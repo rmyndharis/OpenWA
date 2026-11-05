@@ -309,4 +309,63 @@ describe('Baileys chat preview against an edit or delete from someone other than
     await settle();
     expect(store.listChats().find(c => c.id === GROUP)?.lastMessage).toBe('lunch at one');
   });
+
+  // A pairing brings a lid and a number together, never two lids. The member who sends the change here is known by a
+  // paired lid and the author by a lid the table has no number for, so they are two members, not one that the pairing
+  // turned into a number the other lid might be.
+  describe('a group change from a member with a paired lid, to the message of a member known by an unpaired lid', () => {
+    const members: Roster = () =>
+      Promise.resolve([
+        { ids: [LID_PEER, PEER], admin: false },
+        { ids: [LID_OTHER, OTHER], admin: false },
+      ]);
+    const posted = (): WAMessage => ({
+      key: { id: 'ALICE4', remoteJid: GROUP, fromMe: false, participant: LID_PEER },
+      message: { conversation: 'standup at 9' },
+      messageTimestamp: 1_700_000_000,
+    });
+
+    it('keeps the preview when that member deletes it', async () => {
+      const { events, history, store } = build({ [LID_OTHER]: '628333' }, members);
+      await history.captureHistoryMessages([posted()]);
+
+      events.handleMessagesUpsert({
+        type: 'notify',
+        messages: [
+          change(
+            { remoteJid: GROUP, fromMe: false, participant: LID_OTHER },
+            { type: 0, key: { id: 'ALICE4', remoteJid: GROUP, participant: LID_PEER } },
+          ),
+        ],
+      });
+      await settle();
+
+      expect(store.listChats().find(c => c.id === GROUP)).toMatchObject({
+        lastMessage: 'standup at 9',
+        lastMessageType: 'text',
+      });
+    });
+
+    it('keeps the preview when that member edits it', async () => {
+      const { events, history, store } = build({ [LID_OTHER]: '628333' }, members);
+      await history.captureHistoryMessages([posted()]);
+
+      events.handleMessagesUpsert({
+        type: 'notify',
+        messages: [
+          change(
+            { remoteJid: GROUP, fromMe: false, participant: LID_OTHER },
+            {
+              type: 14,
+              key: { id: 'ALICE4', remoteJid: GROUP, participant: LID_PEER },
+              editedMessage: { conversation: 'standup cancelled' },
+            },
+          ),
+        ],
+      });
+      await settle();
+
+      expect(store.listChats().find(c => c.id === GROUP)?.lastMessage).toBe('standup at 9');
+    });
+  });
 });

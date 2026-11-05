@@ -831,18 +831,13 @@ export class BaileysEvents {
     isDelete: boolean,
     resolve: (jid: string) => string | null,
   ): (key: WAMessageKey) => boolean {
-    const neutral = (jid: string): string => {
-      const phone = parseWaId(jid).kind === 'lid' ? resolve(jid) : null;
-      return phone ? `${phone}@c.us` : this.host.toNeutralJid(jid);
-    };
     return key => {
       if (isDelete && parseWaId(key.remoteJid ?? '').kind === 'group') return true;
       if ((key.fromMe === true) !== (envelope.fromMe === true)) return false;
-      return (
-        key.fromMe === true ||
-        !key.participant ||
-        !differentWaIds([key.participant, key.participantAlt], [envelope.participant, envelope.participantAlt], neutral)
-      );
+      if (key.fromMe === true || !key.participant) return true;
+      const authors = [key.participant, key.participantAlt];
+      const senders = [envelope.participant, envelope.participantAlt];
+      return !differentWaIds(authors, senders, this.authorNeutral(authors, senders, resolve));
     };
   }
 
@@ -1743,12 +1738,31 @@ export class BaileysEvents {
   }
 
   /**
-   * Whether a change arriving under `key` names a message other than the one `original` is. `resolve` maps a lid to the
-   * phone number the gateway holds a reported pairing for, and is applied to the authors only. A pairing bridges a lid
-   * and a phone number, so a lid is resolved against a side that carries no lid: with the sender known by a number, a
-   * lid that is provably another person's reads as such. Two lids are compared as they are, whatever the table says of
-   * either, because resolving one of them would turn it into a number that the other, a lid with no number beside it,
-   * may still be (see differentWaIds). A lid the table cannot map stays unresolved, and the comparison fails open on it.
+   * How {@link differentWaIds} writes the two ids of one author comparison. `resolve` maps a lid to the phone number the
+   * gateway holds a reported pairing for. A pairing bridges a lid and a phone number, so a lid is resolved only against
+   * a side that carries no lid: with the other side known by a number, a lid that is provably another person's reads as
+   * such. Two lids are compared as they are, whatever the table says of either, because resolving one of them would
+   * turn it into a number that the other, a lid with no number beside it, may still be (see differentWaIds). A lid the
+   * table cannot map stays unresolved, and the comparison fails open on it.
+   */
+  private authorNeutral(
+    a: Array<string | null | undefined>,
+    b: Array<string | null | undefined>,
+    resolve?: (jid: string) => string | null,
+  ): (jid: string) => string {
+    const hasLid = (jids: Array<string | null | undefined>): boolean =>
+      jids.some(jid => !!jid && parseWaId(jid).kind === 'lid');
+    const bridge = resolve && !(hasLid(a) && hasLid(b)) ? resolve : undefined;
+    return jid => {
+      const phone = bridge && parseWaId(jid).kind === 'lid' ? bridge(jid) : null;
+      return phone ? `${phone}@c.us` : this.host.toNeutralJid(jid);
+    };
+  }
+
+  /**
+   * Whether a change arriving under `key` names a message other than the one `original` is. The chats are compared as
+   * the adapter writes them; `resolve` serves the comparison of the authors (see authorNeutral), since a group delete,
+   * the one change judged with it, names a group.
    */
   private readsAsForeign(
     original: WAMessageKey,
@@ -1762,20 +1776,13 @@ export class BaileysEvents {
     const originalChats = [original.remoteJid, original.remoteJidAlt];
     if (broadcast && original.remoteJid !== 'status@broadcast') originalChats.push(original.participant);
     const neutral = (jid: string): string => this.host.toNeutralJid(jid);
-    const hasLid = (jids: Array<string | null | undefined>): boolean =>
-      jids.some(jid => !!jid && parseWaId(jid).kind === 'lid');
     const authors = [original.participant, original.participantAlt];
     const senders = [key.participant, key.participantAlt];
-    const bridge = resolve && !(hasLid(authors) && hasLid(senders)) ? resolve : undefined;
-    const neutralAuthor = (jid: string): string => {
-      const phone = bridge && parseWaId(jid).kind === 'lid' ? bridge(jid) : null;
-      return phone ? `${phone}@c.us` : neutral(jid);
-    };
     return (
       differentWaIds(originalChats, [key.remoteJid, key.remoteJidAlt], neutral) ||
       (checkAuthor &&
         ((original.fromMe === true) !== (key.fromMe === true) ||
-          (key.fromMe !== true && differentWaIds(authors, senders, neutralAuthor))))
+          (key.fromMe !== true && differentWaIds(authors, senders, this.authorNeutral(authors, senders, resolve)))))
     );
   }
 
@@ -1901,8 +1908,8 @@ export class BaileysEvents {
     const stored = await this.readStoredMessage(targetId, 'checking whose message a group delete names');
     const after = this.inboundInFlight.get(targetId);
     const copies = [before?.key, stored?.key, after?.key].filter((key): key is WAMessageKey => !!key);
-    // A sender known by a lid and an author known by a number are the same person only if the gateway holds a reported
-    // pairing that says so: with one that names another number the copy is not theirs, and the roster is read.
+    // A sender known by a lid and an author known by a number are taken for one person unless the gateway holds a
+    // reported pairing for the lid that names another number: with one, the copy is not theirs and the roster is read.
     const resolve = await this.reportedPhones(...copies, envelope);
     const own = copies.length > 0 && copies.every(key => !this.readsAsForeign(key, envelope, true, undefined, resolve));
     // A delivery that reuses the id of a stored message of another chat or sender is stopped as a repeat before it

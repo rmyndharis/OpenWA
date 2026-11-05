@@ -219,18 +219,39 @@ describe('Baileys group delete of another member message', () => {
   // A reported pairing brings a lid and a number together, never two lids. A sender whose lid the table cannot place is
   // not taken for the author because the author's lid, or the sender's own, is placed: two lids are two members.
   it.each([
-    ['only the author lid is paired', { '900111': '628111' }],
-    ['only the sender lid is paired', { '900333': '628333' }],
-    ['both lids are paired to one number', { '900111': '628111', '900333': '628111' }],
-  ])('reads the roster for two different lids when %s', async (_how, pairs) => {
+    ['only the author lid is paired', { '900111': '628111' }, { participant: '900111@lid' }],
+    [
+      'only the author lid is paired and the stored key carries its number',
+      { '900111': '628111' },
+      { participant: '900111@lid', participantAlt: ALICE },
+    ],
+    ['only the sender lid is paired', { '900333': '628333' }, { participant: '900111@lid' }],
+    ['both lids are paired to one number', { '900111': '628111', '900333': '628111' }, { participant: '900111@lid' }],
+  ])('reads the roster for two different lids when %s', async (_how, pairs, author) => {
     const { raw, revoked, members, posted, deleteOf } = build(lidRoster, { pairs });
-    posted('A1', { remoteJid: GROUP, fromMe: false, participant: '900111@lid', participantAlt: ALICE }, 'meeting at 3');
+    posted('A1', { remoteJid: GROUP, fromMe: false, ...author }, 'meeting at 3');
 
     await deleteOf('A1', { participant: '900333@lid' }, { fromMe: false, participant: '900111@lid' });
 
     expect(members).toHaveBeenCalledTimes(1);
     expect(raw.get('A1')?.message).toEqual({ conversation: 'meeting at 3' });
     expect(revoked).not.toHaveBeenCalled();
+  });
+
+  // The table is trusted for the lid it names, so an author whose number changed after the message was stored is no
+  // longer the sender it names: the delete reads as another member's, as an edit by that author does.
+  it('reads the roster when the pairing names another number than the one the message was stored under', async () => {
+    const { raw, revoked, members, posted, deleteOf } = build(lidRoster, { pairs: { '900111': '628999' } });
+    posted('A1', { remoteJid: GROUP, fromMe: false, participant: ALICE }, 'meeting at 3');
+
+    await deleteOf('A1', { participant: '900111@lid' }, { fromMe: false, participant: ALICE });
+
+    expect(members).toHaveBeenCalledTimes(1);
+    expect(raw.get('A1')?.message).toEqual({ conversation: 'meeting at 3' });
+    expect(revoked).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'A1' }),
+      expect.objectContaining({ admin: false }),
+    );
   });
 
   it('reads no roster for a member deleting their own message', async () => {
@@ -325,12 +346,13 @@ describe('Baileys group delete of another member message', () => {
   });
 });
 
-// However the stored author and the sender of a delete are named, by lid, by number or by both, a reported pairing may
-// bring a lid and a number together but must never make two people read as one, nor one person as two: the roster is
-// read for every pair the names prove different, and for no other. A side named by number alone against one named by
-// both is left out, since the number beside the lid decides it without the table.
+// However the stored author and the sender of a delete are named, by lid, by number, or by both (either first), a
+// reported pairing may bring a lid and a number together but must never make two people read as one, nor one person
+// as two: the roster is read for every pair the names prove different, and for no other. Two members of whom one is
+// named by number alone and the other by both are left out: the number beside the lid decides that pair.
 describe('Baileys group delete judged by who the names say the author and the sender are', () => {
-  type How = 'lid' | 'number' | 'both';
+  type How = 'lid' | 'number' | 'both' | 'number first';
+  const HOWS: How[] = ['lid', 'number', 'both', 'number first'];
   const person = (n: number) => ({
     lid: `9001${n}@lid`,
     lidDigits: `9001${n}`,
@@ -343,19 +365,27 @@ describe('Baileys group delete judged by who the names say the author and the se
       ? { participant: p.lid }
       : how === 'number'
         ? { participant: p.number }
-        : { participant: p.lid, participantAlt: p.number };
+        : how === 'both'
+          ? { participant: p.lid, participantAlt: p.number }
+          : { participant: p.number, participantAlt: p.lid };
   const carriesLid = (how: How) => how !== 'number';
   const carriesNumber = (how: How) => how !== 'lid';
+  const flags = (how: How): boolean[] => (carriesLid(how) ? [false, true] : [false]);
 
-  const rows: Array<[string, How, How, boolean, boolean, boolean]> = [];
-  for (const author of ['lid', 'number', 'both'] as const) {
-    for (const sender of ['lid', 'number', 'both'] as const) {
-      if ((author === 'number' && sender === 'both') || (author === 'both' && sender === 'number')) continue;
+  type Row = [label: string, author: How, sender: How, same: boolean, authorPaired: boolean, senderPaired: boolean];
+  const rows: Row[] = [];
+  for (const author of HOWS) {
+    for (const sender of HOWS) {
       for (const same of [true, false]) {
-        for (const authorPaired of [false, true]) {
-          for (const senderPaired of same ? [authorPaired] : [false, true]) {
+        for (const authorPaired of flags(author)) {
+          for (const senderPaired of same ? (carriesLid(sender) ? [authorPaired] : [false]) : flags(sender)) {
+            const numberAgainstBoth =
+              (author === 'number' && carriesLid(sender) && carriesNumber(sender)) ||
+              (sender === 'number' && carriesLid(author) && carriesNumber(author));
+            if (!same && numberAgainstBoth) continue;
+            const paired = (flag: boolean) => (flag ? 'paired' : 'not paired');
             rows.push([
-              `${same ? 'the same member' : 'two members'}: author by ${author} (${authorPaired ? '' : 'not '}paired), sender by ${sender} (${senderPaired ? '' : 'not '}paired)`,
+              `${same ? 'the same member' : 'two members'}: author by ${author} (${paired(authorPaired)}), sender by ${sender} (${paired(senderPaired)})`,
               author,
               sender,
               same,
@@ -398,7 +428,8 @@ describe('Baileys group delete judged by who the names say the author and the se
     await deleteOf('A1', keyOf(sender, s), { fromMe: false, ...keyOf(author, a) });
 
     expect(members).toHaveBeenCalledTimes(provenDifferent ? 1 : 0);
-    // A delete the names prove foreign is refused, as a member who is no admin is held to the author; one they do not is let through.
+    // A delete the names prove foreign is refused, as a member who is no admin is held to the author; any other is
+    // let through.
     expect(raw.get('A1')?.message).toEqual(provenDifferent ? { conversation: 'meeting at 3' } : null);
   });
 });
