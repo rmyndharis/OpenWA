@@ -77,7 +77,8 @@ export class GroupService {
   }
 
   async getGroupInfo(sessionId: string, groupId: string) {
-    const group = await this.getEngine(sessionId).getGroupInfo(groupId);
+    const target = this.groupTarget(groupId);
+    const group = await this.getEngine(sessionId).getGroupInfo(target);
     if (!group) {
       throw new NotFoundException(`Group ${groupId} not found`);
     }
@@ -107,10 +108,11 @@ export class GroupService {
    * draws on the same cold-reachout budget a first message does.
    */
   async addParticipants(sessionId: string, groupId: string, participants: string[]) {
+    const group = this.groupTarget(groupId);
     this.assertAddressableParticipants(participants);
     const reservation = await this.pacing.assertReachoutAllowed(sessionId, participants);
     try {
-      return await this.getEngine(sessionId).addParticipants(groupId, participants);
+      return await this.getEngine(sessionId).addParticipants(group, participants);
     } catch (error) {
       // A refused add contacted nobody. Per-participant failures an engine reports without throwing
       // stay charged: the batch was attempted. So does an outcome-unknown failure.
@@ -120,22 +122,26 @@ export class GroupService {
   }
 
   removeParticipants(sessionId: string, groupId: string, participants: string[]) {
+    const group = this.groupTarget(groupId);
     this.assertAddressableParticipants(participants);
-    return this.getEngine(sessionId).removeParticipants(groupId, participants);
+    return this.getEngine(sessionId).removeParticipants(group, participants);
   }
 
   promoteParticipants(sessionId: string, groupId: string, participants: string[]) {
+    const group = this.groupTarget(groupId);
     this.assertAddressableParticipants(participants);
-    return this.getEngine(sessionId).promoteParticipants(groupId, participants);
+    return this.getEngine(sessionId).promoteParticipants(group, participants);
   }
 
   demoteParticipants(sessionId: string, groupId: string, participants: string[]) {
+    const group = this.groupTarget(groupId);
     this.assertAddressableParticipants(participants);
-    return this.getEngine(sessionId).demoteParticipants(groupId, participants);
+    return this.getEngine(sessionId).demoteParticipants(group, participants);
   }
 
   getGroupMembershipRequests(sessionId: string, groupId: string) {
-    return this.getEngine(sessionId).getGroupMembershipRequests(groupId);
+    const group = this.groupTarget(groupId);
+    return this.getEngine(sessionId).getGroupMembershipRequests(group);
   }
 
   /**
@@ -146,21 +152,25 @@ export class GroupService {
    * feeds a named requester straight to `requesterIds.map(createWid)`.
    */
   approveGroupMembershipRequests(sessionId: string, groupId: string, participants?: string[]) {
+    const group = this.groupTarget(groupId);
     if (participants) this.assertAddressableParticipants(participants);
-    return this.getEngine(sessionId).approveGroupMembershipRequests(groupId, participants);
+    return this.getEngine(sessionId).approveGroupMembershipRequests(group, participants);
   }
 
   rejectGroupMembershipRequests(sessionId: string, groupId: string, participants?: string[]) {
+    const group = this.groupTarget(groupId);
     if (participants) this.assertAddressableParticipants(participants);
-    return this.getEngine(sessionId).rejectGroupMembershipRequests(groupId, participants);
+    return this.getEngine(sessionId).rejectGroupMembershipRequests(group, participants);
   }
 
   setGroupSubject(sessionId: string, groupId: string, subject: string) {
-    return this.getEngine(sessionId).setGroupSubject(groupId, subject);
+    const group = this.groupTarget(groupId);
+    return this.getEngine(sessionId).setGroupSubject(group, subject);
   }
 
   setGroupDescription(sessionId: string, groupId: string, description: string) {
-    return this.getEngine(sessionId).setGroupDescription(groupId, description);
+    const group = this.groupTarget(groupId);
+    return this.getEngine(sessionId).setGroupDescription(group, description);
   }
 
   setGroupMemberLabel(sessionId: string, groupId: string, label: string): Promise<void> {
@@ -171,15 +181,18 @@ export class GroupService {
   }
 
   leaveGroup(sessionId: string, groupId: string) {
-    return this.getEngine(sessionId).leaveGroup(groupId);
+    const group = this.groupTarget(groupId);
+    return this.getEngine(sessionId).leaveGroup(group);
   }
 
   getGroupInviteCode(sessionId: string, groupId: string) {
-    return this.getEngine(sessionId).getGroupInviteCode(groupId);
+    const group = this.groupTarget(groupId);
+    return this.getEngine(sessionId).getGroupInviteCode(group);
   }
 
   revokeGroupInviteCode(sessionId: string, groupId: string) {
-    return this.getEngine(sessionId).revokeGroupInviteCode(groupId);
+    const group = this.groupTarget(groupId);
+    return this.getEngine(sessionId).revokeGroupInviteCode(group);
   }
 
   /**
@@ -225,6 +238,17 @@ export class GroupService {
     if (chatKind(groupId) !== 'group' || groupId.indexOf('@') !== groupId.lastIndexOf('@')) {
       throw new BadRequestException(`${groupId} is not a group id`);
     }
+  }
+
+  /**
+   * The group a route names, as `<id>@g.us`, or a 400 when the id names no group. Baileys addresses a group query to
+   * whatever jid it is handed, so a person's id would be sent a group request, and whatsapp-web.js only finds out
+   * after a page call; a spelling with another case or surrounding space is made canonical here for both. It runs
+   * before the session's engine is looked up, as the check of the picture routes does.
+   */
+  private groupTarget(groupId: string): string {
+    this.assertGroupId(groupId);
+    return toNeutralJid(groupId);
   }
 
   /** Read the group's picture URL, or null when it has none. Groups reuse the profile-picture read. */
@@ -293,21 +317,22 @@ export class GroupService {
         'At least one of announce, locked, ephemeralSeconds, memberAddMode must be provided',
       );
     }
+    const group = this.groupTarget(groupId);
     const engine = this.getEngine(sessionId);
     const steps: Array<[field: string, apply: () => Promise<unknown>]> = [];
     if (ephemeralSeconds !== undefined) {
-      steps.push(['ephemeralSeconds', () => engine.setGroupEphemeral(groupId, ephemeralSeconds)]);
+      steps.push(['ephemeralSeconds', () => engine.setGroupEphemeral(group, ephemeralSeconds)]);
     }
     // After ephemeralSeconds, per the ordering rule above: this field is supported on both engines,
     // so it carries no deterministic refusal and must not displace the one field that does.
     if (memberAddMode !== undefined) {
-      steps.push(['memberAddMode', () => engine.setGroupMemberAddMode(groupId, memberAddMode)]);
+      steps.push(['memberAddMode', () => engine.setGroupMemberAddMode(group, memberAddMode)]);
     }
     if (announce !== undefined) {
-      steps.push(['announce', () => engine.setGroupMessagesAdminsOnly(groupId, announce)]);
+      steps.push(['announce', () => engine.setGroupMessagesAdminsOnly(group, announce)]);
     }
     if (locked !== undefined) {
-      steps.push(['locked', () => engine.setGroupInfoAdminsOnly(groupId, locked)]);
+      steps.push(['locked', () => engine.setGroupInfoAdminsOnly(group, locked)]);
     }
 
     const applied: string[] = [];

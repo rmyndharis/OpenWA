@@ -10125,7 +10125,7 @@
             }
           },
           "400": {
-            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry. Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10318,7 +10318,7 @@
             }
           },
           "400": {
-            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry. Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10427,7 +10427,7 @@
             }
           },
           "400": {
-            "description": "No setting provided, an unknown body field, or an invalid value: `announce` and `locked` take a boolean, `ephemeralSeconds` an integer of 0 or more, `memberAddMode` `all` or `admins`, and `null` is refused. Also answered when the session is not started (no engine is running for it).",
+            "description": "No setting provided, an unknown body field, or an invalid value: `announce` and `locked` take a boolean, `ephemeralSeconds` an integer of 0 or more, `memberAddMode` `all` or `admins`, and `null` is refused. Also answered when the session is not started (no engine is running for it), or the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10548,7 +10548,7 @@
             }
           },
           "400": {
-            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected. With send pacing on, also answered (without `retryAfterSeconds`) when the request names more new contacts than the whole day's cold-reachout allowance; split it into smaller batches.",
+            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected. With send pacing on, also answered (without `retryAfterSeconds`) when the request names more new contacts than the whole day's cold-reachout allowance; split it into smaller batches. Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10657,7 +10657,7 @@
             }
           },
           "400": {
-            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected.",
+            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected. Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10768,7 +10768,7 @@
             }
           },
           "400": {
-            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected.",
+            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected. Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10879,7 +10879,7 @@
             }
           },
           "400": {
-            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected.",
+            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected. Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10984,7 +10984,7 @@
             }
           },
           "400": {
-            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry. Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11096,7 +11096,7 @@
             }
           },
           "400": {
-            "description": "The body failed validation, or the session is not started (no engine is running for it).",
+            "description": "The body failed validation, or the session is not started (no engine is running for it). Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11208,7 +11208,7 @@
             }
           },
           "400": {
-            "description": "The body failed validation, or the session is not started (no engine is running for it).",
+            "description": "The body failed validation, or the session is not started (no engine is running for it). Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11319,7 +11319,7 @@
             }
           },
           "400": {
-            "description": "The body failed validation, or the session is not started (no engine is running for it).",
+            "description": "The body failed validation, or the session is not started (no engine is running for it). Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11430,7 +11430,7 @@
             }
           },
           "400": {
-            "description": "The body failed validation, or the session is not started (no engine is running for it).",
+            "description": "The body failed validation, or the session is not started (no engine is running for it). Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11653,7 +11653,7 @@
             }
           },
           "400": {
-            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry. Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12063,7 +12063,7 @@
             }
           },
           "400": {
-            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry. Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12164,7 +12164,7 @@
             }
           },
           "400": {
-            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry. Also answered when the group id in the path does not name a group.",
             "content": {
               "application/json": {
                 "schema": {
