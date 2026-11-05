@@ -1,10 +1,12 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { invokeTool } from '../tool-invoker';
 import { contactTools } from './contact.tools';
 import type { AnyToolDescriptor } from '../tool-descriptor';
-import type { ContactService } from '../../../modules/contact/contact.service';
+import { ContactService } from '../../../modules/contact/contact.service';
 import type { AuthService } from '../../../modules/auth/auth.service';
 import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
+import { EngineRegistry } from '../../../engine/engine-registry.service';
+import type { IWhatsAppEngine } from '../../../engine/interfaces/whatsapp-engine.interface';
 
 // Covers every contactTools execute() handler via the real invokeTool path (auth → zod → handler).
 // agent-tools.module.ts is pure Nest wiring, stays at 0% coverage, and is intentionally not a target.
@@ -63,6 +65,30 @@ describe('contactTools', () => {
       number: '628123',
     });
     expect(out).toEqual({ number: '628123', exists: false, whatsappId: null });
+  });
+
+  it('ContactCheckNumber refuses an id that is not a phone number with 400 and asks no engine', async () => {
+    const getNumberId = jest.fn();
+    const engines = new EngineRegistry();
+    engines.set('s1', { getNumberId } as unknown as IWhatsAppEngine);
+    const tool = makeTools(new ContactService(engines)).get('ContactCheckNumber')!;
+
+    await expect(run(tool, { sessionId: 's1', number: '120363021234567890@g.us' })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(getNumberId).not.toHaveBeenCalled();
+  });
+
+  it('ContactCheckNumber asks the engine about the digits of a typed number and echoes what was typed', async () => {
+    const getNumberId = jest.fn().mockResolvedValue('6281270008896@c.us');
+    const engines = new EngineRegistry();
+    engines.set('s1', { getNumberId } as unknown as IWhatsAppEngine);
+    const tool = makeTools(new ContactService(engines)).get('ContactCheckNumber')!;
+
+    const out = await run(tool, { sessionId: 's1', number: '+62 812-7000-8896' });
+
+    expect(getNumberId).toHaveBeenCalledWith('6281270008896');
+    expect(out).toEqual({ number: '+62 812-7000-8896', exists: true, whatsappId: '6281270008896@c.us' });
   });
 
   it('ContactCheckNumber requires OPERATOR: a below-role key is refused before the lookup runs', async () => {

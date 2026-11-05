@@ -117,4 +117,31 @@ describe('Contact LID lookup gate (e2e)', () => {
     expect(res.body).toEqual({ number: '628123456789', exists: true, whatsappId: '628123456789@c.us' });
     expect(engine.getContactLid).not.toHaveBeenCalled();
   });
+
+  it('refuses a group, channel or privacy id as the number to check (400) without asking the engine', async () => {
+    const check = jest.fn();
+    app.get(EngineRegistry).set(sessionId, { ...engine, getNumberId: check } as unknown as IWhatsAppEngine);
+
+    for (const id of ['120363021234567890@g.us', '120363021234567890@newsletter', '234767895240796@lid']) {
+      await request(app.getHttpServer())
+        .get(`/api/sessions/${sessionId}/contacts/check/${id}`)
+        .set('X-API-Key', operatorKey)
+        .expect(400);
+    }
+
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it('asks the engine about the digits of a typed number and echoes what was typed', async () => {
+    const check = jest.fn().mockResolvedValue('6281270008896@c.us');
+    app.get(EngineRegistry).set(sessionId, { ...engine, getNumberId: check } as unknown as IWhatsAppEngine);
+
+    const res = await request(app.getHttpServer())
+      .get(`/api/sessions/${sessionId}/contacts/check/${encodeURIComponent('+62 812-7000-8896')}`)
+      .set('X-API-Key', operatorKey)
+      .expect(200);
+
+    expect(check).toHaveBeenCalledWith('6281270008896');
+    expect(res.body).toEqual({ number: '+62 812-7000-8896', exists: true, whatsappId: '6281270008896@c.us' });
+  });
 });

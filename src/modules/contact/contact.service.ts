@@ -5,7 +5,7 @@ import { Contact, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engin
 import { paginate, ListOptions } from '../../common/utils/paginate';
 import { ListingMemo } from '../../common/utils/listing-memo';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { isIndividualWid, parseWaId, toNeutralJid } from '../../engine/identity/wa-id';
+import { isIndividualWid, parseWaId, toNeutralJid, userPart } from '../../engine/identity/wa-id';
 
 /**
  * Owns engine access for contact operations so the "session not started" guard and
@@ -54,8 +54,19 @@ export class ContactService {
     return this.getEngine(sessionId).getBlockedContacts();
   }
 
+  /**
+   * Whether a phone number is registered, and the id WhatsApp holds for it. The engines are asked about the DIGITS of
+   * `number`: whatsapp-web.js appends `@c.us` unless the value already ends with it, so a typed `+62 812-7000-8896` or
+   * an `@s.whatsapp.net` id reached its page as a malformed wid, and Baileys put the typed characters in its contact
+   * query. An id of another dialect is refused, as the LID lookup does, and so is a value with no digits at all.
+   */
   getNumberId(sessionId: string, number: string) {
-    return this.getEngine(sessionId).getNumberId(number);
+    this.assertPhoneNumber(number);
+    const digits = userPart(number).replace(/\D/g, '');
+    if (!digits) {
+      throw new BadRequestException(`${number} holds no digits; pass a phone number such as 628123456789`);
+    }
+    return this.getEngine(sessionId).getNumberId(digits);
   }
 
   /**
@@ -82,20 +93,26 @@ export class ContactService {
 
   /**
    * Unlike {@link resolveContactPhone}, a failed lookup is not swallowed: a null here would claim "no lid".
-   *
-   * The input is a PHONE NUMBER, typed any way (`+62 812-7000-8896`) or as a phone id (`628…@c.us`). An id of another
-   * dialect only looks like one: the digits of a privacy id or a group id are no phone number, and the engines keep
-   * nothing but digits, so the lookup would spend a query on a stranger's number and answer null, or that stranger's
-   * LID. It is refused before an engine is asked.
+   * The engines keep nothing but the digits of `number`.
    */
   getContactLid(sessionId: string, number: string) {
+    this.assertPhoneNumber(number);
+    return this.getEngine(sessionId).getContactLid(number);
+  }
+
+  /**
+   * The input of the number check and the LID lookup is a PHONE NUMBER, typed any way (`+62 812-7000-8896`) or as a
+   * phone id (`628…@c.us`). An id of another dialect only looks like one: the digits of a privacy id or a group id
+   * are no phone number, and the engines keep nothing but digits, so a lookup would spend a query on a stranger's
+   * number and answer for it. It is refused before an engine is asked.
+   */
+  private assertPhoneNumber(number: string): void {
     if (number.includes('@') && parseWaId(number).kind !== 'user') {
       throw new BadRequestException(
         `${number} does not name a phone number; pass a phone number or a phone-based contact id such as 628123456789@c.us` +
           (parseWaId(number).kind === 'lid' ? ', or resolve a privacy id with GET contacts/{contactId}/phone' : ''),
       );
     }
-    return this.getEngine(sessionId).getContactLid(number);
   }
 
   getProfilePicture(sessionId: string, contactId: string) {
