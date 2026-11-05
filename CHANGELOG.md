@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Install Trivy for the release and scheduled image scans from its GitHub release against a pinned SHA-256, since the action's own installer needs a host that no longer resolves.
-- Answer `503`, not `500`, when a lost or timed-out database connection interrupts a start's cap and claim checks, a stop's ownership check, a delete's row read, ownership check or claim, or the owner lookup of a request on a node with `NODE_URL`; nothing was started, stopped or deleted.
+- Answer `503`, not `500`, when a transient database failure interrupts a read a start, stop or delete makes before it acts (the cap check, the ownership check, a delete's row read, the read after a refused claim); nothing was started, stopped or deleted.
+- Answer `503`, not `500`, when a transient database failure interrupts the owner lookup a node with `NODE_URL` makes before routing a session request; nothing was done.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Take any restored session id (letters, digits and hyphens, up to 128 characters) on the `/api/sessions/{sessionId}` routes, which answered `400` for a non-UUID id and left a restored session impossible to stop, log out or delete; a restore refuses an archive whose session id is longer.

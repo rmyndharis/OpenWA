@@ -188,9 +188,10 @@ export class SessionProxyInterceptor implements NestInterceptor {
         select: { id: true, nodeId: true, nodeUrl: true, leaseExpiresAt: true },
       });
     } catch (error) {
-      // This lookup is the first statement of every session request on a routed node. A lost or timed-out connection
-      // there has done nothing yet, so it answers the retryable 503 that a start, stop or delete answers for its own
-      // checks, which a 500 from here would hide. Any other failure is a fault and stays one.
+      // This lookup is the first statement of every session request on a routed node. A database that cannot serve it
+      // for the moment (isTransientDbError: a lost, refused or timed-out connection, a lock, a connection limit) has
+      // done nothing yet, so it answers the retryable 503 that a start, stop or delete answers for its own checks,
+      // which a 500 from here would hide. Any other failure is a fault and stays one.
       if (!isTransientDbError(error)) throw error;
       this.logger.warn('Could not look up the owner of a session; nothing was routed or run', {
         sessionId,
