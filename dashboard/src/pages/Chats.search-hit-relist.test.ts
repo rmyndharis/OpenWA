@@ -263,6 +263,30 @@ for (const stage of ['callback-stage', 'effect-stage']) {
   });
 }
 
+// The same holds for a hit that already has its session and waits for the phone lookup of its chat: a room the user opened
+// and closed again while it waited is a choice that ended the hit, although the open chat is back to what it was.
+for (const stage of ['callback-stage', 'effect-stage']) {
+  test(`a room opened and closed again ends a search hit waiting for its phone lookup (${stage})`, async () => {
+    mode = stage;
+    hits = [hit(FIRST, 1)];
+    const container = await render();
+    await clickHit(container, 0);
+    if (stage === 'effect-stage') {
+      await rtl.waitFor(() => assert.ok(finishFirstList));
+      await rtl.act(async () => finishFirstList?.());
+    }
+    await rtl.waitFor(() => assert.ok(finishPhoneLookup, 'the phone lookup is under way'));
+    rtl.fireEvent.click(rtl.screen.getByText('session-a contact'));
+    await rtl.waitFor(() => assert.ok(container.querySelector('.room-header')));
+    rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Back' }));
+    await rtl.waitFor(() => assert.equal(Boolean(container.querySelector('.room-header')), false));
+
+    await rtl.act(async () => finishPhoneLookup?.());
+
+    assert.equal(Boolean(container.querySelector('.room-header')), false);
+  });
+}
+
 test('a held session list that fails after the user chose another session shows no error', async () => {
   const container = await render();
   await clickHit(container, 0);

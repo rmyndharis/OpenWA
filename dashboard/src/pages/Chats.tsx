@@ -1409,10 +1409,11 @@ export function Chats() {
   const [hitSeq, setHitSeq] = useState(0);
   // The click being handled: a newer hit replaces it, so a hit that waited for the session list can tell it was overtaken.
   const hitClickRef = useRef<object | null>(null);
-  // Another session or chat chosen while a click waits ends the click, also when the choice later comes back to where it
-  // began: the values alone would then look as if nothing had happened.
+  // Moves whenever another session or chat is chosen. A continuation of a hit that began before can tell it was overtaken,
+  // also when the choice came back to where it began: the ids alone would then look as if nothing had happened.
+  const hitContextRef = useRef(0);
   useLayoutEffect(() => {
-    hitClickRef.current = null;
+    hitContextRef.current += 1;
   }, [selectedSessionId, activeChat?.id]);
 
   // The listed chat a hit was found in. A stored row keeps the chat id it was written with, which can be another
@@ -1470,11 +1471,8 @@ export function Chats() {
       // The hit before it is over, wherever its own lookup has got: it must not open a room that this click would then
       // take for the user's own choice.
       pendingHitRef.current = null;
-      const openAtClick = activeChatIdRef.current;
-      const overtaken = () =>
-        hitClickRef.current !== click ||
-        selectedSessionRef.current !== selectedSessionId ||
-        activeChatIdRef.current !== openAtClick;
+      const contextAtClick = hitContextRef.current;
+      const overtaken = () => hitClickRef.current !== click || hitContextRef.current !== contextAtClick;
       // Search covers stored messages of every session, but the page can only open a ready one, and
       // its list is read on mount. A session missing from it is looked up again, since it may have
       // connected since; one that still is not ready is refused rather than selected with no chats.
@@ -1517,9 +1515,17 @@ export function Chats() {
       }
       if (!listReady) return;
       const openBefore = activeChatIdRef.current;
+      const contextBefore = hitContextRef.current;
       const chat = await findHitChat(hit.chatId);
-      // A newer hit, a session switch, or a chat the user opened while the lookup ran takes over from this one.
-      if (pendingHitRef.current !== pending || activeChatIdRef.current !== openBefore) return;
+      // A newer hit, a session switch, or a chat the user opened while the lookup ran takes over from this one, also when
+      // a room was opened and closed again and the open chat is what it was.
+      if (
+        pendingHitRef.current !== pending ||
+        activeChatIdRef.current !== openBefore ||
+        hitContextRef.current !== contextBefore
+      ) {
+        return;
+      }
       openHitChat(pending, chat);
     },
     [
@@ -1558,8 +1564,15 @@ export function Chats() {
     const resolving = { ...pending, resolving: true };
     pendingHitRef.current = resolving;
     const openBefore = activeChatIdRef.current;
+    const contextBefore = hitContextRef.current;
     void findHitChat(pending.chatId).then(chat => {
-      if (pendingHitRef.current !== resolving || activeChatIdRef.current !== openBefore) return;
+      if (
+        pendingHitRef.current !== resolving ||
+        activeChatIdRef.current !== openBefore ||
+        hitContextRef.current !== contextBefore
+      ) {
+        return;
+      }
       openHitChat(pending, chat);
     });
   }, [chats, loadingChats, chatsFailure, activeChat, selectedSessionId, findHitChat, openHitChat]);
