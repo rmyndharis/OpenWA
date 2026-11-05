@@ -7,9 +7,10 @@ import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
 /**
  * WhatsApp applies an edit only from the author of the message and a delete only from its author (or
- * a group admin), and only inside the message's own chat. Baileys hands any edit or delete through
- * as-is, naming whatever message id the sender knows, so the chat list preview must not show an edit
- * or delete that the message it names could not have received: the preview holds that message's key.
+ * a group admin, as the group's roster shows them), and only inside the message's own chat. Baileys
+ * hands any edit or delete through as-is, naming whatever message id the sender knows, so the chat list
+ * preview must not show an edit or delete that the message it names could not have received: the
+ * preview holds that message's key.
  */
 
 const lib = {
@@ -27,8 +28,10 @@ const SELF = '628222@s.whatsapp.net';
 const LID_PEER = '111111111111111@lid';
 const LID_OTHER = '333333333333333@lid';
 
+type Roster = (groupId: string) => Promise<Array<{ ids: string[]; admin: boolean }> | null>;
+
 /** Lid to phone pairs the persisted table reports, as `findPersistedLidPhone` answers them (digits). */
-function build(pairs: Record<string, string> = {}) {
+function build(pairs: Record<string, string> = {}, readGroupMembers?: Roster) {
   const store = new BaileysSessionStore(undefined, 's1');
   store.upsertChats([{ id: PEER }, { id: GROUP }]);
   const edited = jest.fn();
@@ -76,6 +79,7 @@ function build(pairs: Record<string, string> = {}) {
     extractEphemeralDuration: noop,
     getOnHistoryMessages: noop,
     applyHistoryRevoke: noop,
+    readGroupMembers,
   };
   return {
     events: new BaileysEvents(host),
@@ -178,26 +182,56 @@ describe('Baileys chat preview against an edit or delete from someone other than
     });
   });
 
-  it('lets a group member delete another member last message, as an admin may', async () => {
-    const { events, history, store } = build();
-    await history.captureHistoryMessages([
-      {
-        key: { id: 'ALICE2', remoteJid: GROUP, fromMe: false, participant: PEER },
-        message: { conversation: 'off-topic link' },
-        messageTimestamp: 1_700_000_000,
-      },
-    ]);
-    events.handleMessagesUpsert({
-      type: 'notify',
-      messages: [
-        change(
-          { remoteJid: GROUP, fromMe: false, participant: OTHER },
-          { type: 0, key: { id: 'ALICE2', remoteJid: GROUP, participant: PEER } },
-        ),
-      ],
+  describe('a group delete of another member last message', () => {
+    const roster =
+      (otherIsAdmin: boolean): Roster =>
+      () =>
+        Promise.resolve([
+          { ids: [PEER], admin: false },
+          { ids: [OTHER], admin: otherIsAdmin },
+        ]);
+    const deleteByOther = async (readGroupMembers?: Roster) => {
+      const { events, history, store, revoked } = build({}, readGroupMembers);
+      await history.captureHistoryMessages([
+        {
+          key: { id: 'ALICE2', remoteJid: GROUP, fromMe: false, participant: PEER },
+          message: { conversation: 'off-topic link' },
+          messageTimestamp: 1_700_000_000,
+        },
+      ]);
+      events.handleMessagesUpsert({
+        type: 'notify',
+        messages: [
+          change(
+            { remoteJid: GROUP, fromMe: false, participant: OTHER },
+            { type: 0, key: { id: 'ALICE2', remoteJid: GROUP, participant: PEER } },
+          ),
+        ],
+      });
+      await settle();
+      return { preview: store.listChats().find(c => c.id === GROUP), revoked };
+    };
+
+    it.each([
+      ['an admin', roster(true)],
+      ['a member whose roster cannot be read', () => Promise.reject(new Error('no answer'))],
+      ['a member the roster does not list', () => Promise.resolve([{ ids: [PEER], admin: true }])],
+      ['a member, where the engine reads no roster', undefined],
+    ])('clears the preview when sent by %s', async (_who, readGroupMembers) => {
+      const { preview } = await deleteByOther(readGroupMembers);
+      expect(preview).toMatchObject({ lastMessage: '', lastMessageType: 'revoked' });
     });
-    await settle();
-    expect(store.listChats().find(c => c.id === GROUP)).toMatchObject({ lastMessage: '', lastMessageType: 'revoked' });
+
+    it('keeps the preview when the roster shows the sender is no admin', async () => {
+      const { preview, revoked } = await deleteByOther(roster(false));
+      expect(preview).toMatchObject({ lastMessage: 'off-topic link', lastMessageType: 'text' });
+      // The message is not held, so the session judges it by its row, told who sent the delete.
+      expect(revoked).toHaveBeenCalledWith(expect.objectContaining({ id: 'ALICE2' }), {
+        fromMe: false,
+        participant: '628333@c.us',
+        admin: false,
+      });
+    });
   });
 
   it('applies the account own edit from its phone, also when the chat is addressed by lid there', async () => {
@@ -274,5 +308,64 @@ describe('Baileys chat preview against an edit or delete from someone other than
     events.handleMessagesUpsert({ type: 'notify', messages: [editBy(LID_PEER, 'lunch at one')] });
     await settle();
     expect(store.listChats().find(c => c.id === GROUP)?.lastMessage).toBe('lunch at one');
+  });
+
+  // A pairing brings a lid and a number together, never two lids. The member who sends the change here is known by a
+  // paired lid and the author by a lid the table has no number for, so they are two members, not one that the pairing
+  // turned into a number the other lid might be.
+  describe('a group change from a member with a paired lid, to the message of a member known by an unpaired lid', () => {
+    const members: Roster = () =>
+      Promise.resolve([
+        { ids: [LID_PEER, PEER], admin: false },
+        { ids: [LID_OTHER, OTHER], admin: false },
+      ]);
+    const posted = (): WAMessage => ({
+      key: { id: 'ALICE4', remoteJid: GROUP, fromMe: false, participant: LID_PEER },
+      message: { conversation: 'standup at 9' },
+      messageTimestamp: 1_700_000_000,
+    });
+
+    it('keeps the preview when that member deletes it', async () => {
+      const { events, history, store } = build({ [LID_OTHER]: '628333' }, members);
+      await history.captureHistoryMessages([posted()]);
+
+      events.handleMessagesUpsert({
+        type: 'notify',
+        messages: [
+          change(
+            { remoteJid: GROUP, fromMe: false, participant: LID_OTHER },
+            { type: 0, key: { id: 'ALICE4', remoteJid: GROUP, participant: LID_PEER } },
+          ),
+        ],
+      });
+      await settle();
+
+      expect(store.listChats().find(c => c.id === GROUP)).toMatchObject({
+        lastMessage: 'standup at 9',
+        lastMessageType: 'text',
+      });
+    });
+
+    it('keeps the preview when that member edits it', async () => {
+      const { events, history, store } = build({ [LID_OTHER]: '628333' }, members);
+      await history.captureHistoryMessages([posted()]);
+
+      events.handleMessagesUpsert({
+        type: 'notify',
+        messages: [
+          change(
+            { remoteJid: GROUP, fromMe: false, participant: LID_OTHER },
+            {
+              type: 14,
+              key: { id: 'ALICE4', remoteJid: GROUP, participant: LID_PEER },
+              editedMessage: { conversation: 'standup cancelled' },
+            },
+          ),
+        ],
+      });
+      await settle();
+
+      expect(store.listChats().find(c => c.id === GROUP)?.lastMessage).toBe('standup at 9');
+    });
   });
 });

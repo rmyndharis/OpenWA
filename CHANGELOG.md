@@ -61,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep a working directory `.env` out of the e2e and unit boots, which read the environment their harness sets; a `.env` that cannot be read still stops the boot, and the error names the file.
 - Stop the boot, naming the file, when `data/.env.generated` exists but cannot be read (a directory where a bind mount found no file, or a file the app user cannot open), instead of starting on the defaults without the database and storage settings saved there.
 - Stop the migration CLI, naming the file, when `.env` or `data/.env.generated` exists but cannot be read, instead of migrating without that file's settings.
+- Keep a Baileys receipt from another chat from advancing or announcing an own message whose row is still being written.
+- Preview each Baileys chat from its own history message when two chats' messages share an id.
+- Store a Baileys history-sync admin delete of the account's group message as the account's deleted message, and clear a member's own group message deleted in another history chunk.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Stop announcing `message.ack` for the acks of whatsapp-web.js system notices, which are no longer delivered as messages.
 - Stop delivering whatsapp-web.js system notices (a changed security code, the encryption notice, business and broadcast notices) as `unknown` messages on `message.received` and `message.sent`, so they are no longer stored, passed to the message hooks or answered by automation rules (#1864). Thanks @dwimnofan.
@@ -104,6 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Leave SIGUSR2 to Node, so `--report-on-signal` and `--heapsnapshot-signal=SIGUSR2` write their file and no longer stop the gateway; name a writable directory such as `/app/data` with `--report-directory` or `--diagnostic-dir`.
 - Hold the pacing admission of a bulk item or product send for the usual window when the engine answers not-ready, unreachable or not found after the send may already have gone out, instead of handing it back at once.
 - Keep the forwarded type and caption of a forward of a message the gateway has no stored copy of, instead of the `[Forwarded]` placeholder.
+- Ignore a Baileys group delete of another member's message, or of the account's, from a member the group roster shows is not an admin.
+- Keep the chat preview of a Baileys group message when a member known by a paired lid edits or deletes the message of a member known by a lid with no pairing.
 
 ### Documentation
 

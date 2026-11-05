@@ -1127,8 +1127,11 @@ adapter boundary — none silently stubs.
   for the group, a refresh of the all-groups listing (Baileys runs one on its own and `GET /groups`
   another), a write to it through the API, and every reconnect drop the cached list early. A member
   added without the adapter receiving the event gets the group's messages once the entry expires or
-  its client asks for a retry. whatsapp-web.js has no counterpart: the page keeps the member list
-  itself.
+  its client asks for a retry. The same list backs the check of a member's delete of another member's
+  message: with `0`, the delete of a settled message that is not provably the member's own makes one
+  query (up to the 30 second query budget), and a delete of a message still being processed or stored
+  is decided from the cached list alone and let through when it holds none. whatsapp-web.js has no
+  counterpart: the page keeps the member list itself.
 
 ## 29.8 Snapshot summary
 

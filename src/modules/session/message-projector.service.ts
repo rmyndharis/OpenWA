@@ -159,7 +159,9 @@ interface InFlightEntry {
   // An edit held for the message or applied by the engine changed its text, or was asked for: the row it lands on is
   // marked edited.
   edited?: boolean;
-  ackStatus?: MessageStatus;
+  // The furthest ack kept for the row per chat its receipt named ('' when it named none), so one naming another chat
+  // cannot displace one naming this message's: the insert advances the row by those its chat proves to be the row's.
+  acks?: Map<string, MessageStatus>;
   // Latest reaction per sender; '' means the sender withdrew theirs.
   reactions?: Record<string, string>;
   // Deliveries sharing the entry: a repeat keeps what was recorded for the first one.
@@ -1060,16 +1062,16 @@ export class MessageProjector {
     insertedCleared = false,
     lostInsert?: MutationSource,
   ): void {
-    const { ackStatus } = pending;
+    const { acks } = pending;
     const rowChanges = Boolean(
       pending.revoked || pending.editedBody !== undefined || pending.edited || pending.reactions,
     );
-    if (!ackStatus && !rowChanges) return;
+    if (!acks?.size && !rowChanges) return;
     const advance = (): void => {
-      if (!ackStatus) return;
-      void this.advanceAck(id, waMessageId, ackStatus).catch(err =>
-        this.logger.error(`Failed to advance ack for ${waMessageId}`, String(err)),
-      );
+      if (!acks?.size) return;
+      void this.furthestParkedAck(pending.ref, acks)
+        .then(status => (status ? this.advanceAck(id, waMessageId, status) : 0))
+        .catch(err => this.logger.error(`Failed to advance ack for ${waMessageId}`, String(err)));
     };
     if (!lostInsert) {
       advance();
@@ -1093,6 +1095,24 @@ export class MessageProjector {
       advance();
       await this.writeChangesMadeInFlight(id, waMessageId, pending, insertedCleared);
     });
+  }
+
+  /**
+   * The furthest of the acks kept for a message in flight whose receipt named its chat, or no chat: one naming another
+   * chat (through the lid directory, as {@link receiptVerdict} judges a written row) is left out. The queued receipt
+   * judgement already logged it.
+   */
+  private async furthestParkedAck(
+    ref: StoredMessageRef | undefined,
+    acks: Map<string, MessageStatus>,
+  ): Promise<MessageStatus | undefined> {
+    const resolveLid = this.lidMappingStore ? (jid: string) => this.lidMappingStore!.findPhoneForLid(jid) : undefined;
+    let furthest: MessageStatus | undefined;
+    for (const [chat, status] of acks) {
+      if (chat && ref && (await receiptTargetsForeignRowPersisted(ref, chat, resolveLid))) continue;
+      if (!furthest || ackStatusTransitionFrom(status).includes(furthest)) furthest = status;
+    }
+    return furthest;
   }
 
   /** The row part of {@link applyChangesMadeInFlight}. Must run on the mutation chain. */
@@ -1561,12 +1581,13 @@ export class MessageProjector {
       this.logForeignReceipt(id, messageId, receiptChat);
       return;
     }
-    if (messageStatus) {
+    if (messageStatus && inFlight) {
       // A message not written yet (its commit waits behind an earlier one of the chat) keeps the
-      // furthest ack for when its row lands; the UPDATEs below would match nothing.
-      if (inFlight && (!inFlight.ackStatus || ackStatusTransitionFrom(messageStatus).includes(inFlight.ackStatus))) {
-        inFlight.ackStatus = messageStatus;
-      }
+      // furthest ack per chat for when its row lands; the UPDATEs below would match nothing.
+      const acks = (inFlight.acks ??= new Map<string, MessageStatus>());
+      const chat = receiptChat ?? '';
+      const parked = acks.get(chat);
+      if (!parked || ackStatusTransitionFrom(messageStatus).includes(parked)) acks.set(chat, messageStatus);
     }
 
     const logNoop = (): void =>
@@ -1644,16 +1665,15 @@ export class MessageProjector {
       return;
     }
     this.enqueueMessageMutation(id, messageId, async () => {
-      const verdict = await this.receiptVerdict(id, messageId, receiptChat);
+      const verdict = await this.receiptVerdict(id, messageId, receiptChat, inFlight);
       if (verdict === 'foreign' || !this.engines.isLive(id, engine)) return;
       announce();
       if (!messageStatus) return;
       const target = messageStatus;
       // A row the verdict did not see is advanced by the retry, which judges it again once it is written, and for a
-      // message still in flight by its insert, with the status parked above: that one had only the check against the
-      // in-flight entry, which resolves no lid.
+      // message still in flight by its insert, with the status parked above, which the insert judges by its chat too.
       const judged = async (): Promise<number> =>
-        (await this.receiptVerdict(id, messageId, receiptChat)) === 'stored'
+        (await this.receiptVerdict(id, messageId, receiptChat, inFlight)) === 'stored'
           ? this.advanceAck(id, messageId, target)
           : 0;
       await advance(
@@ -1665,25 +1685,29 @@ export class MessageProjector {
 
   /**
    * What the stored row says of a receipt naming `chatId`: absent, the row it may advance, or a row of another chat.
+   * Without a row, a message still in flight (`inFlight`, or the entry held now) is judged by the chat it will be
+   * written under, and is absent unless that proves the receipt foreign.
    * Never rejects: a row that cannot be read reads as absent, so the receipt goes out and its retry judges again.
    */
   private async receiptVerdict(
     id: string,
     messageId: string,
     chatId: string,
+    inFlight?: InFlightEntry,
   ): Promise<'absent' | 'stored' | 'foreign'> {
     try {
       const row = await this.messageRepository.findOne({
         where: { sessionId: id, waMessageId: messageId },
         select: { chatId: true, direction: true, author: true },
       });
-      if (!row) return 'absent';
+      const ref = row ?? (this.inboundInFlight.get(`${id}:${messageId}`) ?? inFlight)?.ref;
+      if (!ref) return 'absent';
       const foreign = await receiptTargetsForeignRowPersisted(
-        row,
+        ref,
         chatId,
         this.lidMappingStore ? jid => this.lidMappingStore!.findPhoneForLid(jid) : undefined,
       );
-      if (!foreign) return 'stored';
+      if (!foreign) return row ? 'stored' : 'absent';
       this.logForeignReceipt(id, messageId, chatId);
       return 'foreign';
     } catch {
@@ -1740,7 +1764,7 @@ export class MessageProjector {
     id: string,
     engine: IWhatsAppEngine,
     message: RevokedMessage,
-    actor?: { fromMe: boolean; participant?: string },
+    actor?: { fromMe: boolean; participant?: string; admin?: boolean },
   ): void {
     if (!this.engines.isLive(id, engine)) return;
     this.logger.debug(`Message revoked: ${message.id}`, {
@@ -1759,7 +1783,9 @@ export class MessageProjector {
     const revokedWaMessageId = message.revokedId ?? message.id;
     // A story is not a row of `messages`: the status store drops it, and the rest of the revoke goes on as for any chat.
     if (message.chatId === 'status@broadcast') this.removeDeletedStory(id, revokedWaMessageId, actor);
-    const source = actor ? ({ kind: 'revoke', chatId: message.chatId, fromMe: actor.fromMe } as const) : undefined;
+    const source: MutationSource | undefined = actor
+      ? { kind: 'revoke', chatId: message.chatId, fromMe: actor.fromMe, author: actor.participant, admin: actor.admin }
+      : undefined;
     const apply = (): void => {
       void this.recordRevoke(id, revokedWaMessageId, source, true);
 

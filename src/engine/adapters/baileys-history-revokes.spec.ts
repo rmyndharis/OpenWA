@@ -313,17 +313,14 @@ describe('Baileys history revokes', () => {
       });
     });
 
-    it('writes nothing for a group revoke whose target neither the chunk nor the store holds', async () => {
+    it('reads a group member revoke the chunk and the store cannot resolve as the member own message', async () => {
       await capture([memberRevoke()]);
-      expect(await repo.count()).toBe(0);
+      expect(await cleared()).toMatchObject({ direction: MessageDirection.INCOMING, author: '628333@c.us' });
 
       const posted = target({ key: { id: 'M1', remoteJid: GROUP, fromMe: false, participant: MEMBER } });
       await capture([posted]);
       await capture([memberRevoke()]);
-      expect(await repo.findOneByOrFail({ waMessageId: 'M1' })).toMatchObject({
-        direction: MessageDirection.INCOMING,
-        body: 'withdrawn secret',
-      });
+      expect(await cleared()).toMatchObject({ direction: MessageDirection.INCOMING, author: '628333@c.us' });
     });
 
     it('clears a group message the store holds, keeping its direction', async () => {

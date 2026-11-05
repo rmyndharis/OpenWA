@@ -92,15 +92,34 @@ export function toUnixSeconds(ts: number | string | { toNumber(): number } | nul
 /**
  * The key a history revoke is judged against when neither its chunk nor the store holds the message it names.
  * The revoker's client writes that key from its own side (Baileys flips it for a live revoke), so only the
- * account's own revoke reads as is. A contact's `fromMe` in a 1:1 chat can only be their own message there. A group
- * member's `fromMe` is either their own message or, read from this side, the account's, so that revoke keeps just
- * the id: only the stored copy can say which message it is, and without one nothing is written.
+ * account's own revoke reads as is. A contact's `fromMe` in a 1:1 chat can only be their own message there. In a
+ * group, a member's `fromMe` is their own message, and a key that names the account as participant is the
+ * account's message deleted by an admin.
+ *
+ * Nothing in a key says which side wrote it, so this rests on that reading. Were a group key ever written from the
+ * account's side, an admin's delete of the account's message arriving before the message would be stored as a
+ * deleted message of the admin (with no text, the account's copy losing its id), and one arriving after it would
+ * leave the message as it was. A member can also forge a delete keyed `fromMe` that names someone else's message: it
+ * clears that member's stored message when it comes after the message, and when it comes first it is stored as a
+ * deleted message of the sender under that id, so the real message never lands. A delete keyed as an admin's, with
+ * the other member as participant, already did both, since history deletes are not checked against the roster, so
+ * the reach is not wider.
  */
-function revokeFallbackKey(target: WAMessageKey, envelope: WAMessageKey): WAMessageKey {
-  if (envelope.fromMe === true || target.fromMe !== true) {
-    return { ...target, remoteJid: target.remoteJid ?? envelope.remoteJid };
-  }
+function revokeFallbackKey(
+  target: WAMessageKey,
+  envelope: WAMessageKey,
+  isSelf: (jid: string | null | undefined) => boolean,
+): WAMessageKey {
+  const remoteJid = target.remoteJid ?? envelope.remoteJid;
   const kind = parseWaId(envelope.remoteJid ?? '').kind;
+  if (envelope.fromMe !== true && kind === 'group') {
+    if (target.fromMe === true) {
+      const { participant, participantAlt } = envelope;
+      return { remoteJid, fromMe: false, participant, participantAlt, id: target.id };
+    }
+    if (isSelf(target.participant) || isSelf(target.participantAlt)) return { remoteJid, fromMe: true, id: target.id };
+  }
+  if (envelope.fromMe === true || target.fromMe !== true) return { ...target, remoteJid };
   if (kind !== 'user' && kind !== 'lid') return { id: target.id };
   return { remoteJid: envelope.remoteJid, remoteJidAlt: envelope.remoteJidAlt, fromMe: false, id: target.id };
 }
@@ -151,8 +170,12 @@ export class BaileysHistory {
     const nameUpdates: { id: string; notify: string }[] = [];
     const mapped: IncomingMessage[] = [];
     const revokes: { message: WAMessage; target: WAMessageKey }[] = [];
-    const targets = new Map(messages.filter(msg => msg.key?.id).map(msg => [msg.key.id!, msg]));
+    // An id can name messages of different chats: each mapped message keeps its own source, and a revoke is
+    // matched with the message of its own chat.
+    const sources = new Map<IncomingMessage, WAMessage>();
+    const targets = new Map<string, WAMessage[]>();
     for (const msg of messages) {
+      if (msg.key?.id) targets.set(msg.key.id, [...(targets.get(msg.key.id) ?? []), msg]);
       if (msg.key?.fromMe !== true && msg.pushName) {
         const sender = keyParticipant(msg.key ?? {}) ?? msg.key?.remoteJid;
         if (sender) {
@@ -162,6 +185,7 @@ export class BaileysHistory {
       const incoming = this.mapHistoryMessage(b, msg);
       if (incoming) {
         mapped.push(incoming);
+        sources.set(incoming, msg);
       } else if (msg.key?.remoteJid) {
         const content = b.normalizeMessageContent(msg.message) ?? msg.message;
         const protocol = content?.protocolMessage;
@@ -172,10 +196,16 @@ export class BaileysHistory {
     }
     // Targets can precede or follow their revokes, including across separate history chunks.
     const crossFormRevokes: { confirmedKey: string; extra: IncomingMessage }[] = [];
+    const self = this.host.toNeutralJid(this.host.normalizedSelfJid());
+    const isSelf = (jid: string | null | undefined): boolean => !!jid && !!self && this.host.toNeutralJid(jid) === self;
     for (const { message, target } of revokes) {
-      const original = targets.get(target.id!);
+      const sameId = targets.get(target.id!) ?? [];
+      const chat = this.host.toNeutralJid(message.key.remoteJid!);
+      // None in the revoke's chat: the last one, as before, which the chat check then refuses.
+      const original =
+        sameId.find(msg => !!msg.key.remoteJid && this.host.toNeutralJid(msg.key.remoteJid) === chat) ?? sameId.at(-1);
       const key = await this.host.applyHistoryRevoke(
-        original?.key ?? revokeFallbackKey(target, message.key),
+        original?.key ?? revokeFallbackKey(target, message.key, isSelf),
         message.key,
       );
       if (!current()) return;
@@ -211,7 +241,7 @@ export class BaileysHistory {
       }
       for (const incoming of mapped) {
         if (incoming.type === 'revoked') continue;
-        const original = targets.get(incoming.id)!;
+        const original = sources.get(incoming)!;
         const deleted = revokedKeys.has(JSON.stringify([incoming.id, incoming.chatId, incoming.fromMe]));
         if (parseWaId(incoming.chatId).kind === 'lid') {
           this.rememberLidMessage(incoming.id, incoming.chatId, incoming.fromMe);

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { WAState, type Message as WwebjsMessage } from 'whatsapp-web.js';
 import type { Repository } from 'typeorm';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
-import { BaileysEvents, type BaileysEventsHost } from './baileys-events';
+import { BaileysEvents, type BaileysEventsHost, type GroupMember } from './baileys-events';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
 import { plannedInboundDownload } from './wwebjs-messaging';
 import type { WwebjsLifecycle } from './wwebjs-lifecycle';
@@ -197,7 +197,11 @@ describe('Baileys inbound messages held for storage', () => {
     };
   };
 
-  const build = (concurrency: number, callbacks?: EngineEventCallbacks, store?: ReturnType<typeof memoryStore>) => {
+  const build = (
+    concurrency: number,
+    callbacks?: EngineEventCallbacks,
+    store?: ReturnType<typeof memoryStore> & Pick<BaileysEventsHost, 'readGroupMembers' | 'peekGroupMembers'>,
+  ) => {
     const emitted: string[] = [];
     const recordKeyLidMappings = jest.fn();
     const host = {
@@ -406,6 +410,291 @@ describe('Baileys inbound messages held for storage', () => {
     expect(h.inserted()).toEqual(['GONE', 'NEXT']);
     expect(h.rows[0]).toEqual(expect.objectContaining({ body: '', type: 'revoked' }));
     expect(h.announced()).toEqual(['NEXT']);
+  });
+
+  describe("a group delete a member sends of another member's message", () => {
+    const GROUP = '1@g.us';
+    const ALICE = '628111@s.whatsapp.net';
+    const BOB = '628333@s.whatsapp.net';
+    const members = (bobIsAdmin: boolean): GroupMember[] => [
+      { ids: [ALICE], admin: false },
+      { ids: [BOB], admin: bobIsAdmin },
+    ];
+    const photoBy = (author: string): WAMessage => ({
+      key: { id: 'GONE', remoteJid: GROUP, fromMe: false, participant: author },
+      messageTimestamp: 1_700_000_000,
+      message: { imageMessage: { mimetype: 'image/jpeg', fileLength: 3, caption: 'secret caption' } },
+    });
+    const deleteBy = (sender: string, target: WAMessage['key']): WAMessage => ({
+      key: { id: 'REV', remoteJid: GROUP, fromMe: false, participant: sender },
+      messageTimestamp: 1_700_000_001,
+      message: { protocolMessage: { type: 0, key: { id: 'GONE', remoteJid: GROUP, ...target } } },
+    });
+
+    /** Alice's photo is still downloading when `sender` deletes it; `afterDownload` runs once the download ended. */
+    const deleteWhileDownloading = async (
+      sender: string,
+      target: WAMessage['key'],
+      roster: Pick<BaileysEventsHost, 'readGroupMembers' | 'peekGroupMembers'>,
+      afterDownload?: () => void,
+      author = ALICE,
+      beforeDelete?: (copies: Map<string, WAMessage>) => void,
+    ) => {
+      process.env.INBOUND_MEDIA_CONCURRENCY = '1';
+      const h = heldProjector();
+      const actors: unknown[] = [];
+      const store = memoryStore();
+      const { events } = build(
+        4,
+        {
+          ...h.callbacks,
+          onMessageRevoked: (message, actor) => {
+            actors.push(actor);
+            h.callbacks.onMessageRevoked?.(message, actor);
+          },
+        },
+        { ...store, ...roster },
+      );
+      const pending = deferred<ReturnType<typeof stream>>();
+      downloadMediaMessage.mockImplementationOnce(() => pending.promise);
+      upsert(events, photoBy(author));
+      await flush();
+      beforeDelete?.(store.copies);
+      upsert(events, deleteBy(sender, target));
+      await flush();
+      pending.resolve(stream());
+      await flush();
+      afterDownload?.();
+      await flush();
+      await sleep(20);
+      return {
+        actors,
+        copy: store.copies.get('GONE')?.message,
+        rows: h.rows.map(row => [row.waMessageId, row.type, row.body]),
+        received: h.announcedAs('message.received').map(row => ({ id: row.id, body: row.body })),
+        revoked: h.announcedAs('message.revoked').map(row => row.id),
+      };
+    };
+
+    // As when no roster is read: the row is kept, cleared, and nothing of the photo is announced.
+    const suppressed = { rows: [['GONE', 'revoked', '']], received: [], revoked: ['GONE'] };
+    const bobOverAlice = { fromMe: false, participant: ALICE };
+
+    const slowAnswer = () => {
+      const answer = deferred<GroupMember[]>();
+      return { read: jest.fn(() => answer.promise), settle: () => answer.resolve(members(true)) };
+    };
+    const lateFailure = () => {
+      let fail!: (error: Error) => void;
+      const answer = new Promise<GroupMember[]>((_resolve, reject) => (fail = reject));
+      answer.catch(() => undefined); // nothing is meant to ask for it
+      return { read: jest.fn(() => answer), settle: () => fail(new Error('no answer')) };
+    };
+
+    it.each([
+      ['a query would answer late', slowAnswer],
+      ['a query would fail late', lateFailure],
+    ])('is stored cleared and unannounced when no roster is cached and %s', async (_case, query) => {
+      const { read, settle } = query();
+
+      const seen = await deleteWhileDownloading(
+        BOB,
+        bobOverAlice,
+        { readGroupMembers: read, peekGroupMembers: () => null },
+        settle,
+      );
+
+      expect(seen).toMatchObject(suppressed);
+      expect(seen.actors).toEqual([{ fromMe: false, participant: BOB, admin: undefined }]);
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it('is stored cleared and unannounced when a copy of the same photo is already stored and no roster is cached', async () => {
+      const read = jest.fn(() => Promise.resolve(members(false)));
+
+      const seen = await deleteWhileDownloading(
+        BOB,
+        bobOverAlice,
+        { readGroupMembers: read, peekGroupMembers: () => null },
+        undefined,
+        ALICE,
+        copies => copies.set('GONE', photoBy(ALICE)),
+      );
+
+      expect(seen).toMatchObject(suppressed);
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it('is stored cleared and unannounced when the engine reads no roster', async () => {
+      const seen = await deleteWhileDownloading(BOB, bobOverAlice, {});
+
+      expect(seen).toMatchObject(suppressed);
+    });
+
+    it('is stored cleared and unannounced when the cached roster shows an admin, and says so', async () => {
+      const read = jest.fn(() => Promise.resolve(members(false)));
+
+      const seen = await deleteWhileDownloading(BOB, bobOverAlice, {
+        readGroupMembers: read,
+        peekGroupMembers: () => members(true),
+      });
+
+      expect(seen).toMatchObject(suppressed);
+      expect(seen.actors).toEqual([{ fromMe: false, participant: BOB, admin: true }]);
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it('is refused, and the photo announced with its caption, when the cached roster shows a member', async () => {
+      const read = jest.fn(() => Promise.resolve(members(true)));
+
+      const seen = await deleteWhileDownloading(BOB, bobOverAlice, {
+        readGroupMembers: read,
+        peekGroupMembers: () => members(false),
+      });
+
+      expect(seen.received).toEqual([{ id: 'GONE', body: 'secret caption' }]);
+      expect(seen.rows).toEqual([['GONE', 'image', 'secret caption']]);
+      expect(seen.revoked).toEqual([]);
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it('is stored cleared and unannounced when a member deletes their own photo, and tells the session the roster says no admin', async () => {
+      const read = jest.fn(() => Promise.resolve(members(true)));
+      const peek = jest.fn(() => members(false));
+
+      const seen = await deleteWhileDownloading(
+        ALICE,
+        { fromMe: true },
+        { readGroupMembers: read, peekGroupMembers: peek },
+      );
+
+      expect(seen).toMatchObject(suppressed);
+      expect(seen.actors).toEqual([{ fromMe: false, participant: ALICE, admin: false }]);
+      expect(read).not.toHaveBeenCalled();
+      expect(peek).toHaveBeenCalledTimes(1);
+    });
+
+    it('is stored cleared and unannounced when the sender is the author named in an id that cannot be compared', async () => {
+      const phone = '628111@c.us';
+      const lid = '900111@lid';
+
+      const seen = await deleteWhileDownloading(
+        lid,
+        { fromMe: false, participant: phone },
+        { peekGroupMembers: () => [{ ids: [phone, lid], admin: false }] },
+        undefined,
+        phone,
+      );
+
+      expect(seen).toMatchObject(suppressed);
+      expect(seen.copy).toBeNull();
+      expect(seen.actors).toEqual([{ fromMe: false, participant: lid, admin: false }]);
+    });
+
+    it.each([
+      ['no roster is cached', true],
+      ['the engine reads no roster', false],
+    ])(
+      'is stored cleared and unannounced when it is handed on, its row not written yet, and %s',
+      async (_case, reads) => {
+        const h = heldProjector();
+        const releaseInsert = h.stall('GONE');
+        const answer = deferred<GroupMember[]>();
+        const read = jest.fn(() => answer.promise);
+        const roster = reads ? { readGroupMembers: read, peekGroupMembers: () => null } : {};
+        const { events } = build(4, h.callbacks, { ...memoryStore(), ...roster });
+        upsert(events, photoBy(ALICE));
+        await flush();
+        expect(h.hookStarts).toContain('GONE');
+        expect(h.rows).toEqual([]);
+
+        upsert(events, deleteBy(BOB, bobOverAlice));
+        await flush();
+        releaseInsert();
+        await flush();
+        answer.resolve(members(true));
+        await flush();
+        await sleep(20);
+
+        expect(h.rows.map(row => [row.waMessageId, row.type, row.body])).toEqual(suppressed.rows);
+        expect(h.announcedAs('message.received')).toEqual([]);
+        expect(h.announcedAs('message.revoked').map(row => row.id)).toEqual(['GONE']);
+        expect(read).not.toHaveBeenCalled();
+      },
+    );
+
+    // The sender's own message under the id sits beside the other member's, and reads as theirs: the roster
+    // still decides whether the delete may touch what the other member wrote.
+    describe('named under an id another member holds', () => {
+      const textBy = (author: string): WAMessage => ({
+        key: { id: 'GONE', remoteJid: GROUP, fromMe: false, participant: author },
+        messageTimestamp: 1_700_000_000,
+        message: { conversation: 'secret text' },
+      });
+      const kept = [['GONE', 'text', 'secret text']];
+
+      // His message under the id is stopped as a repeat of the stored one and carries nothing out, so the stored
+      // message is judged as any settled one is: by one awaited read, which a cold cache answers with a query.
+      it.each([
+        ['a roster is cached', () => members(false)],
+        ['no roster is cached', () => null],
+      ])(
+        'leaves a stored message and its row when a member who is no admin sends one under its id and deletes it, and %s',
+        async (_case, cached) => {
+          const h = heldProjector();
+          const store = memoryStore();
+          const read = jest.fn(() => Promise.resolve(members(false)));
+          const peek = jest.fn(cached);
+          const { events } = build(4, h.callbacks, { ...store, readGroupMembers: read, peekGroupMembers: peek });
+          upsert(events, textBy(ALICE));
+          await flush();
+          expect(h.rows.map(row => [row.waMessageId, row.type, row.body])).toEqual(kept);
+
+          // As Baileys hands over a catch-up flush: his message under that id, and his delete of it, in one batch.
+          upsert(events, textBy(BOB), deleteBy(BOB, bobOverAlice));
+          await flush();
+          await sleep(20);
+
+          expect(store.copies.get('GONE')?.message).toEqual({ conversation: 'secret text' });
+          expect(h.rows.map(row => [row.waMessageId, row.type, row.body])).toEqual(kept);
+          expect(h.announced()).toEqual(['GONE']);
+          expect(h.announcedAs('message.revoked')).toEqual([]);
+          expect(read).toHaveBeenCalledTimes(1);
+          expect(peek).not.toHaveBeenCalled();
+        },
+      );
+
+      it('leaves the row only the table holds when a member who is no admin deletes it while his message under its id is held', async () => {
+        const h = heldProjector({ unique: true });
+        h.rows.push({
+          waMessageId: 'GONE',
+          chatId: GROUP,
+          direction: 'incoming',
+          author: ALICE,
+          type: 'text',
+          body: 'secret text',
+        });
+        const releaseInsert = h.stall('GONE');
+        const read = jest.fn(() => Promise.resolve(members(true)));
+        const { events } = build(4, h.callbacks, {
+          ...memoryStore(),
+          readGroupMembers: read,
+          peekGroupMembers: () => members(false),
+        });
+
+        upsert(events, textBy(BOB));
+        await flush();
+        upsert(events, deleteBy(BOB, bobOverAlice));
+        await flush();
+        releaseInsert();
+        await flush();
+        await sleep(20);
+
+        expect(h.rows).toEqual([expect.objectContaining({ author: ALICE, type: 'text', body: 'secret text' })]);
+        expect(h.announcedAs('message.revoked')).toEqual([]);
+        expect(read).not.toHaveBeenCalled();
+      });
+    });
   });
 
   it('downloads nothing for media deleted for everyone while it waits for room, and stores it cleared', async () => {
