@@ -133,7 +133,7 @@
 > or headers is passed on. A larger answer, such as a media download, is passed on as it
 > arrives instead, so that concurrent downloads through a node that does not own the session
 > do not each hold a copy in its memory. It carries the owner's `Content-Length` when the
-> owner sent one. `SESSION_PROXY_TIMEOUT_MS` then covers the owner's reply up to those first
+> owner sent one and the body was not encoded. `SESSION_PROXY_TIMEOUT_MS` then covers the owner's reply up to those first
 > 4 MiB and no more, so a slow client is not cut by it, and an owner that stops sending is
 > ended by the HTTP client's own limit of 5 minutes without data. A failure after the first
 > byte can no longer answer `502`: the connection to the client is cut, so a short body
