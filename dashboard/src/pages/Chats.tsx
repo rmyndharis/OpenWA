@@ -1639,11 +1639,13 @@ export function Chats() {
   // it is added to the sidebar locally until the first message, or the next list load, settles it.
   // The filter and search are cleared so the opened chat is visible in the list. A chat the panel found
   // through another session (a lookup that answered after a switch) is dropped: opening it here would
-  // send the next message through the wrong account.
+  // send the next message through the wrong account. Until the selected session's own list has committed the rows
+  // are still the previous session's, so the chat opens without being read from or added to them.
   const handleOpenNewChat = (chat: Chat, sessionId: string) => {
     if (sessionId !== selectedSessionRef.current) return;
-    const existing = chats.find(c => c.id === chat.id);
-    if (!existing) setChats(prev => [chat, ...prev]);
+    const listed = chatsOwnerRef.current === sessionId;
+    const existing = listed ? chats.find(c => c.id === chat.id) : undefined;
+    if (listed && !existing) setChats(prev => [chat, ...prev]);
     setActiveTab('chats');
     setActiveChannel(null);
     setActiveStatusContactId(null);
