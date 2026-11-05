@@ -23,7 +23,7 @@ function deps(overrides: Record<string, unknown> = {}) {
       signature: { scheme: 'none' },
       dedupHeader: 'x-delivery',
     }),
-    events: { recordOrSkip: jest.fn().mockResolvedValue(true) },
+    events: { recordOrSkip: jest.fn().mockResolvedValue(true), getPayloadHash: jest.fn().mockResolvedValue(null) },
     enqueue: jest.fn().mockResolvedValue(undefined),
     now: () => 0,
     ...overrides,
@@ -410,7 +410,9 @@ describe('IngressService.handle', () => {
   });
 
   it('short-circuits a duplicate delivery with the route ack and no enqueue', async () => {
-    const d = deps({ events: { recordOrSkip: jest.fn().mockResolvedValue(false) } });
+    const d = deps({
+      events: { recordOrSkip: jest.fn().mockResolvedValue(false), getPayloadHash: jest.fn().mockResolvedValue(null) },
+    });
     const svc = new IngressService(d);
     const res = await svc.handle(req);
     expect(d.enqueue).not.toHaveBeenCalled();
@@ -898,7 +900,7 @@ describe('IngressService.handle — response contract', () => {
         signature: { scheme: 'none' },
         dedupHeader: 'x-delivery',
       }),
-      events: { recordOrSkip: jest.fn().mockResolvedValue(true) },
+      events: { recordOrSkip: jest.fn().mockResolvedValue(true), getPayloadHash: jest.fn().mockResolvedValue(null) },
       enqueue: jest.fn().mockResolvedValue(undefined),
       log: jest.fn(),
       now: () => 0,
@@ -1138,7 +1140,7 @@ describe('IngressService.handle — response contract', () => {
       baseReq,
     );
     const dup = depsWith({
-      events: { recordOrSkip: jest.fn().mockResolvedValue(false) },
+      events: { recordOrSkip: jest.fn().mockResolvedValue(false), getPayloadHash: jest.fn().mockResolvedValue(null) },
       manifestRoute: jest.fn().mockReturnValue(route),
     });
     const retry = await new IngressService(dup).handle(baseReq);

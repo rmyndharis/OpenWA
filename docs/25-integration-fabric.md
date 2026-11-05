@@ -229,6 +229,21 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   byte-identical copies within `INGRESS_DEDUP_RETENTION_DAYS` (a copy gets the route's ack and is not
   enqueued again); beyond that, handler idempotency is the only protection. The loader logs a warning
   for each such route that keeps the header-keyed default.
+  A captured signed request can also preclaim a predictable future delivery id when that header is
+  outside the signed bytes: the genuine delivery under that id is then acknowledged and suppressed
+  until the dedup marker expires. On a repeated id with different body bytes the host emits WARN
+  `ingress_dedup_body_mismatch` with `pluginId`, `instanceId` and `deliveryId`, and increments
+  `openwa_ingress_dedup_body_mismatches_total`. The default still acknowledges without dispatching:
+  providers whose retries change body bytes depend on this behavior. A historical row without a
+  payload fingerprint counts as a match.
+  A route for a provider whose retries are byte-identical may explicitly set
+  `dedupBodyMismatchAsNew: true`. A different body under an existing id then becomes a new delivery
+  with a deterministic body-specific row and queue key; its retries still collapse. The handler and
+  the `{id}` ack token retain the provider delivery id, including on queued retries, reconciliation
+  and redrive, so the handler sees the same `req.deliveryId` for both bodies; section 25.7 says how
+  such a handler keys its side effects. The flag defaults to false. Enabling it for a provider whose
+  retries change bytes can send duplicate WhatsApp messages; it does not authenticate the delivery
+  header or replace handler idempotency.
   The value of a route's declared signature header (hmac-sha256 or shared-secret) is redacted from the
   persisted and enqueued payload, like the well-known signature headers, so the plugin's handler sees
   `[redacted]` in its place.
@@ -280,6 +295,12 @@ Key every side effect on the delivery id (`req.deliveryId`) and hand work that c
 a background task instead of awaiting it in the handler. The budget is short because a queue-disabled
 deployment answers the provider only after the inline dispatch, and providers abandon a request within a
 few seconds.
+
+On a route that sets `dedupBodyMismatchAsNew` (section 25.6) the handler receives the same `req.deliveryId`
+for every body the host accepts under one provider delivery id. Key its side effects on a provider event
+identity taken from the signed body, or on `req.deliveryId` together with a hash of `req.rawBody`: keyed on
+the delivery id alone, the handler would treat the second body as a repeat and drop it. A byte-identical
+retry still shares the key.
 
 A queued, retried, reconciled or redriven delivery runs with what was decided when it was accepted: the
 verification verdict (a delivery stored before the verdict was recorded reads the route as it stands) and

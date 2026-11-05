@@ -293,9 +293,12 @@ Always use the correct format for chat IDs:
    `attempts: 0` was never sent (shed under load, dropped at shutdown, over the payload size cap, or
    failed before sending; a shed or shutdown row is replayed later), except one that shutdown
    stopped between retries with the queue disabled, whose earlier attempts were sent; with
-   attempts, n8n timed out or was unreachable. An empty list means nothing has failed permanently
-   yet: retries still in flight show only in the server logs, and an event that never matched the
-   webhook leaves no row
+   attempts, n8n may have timed out, been unreachable, redirected, or resolved to a blocked address.
+   With `WEBHOOK_SSRF_PROTECT` enabled, a redirect or blocked destination is recorded as
+   `Destination address is not allowed`; with protection disabled and `WEBHOOK_SSRF_REDIRECTS`
+   unset, a redirect can read `fetch failed`. Register the final https URL instead of one that
+   redirects. An empty list means nothing has failed permanently yet: retries still in flight show
+   only in the server logs, and an event that never matched the webhook leaves no row
 
 ### Message Not Sending
 

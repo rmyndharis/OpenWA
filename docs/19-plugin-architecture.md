@@ -330,6 +330,8 @@ claims a route the manifest already declared under `ingress`: the host owns the 
 [27 — Writing a Search-Provider Plugin](./27-plugin-search-providers.md). Hook handlers use the host
 `HookContext` / `HookResult` shape (see §19.5), not a `{ continue, modified }` shape.
 
+Ingress routes may set `dedupBodyMismatchAsNew: true` only for providers whose retries preserve body bytes. The default keeps header-keyed retries suppressed even when the body changes; all such mismatches are logged and counted. With the option enabled, a different body gets a separate storage and queue key while the handler keeps the provider delivery id, so the handler of such a route keys its side effects on the delivery id and the body together. See [25.6](25-integration-fabric.md#256-security-model) for the retry and idempotency contract.
+
 ### Capability facade
 
 A plugin reaches WhatsApp, the engine, and the network **only** through these namespaces. Each call is
@@ -850,7 +852,7 @@ tier automatically. Key properties:
   logged at most once per event per minute and shows as the last hook error in plugin health.
 - A sandboxed **webhook** handler (`ctx.registerWebhook`) has the same **5 s** budget (`INGRESS_DISPATCH_TIMEOUT_MS`), and the host
   cannot cancel a handler that overruns it: the delivery is retried while the first run still lands, so a handler must key
-  its side effects on `req.deliveryId` and hand slow work to a background task (docs/25, section 25.7).
+  its side effects on `req.deliveryId` (with a hash of `req.rawBody` on a route that sets `dedupBodyMismatchAsNew`) and hand slow work to a background task (docs/25, section 25.7).
 - After a hook, webhook or search dispatch times out, the host pings the worker. A worker whose event
   loop is blocked (a synchronous loop) cannot answer within 5 s, so it is terminated and the plugin is
   set to `ERROR`, as on a crash; a slow async handler answers and is left running.

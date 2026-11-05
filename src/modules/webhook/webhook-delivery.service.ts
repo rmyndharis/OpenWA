@@ -1,6 +1,7 @@
 import { Injectable, Optional, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { MoreThan, Repository } from 'typeorm';
+import { IsNull, MoreThan, Repository } from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -1226,7 +1227,29 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     const existing = await this.failureRepository.count({
       where: { webhookId: row.webhookId, idempotencyKey: row.idempotencyKey, attempts: MoreThan(0) },
     });
-    if (existing > 0) return true;
+    if (existing > 0) {
+      if (this.keepsFailurePayload()) {
+        try {
+          await this.failureRepository.update(
+            {
+              webhookId: row.webhookId,
+              idempotencyKey: row.idempotencyKey,
+              attempts: MoreThan(0),
+              payload: IsNull(),
+              createdAt: MoreThan(new Date(Date.now() - this.payloadRetentionHours() * 60 * 60 * 1000)),
+            },
+            { payload: row.payload } as QueryDeepPartialEntity<WebhookDeliveryFailure>,
+          );
+        } catch (error) {
+          this.logger.error(
+            'Failed to retain webhook replay payload',
+            error instanceof Error ? error.message : String(error),
+          );
+          return false;
+        }
+      }
+      return true;
+    }
     // A delivery that was shed or refused before sending was recorded with its reason as an attempts-0 row,
     // which the terminal row below replaces; keep that reason on it.
     const unsent = await this.failureRepository.findOne({

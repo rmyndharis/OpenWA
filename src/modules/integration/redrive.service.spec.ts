@@ -23,6 +23,13 @@ describe('RedriveService', () => {
     ingressEnqueue = { enqueue: jest.fn().mockResolvedValue({ outcome: 'queued' }) };
   });
 
+  function setRows(rows: Array<{ id: string }>): void {
+    (repo.find as jest.Mock).mockResolvedValue(rows.map(({ id }) => ({ id })));
+    (repo.findOneBy as jest.Mock).mockImplementation((criteria: { id: string } | Array<{ id: string }>) =>
+      Promise.resolve(rows.find(row => row.id === (Array.isArray(criteria) ? criteria[0].id : criteria.id)) ?? null),
+    );
+  }
+
   function makeSvc(): RedriveService {
     return new RedriveService(
       repo as Repository<IntegrationDeliveryFailure>,
@@ -34,10 +41,7 @@ describe('RedriveService', () => {
   it('redrives the rows it can read when one stored payload does not parse', async () => {
     const ingress = { headers: {}, query: {}, body: '{}', rawBody: '{}' };
     const healthy = { id: 'f2', pluginId: 'p', instanceId: 'i', deliveryId: 'd2', payload: { route: 'r', ingress } };
-    // The window read fails as a whole; read again by id, the first row cannot be read and the second can.
-    (repo.find as jest.Mock)
-      .mockRejectedValueOnce(new SyntaxError('Unexpected token o in JSON at position 1'))
-      .mockResolvedValueOnce([{ id: 'f1' }, { id: 'f2' }]);
+    (repo.find as jest.Mock).mockResolvedValue([{ id: 'f1' }, { id: 'f2' }]);
     (repo.findOneBy as jest.Mock).mockRejectedValueOnce(new SyntaxError('bad json')).mockResolvedValueOnce(healthy);
     const logged = jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
 
@@ -88,7 +92,7 @@ describe('RedriveService', () => {
         redriven: false,
       },
     ];
-    (repo.find as jest.Mock).mockResolvedValue(rows);
+    setRows(rows);
     const svc = makeSvc();
 
     const res = await svc.redriveInstance('p', 'i', null);
@@ -130,7 +134,7 @@ describe('RedriveService', () => {
         redriven: false,
       },
     ];
-    (repo.find as jest.Mock).mockResolvedValue(rows);
+    setRows(rows);
     const svc = makeSvc();
 
     const res = await svc.redriveInstance('p', 'i', null);
@@ -161,7 +165,7 @@ describe('RedriveService', () => {
         redriven: false,
       },
     ];
-    (repo.find as jest.Mock).mockResolvedValue(rows);
+    setRows(rows);
     (ingressEnqueue.enqueue as jest.Mock).mockResolvedValue({ outcome: 'failed' });
     const svc = makeSvc();
 
@@ -182,6 +186,7 @@ describe('RedriveService', () => {
     // The binding enters BOTH the find() and the count() query: rows of an earlier binding neither consume
     // the batch nor leak through `remaining`, since dispatch refuses them and a replay would only fail again.
     expect(repo.find).toHaveBeenCalledWith({
+      select: { id: true },
       where: { pluginId: 'p', instanceId: 'i', direction: 'inbound', redriven: false, sessionId: 'sess-current' },
       order: { attempts: 'ASC', createdAt: 'ASC' },
       take: 100,
@@ -205,7 +210,12 @@ describe('RedriveService', () => {
       { ...base, sessionId: expect.objectContaining({ _type: 'isNull' }) as unknown },
       { ...base, sessionId: '*' },
     ];
-    expect(repo.find).toHaveBeenCalledWith({ where, order: { attempts: 'ASC', createdAt: 'ASC' }, take: 100 });
+    expect(repo.find).toHaveBeenCalledWith({
+      select: { id: true },
+      where,
+      order: { attempts: 'ASC', createdAt: 'ASC' },
+      take: 100,
+    });
     expect(repo.count).toHaveBeenCalledWith({ where });
   });
 
@@ -222,7 +232,7 @@ describe('RedriveService', () => {
         redriven: false,
       },
     ];
-    (repo.find as jest.Mock).mockResolvedValue(rows);
+    setRows(rows);
     const svc = makeSvc();
 
     await svc.redriveInstance('p', 'i', null);
@@ -251,7 +261,7 @@ describe('RedriveService', () => {
     const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 
     it('stops at the next row and leaves the rows it did not reach open and unchanged', async () => {
-      (repo.find as jest.Mock).mockResolvedValue([failure('f1', 'd1'), failure('f2', 'd2'), failure('f3', 'd3')]);
+      setRows([failure('f1', 'd1'), failure('f2', 'd2'), failure('f3', 'd3')]);
       (repo.count as jest.Mock).mockResolvedValue(2);
       let finishFirst!: () => void;
       (ingressEnqueue.enqueue as jest.Mock).mockImplementationOnce(
@@ -272,7 +282,7 @@ describe('RedriveService', () => {
     });
 
     it('leaves a row open and unchanged when its enqueue is refused because shutdown began', async () => {
-      (repo.find as jest.Mock).mockResolvedValue([failure('f1', 'd1'), failure('f2', 'd2')]);
+      setRows([failure('f1', 'd1'), failure('f2', 'd2')]);
       (repo.count as jest.Mock).mockResolvedValue(2);
       const svc = makeSvc();
       let destroyed: Promise<void> | undefined;
@@ -289,14 +299,14 @@ describe('RedriveService', () => {
     });
 
     it('still surfaces an enqueue failure that is not a shutdown', async () => {
-      (repo.find as jest.Mock).mockResolvedValue([failure('f1', 'd1')]);
+      setRows([failure('f1', 'd1')]);
       (ingressEnqueue.enqueue as jest.Mock).mockRejectedValueOnce(new Error('database is gone'));
 
       await expect(makeSvc().redriveInstance('p', 'i', null)).rejects.toThrow('database is gone');
     });
 
     it('settles its teardown when the redrive it waits for fails', async () => {
-      (repo.find as jest.Mock).mockResolvedValue([failure('f1', 'd1')]);
+      setRows([failure('f1', 'd1')]);
       // A bookkeeping write after the enqueue is not covered by the shutdown refusal above, so the run rejects.
       (events.update as jest.Mock).mockRejectedValueOnce(new Error('database is gone'));
       let finishFirst!: () => void;
@@ -319,7 +329,7 @@ describe('RedriveService', () => {
     it('waits at most the dispatch timeout for a replay still in hand', async () => {
       jest.useFakeTimers();
       try {
-        (repo.find as jest.Mock).mockResolvedValue([failure('f1', 'd1')]);
+        setRows([failure('f1', 'd1')]);
         (ingressEnqueue.enqueue as jest.Mock).mockReturnValueOnce(new Promise(() => undefined));
         const svc = makeSvc();
         void svc.redriveInstance('p', 'i', null);

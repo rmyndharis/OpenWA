@@ -72,6 +72,7 @@ export const CHAT_KINDS: readonly ChatKind[] = ['individual', 'group', 'channel'
 export const MAX_CONDITIONS = 20;
 export const MAX_VALUES_PER_CONDITION = 100;
 export const MAX_TEXT_VALUE_LENGTH = 1000;
+export const MAX_ID_VALUE_LENGTH = 128;
 
 const ID_OPERATORS: FilterOperator[] = ['is', 'isNot'];
 const TEXT_OPERATORS: FilterOperator[] = ['contains', 'equals'];

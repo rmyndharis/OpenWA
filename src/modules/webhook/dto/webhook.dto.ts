@@ -131,11 +131,13 @@ export class CreateWebhookDto {
     type: String,
     isArray: true,
     minItems: 1,
+    maxItems: WEBHOOK_EVENTS.length + 1,
   })
   @IsOptional()
   @ToStrictArray()
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(WEBHOOK_EVENTS.length + 1)
   // Must include '*' (wildcard subscribe-all) alongside the known events.
   @IsIn([...WEBHOOK_EVENTS, '*'], { each: true })
   events?: string[];
@@ -221,11 +223,13 @@ export class UpdateWebhookDto {
     type: String,
     isArray: true,
     minItems: 1,
+    maxItems: WEBHOOK_EVENTS.length + 1,
   })
   @ValidateIf((_: UpdateWebhookDto, v: unknown) => v !== undefined)
   @ToStrictArray()
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(WEBHOOK_EVENTS.length + 1)
   @IsIn([...WEBHOOK_EVENTS, '*'], { each: true })
   events?: string[];
 

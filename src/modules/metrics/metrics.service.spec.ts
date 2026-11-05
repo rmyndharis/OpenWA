@@ -98,6 +98,8 @@ describe('MetricsService', () => {
       // Webhook terminal-failure counter is emitted with correct counter typing + current total.
       expect(out).toContain('# TYPE openwa_webhook_delivery_failures_total counter');
       expect(out).toContain(`openwa_webhook_delivery_failures_total ${getWebhookDeliveryFailuresTotal()}`);
+      expect(out).toContain('# TYPE openwa_ingress_dedup_body_mismatches_total counter');
+      expect(out).toMatch(/^openwa_ingress_dedup_body_mismatches_total \d+$/m);
       // Reconnect observability counters are emitted with correct counter typing + current totals.
       expect(out).toContain('# TYPE openwa_session_reconnect_attempts_total counter');
       expect(out).toContain(`openwa_session_reconnect_attempts_total ${getSessionReconnectAttemptsTotal()}`);

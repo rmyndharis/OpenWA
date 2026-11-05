@@ -23,14 +23,14 @@ describe('PluginInstanceService', () => {
     if (ds.isInitialized) await ds.destroy();
   });
 
-  it('mints a 64-hex-char secret and stores a composite id', async () => {
-    const inst = await service.mint('chatwoot', 'acct1', { sessionScope: 'sess-1' });
+  it('creates a 64-hex-char secret and stores a composite id', async () => {
+    const inst = await service.create('chatwoot', 'acct1', { sessionScope: 'sess-1' });
     expect(inst.id).toBe('chatwoot:acct1');
     expect(inst.secret).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('masks the secret on the operator-facing view', async () => {
-    const inst = await service.mint('chatwoot', 'acct1', {});
+    const inst = await service.create('chatwoot', 'acct1', {});
     expect(service.maskedView(inst).secret).toBe('***');
   });
 
@@ -63,7 +63,7 @@ describe('PluginInstanceService', () => {
   });
 
   it('resolves an existing instance and returns null for an unknown one', async () => {
-    await service.mint('chatwoot', 'acct1', {});
+    await service.create('chatwoot', 'acct1', {});
     expect((await service.resolve('chatwoot', 'acct1'))?.id).toBe('chatwoot:acct1');
     expect(await service.resolve('chatwoot', 'nope')).toBeNull();
   });
@@ -78,10 +78,9 @@ describe('PluginInstanceService', () => {
   });
 
   // A GET challenge route answers 403 while verifyToken is null, and no update path can set it later.
-  it('keeps a supplied verifyToken, else auto-generates one on create and mint', async () => {
+  it('keeps a supplied verifyToken, else auto-generates one on create', async () => {
     expect((await service.create('meta', 'a1', { verifyToken: 'hub-token' })).verifyToken).toBe('hub-token');
     expect((await service.create('meta', 'a2', {})).verifyToken).toMatch(/^[0-9a-f]{32}$/);
-    expect((await service.mint('meta', 'a3', {})).verifyToken).toMatch(/^[0-9a-f]{32}$/);
   });
 
   it('masks a NESTED secret:true config field on masked reads (recursive redaction)', () => {
@@ -380,12 +379,6 @@ describe('PluginInstanceService provisioning', () => {
     expect((await service.resolve('chatwoot', 'acct1'))?.secret).toBe(winner.secret);
   });
 
-  it('mint returns the stored row when a concurrent mint inserted it first', async () => {
-    const [a, b] = await Promise.all([service.mint('chatwoot', 'acct1', {}), service.mint('chatwoot', 'acct1', {})]);
-    expect(a.secret).toBe(b.secret);
-    expect((await service.resolve('chatwoot', 'acct1'))?.secret).toBe(a.secret);
-  });
-
   // update() reads the row before it writes; a DELETE or a secret rotation can land in between.
   it('update does not re-insert a row deleted after it was read', async () => {
     await service.create('chatwoot', 'acct1', {});
@@ -420,10 +413,8 @@ describe('PluginInstanceService provisioning', () => {
     expect(await service.resolve('chatwoot', 'acct1')).toBeNull();
   });
 
-  it('normalizes an empty sessionScope to null (all-sessions) on mint/create/update, never a literal ""', async () => {
+  it('normalizes an empty sessionScope to null (all-sessions) on create/update, never a literal ""', async () => {
     // '' would break outbound send (falsy sessionId) and be unrecoverable from the UI; store null instead.
-    const minted = await service.mint('chatwoot', 'm1', { sessionScope: '' });
-    expect(minted.sessionScope).toBeNull();
     const created = await service.create('chatwoot', 'acct1', { sessionScope: '' });
     expect(created.sessionScope).toBeNull();
     const patched = await service.update('chatwoot', 'acct1', { sessionScope: '' });

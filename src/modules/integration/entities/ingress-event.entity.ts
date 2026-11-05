@@ -64,6 +64,7 @@ export class IngressEvent {
     query: Record<string, string>;
     body: string;
     rawBody: string;
+    providerDeliveryId?: string;
     method?: string;
     admission?: { verified: boolean };
   } | null;

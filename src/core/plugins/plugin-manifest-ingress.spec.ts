@@ -31,6 +31,18 @@ const baseManifest = () => ({
 });
 
 describe('validateIngressManifest', () => {
+  it.each(['true', 1, null, {}])('rejects a non-boolean body mismatch option (%p)', value => {
+    const m = baseManifest();
+    Object.assign(m.ingress[0], { dedupBodyMismatchAsNew: value });
+    expect(() => validateIngressManifest(m as never)).toThrow(/dedupBodyMismatchAsNew/);
+  });
+
+  it.each([true, false])('accepts the body mismatch option %p', value => {
+    const m = baseManifest();
+    Object.assign(m.ingress[0], { dedupBodyMismatchAsNew: value });
+    expect(() => validateIngressManifest(m as never)).not.toThrow();
+  });
+
   it('accepts a well-formed sdkVersion 1 ingress manifest', () => {
     expect(() => validateIngressManifest(baseManifest() as never)).not.toThrow();
   });

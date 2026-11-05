@@ -42,6 +42,10 @@ export class IngressEventService {
     }
   }
 
+  async getPayloadHash(key: IngressEventKey): Promise<string | null> {
+    return (await this.repo.findOne({ where: key, select: { payloadHash: true } }))?.payloadHash ?? null;
+  }
+
   /**
    * Record the enqueue outcome on the persisted event. 'queued'/'dispatched' mean the event reached
    * the dispatch tier → 'dispatched' (a later in-tier failure dead-letters via the processor/DLQ, not

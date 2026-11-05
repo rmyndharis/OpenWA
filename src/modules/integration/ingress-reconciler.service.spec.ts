@@ -96,6 +96,29 @@ describe('IngressReconcilerService.sweep', () => {
   const stored = (id: string) => events.findOneByOrFail({ id });
   const enqueuedJobs = () => enqueue.mock.calls as Array<[IngressJobData, string]>;
 
+  it('keeps the provider id through reconciliation, a failed dispatch, and redrive', async () => {
+    await insertEvent({
+      providerDeliveryId: 'body-specific-key',
+      payload: { headers: {}, query: {}, body: '{}', rawBody: '{}', providerDeliveryId: 'provider-17' },
+      dispatchAttempts: 4,
+    });
+    enqueue.mockResolvedValue({ outcome: 'failed', error: 'unavailable' });
+
+    await service.sweep(OPTS);
+    const [first] = enqueuedJobs()[0];
+    expect(first).toMatchObject({ deliveryId: 'body-specific-key', payload: { providerDeliveryId: 'provider-17' } });
+    expect((await failures.find())[0]).toMatchObject({
+      deliveryId: 'body-specific-key',
+      payload: { ingress: { providerDeliveryId: 'provider-17' } },
+    });
+
+    enqueue.mockResolvedValue({ outcome: 'queued' });
+    const redrive = new RedriveService(failures, events, { enqueue } as unknown as IngressEnqueueService);
+    expect((await redrive.redriveInstance('plug', 'inst', 'sess-1')).redriven).toBe(1);
+    const [replayed] = enqueuedJobs()[1];
+    expect(replayed).toMatchObject({ deliveryId: 'body-specific-key', payload: { providerDeliveryId: 'provider-17' } });
+  });
+
   it('replays a stale pending event with its original deliveryId as jobId, then marks it dispatched', async () => {
     const id = await insertEvent();
 
