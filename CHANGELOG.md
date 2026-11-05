@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-06
+
 ### Added
 
 - Add `GET /api/sessions/{sessionId}/messages/{chatId}/{messageId}/receipts`, which lists who received, read and played a message the account sent on whatsapp-web.js (Baileys answers `501`), and `messages.receipts` in all five SDKs (#1748). Thanks @Purushotham-Prajapati-24, and @berodcdev for the request.
