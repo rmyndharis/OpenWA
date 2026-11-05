@@ -222,14 +222,19 @@ describe('SessionProxyInterceptor relaying an answer larger than it holds', () =
 
   it('cuts the connection, and says so, when the owner breaks off after the answer began', async () => {
     const total = CEILING + 3 * MIB;
+    const began = deferred();
     const owner = await startOwner((req, res) => {
       res.writeHead(200, { 'content-length': String(total) });
       res.write(pattern(0, CEILING + MIB));
-      setTimeout(() => req.socket.destroy(), 50);
+      // The owner breaks off once the client has the start of the answer, which is when the relay has begun; a fixed
+      // delay would break it off before the relay read its first 4 MiB on a loaded machine, and that is a 502.
+      void began.promise.then(() => req.socket.destroy());
     });
     const node = await startNode(owner);
 
     const client = download(node.url);
+    expect(await client.reached(CEILING, 10_000)).toBe(true);
+    began.resolve();
     const { body, complete } = await client.finished;
 
     expect(client.response().statusCode).toBe(200);
