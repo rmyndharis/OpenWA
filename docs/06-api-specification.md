@@ -319,9 +319,9 @@ in it is stored but ignored).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Response** `200`
 
@@ -350,9 +350,9 @@ and therefore apply on the next start, leaving a reconnect sequence already in f
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `UpdateSessionConfigDto` (any subset; each key also accepts `null`)
 
@@ -378,9 +378,9 @@ Read a session's masked proxy configuration. Credentials embedded in the stored 
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Response** `200` — `SessionProxyResponseDto`
 
@@ -405,9 +405,9 @@ Update per-session proxy settings. No restart is required or performed — chang
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `UpdateSessionProxyDto` (any subset; each key also accepts `null`)
 
@@ -431,9 +431,9 @@ Get the QR code (PNG data URL) for session authentication.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Response** `200` — `QRCodeResponseDto`
 
@@ -456,9 +456,9 @@ Get all groups the session is a member of (paginated).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Query parameters**
 
@@ -485,9 +485,9 @@ Get active chats for a session, most-recent first (paginated).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Query parameters**
 
@@ -654,9 +654,9 @@ Start a session and initialize the WhatsApp connection.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 No request body.
 
@@ -695,9 +695,9 @@ Stop a session and disconnect WhatsApp.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 No request body.
 
@@ -774,9 +774,9 @@ session must be started explicitly and the logout retried by hand. A session sto
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 No request body.
 
@@ -813,9 +813,9 @@ Force-kill a stuck session (SIGKILL the wedged engine, then tear it down).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 No request body.
 
@@ -854,9 +854,9 @@ Request an 8-char pairing code to link via phone number (alternative to QR).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `RequestPairingCodeDto`
 
@@ -901,9 +901,9 @@ Two properties to design around:
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `SubscribePresenceDto`
 
@@ -1001,9 +1001,9 @@ Mark a chat as read/seen.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `MarkChatReadDto`
 
@@ -1042,9 +1042,9 @@ Mark a chat as unread.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `MarkChatUnreadDto`
 
@@ -1080,7 +1080,7 @@ Delete every message in a chat, keeping the chat itself in the list.
 
 | Name        | Type   | Description                                                                                                                           |
 | ----------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `sessionId` | string | Session UUID                                                                                                                          |
+| `sessionId` | string | Session id                                                                                                                            |
 | `chatId`    | string | Chat ID in the neutral form the gateway returns, on either engine, e.g. `1234567890-123@g.us`. URL-encode it if your client does not. |
 
 **Response** `200`
@@ -1105,9 +1105,9 @@ Archive or unarchive a chat.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `ArchiveChatDto`
 
@@ -1147,9 +1147,9 @@ Mute a chat's notifications until a given moment, or unmute it.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `MuteChatDto`
 
@@ -1200,9 +1200,9 @@ Pin a chat to the top of the chat list, or unpin it. Chat-level — distinct fro
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `PinChatDto`
 
@@ -1241,9 +1241,9 @@ Delete a chat from the chat list (e.g. a group you have left).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `DeleteChatDto`
 
@@ -1278,9 +1278,9 @@ Send a typing/recording presence indicator to a chat (or clear it with `paused`)
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `SendChatStateDto`
 
@@ -1311,9 +1311,9 @@ Delete a session.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Response** `204` — empty body (`@HttpCode(204)`, returns void). A `findOne` lookup runs first, so a missing id yields `404`.
 
