@@ -49,6 +49,14 @@ flowchart TD
     A3 -->|No| A3a[Check message format]
 ```
 
+### Issue: Source install fails with a `GLIBC_2.xx not found` error
+
+**Symptoms:** A Linux source install exits during startup with an error such as `version GLIBC_2.29 not found` or `version GLIBC_2.33 not found (required by .../better-sqlite3/prebuilds/linux-x64.node)` or `ERR_DLOPEN_FAILED` naming that prebuild.
+
+**Cause:** The shipped `better-sqlite3` Linux x64/arm64 glibc prebuilds require **glibc 2.34 or newer**. The main authentication database always uses SQLite, so selecting PostgreSQL does not avoid this requirement. Node.js can run on older glibc versions while this native driver cannot.
+
+**Solution:** Use a host with glibc 2.34+ (Ubuntu 22.04+, Debian 12+, RHEL 9+) or the published Docker image. `npm rebuild better-sqlite3 --build-from-source` does not help while the shipped prebuild exists: the package skips an ordinary rebuild when it finds a prebuild, and its loader chooses that file ahead of a local build.
+
 ## 12.2 Podman Compatibility
 
 ### Issue: `FileNotFoundError` / Docker socket missing

@@ -572,9 +572,12 @@ Add a new one only when the condition is engine-agnostic and recurs; a one-off s
 
 ### Prerequisites
 
+The shipped `better-sqlite3` Linux x64/arm64 glibc prebuild requires glibc 2.34+. Use a newer host (Ubuntu 22.04+, Debian 12+, RHEL 9+) or the published Docker image on an older host. `npm rebuild better-sqlite3 --build-from-source` does not help while the prebuild exists: the build skips it and the loader prefers that prebuild. See [startup troubleshooting](./12-troubleshooting-faq.md#issue-source-install-fails-with-a-glibc_2xx-not-found-error).
+
 ```bash
 # Required
 - Node.js 22.19 or newer (22 LTS)
+- glibc 2.34+ for Linux glibc source installs on x64/arm64 (including PostgreSQL deployments)
 - npm 10+
 - Docker & Docker Compose
 - Git

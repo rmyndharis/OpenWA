@@ -208,6 +208,8 @@ then use it to sign in to the dashboard and as the `X-API-Key` header wherever t
 
 ### Option B: Local Development
 
+Source installs on Linux x64/arm64 hosts using glibc need **glibc 2.34 or newer** for the shipped `better-sqlite3` prebuild, including when PostgreSQL is selected. Use a newer host (Ubuntu 22.04+, Debian 12+, RHEL 9+) or the published Docker image on older hosts; see the [startup troubleshooting note](docs/12-troubleshooting-faq.md#issue-source-install-fails-with-a-glibc_2xx-not-found-error).
+
 ```bash
 # Clone repository
 git clone https://github.com/rmyndharis/OpenWA.git
@@ -447,17 +449,17 @@ The key can be passed as `Authorization: Bearer …` or `X-API-Key: …`. Every 
 
 ## 🛠 Tech Stack
 
-| Layer         | Technology                                              |
-| ------------- | ------------------------------------------------------- |
-| **Runtime**   | Node.js 22 LTS                                          |
-| **Framework** | NestJS 11.x                                             |
-| **Language**  | TypeScript 6.x                                          |
-| **WA Engine** | whatsapp-web.js (default) / baileys — set `ENGINE_TYPE` |
-| **Database**  | SQLite / PostgreSQL                                     |
-| **Redis**     | Queue, rate limits, WebSocket fan-out (optional)        |
-| **Storage**   | Local / S3 / MinIO                                      |
-| **ORM**       | TypeORM                                                 |
-| **Container** | Docker + Docker Compose                                 |
+| Layer         | Technology                                                      |
+| ------------- | --------------------------------------------------------------- |
+| **Runtime**   | Node.js 22 LTS; Linux glibc source installs on x64/arm64: 2.34+ |
+| **Framework** | NestJS 11.x                                                     |
+| **Language**  | TypeScript 6.x                                                  |
+| **WA Engine** | whatsapp-web.js (default) / baileys — set `ENGINE_TYPE`         |
+| **Database**  | SQLite / PostgreSQL                                             |
+| **Redis**     | Queue, rate limits, WebSocket fan-out (optional)                |
+| **Storage**   | Local / S3 / MinIO                                              |
+| **ORM**       | TypeORM                                                         |
+| **Container** | Docker + Docker Compose                                         |
 
 ---
 
