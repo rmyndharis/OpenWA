@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A whatsapp-web.js session whose proxy asks for a username and password failed every start after the first with `net::ERR_INVALID_AUTH_CREDENTIALS`, because WhatsApp Web's service worker, registered in the saved profile, took the page's requests out of reach of the proxy login; the page now ignores the service worker for such a session (#819). Thanks @gudge25 and @lHumanizado for the report.
+
 ## [0.28.0] - 2026-11-06
 
 ### Added
