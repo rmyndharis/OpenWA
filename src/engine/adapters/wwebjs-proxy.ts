@@ -47,3 +47,29 @@ export function buildProxyLaunchConfig(url: string): ProxyLaunchConfig {
   }
   return { serverArg, socksAuthUnsupported: hasCredentials && isSocks };
 }
+
+/** The part of a whatsapp-web.js auth strategy that {@link bypassServiceWorkerOnLaunch} reaches into. */
+interface LaunchHookStrategy {
+  client: { pupPage: { setBypassServiceWorker(bypass: boolean): Promise<void> } };
+  afterBrowserInitialized(): Promise<void>;
+}
+
+/**
+ * Make the session's page ignore WhatsApp Web's service worker from the first navigation on.
+ * `page.authenticate()` answers a proxy's 407 only for the page's own requests. After the first link WhatsApp Web
+ * registers a service worker in the persisted profile, the next launch's navigation is served through it, and
+ * the worker's request meets the 407 with nobody to answer: Chromium reports `net::ERR_INVALID_AUTH_CREDENTIALS`
+ * on every start after the first (#819). With the worker bypassed, the page's requests carry the credentials.
+ *
+ * whatsapp-web.js calls `afterBrowserInitialized` once the page exists and before it navigates, so the hook goes
+ * there. Only a session whose proxy asks for credentials needs it. A page that is missing fails the start rather
+ * than skipping the call, since a library that stopped calling the hook in that order would otherwise go unnoticed.
+ */
+export function bypassServiceWorkerOnLaunch(strategy: object): void {
+  const target = strategy as LaunchHookStrategy;
+  const original = target.afterBrowserInitialized.bind(target);
+  target.afterBrowserInitialized = async () => {
+    await target.client.pupPage.setBypassServiceWorker(true);
+    await original();
+  };
+}
