@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-06
+
 ### Changed
 
 - The amd64 image's Chrome for Testing 156.0.8078.80 to 157.0.8103.38, picking up the browser security fixes released since; the arm64 image keeps the chromium package Debian ships.

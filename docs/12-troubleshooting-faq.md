@@ -552,7 +552,7 @@ the session card) carries a short form of it, so the pointer survives without re
 of a profile a newer Chrome has opened, and that is where whatsapp-web.js keeps the WhatsApp login: every
 previously linked session starts at a QR code instead of reconnecting, the log names no cause (0.23.3 and
 0.23.4 log only a generic `relink_required` warning), and upgrading again does not bring the pairing back. On
-amd64 this follows a rollback from the release after 0.28.0 (Chrome for Testing 157) to 0.28.0 or earlier,
+amd64 this follows a rollback from 0.29.0 or later (Chrome for Testing 157) to 0.28.0 or earlier,
 from 0.26.0 or later (156) to 0.25.0 or earlier, and from 0.23.5 or later to 0.23.4 or earlier (146); on arm64, a rollback to an image built with an older Debian
 chromium major. Restoring `sessions/` from a backup taken before the first start on the newer image keeps the
 pairing (see the upgrade runbook's rollback in docs/11); without one, scan a new QR.

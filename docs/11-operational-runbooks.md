@@ -711,8 +711,7 @@ curl -H "X-API-Key: $API_KEY" http://localhost:2785/api/health
 ```
 
 > Restoring `sessions/` is required, not optional, when the rollback crosses a browser major upgrade (on
-> amd64, 0.23.5 moved Chrome for Testing from 146 to 153, 0.26.0 moves it to 156 and the release after 0.28.0
-> moves it to 157; arm64
+> amd64, 0.23.5 moved Chrome for Testing from 146 to 153, 0.26.0 moves it to 156 and 0.29.0 moves it to 157; arm64
 > runs the chromium Debian shipped when each image was built), and the backup must predate the first start
 > on the newer image; a daily backup taken after the upgrade does not qualify. An older Chrome silently
 > deletes the IndexedDB of a profile a newer Chrome has opened, which is where whatsapp-web.js keeps the
