@@ -377,10 +377,11 @@ unpinned session (this setting, or an auto-resolve that could not reach the regi
 disk, so it also works on the image's read-only root filesystem. A pinned build's HTML is downloaded
 at start, with a 10 s bound, into `<SESSION_DATA_PATH>/.wa-web-cache/` on the writable data volume and
 served from there; a build no session has started on for a week is removed. A registry build whose page is
-WhatsApp's logged-out landing page, not the app (its root element is `<html id="whatsapp-web-logged-out">`), is
-refused: the auto-resolved pin moves to the next older settled build (up to three are tried, with the warning
-`web_version_html_rejected`), and an exact build you set is not swapped, so that session starts on the live build
-with the `web_version_html_unavailable` warning above.
+WhatsApp's logged-out landing page, not the app (its root element is `<html id="whatsapp-web-logged-out">`, the
+value quoted or not), is refused: the auto-resolved pin moves to the next older settled build from the same
+registry read (up to three are tried, with the warning `web_version_html_rejected`), so the fallback needs no
+second read and still pins on a host that has since lost the registry. An exact build you set is not swapped, so
+that session starts on the live build with the `web_version_html_unavailable` warning above.
 
 A pin is not guaranteed to hold. whatsapp-web.js applies it by answering the page's document request
 with the pinned HTML, and that can miss in two ways: a pin whose HTML could not be fetched is dropped
