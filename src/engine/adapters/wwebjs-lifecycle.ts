@@ -15,7 +15,7 @@ import { DEFAULT_PUPPETEER_ARGS, MAX_TIMER_MS, withPinnedBrowserLocale } from '.
 import { resolveWebVersionPin } from '../wa-web-version';
 import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import { killOrphanedChromiumProcesses, removeStaleSingletonFiles } from './chromium-profile-hygiene';
-import { isSupportedProxyUrl, buildProxyLaunchConfig } from './wwebjs-proxy';
+import { isSupportedProxyUrl, buildProxyLaunchConfig, bypassServiceWorkerOnLaunch } from './wwebjs-proxy';
 import { backportProblem } from './wwebjs-backport-check';
 import { unappliedPatches, unappliedPatchesMessage } from './engine-patch-status';
 import { type EvaluatablePage, reportMissingCallHook } from './wwebjs-call-hook-check';
@@ -536,11 +536,15 @@ export class WwebjsLifecycle {
       configuredProtocolTimeout <= MAX_TIMER_MS
         ? configuredProtocolTimeout
         : undefined;
+    const authStrategy = new LocalAuth({
+      clientId: this.host.config.sessionId,
+      dataPath: path.resolve(this.host.config.sessionDataPath),
+    });
+    // page.authenticate answers the proxy's login for the page only, and a service worker registered by an earlier
+    // start takes the page's requests out of its reach (#819).
+    if (proxyAuthentication) bypassServiceWorkerOnLaunch(authStrategy);
     const client = new Client({
-      authStrategy: new LocalAuth({
-        clientId: this.host.config.sessionId,
-        dataPath: path.resolve(this.host.config.sessionDataPath),
-      }),
+      authStrategy,
       puppeteer: {
         headless: this.host.config.puppeteer?.headless ?? true,
         args: puppeteerArgs,
