@@ -7,10 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The amd64 image's Chrome for Testing 156.0.8078.80 to 157.0.8103.38, picking up the browser security fixes released since; the arm64 image keeps the chromium package Debian ships.
+
 ### Fixed
 
 - A whatsapp-web.js session whose proxy asks for a username and password failed every start after the first with `net::ERR_INVALID_AUTH_CREDENTIALS`, because WhatsApp Web's service worker, registered in the saved profile, took the page's requests out of reach of the proxy login; the page now ignores the service worker for such a session (#819). Thanks @gudge25 and @lHumanizado for the report.
 - Refuse a WhatsApp Web build whose registry page is the logged-out landing page and pin the next older settled build instead (up to three are tried, warning `web_version_html_rejected`); every whatsapp-web.js session start used to fail with `Cannot read properties of null (reading 'Socket')` until the process restarted (#1997). Thanks @ScalingMBA for the report.
+
+### Upgrade notes (behavior changes)
+
+- The amd64 image moves from Chrome for Testing 156 to 157, so an amd64 rollback to 0.28.0 or earlier crosses a browser major and deletes the stored whatsapp-web.js logins unless `sessions/` is restored from a backup taken before the first start on the new image (see `docs/11-operational-runbooks.md`); Baileys sessions are unaffected.
 
 ## [0.28.0] - 2026-11-06
 

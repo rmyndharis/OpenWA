@@ -1130,7 +1130,7 @@ flowchart TD
 
 > [!WARNING]
 > A rollback across a browser major upgrade (on amd64, 0.23.5 moved Chrome for Testing from 146 to 153 and
-> 0.26.0 moves it to 156; arm64 runs the chromium Debian shipped when each image was
+> 0.26.0 moves it to 156 and the release after 0.28.0 moves it to 157; arm64 runs the chromium Debian shipped when each image was
 > built) must restore `sessions/` from a backup taken before the first start on the newer image, on both the
 > full and the partial branch: a partial rollback that merges data but keeps the current `sessions/` loses
 > every whatsapp-web.js login. An older Chrome silently deletes the IndexedDB of a profile a newer Chrome
