@@ -109,6 +109,8 @@
 #   (aw) restore stops before it writes anything when the dump opens with \restrict and the psql on PATH is too old
 #       to read it, and otherwise, with no psql on PATH too, names the psql versions the load needs
 #
+#   (ax) the archive listing helper finds a member listed first in a listing that outgrows a pipe buffer
+#
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
 set -euo pipefail
@@ -135,6 +137,16 @@ fi
 
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# Whether an archive's listing has a member matching the grep arguments. The listing is read in full
+# first: `tar -t | grep -q` closes the pipe at the first match while tar may still be writing, and
+# pipefail then turns tar's SIGPIPE into "not listed".
+tar_lists() { # <tar flags> <archive> <grep arguments>
+  local flags="$1" archive="$2" listing
+  shift 2
+  listing="$(tar "$flags" "$archive")" || fail "tar $flags could not list $archive"
+  grep -q "$@" <<<"$listing"
+}
 
 # A fixture database: a real SQLite file with a sentinel row when sqlite3 is available (backup.sh
 # uses .backup then, which refuses non-database files), else a plain marker file for the cp path.
@@ -186,10 +198,10 @@ make_fixture "$A/custom/store.sqlite" "alpha-data"
     "$BACKUP" >/dev/null
 )
 ARCHIVE_A="$(ls "$A"/out/openwa-backup-*.tar.gz)"
-if ! tar -tzf "$ARCHIVE_A" | grep -qx './main.sqlite'; then
+if ! tar_lists -tzf "$ARCHIVE_A" -x './main.sqlite'; then
   fail "(a) archive missing ./main.sqlite"
 fi
-if ! tar -tzf "$ARCHIVE_A" | grep -qx './openwa.sqlite'; then
+if ! tar_lists -tzf "$ARCHIVE_A" -x './openwa.sqlite'; then
   fail "(a) archive missing ./openwa.sqlite"
 fi
 (
@@ -252,7 +264,7 @@ if [ "$HAS_SQLITE3" -eq 1 ]; then
     BACKUP_DIR="$C/out" "$BACKUP" >/dev/null
   )
   ARCHIVE_C="$(ls "$C"/out/openwa-backup-*.tar.gz)"
-  if tar -tzf "$ARCHIVE_C" | grep -q 'CONSISTENCY-WARNING'; then
+  if tar_lists -tzf "$ARCHIVE_C" 'CONSISTENCY-WARNING'; then
     fail "(c) unexpected CONSISTENCY-WARNING marker with sqlite3 present"
   fi
   (
@@ -284,7 +296,7 @@ populate_shim "$D/shim"
   PATH="$D/shim" BACKUP_DIR="$D/out" "$BACKUP" >"$D/backup.log" 2>&1
 )
 ARCHIVE_D="$(ls "$D"/out/openwa-backup-*.tar.gz)"
-if ! tar -tzf "$ARCHIVE_D" | grep -q 'CONSISTENCY-WARNING'; then
+if ! tar_lists -tzf "$ARCHIVE_D" 'CONSISTENCY-WARNING'; then
   fail "(d) fallback archive does not carry the CONSISTENCY-WARNING marker"
 fi
 if ! grep -q 'sqlite3' "$D/backup.log"; then
@@ -830,7 +842,7 @@ ln -s "$R/src-disk/media" "$R/src/data/media"
   BACKUP_DIR="$R/out" "$BACKUP" >/dev/null
 )
 ARCHIVE_R="$(ls "$R"/out/openwa-backup-*.tar.gz)"
-if ! tar -tzf "$ARCHIVE_R" | grep -qx './media/a.jpg'; then
+if ! tar_lists -tzf "$ARCHIVE_R" -x './media/a.jpg'; then
   fail "(r) backup archived the symlinked media dir as a link instead of its files"
 fi
 printf 'romeo-live\n' >"$R/disk/media/m0"
@@ -1074,7 +1086,7 @@ if [ "$(id -u)" -ne 0 ]; then
     fail "(v) backup failed: $OUT_V"
   fi
   ARCHIVE_V="$(ls "$V"/out/openwa-backup-*.tar.gz)"
-  if ! tar -tzf "$ARCHIVE_V" | grep -qx './media/a.jpg'; then
+  if ! tar_lists -tzf "$ARCHIVE_V" -x './media/a.jpg'; then
     fail "(v) backup left out the media the app keeps in ./data/media"
   fi
   if ! printf '%s' "$OUT_V" | grep -q 'STORAGE_LOCAL_PATH=./uploads'; then
@@ -1240,7 +1252,7 @@ printf 'zulu-media\n' >"$Z/app/data/media/a.jpg"
 printf 'STORAGE_LOCAL_PATH=./uploads\n' >"$Z/app/data/.env.generated"
 OUT_Z="$(cd "$Z/app" && BACKUP_DIR="$Z/out" "$BACKUP" 2>&1)"
 ARCHIVE_Z="$(ls "$Z"/out/openwa-backup-*.tar.gz)"
-if ! tar -tzf "$ARCHIVE_Z" | grep -qx './media/a.jpg'; then
+if ! tar_lists -tzf "$ARCHIVE_Z" -x './media/a.jpg'; then
   fail "(z) backup left out the media in ./data/media: $OUT_Z"
 fi
 OUT_Z="$(cd "$Z/dst" && "$RESTORE" "$ARCHIVE_Z" 2>&1)"
@@ -1278,7 +1290,7 @@ fi
 if ! printf '%s' "$OUT_AA" | grep -q 'may have been written during the copy'; then
   fail "(aa) backup did not warn that engine auth state may have been written during the copy: $OUT_AA"
 fi
-if ! tar -tvzf "$ARCHIVE_AA" | grep -q '^l.*session-s1/SingletonLock'; then
+if ! tar_lists -tvzf "$ARCHIVE_AA" '^l.*session-s1/SingletonLock'; then
   fail "(aa) the profile lock was not archived as the symlink it is"
 fi
 # Without sqlite3 the databases are plain-copied and --strict rightly refuses on that marker.
@@ -1297,7 +1309,7 @@ make_fixture "$AA/quiet/data/main.sqlite" "alpha2-quiet-main"
 make_fixture "$AA/quiet/data/openwa.sqlite" "alpha2-quiet-data"
 printf 'profile\n' >"$AA/quiet/data/sessions/session-s1/Preferences"
 (cd "$AA/quiet" && BACKUP_DIR="$AA/quiet-out" "$BACKUP" >/dev/null 2>&1)
-if tar -tzf "$(ls "$AA"/quiet-out/openwa-backup-*.tar.gz)" | grep -q 'ENGINE-STATE-NOTE'; then
+if tar_lists -tzf "$(ls "$AA"/quiet-out/openwa-backup-*.tar.gz)" 'ENGINE-STATE-NOTE'; then
   fail "(aa) an archive with no open profile and no Baileys state carries the engine note"
 fi
 pass "(aa) live engine auth state is noted in the archive and printed, never refused"
@@ -1845,7 +1857,7 @@ set +e
 OUT_AG="$(cd "$AGB" && PATH="$AGB/bin:$PATH" DATABASE_URL=postgres://db.internal/openwa BACKUP_DIR="$AGB/pg" "$BACKUP" 2>&1)"
 RC_AG=$?
 set -e
-if [ "$RC_AG" -ne 0 ] || [ ! -e "$AGB/pg_dump-ran" ] || ! tar -tzf "$(ls "$AGB"/pg/openwa-backup-*.tar.gz)" | grep -qx './database.sql'; then
+if [ "$RC_AG" -ne 0 ] || [ ! -e "$AGB/pg_dump-ran" ] || ! tar_lists -tzf "$(ls "$AGB"/pg/openwa-backup-*.tar.gz)" -x './database.sql'; then
   fail "(ag) a Postgres backup through DATABASE_URL stopped on a DATABASE_NAME line it does not use (rc $RC_AG): $OUT_AG"
 fi
 rm -rf "$AGB/pgdst" && mkdir -p "$AGB/pgdst/data"
@@ -2092,7 +2104,7 @@ fi
 printf 'STORAGE_LOCAL_PATH=./uploads\n' >"$AI/vol/.env.generated"
 (cd "$AI/host" && OPENWA_DATA_DIR="$AI/vol" BACKUP_DIR="$AI/out-uploads" "$BACKUP" >/dev/null 2>&1) ||
   fail "(ai) backup with a leftover ./uploads failed"
-if ! tar -tzf "$(ls "$AI"/out-uploads/openwa-backup-*.tar.gz)" | grep -qx './media/a.jpg'; then
+if ! tar_lists -tzf "$(ls "$AI"/out-uploads/openwa-backup-*.tar.gz)" -x './media/a.jpg'; then
   fail "(ai) a leftover ./uploads did not fall back to the volume's media"
 fi
 # Restored into an empty volume, whose media dir does not exist yet, the media lands there too rather
@@ -2604,7 +2616,8 @@ printf 'ao-abs\n' >"$AO/abs/member.txt"
 # while archiving. GNU tar spells that --transform and bsdtar -s, and each refuses the other's flag.
 tar -czPf "$AO/dotdot-end.tar.gz" -C "$AO/stage" --transform 's,^b\.txt$,a/..,' b.txt 2>/dev/null ||
   tar -czPf "$AO/dotdot-end.tar.gz" -C "$AO/stage" -s ',^b\.txt$,a/..,' b.txt
-if ! tar -tzf "$AO/dotdot-end.tar.gz" 2>/dev/null | grep -qx 'a/\.\.'; then
+AO_LISTING="$(tar -tzf "$AO/dotdot-end.tar.gz" 2>/dev/null)" || fail "(ao) could not list the a/.. archive"
+if ! grep -qx 'a/\.\.' <<<"$AO_LISTING"; then
   fail "(ao) could not build an archive with a member named a/.."
 fi
 refused_restore "$AO" "ao: ../x" 'unsafe path in backup archive: ../escape.txt' "$AO/work" "$AO/dotdot.tar.gz"
@@ -3076,7 +3089,7 @@ fi
 for AV_PUBLIC in 'POSTGRES_SCHEMA=public\n' 'POSTGRES_SCHEMA=\n' ''; do
   rc="$(backup_av '' "${AV_PG}${AV_PUBLIC}")"
   if [ "$rc" -ne 0 ] || [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "-h|db|-p|5432|-U|app|shared|" ] ||
-    tar -tzf "$(ls "$AV"/out/openwa-backup-*.tar.gz)" | grep -qx './database.schema'; then
+    tar_lists -tzf "$(ls "$AV"/out/openwa-backup-*.tar.gz)" -x './database.schema'; then
     fail "(av) a public schema ('$AV_PUBLIC') did not keep the whole-database dump (rc $rc): $(cat "$AV/pg_dump-args" 2>&1)"
   fi
 done
@@ -3195,6 +3208,29 @@ if [ "$rc" -ne 0 ] || [ ! -f "$AW/dst/data/main.sqlite" ] || grep -q 'the load n
   fail "(aw) a dump without \\restrict was refused or named a psql it does not need (rc $rc): $OUT_AW"
 fi
 pass "(aw) restore refuses a psql that cannot read the dump's \\restrict and names the versions that can"
+
+echo ""
+echo "==> (ax) tar_lists finds a member listed first in a listing that outgrows a pipe buffer"
+# A tar that lists its match first and keeps writing broke `tar -t | grep -q` under pipefail: grep left at
+# the match, the next write got SIGPIPE, and the pipeline read as "not listed".
+AX="$WORK/ax"
+mkdir -p "$AX/shim"
+cat >"$AX/shim/tar" <<'SHIM'
+#!/bin/sh
+echo ./first-member
+i=0
+while [ "$i" -lt 20000 ]; do
+  echo "./padding-$i"
+  i=$((i + 1))
+done
+SHIM
+chmod +x "$AX/shim/tar"
+for _ in 1 2 3 4 5; do
+  if ! PATH="$AX/shim:$PATH" tar_lists -tzf unused.tar.gz -x './first-member'; then
+    fail "(ax) tar_lists lost a member listed first in a long listing"
+  fi
+done
+pass "(ax) tar_lists finds a member listed first in a listing that outgrows a pipe buffer"
 
 echo ""
 echo "All smoke tests passed!"
