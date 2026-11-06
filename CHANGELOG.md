@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The amd64 image's Chrome for Testing 156.0.8078.80 to 157.0.8103.38, picking up the browser security fixes released since; the arm64 image keeps the chromium package Debian ships.
+
+### Upgrade notes (behavior changes)
+
+- The amd64 image moves from Chrome for Testing 156 to 157, so an amd64 rollback to 0.28.0 or earlier crosses a browser major and deletes the stored whatsapp-web.js logins unless `sessions/` is restored from a backup taken before the first start on the new image (see `docs/11-operational-runbooks.md`); Baileys sessions are unaffected.
+
 ## [0.28.0] - 2026-11-06
 
 ### Added
