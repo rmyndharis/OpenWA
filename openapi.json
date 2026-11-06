@@ -21670,6 +21670,16 @@
               "type": "string"
             }
           },
+          "isForwarded": {
+            "type": "boolean",
+            "description": "True when the sender forwarded this message rather than writing it. Absent otherwise.",
+            "example": true
+          },
+          "forwardingScore": {
+            "type": "number",
+            "description": "How many times the message has been forwarded. Set with `isForwarded`.",
+            "example": 1
+          },
           "call": {
             "description": "Set for `call` messages.",
             "allOf": [

@@ -135,6 +135,13 @@ export interface IncomingMessage {
   author?: string;
   /** WIDs @mentioned in the message (empty/absent when none). Surfaced for command targeting. */
   mentionedIds?: string[];
+  /**
+   * True when the sender forwarded this message rather than writing it. Absent (never `false`) for a
+   * message that was not forwarded, so consumers can treat the key's presence as the signal.
+   */
+  isForwarded?: boolean;
+  /** How many times the message has been forwarded; WhatsApp flags a widely forwarded one at 5 or more. Set with `isForwarded`. */
+  forwardingScore?: number;
   /** Set for `call` (call_log) messages: video vs voice, and whether an incoming call went unanswered. */
   call?: { video: boolean; missed: boolean };
   /**

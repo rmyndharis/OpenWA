@@ -517,6 +517,13 @@ describe('buildIncomingMessageFromBaileys', () => {
     expect(r.mentionedIds).toEqual(['111@c.us', '222@c.us']);
   });
 
+  it('maps isForwarded and forwardingScore for a forwarded message', () => {
+    const r = buildIncomingMessageFromBaileys({ ...base, isForwarded: true, forwardingScore: 2 });
+    expect(r.isForwarded).toBe(true);
+    expect(r.forwardingScore).toBe(2);
+    expect(buildIncomingMessageFromBaileys(base)).not.toHaveProperty('isForwarded');
+  });
+
   it('omits mentionedIds when absent or empty', () => {
     expect(buildIncomingMessageFromBaileys(base).mentionedIds).toBeUndefined();
     expect(buildIncomingMessageFromBaileys({ ...base, mentionedJids: [] }).mentionedIds).toBeUndefined();

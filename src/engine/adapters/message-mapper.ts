@@ -93,6 +93,9 @@ export interface RawMessageFields {
   author?: string;
   /** WIDs @mentioned in the message; whatsapp-web.js attaches this to every Message. */
   mentionedIds?: string[];
+  /** Whether the message was forwarded, and how many times; whatsapp-web.js sets both on every Message. */
+  isForwarded?: boolean;
+  forwardingScore?: number;
   /** Raw wwebjs payload; `notifyName` carries the sender's push name without an extra lookup. */
   _data?: { notifyName?: string; ephemeralDuration?: number };
   /** Set on `order` messages: the placed order's id, and the single-order token that unlocks its items. */
@@ -148,6 +151,14 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
   // @mentioned WIDs, when present — used for command targeting (e.g. `/tr grant @user`).
   if (msg.mentionedIds && msg.mentionedIds.length > 0) {
     incoming.mentionedIds = msg.mentionedIds;
+  }
+
+  // Forwarded content is not the sender's own words; surface that so consumers do not attribute it to them.
+  if (msg.isForwarded === true) {
+    incoming.isForwarded = true;
+    if (typeof msg.forwardingScore === 'number') {
+      incoming.forwardingScore = msg.forwardingScore;
+    }
   }
 
   // Flag senders identified by a WhatsApp privacy id (`@lid`) so engine-neutral code can opt to
