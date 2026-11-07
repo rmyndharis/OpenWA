@@ -124,6 +124,28 @@ describe('buildIncomingMessageBase', () => {
     expect(r.mentionedIds).toEqual(['222@lid', '333@lid']);
   });
 
+  it('maps isForwarded and forwardingScore for a forwarded message', () => {
+    const r = buildIncomingMessageBase({ ...base, isForwarded: true, forwardingScore: 1 });
+    expect(r.isForwarded).toBe(true);
+    expect(r.forwardingScore).toBe(1);
+  });
+
+  it('omits forwardingScore when a forwarded message reports none (whatsapp-web.js defaults it to 0)', () => {
+    const r = buildIncomingMessageBase({ ...base, isForwarded: true, forwardingScore: 0 });
+    expect(r.isForwarded).toBe(true);
+    expect(r).not.toHaveProperty('forwardingScore');
+  });
+
+  it('omits the forward fields for a message that was not forwarded', () => {
+    for (const r of [
+      buildIncomingMessageBase(base),
+      buildIncomingMessageBase({ ...base, isForwarded: false, forwardingScore: 0 }),
+    ]) {
+      expect(r).not.toHaveProperty('isForwarded');
+      expect(r).not.toHaveProperty('forwardingScore');
+    }
+  });
+
   it('omits mentionedIds when absent or empty', () => {
     expect(buildIncomingMessageBase(base).mentionedIds).toBeUndefined();
     expect(buildIncomingMessageBase({ ...base, mentionedIds: [] }).mentionedIds).toBeUndefined();

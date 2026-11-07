@@ -2898,6 +2898,8 @@ export class BaileysEvents {
         isCatalogShare: isBaileysCatalogShare(normalized),
         ephemeralDuration: context.ephemeralDuration,
         mentionedJids: context.mentionedJids,
+        isForwarded: context.isForwarded,
+        forwardingScore: context.forwardingScore,
         backgroundArgb: context.backgroundArgb,
         font: context.font,
       },

@@ -114,6 +114,8 @@ interface WireChatHistoryMessage {
   kind: 'individual' | 'group' | 'channel' | 'status' | 'broadcast' | 'unknown';
   isStatusBroadcast?: boolean;
   ephemeralDuration?: number;
+  isForwarded?: boolean;
+  forwardingScore?: number;
   author?: string;
   mentionedIds?: string[];
   call?: { video: boolean; missed: boolean };

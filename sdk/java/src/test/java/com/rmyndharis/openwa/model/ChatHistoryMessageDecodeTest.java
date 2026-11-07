@@ -24,6 +24,7 @@ class ChatHistoryMessageDecodeTest {
         String json = "{\"id\":\"true_628@c.us_ABC\",\"from\":\"628@c.us\",\"to\":\"629@c.us\","
             + "\"chatId\":\"628@c.us\",\"body\":\"\",\"type\":\"call\",\"timestamp\":1719312000,"
             + "\"fromMe\":false,\"isGroup\":false,\"kind\":\"individual\",\"ephemeralDuration\":604800,"
+            + "\"isForwarded\":true,\"forwardingScore\":2,"
             + "\"call\":{\"video\":true,\"missed\":false},"
             + "\"contact\":{\"pushName\":\"Budi\",\"number\":\"628\",\"isMyContact\":true,"
             + "\"verifiedLevel\":0,\"labels\":[\"vip\"]}}";
@@ -31,6 +32,8 @@ class ChatHistoryMessageDecodeTest {
         ChatHistoryMessage m = GSON.fromJson(json, ChatHistoryMessage.class);
 
         assertEquals(604800, m.ephemeralDuration());
+        assertTrue(m.isForwarded());
+        assertEquals(2L, m.forwardingScore());
         assertNotNull(m.call());
         assertTrue(m.call().video());
         assertFalse(m.call().missed());
@@ -53,6 +56,14 @@ class ChatHistoryMessageDecodeTest {
             1L, false, false, null, null, null, null, null, null, null, null, null, null,
             null, null, null, null, null, null);
         assertNull(legacy.poll());
+        assertNull(legacy.isForwarded());
+    }
+
+    @Test
+    void decodesTheLargestForwardingScore() {
+        // The sender writes the counter as an unsigned 32-bit value: it must not overflow a Long.
+        var m = GSON.fromJson("{\"isForwarded\":true,\"forwardingScore\":4294967295}", ChatHistoryMessage.class);
+        assertEquals(4294967295L, m.forwardingScore());
     }
 
     @Test
@@ -66,6 +77,8 @@ class ChatHistoryMessageDecodeTest {
         assertNull(m.call());
         assertNull(m.contact());
         assertNull(m.ephemeralDuration());
+        assertNull(m.isForwarded());
+        assertNull(m.forwardingScore());
         assertNull(m.font());
         assertNull(m.backgroundColor());
     }
