@@ -526,6 +526,54 @@ describe('resolveWebVersionPin when a registry build is the logged-out page', ()
     expect(warnings('web_version_html_rejected')).toHaveLength(1);
   });
 
+  it('pins the next build from the same registry read when the registry cannot be read again', async () => {
+    // The read that named the logged-out build is the only one that succeeds: the fallback must not need another.
+    const pages = host([NEWEST, NEWER, OLDER], { [NEWEST]: LOGGED_OUT, [NEWER]: APP, [OLDER]: APP });
+    let reads = 0;
+    const fetcher = jest.fn((url: string) => {
+      if (url !== WA_VERSION_REGISTRY_URL) return pages(url);
+      reads += 1;
+      return reads === 1 ? pages(url) : Promise.reject(new Error('registry unreachable'));
+    });
+
+    await expect(resolveWebVersionPin(fetcher as never, dir)).resolves.toMatchObject({ webVersion: NEWER });
+    expect(reads).toBe(1);
+    expect(fs.readdirSync(dir)).toEqual([`${NEWER}.html`]);
+  });
+
+  it('keeps skipping the rejected build after the daily refresh re-reads the registry', async () => {
+    const DAY = 86_400_000;
+    let now = Date.now();
+    jest.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const fetcher = host([NEWEST, NEWER], { [NEWEST]: LOGGED_OUT, [NEWER]: APP });
+      await expect(resolveWebVersionPin(fetcher as never, dir)).resolves.toMatchObject({ webVersion: NEWER });
+
+      now += DAY;
+      await expect(resolveWebVersionPin(fetcher as never, dir)).resolves.toMatchObject({ webVersion: NEWER });
+      expect(fetcher.mock.calls.filter(([url]) => url === htmlUrl(NEWEST))).toHaveLength(1);
+      expect(warnings('web_version_html_rejected')).toHaveLength(1);
+    } finally {
+      jest.restoreAllMocks();
+    }
+  });
+
+  it('reads the registry again when the only build of the last read was the logged-out page', async () => {
+    // No candidate is left to fall back to, so the next resolve has to read the registry; the rejected build stays out.
+    const FRESH = '2.3000.1053100000-alpha';
+    let reads = 0;
+    const pages = host([FRESH, NEWEST], { [FRESH]: APP, [NEWEST]: LOGGED_OUT });
+    const fetcher = jest.fn((url: string) => {
+      if (url !== WA_VERSION_REGISTRY_URL) return pages(url);
+      reads += 1;
+      return Promise.resolve(registry(reads === 1 ? [NEWEST] : [FRESH, NEWEST]));
+    });
+
+    await expect(resolveWebVersionPin(fetcher as never, dir)).resolves.toMatchObject({ webVersion: FRESH });
+    expect(reads).toBe(2);
+    expect(fs.readdirSync(dir)).toEqual([`${FRESH}.html`]);
+  });
+
   it('shares one rejection between sessions that start together', async () => {
     const fetcher = host([NEWEST, NEWER], { [NEWEST]: LOGGED_OUT, [NEWER]: APP });
 
@@ -553,6 +601,8 @@ describe('resolveWebVersionPin when a registry build is the logged-out page', ()
       expect.objectContaining({ webVersion: OLDER, reason: expect.stringContaining('logged-out') as unknown }),
     ]);
     expect(fs.readdirSync(dir)).toEqual([]);
+    // Out of builds, no rejected page is left reported as the resolved build; the next start reads the registry.
+    expect(getEffectiveWebVersionInfo()).toEqual({ version: null, source: 'auto' });
   });
 
   it('does not swap an exact build the operator set', async () => {
@@ -571,6 +621,7 @@ describe('resolveWebVersionPin when a registry build is the logged-out page', ()
     ['single quotes and another attribute first', `<html lang="en" id='whatsapp-web-logged-out' dir="ltr">`],
     ['upper case', `<HTML ID="whatsapp-web-logged-out">`],
     ['spaces around the equals sign', `<html id = "whatsapp-web-logged-out">`],
+    ['an unquoted value', `<html id=whatsapp-web-logged-out>`],
   ])('refuses the page with %s', async (_label, root) => {
     process.env.WWEBJS_WEB_VERSION = NEWEST;
     const page = `<!DOCTYPE html>${root}<head></head><body>${'x'.repeat(2048)}</body></html>`;

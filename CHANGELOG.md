@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Mark a forwarded message with `isForwarded: true` and, when positive, `forwardingScore` on `message.received` and `message.sent` on both engines, and on the whatsapp-web.js chat history (#2029). Thanks @visualpathpaulpraksh.
 
+### Fixed
+
+- Pin the next settled WhatsApp Web build from the registry read that named a logged-out page, so a second registry read that fails no longer leaves the session unpinned (#1997). Thanks @Mr4sR.
+
 ## [0.29.0] - 2026-11-06
 
 ### Changed
