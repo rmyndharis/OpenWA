@@ -359,6 +359,10 @@ export interface EngineHistoryMessage {
   kind: ChatKind;
   /** Disappearing-messages timer on the chat, in seconds. Absent when the chat has none set. */
   ephemeralDuration?: number;
+  /** True when the sender forwarded this message rather than writing it. Absent otherwise. */
+  isForwarded?: boolean;
+  /** How many times the message has been forwarded. Set with `isForwarded`. */
+  forwardingScore?: number;
   /** Sender in a group: `from` is the group JID, so this participant WID is the real poster. */
   author?: string;
   mentionedIds?: string[];

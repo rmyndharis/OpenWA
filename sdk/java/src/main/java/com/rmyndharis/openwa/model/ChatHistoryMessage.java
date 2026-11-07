@@ -37,9 +37,30 @@ public record ChatHistoryMessage(
     Location location,
     Order order,
     Product product,
-    Poll poll) {
+    Poll poll,
+    /** True when the sender forwarded this message rather than writing it; {@code null} otherwise. */
+    Boolean isForwarded,
+    /**
+     * How many times the message has been forwarded; {@code null} otherwise. A sender writes it as
+     * an unsigned 32-bit value, so it is a {@code Long}.
+     */
+    Long forwardingScore) {
 
-    /** Construct a history message without poll metadata. */
+    /** Construct a history message without the forwarded marker. */
+    public ChatHistoryMessage(
+        String id, String from, String to, String chatId, String body, MessageType type,
+        long timestamp, boolean fromMe, boolean isGroup, Boolean isStatusBroadcast,
+        ChatKind kind, Integer ephemeralDuration, String author, List<String> mentionedIds,
+        Call call, Boolean isLidSender, String senderPhone, Contact contact,
+        String backgroundColor, Integer font, Media media, QuotedMessage quotedMessage,
+        Location location, Order order, Product product, Poll poll) {
+        this(id, from, to, chatId, body, type, timestamp, fromMe, isGroup, isStatusBroadcast,
+            kind, ephemeralDuration, author, mentionedIds, call, isLidSender, senderPhone,
+            contact, backgroundColor, font, media, quotedMessage, location, order, product, poll,
+            null, null);
+    }
+
+    /** Construct a history message without poll metadata or the forwarded marker. */
     public ChatHistoryMessage(
         String id, String from, String to, String chatId, String body, MessageType type,
         long timestamp, boolean fromMe, boolean isGroup, Boolean isStatusBroadcast,
@@ -49,7 +70,8 @@ public record ChatHistoryMessage(
         Location location, Order order, Product product) {
         this(id, from, to, chatId, body, type, timestamp, fromMe, isGroup, isStatusBroadcast,
             kind, ephemeralDuration, author, mentionedIds, call, isLidSender, senderPhone,
-            contact, backgroundColor, font, media, quotedMessage, location, order, product, null);
+            contact, backgroundColor, font, media, quotedMessage, location, order, product, null,
+            null, null);
     }
 
     public record Poll(String name, List<String> options, boolean allowMultipleAnswers) {}

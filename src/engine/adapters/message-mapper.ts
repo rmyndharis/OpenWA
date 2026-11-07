@@ -154,9 +154,11 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
   }
 
   // Forwarded content is not the sender's own words; surface that so consumers do not attribute it to them.
+  // whatsapp-web.js defaults forwardingScore to 0 when the raw payload carries no score at all, so the
+  // same positive-value gate the ephemeralDuration field above uses keeps a real 0 from reading as a signal.
   if (msg.isForwarded === true) {
     incoming.isForwarded = true;
-    if (typeof msg.forwardingScore === 'number') {
+    if (typeof msg.forwardingScore === 'number' && msg.forwardingScore > 0) {
       incoming.forwardingScore = msg.forwardingScore;
     }
   }

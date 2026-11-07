@@ -117,7 +117,7 @@ const quoteOf = (m: Pick<IncomingMessage, 'chatId' | 'body'>) => ({ chatId: m.ch
 
 /** A deleted message as hooks and consumers see it: nothing of its content survives, as in REVOKED_ROW_PATCH. */
 const deletedPlaceholder = (message: InboundMessageData): InboundMessageData => {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  /* eslint-disable @typescript-eslint/no-unused-vars */
   const {
     media,
     quotedMessage,
@@ -133,6 +133,7 @@ const deletedPlaceholder = (message: InboundMessageData): InboundMessageData => 
     forwardingScore,
     ...kept
   } = message;
+  /* eslint-enable @typescript-eslint/no-unused-vars */
   return { ...kept, body: '', type: 'revoked' };
 };
 

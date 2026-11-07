@@ -707,6 +707,39 @@ describe('MessageProjector (inbound projection)', () => {
       );
     });
 
+    it('carries the forwarded marker of a received message to the webhook and the websocket, and stores none of it', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+
+      projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ isForwarded: true, forwardingScore: 3 }));
+      await new Promise(resolve => setImmediate(resolve));
+
+      const marker = expect.objectContaining({ isForwarded: true, forwardingScore: 3 }) as unknown;
+      expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.received', marker);
+      expect(eventsGateway.emitMessage).toHaveBeenCalledWith(SESSION_ID, marker);
+      expect(messageRepository.create).toHaveBeenCalledWith(expect.not.objectContaining({ isForwarded: true }));
+    });
+
+    it('announces a message delivered already deleted without its forwarded marker', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+
+      projector.handleInboundMessage(
+        SESSION_ID,
+        engine,
+        makeIncoming({ type: 'revoked', body: '', isForwarded: true, forwardingScore: 3 }),
+      );
+      await new Promise(resolve => setImmediate(resolve));
+
+      const payload = dispatchPayload(webhookService.dispatch);
+      expect(payload).toMatchObject({ type: 'revoked', body: '' });
+      expect(payload).not.toHaveProperty('isForwarded');
+      expect(payload).not.toHaveProperty('forwardingScore');
+      const [, emitted] = eventsGateway.emitMessage.mock.calls[0] as [string, Record<string, unknown>];
+      expect(emitted).not.toHaveProperty('isForwarded');
+      expect(emitted).not.toHaveProperty('forwardingScore');
+    });
+
     // HookManager threads any defined `data`, so a handler returning `data: null` ("I consumed it")
     // or an object that is not a message reaches the projector. It must still record and dispatch
     // the engine's message, not throw and erase it.

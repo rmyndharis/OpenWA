@@ -524,6 +524,12 @@ describe('buildIncomingMessageFromBaileys', () => {
     expect(buildIncomingMessageFromBaileys(base)).not.toHaveProperty('isForwarded');
   });
 
+  it('omits forwardingScore when a forwarded message reports none', () => {
+    const r = buildIncomingMessageFromBaileys({ ...base, isForwarded: true, forwardingScore: 0 });
+    expect(r.isForwarded).toBe(true);
+    expect(r).not.toHaveProperty('forwardingScore');
+  });
+
   it('omits mentionedIds when absent or empty', () => {
     expect(buildIncomingMessageFromBaileys(base).mentionedIds).toBeUndefined();
     expect(buildIncomingMessageFromBaileys({ ...base, mentionedJids: [] }).mentionedIds).toBeUndefined();

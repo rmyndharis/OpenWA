@@ -1251,10 +1251,11 @@ export function buildIncomingMessageFromBaileys(
     incoming.mentionedIds = fields.mentionedJids.map(normalizeJid);
   }
 
-  // Parity with the wwjs mapper: mark forwarded content so it is not attributed to the sender.
+  // Parity with the wwjs mapper: mark forwarded content so it is not attributed to the sender, gated
+  // on a positive score the same way ephemeralDuration is, above.
   if (fields.isForwarded === true) {
     incoming.isForwarded = true;
-    if (typeof fields.forwardingScore === 'number') {
+    if (typeof fields.forwardingScore === 'number' && fields.forwardingScore > 0) {
       incoming.forwardingScore = fields.forwardingScore;
     }
   }

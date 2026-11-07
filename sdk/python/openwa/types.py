@@ -629,6 +629,8 @@ ChatHistoryMessage = TypedDict(
         "kind": ChatKind,
         "isStatusBroadcast": NotRequired[bool],
         "ephemeralDuration": NotRequired[int],
+        "isForwarded": NotRequired[bool],
+        "forwardingScore": NotRequired[int],
         "author": NotRequired[Jid],
         "mentionedIds": NotRequired[list[str]],
         "call": NotRequired[MessageCall],

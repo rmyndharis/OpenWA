@@ -296,25 +296,29 @@ type MessageLocation struct {
 // ChatHistoryMessage is a message read live from WhatsApp by Messages.History —
 // the richer engine payload, differently shaped from MessageRecord.
 type ChatHistoryMessage struct {
-	ID                string          `json:"id"`
-	From              string          `json:"from"`
-	To                string          `json:"to"`
-	ChatID            string          `json:"chatId"`
-	Body              string          `json:"body"`
-	Type              MessageType     `json:"type"`
-	Timestamp         int64           `json:"timestamp"`
-	FromMe            bool            `json:"fromMe"`
-	IsGroup           bool            `json:"isGroup"`
-	IsStatusBroadcast bool            `json:"isStatusBroadcast,omitempty"`
-	Kind              ChatKind        `json:"kind"`
-	EphemeralDuration int             `json:"ephemeralDuration,omitempty"`
-	Author            string          `json:"author,omitempty"`
-	MentionedIDs      []string        `json:"mentionedIds,omitempty"`
-	Call              *MessageCall    `json:"call,omitempty"`
-	IsLidSender       bool            `json:"isLidSender,omitempty"`
-	SenderPhone       *string         `json:"senderPhone,omitempty"`
-	Contact           *MessageContact `json:"contact,omitempty"`
-	BackgroundColor   string          `json:"backgroundColor,omitempty"`
+	ID                string      `json:"id"`
+	From              string      `json:"from"`
+	To                string      `json:"to"`
+	ChatID            string      `json:"chatId"`
+	Body              string      `json:"body"`
+	Type              MessageType `json:"type"`
+	Timestamp         int64       `json:"timestamp"`
+	FromMe            bool        `json:"fromMe"`
+	IsGroup           bool        `json:"isGroup"`
+	IsStatusBroadcast bool        `json:"isStatusBroadcast,omitempty"`
+	Kind              ChatKind    `json:"kind"`
+	EphemeralDuration int         `json:"ephemeralDuration,omitempty"`
+	// IsForwarded and ForwardingScore: the score is a sender-written unsigned 32-bit value, held as
+	// 64-bit so it cannot overflow.
+	IsForwarded     bool            `json:"isForwarded,omitempty"`
+	ForwardingScore int64           `json:"forwardingScore,omitempty"`
+	Author          string          `json:"author,omitempty"`
+	MentionedIDs    []string        `json:"mentionedIds,omitempty"`
+	Call            *MessageCall    `json:"call,omitempty"`
+	IsLidSender     bool            `json:"isLidSender,omitempty"`
+	SenderPhone     *string         `json:"senderPhone,omitempty"`
+	Contact         *MessageContact `json:"contact,omitempty"`
+	BackgroundColor string          `json:"backgroundColor,omitempty"`
 	// Pointer because font index 0 is a real style, so a value type could not tell it from absent.
 	// Matches StatusRecord.Font, which carries the same wire field.
 	Font          *int              `json:"font,omitempty"`

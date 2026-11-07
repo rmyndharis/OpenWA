@@ -606,6 +606,10 @@ export interface ChatHistoryMessage {
   kind: ChatKind;
   /** Disappearing-messages timer on the chat, in seconds. Absent when the chat has none set. */
   ephemeralDuration?: number;
+  /** True when the sender forwarded this message rather than writing it. Absent otherwise. */
+  isForwarded?: boolean;
+  /** How many times the message has been forwarded. Set with `isForwarded`. */
+  forwardingScore?: number;
   /** For group messages, the participant who sent it (`from` is the group JID). */
   author?: Jid;
   mentionedIds?: Jid[];

@@ -130,6 +130,12 @@ describe('buildIncomingMessageBase', () => {
     expect(r.forwardingScore).toBe(1);
   });
 
+  it('omits forwardingScore when a forwarded message reports none (whatsapp-web.js defaults it to 0)', () => {
+    const r = buildIncomingMessageBase({ ...base, isForwarded: true, forwardingScore: 0 });
+    expect(r.isForwarded).toBe(true);
+    expect(r).not.toHaveProperty('forwardingScore');
+  });
+
   it('omits the forward fields for a message that was not forwarded', () => {
     for (const r of [
       buildIncomingMessageBase(base),
