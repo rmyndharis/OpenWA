@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop a Baileys inbound media download abandoned at `MEDIA_DOWNLOAD_TIMEOUT_MS` or the byte cap from crashing the gateway with `TypeError: terminated` when its HTTP/2 stream is later reset (`NGHTTP2_PROTOCOL_ERROR` / `NGHTTP2_INTERNAL_ERROR`): Baileys piped the response body into the decrypting stream without an error listener and never closed it, so the reset was emitted unhandled. A new install-time patch, `scripts/patch-baileys-media-stream.js`, ties the two streams together.
+
 ## [0.29.1] - 2026-11-07
 
 ### Added

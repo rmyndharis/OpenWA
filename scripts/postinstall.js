@@ -39,6 +39,8 @@
  *
  *  13. `node scripts/patch-baileys-pairing.js --best-effort` when present, preserving pre-login
  *      notification ACKs and refreshing pairing credentials. A partial patch remains fatal.
+ *  13b. `node scripts/patch-baileys-media-stream.js --best-effort` when present, so an abandoned
+ *      inbound media download cannot crash the process.
  *  14. `node scripts/patch-wwebjs-puppeteer.js` when present. Browser teardown must use the
  *      connected getter required by Puppeteer 25; an unknown source shape aborts the install.
  *
@@ -191,6 +193,15 @@ function planSteps(root, env = process.env) {
       name: 'Baileys pairing refresh (scripts/patch-baileys-pairing.js --best-effort)',
       command: process.execPath,
       args: [baileysPairingPatcher, '--best-effort'],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
+  }
+  const baileysMediaStreamPatcher = path.join(root, 'scripts', 'patch-baileys-media-stream.js');
+  if (fs.existsSync(baileysMediaStreamPatcher)) {
+    steps.push({
+      name: 'Baileys media download stream fix (scripts/patch-baileys-media-stream.js --best-effort)',
+      command: process.execPath,
+      args: [baileysMediaStreamPatcher, '--best-effort'],
       options: { stdio: 'inherit', cwd: root, env: cleanEnv },
     });
   }
