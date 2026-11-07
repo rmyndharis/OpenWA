@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Pin the next settled WhatsApp Web build from the registry read that named a logged-out page, so a second registry read that fails no longer leaves the session unpinned (#1997). Thanks @Mr4sR.
+- Stop a Baileys session start from blocking the whole process for seconds to tens of seconds on default SQLite when the account has many stored chats it only ever sent to: the chat-name lookup scanned every stored incoming message instead of seeking by chat.
 
 ## [0.29.0] - 2026-11-06
 

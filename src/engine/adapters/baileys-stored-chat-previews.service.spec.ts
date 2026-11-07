@@ -227,6 +227,7 @@ describe('StoredChatPreviewService', () => {
         expect.arrayContaining([
           'SEARCH l USING COVERING INDEX IDX_messages_session_chat_timestamp_id (sessionId=?)',
           'SEARCH w USING INDEX IDX_messages_session_chat_timestamp_id (sessionId=? AND chatId=? AND timestamp>?)',
+          'SEARCH n USING INDEX IDX_messages_session_chat_timestamp_id (sessionId=? AND chatId=? AND timestamp>?)',
         ]),
       );
     },

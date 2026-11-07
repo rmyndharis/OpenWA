@@ -75,7 +75,17 @@ export class StoredChatPreviewService implements StoredChatPreviewSource {
   async latestPerChat(sessionId: string, ownIds: string[], limit: number): Promise<StoredChatPreview[]> {
     if (!ownIds.length) return [];
     const driver = this.repo.manager.connection.driver;
-    const lastStored = this.repo.manager.connection.options.type === 'postgres' ? 'w."id"' : 'w."rowid"';
+    const isPostgres = this.repo.manager.connection.options.type === 'postgres';
+    const lastStored = isPostgres ? 'w."id"' : 'w."rowid"';
+    // SQLite has no composite index on (sessionId, chatId, direction, timestamp), so between the two
+    // indexes that each match two of this subquery's three equalities, it picks
+    // IDX_messages_session_direction_timestamp_id (sessionId, direction) over
+    // IDX_messages_session_chat_timestamp_id (sessionId, chatId) and then filters chatId per row,
+    // scanning every row of the session with this direction once per candidate chat. A unary plus
+    // makes the comparison an expression a bare-column index cannot serve, which steers SQLite onto
+    // the chatId index instead, the one `w` below already uses. PostgreSQL has no such index choice
+    // to steer and no unary `+` on a varchar column, so the hint is SQLite only.
+    const nDirection = isPostgres ? 'n."direction"' : '+n."direction"';
     const table = this.repo.metadata.tablePath
       .split('.')
       .map(part => driver.escape(part))
@@ -84,7 +94,7 @@ export class StoredChatPreviewService implements StoredChatPreviewSource {
       `SELECT m."chatId", m."waMessageId", m."direction", m."author", m."timestamp", m."body", m."type",
          (
            SELECT n."chatName" FROM ${table} n
-           WHERE n."sessionId" = :sessionId AND n."chatId" = c."chatId" AND n."direction" = :incoming
+           WHERE n."sessionId" = :sessionId AND n."chatId" = c."chatId" AND ${nDirection} = :incoming
              AND n."to" IN (:...ownIds) AND n."chatName" IS NOT NULL AND n."timestamp" IS NOT NULL
            ORDER BY n."timestamp" DESC
            LIMIT 1
