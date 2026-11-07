@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-11-07
+
 ### Added
 
 - Mark a forwarded message with `isForwarded: true` and, when positive, `forwardingScore` on `message.received` and `message.sent` on both engines, and on the whatsapp-web.js chat history (#2029). Thanks @visualpathpaulpraksh.
