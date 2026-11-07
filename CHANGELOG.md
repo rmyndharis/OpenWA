@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Pin the next settled WhatsApp Web build from the registry read that named a logged-out page, so a second registry read that fails no longer leaves the session unpinned (#1997). Thanks @Mr4sR.
+
 ## [0.29.0] - 2026-11-06
 
 ### Changed
