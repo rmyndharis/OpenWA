@@ -558,6 +558,22 @@ describe('resolveWebVersionPin when a registry build is the logged-out page', ()
     }
   });
 
+  it('reads the registry again when the only build of the last read was the logged-out page', async () => {
+    // No candidate is left to fall back to, so the next resolve has to read the registry; the rejected build stays out.
+    const FRESH = '2.3000.1053100000-alpha';
+    let reads = 0;
+    const pages = host([FRESH, NEWEST], { [FRESH]: APP, [NEWEST]: LOGGED_OUT });
+    const fetcher = jest.fn((url: string) => {
+      if (url !== WA_VERSION_REGISTRY_URL) return pages(url);
+      reads += 1;
+      return Promise.resolve(registry(reads === 1 ? [NEWEST] : [FRESH, NEWEST]));
+    });
+
+    await expect(resolveWebVersionPin(fetcher as never, dir)).resolves.toMatchObject({ webVersion: FRESH });
+    expect(reads).toBe(2);
+    expect(fs.readdirSync(dir)).toEqual([`${FRESH}.html`]);
+  });
+
   it('shares one rejection between sessions that start together', async () => {
     const fetcher = host([NEWEST, NEWER], { [NEWEST]: LOGGED_OUT, [NEWER]: APP });
 
@@ -585,6 +601,8 @@ describe('resolveWebVersionPin when a registry build is the logged-out page', ()
       expect.objectContaining({ webVersion: OLDER, reason: expect.stringContaining('logged-out') as unknown }),
     ]);
     expect(fs.readdirSync(dir)).toEqual([]);
+    // Out of builds, no rejected page is left reported as the resolved build; the next start reads the registry.
+    expect(getEffectiveWebVersionInfo()).toEqual({ version: null, source: 'auto' });
   });
 
   it('does not swap an exact build the operator set', async () => {

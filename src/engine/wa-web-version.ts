@@ -343,7 +343,7 @@ async function localisePin(
         return undefined;
       }
       if (cachedCurrentVersion === webVersion) {
-        cachedCurrentVersion = undefined; // out of builds: the next resolve reads the registry again
+        cachedCurrentVersion = undefined; // attempts used up: the next resolve reads the registry again
         cachedAt = 0;
       }
     }
