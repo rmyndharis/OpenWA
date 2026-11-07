@@ -380,7 +380,7 @@ served from there; a build no session has started on for a week is removed. A re
 WhatsApp's logged-out landing page, not the app (its root element is `<html id="whatsapp-web-logged-out">`, the
 value quoted or not), is refused: the auto-resolved pin moves to the next older settled build from the same
 registry read (up to three are tried, with the warning `web_version_html_rejected`), so the fallback needs no
-second read and still pins on a host that has since lost the registry. An exact build you set is not swapped, so
+second registry read. An exact build you set is not swapped, so
 that session starts on the live build with the `web_version_html_unavailable` warning above.
 
 A pin is not guaranteed to hold. whatsapp-web.js applies it by answering the page's document request
