@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fall back to the next settled WhatsApp Web build from the registry read that named a logged-out page, instead of reading the registry again: a second read that failed left the session unpinned, the failure the pin exists to prevent. The logged-out page is also recognised with an unquoted `id`, as the HTML allows (#1997).
+- Pin the next settled WhatsApp Web build from the registry read that named a logged-out page, so a second registry read that fails no longer leaves the session unpinned (#1997). Thanks @Mr4sR.
 
 ## [0.29.0] - 2026-11-06
 
