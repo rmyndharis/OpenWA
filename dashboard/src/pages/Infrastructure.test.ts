@@ -3179,7 +3179,9 @@ test('the restart progress bar measures the server estimate, not a fixed 30 s', 
   // the style drops, leaving the bar empty until the countdown fell under 30.
   await within(dialog).findByText('Server restarting... 34s', undefined, { timeout: 2_000 });
   const fill = dialog.querySelector<HTMLElement>('.restart-progress-fill');
-  assert.equal(fill?.style.width, `${(1 / 35) * 100}%`);
+  // The style serializes a number at six significant digits, as browsers do, so compare numerically.
+  const width = parseFloat(fill?.style.width ?? '');
+  assert.ok(Math.abs(width - (1 / 35) * 100) < 1e-3, `bar width ${fill?.style.width} is not 1/35 of the track`);
 });
 
 test(
