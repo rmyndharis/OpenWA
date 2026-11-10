@@ -41,6 +41,35 @@ describe('messageTools', () => {
     expect(out).toEqual([{ id: 'm1' }]);
   });
 
+  // Media rows carry their base64 inline up to a per-response budget (8 MiB by default), and over MCP the list is
+  // the only way to the bytes, so the default stays "inline"; an agent that wants the rows alone opts out, as the
+  // REST list's inlineMedia=false does.
+  it.each([true, false])('MessageList forwards inlineMedia: %s to getMessages', async inlineMedia => {
+    const getMessages = jest.fn().mockResolvedValue({ messages: [], total: 0 });
+    const tools = makeTools({ getMessages } as unknown as MessageService);
+    await run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us', inlineMedia });
+    expect(getMessages).toHaveBeenCalledWith('s1', expect.objectContaining({ chatId: '628111@c.us', inlineMedia }));
+  });
+
+  it('MessageList leaves inlineMedia out of the call when it is unset, so the service default applies', async () => {
+    const getMessages = jest.fn().mockResolvedValue({ messages: [], total: 0 });
+    const tools = makeTools({ getMessages } as unknown as MessageService);
+    await run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us' });
+    const options = (getMessages.mock.calls[0] as [string, Record<string, unknown>])[1];
+    expect(Object.keys(options)).not.toContain('inlineMedia');
+  });
+
+  it('MessageList refuses an inlineMedia that is not a boolean', async () => {
+    const getMessages = jest.fn();
+    const tools = makeTools({ getMessages } as unknown as MessageService);
+    await expect(
+      run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us', inlineMedia: 'false' }),
+    ).rejects.toMatchObject({
+      response: { message: [expect.stringContaining('inlineMedia') as unknown as string] },
+    });
+    expect(getMessages).not.toHaveBeenCalled();
+  });
+
   it('MessageHistory delegates to getChatHistory', async () => {
     const getChatHistory = jest.fn().mockResolvedValue([{ id: 'm1' }]);
     const tools = makeTools({ getChatHistory } as unknown as MessageService);

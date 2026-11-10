@@ -121,7 +121,9 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
       name: 'MessageList',
       chatScope: ['chatId'],
       description:
-        'List persisted messages for a session, optionally filtered by chatId or sender. Reads from the local DB.',
+        'List persisted messages for a session, optionally filtered by chatId or sender. Reads from the local DB. ' +
+        'A message with media carries it inline as base64, up to a per-response budget (8 MiB by default), which ' +
+        'makes a result large; pass inlineMedia false to get the rows without the media.',
       tier: 'read',
       sessionScoped: true,
       inputSchema: z.object({
@@ -130,6 +132,13 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         from: z.string().optional().describe('Filter by sender phone or JID'),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
+        inlineMedia: z
+          .boolean()
+          .optional()
+          .describe(
+            'Set false to leave inline media payloads out: each media row then keeps an { omitted, sizeBytes } ' +
+              'marker. Media is only available inline over MCP, so leave it unset when you need the bytes.',
+          ),
       }),
       handler: input =>
         message.getMessages(input.sessionId, {
@@ -137,6 +146,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           from: input.from,
           limit: input.limit,
           offset: input.offset,
+          ...(input.inlineMedia === undefined ? {} : { inlineMedia: input.inlineMedia }),
         }),
     }),
     defineTool({
