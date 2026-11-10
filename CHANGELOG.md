@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Accept `inlineMedia` on the MCP `MessageList` tool, so an agent can list messages without the base64 of their media, as `inlineMedia=false` does on `GET /api/sessions/{sessionId}/messages`; unset keeps the media inline.
+- Accept the REST message-list filters `after`, `direction`, `type`, `since`, `until`, `orderBy` and `messageId` on the MCP `MessageList` tool, and `type` on `MessageSearch`.
 
 ### Changed
 

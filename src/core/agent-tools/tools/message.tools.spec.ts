@@ -70,6 +70,50 @@ describe('messageTools', () => {
     expect(getMessages).not.toHaveBeenCalled();
   });
 
+  // The filters the REST list takes, so an agent can window a chat the way an HTTP client does.
+  it('MessageList forwards the REST filters to getMessages', async () => {
+    const getMessages = jest.fn().mockResolvedValue({ messages: [], total: 0 });
+    const tools = makeTools({ getMessages } as unknown as MessageService);
+    const filters = {
+      after: 'row-17',
+      since: 1_700_000_000_000,
+      until: 1_700_000_100_000.5,
+      direction: 'incoming',
+      type: 'image',
+      orderBy: 'timestamp',
+      messageId: 'true_628111@c.us_3EB0ABC',
+    };
+    await run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us', ...filters });
+    expect(getMessages).toHaveBeenCalledWith('s1', { chatId: '628111@c.us', ...filters });
+  });
+
+  it.each(['', '   '])('MessageList reads the blank cursor %p as absent, as REST does', async after => {
+    const getMessages = jest.fn().mockResolvedValue({ messages: [], total: 0 });
+    const tools = makeTools({ getMessages } as unknown as MessageService);
+    await run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us', after });
+    const options = (getMessages.mock.calls[0] as [string, Record<string, unknown>])[1];
+    expect(options.after).toBeUndefined();
+  });
+
+  it.each([
+    ['direction', 'sideways'],
+    ['orderBy', 'newest'],
+    ['since', -1],
+    ['until', 'yesterday'],
+    ['type', 'x'.repeat(51)],
+    ['messageId', 'x'.repeat(201)],
+    ['after', 'x'.repeat(129)],
+  ])('MessageList refuses %s: %p', async (field, value) => {
+    const getMessages = jest.fn();
+    const tools = makeTools({ getMessages } as unknown as MessageService);
+    await expect(
+      run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us', [field]: value }),
+    ).rejects.toMatchObject({
+      response: { message: [expect.stringContaining(field) as unknown as string] },
+    });
+    expect(getMessages).not.toHaveBeenCalled();
+  });
+
   it('MessageHistory delegates to getChatHistory', async () => {
     const getChatHistory = jest.fn().mockResolvedValue([{ id: 'm1' }]);
     const tools = makeTools({ getChatHistory } as unknown as MessageService);
