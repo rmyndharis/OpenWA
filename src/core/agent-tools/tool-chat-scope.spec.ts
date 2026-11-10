@@ -7,6 +7,7 @@ import type { ContactService } from '../../modules/contact/contact.service';
 import type { GroupService } from '../../modules/group/group.service';
 import type { LabelService } from '../../modules/label/label.service';
 import type { MessageService } from '../../modules/message/message.service';
+import type { SendIdempotencyService } from '../../modules/message/idempotency/send-idempotency.service';
 import type { SessionService } from '../../modules/session/session.service';
 import { messageTools } from './tools/message.tools';
 import { sessionTools } from './tools/session.tools';
@@ -42,6 +43,29 @@ describe('chat-restricted tool calls', () => {
       messageId: 'm1',
     });
     expect(sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an outside destination before it claims an idempotency key', async () => {
+    const claim = jest.fn();
+    const keyed = messageTools(
+      { sendText } as unknown as MessageService,
+      { claim } as unknown as SendIdempotencyService,
+    );
+
+    await expect(
+      call(
+        keyed.find(t => t.name === 'MessageSendText')!,
+        {
+          sessionId: 's1',
+          chatId: OTHER,
+          text: 'hello',
+          idempotencyKey: 'k1',
+        },
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(claim).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
   });
 
   it('refuses an outside destination before sending', async () => {

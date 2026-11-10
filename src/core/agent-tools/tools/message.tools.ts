@@ -1,8 +1,15 @@
+import { NotImplementedException } from '@nestjs/common';
 import { z } from 'zod';
 import { isMediaUrl, MEDIA_URL_MESSAGE } from '../../../common/media/media-url';
 import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import { stripBase64DataUri } from '../../../modules/message/media-cap.util';
 import type { MessageService } from '../../../modules/message/message.service';
+import { runIdempotentSend } from '../../../modules/message/idempotency/run-idempotent-send';
+import {
+  IDEMPOTENCY_KEY_MAX_LENGTH,
+  IDEMPOTENCY_KEY_PATTERN,
+  type SendIdempotencyService,
+} from '../../../modules/message/idempotency/send-idempotency.service';
 import {
   CHAT_ID_MAX_LENGTH,
   CUSTOM_PREVIEW_DESCRIPTION_MAX_LENGTH,
@@ -123,8 +130,64 @@ const linkPreviewSchema = z
       'false sends none.',
   );
 
-export function messageTools(message: MessageService): AnyToolDescriptor[] {
-  return [
+/**
+ * The optional field of the send tools whose REST routes take an `Idempotency-Key` header, with the same key
+ * syntax. It is declared on each of those schemas, so an agent reads it in the published input, and acted on by
+ * withSendIdempotency below.
+ */
+const idempotencyKeySchema = z
+  .string()
+  .max(IDEMPOTENCY_KEY_MAX_LENGTH)
+  .regex(IDEMPOTENCY_KEY_PATTERN, 'must be 1-255 visible ASCII characters')
+  .optional()
+  .describe(
+    'Makes the send safe to retry: pass a string that is unique to this intended send. A retry with the same ' +
+      'key and the same arguments returns the first result and sends nothing. The same key with other arguments ' +
+      'is refused, and so is a retry while the first call still runs or after a failure that may have sent the ' +
+      'message (check the chat, then send again with a new key). A key lasts 24 hours and belongs to its session.',
+  );
+
+/** The tools that carry `idempotencyKey`: the REST send routes with an `Idempotency-Key` header, minus poll. */
+const SEND_IDEMPOTENT_TOOLS: ReadonlySet<string> = new Set([
+  'MessageSendText',
+  'MessageSendImage',
+  'MessageSendVideo',
+  'MessageSendAudio',
+  'MessageSendDocument',
+  'MessageSendLocation',
+  'MessageSendContact',
+  'MessageSendSticker',
+  'MessageSendTemplate',
+  'MessageReply',
+  'MessageForward',
+]);
+
+/**
+ * Run a send tool under its `idempotencyKey`, as SendIdempotencyInterceptor does for the REST route. It runs
+ * inside the handler, so the key is claimed only after the invoker has authorized the call and validated its
+ * input, and the handler never sees the key. The route is the tool name, so a key used over REST does not match
+ * a tool call and is refused as reused, not replayed. A call without a key runs untouched; with a key and no
+ * store the call is refused, never sent unclaimed.
+ */
+function withSendIdempotency(tool: AnyToolDescriptor, store: SendIdempotencyService | undefined): AnyToolDescriptor {
+  return {
+    ...tool,
+    handler: async (input, apiKey, chatScope, signal) => {
+      const { idempotencyKey, ...rest } = input as { sessionId: string; idempotencyKey?: string };
+      if (idempotencyKey === undefined) return tool.handler(rest as never, apiKey, chatScope, signal);
+      if (!store) throw new NotImplementedException('Idempotent sends are not available on this server.');
+      const { body } = await runIdempotentSend(
+        store,
+        { sessionId: rest.sessionId, key: idempotencyKey, route: `mcp:${tool.name}`, body: rest },
+        () => tool.handler(rest as never, apiKey, chatScope, signal),
+      );
+      return body;
+    },
+  };
+}
+
+export function messageTools(message: MessageService, idempotency?: SendIdempotencyService): AnyToolDescriptor[] {
+  const tools: AnyToolDescriptor[] = [
     defineTool({
       name: 'MessageList',
       chatScope: ['chatId'],
@@ -237,6 +300,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         quotedMessageId: quotedMessageIdSchema,
         mentions: mentionsSchema,
         customLinkPreview: customLinkPreviewSchema,
+        idempotencyKey: idempotencyKeySchema,
       }),
       handler: input =>
         message.sendText(input.sessionId, {
@@ -266,6 +330,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           caption: z.string().max(MEDIA_CAPTION_MAX_LENGTH).optional(),
           quotedMessageId: quotedMessageIdSchema,
           mentions: mentionsSchema,
+          idempotencyKey: idempotencyKeySchema,
         })
         .refine(hasValidMediaUrl, { error: MEDIA_URL_MESSAGE, path: ['url'] }),
       handler: input =>
@@ -298,6 +363,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           caption: z.string().max(MEDIA_CAPTION_MAX_LENGTH).optional(),
           quotedMessageId: quotedMessageIdSchema,
           mentions: mentionsSchema,
+          idempotencyKey: idempotencyKeySchema,
         })
         .refine(hasValidMediaUrl, { error: MEDIA_URL_MESSAGE, path: ['url'] }),
       handler: input =>
@@ -331,6 +397,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           ptt: z.boolean().optional().describe('Send as a WhatsApp voice note (PTT)'),
           quotedMessageId: quotedMessageIdSchema,
           mentions: mentionsSchema,
+          idempotencyKey: idempotencyKeySchema,
         })
         .refine(hasValidMediaUrl, { error: MEDIA_URL_MESSAGE, path: ['url'] }),
       handler: input =>
@@ -364,6 +431,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           caption: z.string().max(MEDIA_CAPTION_MAX_LENGTH).optional(),
           quotedMessageId: quotedMessageIdSchema,
           mentions: mentionsSchema,
+          idempotencyKey: idempotencyKeySchema,
         })
         .refine(hasValidMediaUrl, { error: MEDIA_URL_MESSAGE, path: ['url'] }),
       handler: input =>
@@ -393,6 +461,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         description: z.string().max(LOCATION_TEXT_MAX_LENGTH).optional().describe('Location label/description'),
         address: z.string().max(LOCATION_TEXT_MAX_LENGTH).optional().describe('Street address'),
         quotedMessageId: quotedMessageIdSchema,
+        idempotencyKey: idempotencyKeySchema,
       }),
       handler: input =>
         message.sendLocation(input.sessionId, {
@@ -421,6 +490,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           .max(CONTACT_NUMBER_MAX_LENGTH)
           .describe('Phone number of the contact to share'),
         quotedMessageId: quotedMessageIdSchema,
+        idempotencyKey: idempotencyKeySchema,
       }),
       handler: input =>
         message.sendContact(input.sessionId, {
@@ -448,6 +518,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           caption: z.string().max(MEDIA_CAPTION_MAX_LENGTH).optional(),
           quotedMessageId: quotedMessageIdSchema,
           mentions: mentionsSchema,
+          idempotencyKey: idempotencyKeySchema,
         })
         .refine(hasValidMediaUrl, { error: MEDIA_URL_MESSAGE, path: ['url'] }),
       handler: input =>
@@ -481,6 +552,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           .describe('Variables to substitute into {{placeholder}} tokens'),
         mentions: mentionsSchema,
         linkPreview: linkPreviewSchema,
+        idempotencyKey: idempotencyKeySchema,
       }),
       handler: input =>
         message.sendTemplate(input.sessionId, {
@@ -506,6 +578,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         quotedMessageId: z.string().min(1).describe('ID of the message to quote/reply to'),
         text: z.string().min(1).max(MESSAGE_TEXT_MAX_LENGTH).describe('Reply text content'),
         mentions: mentionsSchema,
+        idempotencyKey: idempotencyKeySchema,
       }),
       handler: input =>
         message.reply(input.sessionId, {
@@ -527,6 +600,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         fromChatId: chatJidSchema.describe('Source chat JID'),
         toChatId: chatJidSchema.describe('Destination chat JID'),
         messageId: z.string().min(1).describe('ID of the message to forward'),
+        idempotencyKey: idempotencyKeySchema,
       }),
       handler: input =>
         message.forward(input.sessionId, {
@@ -558,4 +632,6 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           .then(() => ({ success: true })),
     }),
   ];
+
+  return tools.map(tool => (SEND_IDEMPOTENT_TOOLS.has(tool.name) ? withSendIdempotency(tool, idempotency) : tool));
 }

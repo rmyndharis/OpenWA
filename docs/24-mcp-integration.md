@@ -205,6 +205,20 @@ The text of a tool error is cut at 4096 characters and ends with
 refusals, and a tool call can carry a far longer id than a REST path allows. The same cut applies to
 the server log line.
 
+### Retrying a send
+
+Each send tool (`MessageSendText`, `MessageSendImage`, `MessageSendVideo`, `MessageSendAudio`,
+`MessageSendDocument`, `MessageSendLocation`, `MessageSendContact`, `MessageSendSticker`,
+`MessageSendTemplate`, `MessageReply`, `MessageForward`) takes an optional `idempotencyKey`, 1 to 255
+visible ASCII characters, which works as the `Idempotency-Key` header does on the matching REST route. The
+first call with a key sends and keeps its result for 24 hours. A retry with the same key and the same
+arguments returns that result and sends nothing. The same key with other arguments is refused, and so is a
+retry while the first call still runs or after a failure that may have sent the message. Each refusal
+carries a `code` (`IDEMPOTENCY_KEY_REUSED`, `IDEMPOTENCY_KEY_IN_PROGRESS` or `IDEMPOTENCY_OUTCOME_UNKNOWN`)
+beside its message. A send refused before it reached WhatsApp frees the key. A key belongs to its session, and
+a key used over REST is not matched by a tool call: it is refused as reused. A call without a key behaves as
+before.
+
 ## 24.5 Authentication & Security
 
 - **Every request needs a key.** The mount refuses any `POST /mcp` without a valid key before
