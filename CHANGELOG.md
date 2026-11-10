@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Stop a Baileys inbound media download that is abandoned at `MEDIA_DOWNLOAD_TIMEOUT_MS` or the byte cap, or cut off mid-body, from crashing the gateway with `TypeError: terminated`: a new install-time patch, `scripts/patch-baileys-media-stream.js`, ties the response body to its decrypting stream, which Baileys piped with no error listener and never closed (#2034). Thanks @voidm4p.
 
+### Dependencies
+
+- Update `undici` to 8.12.4, which fixes six advisories in its cache and redirect interceptors and in `fetch` integrity checks; the gateway uses none of those features.
+- Update `@aws-sdk/client-s3` to 3.1163.0, `bullmq` to 6.7.1, `@bull-board/api`, `@bull-board/express` and `@bull-board/nestjs` to 9.11.0 and `@nestjs/swagger` to 11.4.8 in the gateway.
+- Update `@tanstack/react-query` to 5.107.1, `i18next` to 26.7.2, `i18next-browser-languagedetector` to 8.3.0, `lucide-react` to 1.70.0, `react-i18next` to 17.1.13 and `yet-another-react-lightbox` to 3.33.0 in the dashboard bundle.
+- Update `jsdom` to 31.0.0 in the dashboard tests; the restart progress test compares the bar width numerically, since jsdom now rounds style numbers to six digits.
+- Update `eslint` to 10.14.0 and `globals` to 17.14.0 in the gateway and the dashboard, `vite` to 8.3.6 and `@vitejs/plugin-react` to 6.2.1 in the dashboard and `vitest` to 5.1.0 in the JavaScript SDK; these are build, lint and test tooling only.
+
 ## [0.29.1] - 2026-11-07
 
 ### Added
