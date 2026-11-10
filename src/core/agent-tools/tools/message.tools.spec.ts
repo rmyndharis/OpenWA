@@ -267,6 +267,44 @@ describe('messageTools', () => {
     expect(out).toEqual({ id: 'm1' });
   });
 
+  // The REST send-template body takes the same linkPreview as send-text, and the service hands it on to the send:
+  // without the field an agent could neither ask Baileys for a preview nor switch the whatsapp-web.js one off.
+  it.each([true, false])('MessageSendTemplate forwards linkPreview: %s', async linkPreview => {
+    const sendTemplate = jest.fn().mockResolvedValue({ id: 'm1' });
+    const tools = makeTools({ sendTemplate } as unknown as MessageService);
+    await run(tools.get('MessageSendTemplate')!, {
+      sessionId: 's1',
+      chatId: '628111@c.us',
+      templateName: 'welcome',
+      linkPreview,
+    });
+    expect(sendTemplate).toHaveBeenCalledWith('s1', expect.objectContaining({ templateName: 'welcome', linkPreview }));
+  });
+
+  it('MessageSendTemplate leaves linkPreview out of the call when it is unset', async () => {
+    const sendTemplate = jest.fn().mockResolvedValue({ id: 'm1' });
+    const tools = makeTools({ sendTemplate } as unknown as MessageService);
+    await run(tools.get('MessageSendTemplate')!, { sessionId: 's1', chatId: '628111@c.us', templateName: 'welcome' });
+    const dto = (sendTemplate.mock.calls[0] as [string, Record<string, unknown>])[1];
+    expect(Object.keys(dto)).not.toContain('linkPreview');
+  });
+
+  it('MessageSendTemplate refuses a linkPreview that is not a boolean', async () => {
+    const sendTemplate = jest.fn();
+    const tools = makeTools({ sendTemplate } as unknown as MessageService);
+    await expect(
+      run(tools.get('MessageSendTemplate')!, {
+        sessionId: 's1',
+        chatId: '628111@c.us',
+        templateName: 'welcome',
+        linkPreview: 'false',
+      }),
+    ).rejects.toMatchObject({
+      response: { message: [expect.stringContaining('linkPreview') as unknown as string] },
+    });
+    expect(sendTemplate).not.toHaveBeenCalled();
+  });
+
   it('MessageReply delegates to reply', async () => {
     const reply = jest.fn().mockResolvedValue({ id: 'm2' });
     const tools = makeTools({ reply } as unknown as MessageService);

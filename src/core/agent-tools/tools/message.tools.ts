@@ -101,6 +101,20 @@ const customLinkPreviewSchema = z
       'Baileys only: whatsapp-web.js answers 501.',
   );
 
+/**
+ * Mirrors the REST `linkPreview` field of the two routes that carry text (send-text, send-template). The engines
+ * differ, and the description is all an agent has to go on: whatsapp-web.js builds a preview by default, Baileys
+ * only when it is asked to.
+ */
+const linkPreviewSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    'Controls the URL preview, and the engines differ. whatsapp-web.js builds one by default and false ' +
+      'suppresses it. On Baileys a preview is opt-in: true fetches the page and attaches one, while unset or ' +
+      'false sends none.',
+  );
+
 export function messageTools(message: MessageService): AnyToolDescriptor[] {
   return [
     defineTool({
@@ -175,13 +189,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         sessionId,
         chatId: chatJidSchema.describe('Chat JID (e.g. 628123456789@c.us or groupId@g.us)'),
         text: z.string().min(1).max(MESSAGE_TEXT_MAX_LENGTH).describe('Text message content'),
-        linkPreview: z
-          .boolean()
-          .optional()
-          .describe(
-            'Set false to suppress the URL preview. Guaranteed only in that direction — leaving it ' +
-              'unset means the engine default, and the engines differ.',
-          ),
+        linkPreview: linkPreviewSchema,
         quotedMessageId: quotedMessageIdSchema,
         mentions: mentionsSchema,
         customLinkPreview: customLinkPreviewSchema,
@@ -428,6 +436,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           .optional()
           .describe('Variables to substitute into {{placeholder}} tokens'),
         mentions: mentionsSchema,
+        linkPreview: linkPreviewSchema,
       }),
       handler: input =>
         message.sendTemplate(input.sessionId, {
@@ -436,6 +445,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           templateName: input.templateName,
           vars: input.vars,
           mentions: input.mentions,
+          ...(input.linkPreview === undefined ? {} : { linkPreview: input.linkPreview }),
         }),
     }),
     defineTool({
