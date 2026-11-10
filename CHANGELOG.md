@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-10
+
 ### Added
 
 - Say how far a Baileys connection had got when it closed: the `baileys_connection_dropped` log line carries `stage` and `aliveMs`, and `lastError` of a reconnect-looping session ends with a sentence naming the stage.
