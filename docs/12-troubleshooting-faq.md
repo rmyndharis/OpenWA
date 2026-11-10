@@ -694,6 +694,25 @@ other drop is retried inside the engine, with a fixed 1s to 60s backoff and no a
 session behind an unreachable network keeps retrying there whatever these keys say. Subscribe to the
 `session.reconnect_loop` webhook to be alerted on every 5th consecutive attempt.
 
+On Baileys, each of those drops writes one log line, `Baileys connection dropped; reconnecting`
+(`action=baileys_connection_dropped`), and the close code on it does not say what failed: `428` ends a
+wait for a QR scan, a login WhatsApp never answered and a session that had been open for a day alike.
+The line therefore also carries `stage`, how far that connection had got, and `aliveMs`, how long it
+had existed:
+
+| `stage`             | The connection closed                                                                                                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `registration`      | while the session waited for a QR scan or a pairing code                                                                                                               |
+| `linked`            | right after the link was accepted                                                                                                                                      |
+| `login_unconfirmed` | before WhatsApp confirmed a linked device's login                                                                                                                      |
+| `login_confirmed`   | after WhatsApp confirmed the login and before the session opened; in between the engine stores and uploads its pre-keys (812 on a first login with Baileys 7.0.0-rc14) |
+| `open`              | after the session had opened                                                                                                                                           |
+
+The restart WhatsApp asks for once it has accepted a link (close `515`) is expected, and is logged on
+its own as `Baileys link accepted; restarting the connection as WhatsApp asked`
+(`action=baileys_link_restart`). From the fifth consecutive attempt, `lastError` on
+`GET /api/sessions/{sessionId}` ends with a sentence naming the same stage.
+
 On a slow host, raise the first-boot init wait with `WWEBJS_AUTH_TIMEOUT_MS` (see _QR generation
 times out on slow first boot_ above).
 

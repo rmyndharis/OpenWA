@@ -9,12 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Say how far a Baileys connection had got when it closed: the `baileys_connection_dropped` log line carries `stage` and `aliveMs`, and `lastError` of a reconnect-looping session ends with a sentence naming the stage.
 - Accept `inlineMedia` on the MCP `MessageList` tool, so an agent can list messages without the base64 of their media, as `inlineMedia=false` does on `GET /api/sessions/{sessionId}/messages`; unset keeps the media inline.
 - Accept an `idempotencyKey` on the eleven MCP send tools, as `Idempotency-Key` works on the REST send routes: a retry with the same key and arguments returns the first result instead of sending again.
 - Accept the REST message-list filters `after`, `direction`, `type`, `since`, `until`, `orderBy` and `messageId` on the MCP `MessageList` tool, and `type` on `MessageSearch`.
 
 ### Changed
 
+- Log the restart WhatsApp asks for right after it accepts a Baileys link (close `515`) as `baileys_link_restart`, where it was logged as a dropped connection.
 - The MCP `SessionGetPresence` tool answers `observedAt` as an ISO date-time, as `GET /api/sessions/{sessionId}/presence/{chatId}` does, where it answered unix milliseconds.
 - Refuse an MCP tool argument the tool does not name with `Unrecognized key: "x"`, where it was dropped and the call ran without it; the published input schemas now say `additionalProperties: false`.
 - Carry the `code` of an HTTP error, such as `IDEMPOTENCY_KEY_IN_PROGRESS`, in an MCP tool error, which returned only its name and message.

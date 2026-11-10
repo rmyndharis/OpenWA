@@ -230,6 +230,7 @@ import {
   StoredChatMessage,
 } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { LoggerService } from '../../common/services/logger.service';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { CallNotFoundError } from '../../common/errors/call-not-found.error';
@@ -304,6 +305,10 @@ const newAdapter = (): BaileysAdapter =>
   });
 
 const noopCallbacks = (over: Partial<EngineEventCallbacks> = {}): EngineEventCallbacks => over;
+
+/** The attempt number and delay of each reported reconnect; the close context that rides along has its own tests. */
+const scheduledReconnects = (onReconnecting: jest.Mock): unknown[][] =>
+  onReconnecting.mock.calls.map(call => (call as unknown[]).slice(0, 2));
 
 // A real 1x1 PNG, and a small SVG: the picture writes read the header of what they upload, so bytes that
 // are no image are refused before they reach the socket.
@@ -1259,7 +1264,7 @@ describe('BaileysAdapter reconnect policy — unlimited backoff (I4 hardening)',
       fakeSock.fire('connection.update', { connection: 'open' });
       expect(adapter.getStatus()).toBe(EngineStatus.READY);
     }
-    expect(onReconnecting.mock.calls).toEqual([
+    expect(scheduledReconnects(onReconnecting)).toEqual([
       [1, 1_000],
       [2, 2_000],
       [3, 4_000],
@@ -1284,7 +1289,7 @@ describe('BaileysAdapter reconnect policy — unlimited backoff (I4 hardening)',
     // previous one is a fresh incident: attempt 1 (1 s), not attempt 3.
     jest.setSystemTime(Date.now() + 5 * 60_000);
     fireRecoverableClose();
-    expect(onReconnecting).toHaveBeenLastCalledWith(1, 1_000);
+    expect(onReconnecting).toHaveBeenLastCalledWith(1, 1_000, expect.anything());
   });
 
   it('stability reset: a close >5 min after the previous close restarts the backoff at attempt 1', async () => {
@@ -1483,7 +1488,7 @@ describe('BaileysAdapter reconnect policy — unlimited backoff (I4 hardening)',
 
     // A socket that then fails before any QR opens a fresh episode: attempt 1, not attempt 9.
     fireClose(408);
-    expect(onReconnecting.mock.calls).toEqual([[1, 1_000]]);
+    expect(scheduledReconnects(onReconnecting)).toEqual([[1, 1_000]]);
   });
 
   it('a QR window that runs out ends the streak, so a QR left unscanned never reaches the loop alert', async () => {
@@ -1501,7 +1506,7 @@ describe('BaileysAdapter reconnect policy — unlimited backoff (I4 hardening)',
       await jest.advanceTimersByTimeAsync(1_000);
     }
 
-    expect(onReconnecting.mock.calls).toEqual(Array.from({ length: 6 }, () => [1, 1_000]));
+    expect(scheduledReconnects(onReconnecting)).toEqual(Array.from({ length: 6 }, () => [1, 1_000]));
   });
 
   // Only the QR expiry is exempt. WhatsApp or a proxy shedding the socket after it served a QR is a
@@ -1530,7 +1535,7 @@ describe('BaileysAdapter reconnect policy — unlimited backoff (I4 hardening)',
     }
 
     // Attempt 5 is the one the session layer turns into the reconnect-loop alert.
-    expect(onReconnecting.mock.calls).toEqual(delays.map((delay, cycle) => [cycle + 1, delay]));
+    expect(scheduledReconnects(onReconnecting)).toEqual(delays.map((delay, cycle) => [cycle + 1, delay]));
   });
 
   it('a scan ends the streak: the restart WhatsApp asks for after it is attempt 1 again', async () => {
@@ -1549,7 +1554,7 @@ describe('BaileysAdapter reconnect policy — unlimited backoff (I4 hardening)',
     onReconnecting.mockClear();
 
     fireClose(515);
-    expect(onReconnecting.mock.calls).toEqual([[1, 1_000]]);
+    expect(scheduledReconnects(onReconnecting)).toEqual([[1, 1_000]]);
   });
 
   it('a linked session still reports every attempt of an outage, growing backoff included', async () => {
@@ -1564,7 +1569,7 @@ describe('BaileysAdapter reconnect policy — unlimited backoff (I4 hardening)',
       await jest.advanceTimersByTimeAsync(60_000); // the reconnected socket never opens
     }
 
-    expect(onReconnecting.mock.calls).toEqual([
+    expect(scheduledReconnects(onReconnecting)).toEqual([
       [1, 1_000],
       [2, 2_000],
       [3, 4_000],
@@ -1740,7 +1745,7 @@ describe('BaileysAdapter connection attempt stuck at the WebSocket upgrade', () 
       expect(error).not.toBeInstanceOf(Boom);
       expect((error as Error).message).toContain(`HTTP ${statusCode}`);
 
-      expect(onReconnecting).toHaveBeenCalledWith(2, 2_000);
+      expect(onReconnecting).toHaveBeenCalledWith(2, 2_000, expect.anything());
       expect(adapter.getStatus()).toBe(EngineStatus.INITIALIZING);
       expect(onError).not.toHaveBeenCalled();
       expect(onDisconnected).not.toHaveBeenCalled();
@@ -1791,6 +1796,156 @@ describe('BaileysAdapter connection attempt stuck at the WebSocket upgrade', () 
     // logout() without a linked identity still shuts the socket down locally, then rejects.
     await adapter[method]().catch(() => undefined);
     expect(jest.getTimerCount()).toBe(0);
+  });
+});
+
+// A close code does not say what failed: 428 ends a wait for a QR scan, a login WhatsApp never answered
+// and a session that had been open for a day alike. The close line and the reconnect report therefore
+// say how far the connection had got, and for how long it had existed.
+describe('BaileysAdapter close stage', () => {
+  const baileys = () =>
+    jest.requireMock<{ default: jest.Mock; useMultiFileAuthState: jest.Mock }>('@whiskeysockets/baileys');
+  // What a completed link stores: Baileys logs in whenever creds.me is set.
+  const linkedCreds = { me: { id: '628111:1@s.whatsapp.net' }, account: {}, accountSyncCounter: 1 };
+  const authState = (creds: object): unknown => ({ state: { creds, keys: {} }, saveCreds });
+
+  let log: jest.SpyInstance;
+  const onReconnecting = jest.fn();
+
+  // initialize() needs real timers (loadLib is a dynamic import); the closes then run under fake ones,
+  // so the reconnect each close schedules never fires into another test.
+  const start = async (creds: object): Promise<void> => {
+    fakeSock.user = undefined;
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+    baileys().useMultiFileAuthState.mockResolvedValueOnce(authState(creds));
+    await newAdapter().initialize(noopCallbacks({ onReconnecting }));
+    log = jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+  };
+  const close = (statusCode: number): void => {
+    fakeSock.fire('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode }, message: 'Connection Terminated' } },
+    });
+  };
+  /** The lines the close branch wrote, as [message, fields]. */
+  const closeLines = (): Array<[string, Record<string, unknown>]> =>
+    (log.mock.calls as Array<[string, Record<string, unknown> | undefined]>).filter(
+      (call): call is [string, Record<string, unknown>] => String(call[1]?.action).startsWith('baileys_'),
+    );
+  const lastContext = (): unknown => (onReconnecting.mock.calls.at(-1) as unknown[])[2];
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('a session waiting to be linked closes at the registration stage', async () => {
+    await start({});
+
+    close(428);
+
+    expect(lastContext()).toEqual({ stage: 'registration', statusCode: 428, aliveMs: expect.any(Number) as number });
+    expect(closeLines()).toEqual([
+      [
+        'Baileys connection dropped; reconnecting',
+        expect.objectContaining({
+          statusCode: 428,
+          reason: 'Connection Terminated',
+          stage: 'registration',
+          action: 'baileys_connection_dropped',
+        }),
+      ],
+    ]);
+  });
+
+  it('a login WhatsApp never confirms closes as login_unconfirmed, with how long the connection lived', async () => {
+    await start(linkedCreds);
+
+    jest.advanceTimersByTime(30_000);
+    close(428);
+
+    const context = lastContext() as { stage: string; aliveMs: number };
+    expect(context.stage).toBe('login_unconfirmed');
+    expect(context.aliveMs).toBeGreaterThanOrEqual(30_000);
+    expect(context.aliveMs).toBeLessThan(60_000);
+    const [[, fields]] = closeLines();
+    expect(fields).toMatchObject({ stage: 'login_unconfirmed', aliveMs: context.aliveMs });
+  });
+
+  it('the frame that confirms a login moves the stage to login_confirmed', async () => {
+    await start(linkedCreds);
+
+    fakeSock.ws.emit('CB:success', { tag: 'success', attrs: {} });
+    close(428);
+
+    expect(lastContext()).toMatchObject({ stage: 'login_confirmed', statusCode: 428 });
+  });
+
+  it('a session that had opened closes at the open stage', async () => {
+    await start(linkedCreds);
+
+    fakeSock.ws.emit('CB:success', { tag: 'success', attrs: {} });
+    fakeSock.fire('connection.update', { connection: 'open' });
+    close(408);
+
+    expect(lastContext()).toMatchObject({ stage: 'open', statusCode: 408 });
+  });
+
+  // WhatsApp ends the registration connection with 515 once it has accepted a link, and the device
+  // logs in on the next one. That line read as a failure and was reported as one.
+  it('logs the restart after an accepted link as that, not as a dropped connection', async () => {
+    await start({});
+
+    fakeSock.fire('connection.update', { isNewLogin: true });
+    close(515);
+
+    expect(closeLines()).toEqual([
+      [
+        'Baileys link accepted; restarting the connection as WhatsApp asked',
+        expect.objectContaining({ statusCode: 515, stage: 'linked', action: 'baileys_link_restart' }),
+      ],
+    ]);
+    expect(onReconnecting).toHaveBeenCalledWith(1, 1_000, expect.objectContaining({ stage: 'linked' }));
+  });
+
+  it('keeps any other close of a just-linked connection a drop', async () => {
+    await start({});
+
+    fakeSock.fire('connection.update', { isNewLogin: true });
+    close(428);
+
+    const [[message, fields]] = closeLines();
+    expect(message).toBe('Baileys connection dropped; reconnecting');
+    expect(fields).toMatchObject({ stage: 'linked', action: 'baileys_connection_dropped' });
+  });
+
+  it('starts over with each socket: the login after an open session reports its own stage', async () => {
+    await start(linkedCreds);
+    fakeSock.ws.emit('CB:success', { tag: 'success', attrs: {} });
+    fakeSock.fire('connection.update', { connection: 'open' });
+    close(428);
+    expect(lastContext()).toMatchObject({ stage: 'open' });
+
+    baileys().useMultiFileAuthState.mockResolvedValueOnce(authState(linkedCreds));
+    await jest.advanceTimersByTimeAsync(1_000); // attempt 1 builds the next socket
+    expect(baileys().default).toHaveBeenCalledTimes(2);
+    close(428);
+
+    expect(lastContext()).toMatchObject({ stage: 'login_unconfirmed' });
+  });
+
+  it('reports no connection for an attempt that follows a connect which never built a socket', async () => {
+    await start({});
+    close(428);
+    expect(lastContext()).toBeDefined();
+
+    baileys().useMultiFileAuthState.mockRejectedValueOnce(new Error('auth dir unreadable'));
+    await jest.advanceTimersByTimeAsync(1_000); // attempt 1 fails before any socket exists
+
+    expect(onReconnecting).toHaveBeenLastCalledWith(2, 2_000, undefined);
   });
 });
 

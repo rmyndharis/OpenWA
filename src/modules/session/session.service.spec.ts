@@ -1,4 +1,5 @@
 import { SessionErrorStore } from './session-error-store.service';
+import { LoggerService } from '../../common/services/logger.service';
 import { SessionRestrictionStore } from './session-restriction-store.service';
 import { PresenceStore } from './presence-store.service';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -5573,6 +5574,54 @@ describe('SessionService', () => {
       const result = await service.findOne('sess-uuid-1');
 
       expect(result.lastError).toMatch(/^Reconnecting after a dropped connection \(attempt 5, down for /);
+    });
+
+    // The attempt count says a session is stuck, not where. The engine reports how far the connection that
+    // closed last had got, and the sentence naming it is what an operator without the logs gets to read.
+    it.each([
+      ['registration', 'The last connection closed while the session waited to be linked.'],
+      ['linked', 'The last connection closed right after the link was accepted.'],
+      ['login_unconfirmed', 'The last connection closed before WhatsApp confirmed the login.'],
+      ['login_confirmed', 'The last connection closed after WhatsApp confirmed the login, before the session opened.'],
+      ['open', 'The last connection had opened before it closed.'],
+    ] as const)('adds where the last connection closed to lastError: %s', async (stage, sentence) => {
+      const callbacks = await startAndCapture();
+      const sessionErrors = (service as unknown as { sessionErrors: SessionErrorStore }).sessionErrors;
+      const now = jest.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+      try {
+        for (let attempt = 1; attempt <= 5; attempt++) {
+          callbacks.onReconnecting?.(attempt, 60_000, { stage, statusCode: 428, aliveMs: 30_000 });
+        }
+      } finally {
+        now.mockRestore();
+      }
+
+      expect(sessionErrors.get('sess-uuid-1')).toBe(
+        `Reconnecting after a dropped connection (attempt 5, down for 0s). ${sentence}`,
+      );
+    });
+
+    it('names the stage and the close code on the loop warning, and neither when the engine gave none', async () => {
+      const callbacks = await startAndCapture();
+      const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+      const loopWarnings = (): Array<Record<string, unknown>> =>
+        (warn.mock.calls as Array<[string, Record<string, unknown> | undefined]>)
+          .filter(call => call[1]?.action === 'reconnect_loop')
+          .map(call => call[1] as Record<string, unknown>);
+      try {
+        for (let attempt = 1; attempt <= 5; attempt++) {
+          callbacks.onReconnecting?.(attempt, 60_000, { stage: 'login_unconfirmed', statusCode: 428, aliveMs: 30_000 });
+        }
+        for (let attempt = 6; attempt <= 10; attempt++) callbacks.onReconnecting?.(attempt, 60_000);
+
+        const [withContext, without] = loopWarnings();
+        expect(withContext).toMatchObject({ attempts: 5, stage: 'login_unconfirmed', statusCode: 428 });
+        expect(without).toMatchObject({ attempts: 10 });
+        expect(without).not.toHaveProperty('stage');
+        expect(without).not.toHaveProperty('statusCode');
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it('keeps lastError current on every attempt past the fifth, while the alert stays on its cadence', async () => {

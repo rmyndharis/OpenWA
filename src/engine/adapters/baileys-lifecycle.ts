@@ -10,7 +10,12 @@ import { type Dispatcher } from 'undici';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { WASocket } from '@whiskeysockets/baileys';
 import type { ILogger } from '@whiskeysockets/baileys/lib/Utils/logger.js';
-import { EngineEventCallbacks, EngineStatus } from '../interfaces/whatsapp-engine.interface';
+import {
+  type ConnectionCloseStage,
+  EngineEventCallbacks,
+  EngineStatus,
+  type ReconnectContext,
+} from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { createProxyDispatcher, hasUnauthenticatableSocks4Credentials } from '../../common/security/proxy-dispatcher';
 import { type createLogger } from '../../common/services/logger.service';
@@ -145,6 +150,15 @@ export function createProxyAgent(proxyUrl: string, connectTimeoutMs = PROXY_CONN
   throw new Error(`Unsupported proxy protocol for the baileys engine: ${protocol}`);
 }
 
+/** What the close branch reports about one socket; `loggingIn` is false for a registration. */
+const newSocketProgress = (loggingIn: boolean) => ({
+  startedAt: Date.now(),
+  loggingIn,
+  linked: false,
+  loginConfirmed: false,
+  opened: false,
+});
+
 /**
  * Connection lifecycle extracted from BaileysAdapter: connect/reconnect with capped backoff, QR
  * rendering, logout with the remove-companion-device ACK, terminal-close handling, and the state
@@ -245,6 +259,8 @@ export class BaileysLifecycle {
   private pairingTimers: ReturnType<typeof setTimeout>[] = [];
   /** Date.now() of the last close that scheduled a reconnect — input to the stability reset. */
   private lastConnectionCloseAt = 0;
+  /** How far the current socket has got, for the close log and the reconnect report (see closeStage). */
+  private socketProgress = newSocketProgress(false);
   /** Set by the first connect, which is the only one that may seed the listing from the stored messages. */
   private storedPreviewsRead = false;
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
@@ -560,6 +576,17 @@ export class BaileysLifecycle {
     });
     this.sock = sock;
 
+    // Baileys logs in whenever creds.me is set and registers otherwise. It reports a login only once
+    // the pre-key upload and the activation that follow it are done (connection 'open'); the frame that
+    // confirms the login comes first, and whether it came tells a login WhatsApp never answered from
+    // one that failed afterwards. The object belongs to this socket, so a late frame of a replaced
+    // socket cannot mark the next one.
+    const progress = newSocketProgress(Boolean(state.creds.me));
+    this.socketProgress = progress;
+    sock.ws.on('CB:success', () => {
+      progress.loginConfirmed = true;
+    });
+
     // Baileys re-emits ws's 'unexpected-response', and any listener there stops ws from aborting the
     // handshake itself: an upgrade answered with anything but 101 (a 503 from WhatsApp's edge or from a
     // session proxy) leaves the socket CONNECTING for good, and the session at INITIALIZING with no
@@ -790,6 +817,7 @@ export class BaileysLifecycle {
       this.qrCode = null;
       this.reconnectAttempts = 0;
       this.cancelPairingWindow();
+      this.socketProgress.linked = true;
       this.setStatus(EngineStatus.AUTHENTICATING);
     }
 
@@ -798,6 +826,7 @@ export class BaileysLifecycle {
     }
 
     if (connection === 'open') {
+      this.socketProgress.opened = true;
       clearTimeout(this.connectingTimer);
       this.cancelPairingWindow();
       this.qrCode = null;
@@ -876,12 +905,25 @@ export class BaileysLifecycle {
       // not kill the session. The counter resets on a scan, when a QR window runs out, and via the
       // stability window below.
       // Do NOT fire onDisconnected here; this is a transient drop, not a terminal disconnect.
-      this.host.logger.log('Baileys connection dropped; reconnecting', {
-        sessionId: this.host.config.sessionId,
-        statusCode,
-        reason: (lastDisconnect?.error as Error | undefined)?.message,
-        action: 'baileys_connection_dropped',
-      });
+      // The code alone does not say what failed (a 428 ends a QR wait, an unanswered login and a
+      // day-old session alike), so the line also says how far this connection had got and for how long.
+      const stage = this.closeStage();
+      const closed: ReconnectContext = { stage, statusCode, aliveMs: Date.now() - this.socketProgress.startedAt };
+      // The restart WhatsApp asks for once it has accepted a link is the expected next step, not a drop.
+      const linkRestart = stage === 'linked' && statusCode === (this.lib?.DisconnectReason.restartRequired ?? 515);
+      this.host.logger.log(
+        linkRestart
+          ? 'Baileys link accepted; restarting the connection as WhatsApp asked'
+          : 'Baileys connection dropped; reconnecting',
+        {
+          sessionId: this.host.config.sessionId,
+          statusCode,
+          reason: (lastDisconnect?.error as Error | undefined)?.message,
+          stage,
+          aliveMs: closed.aliveMs,
+          action: linkRestart ? 'baileys_link_restart' : 'baileys_connection_dropped',
+        },
+      );
 
       // Baileys ends an unscanned socket with a 408 once its QR refs run out, the same code as a lost
       // connection, so only its message tells them apart. Every other close while a QR waits (503, 500,
@@ -916,8 +958,17 @@ export class BaileysLifecycle {
         this.reconnectAttempts = 0;
       }
       this.lastConnectionCloseAt = now;
-      this.scheduleReconnect(!qrWindowEnded);
+      this.scheduleReconnect(!qrWindowEnded, closed);
     }
+  }
+
+  /** How far the current socket had got: see {@link ConnectionCloseStage}. */
+  private closeStage(): ConnectionCloseStage {
+    const { loggingIn, linked, loginConfirmed, opened } = this.socketProgress;
+    if (opened) return 'open';
+    if (linked) return 'linked';
+    if (!loggingIn) return 'registration';
+    return loginConfirmed ? 'login_confirmed' : 'login_unconfirmed';
   }
 
   /**
@@ -981,8 +1032,9 @@ export class BaileysLifecycle {
    *
    * `countAttempt` false is only the close that ends an unscanned QR window: the connection worked,
    * so the reconnect is neither an attempt nor reported, and after the reset it waits the first step.
+   * `closed` describes the connection whose close led here; a failed connect() has none.
    */
-  private scheduleReconnect(countAttempt = true): void {
+  private scheduleReconnect(countAttempt = true, closed?: ReconnectContext): void {
     if (this.intentionalClose || this.reconnectTimer) {
       return;
     }
@@ -997,7 +1049,7 @@ export class BaileysLifecycle {
     // this is the one place every scheduled attempt passes through, including the reschedule from the
     // failed-attempt catch below, and it is already past the duplicate-close guard above.
     if (countAttempt) {
-      this.host.getOnReconnecting()?.(this.reconnectAttempts, delay);
+      this.host.getOnReconnecting()?.(this.reconnectAttempts, delay, closed);
     }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
