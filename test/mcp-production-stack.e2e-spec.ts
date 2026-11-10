@@ -105,12 +105,38 @@ describe('MCP behind the production middleware stack (e2e)', () => {
     expect(properties('MessageSendTemplate')).toContain('linkPreview');
     expect(properties('MessageSendText')).toContain('linkPreview');
     expect(properties('MessageList')).toContain('inlineMedia');
+    expect(properties('MessageSendText')).toContain('idempotencyKey');
+    expect(properties('MessageReact')).not.toContain('idempotencyKey');
   });
 
   it('runs a read tool end to end', async () => {
     const res = await call(operatorKey, 'SessionFindAll', {});
     expect(res.status).toBe(200);
     expect(JSON.parse(toolText(res))).toEqual(expect.any(Array));
+  });
+
+  it('claims a send idempotencyKey in the real store and frees it when the send is refused', async () => {
+    const args = {
+      sessionId: '44444444-4444-4444-8444-444444444444',
+      chatId: '628111@c.us',
+      text: 'hi',
+      idempotencyKey: 'e2e-send-key',
+    };
+    const first = JSON.parse(toolText(await call(operatorKey, 'MessageSendText', args))) as {
+      name: string;
+      code?: string;
+    };
+    // A refusal before anything reached WhatsApp frees the key, so other text under it is refused for the same
+    // reason, not as a reused key (422) or as an outcome that may have been sent (409).
+    const second = JSON.parse(toolText(await call(operatorKey, 'MessageSendText', { ...args, text: 'other' }))) as {
+      name: string;
+      code?: string;
+    };
+
+    expect(first.name).not.toBe('NotImplementedException');
+    expect(first.code).toBeUndefined();
+    expect(second.name).toBe(first.name);
+    expect(second.code).toBeUndefined();
   });
 
   describe('a refusal that names an id the caller sent', () => {

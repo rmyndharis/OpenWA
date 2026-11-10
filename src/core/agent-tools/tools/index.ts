@@ -1,5 +1,6 @@
 import type { SessionService } from '../../../modules/session/session.service';
 import type { MessageService } from '../../../modules/message/message.service';
+import type { SendIdempotencyService } from '../../../modules/message/idempotency/send-idempotency.service';
 import type { ContactService } from '../../../modules/contact/contact.service';
 import type { GroupService } from '../../../modules/group/group.service';
 import type { WebhookService } from '../../../modules/webhook/webhook.service';
@@ -25,6 +26,8 @@ export interface AgentToolDeps {
   webhook: WebhookService;
   labels: LabelService;
   automation: AutomationRulesService;
+  /** Backs `idempotencyKey` on the send tools; a call that carries a key without it is refused, never sent unclaimed. */
+  idempotency?: SendIdempotencyService;
   /** Absent when SEARCH_ENABLED=false omits SearchModule; MessageSearch then answers 501. */
   search?: SearchService;
   /** SEARCH_CONTAINS_ENABLED: MessageSearch defaults to match=contains only when it is on. */
@@ -42,7 +45,7 @@ export interface AgentToolDeps {
 export function allAgentTools(deps: AgentToolDeps): AnyToolDescriptor[] {
   return [
     ...sessionTools(deps.session),
-    ...messageTools(deps.message),
+    ...messageTools(deps.message, deps.idempotency),
     ...contactTools(deps.contact),
     ...groupTools(deps.group),
     ...webhookTools(deps.webhook),
