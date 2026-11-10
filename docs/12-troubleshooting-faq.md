@@ -312,7 +312,7 @@ keeps the name it was paired with until it is re-linked. See the phone-number pa
 **Symptoms:**
 
 - The scan or pairing code is accepted: the log shows `Baileys link accepted; restarting the connection as WhatsApp asked`
-- `Session ready` never follows. `Baileys connection dropped; reconnecting` repeats with `stage=login_unconfirmed` or `stage=login_confirmed`, and `aliveMs` says how long each attempt lasted
+- `Session ready` never follows. `Baileys connection dropped; reconnecting` repeats with `stage=login_unconfirmed` or `stage=login_confirmed`, and `aliveMs` says how long each attempt lasted; `stage=connecting` is a different problem, the connection never reached WhatsApp, so look at the network, DNS and any proxy
 - From the fifth attempt, `lastError` on `GET /api/sessions/{sessionId}` names the same stage
 
 **What a first login does:** once the link is accepted the device logs in on a new connection.
@@ -571,7 +571,7 @@ custom container that drops the `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` setup or th
 
 **Cause D — Debian 12 OS Chromium SIGTRAP in non-root Pods.**
 If `Code: null` happens on Kubernetes, and the host kernel logs or `dmesg` shows `Trace/breakpoint trap (core dumped)` with exit code 133, the underlying Debian 12 OS `chromium` package has crashed due to strict non-root or seccomp constraints (even with `--no-zygote` or `Unconfined` seccomp).
-_Fix:_ On amd64, do not use the `chromium` package from Debian's `apt` — it SIGTRAPs under strict non-root/seccomp. Instead, download Chrome for Testing via Puppeteer during the Docker build (`./node_modules/.bin/puppeteer browsers install 'chrome@157.0.8103.38'`) and point `PUPPETEER_EXECUTABLE_PATH` to it. (arm64 keeps Debian's `chromium`, which ships a native arm64 binary, by choice: Chrome for Testing publishes linux-arm64 builds only from 153, and the image has not moved arm64 to one.) The official `Dockerfile` implements this mixed approach.
+_Fix:_ On amd64, do not use the `chromium` package from Debian's `apt` — it SIGTRAPs under strict non-root/seccomp. Instead, download Chrome for Testing via Puppeteer during the Docker build (`./node_modules/.bin/puppeteer browsers install 'chrome@157.0.8103.50'`) and point `PUPPETEER_EXECUTABLE_PATH` to it. (arm64 keeps Debian's `chromium`, which ships a native arm64 binary, by choice: Chrome for Testing publishes linux-arm64 builds only from 153, and the image has not moved arm64 to one.) The official `Dockerfile` implements this mixed approach.
 
 **Quick triage:** run `docker stats openwa-api`, click **Start**, and watch which resource spikes toward its
 limit the instant before the failure — that tells you A vs B. If neither moves and you see the crashpad
@@ -753,6 +753,7 @@ had existed:
 
 | `stage`             | The connection closed                                                                                                                                                  |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connecting`        | before the connection to WhatsApp opened (no network, a failing DNS or proxy, a refused upgrade, the connecting deadline); the login was never sent                    |
 | `registration`      | while the session waited for a QR scan or a pairing code                                                                                                               |
 | `linked`            | right after the link was accepted                                                                                                                                      |
 | `login_unconfirmed` | before WhatsApp confirmed a linked device's login                                                                                                                      |

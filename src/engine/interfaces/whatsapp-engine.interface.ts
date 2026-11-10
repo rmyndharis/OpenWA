@@ -977,14 +977,17 @@ export interface InboundReceipt {
  * How far a connection had got when it closed. The close code alone does not say: a `428` is what a
  * session waiting for its QR, a login WhatsApp never answered and a session that had been open for a
  * day all report.
+ * - `connecting`: the connection to WhatsApp never opened: no network, a failing proxy, a refused upgrade or
+ *   the connecting deadline. Nothing was exchanged, so it says nothing about the login.
  * - `registration`: no device is linked; the connection was waiting for a QR scan or a pairing code.
  * - `linked`: the link was accepted on this connection. WhatsApp then asks for a restart (close 515).
- * - `login_unconfirmed`: a linked device's login was sent and WhatsApp had not confirmed it.
+ * - `login_unconfirmed`: the connection opened, a linked device's login was sent and WhatsApp had not confirmed it.
  * - `login_confirmed`: WhatsApp confirmed the login and the session had not opened yet. In between the
  *   engine stores and uploads its pre-keys and activates the connection.
  * - `open`: the session was open.
  */
-export type ConnectionCloseStage = 'registration' | 'linked' | 'login_unconfirmed' | 'login_confirmed' | 'open';
+export type ConnectionCloseStage =
+  'connecting' | 'registration' | 'linked' | 'login_unconfirmed' | 'login_confirmed' | 'open';
 
 /** What the engine knows about the connection whose close a reconnect attempt follows. */
 export interface ReconnectContext {

@@ -588,7 +588,7 @@
       "tos_block": "Blocked by WhatsApp",
       "proxy_block": "Connection blocked",
       "passkey_required": "Passkey required",
-      "passkey_required_note": "WhatsApp asked for a passkey to finish linking this device. OpenWA cannot answer that request, so scanning this code again will not complete the link.",
+      "passkey_required_note": "WhatsApp asked for a passkey to finish linking this device. OpenWA cannot answer that request, so trying again with a new code will not complete the link.",
       "until": "until {{date}}"
     }
   },

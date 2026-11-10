@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refuse an MCP tool argument the tool does not name with `Unrecognized key: "x"`, where it was dropped and the call ran without it; the published input schemas now say `additionalProperties: false`.
 - Carry the `code` of an HTTP error, such as `IDEMPOTENCY_KEY_IN_PROGRESS`, in an MCP tool error, which returned only its name and message.
 - Show a session restriction on the dashboard card of a session that is waiting for a scan or a pairing code, where the card showed none until the session was ready.
+- The amd64 image's Chrome for Testing 157.0.8103.38 to 157.0.8103.50, picking up the browser security fixes released since; the arm64 image keeps the chromium package Debian ships.
 - Refuse an MCP tool call whose arguments hold more than 10,000 array items and object keys before validating them, where a map of tens of thousands of entries with one wrong value was answered with an issue per entry, megabytes of text.
 - Refuse a `from` filter of more than 255 characters on the MCP `MessageList` and `MessageSearch` tools, as `chatId` already is.
 

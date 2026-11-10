@@ -2009,6 +2009,8 @@ test('the QR modal says WhatsApp asked for a passkey, on both tabs', async () =>
     // The phone tab is the other way to link, and WhatsApp asks for the passkey on it too.
     fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
     assert.match(screen.getByRole('status').textContent ?? '', /asked for a passkey/);
+    // The phone tab shows a code to type, not one to scan, so the note must not tell the operator to scan.
+    assert.doesNotMatch(screen.getByRole('status').textContent ?? '', /scan/i);
   });
 });
 

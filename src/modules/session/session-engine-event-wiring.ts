@@ -33,6 +33,7 @@ export const RECONNECT_LOOP_REASON = 'Reconnecting after a dropped connection';
 
 /** The sentence `lastError` adds for the connection that closed last, so the loop says where it fails. */
 const RECONNECT_STAGE_NOTE: Record<ConnectionCloseStage, string> = {
+  connecting: 'The last connection closed before it reached WhatsApp.',
   registration: 'The last connection closed while the session waited to be linked.',
   linked: 'The last connection closed right after the link was accepted.',
   login_unconfirmed: 'The last connection closed before WhatsApp confirmed the login.',

@@ -588,7 +588,7 @@
       "tos_block": "被 WhatsApp 封禁",
       "proxy_block": "连接被阻止",
       "passkey_required": "需要通行密钥",
-      "passkey_required_note": "WhatsApp 要求使用通行密钥来完成此设备的关联。OpenWA 无法响应该请求，因此再次扫描此二维码也无法完成关联。",
+      "passkey_required_note": "WhatsApp 要求使用通行密钥来完成此设备的关联。OpenWA 无法响应该请求，因此使用新的代码重试也无法完成关联。",
       "until": "至 {{date}}"
     }
   },
