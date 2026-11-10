@@ -5947,6 +5947,68 @@ describe('SessionService', () => {
       expect((await service.findOne('sess-uuid-1')).restriction).toEqual(timelock);
     });
 
+    // WhatsApp asking for a passkey reaches the session while it still shows its QR, and no status change
+    // comes with it: the restriction is the only channel that tells the API, the dashboard and a webhook
+    // consumer. The engine reports it once per socket, so the dedupe keeps every later scan quiet.
+    describe('a passkey requirement while linking', () => {
+      const passkey = { kind: 'passkey_required' as const, code: 'passkey_prologue_request' };
+
+      it('is announced once, served on the session while it waits at its QR, and not announced again', async () => {
+        const callbacks = await startAndCapture();
+        (webhookService.dispatch as jest.Mock).mockClear();
+
+        callbacks.onAccountRestriction?.(passkey);
+        callbacks.onAccountRestriction?.(passkey);
+
+        const restrictionDispatches = ((webhookService.dispatch as jest.Mock).mock.calls as unknown[][]).filter(
+          c => c[1] === 'session.restriction',
+        );
+        expect(restrictionDispatches).toEqual([
+          [
+            'sess-uuid-1',
+            'session.restriction',
+            {
+              sessionId: 'sess-uuid-1',
+              active: true,
+              kind: 'passkey_required',
+              code: 'passkey_prologue_request',
+              expiresAt: null,
+            },
+          ],
+        ]);
+        expect(eventsGateway.emitSessionRestriction).toHaveBeenCalledTimes(1);
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ status: SessionStatus.QR_READY }));
+        expect((await service.findOne('sess-uuid-1')).restriction).toEqual(passkey);
+      });
+
+      it('is lifted, with the same webhook a lifted block gets, when a link finally completes', async () => {
+        const callbacks = await startAndCapture();
+        callbacks.onAccountRestriction?.(passkey);
+        (webhookService.dispatch as jest.Mock).mockClear();
+
+        callbacks.onReady?.('628123', 'Tester');
+
+        expect(webhookService.dispatch).toHaveBeenCalledWith('sess-uuid-1', 'session.restriction', {
+          sessionId: 'sess-uuid-1',
+          active: false,
+          kind: 'passkey_required',
+          code: 'passkey_prologue_request',
+          expiresAt: null,
+        });
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ status: SessionStatus.READY }));
+        expect((await service.findOne('sess-uuid-1')).restriction).toBeNull();
+      });
+
+      it('moves no status: the session keeps showing the QR it is waiting on', async () => {
+        const callbacks = await startAndCapture();
+        (repository.update as jest.Mock).mockClear();
+
+        callbacks.onAccountRestriction?.(passkey);
+
+        expect(repository.update).not.toHaveBeenCalled();
+      });
+    });
+
     // Detection must not move the session's status: a timelocked account is still connected and
     // still serving every existing chat, and a status change would take the session out of service.
     it('does not touch the session status', async () => {

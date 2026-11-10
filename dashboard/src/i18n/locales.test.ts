@@ -139,6 +139,22 @@ test('every session-scope API key string resolves in every locale', () => {
   }
 });
 
+test('the passkey restriction label and note resolve in every locale, and the note names the passkey', () => {
+  for (const lng of LOCALE_IDS) {
+    for (const key of ['sessions.restriction.passkey_required', 'sessions.restriction.passkey_required_note']) {
+      const value = i18n.t(key, { lng });
+      assert.ok(value && value !== key, `${lng}: ${key} missing from the catalog (the card would show a raw key)`);
+    }
+    // The note says what WhatsApp asked for and that OpenWA does not answer it; a label pasted into both
+    // places would resolve and say neither.
+    const note = i18n.t('sessions.restriction.passkey_required_note', { lng });
+    const label = i18n.t('sessions.restriction.passkey_required', { lng });
+    assert.notEqual(note, label, `${lng}: the note repeats the label`);
+    assert.ok(note.includes('OpenWA'), `${lng}: the note does not say that OpenWA cannot answer the request`);
+  }
+  assert.equal(i18n.t('sessions.restriction.passkey_required', { lng: 'en' }), 'Passkey required');
+});
+
 test('English session-scope copy explains the empty-allowlist default', () => {
   assert.equal(i18n.t('apiKeys.sessions.all'), 'All sessions');
   assert.equal(i18n.t('apiKeys.sessions.choose'), 'Choose sessions');

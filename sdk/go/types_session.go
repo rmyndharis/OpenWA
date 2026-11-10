@@ -102,6 +102,7 @@ const (
 	RestrictionReachoutTimelock AccountRestrictionKind = "reachout_timelock"
 	RestrictionTosBlock         AccountRestrictionKind = "tos_block"
 	RestrictionProxyBlock       AccountRestrictionKind = "proxy_block"
+	RestrictionPasskeyRequired  AccountRestrictionKind = "passkey_required"
 )
 
 // PresenceState is a subscribed contact's presence.
@@ -139,10 +140,11 @@ type ChatPresence struct {
 // AccountRestriction is a restriction WhatsApp has in force on a session's account.
 //
 // "reachout_timelock" leaves the session connected and existing chats working -- only starting new
-// conversations is blocked -- whereas "tos_block" and "proxy_block" refuse the connection itself and
-// therefore cannot coexist with a "ready" status.
+// conversations is blocked -- whereas "tos_block", "proxy_block" and "passkey_required" stop a link or
+// the connection itself and therefore cannot coexist with a "ready" status. "passkey_required" means
+// WhatsApp asked for a passkey to finish linking a device, which the Baileys engine cannot answer.
 type AccountRestriction struct {
-	// Kind is one of: reachout_timelock, tos_block, proxy_block.
+	// Kind is one of: reachout_timelock, tos_block, proxy_block, passkey_required.
 	Kind AccountRestrictionKind `json:"kind"`
 	// Code is the engine's own token for the cause, verbatim (TOS_BLOCK, BIZ_QUALITY, ...).
 	Code string `json:"code"`

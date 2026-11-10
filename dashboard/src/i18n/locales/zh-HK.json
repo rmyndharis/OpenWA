@@ -587,6 +587,8 @@
       "reachout_timelock": "新對話被封鎖",
       "tos_block": "被 WhatsApp 封鎖",
       "proxy_block": "連線被封鎖",
+      "passkey_required": "需要通行密鑰",
+      "passkey_required_note": "WhatsApp 要求使用通行密鑰來完成此裝置的連結。OpenWA 無法回應該要求，因此再次掃描此 QR 碼也無法完成連結。",
       "until": "至 {{date}}"
     }
   },

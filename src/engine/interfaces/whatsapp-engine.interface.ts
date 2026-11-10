@@ -828,13 +828,17 @@ export interface IncomingCallEvent {
  *  - `tos_block` / `proxy_block` (whatsapp-web.js) — a connection-level refusal: WhatsApp Web drops
  *    the socket and the engine cannot stay linked at all. Derived from the `WAState` the library
  *    reports on its `disconnected` event, which is the only channel that carries it.
+ *  - `passkey_required` (Baileys): WhatsApp wants a passkey (a WebAuthn assertion) before it completes
+ *    a link, and the engine cannot produce one, so the link never completes. Reported when the
+ *    `passkey_prologue_request` notification arrives, which happens after the scan or the pairing code
+ *    and before any status change: the session keeps showing its QR.
  *
  * That difference is load-bearing for clearing: a `reachout_timelock` can only be resolved by an
  * explicit lift signal, whereas a connection-scoped kind is disproved the moment the session reaches
  * READY again — the block would have prevented that.
  */
 export interface AccountRestriction {
-  kind: 'reachout_timelock' | 'tos_block' | 'proxy_block';
+  kind: 'reachout_timelock' | 'tos_block' | 'proxy_block' | 'passkey_required';
   /**
    * The engine's own token for the cause, kept verbatim so an operator can search for it and so a
    * new upstream value is surfaced rather than flattened: the `WAState` string on whatsapp-web.js

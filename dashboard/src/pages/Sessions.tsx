@@ -69,6 +69,22 @@ function restrictionTitle(restriction: AccountRestriction, t: TFunction): string
   return parts.join(' · ');
 }
 
+/**
+ * The restriction row of a session card. Shared by both card layouts: a restriction can arrive on a
+ * session that is not linked yet (WhatsApp asking for a passkey while the card still shows its QR), and
+ * the pairing placeholder is the layout that session has.
+ */
+function RestrictionRow({ restriction, t }: { restriction: AccountRestriction; t: TFunction }) {
+  return (
+    <div className="info-row session-restriction">
+      <span className="info-label">{t('sessions.card.restriction')}</span>
+      <span className="info-value restriction-text" title={restrictionTitle(restriction, t)}>
+        {t(`sessions.restriction.${restriction.kind}`)}
+      </span>
+    </div>
+  );
+}
+
 // How long the list reads that pushes ask for are held so that the pushes around them share one read.
 const PUSHED_READ_WINDOW_MS = 250;
 
@@ -910,6 +926,12 @@ export function Sessions() {
               </div>
             )}
 
+            {sessions.find(s => s.id === qrData.sessionId)?.restriction?.kind === 'passkey_required' ? (
+              <p className="qr-restriction-note" role="status">
+                {t('sessions.restriction.passkey_required_note')}
+              </p>
+            ) : null}
+
             {!pairingMode ? (
               // QR Code Content
               qrData.qrCode ? (
@@ -1326,21 +1348,28 @@ export function Sessions() {
               </div>
 
               {awaitsPairing(session) ? (
-                <div className="qr-placeholder">
-                  <QrCode size={80} className="qr-icon" />
-                  <p>{session.status === 'qr_ready' ? t('sessions.qr.scanToConnect') : t('sessions.qr.preparing')}</p>
-                  {/* The QR is operator-only over REST and the socket, so a read-only key would open a
+                <>
+                  <div className="qr-placeholder">
+                    <QrCode size={80} className="qr-icon" />
+                    <p>{session.status === 'qr_ready' ? t('sessions.qr.scanToConnect') : t('sessions.qr.preparing')}</p>
+                    {/* The QR is operator-only over REST and the socket, so a read-only key would open a
                       modal that never gets a code. */}
-                  {canWrite && (
-                    <button
-                      className="btn-sm"
-                      onClick={() => handleShowQR(session.id)}
-                      disabled={session.status !== 'qr_ready'}
-                    >
-                      {session.status === 'qr_ready' ? t('sessions.qr.showQr') : t('sessions.qr.loading')}
-                    </button>
-                  )}
-                </div>
+                    {canWrite && (
+                      <button
+                        className="btn-sm"
+                        onClick={() => handleShowQR(session.id)}
+                        disabled={session.status !== 'qr_ready'}
+                      >
+                        {session.status === 'qr_ready' ? t('sessions.qr.showQr') : t('sessions.qr.loading')}
+                      </button>
+                    )}
+                  </div>
+                  {session.restriction ? (
+                    <div className="session-info">
+                      <RestrictionRow restriction={session.restriction} t={t} />
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <div className="session-info">
                   <div className="info-row">
@@ -1366,14 +1395,7 @@ export function Sessions() {
                   {/* Not gated on status, unlike the error above: a reachout timelock applies to a
                       session that is perfectly `ready`, and hiding it behind a status would make it
                       invisible exactly when the operator needs it. */}
-                  {session.restriction ? (
-                    <div className="info-row session-restriction">
-                      <span className="info-label">{t('sessions.card.restriction')}</span>
-                      <span className="info-value restriction-text" title={restrictionTitle(session.restriction, t)}>
-                        {t(`sessions.restriction.${session.restriction.kind}`)}
-                      </span>
-                    </div>
-                  ) : null}
+                  {session.restriction ? <RestrictionRow restriction={session.restriction} t={t} /> : null}
                 </div>
               )}
 

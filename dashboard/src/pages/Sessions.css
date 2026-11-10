@@ -619,6 +619,18 @@
   color: var(--text-primary);
 }
 
+/* WhatsApp asked for a passkey, which the engine cannot answer: said where the operator is looking, in
+   the warning colour a restriction already uses on the card. */
+.sessions-page .qr-restriction-note {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-light);
+  border-radius: 12px;
+  font-size: 0.8125rem;
+  color: var(--warning-text);
+  text-align: start;
+}
+
 .sessions-page .qr-auto-refresh {
   display: flex;
   align-items: center;

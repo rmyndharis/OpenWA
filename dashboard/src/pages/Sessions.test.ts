@@ -1954,6 +1954,76 @@ test('an unrestricted session shows no restriction row', async () => {
   assert.equal(within(card).queryByText('Restriction') === null, true);
 });
 
+// WhatsApp asks some accounts for a passkey before it completes a link, and the engine cannot answer.
+// The request arrives with no status change, so the session is still at its QR when it is reported: the
+// pairing placeholder is the layout it has, and the restriction row used to exist only in the other one.
+const PASSKEY_RESTRICTION: Session['restriction'] = { kind: 'passkey_required', code: 'passkey_prologue_request' };
+
+async function withQrSessionRestriction<T>(
+  restriction: Session['restriction'],
+  run: (card: HTMLElement) => Promise<T>,
+): Promise<T> {
+  SESSION_QR.restriction = restriction;
+  try {
+    resetFetchCalls();
+    renderSessions();
+    const card = (await rtl.screen.findByText('new-device')).closest('.session-card') as HTMLElement;
+    return await run(card);
+  } finally {
+    delete SESSION_QR.restriction;
+  }
+}
+
+test('a session waiting for its QR shows a passkey restriction on the pairing placeholder', async () => {
+  const { within } = rtl;
+  await withQrSessionRestriction(PASSKEY_RESTRICTION, card => {
+    // Still the pairing layout: the restriction is added to it, it does not replace it.
+    assert.ok(card.querySelector('.qr-placeholder'));
+    within(card).getByRole('button', { name: 'Show QR' });
+    within(card).getByText('Restriction');
+    const value = within(card).getByText('Passkey required');
+    assert.match(value.getAttribute('title') ?? '', /passkey_prologue_request/);
+    return Promise.resolve();
+  });
+});
+
+test('a session waiting for its QR shows no restriction row when it has none', async () => {
+  const { within } = rtl;
+  await withQrSessionRestriction(undefined, card => {
+    assert.ok(card.querySelector('.qr-placeholder'));
+    assert.equal(within(card).queryByText('Restriction') === null, true);
+    return Promise.resolve();
+  });
+});
+
+test('the QR modal says WhatsApp asked for a passkey, on both tabs', async () => {
+  const { screen, fireEvent, within } = rtl;
+  await withQrSessionRestriction(PASSKEY_RESTRICTION, async card => {
+    fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
+    await screen.findByAltText('QR');
+
+    const note = screen.getByRole('status');
+    assert.match(note.textContent ?? '', /WhatsApp asked for a passkey to finish linking this device/);
+    assert.match(note.textContent ?? '', /will not complete the link/);
+
+    // The phone tab is the other way to link, and WhatsApp asks for the passkey on it too.
+    fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
+    assert.match(screen.getByRole('status').textContent ?? '', /asked for a passkey/);
+  });
+});
+
+test('the QR modal carries no passkey note for another restriction or none', async () => {
+  const { screen, fireEvent, within } = rtl;
+  for (const restriction of [undefined, { kind: 'reachout_timelock' as const, code: 'BIZ_QUALITY' }]) {
+    await withQrSessionRestriction(restriction, async card => {
+      fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
+      await screen.findByAltText('QR');
+      assert.equal(screen.queryByText(/asked for a passkey/) === null, true);
+    });
+    rtl.cleanup();
+  }
+});
+
 // ── Live feed banner ─────────────────────────────────────────────────────────
 
 test('Refresh on a feed that never connected re-reads the list once the socket is back', async () => {

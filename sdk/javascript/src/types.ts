@@ -96,11 +96,12 @@ export interface SessionResponse {
  * A restriction WhatsApp has in force on a session's account.
  *
  * `reachout_timelock` leaves the session connected and existing chats working — only starting new
- * conversations is blocked — whereas `tos_block` and `proxy_block` refuse the connection itself and
- * therefore cannot coexist with a `ready` status.
+ * conversations is blocked — whereas `tos_block`, `proxy_block` and `passkey_required` stop a link or
+ * the connection itself and therefore cannot coexist with a `ready` status. `passkey_required` means
+ * WhatsApp asked for a passkey to finish linking a device, which the Baileys engine cannot answer.
  */
 export interface AccountRestriction {
-  kind: 'reachout_timelock' | 'tos_block' | 'proxy_block';
+  kind: 'reachout_timelock' | 'tos_block' | 'proxy_block' | 'passkey_required';
   /** The engine's own token for the cause, verbatim (`TOS_BLOCK`, `BIZ_QUALITY`, …). */
   code: string;
   /** ISO timestamp when enforcement ends, when WhatsApp states one. */
