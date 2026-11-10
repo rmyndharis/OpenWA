@@ -205,7 +205,10 @@ message's media inline as base64, up to a per-response budget
 The text of a tool error is cut at 4096 characters and ends with
 `... [truncated, <n> characters in all]`. Several services name the id the caller sent in their
 refusals, and a tool call can carry a far longer id than a REST path allows. The same cut applies to
-the server log line.
+the server log line. The cut covers the errors a tool raises. An argument the input schema refuses is
+answered earlier, with the SDK's own text, which names the offending argument and is not cut: a
+template `vars` name sent with a value that is not a string comes back in the answer, as long as the
+caller made it. That text is not logged.
 
 ### Retrying a send
 
