@@ -72,11 +72,12 @@ const unknownKeysError = ((issue: { code: string; keys?: string[] }) =>
  * declare. A tool call that carried one used to run with it silently dropped: a misspelled `quotedMessageId`
  * sent the message unquoted, a misspelled filter listed everything. The published schema then says
  * `additionalProperties: false`, so a client knows before it calls. Object-level checks are kept.
+ * defineTool applies it to every input; a nested object that is not a whole input applies it itself.
  */
-function refuseUnknownArguments(schema: z.ZodType): z.ZodType {
+export function refuseUnknownArguments<S extends z.ZodType>(schema: S): S {
   if (!(schema instanceof z.ZodObject)) return schema;
   const object: z.ZodObject = schema;
-  return object.clone({ ...object.def, catchall: z.never(), error: unknownKeysError });
+  return object.clone({ ...object.def, catchall: z.never(), error: unknownKeysError }) as unknown as S;
 }
 
 /**

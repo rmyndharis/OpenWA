@@ -22,7 +22,7 @@ import {
   REACTION_EMOJI_MAX_LENGTH,
 } from '../../../modules/message/dto/message-actions.dto';
 import { chatIdSchema, chatJidSchema } from '../chat-id-schema';
-import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
+import { defineTool, refuseUnknownArguments, type AnyToolDescriptor } from '../tool-descriptor';
 
 const sessionId = z.string().min(1).describe('Session UUID (the session id, not the name)');
 
@@ -70,8 +70,8 @@ const mentionsSchema = z
  * `mentionsSchema` above. Baileys only: whatsapp-web.js takes a boolean and answers 501, and the
  * field cannot be combined with `linkPreview: false`, which asks for the opposite.
  */
-const customLinkPreviewSchema = z
-  .object({
+const customLinkPreviewSchema = refuseUnknownArguments(
+  z.object({
     url: z
       .string()
       .min(1)
@@ -91,7 +91,8 @@ const customLinkPreviewSchema = z
       .string()
       .optional()
       .describe('Preview image as base64, at most 5 MiB decoded. Wins over thumbnailUrl.'),
-  })
+  }),
+)
   .refine(p => hasValidMediaUrl({ url: p.thumbnailUrl, base64: p.thumbnailBase64 }), {
     error: MEDIA_URL_MESSAGE,
     path: ['thumbnailUrl'],

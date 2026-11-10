@@ -55,6 +55,25 @@ describe('tool inputs refuse an argument they do not name', () => {
     expect(messageOf(tool, { ['k'.repeat(1_000_000)]: 1 }).length).toBeLessThan(100);
   });
 
+  it('refuses an unknown key inside customLinkPreview too, with the same short message', () => {
+    const text = byName.find(([name]) => name === 'MessageSendText')![1];
+    const result = text.inputSchema.safeParse({
+      sessionId: 's1',
+      chatId: '628111@c.us',
+      text: 'hi',
+      customLinkPreview: { url: 'https://example.com', title: 't', thumbnail_url: 'x' },
+    });
+
+    expect(result.success).toBe(false);
+    const issue = result.error?.issues.find(i => i.code === 'unrecognized_keys');
+    expect(issue?.path).toEqual(['customLinkPreview']);
+    expect(issue?.message).toBe('Unrecognized key: "thumbnail_url"');
+    const schema = z.toJSONSchema(text.inputSchema, { io: 'input' }) as unknown as {
+      properties: { customLinkPreview: { additionalProperties?: unknown } };
+    };
+    expect(schema.properties.customLinkPreview.additionalProperties).toBe(false);
+  });
+
   it('keeps the object-level check of a media tool', () => {
     const image = byName.find(([name]) => name === 'MessageSendImage')![1];
     expect(messageOf(image, { sessionId: 's1', chatId: '628111@c.us', url: 'ftp://host/a.png' })).toContain(
