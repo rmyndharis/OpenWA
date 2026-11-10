@@ -1,6 +1,6 @@
-import { NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { LoggerService } from '../../common/services/logger.service';
-import { handleToolError, smartToolResult } from './tool-result';
+import { handleToolError, smartToolResult, TOOL_ERROR_TEXT_MAX_CHARS } from './tool-result';
 
 describe('smartToolResult', () => {
   it('inlines a small object as JSON text', () => {
@@ -66,5 +66,107 @@ describe('handleToolError logging', () => {
     handleToolError(failure);
     expect(error).toHaveBeenCalledWith('engine down', failure.stack);
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+// A tool takes ids from the caller, and the services name them in their refusals ("Webhook with id '...' not
+// found", "... is not a group id"). REST bounds what such an id can be through the request line; a tool call
+// arrives in a body of up to BODY_SIZE_LIMIT, so the error carries the id back only up to a cap.
+describe('handleToolError text cap', () => {
+  const CAP = TOOL_ERROR_TEXT_MAX_CHARS;
+  const body = (result: ReturnType<typeof handleToolError>): { success: boolean; name: string; message: unknown } => {
+    const first = result.content[0];
+    if (first.type !== 'text') throw new Error('expected a text block');
+    return JSON.parse(first.text) as { success: boolean; name: string; message: unknown };
+  };
+  let error: jest.SpyInstance;
+  let warn: jest.SpyInstance;
+  beforeEach(() => {
+    error = jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+    warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  it('caps a client-supplied id in the answer and in the log line, and says it did', () => {
+    const id = 'x'.repeat(2_000_000);
+    const result = handleToolError(new NotFoundException(`Webhook with id '${id}' not found`));
+
+    const { message, name, success } = body(result);
+    expect(success).toBe(false);
+    expect(name).toBe('NotFoundException');
+    expect(result.isError).toBe(true);
+    expect(typeof message).toBe('string');
+    expect((message as string).length).toBeLessThan(CAP + 100);
+    expect(message as string).toMatch(/^Webhook with id 'x{100}/);
+    expect(message as string).toContain(
+      `[truncated, ${2_000_000 + "Webhook with id '' not found".length} characters in all]`,
+    );
+
+    const [logged] = warn.mock.calls[0] as [string];
+    expect(logged.startsWith('MCP tool error 404: Webhook with id')).toBe(true);
+    expect(logged.length).toBeLessThan(CAP + 150);
+  });
+
+  it('leaves a message of exactly the cap whole', () => {
+    const text = 'y'.repeat(CAP);
+    expect(body(handleToolError(new BadRequestException(text))).message).toBe(text);
+    expect(warn).toHaveBeenCalledWith(`MCP tool error 400: ${text}`);
+  });
+
+  it('caps each entry of a message list and keeps a short entry as it was', () => {
+    const { message } = body(handleToolError(new BadRequestException(['limit: too big', 'z'.repeat(CAP + 1)])));
+    expect(Array.isArray(message)).toBe(true);
+    const [short, long] = message as string[];
+    expect(short).toBe('limit: too big');
+    expect(long.length).toBeLessThan(CAP + 100);
+    expect(long).toContain('[truncated, ');
+  });
+
+  it('caps the answer and the log line of a 5xx, and keeps the frames of its stack', () => {
+    const id = 'w'.repeat(500_000);
+    const failure = new ServiceUnavailableException(`engine said ${id}`);
+    const result = handleToolError(failure);
+
+    expect((body(result).message as string).length).toBeLessThan(CAP + 100);
+    const [line, stack] = error.mock.calls[0] as [string, string];
+    expect(line.length).toBeLessThan(CAP + 100);
+    expect(stack.length).toBeLessThan(CAP * 5);
+    expect(stack).toContain('at ');
+  });
+
+  it('answers an internal error generically and caps the message in what it logs, stack included', () => {
+    const failure = new Error(`invalid input syntax for type uuid: "${'v'.repeat(300_000)}"`);
+    expect(failure.stack).toContain('v'.repeat(1000)); // the echo really is in the stack
+    const result = handleToolError(failure);
+
+    expect(body(result).message).toBe('Internal error');
+    const [line, stack] = error.mock.calls[0] as [string, string];
+    expect(line.length).toBeLessThan(CAP + 100);
+    expect(stack.length).toBeLessThan(CAP * 5);
+    expect(stack).toContain('[truncated, ');
+    expect(stack).toContain('at ');
+  });
+
+  it('does not expand a replacement pattern that the cut message happens to hold', () => {
+    // `$&` in a replacement STRING stands for the matched text, which here is the whole 10000 characters.
+    const failure = new Error('$&'.repeat(5000));
+    handleToolError(failure);
+    const [, stack] = error.mock.calls[0] as [string, string];
+    expect(stack).toContain('$&'.repeat(CAP / 2) + '... [truncated, 10000 characters in all]');
+    expect(stack.length).toBeLessThan(CAP * 5);
+    expect(stack).toContain('at ');
+  });
+
+  it('does not cut a surrogate pair in half', () => {
+    const emoji = '😀';
+    const { message } = body(handleToolError(new BadRequestException('a'.repeat(CAP - 1) + emoji + 'tail')));
+    const kept = (message as string).slice(0, (message as string).indexOf('... [truncated'));
+    expect(kept).toBe('a'.repeat(CAP - 1));
+    expect(/[\ud800-\udbff]$/.test(kept)).toBe(false);
+  });
+
+  it('leaves a short message and its log line exactly as before', () => {
+    expect(body(handleToolError(new NotFoundException('Session x not found'))).message).toBe('Session x not found');
+    expect(warn).toHaveBeenCalledWith('MCP tool error 404: Session x not found');
   });
 });

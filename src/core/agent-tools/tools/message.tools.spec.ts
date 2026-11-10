@@ -41,6 +41,35 @@ describe('messageTools', () => {
     expect(out).toEqual([{ id: 'm1' }]);
   });
 
+  // Media rows carry their base64 inline up to a per-response budget (8 MiB by default), and over MCP the list is
+  // the only way to the bytes, so the default stays "inline"; an agent that wants the rows alone opts out, as the
+  // REST list's inlineMedia=false does.
+  it.each([true, false])('MessageList forwards inlineMedia: %s to getMessages', async inlineMedia => {
+    const getMessages = jest.fn().mockResolvedValue({ messages: [], total: 0 });
+    const tools = makeTools({ getMessages } as unknown as MessageService);
+    await run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us', inlineMedia });
+    expect(getMessages).toHaveBeenCalledWith('s1', expect.objectContaining({ chatId: '628111@c.us', inlineMedia }));
+  });
+
+  it('MessageList leaves inlineMedia out of the call when it is unset, so the service default applies', async () => {
+    const getMessages = jest.fn().mockResolvedValue({ messages: [], total: 0 });
+    const tools = makeTools({ getMessages } as unknown as MessageService);
+    await run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us' });
+    const options = (getMessages.mock.calls[0] as [string, Record<string, unknown>])[1];
+    expect(Object.keys(options)).not.toContain('inlineMedia');
+  });
+
+  it('MessageList refuses an inlineMedia that is not a boolean', async () => {
+    const getMessages = jest.fn();
+    const tools = makeTools({ getMessages } as unknown as MessageService);
+    await expect(
+      run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us', inlineMedia: 'false' }),
+    ).rejects.toMatchObject({
+      response: { message: [expect.stringContaining('inlineMedia') as unknown as string] },
+    });
+    expect(getMessages).not.toHaveBeenCalled();
+  });
+
   it('MessageHistory delegates to getChatHistory', async () => {
     const getChatHistory = jest.fn().mockResolvedValue([{ id: 'm1' }]);
     const tools = makeTools({ getChatHistory } as unknown as MessageService);
@@ -265,6 +294,44 @@ describe('messageTools', () => {
       vars: { name: 'Jane' },
     });
     expect(out).toEqual({ id: 'm1' });
+  });
+
+  // The REST send-template body takes the same linkPreview as send-text, and the service hands it on to the send:
+  // without the field an agent could neither ask Baileys for a preview nor switch the whatsapp-web.js one off.
+  it.each([true, false])('MessageSendTemplate forwards linkPreview: %s', async linkPreview => {
+    const sendTemplate = jest.fn().mockResolvedValue({ id: 'm1' });
+    const tools = makeTools({ sendTemplate } as unknown as MessageService);
+    await run(tools.get('MessageSendTemplate')!, {
+      sessionId: 's1',
+      chatId: '628111@c.us',
+      templateName: 'welcome',
+      linkPreview,
+    });
+    expect(sendTemplate).toHaveBeenCalledWith('s1', expect.objectContaining({ templateName: 'welcome', linkPreview }));
+  });
+
+  it('MessageSendTemplate leaves linkPreview out of the call when it is unset', async () => {
+    const sendTemplate = jest.fn().mockResolvedValue({ id: 'm1' });
+    const tools = makeTools({ sendTemplate } as unknown as MessageService);
+    await run(tools.get('MessageSendTemplate')!, { sessionId: 's1', chatId: '628111@c.us', templateName: 'welcome' });
+    const dto = (sendTemplate.mock.calls[0] as [string, Record<string, unknown>])[1];
+    expect(Object.keys(dto)).not.toContain('linkPreview');
+  });
+
+  it('MessageSendTemplate refuses a linkPreview that is not a boolean', async () => {
+    const sendTemplate = jest.fn();
+    const tools = makeTools({ sendTemplate } as unknown as MessageService);
+    await expect(
+      run(tools.get('MessageSendTemplate')!, {
+        sessionId: 's1',
+        chatId: '628111@c.us',
+        templateName: 'welcome',
+        linkPreview: 'false',
+      }),
+    ).rejects.toMatchObject({
+      response: { message: [expect.stringContaining('linkPreview') as unknown as string] },
+    });
+    expect(sendTemplate).not.toHaveBeenCalled();
   });
 
   it('MessageReply delegates to reply', async () => {

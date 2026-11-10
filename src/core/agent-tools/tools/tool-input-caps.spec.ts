@@ -4,8 +4,12 @@ import type { MessageService } from '../../../modules/message/message.service';
 import type { GroupService } from '../../../modules/group/group.service';
 import {
   CHAT_ID_MAX_LENGTH,
+  MEDIA_CAPTION_MAX_LENGTH,
+  MEDIA_FILENAME_MAX_LENGTH,
   MENTIONS_MAX,
   MESSAGE_TEXT_MAX_LENGTH,
+  SendAudioMessageDto,
+  SendMediaMessageDto,
   SendTextMessageDto,
 } from '../../../modules/message/dto/send-message.dto';
 import {
@@ -59,6 +63,27 @@ interface CapCase {
   dtoClass: new () => object;
   dtoPayload: Record<string, unknown>;
 }
+
+// The five media tools share one pair of free-text fields with the media DTOs. They restated the numbers as
+// literals once, which only this parity would have caught drifting, so each tool is paired with its own body.
+const MEDIA_TOOLS: Array<[string, new () => object]> = [
+  ['MessageSendImage', SendMediaMessageDto],
+  ['MessageSendVideo', SendMediaMessageDto],
+  ['MessageSendAudio', SendAudioMessageDto],
+  ['MessageSendDocument', SendMediaMessageDto],
+  ['MessageSendSticker', SendMediaMessageDto],
+];
+const MEDIA_CASES: CapCase[] = MEDIA_TOOLS.flatMap(([toolName, dtoClass]) =>
+  (['filename', 'caption'] as const).map(field => ({
+    label: `${toolName}.${field} ↔ ${dtoClass.name}.${field}`,
+    toolName,
+    field,
+    cap: field === 'filename' ? MEDIA_FILENAME_MAX_LENGTH : MEDIA_CAPTION_MAX_LENGTH,
+    toolInput: { sessionId: 's1', chatId: 'x@c.us', url: 'https://example.com/a.bin' },
+    dtoClass,
+    dtoPayload: { chatId: 'x@c.us', url: 'https://example.com/a.bin' },
+  })),
+);
 
 // Every string field whose Zod schema previously had no max while the equivalent REST DTO
 // enforces one via class-validator. Both sides now read the same exported constant.
@@ -144,6 +169,7 @@ const CASES: CapCase[] = [
     dtoClass: GroupDescriptionDto,
     dtoPayload: { description: 'rules' },
   },
+  ...MEDIA_CASES,
 ];
 
 // Same parity idea as the string caps above, for the participants arrays: the Zod schemas had

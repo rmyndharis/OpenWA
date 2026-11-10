@@ -8,6 +8,8 @@ import {
   CUSTOM_PREVIEW_DESCRIPTION_MAX_LENGTH,
   CUSTOM_PREVIEW_TITLE_MAX_LENGTH,
   CUSTOM_PREVIEW_URL_MAX_LENGTH,
+  MEDIA_CAPTION_MAX_LENGTH,
+  MEDIA_FILENAME_MAX_LENGTH,
   MENTIONS_MAX,
   MENTION_WID_MAX_LENGTH,
   MESSAGE_TEXT_MAX_LENGTH,
@@ -101,13 +103,29 @@ const customLinkPreviewSchema = z
       'Baileys only: whatsapp-web.js answers 501.',
   );
 
+/**
+ * Mirrors the REST `linkPreview` field of the two routes that carry text (send-text, send-template). The engines
+ * differ, and the description is all an agent has to go on: whatsapp-web.js builds a preview by default, Baileys
+ * only when it is asked to.
+ */
+const linkPreviewSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    'Controls the URL preview, and the engines differ. whatsapp-web.js builds one by default and false ' +
+      'suppresses it. On Baileys a preview is opt-in: true fetches the page and attaches one, while unset or ' +
+      'false sends none.',
+  );
+
 export function messageTools(message: MessageService): AnyToolDescriptor[] {
   return [
     defineTool({
       name: 'MessageList',
       chatScope: ['chatId'],
       description:
-        'List persisted messages for a session, optionally filtered by chatId or sender. Reads from the local DB.',
+        'List persisted messages for a session, optionally filtered by chatId or sender. Reads from the local DB. ' +
+        'A message with media carries it inline as base64, up to a per-response budget (8 MiB by default), which ' +
+        'makes a result large; pass inlineMedia false to get the rows without the media.',
       tier: 'read',
       sessionScoped: true,
       inputSchema: z.object({
@@ -116,6 +134,13 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         from: z.string().optional().describe('Filter by sender phone or JID'),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
+        inlineMedia: z
+          .boolean()
+          .optional()
+          .describe(
+            'Set false to leave inline media payloads out: each media row then keeps an { omitted, sizeBytes } ' +
+              'marker. Media is only available inline over MCP, so leave it unset when you need the bytes.',
+          ),
       }),
       handler: input =>
         message.getMessages(input.sessionId, {
@@ -123,6 +148,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           from: input.from,
           limit: input.limit,
           offset: input.offset,
+          ...(input.inlineMedia === undefined ? {} : { inlineMedia: input.inlineMedia }),
         }),
     }),
     defineTool({
@@ -175,13 +201,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         sessionId,
         chatId: chatJidSchema.describe('Chat JID (e.g. 628123456789@c.us or groupId@g.us)'),
         text: z.string().min(1).max(MESSAGE_TEXT_MAX_LENGTH).describe('Text message content'),
-        linkPreview: z
-          .boolean()
-          .optional()
-          .describe(
-            'Set false to suppress the URL preview. Guaranteed only in that direction — leaving it ' +
-              'unset means the engine default, and the engines differ.',
-          ),
+        linkPreview: linkPreviewSchema,
         quotedMessageId: quotedMessageIdSchema,
         mentions: mentionsSchema,
         customLinkPreview: customLinkPreviewSchema,
@@ -210,8 +230,8 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           url: mediaUrl('Image'),
           base64: z.string().optional().describe('Base64-encoded image data'),
           mimetype: z.string().optional().describe('MIME type (required when using base64)'),
-          filename: z.string().max(255).optional(),
-          caption: z.string().max(1024).optional(),
+          filename: z.string().max(MEDIA_FILENAME_MAX_LENGTH).optional(),
+          caption: z.string().max(MEDIA_CAPTION_MAX_LENGTH).optional(),
           quotedMessageId: quotedMessageIdSchema,
           mentions: mentionsSchema,
         })
@@ -242,8 +262,8 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           url: mediaUrl('Video'),
           base64: z.string().optional().describe('Base64-encoded video data'),
           mimetype: z.string().optional().describe('MIME type (required when using base64)'),
-          filename: z.string().max(255).optional(),
-          caption: z.string().max(1024).optional(),
+          filename: z.string().max(MEDIA_FILENAME_MAX_LENGTH).optional(),
+          caption: z.string().max(MEDIA_CAPTION_MAX_LENGTH).optional(),
           quotedMessageId: quotedMessageIdSchema,
           mentions: mentionsSchema,
         })
@@ -274,8 +294,8 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           url: mediaUrl('Audio'),
           base64: z.string().optional().describe('Base64-encoded audio data'),
           mimetype: z.string().optional().describe('MIME type (required when using base64)'),
-          filename: z.string().max(255).optional(),
-          caption: z.string().max(1024).optional(),
+          filename: z.string().max(MEDIA_FILENAME_MAX_LENGTH).optional(),
+          caption: z.string().max(MEDIA_CAPTION_MAX_LENGTH).optional(),
           ptt: z.boolean().optional().describe('Send as a WhatsApp voice note (PTT)'),
           quotedMessageId: quotedMessageIdSchema,
           mentions: mentionsSchema,
@@ -308,8 +328,8 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           url: mediaUrl('Document'),
           base64: z.string().optional().describe('Base64-encoded document data'),
           mimetype: z.string().optional().describe('MIME type (required when using base64)'),
-          filename: z.string().max(255).optional(),
-          caption: z.string().max(1024).optional(),
+          filename: z.string().max(MEDIA_FILENAME_MAX_LENGTH).optional(),
+          caption: z.string().max(MEDIA_CAPTION_MAX_LENGTH).optional(),
           quotedMessageId: quotedMessageIdSchema,
           mentions: mentionsSchema,
         })
@@ -392,8 +412,8 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           url: mediaUrl('Sticker'),
           base64: z.string().optional().describe('Base64-encoded sticker data'),
           mimetype: z.string().optional().describe('MIME type (required when using base64)'),
-          filename: z.string().max(255).optional(),
-          caption: z.string().max(1024).optional(),
+          filename: z.string().max(MEDIA_FILENAME_MAX_LENGTH).optional(),
+          caption: z.string().max(MEDIA_CAPTION_MAX_LENGTH).optional(),
           quotedMessageId: quotedMessageIdSchema,
           mentions: mentionsSchema,
         })
@@ -428,6 +448,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           .optional()
           .describe('Variables to substitute into {{placeholder}} tokens'),
         mentions: mentionsSchema,
+        linkPreview: linkPreviewSchema,
       }),
       handler: input =>
         message.sendTemplate(input.sessionId, {
@@ -436,6 +457,7 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           templateName: input.templateName,
           vars: input.vars,
           mentions: input.mentions,
+          ...(input.linkPreview === undefined ? {} : { linkPreview: input.linkPreview }),
         }),
     }),
     defineTool({
