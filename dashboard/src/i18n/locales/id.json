@@ -588,7 +588,7 @@
       "tos_block": "Diblokir oleh WhatsApp",
       "proxy_block": "Koneksi diblokir",
       "passkey_required": "Passkey diperlukan",
-      "passkey_required_note": "WhatsApp meminta passkey untuk menyelesaikan penautan perangkat ini. OpenWA tidak dapat menjawab permintaan itu, sehingga memindai kode ini lagi tidak akan menyelesaikan penautan.",
+      "passkey_required_note": "WhatsApp meminta passkey untuk menyelesaikan penautan perangkat ini. OpenWA tidak dapat menjawab permintaan itu, sehingga mencoba lagi dengan kode baru tidak akan menyelesaikan penautan.",
       "until": "sampai {{date}}"
     }
   },

@@ -588,7 +588,7 @@
       "tos_block": "WhatsApp에 의해 차단됨",
       "proxy_block": "연결 차단됨",
       "passkey_required": "패스키 필요",
-      "passkey_required_note": "WhatsApp이 이 기기 연결을 완료하기 위해 패스키를 요청했습니다. OpenWA는 이 요청에 응답할 수 없으므로 이 코드를 다시 스캔해도 연결이 완료되지 않습니다.",
+      "passkey_required_note": "WhatsApp이 이 기기 연결을 완료하기 위해 패스키를 요청했습니다. OpenWA는 이 요청에 응답할 수 없으므로 새 코드로 다시 시도해도 연결이 완료되지 않습니다.",
       "until": "{{date}}까지"
     }
   },
