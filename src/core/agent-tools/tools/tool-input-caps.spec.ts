@@ -2,6 +2,7 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import type { MessageService } from '../../../modules/message/message.service';
 import type { GroupService } from '../../../modules/group/group.service';
+import type { SessionService } from '../../../modules/session/session.service';
 import {
   CHAT_ID_MAX_LENGTH,
   MEDIA_CAPTION_MAX_LENGTH,
@@ -46,7 +47,7 @@ import { groupTools } from './group.tools';
 const PIPE_TRANSFORM_OPTS = { enableImplicitConversion: true };
 
 const messages = messageTools({} as unknown as MessageService);
-const groups = groupTools({} as unknown as GroupService);
+const groups = groupTools({} as unknown as GroupService, {} as unknown as SessionService);
 
 function tool(name: string): AnyToolDescriptor {
   const found = [...messages, ...groups].find(t => t.name === name);

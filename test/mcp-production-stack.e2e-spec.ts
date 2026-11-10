@@ -111,6 +111,8 @@ describe('MCP behind the production middleware stack (e2e)', () => {
     expect(properties('MessageSendTemplate')).toContain('linkPreview');
     expect(properties('MessageSendText')).toContain('linkPreview');
     expect(properties('MessageList')).toContain('inlineMedia');
+    expect(properties('MessageSendText')).toContain('idempotencyKey');
+    expect(properties('MessageReact')).not.toContain('idempotencyKey');
   });
 
   it('runs a read tool end to end', async () => {
@@ -126,6 +128,57 @@ describe('MCP behind the production middleware stack (e2e)', () => {
     const long = await call(operatorKey, 'SessionFindAll', { ['k'.repeat(1_000_000)]: 1 });
     expect(toolText(long)).toContain('Unrecognized key');
     expect(long.text.length).toBeLessThan(1000);
+  });
+
+  it('claims a send idempotencyKey in the real store and frees it when the send is refused', async () => {
+    const args = {
+      sessionId: '44444444-4444-4444-8444-444444444444',
+      chatId: '628111@c.us',
+      text: 'hi',
+      idempotencyKey: 'e2e-send-key',
+    };
+    const first = JSON.parse(toolText(await call(operatorKey, 'MessageSendText', args))) as {
+      name: string;
+      code?: string;
+    };
+    // A refusal before anything reached WhatsApp frees the key, so other text under it is refused for the same
+    // reason, not as a reused key (422) or as an outcome that may have been sent (409).
+    const second = JSON.parse(toolText(await call(operatorKey, 'MessageSendText', { ...args, text: 'other' }))) as {
+      name: string;
+      code?: string;
+    };
+
+    expect(first.name).not.toBe('NotImplementedException');
+    expect(first.code).toBeUndefined();
+    expect(second.name).toBe(first.name);
+    expect(second.code).toBeUndefined();
+  });
+
+  it('lists messages with the REST filters, and the service still validates them', async () => {
+    const sessionId = '33333333-3333-4333-8333-333333333333';
+    const filtered = await call(operatorKey, 'MessageList', {
+      sessionId,
+      direction: 'incoming',
+      type: 'image',
+      since: 0,
+      until: 10,
+      orderBy: 'timestamp',
+    });
+    expect(JSON.parse(toolText(filtered))).toMatchObject({ messages: [], total: 0 });
+
+    const reversed = await call(operatorKey, 'MessageList', { sessionId, since: 10, until: 5 });
+    expect(JSON.parse(toolText(reversed))).toMatchObject({ success: false, name: 'BadRequestException' });
+  });
+
+  it('answers 404 for a group list on an unknown session, as the REST route does', async () => {
+    const unknownSession = '22222222-2222-4222-8222-222222222222';
+    const res = await call(operatorKey, 'GroupFindAll', { sessionId: unknownSession });
+    expect(JSON.parse(toolText(res))).toMatchObject({ success: false, name: 'NotFoundException' });
+
+    const rest = await request(app.getHttpServer())
+      .get(`/api/sessions/${unknownSession}/groups`)
+      .set('X-API-Key', operatorKey);
+    expect(rest.status).toBe(404);
   });
 
   describe('a refusal that names an id the caller sent', () => {

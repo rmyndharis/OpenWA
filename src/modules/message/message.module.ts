@@ -43,6 +43,6 @@ import { PLUGIN_MESSAGE_PORT } from '../../core/plugins/plugin-host-ports';
     // An alias, not a factory, so lifecycle hooks are not dispatched twice on the same instance.
     { provide: PLUGIN_MESSAGE_PORT, useExisting: MessageService },
   ],
-  exports: [MessageService, BulkMessageService, SendPacingService],
+  exports: [MessageService, BulkMessageService, SendPacingService, SendIdempotencyService],
 })
 export class MessageModule {}

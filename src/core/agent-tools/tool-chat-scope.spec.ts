@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
 import { ChatScopeService } from '../../modules/auth/chat-scope.service';
 import type { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
@@ -7,6 +7,7 @@ import type { ContactService } from '../../modules/contact/contact.service';
 import type { GroupService } from '../../modules/group/group.service';
 import type { LabelService } from '../../modules/label/label.service';
 import type { MessageService } from '../../modules/message/message.service';
+import type { SendIdempotencyService } from '../../modules/message/idempotency/send-idempotency.service';
 import type { SessionService } from '../../modules/session/session.service';
 import { messageTools } from './tools/message.tools';
 import { sessionTools } from './tools/session.tools';
@@ -42,6 +43,29 @@ describe('chat-restricted tool calls', () => {
       messageId: 'm1',
     });
     expect(sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an outside destination before it claims an idempotency key', async () => {
+    const claim = jest.fn();
+    const keyed = messageTools(
+      { sendText } as unknown as MessageService,
+      { claim } as unknown as SendIdempotencyService,
+    );
+
+    await expect(
+      call(
+        keyed.find(t => t.name === 'MessageSendText')!,
+        {
+          sessionId: 's1',
+          chatId: OTHER,
+          text: 'hello',
+          idempotencyKey: 'k1',
+        },
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(claim).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
   });
 
   it('refuses an outside destination before sending', async () => {
@@ -167,7 +191,9 @@ describe('chat-restricted tool calls', () => {
       const descriptors =
         name === 'ContactFindAll'
           ? contactTools({ listContacts: list, getContacts: paged } as unknown as ContactService)
-          : groupTools({ listGroups: list, getGroups: paged } as unknown as GroupService);
+          : groupTools({ listGroups: list, getGroups: paged } as unknown as GroupService, {
+              findOne: jest.fn().mockResolvedValue({}),
+            });
       await expect(
         call(
           descriptors.find(t => t.name === name)!,
@@ -179,6 +205,18 @@ describe('chat-restricted tool calls', () => {
       expect(paged).not.toHaveBeenCalled();
     },
   );
+
+  it('answers 404 for an unknown session on a restricted key before listing the groups', async () => {
+    const list = jest.fn();
+    const unknown = {
+      findOne: jest.fn().mockRejectedValue(new NotFoundException('Session s1 not found')),
+    } as unknown as SessionService;
+    const descriptor = groupTools({ listGroups: list } as unknown as GroupService, unknown).find(
+      t => t.name === 'GroupFindAll',
+    )!;
+    await expect(call(descriptor, { sessionId: 's1' })).rejects.toBeInstanceOf(NotFoundException);
+    expect(list).not.toHaveBeenCalled();
+  });
 
   it('filters label chat membership', async () => {
     const descriptor = labelTools({
