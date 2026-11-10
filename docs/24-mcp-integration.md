@@ -6,8 +6,10 @@
 >
 > OpenWA can expose a curated set of its capabilities to AI agents over the
 > [Model Context Protocol](https://modelcontextprotocol.io). The server is **off by
-> default** and **purely additive**: when disabled, none of its code (or the MCP SDK)
-> is loaded and every REST route behaves exactly as before.
+> default** and **purely additive**: when disabled, the MCP module and the MCP SDK
+> are not loaded and every REST route behaves exactly as before. The protocol-neutral tool
+> registry (`AgentToolsModule`) is built either way, and nothing reads it until the server is
+> enabled.
 
 | Component                                                                 | Status         | Location                                             |
 | ------------------------------------------------------------------------- | -------------- | ---------------------------------------------------- |
