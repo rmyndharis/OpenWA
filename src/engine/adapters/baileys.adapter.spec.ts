@@ -2035,6 +2035,17 @@ describe('BaileysAdapter passkey request while linking', () => {
     expect(passkeyWarnings()).toEqual([]);
   });
 
+  // Nothing lifts a restriction once the session is ready, so one reported after the open would stay.
+  it('says and reports nothing for a request that arrives once the connection has opened', async () => {
+    await start();
+    fakeSock.fire('connection.update', { connection: 'open' });
+
+    deliver(notification('passkey_prologue_request', 'passkey_request_options'));
+
+    expect(passkeyWarnings()).toEqual([]);
+    expect(onAccountRestriction).not.toHaveBeenCalled();
+  });
+
   it('says it again on the next socket, which asks again when the next code is scanned', async () => {
     await start();
     deliver(notification('passkey_prologue_request', 'passkey_request_options'));

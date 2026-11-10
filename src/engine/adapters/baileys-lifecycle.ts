@@ -593,9 +593,11 @@ export class BaileysLifecycle {
     // request; saying that it arrived is what turns a silent stall into a known limit. It is reported
     // as a restriction because that is what it is, and because the request comes with no status change:
     // the restriction is the one channel that reaches the API, the dashboard and the webhook without one.
+    // A connection that has opened completed its login, so a request that arrives after that does not
+    // stand in the way of it, and is not reported: nothing would lift the restriction again.
     let passkeyAsked = false;
     sock.ws.on('CB:notification,type:passkey_prologue_request', () => {
-      if (passkeyAsked) return;
+      if (passkeyAsked || progress.opened) return;
       passkeyAsked = true;
       this.host.getOnAccountRestriction()?.({ kind: 'passkey_required', code: 'passkey_prologue_request' });
       this.host.logger.warn(
