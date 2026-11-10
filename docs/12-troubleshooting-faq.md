@@ -312,7 +312,7 @@ keeps the name it was paired with until it is re-linked. See the phone-number pa
 **Symptoms:**
 
 - The scan or pairing code is accepted: the log shows `Baileys link accepted; restarting the connection as WhatsApp asked`
-- `Session ready` never follows. `Baileys connection dropped; reconnecting` repeats with `stage=login_unconfirmed` or `stage=login_confirmed`, and `aliveMs` says how long each attempt lasted
+- `Session ready` never follows. `Baileys connection dropped; reconnecting` repeats with `stage=login_unconfirmed` or `stage=login_confirmed`, and `aliveMs` says how long each attempt lasted; `stage=connecting` is a different problem, the connection never reached WhatsApp, so look at the network, DNS and any proxy
 - From the fifth attempt, `lastError` on `GET /api/sessions/{sessionId}` names the same stage
 
 **What a first login does:** once the link is accepted the device logs in on a new connection.
@@ -753,6 +753,7 @@ had existed:
 
 | `stage`             | The connection closed                                                                                                                                                  |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connecting`        | before the connection to WhatsApp opened (no network, a failing DNS or proxy, a refused upgrade, the connecting deadline); the login was never sent                    |
 | `registration`      | while the session waited for a QR scan or a pairing code                                                                                                               |
 | `linked`            | right after the link was accepted                                                                                                                                      |
 | `login_unconfirmed` | before WhatsApp confirmed a linked device's login                                                                                                                      |

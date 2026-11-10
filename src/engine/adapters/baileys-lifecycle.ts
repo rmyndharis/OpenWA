@@ -154,6 +154,7 @@ export function createProxyAgent(proxyUrl: string, connectTimeoutMs = PROXY_CONN
 const newSocketProgress = (loggingIn: boolean) => ({
   startedAt: Date.now(),
   loggingIn,
+  wsOpened: false,
   linked: false,
   loginConfirmed: false,
   opened: false,
@@ -586,6 +587,11 @@ export class BaileysLifecycle {
     sock.ws.on('CB:success', () => {
       progress.loginConfirmed = true;
     });
+    // A socket that never opens (no network, a dead proxy, a refused upgrade, the connecting deadline) closes
+    // before any frame is exchanged, and says nothing about the login: it is reported as such.
+    sock.ws.on('open', () => {
+      progress.wsOpened = true;
+    });
 
     // WhatsApp asks some accounts for a passkey before it completes a link: a WebAuthn assertion the new
     // device has to return. Baileys acknowledges the request and does nothing else, so the link stalls
@@ -984,9 +990,10 @@ export class BaileysLifecycle {
 
   /** How far the current socket had got: see {@link ConnectionCloseStage}. */
   private closeStage(): ConnectionCloseStage {
-    const { loggingIn, linked, loginConfirmed, opened } = this.socketProgress;
+    const { loggingIn, wsOpened, linked, loginConfirmed, opened } = this.socketProgress;
     if (opened) return 'open';
     if (linked) return 'linked';
+    if (!wsOpened && !loginConfirmed) return 'connecting';
     if (!loggingIn) return 'registration';
     return loginConfirmed ? 'login_confirmed' : 'login_unconfirmed';
   }

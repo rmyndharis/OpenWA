@@ -5579,6 +5579,7 @@ describe('SessionService', () => {
     // The attempt count says a session is stuck, not where. The engine reports how far the connection that
     // closed last had got, and the sentence naming it is what an operator without the logs gets to read.
     it.each([
+      ['connecting', 'The last connection closed before it reached WhatsApp.'],
       ['registration', 'The last connection closed while the session waited to be linked.'],
       ['linked', 'The last connection closed right after the link was accepted.'],
       ['login_unconfirmed', 'The last connection closed before WhatsApp confirmed the login.'],

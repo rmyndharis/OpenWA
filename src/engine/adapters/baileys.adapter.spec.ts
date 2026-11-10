@@ -1845,6 +1845,7 @@ describe('BaileysAdapter close stage', () => {
   it('a session waiting to be linked closes at the registration stage', async () => {
     await start({});
 
+    fakeSock.ws.emit('open');
     close(428);
 
     expect(lastContext()).toEqual({ stage: 'registration', statusCode: 428, aliveMs: expect.any(Number) as number });
@@ -1864,6 +1865,7 @@ describe('BaileysAdapter close stage', () => {
   it('a login WhatsApp never confirms closes as login_unconfirmed, with how long the connection lived', async () => {
     await start(linkedCreds);
 
+    fakeSock.ws.emit('open');
     jest.advanceTimersByTime(30_000);
     close(428);
 
@@ -1873,6 +1875,21 @@ describe('BaileysAdapter close stage', () => {
     expect(context.aliveMs).toBeLessThan(60_000);
     const [[, fields]] = closeLines();
     expect(fields).toMatchObject({ stage: 'login_unconfirmed', aliveMs: context.aliveMs });
+  });
+
+  // No network, a failing proxy, a refused upgrade or the connecting deadline all close a socket that never
+  // opened. The login was never sent, so naming it as unconfirmed would send an operator to the wrong place.
+  it.each([
+    ['a session waiting to be linked', {}],
+    ['a linked device that is logging in', linkedCreds],
+  ])('%s whose websocket never opened closes at the connecting stage', async (_case, creds) => {
+    await start(creds);
+
+    close(408);
+
+    expect(lastContext()).toMatchObject({ stage: 'connecting', statusCode: 408 });
+    const [[, fields]] = closeLines();
+    expect(fields).toMatchObject({ stage: 'connecting', action: 'baileys_connection_dropped' });
   });
 
   it('the frame that confirms a login moves the stage to login_confirmed', async () => {
@@ -1922,8 +1939,9 @@ describe('BaileysAdapter close stage', () => {
     expect(fields).toMatchObject({ stage: 'linked', action: 'baileys_connection_dropped' });
   });
 
-  it('starts over with each socket: the login after an open session reports its own stage', async () => {
+  it('starts over with each socket: the connection after an open session reports its own stage', async () => {
     await start(linkedCreds);
+    fakeSock.ws.emit('open');
     fakeSock.ws.emit('CB:success', { tag: 'success', attrs: {} });
     fakeSock.fire('connection.update', { connection: 'open' });
     close(428);
@@ -1934,7 +1952,8 @@ describe('BaileysAdapter close stage', () => {
     expect(baileys().default).toHaveBeenCalledTimes(2);
     close(428);
 
-    expect(lastContext()).toMatchObject({ stage: 'login_unconfirmed' });
+    // Nothing of the first socket carries over: this one never opened.
+    expect(lastContext()).toMatchObject({ stage: 'connecting' });
   });
 
   it('reports no connection for an attempt that follows a connect which never built a socket', async () => {
