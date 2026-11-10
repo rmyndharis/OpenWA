@@ -1,6 +1,6 @@
 # rmyndharis/openwa
 
-This document describes SDK 0.10.0. `messages->receipts` requires OpenWA 0.28.0 or later. `contacts->lid` requires OpenWA 0.27.1 or later. `groups->setMemberLabel` and the `match` search key require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
+This document describes SDK 0.11.0. `messages->receipts` requires OpenWA 0.28.0 or later. `contacts->lid` requires OpenWA 0.27.1 or later. `groups->setMemberLabel` and the `match` search key require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
 
 Official PHP SDK for [OpenWA](https://github.com/rmyndharis/OpenWA), the open-source WhatsApp API Gateway. OpenWA is an independent project, not affiliated with or endorsed by WhatsApp or Meta.
 
@@ -192,7 +192,7 @@ Cutting a release:
 1. If the minor line changes, update `extra.branch-alias.dev-main` in
    `composer.json` (e.g. `0.1.x-dev` → `0.2.x-dev`) and land it on `main`. The
    release workflow refuses to publish when the alias does not match the tag.
-2. Tag that commit `php-sdk-v<version>` (e.g. `php-sdk-v0.10.0`) and push the
+2. Tag that commit `php-sdk-v<version>` (e.g. `php-sdk-v0.11.0`) and push the
    tag. The SDK has its own version line — the monorepo's `v*` tags are the app
    version and never trigger an SDK release.
 3. The workflow runs the test suite, then tags the mirror `<version>` (no `v`
