@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Stop a Baileys inbound media download that is abandoned at `MEDIA_DOWNLOAD_TIMEOUT_MS` or the byte cap, or cut off mid-body, from crashing the gateway with `TypeError: terminated`: a new install-time patch, `scripts/patch-baileys-media-stream.js`, ties the response body to its decrypting stream, which Baileys piped with no error listener and never closed (#2034). Thanks @voidm4p.
 
+### Documentation
+
+- State in `CONTRIBUTING.md` and `docs/08-development-guidelines.md` that the dashboard unit tests need Node.js 22.22.2+ or 24.15+ (jsdom), above the Node.js 22.19 floor of the gateway.
+
 ### Dependencies
 
 - Update `undici` to 8.12.4, which fixes six advisories in its cache and redirect interceptors and in `fetch` integrity checks; the gateway uses none of those features.

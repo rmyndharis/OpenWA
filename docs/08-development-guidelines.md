@@ -583,7 +583,7 @@ The shipped `better-sqlite3` Linux x64/arm64 glibc prebuild requires glibc 2.34+
 
 ```bash
 # Required
-- Node.js 22.19 or newer (22 LTS)
+- Node.js 22.19 or newer (22 LTS); the dashboard unit tests need 22.22.2+ or 24.15+ (jsdom)
 - glibc 2.34+ for Linux glibc source installs on x64/arm64 (including PostgreSQL deployments)
 - npm 10+
 - Docker & Docker Compose
