@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { LoggerService } from '../../common/services/logger.service';
-import { handleToolError, smartToolResult, TOOL_ERROR_TEXT_MAX_CHARS } from './tool-result';
+import { handleToolError, INLINE_RESULT_MAX_BYTES, smartToolResult, TOOL_ERROR_TEXT_MAX_CHARS } from './tool-result';
 
 describe('smartToolResult', () => {
   it('inlines a small object as JSON text', () => {
@@ -18,31 +18,50 @@ describe('smartToolResult', () => {
     expect(result.content).toEqual([{ type: 'text', text: 'null' }]);
   });
 
-  // The threshold is 4 KB of UTF-8, not 4096 UTF-16 code units: multi-byte text must not inline at triple size.
-  it.each(['x'.repeat(4096), '\u00e9'.repeat(2048), '\ud83d\ude00'.repeat(1024)])(
-    'inlines a payload of exactly 4096 UTF-8 bytes',
+  // The threshold is in UTF-8 bytes, not UTF-16 code units: multi-byte text must not inline at triple size.
+  const limit = INLINE_RESULT_MAX_BYTES;
+  it.each(['x'.repeat(limit), '\u00e9'.repeat(limit / 2), '\ud83d\ude00'.repeat(limit / 4)])(
+    'inlines a payload of exactly the limit in UTF-8 bytes',
     text => {
+      expect(Buffer.byteLength(text)).toBe(limit);
       expect(smartToolResult(text).content).toEqual([{ type: 'text', text }]);
     },
   );
 
-  it.each(['x'.repeat(4097), '\u00e9'.repeat(2048) + 'x', '\u4e2d'.repeat(2000), '\ud83d\ude00'.repeat(1025)])(
-    'embeds a payload over 4096 UTF-8 bytes without changing its contents',
-    text => {
-      const { content } = smartToolResult(text);
-      expect(content).toHaveLength(2);
-      const resource = content[1];
-      if (resource.type !== 'resource' || !('blob' in resource.resource)) throw new Error('expected a blob resource');
-      expect(Buffer.from(resource.resource.blob, 'base64').toString('utf8')).toBe(text);
-    },
-  );
+  it.each([
+    'x'.repeat(limit + 1),
+    '\u00e9'.repeat(limit / 2) + 'x',
+    '\u4e2d'.repeat(Math.ceil((limit + 1) / 3)),
+    '\ud83d\ude00'.repeat(limit / 4 + 1),
+  ])('embeds a payload over the limit without changing its contents', text => {
+    expect(Buffer.byteLength(text)).toBeGreaterThan(limit);
+    const { content } = smartToolResult(text);
+    expect(content).toHaveLength(2);
+    const resource = content[1];
+    if (resource.type !== 'resource' || !('blob' in resource.resource)) throw new Error('expected a blob resource');
+    expect(Buffer.from(resource.resource.blob, 'base64').toString('utf8')).toBe(text);
+  });
 
-  it('offloads a payload over 4 KB to an embedded resource', () => {
-    const big = { blob: 'x'.repeat(5000) };
+  it('returns a result of about 4.5 KB, the size of sixteen sessions, as text', () => {
+    // The client-side file Claude Code writes for an offloaded blob is the only way the model reaches the data.
+    const rows = Array.from({ length: 16 }, (_, i) => ({
+      id: `${i}`.padStart(36, '0'),
+      name: `probe-${i}`,
+      note: 'x'.repeat(240),
+    }));
+    const result = smartToolResult(rows);
+    expect(Buffer.byteLength(JSON.stringify(rows))).toBeGreaterThan(4096);
+    expect(result.content).toEqual([{ type: 'text', text: JSON.stringify(rows) }]);
+  });
+
+  it('offloads a payload over the limit to an embedded resource', () => {
+    const big = { blob: 'x'.repeat(limit + 1000) };
     const result = smartToolResult(big);
     expect(result.content).toHaveLength(2);
-    expect(result.content[0].type).toBe('text');
-    expect(result.content[1]).toMatchObject({ type: 'resource', resource: { mimeType: 'application/json' } });
+    const [pointer, resource] = result.content;
+    if (pointer.type !== 'text') throw new Error('expected a text pointer');
+    expect(pointer.text).toMatch(/^Received resource mcp:\/\/toolResult\/.+\.json with \d+ bytes$/);
+    expect(resource).toMatchObject({ type: 'resource', resource: { mimeType: 'application/json' } });
   });
 });
 

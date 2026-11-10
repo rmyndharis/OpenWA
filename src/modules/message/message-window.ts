@@ -1,6 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
 import { MessageDirection } from './entities/message.entity';
 
+/** The longest stored message type token, and the longest exact message reference a filter accepts. */
+export const MESSAGE_TYPE_MAX_LENGTH = 50;
+export const MESSAGE_REFERENCE_MAX_LENGTH = 200;
+const MESSAGE_TYPE_PATTERN = new RegExp(`^[a-z][a-z0-9_]{0,${MESSAGE_TYPE_MAX_LENGTH - 1}}$`);
+
 export interface MessageWindow {
   /** Unix epoch milliseconds, inclusive. Selection uses WhatsApp's message time. */
   since?: number;
@@ -36,18 +41,20 @@ export function validateMessageWindow(window: MessageWindow): void {
   if (window.direction !== undefined && !Object.values(MessageDirection).includes(window.direction)) {
     throw new BadRequestException('direction must be incoming or outgoing');
   }
-  if (window.type !== undefined && (typeof window.type !== 'string' || !/^[a-z][a-z0-9_]{0,49}$/.test(window.type))) {
+  if (window.type !== undefined && (typeof window.type !== 'string' || !MESSAGE_TYPE_PATTERN.test(window.type))) {
     throw new BadRequestException('type must be a non-empty message type token');
   }
   if (
     window.messageId !== undefined &&
     (typeof window.messageId !== 'string' ||
       !window.messageId.length ||
-      window.messageId.length > 200 ||
+      window.messageId.length > MESSAGE_REFERENCE_MAX_LENGTH ||
       /\s/.test(window.messageId) ||
       [...window.messageId].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127))
   ) {
-    throw new BadRequestException('messageId must be a non-empty WhatsApp message reference up to 200 characters');
+    throw new BadRequestException(
+      `messageId must be a non-empty WhatsApp message reference up to ${MESSAGE_REFERENCE_MAX_LENGTH} characters`,
+    );
   }
   if (window.orderBy !== undefined && !['createdAt', 'timestamp'].includes(window.orderBy)) {
     throw new BadRequestException('orderBy must be createdAt or timestamp');

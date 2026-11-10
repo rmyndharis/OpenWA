@@ -47,7 +47,7 @@ export function allAgentTools(deps: AgentToolDeps): AnyToolDescriptor[] {
     ...sessionTools(deps.session),
     ...messageTools(deps.message, deps.idempotency),
     ...contactTools(deps.contact),
-    ...groupTools(deps.group),
+    ...groupTools(deps.group, deps.session),
     ...webhookTools(deps.webhook),
     ...labelTools(deps.labels),
     ...automationTools(deps.automation),

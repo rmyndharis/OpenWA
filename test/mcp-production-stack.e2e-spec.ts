@@ -139,6 +139,33 @@ describe('MCP behind the production middleware stack (e2e)', () => {
     expect(second.code).toBeUndefined();
   });
 
+  it('lists messages with the REST filters, and the service still validates them', async () => {
+    const sessionId = '33333333-3333-4333-8333-333333333333';
+    const filtered = await call(operatorKey, 'MessageList', {
+      sessionId,
+      direction: 'incoming',
+      type: 'image',
+      since: 0,
+      until: 10,
+      orderBy: 'timestamp',
+    });
+    expect(JSON.parse(toolText(filtered))).toMatchObject({ messages: [], total: 0 });
+
+    const reversed = await call(operatorKey, 'MessageList', { sessionId, since: 10, until: 5 });
+    expect(JSON.parse(toolText(reversed))).toMatchObject({ success: false, name: 'BadRequestException' });
+  });
+
+  it('answers 404 for a group list on an unknown session, as the REST route does', async () => {
+    const unknownSession = '22222222-2222-4222-8222-222222222222';
+    const res = await call(operatorKey, 'GroupFindAll', { sessionId: unknownSession });
+    expect(JSON.parse(toolText(res))).toMatchObject({ success: false, name: 'NotFoundException' });
+
+    const rest = await request(app.getHttpServer())
+      .get(`/api/sessions/${unknownSession}/groups`)
+      .set('X-API-Key', operatorKey);
+    expect(rest.status).toBe(404);
+  });
+
   describe('a refusal that names an id the caller sent', () => {
     let warn: jest.SpyInstance;
     beforeEach(() => {

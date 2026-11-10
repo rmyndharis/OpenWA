@@ -6,8 +6,17 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 const logger = createLogger('Mcp');
 
 /**
- * Format a tool result, inlining small payloads as text and offloading large
- * ones (> 4 KB) to an embedded base64 resource so the response stays compact.
+ * The most a result may weigh, in UTF-8 bytes, and still be returned as text. The server has no `resources`
+ * capability, so an offloaded result is only an embedded blob: Claude Code saves it to a file on its own
+ * machine and tells the model just the path, so the model sees the data only if it has a file tool and a
+ * client that forwards text alone shows none. An ordinary page of rows (a few dozen sessions, chats or
+ * messages) therefore has to fit under this; only a payload past it is offloaded, to keep the context compact.
+ */
+export const INLINE_RESULT_MAX_BYTES = 32 * 1024;
+
+/**
+ * Format a tool result, inlining payloads up to {@link INLINE_RESULT_MAX_BYTES} as text and offloading
+ * larger ones to an embedded base64 resource so the response stays compact.
  */
 export function smartToolResult(data: string | object | object[]): CallToolResult {
   // JSON.stringify(undefined) is undefined, not a string — a handler that resolves void would turn
@@ -16,7 +25,7 @@ export function smartToolResult(data: string | object | object[]): CallToolResul
   const mimeType = typeof data === 'string' ? 'text/plain' : 'application/json';
   const ext = typeof data === 'string' ? 'txt' : 'json';
   const buffer = Buffer.from(text);
-  if (buffer.byteLength > 4096) {
+  if (buffer.byteLength > INLINE_RESULT_MAX_BYTES) {
     const uri = `mcp://toolResult/${randomUUID()}.${ext}`;
     return {
       content: [
