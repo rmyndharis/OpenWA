@@ -1949,6 +1949,90 @@ describe('BaileysAdapter close stage', () => {
   });
 });
 
+// WhatsApp asks some accounts for a passkey before it completes a link. Baileys acknowledges the request
+// and does nothing else, so the session kept showing QR codes with no word of why (#560).
+describe('BaileysAdapter passkey request while linking', () => {
+  const baileys = () => jest.requireMock<{ default: jest.Mock }>('@whiskeysockets/baileys');
+  type Frame = { tag: string; attrs: Record<string, string>; content?: Array<{ tag: string }> };
+  const notification = (type: string, child?: string): Frame => ({
+    tag: 'notification',
+    attrs: { from: 's.whatsapp.net', type, id: 'fixture-1' },
+    content: child ? [{ tag: child }] : [],
+  });
+  // Every name Baileys 7.0.0-rc14 dispatches a received frame under (lib/Socket/socket.js,
+  // onMessageReceived), copied because the library is mocked here: a listener registered under a name
+  // the library never emits would pass a test that emitted that name itself.
+  const deliver = (frame: Frame): void => {
+    const child = frame.content?.[0]?.tag ?? '';
+    for (const [attr, value] of Object.entries(frame.attrs)) {
+      fakeSock.ws.emit(`CB:${frame.tag},${attr}:${value},${child}`, frame);
+      fakeSock.ws.emit(`CB:${frame.tag},${attr}:${value}`, frame);
+      fakeSock.ws.emit(`CB:${frame.tag},${attr}`, frame);
+    }
+    fakeSock.ws.emit(`CB:${frame.tag},,${child}`, frame);
+    fakeSock.ws.emit(`CB:${frame.tag}`, frame);
+  };
+
+  let warn: jest.SpyInstance;
+  const passkeyWarnings = (): Array<[string, Record<string, unknown>]> =>
+    (warn.mock.calls as Array<[string, Record<string, unknown> | undefined]>).filter(
+      (call): call is [string, Record<string, unknown>] => call[1]?.action === 'baileys_passkey_required',
+    );
+  const start = async (): Promise<void> => {
+    fakeSock.user = undefined;
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+    await newAdapter().initialize(noopCallbacks());
+    warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+  };
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('says once that WhatsApp asked for a passkey, however often the request arrives on the socket', async () => {
+    await start();
+
+    deliver(notification('passkey_prologue_request', 'passkey_request_options'));
+    deliver(notification('passkey_prologue_request', 'passkey_request_options'));
+
+    expect(passkeyWarnings()).toEqual([
+      [
+        expect.stringMatching(/asked for a passkey .*link will not complete/) as string,
+        expect.objectContaining({ sessionId: 'sess-1' }),
+      ],
+    ]);
+  });
+
+  it('says nothing for any other notification', async () => {
+    await start();
+
+    deliver(notification('companion_reg_refresh'));
+    deliver(notification('account_sync', 'devices'));
+
+    expect(passkeyWarnings()).toEqual([]);
+  });
+
+  it('says it again on the next socket, which asks again when the next code is scanned', async () => {
+    await start();
+    deliver(notification('passkey_prologue_request', 'passkey_request_options'));
+
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+    baileys().default.mockClear();
+    fakeSock.fire('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 408 }, message: 'Connection was lost' } },
+    });
+    await jest.advanceTimersByTimeAsync(1_000); // the reconnect builds the next socket
+    expect(baileys().default).toHaveBeenCalledTimes(1);
+    deliver(notification('passkey_prologue_request', 'passkey_request_options'));
+
+    expect(passkeyWarnings()).toHaveLength(2);
+  });
+});
+
 describe('BaileysAdapter status honesty across the reconnect backoff', () => {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
   const baileys = () => jest.requireMock('@whiskeysockets/baileys') as { default: jest.Mock };

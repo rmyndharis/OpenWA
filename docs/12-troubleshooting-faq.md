@@ -273,6 +273,7 @@ initialization deadline, without it.
 - The phone shows "Create a passkey to log in" or "Continue on your other device" during linking, by QR or by pairing code
 - The session stays `qr_ready` on both engines; on Baileys the log shows `408` or `428` close loops, and a pairing code never appears
 - On whatsapp-web.js the page shows a "Quick security check with Passkey" modal that never succeeds
+- On Baileys the gateway log says so once per connection: a warning that `WhatsApp asked for a passkey to finish linking this device` (`action=baileys_passkey_required`)
 
 **Cause:** WhatsApp added a passkey (WebAuthn) step to its companion linking handshake for some
 accounts. That step is enforced server-side inside the linking frames, which live in the engine
