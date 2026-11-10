@@ -863,6 +863,8 @@ rm -rf node_modules/whatsapp-web.js && npm ci
 - One capability fails while everything around it works: an unnamed `500` from a single route,
   block/unblock refusing every id, a status media send that never arrives, a group description that
   cannot be set, an app-state resync that never settles
+- On Baileys, the process exits with `TypeError: terminated` some seconds after an
+  `Inbound media download passed MEDIA_DOWNLOAD_TIMEOUT_MS` warning (the media-stream patch is missing)
 
 **Cause:** OpenWA applies fourteen exact source transforms to its engine libraries at install time
 (docs/29 §29.3). The Docker image runs them without `--best-effort`, so a source shape a patcher
@@ -892,8 +894,11 @@ was cut short: an interrupted install left it half applied, and reinstalling `@w
 > `patch-wwebjs-201832.js` is not in that list. It carries its own startup check and its own entry
 > above, because a partially applied backport needs different advice than one that never ran.
 
-> A patch that never applied is not fatal on its own: only the capability it repairs is affected and
-> the rest of the gateway runs normally, which is why this is easy to misread as a bug in one route.
+> A patch that never applied is not fatal on its own, with one exception: without
+> `patch-baileys-media-stream.js`, a Baileys media download abandoned at `MEDIA_DOWNLOAD_TIMEOUT_MS` or
+> the byte cap can end the process with `TypeError: terminated`. Every other patch affects only the
+> capability it repairs and the rest of the gateway runs normally, which is why this is easy to misread
+> as a bug in one route.
 
 ### Issue: Reads on a large account fail with `did not answer ... in time` or `Runtime.callFunctionOn timed out`
 
