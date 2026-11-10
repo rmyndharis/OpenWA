@@ -113,6 +113,17 @@ describe('MCP behind the production middleware stack (e2e)', () => {
     expect(JSON.parse(toolText(res))).toEqual(expect.any(Array));
   });
 
+  it('answers 404 for a group list on an unknown session, as the REST route does', async () => {
+    const unknownSession = '22222222-2222-4222-8222-222222222222';
+    const res = await call(operatorKey, 'GroupFindAll', { sessionId: unknownSession });
+    expect(JSON.parse(toolText(res))).toMatchObject({ success: false, name: 'NotFoundException' });
+
+    const rest = await request(app.getHttpServer())
+      .get(`/api/sessions/${unknownSession}/groups`)
+      .set('X-API-Key', operatorKey);
+    expect(rest.status).toBe(404);
+  });
+
   describe('a refusal that names an id the caller sent', () => {
     let warn: jest.SpyInstance;
     beforeEach(() => {

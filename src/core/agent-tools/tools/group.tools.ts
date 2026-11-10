@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import type { GroupService } from '../../../modules/group/group.service';
+import type { SessionService } from '../../../modules/session/session.service';
 import {
   GROUP_DESCRIPTION_MAX_LENGTH,
   GROUP_NAME_MAX_LENGTH,
@@ -11,7 +12,7 @@ import { paginate } from '../../../common/utils/paginate';
 
 const sessionId = z.string().min(1).describe('Session UUID (the session id, not the name)');
 
-export function groupTools(group: GroupService): AnyToolDescriptor[] {
+export function groupTools(group: GroupService, session: Pick<SessionService, 'findOne'>): AnyToolDescriptor[] {
   return [
     defineTool({
       name: 'GroupFindAll',
@@ -27,6 +28,9 @@ export function groupTools(group: GroupService): AnyToolDescriptor[] {
         offset: z.number().int().min(0).optional(),
       }),
       handler: async (input, apiKey, chatScope) => {
+        // GroupService answers 400 'Session is not started' for any session without an engine, an unknown id
+        // included. REST lists groups through SessionService, which answers 404 for an unknown one first.
+        await session.findOne(input.sessionId);
         if (!chatScope?.isRestricted(apiKey)) {
           return group.getGroups(input.sessionId, { limit: input.limit, offset: input.offset });
         }
