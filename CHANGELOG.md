@@ -9,12 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Say how far a Baileys connection had got when it closed: the `baileys_connection_dropped` log line carries `stage` and `aliveMs`, and `lastError` of a reconnect-looping session ends with a sentence naming the stage.
+- Warn once per connection when WhatsApp asks for a passkey to finish a Baileys link (`action=baileys_passkey_required`); the link stalled with no word of why (#560).
 - Accept `inlineMedia` on the MCP `MessageList` tool, so an agent can list messages without the base64 of their media, as `inlineMedia=false` does on `GET /api/sessions/{sessionId}/messages`; unset keeps the media inline.
 - Accept an `idempotencyKey` on the eleven MCP send tools, as `Idempotency-Key` works on the REST send routes: a retry with the same key and arguments returns the first result instead of sending again.
 - Accept the REST message-list filters `after`, `direction`, `type`, `since`, `until`, `orderBy` and `messageId` on the MCP `MessageList` tool, and `type` on `MessageSearch`.
 
 ### Changed
 
+- Log the restart WhatsApp asks for right after it accepts a Baileys link (close `515`) as `baileys_link_restart`, where it was logged as a dropped connection.
 - The MCP `SessionGetPresence` tool answers `observedAt` as an ISO date-time, as `GET /api/sessions/{sessionId}/presence/{chatId}` does, where it answered unix milliseconds.
 - Refuse an MCP tool argument the tool does not name with `Unrecognized key: "x"`, where it was dropped and the call ran without it; the published input schemas now say `additionalProperties: false`.
 - Carry the `code` of an HTTP error, such as `IDEMPOTENCY_KEY_IN_PROGRESS`, in an MCP tool error, which returned only its name and message.
@@ -29,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Add a troubleshooting entry for a Baileys link that is accepted and never becomes `ready`: what a first login does, and how to tell which step fails.
 - State in `CONTRIBUTING.md` and `docs/08-development-guidelines.md` that the dashboard unit tests need Node.js 22.22.2+ or 24.15+ (jsdom), above the Node.js 22.19 floor of the gateway.
 - Document in `docs/24-mcp-integration.md` how an MCP result over the inline limit and a long tool error are shaped and that tool calls are not forwarded between nodes, and say in the README and `.env.example` that `MCP_READONLY` mounts only the read tools unless set to `false`.
 - Name the fields of a `GroupFindAll` entry in the MCP tool description.

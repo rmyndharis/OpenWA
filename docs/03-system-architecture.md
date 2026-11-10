@@ -950,7 +950,7 @@ export interface EngineEventCallbacks {
   onCall?: (event: IncomingCallEvent) => void; // incoming call ringing; Baileys can rejectCall() while it rings
   onHistoryMessages?: (messages: IncomingMessage[]) => void | Promise<IncomingMessage[] | void>; // bulk initial sync; persist, don't dispatch
   onDisconnected?: (reason: string) => void; // recoverable -> reconnect
-  onReconnecting?: (attempt: number, nextDelayMs: number) => void; // engines that retry internally (Baileys)
+  onReconnecting?: (attempt: number, nextDelayMs: number, context?: ReconnectContext) => void; // engines that retry internally (Baileys); context: how far the closed connection had got
   onStateChanged?: (state: EngineStatus) => void;
   onActionRequired?: (reason: string) => void; // engine alive, but an operator must act
   onAccountRestriction?: (restriction: AccountRestriction | null) => void; // null = restriction lifted

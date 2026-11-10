@@ -14,6 +14,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
 import {
+  type ConnectionCloseStage,
   EngineEventCallbacks,
   EngineStatus,
   IWhatsAppEngine,
@@ -21,6 +22,7 @@ import {
   AccountRestriction,
   PresenceUpdateEvent,
   CallOutcomeEvent,
+  type ReconnectContext,
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { type createLogger } from '../../common/services/logger.service';
 import { userPart } from '../../engine/identity/wa-id';
@@ -28,6 +30,15 @@ import { SessionEngineLeafEvents } from './session-engine-leaf-events';
 
 /** The lastError an engine-internal reconnect episode records; onQRCode clears only this one. */
 export const RECONNECT_LOOP_REASON = 'Reconnecting after a dropped connection';
+
+/** The sentence `lastError` adds for the connection that closed last, so the loop says where it fails. */
+const RECONNECT_STAGE_NOTE: Record<ConnectionCloseStage, string> = {
+  registration: 'The last connection closed while the session waited to be linked.',
+  linked: 'The last connection closed right after the link was accepted.',
+  login_unconfirmed: 'The last connection closed before WhatsApp confirmed the login.',
+  login_confirmed: 'The last connection closed after WhatsApp confirmed the login, before the session opened.',
+  open: 'The last connection had opened before it closed.',
+};
 
 /**
  * The call-ins SessionEngineEventWiring needs from the lifecycle core. Built ONCE in the
@@ -366,7 +377,7 @@ export class SessionEngineEventWiring {
         // Opt-in auto-reject runs AFTER the dispatch so a reject failure can never eat the event.
         void host.leafEvents.maybeAutoRejectCall(id, engine, event.callId);
       },
-      onReconnecting: (attempt: number, nextDelayMs: number): void => {
+      onReconnecting: (attempt: number, nextDelayMs: number, context?: ReconnectContext): void => {
         if (!host.isLiveEngine(id, engine)) return;
         // Count it whichever layer scheduled it: the counter's published meaning is "reconnect
         // attempts scheduled across all sessions", and an engine that retries internally was simply
@@ -385,7 +396,8 @@ export class SessionEngineEventWiring {
         // it reports for a session waiting to be paired. Record why, so `lastError` says so on
         // GET /sessions/:id, the only durable operator surface this path reaches. Rewritten on every
         // attempt from here on, so the attempt and the downtime it shows never lag the episode.
-        host.sessionErrors.set(id, `${RECONNECT_LOOP_REASON} (attempt ${attempt}, down for ${downFor}).`);
+        const stageNote = context ? ` ${RECONNECT_STAGE_NOTE[context.stage]}` : '';
+        host.sessionErrors.set(id, `${RECONNECT_LOOP_REASON} (attempt ${attempt}, down for ${downFor}).${stageNote}`);
         if (attempt % RECONNECT_LOOP_ALERT_INTERVAL_ATTEMPTS !== 0) return;
 
         // Same cadence, same log shape and the same already-documented webhook the service-level
@@ -396,6 +408,7 @@ export class SessionEngineEventWiring {
           attempts: attempt,
           nextDelayMs,
           downForSeconds,
+          ...(context ? { stage: context.stage, statusCode: context.statusCode } : {}),
           action: 'reconnect_loop',
         });
         incrementSessionReconnectLoopAlerts();
