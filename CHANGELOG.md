@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - State in `CONTRIBUTING.md` and `docs/08-development-guidelines.md` that the dashboard unit tests need Node.js 22.22.2+ or 24.15+ (jsdom), above the Node.js 22.19 floor of the gateway.
+- Document in `docs/24-mcp-integration.md` how an MCP result over 4096 bytes and a long tool error are shaped and that tool calls are not forwarded between nodes, and say in the README and `.env.example` that `MCP_READONLY` mounts only the read tools unless set to `false`.
+- Name the fields of a `GroupFindAll` entry in the MCP tool description.
 
 ### Dependencies
 

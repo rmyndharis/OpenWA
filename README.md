@@ -440,7 +440,7 @@ The key can be passed as `Authorization: Bearer …` or `X-API-Key: …`. Every 
 
 - **Mint a dedicated, least-privilege key** for the agent — a non-admin, **session-scoped** key (`OPERATOR` role at most). The plaintext key is shown only once on creation; to rotate, create a new key and delete the old one.
 - The key **must not** carry an IP allow-list (`allowedIps`) — there is no genuine client IP over MCP, so such a key is rejected.
-- Set **`MCP_READONLY=true`** to mount only the read tools (no sends/writes).
+- Read-only is the default, so leave **`MCP_READONLY`** unset unless the agent must write. **`MCP_READONLY=false`** adds the write tools (sends, replies, group changes).
 - Set **`MCP_RATE_LIMIT_MAX`** (default `60`) to limit tool calls per API key per window.
 - Set **`MCP_RATE_LIMIT_WINDOW_MS`** (default `60000`) to control the sliding window size in milliseconds.
 - **Do not expose `/mcp` to the public internet** without a fronting auth proxy. For a self-hosted, locally-reached deployment the static API key is appropriate; public exposure should use OAuth 2.1 (not yet built).

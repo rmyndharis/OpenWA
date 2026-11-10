@@ -16,7 +16,9 @@ export function groupTools(group: GroupService): AnyToolDescriptor[] {
     defineTool({
       name: 'GroupFindAll',
       chatScope: 'filtered',
-      description: 'List all groups the session is a member of. Use limit/offset to page.',
+      description:
+        'List all groups the session is a member of. Each entry has id and name, plus participantsCount, isAdmin and ' +
+        'linkedParentJID (the parent community, or null) when the engine reports them. Use limit/offset to page.',
       tier: 'read',
       sessionScoped: true,
       inputSchema: z.object({

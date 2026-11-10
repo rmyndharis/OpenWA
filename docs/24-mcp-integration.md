@@ -20,13 +20,13 @@
 | **Per-key rate limiter**                                                  | ✅ Implemented | `src/modules/mcp/mcp-rate-limit.ts`                  |
 | **Result shaping (smart/json)**                                           | ✅ Implemented | `src/modules/mcp/tool-result.ts`                     |
 
-| Capability                        | Status         | Notes                                                                 |
-| --------------------------------- | -------------- | --------------------------------------------------------------------- |
-| **Read-only mode**                | ✅ Implemented | **Default read-only**; set `MCP_READONLY=false` to expose write tools |
-| **OAuth 2.1 (public exposure)**   | 🔜 Planned     | Static API key is used today (suitable for self-hosted/internal)      |
-| **Agent-action audit provenance** | 🔜 Planned     | Mark audited actions as agent-initiated                               |
-| **Env-tunable rate limits**       | ✅ Implemented | `MCP_RATE_LIMIT_MAX` / `MCP_RATE_LIMIT_WINDOW_MS`                     |
-| **Additional tool domains**       | 🔜 Planned     | templates / channels / catalog / status (labels/automation now ship)  |
+| Capability                        | Status         | Notes                                                                          |
+| --------------------------------- | -------------- | ------------------------------------------------------------------------------ |
+| **Read-only mode**                | ✅ Implemented | **Default read-only**; set `MCP_READONLY=false` to expose write tools          |
+| **OAuth 2.1 (public exposure)**   | 🔜 Planned     | Static API key is used today (suitable for self-hosted/internal)               |
+| **Agent-action audit provenance** | 🔜 Planned     | Mark audited actions as agent-initiated                                        |
+| **Env-tunable rate limits**       | ✅ Implemented | `MCP_RATE_LIMIT_MAX` / `MCP_RATE_LIMIT_WINDOW_MS`                              |
+| **Additional tool domains**       | 🔜 Planned     | template management / channels / catalog / status (labels/automation now ship) |
 
 ---
 
@@ -179,6 +179,21 @@ opt in to write tools with `MCP_READONLY=false`. Any other value (or leaving it 
 read-only posture, so enabling MCP never silently exposes state-changing tools. Set `MCP_READONLY=false`
 only when an agent genuinely needs to send messages / mutate state.
 
+### Result and error sizes
+
+A result whose JSON is longer than 4096 bytes is not placed in the text block. The text block
+reads `Received resource mcp://toolResult/<id>.json with <n> bytes` and the payload follows as an
+embedded base64 `resource` block. How a client presents that block to the model is the client's
+choice, so page a tool that can return many rows (`SessionGetChats`, `GroupFindAll`, `MessageList`)
+with `limit` and `offset`. `MessageList` also carries each message's media inline as base64, up to a
+per-response budget (`MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES`, 8 MiB by default); pass
+`inlineMedia: false` to get the rows without it.
+
+The text of a tool error is cut at 4096 characters and ends with
+`... [truncated, <n> characters in all]`. Several services name the id the caller sent in their
+refusals, and a tool call can carry a far longer id than a REST path allows. The same cut applies to
+the server log line.
+
 ## 24.5 Authentication & Security
 
 - **Every request needs a key.** The mount refuses any `POST /mcp` without a valid key before
@@ -311,8 +326,12 @@ Guidelines:
   intended for self-hosted/internal use).
 - **Agent-action audit provenance** — record that an audited action was agent-initiated
   and by which key.
-- **Expansion-pack tool domains** — templates, channels, catalog, and status are not in the
-  default surface yet. Labels and automation-rule reads already are.
+- **Expansion-pack tool domains** — template management (create, list, update, delete),
+  channels, catalog, and status are not in the default surface yet. Sending from a template
+  (`MessageSendTemplate`), labels, and automation-rule reads already are.
+- **Multi-node.** A tool call runs on the node that received it. REST session routes are forwarded
+  to the node that owns the session; tool calls are not. See
+  [13 - Horizontal Scaling](13-horizontal-scaling.md).
 - **Stateful MCP sessions / SSE reconnect, prompts, elicitation** — out of scope; the
   transport is intentionally stateless.
 
