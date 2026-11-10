@@ -112,8 +112,11 @@ refuses come back as an `isError` tool result whose text reads `MCP error -32602
 error: ...`, without reaching authentication: a key that lacks the tool's role or session gets that
 error rather than a `403`, and no audit row is written. That includes an argument the tool does not name
 (`Unrecognized key: "x"`, at most five names listed, each cut at 64 characters), which a tool call used to
-drop silently, as REST refuses a body property its DTO does not declare; the published input schema says
-`additionalProperties: false`. A call whose arguments pass flows through five steps, in this order:
+drop silently and is now refused, as REST refuses a body property its DTO does not declare; the published
+input schema says `additionalProperties: false`. Before the schema, the SDK counts the array items and object
+keys of the arguments, nested ones included, and refuses a call with more than 10,000 (`arguments contain
+more than the maximum of 10000 elements`); the widest input a tool takes is a list of a few hundred ids. A
+call whose arguments pass flows through five steps, in this order:
 
 1. **Key extraction.** The adapter reads the API key from the `X-API-Key` header or
    `Authorization: Bearer …`.

@@ -11,6 +11,7 @@ import { applyGlobalValidation } from '../src/config/app-validation';
 import { LoggerService } from '../src/common/services/logger.service';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { ApiKeyRole } from '../src/modules/auth/entities/api-key.entity';
+import { MCP_MAX_TOOL_INPUT_ELEMENTS } from '../src/modules/mcp/mcp.server';
 import { TOOL_ERROR_TEXT_MAX_CHARS } from '../src/modules/mcp/tool-result';
 
 // test/mcp-auth.e2e-spec.ts boots the app the way a unit would, without configureApp(), so nothing else in CI
@@ -128,6 +129,23 @@ describe('MCP behind the production middleware stack (e2e)', () => {
     const long = await call(operatorKey, 'SessionFindAll', { ['k'.repeat(1_000_000)]: 1 });
     expect(toolText(long)).toContain('Unrecognized key');
     expect(long.text.length).toBeLessThan(1000);
+  });
+
+  it('refuses a call whose arguments hold more than the element cap, before it validates any of them', async () => {
+    // A wrong value in a map costs one issue line per entry once the schema runs, so a wide map is cut off first.
+    const withVars = (entries: number) => ({
+      sessionId: scopedSession,
+      chatId: '628111000111@c.us',
+      templateId: 'x',
+      vars: Object.fromEntries(Array.from({ length: entries }, (_, i) => [`v${i}`, 1])),
+    });
+
+    const over = await call(operatorKey, 'MessageSendTemplate', withVars(MCP_MAX_TOOL_INPUT_ELEMENTS));
+    expect(toolText(over)).toContain(`more than the maximum of ${MCP_MAX_TOOL_INPUT_ELEMENTS} elements`);
+    expect(over.text.length).toBeLessThan(1000);
+
+    const within = await call(operatorKey, 'MessageSendTemplate', withVars(50));
+    expect(toolText(within)).toContain('expected string, received number');
   });
 
   it('claims a send idempotencyKey in the real store and frees it when the send is refused', async () => {

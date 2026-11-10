@@ -59,6 +59,17 @@ describe('messageTools', () => {
     expect(Object.keys(options)).not.toContain('inlineMedia');
   });
 
+  it('MessageList refuses a sender filter longer than a chat id, as the chat filter beside it is', async () => {
+    const getMessages = jest.fn();
+    const tools = makeTools({ getMessages } as unknown as MessageService);
+    await expect(
+      run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us', from: '6'.repeat(256) }),
+    ).rejects.toMatchObject({
+      response: { message: [expect.stringContaining('from') as unknown as string] },
+    });
+    expect(getMessages).not.toHaveBeenCalled();
+  });
+
   it('MessageList refuses an inlineMedia that is not a boolean', async () => {
     const getMessages = jest.fn();
     const tools = makeTools({ getMessages } as unknown as MessageService);

@@ -45,6 +45,13 @@ describe('MessageSearch tool', () => {
     expect(search).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses a sender filter longer than a chat id', async () => {
+    const key = { id: 'k1', allowedSessions: null, allowedChats: null };
+
+    await expect(call(key, { q: 'invoice', from: '6'.repeat(256) })).rejects.toBeInstanceOf(BadRequestException);
+    expect(search).not.toHaveBeenCalled();
+  });
+
   it('requires OPERATOR: a below-role key is refused before the search runs', async () => {
     expect(tool.requiredRole).toBe(ApiKeyRole.OPERATOR);
 

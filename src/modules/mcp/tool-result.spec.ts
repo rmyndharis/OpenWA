@@ -166,6 +166,23 @@ describe('handleToolError text cap', () => {
     expect(stack).toContain('at ');
   });
 
+  it('still answers and logs an error whose message or stack is not a string', () => {
+    const odd = (message: unknown, stack: unknown): Error => {
+      const failure = new Error('x');
+      Object.defineProperty(failure, 'message', { value: message });
+      Object.defineProperty(failure, 'stack', { value: stack });
+      return failure;
+    };
+
+    for (const failure of [odd(undefined, 'Error\n    at frame'), odd(42, undefined), odd('plain', 7)]) {
+      error.mockClear();
+      const result = handleToolError(failure);
+
+      expect(body(result).message).toBe('Internal error');
+      expect(error).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it('does not expand a replacement pattern that the cut message happens to hold', () => {
     // `$&` in a replacement STRING stands for the matched text, which here is the whole 10000 characters.
     const failure = new Error('$&'.repeat(5000));
