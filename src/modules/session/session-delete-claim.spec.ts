@@ -694,8 +694,11 @@ describe('A session deleted on one node while a peer shares the database', () =>
   it.each(['first write', 'final write', 'final return'])(
     'preserves an accepted stop when the lease expires during the %s',
     async phase => {
+      // Long enough for the first write to return inside its own lease: prepareStart refuses an engine when
+      // the write comes back after the lease it wrote has lapsed, and the phases below then never reach the
+      // pause they wait for. A slow disk on a CI runner made that happen at 200 ms.
       Object.assign(a.ownership, {
-        configService: { get: (key: string) => ({ 'session.nodeId': 'node-a', 'session.leaseTtlMs': 200 })[key] },
+        configService: { get: (key: string) => ({ 'session.nodeId': 'node-a', 'session.leaseTtlMs': 1_000 })[key] },
       });
       const id = await seed({ status: SessionStatus.DISCONNECTED, desiredState: 'stopped' });
       const reached = deferred();
