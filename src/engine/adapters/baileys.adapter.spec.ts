@@ -1978,17 +1978,38 @@ describe('BaileysAdapter passkey request while linking', () => {
     (warn.mock.calls as Array<[string, Record<string, unknown> | undefined]>).filter(
       (call): call is [string, Record<string, unknown>] => call[1]?.action === 'baileys_passkey_required',
     );
+  const onAccountRestriction = jest.fn();
   const start = async (): Promise<void> => {
     fakeSock.user = undefined;
     fakeSock.resetEmitter();
     jest.clearAllMocks();
-    await newAdapter().initialize(noopCallbacks());
+    await newAdapter().initialize(noopCallbacks({ onAccountRestriction }));
     warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
   };
 
   afterEach(() => {
     jest.useRealTimers();
     jest.restoreAllMocks();
+  });
+
+  // The request comes with no status change, so the restriction is the channel that tells the API, the
+  // dashboard and a webhook consumer; the log line alone reaches only whoever reads the container's output.
+  it('reports the passkey request as a restriction, once per socket', async () => {
+    await start();
+
+    deliver(notification('passkey_prologue_request', 'passkey_request_options'));
+    deliver(notification('passkey_prologue_request', 'passkey_request_options'));
+
+    expect(onAccountRestriction.mock.calls).toEqual([[{ kind: 'passkey_required', code: 'passkey_prologue_request' }]]);
+  });
+
+  it('reports no restriction for any other notification', async () => {
+    await start();
+
+    deliver(notification('companion_reg_refresh'));
+    deliver(notification('account_sync', 'devices'));
+
+    expect(onAccountRestriction).not.toHaveBeenCalled();
   });
 
   it('says once that WhatsApp asked for a passkey, however often the request arrives on the socket', async () => {
@@ -2030,6 +2051,8 @@ describe('BaileysAdapter passkey request while linking', () => {
     deliver(notification('passkey_prologue_request', 'passkey_request_options'));
 
     expect(passkeyWarnings()).toHaveLength(2);
+    // The engine reports per socket; telling a repeat from news is the session store's job.
+    expect(onAccountRestriction).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -7,6 +7,7 @@ public enum AccountRestrictionKind {
     @SerializedName("reachout_timelock") REACHOUT_TIMELOCK,
     @SerializedName("tos_block") TOS_BLOCK,
     @SerializedName("proxy_block") PROXY_BLOCK,
+    @SerializedName("passkey_required") PASSKEY_REQUIRED,
     /** Decoded when the gateway sends a value newer than this SDK; not a wire value itself. */
     UNKNOWN
 }

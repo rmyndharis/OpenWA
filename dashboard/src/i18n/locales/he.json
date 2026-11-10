@@ -598,6 +598,8 @@
       "reachout_timelock": "צ׳אטים חדשים חסומים",
       "tos_block": "נחסם על ידי WhatsApp",
       "proxy_block": "החיבור חסום",
+      "passkey_required": "נדרש מפתח גישה",
+      "passkey_required_note": "WhatsApp ביקש מפתח גישה כדי להשלים את קישור המכשיר. OpenWA אינו יכול להשיב לבקשה הזו, ולכן סריקה חוזרת של הקוד לא תשלים את הקישור.",
       "until": "עד {{date}}"
     }
   },

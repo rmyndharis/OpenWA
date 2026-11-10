@@ -587,6 +587,8 @@
       "reachout_timelock": "Yeni sohbetler engellendi",
       "tos_block": "WhatsApp tarafından engellendi",
       "proxy_block": "Bağlantı engellendi",
+      "passkey_required": "Geçiş anahtarı gerekli",
+      "passkey_required_note": "WhatsApp, bu cihazın bağlanmasını tamamlamak için bir geçiş anahtarı istedi. OpenWA bu isteğe yanıt veremez, bu yüzden bu kodu yeniden taramak bağlantıyı tamamlamaz.",
       "until": "{{date}} tarihine kadar"
     }
   },

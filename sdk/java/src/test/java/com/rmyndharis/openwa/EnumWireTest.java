@@ -87,6 +87,9 @@ class EnumWireTest {
             "{\"kind\":\"proxy_block\",\"code\":\"X\"}",
             com.rmyndharis.openwa.model.AccountRestriction.class);
         assertEquals(AccountRestrictionKind.PROXY_BLOCK, a.kind());
+        assertEquals(
+            AccountRestrictionKind.PASSKEY_REQUIRED,
+            gson.fromJson("{\"kind\":\"passkey_required\",\"code\":\"X\"}", AccountRestriction.class).kind());
 
         com.rmyndharis.openwa.model.GroupInfo g = gson.fromJson(
             "{\"id\":\"g\",\"name\":\"n\",\"memberAddMode\":\"admins\"}",

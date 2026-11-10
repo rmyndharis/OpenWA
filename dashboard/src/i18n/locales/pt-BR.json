@@ -592,6 +592,8 @@
       "reachout_timelock": "Novas conversas bloqueadas",
       "tos_block": "Bloqueado pelo WhatsApp",
       "proxy_block": "Conexão bloqueada",
+      "passkey_required": "Chave de acesso necessária",
+      "passkey_required_note": "O WhatsApp pediu uma chave de acesso para concluir a conexão deste dispositivo. O OpenWA não consegue responder a esse pedido, então escanear este código de novo não concluirá a conexão.",
       "until": "até {{date}}"
     }
   },

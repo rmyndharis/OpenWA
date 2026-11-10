@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Say how far a Baileys connection had got when it closed: the `baileys_connection_dropped` log line carries `stage` and `aliveMs`, and `lastError` of a reconnect-looping session ends with a sentence naming the stage.
 - Warn once per connection when WhatsApp asks for a passkey to finish a Baileys link (`action=baileys_passkey_required`); the link stalled with no word of why (#560).
+- Report a passkey request on a Baileys link as a `passkey_required` restriction: it reaches `GET /api/sessions/{sessionId}`, the `session.restriction` webhook and the dashboard with no status change, and is lifted when a link reaches `ready`. The JavaScript, Python, Go and Java SDKs list the new kind.
 - Accept `inlineMedia` on the MCP `MessageList` tool, so an agent can list messages without the base64 of their media, as `inlineMedia=false` does on `GET /api/sessions/{sessionId}/messages`; unset keeps the media inline.
 - Accept an `idempotencyKey` on the eleven MCP send tools, as `Idempotency-Key` works on the REST send routes: a retry with the same key and arguments returns the first result instead of sending again.
 - Accept the REST message-list filters `after`, `direction`, `type`, `since`, `until`, `orderBy` and `messageId` on the MCP `MessageList` tool, and `type` on `MessageSearch`.

@@ -4,15 +4,17 @@ import { SessionStatus } from '../entities/session.entity';
 
 export class AccountRestrictionDto {
   @ApiProperty({
-    enum: ['reachout_timelock', 'tos_block', 'proxy_block'],
+    enum: ['reachout_timelock', 'tos_block', 'proxy_block', 'passkey_required'],
     description:
       'What WhatsApp is restricting. `reachout_timelock` leaves the session connected and existing ' +
       'chats working, blocking only the start of new conversations. `tos_block` and `proxy_block` ' +
       'are connection-level refusals — the session cannot stay linked while one is in force, so ' +
-      'seeing either alongside a `ready` status is not possible.',
+      'seeing either alongside a `ready` status is not possible. `passkey_required` means WhatsApp ' +
+      'asked for a passkey to finish linking a device, which the Baileys engine cannot answer; the ' +
+      'session stays at its QR and the kind is dropped once a link completes.',
     example: 'reachout_timelock',
   })
-  kind!: 'reachout_timelock' | 'tos_block' | 'proxy_block';
+  kind!: 'reachout_timelock' | 'tos_block' | 'proxy_block' | 'passkey_required';
 
   @ApiProperty({
     description:

@@ -10,6 +10,7 @@ const timelock = (over: Partial<AccountRestriction> = {}): AccountRestriction =>
 });
 
 const tosBlock = (): AccountRestriction => ({ kind: 'tos_block', code: 'TOS_BLOCK' });
+const passkeyRequired = (): AccountRestriction => ({ kind: 'passkey_required', code: 'passkey_prologue_request' });
 
 const sessionRow = (id: string, status = SessionStatus.READY): Session => ({ id, status }) as Session;
 
@@ -24,6 +25,13 @@ describe('SessionRestrictionStore', () => {
     // The dedupe is the whole reason set() returns a boolean: whatsapp-web.js re-reports the same
     // block on every reconnect attempt and the Baileys probe re-reads the same timelock on every
     // connect, so an un-deduped caller would announce one unchanged fact on a loop.
+    // The Baileys engine reports the passkey request once per socket, and a session that keeps scanning gets
+    // a new socket each time: the store is what keeps that from announcing the same fact on every scan.
+    it('does not announce a repeated passkey requirement', () => {
+      expect(store.set('s1', passkeyRequired())).toBe(true);
+      expect(store.set('s1', passkeyRequired())).toBe(false);
+    });
+
     it('is news the first time and not afterwards', () => {
       expect(store.set('s1', timelock())).toBe(true);
       expect(store.set('s1', timelock())).toBe(false);
@@ -119,6 +127,16 @@ describe('SessionRestrictionStore', () => {
 
       expect(store.clearIfDisprovedByReady('s1')).toEqual(tosBlock());
       expect(store.get('s1')).toBeUndefined();
+    });
+
+    // WhatsApp asked for a passkey before completing a link. A session that is linked and ready got past it,
+    // so the restriction has nothing left to say, and it must not outlive a link that completed on a later scan.
+    it('READY disproves a passkey requirement', () => {
+      store.set('s1', passkeyRequired());
+
+      expect(store.clearIfDisprovedByReady('s1')).toEqual(passkeyRequired());
+      expect(store.get('s1')).toBeUndefined();
+      expect(store.attachTo(sessionRow('s1')).restriction).toBeNull();
     });
 
     // …but a timelock leaves the account fully connected, so READY says nothing about it. Clearing it

@@ -590,11 +590,14 @@ export class BaileysLifecycle {
     // WhatsApp asks some accounts for a passkey before it completes a link: a WebAuthn assertion the new
     // device has to return. Baileys acknowledges the request and does nothing else, so the link stalls
     // and the session keeps showing QR codes with no word of why (#560). Nothing here can answer the
-    // request; saying that it arrived is what turns a silent stall into a known limit.
+    // request; saying that it arrived is what turns a silent stall into a known limit. It is reported
+    // as a restriction because that is what it is, and because the request comes with no status change:
+    // the restriction is the one channel that reaches the API, the dashboard and the webhook without one.
     let passkeyAsked = false;
     sock.ws.on('CB:notification,type:passkey_prologue_request', () => {
       if (passkeyAsked) return;
       passkeyAsked = true;
+      this.host.getOnAccountRestriction()?.({ kind: 'passkey_required', code: 'passkey_prologue_request' });
       this.host.logger.warn(
         'WhatsApp asked for a passkey to finish linking this device. The Baileys engine cannot answer ' +
           'that request, so the link will not complete; see "Linking asks for a passkey" in the troubleshooting FAQ.',
