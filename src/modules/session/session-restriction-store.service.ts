@@ -14,7 +14,8 @@ import { Session } from './entities/session.entity';
  * account rather than about our attempt, so losing it on restart would matter — except that both
  * engines re-report it on the next connection (Baileys is asked directly on every connect, and
  * whatsapp-web.js re-blocks the very next link attempt), so the state re-seeds itself within one
- * session start. That self-healing is what makes the column unnecessary.
+ * session start. That self-healing is what makes the column unnecessary. A passkey request is the exception:
+ * it comes back only when WhatsApp asks again on the next link attempt.
  *
  * Only ACTIVE restrictions are held: a lift removes the entry rather than storing a negative, so the
  * map's size is the count of restricted sessions and `get` returning nothing means "not restricted".

@@ -92,6 +92,7 @@ test('CONTROL — unpatched, a body error mid-read crashes instead of reaching t
   const { dir, file } = fakeBaileys();
   const r = runScenario(MID_READ, file);
   assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /terminated/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

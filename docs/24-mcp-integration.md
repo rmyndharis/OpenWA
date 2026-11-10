@@ -220,7 +220,8 @@ Each send tool (`MessageSendText`, `MessageSendImage`, `MessageSendVideo`, `Mess
 `MessageSendTemplate`, `MessageReply`, `MessageForward`) takes an optional `idempotencyKey`, 1 to 255
 visible ASCII characters, which works as the `Idempotency-Key` header does on the matching REST route. The
 first call with a key sends and keeps its result for 24 hours. A retry with the same key and the same
-arguments returns that result and sends nothing. The same key with other arguments is refused, and so is a
+arguments returns that result and sends nothing, with nothing in the answer to tell it from a first send (REST sets
+`Idempotent-Replayed: true`). The same key with other arguments is refused, and so is a
 retry while the first call still runs or after a failure that may have sent the message. Each refusal
 carries a `code` (`IDEMPOTENCY_KEY_REUSED`, `IDEMPOTENCY_KEY_IN_PROGRESS` or `IDEMPOTENCY_OUTCOME_UNKNOWN`)
 beside its message. A send refused before it reached WhatsApp frees the key. A key belongs to its session, and

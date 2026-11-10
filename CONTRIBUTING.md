@@ -18,7 +18,7 @@ See `docs/03-system-architecture.md` for the bigger picture.
 
 ## Getting started
 
-OpenWA targets **Node.js 22.19 or newer** (`engines.node`); the dashboard unit tests need **22.22.2+ or 24.15+** (jsdom). On Linux x64/arm64 hosts using glibc, source installs also need **glibc 2.34 or newer** for the shipped `better-sqlite3` prebuild, even with PostgreSQL. Use Ubuntu 22.04+, Debian 12+, RHEL 9+ or the published Docker image on an older host; `npm rebuild better-sqlite3 --build-from-source` does not replace the preferred prebuild. See [startup troubleshooting](docs/12-troubleshooting-faq.md#issue-source-install-fails-with-a-glibc_2xx-not-found-error).
+OpenWA targets **Node.js 22.19 or newer** (`engines.node`); the dashboard unit tests need **22.22.2+ on 22, 24.15+ on 24 or 26+** (jsdom). On Linux x64/arm64 hosts using glibc, source installs also need **glibc 2.34 or newer** for the shipped `better-sqlite3` prebuild, even with PostgreSQL. Use Ubuntu 22.04+, Debian 12+, RHEL 9+ or the published Docker image on an older host; `npm rebuild better-sqlite3 --build-from-source` does not replace the preferred prebuild. See [startup troubleshooting](docs/12-troubleshooting-faq.md#issue-source-install-fails-with-a-glibc_2xx-not-found-error).
 
 ```bash
 npm ci
