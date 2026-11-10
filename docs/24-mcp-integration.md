@@ -164,6 +164,11 @@ code is a transferable join capability, so it sits at OPERATOR like the QR endpo
 > and `MessageGetReactions` need whatsapp-web.js; on Baileys use `MessageList` for stored messages.
 > `GroupCreate` needs Baileys; whatsapp-web.js cannot create a group.
 
+`MessageList` takes the filters of `GET /sessions/{sessionId}/messages`: `chatId`, `from`, `direction`, `type`,
+`since` and `until` (message time in epoch milliseconds), `orderBy`, an exact `messageId`, and `after`, the id of
+the last message of the previous page, which keeps a walk stable while messages arrive. `MessageSearch` takes
+`type` as well as `chatId`, `from`, `direction` and a date range.
+
 **Deliberately excluded from the surface** (not exposed as tools): session lifecycle
 (create/delete/start/stop/logout/force-kill), chat delete, bulk send, message delete, message edit,
 group

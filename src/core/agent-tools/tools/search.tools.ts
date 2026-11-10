@@ -2,6 +2,8 @@ import { NotImplementedException } from '@nestjs/common';
 import { z } from 'zod';
 import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import { MessageDirection } from '../../../modules/message/entities/message.entity';
+import { MESSAGE_TYPE_MAX_LENGTH } from '../../../modules/message/message-window';
+import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
 import type { SearchService } from '../../../modules/search/search.service';
 import {
   SEARCH_CONTAINS_MIN_TERM_LENGTH,
@@ -56,6 +58,11 @@ export function searchTools(search: SearchService | undefined, containsEnabled =
         chatId: chatIdSchema.optional().describe('Restrict to a single chat JID'),
         from: z.string().optional().describe('Filter by sender phone or JID'),
         direction: z.enum(MessageDirection).optional(),
+        type: z
+          .string()
+          .max(MESSAGE_TYPE_MAX_LENGTH)
+          .optional()
+          .describe('Exact stored message type token, e.g. text, image or voice.'),
         dateFrom: z
           .number()
           .min(-Number.MAX_SAFE_INTEGER)
@@ -77,14 +84,16 @@ export function searchTools(search: SearchService | undefined, containsEnabled =
         // passes them: SearchService overwrites any caller-supplied scope at the provider boundary.
         const sessionIds = apiKey.allowedSessions ?? undefined;
         const chatIds = await chatScope?.idsForFilter(apiKey);
+        // The provider compares the token with the stored type, so one that names no type matches nothing, as on REST.
+        const query = { ...input, type: input.type as MessageType | undefined };
         try {
-          return await search.search({ ...input, match: input.match ?? defaultMatch }, sessionIds, chatIds);
+          return await search.search({ ...query, match: input.match ?? defaultMatch }, sessionIds, chatIds);
         } catch (error) {
           // Unless the agent asked for contains, a query contains cannot run yet (its index is not ready)
           // or cannot run at all for its terms (too short or too long) is answered as a word search.
           const fallback = error instanceof NotImplementedException || error instanceof ContainsTermsRefusedError;
           if (input.match || defaultMatch === 'word' || !fallback) throw error;
-          return search.search({ ...input, match: 'word' }, sessionIds, chatIds);
+          return search.search({ ...query, match: 'word' }, sessionIds, chatIds);
         }
       },
     }),

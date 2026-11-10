@@ -113,6 +113,22 @@ describe('MCP behind the production middleware stack (e2e)', () => {
     expect(JSON.parse(toolText(res))).toEqual(expect.any(Array));
   });
 
+  it('lists messages with the REST filters, and the service still validates them', async () => {
+    const sessionId = '33333333-3333-4333-8333-333333333333';
+    const filtered = await call(operatorKey, 'MessageList', {
+      sessionId,
+      direction: 'incoming',
+      type: 'image',
+      since: 0,
+      until: 10,
+      orderBy: 'timestamp',
+    });
+    expect(JSON.parse(toolText(filtered))).toMatchObject({ messages: [], total: 0 });
+
+    const reversed = await call(operatorKey, 'MessageList', { sessionId, since: 10, until: 5 });
+    expect(JSON.parse(toolText(reversed))).toMatchObject({ success: false, name: 'BadRequestException' });
+  });
+
   describe('a refusal that names an id the caller sent', () => {
     let warn: jest.SpyInstance;
     beforeEach(() => {

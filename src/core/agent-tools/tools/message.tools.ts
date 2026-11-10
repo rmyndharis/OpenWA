@@ -21,6 +21,8 @@ import {
   LOCATION_TEXT_MAX_LENGTH,
   REACTION_EMOJI_MAX_LENGTH,
 } from '../../../modules/message/dto/message-actions.dto';
+import { MessageDirection } from '../../../modules/message/entities/message.entity';
+import { MESSAGE_REFERENCE_MAX_LENGTH, MESSAGE_TYPE_MAX_LENGTH } from '../../../modules/message/message-window';
 import { chatIdSchema, chatJidSchema } from '../chat-id-schema';
 import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
 
@@ -40,6 +42,10 @@ const quotedMessageIdSchema = z
   );
 
 const mediaUrl = (label: string) => z.string().optional().describe(`${label} URL (http/https)`);
+
+/** The filters of the REST message list. Its service validates them again, so these only bound the input. */
+const MESSAGE_CURSOR_MAX_LENGTH = 128;
+const messageTimeSchema = z.number().min(0).max(Number.MAX_SAFE_INTEGER).optional();
 
 /**
  * The same media url rule as the REST routes: both engines fetch only a string that starts with
@@ -123,9 +129,11 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
       name: 'MessageList',
       chatScope: ['chatId'],
       description:
-        'List persisted messages for a session, optionally filtered by chatId or sender. Reads from the local DB. ' +
-        'A message with media carries it inline as base64, up to a per-response budget (8 MiB by default), which ' +
-        'makes a result large; pass inlineMedia false to get the rows without the media.',
+        'List persisted messages for a session, newest first, optionally filtered by chatId, sender, direction, ' +
+        'type, message time or an exact message reference. Reads from the local DB. Page with limit and offset, or ' +
+        'walk with after (the id of the last message of the previous page) so a message arriving mid-walk cannot ' +
+        'shift the window. A message with media carries it inline as base64, up to a per-response budget ' +
+        '(8 MiB by default), which makes a result large; pass inlineMedia false to get the rows without the media.',
       tier: 'read',
       sessionScoped: true,
       inputSchema: z.object({
@@ -134,6 +142,31 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         from: z.string().optional().describe('Filter by sender phone or JID'),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
+        after: z
+          .string()
+          .max(MESSAGE_CURSOR_MAX_LENGTH)
+          .optional()
+          .describe('Keyset cursor: the id of the last message of the previous page. Takes precedence over offset.'),
+        since: messageTimeSchema.describe('Inclusive message-time lower bound, Unix epoch milliseconds.'),
+        until: messageTimeSchema.describe('Exclusive message-time upper bound, Unix epoch milliseconds.'),
+        direction: z.enum(MessageDirection).optional().describe('Only incoming or only outgoing messages.'),
+        type: z
+          .string()
+          .max(MESSAGE_TYPE_MAX_LENGTH)
+          .optional()
+          .describe('Exact stored message type token, e.g. text, image or voice.'),
+        orderBy: z
+          .enum(['createdAt', 'timestamp'])
+          .optional()
+          .describe(
+            'Newest first either way. createdAt (default) is the order the gateway stored them in; timestamp is ' +
+              'the time on the message and leaves out rows with no known timestamp.',
+          ),
+        messageId: z
+          .string()
+          .max(MESSAGE_REFERENCE_MAX_LENGTH)
+          .optional()
+          .describe('Exact WhatsApp message reference; the lookup stays inside the session and chat filters.'),
         inlineMedia: z
           .boolean()
           .optional()
@@ -142,13 +175,12 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
               'marker. Media is only available inline over MCP, so leave it unset when you need the bytes.',
           ),
       }),
-      handler: input =>
-        message.getMessages(input.sessionId, {
-          chatId: input.chatId,
-          from: input.from,
-          limit: input.limit,
-          offset: input.offset,
-          ...(input.inlineMedia === undefined ? {} : { inlineMedia: input.inlineMedia }),
+      handler: ({ sessionId, after, inlineMedia, ...filters }) =>
+        message.getMessages(sessionId, {
+          ...filters,
+          // REST reads a blank cursor as absent, and an agent often fills every optional field.
+          after: after?.trim() || undefined,
+          ...(inlineMedia === undefined ? {} : { inlineMedia }),
         }),
     }),
     defineTool({
