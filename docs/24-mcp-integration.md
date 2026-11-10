@@ -183,12 +183,16 @@ only when an agent genuinely needs to send messages / mutate state.
 
 ### Result and error sizes
 
-A result whose JSON is longer than 4096 bytes is not placed in the text block. The text block
-reads `Received resource mcp://toolResult/<id>.json with <n> bytes` and the payload follows as an
-embedded base64 `resource` block. How a client presents that block to the model is the client's
-choice, so page a tool that can return many rows (`SessionGetChats`, `GroupFindAll`, `MessageList`)
-with `limit` and `offset`. `MessageList` also carries each message's media inline as base64, up to a
-per-response budget (`MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES`, 8 MiB by default); pass
+A result whose JSON is up to 32768 bytes (32 KiB) of UTF-8 is returned as text. A larger one is not
+placed in the text block: the text block reads `Received resource mcp://toolResult/<id>.json with <n> bytes`
+and the payload follows as an embedded base64 `resource` block. The server has no `resources`
+capability, so that URI cannot be fetched, and how a client presents the block to the model is the
+client's choice. Claude Code 2.1.321 saves it to a file on its own machine and tells the model only
+the path, so the model sees the data only if it has a file-reading tool; a client that forwards text
+alone shows it nothing. Page a tool that can return many rows (`SessionGetChats`, `GroupFindAll`,
+`MessageList`) with `limit` and `offset` to stay under the limit. `MessageList` also carries each
+message's media inline as base64, up to a per-response budget
+(`MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES`, 8 MiB by default), which is far over the limit; pass
 `inlineMedia: false` to get the rows without it.
 
 The text of a tool error is cut at 4096 characters and ends with
