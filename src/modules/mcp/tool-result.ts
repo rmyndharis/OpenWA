@@ -79,8 +79,10 @@ function clipMessage(message: unknown): unknown {
 
 /** The stack with the copy of a long message cut down, so the frames survive, and capped whole as a last resort. */
 function clipStack(error: Error): string | undefined {
-  const { stack, message } = error;
-  if (stack === undefined) return undefined;
+  const { stack } = error;
+  // An error built by a library can carry either as anything; this handler must still answer, and log.
+  if (typeof stack !== 'string') return undefined;
+  const message = String(error.message);
   // A replacer function: the cut message may hold `$&` or `$1`, which a replacement string would expand.
   const shortened =
     message.length > TOOL_ERROR_TEXT_MAX_CHARS
@@ -104,7 +106,7 @@ export function handleToolError(error: unknown): CallToolResult {
   if (error instanceof HttpException) {
     // A 4xx is the client's mistake (unknown session, bad input, missing role), which REST does not
     // log at all: a warn line without a stack, so error-level alerting fires on server faults only.
-    const text = clipText(error.message, TOOL_ERROR_TEXT_MAX_CHARS);
+    const text = clipText(String(error.message), TOOL_ERROR_TEXT_MAX_CHARS);
     if (error.getStatus() >= 500) logger.error(text, clipStack(error));
     else logger.warn(`MCP tool error ${error.getStatus()}: ${text}`);
     const res = error.getResponse();
@@ -116,7 +118,7 @@ export function handleToolError(error: unknown): CallToolResult {
     return jsonToolResult({ success: false, name: error.name, message, ...(code ? { code } : {}) }, true);
   }
   if (error instanceof Error) {
-    logger.error(clipText(error.message, TOOL_ERROR_TEXT_MAX_CHARS), clipStack(error));
+    logger.error(clipText(String(error.message), TOOL_ERROR_TEXT_MAX_CHARS), clipStack(error));
     return jsonToolResult({ success: false, name: error.name, message: 'Internal error' }, true);
   }
   logger.error('Unknown tool error', clipText(String(error), TOOL_ERROR_STACK_MAX_CHARS));

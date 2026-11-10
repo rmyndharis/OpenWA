@@ -203,7 +203,7 @@ export function messageTools(message: MessageService, idempotency?: SendIdempote
       inputSchema: z.object({
         sessionId,
         chatId: z.string().max(CHAT_ID_MAX_LENGTH).optional().describe('Filter to a specific chat JID'),
-        from: z.string().optional().describe('Filter by sender phone or JID'),
+        from: z.string().max(CHAT_ID_MAX_LENGTH).optional().describe('Filter by sender phone or JID'),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
         after: z

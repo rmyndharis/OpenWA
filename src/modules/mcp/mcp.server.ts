@@ -85,6 +85,14 @@ function resolveReqContext(req: Request): McpRequestContext {
 }
 
 /**
+ * The most array items and object keys, nested ones included, a tool call may carry. The SDK counts them before
+ * it validates, so a call past it is refused at once; below it, one wrong value in a `vars` map costs one issue
+ * line per entry, and a map of tens of thousands answered with megabytes. REST bounds a body the same way
+ * (docs/04). The widest input a tool takes is a list of a few hundred ids.
+ */
+export const MCP_MAX_TOOL_INPUT_ELEMENTS = 10_000;
+
+/**
  * Build the MCP server ONCE and register all tools from the registry.
  * The SDK's `registerTool` accepts `AnySchema` (z4.$ZodType) directly, so we
  * pass `tool.inputSchema` verbatim — no `.shape` extraction needed.
@@ -101,7 +109,7 @@ function buildServer(
 ): McpServer {
   const server = new McpServer(
     { name: serverInfo.name, version: serverInfo.version },
-    { capabilities: { tools: {}, logging: {} } },
+    { capabilities: { tools: {}, logging: {} }, maxToolInputElements: MCP_MAX_TOOL_INPUT_ELEMENTS },
   );
 
   const tools = registry.list({ readOnly });

@@ -2,6 +2,7 @@ import { NotImplementedException } from '@nestjs/common';
 import { z } from 'zod';
 import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import { MessageDirection } from '../../../modules/message/entities/message.entity';
+import { CHAT_ID_MAX_LENGTH } from '../../../modules/message/dto/send-message.dto';
 import { MESSAGE_TYPE_MAX_LENGTH } from '../../../modules/message/message-window';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
 import type { SearchService } from '../../../modules/search/search.service';
@@ -56,7 +57,7 @@ export function searchTools(search: SearchService | undefined, containsEnabled =
           .optional()
           .describe(`contains: any part of a word; word: whole words only. Default: ${defaultMatch}`),
         chatId: chatIdSchema.optional().describe('Restrict to a single chat JID'),
-        from: z.string().optional().describe('Filter by sender phone or JID'),
+        from: z.string().max(CHAT_ID_MAX_LENGTH).optional().describe('Filter by sender phone or JID'),
         direction: z.enum(MessageDirection).optional(),
         type: z
           .string()
