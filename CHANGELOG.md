@@ -20,11 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop a Baileys inbound media download that is abandoned at `MEDIA_DOWNLOAD_TIMEOUT_MS` or the byte cap, or cut off mid-body, from crashing the gateway with `TypeError: terminated`: a new install-time patch, `scripts/patch-baileys-media-stream.js`, ties the response body to its decrypting stream, which Baileys piped with no error listener and never closed (#2034). Thanks @voidm4p.
 - Cut the text of an MCP tool error at 4096 characters, in the answer and in the log line, so an id a caller sent (a group id, a webhook id, a phone number) no longer comes back whole; a tool call reads a body of up to `BODY_SIZE_LIMIT`, where REST reads a request line.
 - Accept `linkPreview` on the MCP `MessageSendTemplate` tool, as send-template does over REST, and say in both text tools that Baileys attaches a preview only for `true`.
+- Return an MCP tool result of up to 32 KiB as text, where anything over 4 KiB was offloaded to a base64 resource that Claude Code saves to a local file and shows the model only as a path.
 
 ### Documentation
 
 - State in `CONTRIBUTING.md` and `docs/08-development-guidelines.md` that the dashboard unit tests need Node.js 22.22.2+ or 24.15+ (jsdom), above the Node.js 22.19 floor of the gateway.
-- Document in `docs/24-mcp-integration.md` how an MCP result over 4096 bytes and a long tool error are shaped and that tool calls are not forwarded between nodes, and say in the README and `.env.example` that `MCP_READONLY` mounts only the read tools unless set to `false`.
+- Document in `docs/24-mcp-integration.md` how an MCP result over the inline limit and a long tool error are shaped and that tool calls are not forwarded between nodes, and say in the README and `.env.example` that `MCP_READONLY` mounts only the read tools unless set to `false`.
 - Name the fields of a `GroupFindAll` entry in the MCP tool description.
 
 ### Dependencies
