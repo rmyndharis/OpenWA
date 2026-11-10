@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Document in `docs/24-mcp-integration.md` how an MCP result over the inline limit and a long tool error are shaped and that tool calls are not forwarded between nodes, and say in the README and `.env.example` that `MCP_READONLY` mounts only the read tools unless set to `false`.
 - Name the fields of a `GroupFindAll` entry in the MCP tool description.
 - Correct `docs/24-mcp-integration.md`: with MCP disabled only the MCP module and SDK are skipped, the tool registry is still built.
+- Correct the MCP result limit (32 KiB) and the argument rule in `docs/06-api-specification.md`, and list the changes to MCP answers in the upgrade hazards of `docs/14-migration-guide.md`.
 
 ### Dependencies
 
