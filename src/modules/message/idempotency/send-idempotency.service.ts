@@ -19,10 +19,11 @@ export const SEND_IDEMPOTENCY_STALE_PENDING_MS = 10 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 
 /** RFC-draft key syntax, kept strict so a key is safe to log and store verbatim: 1-255 visible ASCII. */
-const KEY_PATTERN = /^[\x21-\x7E]{1,255}$/;
+export const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7E]{1,255}$/;
+export const IDEMPOTENCY_KEY_MAX_LENGTH = 255;
 
 export function isValidIdempotencyKey(key: string): boolean {
-  return KEY_PATTERN.test(key);
+  return IDEMPOTENCY_KEY_PATTERN.test(key);
 }
 
 /**
