@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
 import { ChatScopeService } from '../../modules/auth/chat-scope.service';
 import type { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
@@ -167,7 +167,9 @@ describe('chat-restricted tool calls', () => {
       const descriptors =
         name === 'ContactFindAll'
           ? contactTools({ listContacts: list, getContacts: paged } as unknown as ContactService)
-          : groupTools({ listGroups: list, getGroups: paged } as unknown as GroupService);
+          : groupTools({ listGroups: list, getGroups: paged } as unknown as GroupService, {
+              findOne: jest.fn().mockResolvedValue({}),
+            });
       await expect(
         call(
           descriptors.find(t => t.name === name)!,
@@ -179,6 +181,18 @@ describe('chat-restricted tool calls', () => {
       expect(paged).not.toHaveBeenCalled();
     },
   );
+
+  it('answers 404 for an unknown session on a restricted key before listing the groups', async () => {
+    const list = jest.fn();
+    const unknown = {
+      findOne: jest.fn().mockRejectedValue(new NotFoundException('Session s1 not found')),
+    } as unknown as SessionService;
+    const descriptor = groupTools({ listGroups: list } as unknown as GroupService, unknown).find(
+      t => t.name === 'GroupFindAll',
+    )!;
+    await expect(call(descriptor, { sessionId: 's1' })).rejects.toBeInstanceOf(NotFoundException);
+    expect(list).not.toHaveBeenCalled();
+  });
 
   it('filters label chat membership', async () => {
     const descriptor = labelTools({
