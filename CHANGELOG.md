@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Accept `inlineMedia` on the MCP `MessageList` tool, so an agent can list messages without the base64 of their media, as `inlineMedia=false` does on `GET /api/sessions/{sessionId}/messages`; unset keeps the media inline.
 
+### Changed
+
+- The MCP `SessionGetPresence` tool answers `observedAt` as an ISO date-time, as `GET /api/sessions/{sessionId}/presence/{chatId}` does, where it answered unix milliseconds.
+
 ### Fixed
 
 - Stop a Baileys inbound media download that is abandoned at `MEDIA_DOWNLOAD_TIMEOUT_MS` or the byte cap, or cut off mid-body, from crashing the gateway with `TypeError: terminated`: a new install-time patch, `scripts/patch-baileys-media-stream.js`, ties the response body to its decrypting stream, which Baileys piped with no error listener and never closed (#2034). Thanks @voidm4p.

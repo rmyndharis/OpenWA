@@ -91,8 +91,9 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
       name: 'SessionGetPresence',
       chatScope: ['chatId'],
       description:
-        'The last presence reported for a chat, or null when none has been — the chat was never ' +
-        'subscribed, or nothing has changed since. Subscribe first with SessionSubscribePresence.',
+        'The last presence reported for a chat, or null when none has been: the chat was never ' +
+        'subscribed, or nothing has changed since. observedAt is when the gateway received the report, as an ' +
+        'ISO date-time. Subscribe first with SessionSubscribePresence.',
       tier: 'read',
       requiredRole: ApiKeyRole.VIEWER,
       sessionScoped: true,
@@ -100,7 +101,11 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
         sessionId,
         chatId: chatIdSchema.describe('Chat JID (e.g. 1234567890@c.us)'),
       }),
-      handler: input => session.getPresence(input.sessionId, input.chatId),
+      handler: async input => {
+        const presence = await session.getPresence(input.sessionId, input.chatId);
+        // The store keeps unix milliseconds; REST answers a date-time (ChatPresenceResponseDto), so both do.
+        return presence ? { ...presence, observedAt: new Date(presence.observedAt) } : null;
+      },
     }),
     defineTool({
       name: 'SessionMarkChatRead',

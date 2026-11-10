@@ -101,14 +101,32 @@ describe('sessionTools', () => {
     expect(out).toEqual({ success: true });
   });
 
-  it('SessionGetPresence delegates to getPresence and passes the result through', async () => {
-    const getPresence = jest.fn().mockResolvedValue({ presence: 'online' });
+  // The store keeps the time the report arrived as unix milliseconds; the REST route (ChatPresenceResponseDto)
+  // answers it as a date-time, so the tool does too and a client reads one shape on both surfaces.
+  it('SessionGetPresence delegates to getPresence and answers observedAt as a date-time', async () => {
+    const report = {
+      chatId: '628111@c.us',
+      participants: [{ id: '628111@c.us', state: 'available' }],
+      groupOnlineCount: 3,
+      observedAt: Date.UTC(2026, 10, 10, 1, 2, 3),
+    };
+    const getPresence = jest.fn().mockResolvedValue(report);
     const out = await run(makeTools({ getPresence } as unknown as SessionService).get('SessionGetPresence')!, {
       sessionId: 's1',
       chatId: '628111@c.us',
     });
     expect(getPresence).toHaveBeenCalledWith('s1', '628111@c.us');
-    expect(out).toEqual({ presence: 'online' });
+    const wire = JSON.parse(JSON.stringify(out)) as Record<string, unknown>;
+    expect(wire).toEqual({ ...report, observedAt: '2026-11-10T01:02:03.000Z' });
+  });
+
+  it('SessionGetPresence answers null when nothing has been reported', async () => {
+    const getPresence = jest.fn().mockResolvedValue(null);
+    const out = await run(makeTools({ getPresence } as unknown as SessionService).get('SessionGetPresence')!, {
+      sessionId: 's1',
+      chatId: '628111@c.us',
+    });
+    expect(out).toBeNull();
   });
 
   it('SessionMarkChatRead maps the sendSeen result to a success field', async () => {
