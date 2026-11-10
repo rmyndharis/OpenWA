@@ -99,12 +99,12 @@ export function handleToolError(error: unknown): CallToolResult {
     if (error.getStatus() >= 500) logger.error(text, clipStack(error));
     else logger.warn(`MCP tool error ${error.getStatus()}: ${text}`);
     const res = error.getResponse();
-    const message = clipMessage(
-      typeof res === 'object' && res !== null && 'message' in res
-        ? (res as Record<string, unknown>)['message']
-        : error.message,
-    );
-    return jsonToolResult({ success: false, name: error.name, message }, true);
+    const body = typeof res === 'object' && res !== null ? (res as Record<string, unknown>) : undefined;
+    const message = clipMessage(body && 'message' in body ? body['message'] : error.message);
+    // The machine-readable code a REST answer carries (IDEMPOTENCY_KEY_IN_PROGRESS), which an agent branches on.
+    // Bounded like the message: it is a short token in every exception that sets one.
+    const code = typeof body?.['code'] === 'string' ? body['code'].slice(0, 64) : undefined;
+    return jsonToolResult({ success: false, name: error.name, message, ...(code ? { code } : {}) }, true);
   }
   if (error instanceof Error) {
     logger.error(clipText(error.message, TOOL_ERROR_TEXT_MAX_CHARS), clipStack(error));

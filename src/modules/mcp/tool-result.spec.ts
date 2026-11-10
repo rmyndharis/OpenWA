@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { LoggerService } from '../../common/services/logger.service';
 import { handleToolError, smartToolResult, TOOL_ERROR_TEXT_MAX_CHARS } from './tool-result';
 
@@ -168,5 +168,48 @@ describe('handleToolError text cap', () => {
   it('leaves a short message and its log line exactly as before', () => {
     expect(body(handleToolError(new NotFoundException('Session x not found'))).message).toBe('Session x not found');
     expect(warn).toHaveBeenCalledWith('MCP tool error 404: Session x not found');
+  });
+});
+
+describe('handleToolError code', () => {
+  const answer = (error: unknown) =>
+    JSON.parse((handleToolError(error).content[0] as { text: string }).text) as Record<string, unknown>;
+  beforeEach(() => jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined));
+  afterEach(() => jest.restoreAllMocks());
+
+  it('carries the code of an HTTP error that has one, so an agent can branch on it', () => {
+    const error = new ConflictException({
+      statusCode: 409,
+      error: 'Conflict',
+      message: 'A request with this Idempotency-Key is still running.',
+      code: 'IDEMPOTENCY_KEY_IN_PROGRESS',
+    });
+
+    expect(answer(error)).toEqual({
+      success: false,
+      name: 'ConflictException',
+      message: 'A request with this Idempotency-Key is still running.',
+      code: 'IDEMPOTENCY_KEY_IN_PROGRESS',
+    });
+  });
+
+  it.each([undefined, 7, null, ''])('adds no code when the error carries %p', code => {
+    const body = answer(new BadRequestException({ statusCode: 400, message: 'nope', code }));
+
+    expect(body).toEqual({ success: false, name: 'BadRequestException', message: 'nope' });
+  });
+
+  it('adds no code to an error without a body object', () => {
+    expect(answer(new NotFoundException('Session x not found'))).toEqual({
+      success: false,
+      name: 'NotFoundException',
+      message: 'Session x not found',
+    });
+  });
+
+  it('bounds a code that is not a short token', () => {
+    const body = answer(new BadRequestException({ message: 'nope', code: 'x'.repeat(500) }));
+
+    expect(body.code).toBe('x'.repeat(64));
   });
 });
