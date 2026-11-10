@@ -1,0 +1,156 @@
+// Enable the MCP server before AppModule is imported.
+process.env.MCP_ENABLED = 'true';
+
+import { Test, TestingModule } from '@nestjs/testing';
+import { type INestApplication } from '@nestjs/common';
+import request from 'supertest';
+import type { App } from 'supertest/types';
+import { AppModule } from '../src/app.module';
+import { configureApp } from '../src/configure-app';
+import { applyGlobalValidation } from '../src/config/app-validation';
+import { LoggerService } from '../src/common/services/logger.service';
+import { AuthService } from '../src/modules/auth/auth.service';
+import { ApiKeyRole } from '../src/modules/auth/entities/api-key.entity';
+import { TOOL_ERROR_TEXT_MAX_CHARS } from '../src/modules/mcp/tool-result';
+
+// test/mcp-auth.e2e-spec.ts boots the app the way a unit would, without configureApp(), so nothing else in CI
+// runs /mcp behind the middleware main.ts installs: the request id, the security headers, the body parsers
+// with their size and nesting caps. This file boots it the way main.ts does and checks what only that stack
+// can break, plus the cap on the text of a tool error end to end.
+
+const MCP_HEADERS = {
+  'Content-Type': 'application/json',
+  Accept: 'application/json, text/event-stream',
+};
+
+const rpc = (method: string, params: Record<string, unknown>, id = 1) => ({ jsonrpc: '2.0', method, params, id });
+
+/** The transport answers `text/event-stream`: `event: message` then a `data:` line holding the JSON-RPC reply. */
+function reply(res: { body: unknown; text: string }): { result?: Record<string, unknown> } {
+  if (typeof res.body === 'object' && res.body !== null && Object.keys(res.body).length > 0) return res.body;
+  const data = /^data:\s*(.+)$/m.exec(res.text ?? '');
+  return data ? (JSON.parse(data[1]) as { result?: Record<string, unknown> }) : {};
+}
+
+/** The text of the first content block of a tool result. */
+function toolText(res: { body: unknown; text: string }): string {
+  const content = reply(res).result?.content as Array<{ type: string; text?: string }> | undefined;
+  return content?.[0]?.text ?? '';
+}
+
+describe('MCP behind the production middleware stack (e2e)', () => {
+  let app: INestApplication<App>;
+  let operatorKey: string;
+  let scopedKey: string;
+  const scopedSession = '11111111-1111-4111-8111-111111111111';
+  const previousReadOnly = process.env.MCP_READONLY;
+
+  const call = (key: string, name: string, args: Record<string, unknown>) =>
+    request(app.getHttpServer())
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('X-API-Key', key)
+      .send(rpc('tools/call', { name, arguments: args }));
+
+  beforeAll(async () => {
+    // Write tools are only mounted with MCP_READONLY=false; read at mount, so before init.
+    process.env.MCP_READONLY = 'false';
+    const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    // `bodyParser: false` matches main.ts: configureApp installs the only parsers.
+    app = moduleFixture.createNestApplication({ bodyParser: false });
+    configureApp(app);
+    applyGlobalValidation(app);
+    await app.init();
+
+    const authService = app.get(AuthService);
+    operatorKey = (await authService.createApiKey({ name: 'e2e-stack-operator', role: ApiKeyRole.OPERATOR })).rawKey;
+    scopedKey = (
+      await authService.createApiKey({
+        name: 'e2e-stack-scoped',
+        role: ApiKeyRole.OPERATOR,
+        allowedSessions: [scopedSession],
+      })
+    ).rawKey;
+  }, 60_000);
+
+  afterAll(async () => {
+    await app?.close();
+    if (previousReadOnly === undefined) delete process.env.MCP_READONLY;
+    else process.env.MCP_READONLY = previousReadOnly;
+  });
+
+  it('answers behind the request-context middleware and still requires a key', async () => {
+    const withKey = await request(app.getHttpServer())
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('X-API-Key', operatorKey)
+      .send(rpc('tools/list', {}));
+    expect(withKey.status).toBe(200);
+    expect(withKey.headers['x-request-id']).toMatch(/^[A-Za-z0-9-]{1,128}$/);
+
+    const withoutKey = await request(app.getHttpServer()).post('/mcp').set(MCP_HEADERS).send(rpc('tools/list', {}));
+    expect(withoutKey.status).toBe(401);
+  });
+
+  it('publishes the optional fields the REST routes take', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('X-API-Key', operatorKey)
+      .send(rpc('tools/list', {}));
+    const tools = reply(res).result?.tools as Array<{ name: string; inputSchema: { properties: object } }>;
+    const properties = (name: string): string[] =>
+      Object.keys(tools.find(t => t.name === name)?.inputSchema.properties ?? {});
+
+    expect(properties('MessageSendTemplate')).toContain('linkPreview');
+    expect(properties('MessageSendText')).toContain('linkPreview');
+    expect(properties('MessageList')).toContain('inlineMedia');
+  });
+
+  it('runs a read tool end to end', async () => {
+    const res = await call(operatorKey, 'SessionFindAll', {});
+    expect(res.status).toBe(200);
+    expect(JSON.parse(toolText(res))).toEqual(expect.any(Array));
+  });
+
+  describe('a refusal that names an id the caller sent', () => {
+    let warn: jest.SpyInstance;
+    beforeEach(() => {
+      // Recorded and silenced: each capped line is still about 4 KB.
+      warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    });
+    afterEach(() => jest.restoreAllMocks());
+
+    // Each call names the key's own session, so it passes the session gate and the id under test reaches the
+    // service, which puts it in its refusal.
+    it.each([
+      ['GroupFindOne', 'groupId', { sessionId: scopedSession }],
+      ['GroupGetInviteCode', 'groupId', { sessionId: scopedSession }],
+      ['ContactCheckNumber', 'number', { sessionId: scopedSession }],
+      ['WebhookFindOne', 'webhookId', { sessionId: scopedSession }],
+      ['AutomationRuleFindOne', 'ruleId', { sessionId: scopedSession }],
+    ])('%s: a 1 MB %s comes back cut, in the answer and in the log', async (tool, field, base) => {
+      const id = 'x'.repeat(1_000_000);
+      const res = await call(scopedKey, tool, { ...base, [field]: id });
+
+      expect(res.status).toBe(200);
+      const answer = JSON.parse(toolText(res)) as { success: boolean; message: string };
+      expect(answer.success).toBe(false);
+      expect(answer.message.length).toBeLessThan(TOOL_ERROR_TEXT_MAX_CHARS + 100);
+      expect(answer.message).toContain('[truncated, ');
+      expect(res.text.length).toBeLessThan(TOOL_ERROR_TEXT_MAX_CHARS + 1000);
+
+      const logged = warn.mock.calls
+        .map(call => String((call as unknown[])[0]))
+        .filter(line => line.includes('MCP tool error'));
+      expect(logged.length).toBeGreaterThan(0);
+      for (const line of logged) expect(line.length).toBeLessThan(TOOL_ERROR_TEXT_MAX_CHARS + 150);
+    });
+
+    it('keeps a short refusal whole', async () => {
+      const res = await call(scopedKey, 'WebhookFindOne', { sessionId: scopedSession, webhookId: 'missing' });
+      const answer = JSON.parse(toolText(res)) as { message: string };
+      expect(answer.message).toBe("Webhook with id 'missing' not found");
+    });
+  });
+});
