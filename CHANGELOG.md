@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Say how far a Baileys connection had got when it closed: the `baileys_connection_dropped` log line carries `stage` and `aliveMs`, and `lastError` of a reconnect-looping session ends with a sentence naming the stage.
 - Warn once per connection when WhatsApp asks for a passkey to finish a Baileys link (`action=baileys_passkey_required`); the link stalled with no word of why (#560).
-- Report a passkey request on a Baileys link as a `passkey_required` restriction: it reaches `GET /api/sessions/{sessionId}`, the `session.restriction` webhook and the dashboard with no status change, and is lifted when a link reaches `ready`. The JavaScript, Python, Go and Java SDKs list the new kind.
+- Report a passkey request on a Baileys link as a `passkey_required` restriction: it reaches `GET /api/sessions/{sessionId}`, the `session.restriction` webhook and the dashboard with no status change, and is lifted when a link reaches `ready`.
+- List the `passkey_required` restriction kind in the JavaScript, Python, Go and Java SDK types.
 - Accept `inlineMedia` on the MCP `MessageList` tool, so an agent can list messages without the base64 of their media, as `inlineMedia=false` does on `GET /api/sessions/{sessionId}/messages`; unset keeps the media inline.
 - Accept an `idempotencyKey` on the eleven MCP send tools, as `Idempotency-Key` works on the REST send routes: a retry with the same key and arguments returns the first result instead of sending again.
 - Accept the REST message-list filters `after`, `direction`, `type`, `since`, `until`, `orderBy` and `messageId` on the MCP `MessageList` tool, and `type` on `MessageSearch`.
@@ -20,15 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Log the restart WhatsApp asks for right after it accepts a Baileys link (close `515`) as `baileys_link_restart`, where it was logged as a dropped connection.
 - The MCP `SessionGetPresence` tool answers `observedAt` as an ISO date-time, as `GET /api/sessions/{sessionId}/presence/{chatId}` does, where it answered unix milliseconds.
-- Refuse an MCP tool argument the tool does not name with `Unrecognized key: "x"`, where it was dropped and the call ran without it; the published input schemas now say `additionalProperties: false`.
+- Refuse an MCP tool argument the tool does not name, an unknown key inside `customLinkPreview` included, with `Unrecognized key: "x"`, where it was dropped and the call ran without it; the published input schemas now say `additionalProperties: false`.
 - Carry the `code` of an HTTP error, such as `IDEMPOTENCY_KEY_IN_PROGRESS`, in an MCP tool error, which returned only its name and message.
-- Show a session restriction on the dashboard card of a session that is waiting for a scan or a pairing code, where the card showed none until the session was ready.
+- Show a session restriction on the dashboard card of a session that is waiting for a scan or a pairing code, where the pairing placeholder showed none.
 - The amd64 image's Chrome for Testing 157.0.8103.38 to 157.0.8103.50, picking up the browser security fixes released since; the arm64 image keeps the chromium package Debian ships.
 
 ### Fixed
 
-- Stop a Baileys inbound media download that is abandoned at `MEDIA_DOWNLOAD_TIMEOUT_MS` or the byte cap, or cut off mid-body, from crashing the gateway with `TypeError: terminated`: a new install-time patch, `scripts/patch-baileys-media-stream.js`, ties the response body to its decrypting stream, which Baileys piped with no error listener and never closed (#2034). Thanks @voidm4p.
-- Cut the text of an MCP tool error at 4096 characters, in the answer and in the log line, so an id a caller sent (a group id, a webhook id, a phone number) no longer comes back whole; a tool call reads a body of up to `BODY_SIZE_LIMIT`, where REST reads a request line.
+- Stop an abandoned or cut-off Baileys inbound media download from crashing the gateway with `TypeError: terminated`, by tying the response body to its decrypting stream in a new install-time patch (#2034). Thanks @voidm4p.
+- Cut the text of an MCP tool error and its log line at 4096 characters, so a long id a caller sent (a group id, a webhook id, a phone number) no longer comes back whole.
 - Accept `linkPreview` on the MCP `MessageSendTemplate` tool, as send-template does over REST, and say in both text tools that Baileys attaches a preview only for `true`.
 - Answer 404 for an MCP `GroupFindAll` call on an unknown session, as `GET /api/sessions/{sessionId}/groups` does, where it answered 400 `Session is not started`.
 - Return an MCP tool result of up to 32 KiB as text, where anything over 4 KiB was offloaded to a base64 resource that Claude Code saves to a local file and shows the model only as a path.
@@ -36,8 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - Add a troubleshooting entry for a Baileys link that is accepted and never becomes `ready`: what a first login does, and how to tell which step fails.
-- State in `CONTRIBUTING.md` and `docs/08-development-guidelines.md` that the dashboard unit tests need Node.js 22.22.2+ or 24.15+ (jsdom), above the Node.js 22.19 floor of the gateway.
-- Document in `docs/24-mcp-integration.md` how an MCP result over the inline limit and a long tool error are shaped and that tool calls are not forwarded between nodes, and say in the README and `.env.example` that `MCP_READONLY` mounts only the read tools unless set to `false`.
+- State in `CONTRIBUTING.md` and `docs/08-development-guidelines.md` that the dashboard unit tests need Node.js 22.22.2+ on 22, 24.15+ on 24 or 26+ (jsdom), above the Node.js 22.19 floor of the gateway.
+- Document in `docs/24-mcp-integration.md` how an MCP result over the inline limit and a long tool error are shaped and that tool calls are not forwarded between nodes.
+- Say in the README and `.env.example` that `MCP_READONLY` mounts only the read tools unless set to `false`.
 - Name the fields of a `GroupFindAll` entry in the MCP tool description.
 - Correct `docs/24-mcp-integration.md`: with MCP disabled only the MCP module and SDK are skipped, the tool registry is still built.
 - Correct the MCP result limit (32 KiB) and the argument rule in `docs/06-api-specification.md`, and list the changes to MCP answers in the upgrade hazards of `docs/14-migration-guide.md`.
@@ -49,6 +51,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update `@tanstack/react-query` to 5.107.1, `i18next` to 26.7.2, `i18next-browser-languagedetector` to 8.3.0, `lucide-react` to 1.70.0, `react-i18next` to 17.1.13 and `yet-another-react-lightbox` to 3.33.0 in the dashboard bundle.
 - Update `jsdom` to 31.0.0 in the dashboard tests; the restart progress test compares the bar width numerically, since jsdom now rounds style numbers to six digits.
 - Update `eslint` to 10.14.0 and `globals` to 17.14.0 in the gateway and the dashboard, `vite` to 8.3.6 and `@vitejs/plugin-react` to 6.2.1 in the dashboard and `vitest` to 5.1.0 in the JavaScript SDK; these are build, lint and test tooling only.
+
+### Upgrade notes (behavior changes)
+
+- An MCP tool call that carries an argument the tool does not declare, an unknown key inside `customLinkPreview` included, is refused with `Unrecognized key: "x"`, and the published input schemas say `additionalProperties: false`; before, the argument was dropped and the call ran without it, so a misspelled `quotedMessageId` sent the message unquoted.
+- MCP arguments that were dropped before now take effect: `idempotencyKey` on the eleven send tools (a key reused for a different send answers `IDEMPOTENCY_KEY_REUSED`, and a retry after a failure that may have sent answers `IDEMPOTENCY_OUTCOME_UNKNOWN`), `linkPreview` on `MessageSendTemplate`, the filters `after`, `direction`, `type`, `since`, `until`, `orderBy` and `messageId` on `MessageList`, and `type` on `MessageSearch`. Send a fresh key for each intended send and drop a filter the caller did not mean to apply.
+- An MCP call whose arguments hold more than 10,000 array items and object keys, or a `from` filter of more than 255 characters on `MessageList` or `MessageSearch`, is refused; before, neither had a limit.
+- The MCP `SessionGetPresence` tool answers `observedAt` as an ISO date-time, as `GET /api/sessions/{sessionId}/presence/{chatId}` does, where it answered unix milliseconds.
+- The MCP `GroupFindAll` tool answers `NotFoundException` for an unknown session, as `GET /api/sessions/{sessionId}/groups` does, where it answered `BadRequestException` (`Session is not started`); a session that exists and is not started still answers that.
+- An MCP tool result of up to 32 KiB arrives as one `text` block, where anything over 4 KiB was an embedded base64 `resource`; a larger result is still offloaded. A tool error carries the `code` of an HTTP error, and its text is cut at 4096 characters.
+- A new restriction kind, `passkey_required`, reaches `GET /api/sessions/{sessionId}`, the `session.restriction` webhook and socket event, the dashboard, the `openwa_sessions_restricted` gauge and an audit row when WhatsApp asks a Baileys link for a passkey, where nothing was reported. The status does not change and a link that reaches `ready` lifts it; a stop, start or logout does not, so delete the session or restart the gateway to drop it. A client with a closed list of kinds must accept the new value.
+- The close WhatsApp asks for right after it accepts a Baileys link (code `515`) is logged as `baileys_link_restart`, not `baileys_connection_dropped`; that line gains `stage` and `aliveMs`, the `reconnect_loop` warning gains `stage` and `statusCode`, and the `lastError` of a reconnect-looping session ends with a sentence on where the last connection closed. A filter or alert on `action=baileys_connection_dropped` no longer matches the restart, and a consumer should match the start of `lastError`.
 
 ## [0.29.1] - 2026-11-07
 
