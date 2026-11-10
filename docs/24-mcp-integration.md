@@ -110,8 +110,10 @@ dashboard), and no MCP method runs.
 Past the gate, the MCP SDK first checks the arguments against the tool's Zod input schema. Arguments it
 refuses come back as an `isError` tool result whose text reads `MCP error -32602: Input validation
 error: ...`, without reaching authentication: a key that lacks the tool's role or session gets that
-error rather than a `403`, and no audit row is written. A call whose arguments pass flows through five
-steps, in this order:
+error rather than a `403`, and no audit row is written. That includes an argument the tool does not name
+(`Unrecognized key: "x"`, at most five names listed, each cut at 64 characters), which a tool call used to
+drop silently, as REST refuses a body property its DTO does not declare; the published input schema says
+`additionalProperties: false`. A call whose arguments pass flows through five steps, in this order:
 
 1. **Key extraction.** The adapter reads the API key from the `X-API-Key` header or
    `Authorization: Bearer …`.

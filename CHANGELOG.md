@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The MCP `SessionGetPresence` tool answers `observedAt` as an ISO date-time, as `GET /api/sessions/{sessionId}/presence/{chatId}` does, where it answered unix milliseconds.
+- Refuse an MCP tool argument the tool does not name with `Unrecognized key: "x"`, where it was dropped and the call ran without it; the published input schemas now say `additionalProperties: false`.
 - Carry the `code` of an HTTP error, such as `IDEMPOTENCY_KEY_IN_PROGRESS`, in an MCP tool error, which returned only its name and message.
 
 ### Fixed

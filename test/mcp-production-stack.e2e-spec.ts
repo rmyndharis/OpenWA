@@ -98,10 +98,16 @@ describe('MCP behind the production middleware stack (e2e)', () => {
       .set(MCP_HEADERS)
       .set('X-API-Key', operatorKey)
       .send(rpc('tools/list', {}));
-    const tools = reply(res).result?.tools as Array<{ name: string; inputSchema: { properties: object } }>;
+    const tools = reply(res).result?.tools as Array<{
+      name: string;
+      inputSchema: { properties: object; additionalProperties?: boolean };
+    }>;
     const properties = (name: string): string[] =>
       Object.keys(tools.find(t => t.name === name)?.inputSchema.properties ?? {});
 
+    // Every input says it takes no other argument, and the call below holds the server to it.
+    expect(tools.length).toBeGreaterThan(0);
+    expect(tools.every(t => t.inputSchema.additionalProperties === false)).toBe(true);
     expect(properties('MessageSendTemplate')).toContain('linkPreview');
     expect(properties('MessageSendText')).toContain('linkPreview');
     expect(properties('MessageList')).toContain('inlineMedia');
@@ -113,6 +119,15 @@ describe('MCP behind the production middleware stack (e2e)', () => {
     const res = await call(operatorKey, 'SessionFindAll', {});
     expect(res.status).toBe(200);
     expect(JSON.parse(toolText(res))).toEqual(expect.any(Array));
+  });
+
+  it('refuses an argument a tool does not name, in a short answer however long its name is', async () => {
+    const unknown = await call(operatorKey, 'SessionFindAll', { bogus: 1 });
+    expect(toolText(unknown)).toContain('Unrecognized key: "bogus"');
+
+    const long = await call(operatorKey, 'SessionFindAll', { ['k'.repeat(1_000_000)]: 1 });
+    expect(toolText(long)).toContain('Unrecognized key');
+    expect(long.text.length).toBeLessThan(1000);
   });
 
   it('claims a send idempotencyKey in the real store and frees it when the send is refused', async () => {
