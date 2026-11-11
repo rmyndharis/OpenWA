@@ -775,6 +775,18 @@ aside (their device may still be linked). It is torn down locally the same way, 
 no `session_logged_out` audit row is written, and the route returns `409`. Start the session to link
 a device, or delete it; retrying the logout cannot change that.
 
+On Baileys, an unlink also deletes what the gateway stored for the account: its copies of the
+session's messages (`baileys_stored_messages`) and the session's chat states (mute, archive, pin).
+That happens once WhatsApp acknowledges the unlink this route sends, and equally on a
+WhatsApp-initiated unlink: the next account to link the session must not quote or forward the old
+one's messages, nor inherit its chat flags. The `messages` rows are kept, so earlier messages still
+list and search, but a request that needs the stored copy (reply, forward, react, edit, delete,
+star and pin among them) answers `404` `Message <id> not found` for every message from before the
+unlink. Linking the same number again does not bring the copies back: the history WhatsApp then
+replays fills the message list, not the store. The engine logs
+`Cleared the stored messages of an unlinked account` and
+`Cleared the stored chat states of an unlinked account` at that moment.
+
 With `AUTO_START_SESSIONS=true`, auto-start selects sessions whose `phone` is non-null. Both a `200`
 and a `502` logout clear `phone`, and a WhatsApp-initiated unlink reported by a running engine clears
 it the same way, so none of those are auto-started on boot — an incomplete-logout (`502`)
