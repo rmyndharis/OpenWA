@@ -1372,8 +1372,11 @@ export class BaileysLifecycle {
           sessionId,
           error: err instanceof Error ? err.message : String(err),
         });
-    await messageStore?.clearSession(dbSessionId).catch(warn('messages'));
-    await chatStateStore?.clearSession(sessionId).catch(warn('chat states'));
+    // Logged when it completes too: nothing else dates the moment earlier messages stopped answering a reply.
+    const cleared = (what: string) => (): void =>
+      this.host.logger.log(`Cleared the stored ${what} of an unlinked account`, { sessionId });
+    await messageStore?.clearSession(dbSessionId).then(cleared('messages'), warn('messages'));
+    await chatStateStore?.clearSession(sessionId).then(cleared('chat states'), warn('chat states'));
   }
 
   /**

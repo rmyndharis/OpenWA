@@ -6055,6 +6055,19 @@ describe('BaileysAdapter store-backed ops', () => {
         rmSpy.mockRestore();
       }
     });
+
+    // The moment the copies go is the moment earlier messages stop answering a reply or a forward.
+    it('logs a completed clear, and not the one that failed', async () => {
+      const adapter = await linked(); // the chat states clear rejects, the messages clear resolves
+      const log = jest
+        .spyOn((adapter as unknown as { logger: { log: (m: string, ctx?: unknown) => void } }).logger, 'log')
+        .mockImplementation(() => undefined);
+
+      await expect(adapter.logout()).resolves.toBeUndefined();
+
+      expect(log).toHaveBeenCalledWith('Cleared the stored messages of an unlinked account', { sessionId: 'sess-1' });
+      expect(log).not.toHaveBeenCalledWith('Cleared the stored chat states of an unlinked account', expect.anything());
+    });
   });
 });
 
