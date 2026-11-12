@@ -49,7 +49,9 @@
     "refresh": "रीफ़्रेश करें",
     "errorGeneric": "एक त्रुटि हुई",
     "unknownError": "अज्ञात त्रुटि",
-    "retry": "पुनः प्रयास करें"
+    "retry": "पुनः प्रयास करें",
+    "maximize": "बड़ा करें",
+    "restore": "पुनर्स्थापित करें"
   },
   "theme": {
     "light": "लाइट",
@@ -82,7 +84,9 @@
       "callVideo": "वीडियो कॉल",
       "callVideoMissed": "मिस्ड वीडियो कॉल",
       "omitted": "मीडिया",
-      "image": "छवि"
+      "image": "छवि",
+      "preview": "पूर्वावलोकन",
+      "openInNewTab": "नए टैब में खोलें"
     },
     "subtitle": "वास्तविक समय में WhatsApp संदेश भेजें और उत्तर दें",
     "noSessionsTitle": "कोई जुड़ा हुआ सत्र नहीं",

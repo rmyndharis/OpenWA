@@ -49,7 +49,9 @@
     "refresh": "새로고침",
     "errorGeneric": "오류가 발생했습니다",
     "unknownError": "알 수 없는 오류",
-    "retry": "다시 시도"
+    "retry": "다시 시도",
+    "maximize": "최대화",
+    "restore": "이전 크기로"
   },
   "theme": {
     "light": "라이트",
@@ -82,7 +84,9 @@
       "callVideo": "영상 통화",
       "callVideoMissed": "부재중 영상 통화",
       "omitted": "미디어",
-      "image": "이미지"
+      "image": "이미지",
+      "preview": "미리보기",
+      "openInNewTab": "새 탭에서 열기"
     },
     "subtitle": "실시간으로 WhatsApp 메시지를 보내고 답장하세요",
     "noSessionsTitle": "연결된 세션 없음",

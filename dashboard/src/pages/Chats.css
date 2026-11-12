@@ -2567,22 +2567,139 @@
 
 .chats-page .chat-document-media {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding-block: 0.625rem;
-  padding-inline: 0.75rem;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
   margin-bottom: 0.5rem;
   background: color-mix(in srgb, var(--chat-bubble-text) 6%, transparent);
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--chat-bubble-text);
   text-decoration: none;
   font-size: 0.875rem;
   font-weight: 500;
-  word-break: break-all;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--chat-bubble-text) 8%, transparent);
+  box-sizing: border-box;
 }
 
 .chats-page .chat-document-media:hover {
   background: color-mix(in srgb, var(--chat-bubble-text) 10%, transparent);
+}
+
+.chats-page .message-media-omitted.chat-document-card,
+.chats-page .message-media-omitted:has(.chat-document-card),
+.chats-page .message-media-omitted:has(.chat-document-omitted-content) {
+  text-decoration: none;
+  font-style: normal;
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+.chats-page .chat-document-card-inner {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.chats-page .chat-document-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 220px;
+  max-width: 320px;
+  background: color-mix(in srgb, var(--chat-bubble-text) 6%, transparent);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--chat-bubble-text) 8%, transparent);
+  text-align: start;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.chats-page .chat-document-card:hover {
+  background: color-mix(in srgb, var(--chat-bubble-text) 10%, transparent);
+  border-color: color-mix(in srgb, var(--chat-bubble-text) 16%, transparent);
+}
+
+.chats-page .chat-document-preview-cover {
+  position: relative;
+  width: 100%;
+  height: 105px;
+  background: color-mix(in srgb, var(--chat-bubble-text) 5%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--chat-bubble-text) 8%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.chats-page .chat-document-preview-page {
+  position: relative;
+  width: 68px;
+  height: 86px;
+  background: var(--chat-panel);
+  border-radius: 4px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  padding: 8px 6px;
+  box-sizing: border-box;
+}
+
+.chats-page .chat-document-preview-page-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chats-page .chat-document-preview-page-lines .line {
+  height: 3px;
+  background: color-mix(in srgb, var(--chat-bubble-text) 18%, transparent);
+  border-radius: 2px;
+  width: 100%;
+}
+
+.chats-page .chat-document-preview-page-lines .line.header-line {
+  width: 65%;
+  background: #ef4444;
+  height: 4px;
+}
+
+.chats-page .chat-document-preview-page-lines .line.short {
+  width: 45%;
+}
+
+.chats-page .chat-document-preview-watermark {
+  margin-top: auto;
+  align-self: center;
+  font-size: 10px;
+  font-weight: 800;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+}
+
+.chats-page .chat-document-preview-hover-tag {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #ffffff;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.chats-page .chat-document-media:hover .chat-document-preview-hover-tag,
+.chats-page .message-media-omitted:hover .chat-document-preview-hover-tag {
+  opacity: 1;
 }
 
 .chats-page .chat-document-omitted-content {
@@ -2590,7 +2707,9 @@
   align-items: center;
   gap: 0.625rem;
   width: 100%;
-  text-align: left;
+  padding: 0.5rem 0.625rem;
+  box-sizing: border-box;
+  text-align: start;
 }
 
 .chats-page .chat-document-icon-box {
@@ -2653,17 +2772,16 @@
   align-items: center;
   justify-content: center;
   opacity: 0.8;
-  margin-left: 0.5rem;
+  margin-inline-start: 0.5rem;
 }
 
 /* =============================================================================
    HOVER MENU, REPLIES, REACTIONS, AND DELETIONS
    ============================================================================= */
-/* Laid over the bubble's top corner, not beside it: in flow it would squeeze a full-width bubble on hover. */
+/* Positioned outside the bubble, not on top of it, so it never blocks text, timestamps or media */
 .chats-page .message-actions-menu {
   position: absolute;
-  top: 0.375rem;
-  inset-inline-end: 0.375rem;
+  top: 6px;
   display: none;
   align-items: center;
   gap: 0.125rem;
@@ -2673,6 +2791,34 @@
   padding-block: 2px;
   padding-inline: 4px;
   z-index: 5;
+}
+
+/* Floating outside: to the right of incoming messages, to the left of outgoing messages */
+.chats-page .message-bubble-wrapper.incoming .message-actions-menu {
+  inset-inline-start: calc(100% + 6px);
+  inset-inline-end: auto;
+}
+
+.chats-page .message-bubble-wrapper.outgoing .message-actions-menu {
+  inset-inline-end: calc(100% + 6px);
+  inset-inline-start: auto;
+}
+
+/* Invisible bridge so mouse hover doesn't drop across the 6px gap */
+.chats-page .message-actions-menu::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 12px;
+}
+
+.chats-page .message-bubble-wrapper.incoming .message-actions-menu::before {
+  inset-inline-end: 100%;
+}
+
+.chats-page .message-bubble-wrapper.outgoing .message-actions-menu::before {
+  inset-inline-start: 100%;
 }
 
 .chats-page .message-bubble-container:hover .message-actions-menu,

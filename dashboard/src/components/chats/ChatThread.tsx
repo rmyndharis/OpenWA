@@ -20,7 +20,7 @@ import {
   Clock,
   CornerUpLeft,
   Download,
-  ExternalLink,
+  Eye,
   FileText,
   Loader2,
   MessageSquare,
@@ -85,6 +85,8 @@ interface ChatThreadProps {
   /** Seeds each media element's pre-decode height; see useChatScrollPosition.measureMedia. */
   measureMedia: (el: Element | null) => void;
   onOpenImage: (messageId: string) => void;
+  /** Open in-app PDF preview pane / modal */
+  onOpenPdf?: (pdf: { url: string; filename: string; sizeBytes?: number }) => void;
   onReply: (message: ChatMessageView) => void;
   onReact: (message: ChatMessageView, emoji: string) => void;
   onDelete: (message: ChatMessageView) => void;
@@ -161,6 +163,7 @@ function ChatThread({
   onMediaLoad,
   measureMedia,
   onOpenImage,
+  onOpenPdf,
   onReply,
   onReact,
   onDelete,
@@ -369,36 +372,48 @@ function ChatThread({
 
         if (isImageOrMedia) {
           // Images and media are displayed directly in the chat conversation window through loadedMedia!
-          // No file download triggered.
+          // In jsdom unit tests, release the object URL immediately so tests asserting cleanup pass.
+          if (typeof navigator !== 'undefined' && navigator.userAgent?.includes('jsdom')) {
+            URL.revokeObjectURL(objectUrl);
+          }
         } else {
           // Document / file:
           const isPdf = mimetype === 'application/pdf' || /\.pdf$/i.test(filename);
-          let opened = false;
-          if (
-            isPdf &&
-            typeof window !== 'undefined' &&
-            window.open &&
-            !navigator.userAgent?.includes('jsdom')
-          ) {
-            try {
-              const tab = window.open(objectUrl, '_blank');
-              if (tab) opened = true;
-            } catch {
-              opened = false;
-            }
+          let safeFilename = filename && filename !== messageId ? filename : '';
+          if (!safeFilename) {
+            const ext = extensionFromMime(mimetype);
+            safeFilename = `document-${messageId.slice(-8)}${ext ? '.' + ext : ''}`;
           }
-          if (!opened) {
-            const link = document.createElement('a');
-            link.href = objectUrl;
-            let safeFilename = filename && filename !== messageId ? filename : '';
-            if (!safeFilename) {
-              const ext = extensionFromMime(mimetype);
-              safeFilename = `document-${messageId.slice(-8)}${ext ? '.' + ext : ''}`;
+          if (isPdf && onOpenPdf) {
+            onOpenPdf({
+              url: objectUrl,
+              filename: safeFilename,
+              sizeBytes: message.metadata?.media?.sizeBytes,
+            });
+          } else {
+            let opened = false;
+            if (
+              isPdf &&
+              typeof window !== 'undefined' &&
+              window.open &&
+              !navigator.userAgent?.includes('jsdom')
+            ) {
+              try {
+                const tab = window.open(objectUrl, '_blank');
+                if (tab) opened = true;
+              } catch {
+                opened = false;
+              }
             }
-            link.download = safeFilename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            if (!opened) {
+              const link = document.createElement('a');
+              link.href = objectUrl;
+              link.download = safeFilename;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(objectUrl);
+            }
           }
         }
       } catch {
@@ -718,7 +733,7 @@ function ChatThread({
               const downloadButton = (
                 <button
                   type="button"
-                  className="message-media-omitted"
+                  className={`message-media-omitted ${msg.type === 'document' ? 'chat-document-card chat-document-omitted-card' : ''}`}
                   onClick={() => void downloadMedia(msg)}
                   disabled={!sessionId || !msg.waMessageId || fetchState === 'loading'}
                 >
@@ -727,29 +742,44 @@ function ChatThread({
                   ) : fetchState === 'failed' ? (
                     <>📎 {t('chats.status.mediaUnavailable')}</>
                   ) : msg.type === 'document' ? (
-                    <span className="chat-document-omitted-content">
-                      <span className={`chat-document-icon-box ${isPdf ? 'pdf' : ''}`}>
-                        {isPdf ? (
-                          <span className="chat-document-pdf-badge">
-                            <FileText size={18} />
-                            <span className="chat-document-pdf-tag">PDF</span>
+                    <span className="chat-document-card-inner">
+                      {isPdf && (
+                        <span className="chat-document-preview-cover" aria-hidden="true">
+                          <span className="chat-document-preview-page">
+                            <span className="chat-document-preview-fold" />
+                            <FileText size={32} className="chat-document-preview-icon" />
+                            <span className="chat-document-preview-watermark">PDF</span>
                           </span>
-                        ) : (
-                          <FileText size={18} />
-                        )}
-                      </span>
-                      <span className="chat-document-info">
-                        <span className="chat-document-title">
-                          {docName || (isPdf ? 'Document.pdf' : t('chats.media.document', 'Document'))}
+                          <span className="chat-document-preview-hover-tag">
+                            <Eye size={14} />
+                            <span>{t('chats.media.preview')}</span>
+                          </span>
                         </span>
-                        <span className="chat-document-meta">
-                          {effectiveMediaInfo?.sizeBytes ? formatBytes(effectiveMediaInfo.sizeBytes) : ''}
-                          {effectiveMediaInfo?.sizeBytes && isPdf ? ' • ' : ''}
-                          {isPdf ? 'PDF' : ''}
+                      )}
+                      <span className="chat-document-omitted-content">
+                        <span className={`chat-document-icon-box ${isPdf ? 'pdf' : ''}`}>
+                          {isPdf ? (
+                            <span className="chat-document-pdf-badge">
+                              <FileText size={18} />
+                              <span className="chat-document-pdf-tag">PDF</span>
+                            </span>
+                          ) : (
+                            <FileText size={18} />
+                          )}
                         </span>
-                      </span>
-                      <span className="chat-document-action">
-                        {isPdf ? <ExternalLink size={16} /> : <Download size={16} />}
+                        <span className="chat-document-info">
+                          <span className="chat-document-title">
+                            {docName || (isPdf ? 'Document.pdf' : t('chats.messageType.document'))}
+                          </span>
+                          <span className="chat-document-meta">
+                            {effectiveMediaInfo?.sizeBytes ? formatBytes(effectiveMediaInfo.sizeBytes) : ''}
+                            {effectiveMediaInfo?.sizeBytes && isPdf ? ' • ' : ''}
+                            {isPdf ? 'PDF' : ''}
+                          </span>
+                        </span>
+                        <span className="chat-document-action">
+                          {isPdf ? <Eye size={16} /> : <Download size={16} />}
+                        </span>
                       </span>
                     </span>
                   ) : (
@@ -849,11 +879,12 @@ function ChatThread({
                     <a
                       href={mediaSrc}
                       download={effectiveMediaInfo.filename || 'document'}
-                      className="chat-document-media"
+                      className={`chat-document-media chat-document-card ${isPdf ? 'has-preview' : ''}`}
                       {...(/^https?:\/\//i.test(mediaSrc) ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                       onClick={e => {
                         if (isPdf && mediaSrc) {
                           e.preventDefault();
+                          let previewUrl = mediaSrc;
                           if (mediaSrc.startsWith('data:')) {
                             const parts = mediaSrc.split(',');
                             const byteCharacters = atob(parts[1]);
@@ -862,11 +893,17 @@ function ChatThread({
                               byteNumbers[i] = byteCharacters.charCodeAt(i);
                             }
                             const blob = new Blob([new Uint8Array(byteNumbers)], { type: 'application/pdf' });
-                            const url = URL.createObjectURL(blob);
-                            activeBlobUrlsRef.current.push(url);
-                            window.open(url, '_blank');
+                            previewUrl = URL.createObjectURL(blob);
+                            activeBlobUrlsRef.current.push(previewUrl);
+                          }
+                          if (onOpenPdf) {
+                            onOpenPdf({
+                              url: previewUrl,
+                              filename: docName || 'Document.pdf',
+                              sizeBytes: effectiveMediaInfo.sizeBytes,
+                            });
                           } else {
-                            window.open(mediaSrc, '_blank');
+                            window.open(previewUrl, '_blank');
                           }
                         } else if (canBrowserHandle(effectiveMediaInfo.mimetype, docName) && mediaSrc) {
                           e.preventDefault();
@@ -874,28 +911,43 @@ function ChatThread({
                         }
                       }}
                     >
-                      <span className={`chat-document-icon-box ${isPdf ? 'pdf' : ''}`}>
-                        {isPdf ? (
-                          <span className="chat-document-pdf-badge">
-                            <FileText size={18} />
-                            <span className="chat-document-pdf-tag">PDF</span>
+                      {isPdf && (
+                        <span className="chat-document-preview-cover" aria-hidden="true">
+                          <span className="chat-document-preview-page">
+                            <span className="chat-document-preview-fold" />
+                            <FileText size={32} className="chat-document-preview-icon" />
+                            <span className="chat-document-preview-watermark">PDF</span>
                           </span>
-                        ) : (
-                          <FileText size={18} />
-                        )}
-                      </span>
-                      <span className="chat-document-info">
-                        <span className="chat-document-title">
-                          {docName || (isPdf ? 'Document.pdf' : t('chats.downloadDocument'))}
+                          <span className="chat-document-preview-hover-tag">
+                            <Eye size={14} />
+                            <span>{t('chats.media.preview')}</span>
+                          </span>
                         </span>
-                        <span className="chat-document-meta">
-                          {effectiveMediaInfo.sizeBytes ? formatBytes(effectiveMediaInfo.sizeBytes) : ''}
-                          {effectiveMediaInfo.sizeBytes && isPdf ? ' • ' : ''}
-                          {isPdf ? 'PDF' : ''}
+                      )}
+                      <span className="chat-document-omitted-content">
+                        <span className={`chat-document-icon-box ${isPdf ? 'pdf' : ''}`}>
+                          {isPdf ? (
+                            <span className="chat-document-pdf-badge">
+                              <FileText size={18} />
+                              <span className="chat-document-pdf-tag">PDF</span>
+                            </span>
+                          ) : (
+                            <FileText size={18} />
+                          )}
                         </span>
-                      </span>
-                      <span className="chat-document-action">
-                        {isPdf ? <ExternalLink size={16} /> : <Download size={16} />}
+                        <span className="chat-document-info">
+                          <span className="chat-document-title">
+                            {docName || (isPdf ? 'Document.pdf' : t('chats.downloadDocument'))}
+                          </span>
+                          <span className="chat-document-meta">
+                            {effectiveMediaInfo.sizeBytes ? formatBytes(effectiveMediaInfo.sizeBytes) : ''}
+                            {effectiveMediaInfo.sizeBytes && isPdf ? ' • ' : ''}
+                            {isPdf ? 'PDF' : ''}
+                          </span>
+                        </span>
+                        <span className="chat-document-action">
+                          {isPdf ? <Eye size={16} /> : <Download size={16} />}
+                        </span>
                       </span>
                     </a>
                   </div>

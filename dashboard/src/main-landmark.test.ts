@@ -34,7 +34,7 @@ function mainElements(full: string): number {
 test('only the layout renders a main element', () => {
   const withMain = Object.fromEntries(
     tsxFiles(SRC)
-      .map(full => [full.slice(SRC.length + 1), mainElements(full)] as const)
+      .map(full => [full.slice(SRC.length + 1).replace(/\\/g, '/'), mainElements(full)] as const)
       .filter(([, count]) => count > 0),
   );
   assert.deepEqual(withMain, { 'components/Layout.tsx': 1 });

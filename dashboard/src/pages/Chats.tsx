@@ -93,6 +93,7 @@ import ChatThread from '../components/chats/ChatThread';
 import ChatComposer, { type StagedAttachment } from '../components/chats/ChatComposer';
 import StatusMedia from '../components/chats/StatusMedia';
 import StatusComposeModal from '../components/chats/StatusComposeModal';
+import PdfPreviewPane, { type PdfPreviewData } from '../components/chats/PdfPreviewPane';
 import './Chats.css';
 
 // Quiet window for coalescing mark-as-read RPCs (see markReadCoalescer below).
@@ -256,6 +257,19 @@ export function Chats() {
   const openRoomKey = activeChat ? readKey(selectedSessionId, activeChat.id) : '';
   if (contactInfoFor !== '' && contactInfoFor !== openRoomKey) setContactInfoFor('');
   const showContactInfo = contactInfoFor !== '' && contactInfoFor === openRoomKey;
+  const [pdfPreview, setPdfPreview] = useState<PdfPreviewData | null>(null);
+  const pdfRoomRef = useRef<string>('');
+  if (pdfPreview && pdfRoomRef.current !== openRoomKey) {
+    setPdfPreview(null);
+  }
+  const handleOpenPdf = useCallback(
+    (data: PdfPreviewData) => {
+      setContactInfoFor('');
+      pdfRoomRef.current = openRoomKey;
+      setPdfPreview(data);
+    },
+    [openRoomKey],
+  );
   const contactInfoLabel = activeChat?.isGroup ? t('chats.group.info') : t('chats.contactInfo');
   // Closing the panel unmounts its close button, so focus goes back to the button that toggles it.
   const contactToggleRef = useRef<HTMLButtonElement | null>(null);
@@ -2033,6 +2047,7 @@ export function Chats() {
       if (document.querySelector('[role="dialog"], [role="menu"]')) return;
       if (activeStatusContactId !== null) setActiveStatusContactId(null);
       else if (activeChannel) setActiveChannel(null);
+      else if (pdfPreview) setPdfPreview(null);
       else if (activeChat && showContactInfo) {
         setContactInfoFor('');
         contactToggleRef.current?.focus();
@@ -2043,7 +2058,7 @@ export function Chats() {
     };
     document.addEventListener('keydown', closeOpenViewOnEscape);
     return () => document.removeEventListener('keydown', closeOpenViewOnEscape);
-  }, [activeStatusContactId, activeChannel, activeChat, showContactInfo, showNewChat]);
+  }, [activeStatusContactId, activeChannel, activeChat, showContactInfo, showNewChat, pdfPreview]);
 
   // Image and sticker media items for the lightbox, in render order (an archived sticker opens in its own viewer
   // too, see ArchivedMediaPreview). `getMediaSrc` reconstructs a usable src
@@ -2137,7 +2152,7 @@ export function Chats() {
         <div
           className={`chats-layout ${activeChat || activeChannel || activeStatusGroup ? 'has-active-chat' : ''} ${
             activeChat && showContactInfo ? 'has-contact-info' : ''
-          }`}
+          } ${activeChat && pdfPreview ? 'has-pdf-preview' : ''}`}
         >
           {/* LEFT SIDEBAR: session & chat rooms */}
           <ChatSidebar
@@ -2317,6 +2332,7 @@ export function Chats() {
                     const opened = imageMessages.find(m => m.id === messageId);
                     if (opened) setLightbox(viewedImage(opened));
                   }}
+                  onOpenPdf={handleOpenPdf}
                   onReply={setReplyingTo}
                   onReact={handleReactMessage}
                   onDelete={handleDeleteMessage}
@@ -2443,6 +2459,11 @@ export function Chats() {
               </div>
             )}
           </div>
+
+          {/* In-app PDF side preview pane and modal */}
+          {activeChat && pdfPreview && (
+            <PdfPreviewPane preview={pdfPreview} onClose={() => setPdfPreview(null)} />
+          )}
 
           {/* Contact panel beside the room, toggled from its header. */}
           {activeChat && showContactInfo && (

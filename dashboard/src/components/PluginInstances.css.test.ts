@@ -65,7 +65,7 @@ test('every class the plugin instances tab uses is styled outside another page r
   ];
   // A page root is the first bare class selector of its stylesheet (styles.scope.test.ts relies on the same).
   const roots = stylesheets
-    .filter(f => f.includes('/pages/'))
+    .filter(f => f.replace(/\\/g, '/').includes('/pages/'))
     .map(f => selectorsIn(readFileSync(f, 'utf8')).find(s => /^\.[a-zA-Z][\w-]*$/.test(s)))
     .filter((root): root is string => Boolean(root));
   assert.ok(roots.length >= 10 && roots.includes('.webhooks-page'), `found page roots: ${roots.join(', ')}`);
