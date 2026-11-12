@@ -39,6 +39,8 @@ import {
 import { shouldFetchOlderMessages } from '../../utils/scrollDecision';
 import { keepsSameKey } from '../../utils/authLifecycle';
 import { retryThrottled } from '../../utils/fetchAllPages';
+import { chatTitle } from '../../utils/formatPhone';
+import { pauseOtherMedia } from '../../utils/mediaPlayback';
 import ArchivedMediaPreview, { type ArchivedMediaKind } from './ArchivedMediaPreview';
 import MessageBody from './MessageBody';
 
@@ -328,6 +330,18 @@ function ChatThread({
     };
   }, []);
 
+  const onOpenPdfRef = useRef(onOpenPdf);
+  onOpenPdfRef.current = onOpenPdf;
+
+  const downloadMediaAsFile = useCallback((url: string, filename: string) => {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename || 'document';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, []);
+
   const downloadMedia = useCallback(
     async (message: ChatMessageView) => {
       const messageId = message.waMessageId || message.id;
@@ -345,15 +359,51 @@ function ChatThread({
           [429, 503],
         );
         if (!sameKey()) return;
-        const objectUrl = URL.createObjectURL(blob);
-        activeBlobUrlsRef.current.push(objectUrl);
 
         const filename = message.metadata?.media?.filename || message.body || '';
-        const mimetype = blob.type || message.metadata?.media?.mimetype || '';
+        let mimetype = message.metadata?.media?.mimetype || blob.type || '';
+        if (mimetype === 'application/octet-stream' && message.metadata?.media?.mimetype) {
+          mimetype = message.metadata?.media?.mimetype;
+        }
+
+        // Detect PDF reliably by declared type, filename or magic bytes
+        let isPdf =
+          mimetype === 'application/pdf' ||
+          message.metadata?.media?.mimetype === 'application/pdf' ||
+          /\.pdf$/i.test(filename) ||
+          /\.pdf$/i.test(message.metadata?.media?.filename || '');
+
+        if (!isPdf && blob.size >= 4) {
+          try {
+            const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+            if (head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46) {
+              isPdf = true;
+              mimetype = 'application/pdf';
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        let safeFilename = filename && filename !== messageId ? filename : '';
+        if (!safeFilename) {
+          const ext = isPdf ? 'pdf' : extensionFromMime(mimetype);
+          safeFilename = `document-${messageId.slice(-8)}${ext ? '.' + ext : ''}`;
+        } else if (isPdf && !/\.pdf$/i.test(safeFilename)) {
+          safeFilename = `${safeFilename}.pdf`;
+        }
+
+        // CRITICAL: Ensure PDF blob has type 'application/pdf' so Chrome's PDFium plugin renders it in iframe
+        const finalBlob =
+          isPdf && blob.type !== 'application/pdf'
+            ? new Blob([blob], { type: 'application/pdf' })
+            : blob;
+        const objectUrl = URL.createObjectURL(finalBlob);
+        activeBlobUrlsRef.current.push(objectUrl);
 
         setLoadedMedia(prev => ({
           ...prev,
-          [messageId]: { url: objectUrl, mimetype, filename },
+          [messageId]: { url: objectUrl, mimetype: isPdf ? 'application/pdf' : mimetype, filename: safeFilename },
         }));
 
         setMediaFetch(prev => {
@@ -378,42 +428,16 @@ function ChatThread({
           }
         } else {
           // Document / file:
-          const isPdf = mimetype === 'application/pdf' || /\.pdf$/i.test(filename);
-          let safeFilename = filename && filename !== messageId ? filename : '';
-          if (!safeFilename) {
-            const ext = extensionFromMime(mimetype);
-            safeFilename = `document-${messageId.slice(-8)}${ext ? '.' + ext : ''}`;
-          }
-          if (isPdf && onOpenPdf) {
-            onOpenPdf({
+          if (isPdf && onOpenPdfRef.current) {
+            onOpenPdfRef.current({
               url: objectUrl,
               filename: safeFilename,
-              sizeBytes: message.metadata?.media?.sizeBytes,
+              sizeBytes: message.metadata?.media?.sizeBytes || blob.size,
             });
+          } else if (isPdf) {
+            window.open(objectUrl, '_blank');
           } else {
-            let opened = false;
-            if (
-              isPdf &&
-              typeof window !== 'undefined' &&
-              window.open &&
-              !navigator.userAgent?.includes('jsdom')
-            ) {
-              try {
-                const tab = window.open(objectUrl, '_blank');
-                if (tab) opened = true;
-              } catch {
-                opened = false;
-              }
-            }
-            if (!opened) {
-              const link = document.createElement('a');
-              link.href = objectUrl;
-              link.download = safeFilename;
-              document.body.appendChild(link);
-              link.click();
-              document.body.removeChild(link);
-              URL.revokeObjectURL(objectUrl);
-            }
+            downloadMediaAsFile(objectUrl, safeFilename);
           }
         }
       } catch {
@@ -423,7 +447,7 @@ function ChatThread({
         setMediaFetch(prev => ({ ...prev, [messageId]: 'failed' }));
       }
     },
-    [sessionId, activeChat.id],
+    [sessionId, activeChat.id, downloadMediaAsFile],
   );
 
   const handleClickButton = useCallback(
@@ -728,7 +752,9 @@ function ChatThread({
               const fetchState = msg.waMessageId ? mediaFetch[msg.waMessageId] : undefined;
               const docName = effectiveMediaInfo?.filename || msg.body || '';
               const isPdf =
-                effectiveMediaInfo?.mimetype === 'application/pdf' || /\.pdf$/i.test(docName);
+                effectiveMediaInfo?.mimetype === 'application/pdf' ||
+                msg.metadata?.media?.mimetype === 'application/pdf' ||
+                /\.pdf$/i.test(docName);
 
               const downloadButton = (
                 <button
@@ -800,8 +826,8 @@ function ChatThread({
                     : msg.type === 'audio' || msg.type === 'voice'
                       ? 'audio'
                       : null;
-              const waMessageId = msg.waMessageId;
-              if (effectiveMediaInfo.archived && msg.mediaPath && previewKind && sessionId && waMessageId) {
+              const waMessageId = msg.waMessageId || msg.id;
+              if (previewKind && sessionId && waMessageId) {
                 return (
                   <ArchivedMediaPreview
                     key={`${sessionId}:${activeChat.id}:${waMessageId}`}
@@ -857,6 +883,7 @@ function ChatThread({
                       controls
                       className="chat-video-media"
                       onLoadedData={onMediaLoad}
+                      onPlay={e => pauseOtherMedia(e.currentTarget)}
                     />
                   </div>
                 );
@@ -864,52 +891,64 @@ function ChatThread({
               case 'voice':
                 return (
                   <div className="message-media-audio">
-                    <audio src={mediaSrc} controls className="chat-audio-media" />
+                    <audio
+                      src={mediaSrc}
+                      controls
+                      className="chat-audio-media"
+                      onPlay={e => pauseOtherMedia(e.currentTarget)}
+                    />
                   </div>
                 );
               case 'document':
               default: {
                 const docName = effectiveMediaInfo.filename || msg.body || '';
                 const isPdf =
-                  effectiveMediaInfo.mimetype === 'application/pdf' || /\.pdf$/i.test(docName);
+                  effectiveMediaInfo.mimetype === 'application/pdf' ||
+                  msg.metadata?.media?.mimetype === 'application/pdf' ||
+                  /\.pdf$/i.test(docName);
+                const safeDocName =
+                  docName || (isPdf ? 'Document.pdf' : t('chats.downloadDocument'));
+
+                const openDocumentPreview = (e?: React.SyntheticEvent) => {
+                  e?.preventDefault();
+                  if (isPdf && mediaSrc) {
+                    let previewUrl = mediaSrc;
+                    if (mediaSrc.startsWith('data:')) {
+                      const parts = mediaSrc.split(',');
+                      const byteCharacters = atob(parts[1]);
+                      const byteNumbers = new Array(byteCharacters.length);
+                      for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                      }
+                      const blob = new Blob([new Uint8Array(byteNumbers)], { type: 'application/pdf' });
+                      previewUrl = URL.createObjectURL(blob);
+                      activeBlobUrlsRef.current.push(previewUrl);
+                    }
+                    if (onOpenPdfRef.current) {
+                      onOpenPdfRef.current({
+                        url: previewUrl,
+                        filename: safeDocName,
+                        sizeBytes: effectiveMediaInfo.sizeBytes,
+                      });
+                    } else {
+                      window.open(previewUrl, '_blank');
+                    }
+                  } else if (canBrowserHandle(effectiveMediaInfo.mimetype, docName) && mediaSrc) {
+                    window.open(mediaSrc, '_blank');
+                  } else if (mediaSrc) {
+                    downloadMediaAsFile(mediaSrc, safeDocName);
+                  }
+                };
+
                 return (
                   <div className="message-media-document">
-                    {/* A document sent by URL links off-site, where browsers ignore `download`, so a plain
-                        click would navigate the dashboard away; open it in a new tab instead. */}
+                    {/* For PDFs, clicking the card previews it; the explicit download button handles downloading. */}
                     <a
                       href={mediaSrc}
-                      download={effectiveMediaInfo.filename || 'document'}
+                      download={isPdf ? undefined : safeDocName}
                       className={`chat-document-media chat-document-card ${isPdf ? 'has-preview' : ''}`}
                       {...(/^https?:\/\//i.test(mediaSrc) ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                      onClick={e => {
-                        if (isPdf && mediaSrc) {
-                          e.preventDefault();
-                          let previewUrl = mediaSrc;
-                          if (mediaSrc.startsWith('data:')) {
-                            const parts = mediaSrc.split(',');
-                            const byteCharacters = atob(parts[1]);
-                            const byteNumbers = new Array(byteCharacters.length);
-                            for (let i = 0; i < byteCharacters.length; i++) {
-                              byteNumbers[i] = byteCharacters.charCodeAt(i);
-                            }
-                            const blob = new Blob([new Uint8Array(byteNumbers)], { type: 'application/pdf' });
-                            previewUrl = URL.createObjectURL(blob);
-                            activeBlobUrlsRef.current.push(previewUrl);
-                          }
-                          if (onOpenPdf) {
-                            onOpenPdf({
-                              url: previewUrl,
-                              filename: docName || 'Document.pdf',
-                              sizeBytes: effectiveMediaInfo.sizeBytes,
-                            });
-                          } else {
-                            window.open(previewUrl, '_blank');
-                          }
-                        } else if (canBrowserHandle(effectiveMediaInfo.mimetype, docName) && mediaSrc) {
-                          e.preventDefault();
-                          window.open(mediaSrc, '_blank');
-                        }
-                      }}
+                      onClick={openDocumentPreview}
                     >
                       {isPdf && (
                         <span className="chat-document-preview-cover" aria-hidden="true">
@@ -936,8 +975,8 @@ function ChatThread({
                           )}
                         </span>
                         <span className="chat-document-info">
-                          <span className="chat-document-title">
-                            {docName || (isPdf ? 'Document.pdf' : t('chats.downloadDocument'))}
+                          <span className="chat-document-title" title={safeDocName}>
+                            {safeDocName}
                           </span>
                           <span className="chat-document-meta">
                             {effectiveMediaInfo.sizeBytes ? formatBytes(effectiveMediaInfo.sizeBytes) : ''}
@@ -946,7 +985,31 @@ function ChatThread({
                           </span>
                         </span>
                         <span className="chat-document-action">
-                          {isPdf ? <Eye size={16} /> : <Download size={16} />}
+                          {isPdf ? (
+                            <span
+                              className="chat-document-download-btn"
+                              role="button"
+                              tabIndex={0}
+                              title={t('chats.downloadDocument')}
+                              aria-label={t('chats.downloadDocument')}
+                              onClick={e => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                downloadMediaAsFile(mediaSrc, safeDocName);
+                              }}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  downloadMediaAsFile(mediaSrc, safeDocName);
+                                }
+                              }}
+                            >
+                              <Download size={16} />
+                            </span>
+                          ) : (
+                            <Download size={16} />
+                          )}
                         </span>
                       </span>
                     </a>
@@ -958,7 +1021,6 @@ function ChatThread({
 
           const reactions = msg.metadata?.reactions || {};
           const hasReactions = Object.keys(reactions).length > 0;
-          const isRevoked = msg.type === 'revoked';
           const isEdited = !isRevoked && Boolean(msg.metadata?.edited);
           const isMasked = msg.type === 'masked';
 
@@ -1008,14 +1070,71 @@ function ChatThread({
                     )}
 
                     {/* Quoted message display */}
-                    {msg.metadata?.quotedMessage && (
-                      <div className="message-quote-box">
-                        <MessageBody
-                          text={resolveMentions(msg.metadata.quotedMessage.body, mentionNames)}
-                          className="quote-body"
-                        />
-                      </div>
-                    )}
+                    {msg.metadata?.quotedMessage && (() => {
+                      const qId = msg.metadata.quotedMessage.id;
+                      const quotedTarget = qId
+                        ? messages.find(
+                            m =>
+                              m.id === qId ||
+                              m.waMessageId === qId ||
+                              (m.waMessageId && qId && m.waMessageId.endsWith('_' + qId)) ||
+                              (m.id && qId && m.id.endsWith('_' + qId)),
+                          )
+                        : undefined;
+
+                      const senderName = quotedTarget
+                        ? (quotedTarget.direction === 'outgoing' || quotedTarget.from === 'me'
+                            ? t('chats.you')
+                            : quotedTarget.chatName || (activeChat.isGroup ? quotedTarget.from : chatTitle(activeChat)))
+                        : (msg.direction === 'outgoing' ? chatTitle(activeChat) : t('chats.you'));
+
+                      const typeName = quotedTarget?.type && quotedTarget.type !== 'text'
+                        ? `[${t(`chats.messageType.${quotedTarget.type}`, { defaultValue: quotedTarget.type })}]`
+                        : '';
+
+                      const rawBody =
+                        msg.metadata.quotedMessage.body?.trim() ||
+                        quotedTarget?.body?.trim() ||
+                        typeName ||
+                        t('chats.messageType.unknown', 'Message');
+
+                      const quotedBodyText = resolveMentions(rawBody, mentionNames);
+
+                      const handleQuoteClick = (e: SyntheticEvent) => {
+                        e.stopPropagation();
+                        if (!qId) return;
+                        const container = messagesContainerRef?.current;
+                        if (!container) return;
+                        const targetEl = container.querySelector<HTMLElement>(
+                          `[data-scroll-anchor="${qId}"], [data-wa-message-id="${qId}"], [data-wa-message-id$="_${qId}"], [data-scroll-anchor$="_${qId}"]`,
+                        );
+                        if (targetEl) {
+                          targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          targetEl.classList.add('quote-highlight');
+                          setTimeout(() => {
+                            targetEl.classList.remove('quote-highlight');
+                          }, 1500);
+                        }
+                      };
+
+                      return (
+                        <div
+                          className="message-quote-box"
+                          onClick={handleQuoteClick}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleQuoteClick(e);
+                            }
+                          }}
+                        >
+                          <div className="quote-sender">{senderName}</div>
+                          <MessageBody text={quotedBodyText} className="quote-body" />
+                        </div>
+                      );
+                    })()}
 
                     {renderMedia()}
 

@@ -786,6 +786,7 @@ export class MessageController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'chatId', description: 'Chat ID containing the message' })
   @ApiParam({ name: 'messageId', description: 'WhatsApp message ID whose media to download' })
+  @ApiQuery({ name: 'inline', required: false, description: 'Set to true to serve with Content-Disposition: inline for preview' })
   @ApiResponse({
     status: 200,
     description:
@@ -811,15 +812,14 @@ export class MessageController {
     @Param('sessionId') sessionId: string,
     @Param('chatId') chatId: string,
     @Param('messageId') messageId: string,
+    @Query('inline') inline: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ): Promise<StreamableFile> {
     const { mimetype, ...source } = await this.messageService
       .getChatMedia(sessionId, chatId, messageId)
       .catch(retryAfterWhenBusy(res));
-    // attachment + nosniff together: the mimetype is already reduced to an inert set, and forcing a
-    // download means even a mistake there cannot render as active content on the API origin. The
-    // dashboard renders chat media from the inline copy, so nothing depends on inline display here.
-    return storedFileAttachment(res, source, mimetype);
+    const disposition = inline === 'true' || inline === '1' ? 'inline' : 'attachment';
+    return storedFileAttachment(res, source, mimetype, disposition);
   }
 
   // ========== Delete Message ==========

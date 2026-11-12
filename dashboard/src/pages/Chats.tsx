@@ -19,6 +19,8 @@ import {
   Megaphone,
   CircleDashed,
   AlertCircle,
+  AlertTriangle,
+  Play,
   MessageSquare,
   CircleEllipsis,
   Copy,
@@ -94,6 +96,7 @@ import ChatComposer, { type StagedAttachment } from '../components/chats/ChatCom
 import StatusMedia from '../components/chats/StatusMedia';
 import StatusComposeModal from '../components/chats/StatusComposeModal';
 import PdfPreviewPane, { type PdfPreviewData } from '../components/chats/PdfPreviewPane';
+import { pauseOtherMedia } from '../utils/mediaPlayback';
 import './Chats.css';
 
 // Quiet window for coalescing mark-as-read RPCs (see markReadCoalescer below).
@@ -200,6 +203,17 @@ export function Chats() {
   // socket's refs).
   const selectedSessionRef = useRef(selectedSessionId);
   const [loadingSessions, setLoadingSessions] = useState<boolean>(true);
+
+  // Stop previous media when playing any audio or video in the chats page
+  useEffect(() => {
+    const handlePlayCapture = (e: Event) => {
+      if (e.target instanceof HTMLMediaElement) {
+        pauseOtherMedia(e.target);
+      }
+    };
+    document.addEventListener('play', handlePlayCapture, true);
+    return () => document.removeEventListener('play', handlePlayCapture, true);
+  }, []);
 
   // Chats list
   const [chats, setChats] = useState<Chat[]>([]);
@@ -514,8 +528,8 @@ export function Chats() {
     listedSessionsRef.current = list;
     setSessionsFailure(null);
     setListedSessions(list);
-    const firstReady = list.find(s => s.status === 'ready')?.id ?? '';
-    setSelectedSessionId(selected => (list.some(s => s.id === selected) ? selected : firstReady));
+    const defaultSession = list.find(s => s.status === 'ready')?.id ?? list[0]?.id ?? '';
+    setSelectedSessionId(selected => (list.some(s => s.id === selected) ? selected : defaultSession));
     return list;
   }, []);
   const loadSessions = useCallback(async () => {
@@ -2110,6 +2124,44 @@ export function Chats() {
           </button>
         </div>
       )}
+
+      {/* Session disconnected notification banner */}
+      {selectedSessionId && (() => {
+        const activeSess = listedSessions.find(s => s.id === selectedSessionId);
+        if (!activeSess || activeSess.status === 'ready') return null;
+        return (
+          <div className="chats-session-disconnected-banner" role="alert">
+            <div className="chats-disconnected-info">
+              <AlertTriangle size={18} className="text-amber-500" />
+              <span>
+                {t('chats.sessionDisconnectedNotice', {
+                  name: activeSess.name || activeSess.id,
+                  status: activeSess.status,
+                  defaultValue: `WhatsApp session "${activeSess.name || activeSess.id}" is ${activeSess.status}. Displaying offline chat history from local database.`,
+                })}
+              </span>
+            </div>
+            {canWrite && (
+              <button
+                type="button"
+                className="btn-start-session"
+                onClick={async () => {
+                  try {
+                    await sessionApi.start(activeSess.id);
+                    showSuccessToast(t('sessions.started') || 'Session starting...');
+                    await readSessions();
+                  } catch (e) {
+                    showErrorToast(String(e));
+                  }
+                }}
+              >
+                <Play size={14} />
+                <span>{t('sessions.actions.start') || 'Start Session'}</span>
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       {chatsFailure !== null && !loadingChats && (
         <div className="chats-reconnect-banner" role="alert">

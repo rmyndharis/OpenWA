@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import MediaLightbox from './MediaLightbox';
 import { keepsSameKey } from '../../utils/authLifecycle';
 import { loadArchivedMedia } from '../../utils/archivedMediaLoad';
+import { pauseOtherMedia } from '../../utils/mediaPlayback';
 
 export type ArchivedMediaKind = 'image' | 'video' | 'audio';
 
@@ -183,13 +184,25 @@ function ArchivedMediaPreview({
     case 'video':
       return (
         <div className="message-media-video">
-          <video ref={measureMedia} src={state.url} controls className="chat-video-media" onLoadedData={onMediaLoad} />
+          <video
+            ref={measureMedia}
+            src={state.url}
+            controls
+            className="chat-video-media"
+            onLoadedData={onMediaLoad}
+            onPlay={e => pauseOtherMedia(e.currentTarget)}
+          />
         </div>
       );
     case 'audio':
       return (
         <div className="message-media-audio">
-          <audio src={state.url} controls className="chat-audio-media" />
+          <audio
+            src={state.url}
+            controls
+            className="chat-audio-media"
+            onPlay={e => pauseOtherMedia(e.currentTarget)}
+          />
         </div>
       );
   }

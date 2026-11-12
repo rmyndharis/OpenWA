@@ -2408,16 +2408,35 @@
   background: color-mix(in srgb, var(--chat-bubble-text) 6%, transparent);
   border-inline-start: 4px solid var(--chat-quote-accent);
   border-radius: 6px;
-  padding-block: 0.375rem;
-  padding-inline: 0.625rem;
+  padding-block: 0.3125rem;
+  padding-inline: 0.5rem;
   margin-bottom: 0.375rem;
   font-size: 0.8125rem;
   color: var(--chat-meta);
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 100px;
+  max-width: 100%;
 }
 
 .chats-page .message-bubble.outgoing .message-quote-box {
   border-inline-start-color: #008069;
+}
+
+.chats-page .quote-sender {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--chat-quote-accent, #008069);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+}
+
+.chats-page .message-bubble.outgoing .quote-sender {
+  color: #008069;
 }
 
 .chats-page .quote-body {
@@ -2429,6 +2448,17 @@
      whole text, so a bare 320px cap let a long quote paint past a narrow bubble. */
   max-width: min(320px, 100%);
   width: fit-content;
+  font-size: 0.78125rem;
+  line-height: 1.25;
+}
+
+@keyframes quoteHighlightFlash {
+  0% { background-color: rgba(0, 168, 132, 0.3); }
+  100% { background-color: transparent; }
+}
+
+.chats-page .message-bubble-wrapper.quote-highlight .message-bubble {
+  animation: quoteHighlightFlash 1.5s ease-out;
 }
 
 /* Inbound business prompt buttons (Baileys click-button) */
@@ -2773,6 +2803,187 @@
   justify-content: center;
   opacity: 0.8;
   margin-inline-start: 0.5rem;
+}
+
+.chats-page .chat-document-download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--chat-bubble-text) 8%, transparent);
+  border: none;
+  color: var(--chat-bubble-text);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.chats-page .chat-document-download-btn:hover {
+  background: color-mix(in srgb, var(--chat-bubble-text) 20%, transparent);
+  transform: scale(1.08);
+}
+
+/* =============================================================================
+   PDF PREVIEW PANEL & LIGHTBOX MODAL
+   ============================================================================= */
+.pdf-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  animation: pdfBackdropFade 0.2s ease;
+}
+
+@keyframes pdfBackdropFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.chats-page .pdf-preview-panel {
+  width: 520px;
+  max-width: 50vw;
+  min-width: 360px;
+  height: 100%;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--chat-panel);
+  border-inline-start: 1px solid var(--chat-divider);
+  z-index: 20;
+  box-sizing: border-box;
+  transition: width 0.2s ease;
+}
+
+.chats-page .pdf-preview-panel.maximized {
+  position: fixed;
+  top: 3vh;
+  bottom: 3vh;
+  inset-inline-start: 5vw;
+  inset-inline-end: 5vw;
+  width: 90vw;
+  max-width: none;
+  height: 94vh;
+  z-index: 1001;
+  border-radius: 12px;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--chat-divider);
+  overflow: hidden;
+  animation: pdfModalZoom 0.2s ease;
+}
+
+@keyframes pdfModalZoom {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.chats-page .pdf-preview-header {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-block: 0;
+  padding-inline: 1rem;
+  background: var(--chat-panel-header);
+  border-bottom: 1px solid var(--chat-divider);
+  color: var(--text-primary);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.chats-page .pdf-preview-title-box {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.chats-page .pdf-preview-badge {
+  background: #ea4335;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  padding: 2.5px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.chats-page .pdf-preview-filename {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chats-page .pdf-preview-size {
+  font-size: 0.75rem;
+  color: var(--chat-meta);
+  flex-shrink: 0;
+}
+
+.chats-page .pdf-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+
+.chats-page .pdf-preview-actions .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.chats-page .pdf-preview-actions .icon-btn:hover {
+  background: color-mix(in srgb, var(--chat-bubble-text) 10%, transparent);
+  color: var(--text-primary);
+}
+
+.chats-page .pdf-preview-actions .close-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.chats-page .pdf-preview-body {
+  flex: 1;
+  width: 100%;
+  height: calc(100% - 60px);
+  position: relative;
+  overflow: hidden;
+  background: #525659;
+  display: flex;
+  flex-direction: column;
+}
+
+.chats-page .pdf-preview-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  flex: 1;
+  display: block;
 }
 
 /* =============================================================================
@@ -3462,6 +3673,51 @@
   margin-inline-start: auto;
 }
 
+/* Offline / disconnected session notice banner */
+.chats-page .chats-session-disconnected-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: color-mix(in srgb, #f59e0b 14%, var(--chat-panel-header));
+  border-bottom: 1px solid color-mix(in srgb, #f59e0b 28%, transparent);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.chats-page .chats-disconnected-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.chats-page .chats-session-disconnected-banner .btn-start-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 6px;
+  background: #22c55e;
+  color: #ffffff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease;
+  margin-inline-start: auto;
+}
+
+.chats-page .chats-session-disconnected-banner .btn-start-session:hover {
+  background: #16a34a;
+}
+
 /* =============================================================================
    STATUS COMPOSE MODAL
    ============================================================================= */
@@ -3716,5 +3972,16 @@
 
   .main-content:not(.expanded) .chats-page .contact-info-panel {
     width: 100%;
+  }
+
+  .chats-page .pdf-preview-panel:not(.maximized) {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    inset-inline-start: 0;
+    inset-inline-end: 0;
+    width: 100%;
+    max-width: none;
+    z-index: 30;
   }
 }

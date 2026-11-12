@@ -561,9 +561,10 @@ async function handleIncoming(
       try {
         const quoted = await lookup('quoted message', msg.getQuotedMessage());
         if (quoted) {
+          const rawQuoted = quoted as unknown as { caption?: string; type?: string };
           incomingMessage.quotedMessage = {
             id: quoted.id._serialized,
-            body: quoted.body,
+            body: quoted.body || rawQuoted.caption || (rawQuoted.type && rawQuoted.type !== 'chat' ? `[${rawQuoted.type}]` : ''),
           };
         }
       } catch (error) {

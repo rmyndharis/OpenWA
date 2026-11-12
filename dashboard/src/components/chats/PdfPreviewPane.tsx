@@ -98,11 +98,18 @@ export default function PdfPreviewPane({ preview, onClose }: Props) {
           </div>
         </header>
         <div className="pdf-preview-body">
-          <iframe
-            src={`${preview.url}#toolbar=1&navpanes=0`}
+          <object
+            data={`${preview.url}#toolbar=1&navpanes=0`}
+            type="application/pdf"
             className="pdf-preview-frame"
-            title={preview.filename}
-          />
+            aria-label={preview.filename || 'PDF Preview'}
+          >
+            <iframe
+              src={`${preview.url}#toolbar=1&navpanes=0`}
+              className="pdf-preview-frame"
+              title={preview.filename || 'PDF Preview'}
+            />
+          </object>
         </div>
       </aside>
     </>

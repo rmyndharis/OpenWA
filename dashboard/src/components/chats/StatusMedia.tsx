@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { sessionApi } from '../../services/api';
 import { keepsSameKey } from '../../utils/authLifecycle';
 import { loadArchivedMedia } from '../../utils/archivedMediaLoad';
+import { pauseOtherMedia } from '../../utils/mediaPlayback';
 
 // Status image item. <img src="/api/..."> can't carry the X-API-Key header, so the bytes are
 // fetched via sessionApi (which does) and re-exposed as a local object URL. The URL is revoked on
@@ -51,9 +52,9 @@ function StatusMedia({
 
   if (error) return <span className="status-media-placeholder">{t('chats.status.mediaUnavailable')}</span>;
   if (!src) return null;
-  if (type === 'video') return <video className="channel-media" src={src} controls />;
+  if (type === 'video') return <video className="channel-media" src={src} controls onPlay={e => pauseOtherMedia(e.currentTarget)} />;
   // Voice statuses: the blob is an Ogg/Opus voice note — an <img> would render as a broken image.
-  if (type === 'audio') return <audio className="channel-media" src={src} controls />;
+  if (type === 'audio') return <audio className="channel-media" src={src} controls onPlay={e => pauseOtherMedia(e.currentTarget)} />;
   return <img className="channel-media" src={src} alt="" />;
 }
 

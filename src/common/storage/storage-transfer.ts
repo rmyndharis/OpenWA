@@ -68,8 +68,13 @@ export function retryAfterWhenBusy(res: Response): (error: unknown) => never {
  * media headers and answers the JSON 500 a failed whole-file read used to; one that fails after it
  * cuts the connection, since the status line has gone out and a short body must not pass for the file.
  */
-export function storedFileAttachment(res: Response, source: ExportFileSource, mimetype: string): StreamableFile {
-  res.set({ 'Content-Type': mimetype, 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'attachment' });
+export function storedFileAttachment(
+  res: Response,
+  source: ExportFileSource,
+  mimetype: string,
+  disposition: 'attachment' | 'inline' = 'attachment',
+): StreamableFile {
+  res.set({ 'Content-Type': mimetype, 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': disposition });
   const file = new StreamableFile(source.stream, source.size === undefined ? {} : { length: source.size });
   const cutConnection = file.errorHandler;
   return file.setErrorHandler((error, response) => {

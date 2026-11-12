@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   BadGatewayException,
   HttpException,
@@ -67,7 +69,7 @@ import { HookManager } from '../../core/hooks';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { chatKind, parseWaId } from '../../engine/identity/wa-id';
-import { Message, MessageDirection } from '../message/entities/message.entity';
+import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
 import { phoneKey } from './message-mutation-guard';
 import { ownAccountIds } from '../../engine/adapters/baileys-stored-chat-previews.service';
@@ -1514,13 +1516,131 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    */
   async listChats(id: string, offset?: number): Promise<ChatSummary[]> {
     await this.findOne(id); // Verify session exists
-    const engine = this.requireEngine(id);
+    try {
+      const engine = this.requireEngine(id);
 
-    // Most-recent first. Sorting before the cap means a capped response is the N newest chats (what
-    // clients show first) rather than an arbitrary slice.
-    return this.chatListings.read(id, offset, async () =>
-      [...(await engine.getChats())].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)),
-    );
+      // Most-recent first. Sorting before the cap means a capped response is the N newest chats (what
+      // clients show first) rather than an arbitrary slice.
+      const chats = await this.chatListings.read(id, offset, async () =>
+        [...(await engine.getChats())].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)),
+      );
+
+      // Persist snapshot to disk & DB for offline availability
+      void this.persistChatsSnapshot(id, chats);
+
+      return chats;
+    } catch (error) {
+      // If engine is not started, disconnected or getChats fails, gracefully fall back to local database/cache
+      this.logger.debug?.(`Engine getChats unavailable for ${id}, falling back to database: ${String(error)}`);
+      return this.listChatsFromDatabase(id);
+    }
+  }
+
+  private async persistChatsSnapshot(id: string, chats: ChatSummary[]): Promise<void> {
+    if (!Array.isArray(chats) || chats.length === 0) return;
+    try {
+      const cacheDir = path.join(process.cwd(), 'data');
+      const cachePath = path.join(cacheDir, `chats-cache-${id}.json`);
+      await fs.promises.mkdir(cacheDir, { recursive: true }).catch(() => {});
+      await fs.promises.writeFile(cachePath, JSON.stringify(chats), 'utf8').catch(() => {});
+
+      const session = await this.sessionRepository.findOne({ where: { id } });
+      if (session) {
+        const config = (session.config || {}) as Record<string, unknown>;
+        config.cachedChats = chats;
+        await this.sessionRepository.update(id, { config: config as any }).catch(() => {});
+      }
+
+      for (const c of chats) {
+        if (!c.id) continue;
+        const exists = await this.messageRepository.exists({ where: { sessionId: id, chatId: c.id } });
+        if (!exists && (c.lastMessage || c.timestamp)) {
+          const row = this.messageRepository.create({
+            sessionId: id,
+            waMessageId: `head_${c.id}_${c.timestamp || 0}`,
+            chatId: c.id,
+            chatName: c.name,
+            from: c.id,
+            to: session?.phone || id,
+            body: c.lastMessage || '',
+            type: (c.lastMessageType as string) || 'text',
+            direction: MessageDirection.INCOMING,
+            timestamp: c.timestamp || Math.floor(Date.now() / 1000),
+            status: MessageStatus.SENT,
+            createdAt: new Date((c.timestamp || Math.floor(Date.now() / 1000)) * 1000),
+          });
+          await this.messageRepository.save(row).catch(() => {});
+        } else if (c.name) {
+          await this.messageRepository
+            .update({ sessionId: id, chatId: c.id, chatName: IsNull() }, { chatName: c.name })
+            .catch(() => {});
+        }
+      }
+    } catch (e) {
+      this.logger.debug?.(`Error persisting chats snapshot for session ${id}: ${String(e)}`);
+    }
+  }
+
+  private async listChatsFromDatabase(id: string): Promise<ChatSummary[]> {
+    try {
+      // 1. Try local disk cache file
+      const cachePath = path.join(process.cwd(), 'data', `chats-cache-${id}.json`);
+      try {
+        const fileContent = await fs.promises.readFile(cachePath, 'utf8');
+        const parsed = JSON.parse(fileContent);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch {
+        // Disk cache not present or unreadable, fall through
+      }
+
+      // 2. Try session config in PostgreSQL
+      const session = await this.sessionRepository.findOne({ where: { id } });
+      const cachedFromConfig = (session?.config as Record<string, unknown>)?.cachedChats;
+      if (Array.isArray(cachedFromConfig) && cachedFromConfig.length > 0) {
+        return cachedFromConfig as ChatSummary[];
+      }
+
+      // 3. Fall back to aggregating messages table
+      const rows = await this.messageRepository
+        .createQueryBuilder('m')
+        .select('m.chatId', 'chatId')
+        .addSelect('MAX(m.chatName)', 'chatName')
+        .addSelect('MAX(COALESCE(m.timestamp, 0))', 'maxTimestamp')
+        .where('m.sessionId = :sessionId', { sessionId: id })
+        .groupBy('m.chatId')
+        .orderBy('MAX(COALESCE(m.timestamp, 0))', 'DESC')
+        .limit(1000)
+        .getRawMany();
+
+      return await Promise.all(
+        rows.map(async (r: { chatId: string; chatName?: string; maxTimestamp?: string | number }) => {
+          const lastMsg = await this.messageRepository.findOne({
+            where: { sessionId: id, chatId: r.chatId },
+            order: { timestamp: 'DESC', id: 'DESC' },
+            select: { body: true, type: true, timestamp: true },
+          });
+          const isGroup = r.chatId.endsWith('@g.us');
+          return {
+            id: r.chatId,
+            name: r.chatName || (isGroup ? 'Group' : r.chatId.split('@')[0]),
+            isGroup,
+            kind: chatKind(r.chatId),
+            unreadCount: 0,
+            timestamp: lastMsg?.timestamp ? Number(lastMsg.timestamp) : Number(r.maxTimestamp || 0),
+            lastMessage: lastMsg?.body || '',
+            lastMessageType: lastMsg?.type as any,
+            archived: false,
+            pinned: false,
+            muted: false,
+          };
+        }),
+      );
+    } catch (dbError) {
+      this.logger.warn(`Failed to list chats from database for session ${id}: ${String(dbError)}`);
+      return [];
+    }
   }
 
   async getChats(id: string, opts: ListOptions = {}): Promise<ChatSummary[]> {

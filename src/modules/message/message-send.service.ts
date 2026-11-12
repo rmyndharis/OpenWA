@@ -755,7 +755,11 @@ export class MessageSendService {
           })
           .getOne();
       }
-      return quoted?.body || '';
+      if (quoted) {
+        if (quoted.body && quoted.body.trim()) return quoted.body;
+        if (quoted.type && quoted.type !== 'text') return `[${quoted.type}]`;
+      }
+      return '';
     } catch (err) {
       this.logger.warn(`Failed to resolve quoted message ${quotedMessageId}`, { error: String(err) });
       return '';

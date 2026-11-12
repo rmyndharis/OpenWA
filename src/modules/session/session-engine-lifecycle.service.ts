@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { Injectable, HttpException, HttpStatus, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
@@ -1075,6 +1077,48 @@ export class SessionEngineLifecycle {
         sessionId: id,
         action: 'status_seed_on_ready_disabled',
       });
+    }
+
+    // Best-effort snapshot of chats and recent messages for offline viewing
+    void this.seedChats(id, engine);
+  }
+
+  private async seedChats(id: string, engine: IWhatsAppEngine): Promise<void> {
+    try {
+      if (!this.isLiveEngine(id, engine)) return;
+      if (typeof engine.getChats !== 'function') return;
+      const chats = await engine.getChats();
+      if (!Array.isArray(chats) || chats.length === 0) return;
+
+      const cacheDir = path.join(process.cwd(), 'data');
+      const cachePath = path.join(cacheDir, `chats-cache-${id}.json`);
+      await fs.promises.mkdir(cacheDir, { recursive: true }).catch(() => {});
+      await fs.promises.writeFile(cachePath, JSON.stringify(chats), 'utf8').catch(() => {});
+
+      const session = await this.sessionRepository.findOne({ where: { id } });
+      if (session) {
+        const config = (session.config || {}) as Record<string, unknown>;
+        config.cachedChats = chats;
+        await this.sessionRepository.update(id, { config: config as any }).catch(() => {});
+      }
+
+      // Seed recent history for the first 15 chats in background
+      const topChats = chats.slice(0, 15);
+      for (const chat of topChats) {
+        if (!this.isLiveEngine(id, engine)) break;
+        try {
+          if (typeof engine.getChatHistory === 'function') {
+            const history = await engine.getChatHistory(chat.id, 20, false);
+            if (Array.isArray(history) && history.length > 0) {
+              await this.messages.persistHistoryMessages(id, engine, history);
+            }
+          }
+        } catch {
+          // ignore per-chat history failure
+        }
+      }
+    } catch (err) {
+      this.logger.debug?.(`Failed to seed chats for session ${id}: ${String(err)}`);
     }
   }
 

@@ -1082,7 +1082,7 @@ export const sessionApi = {
   // attachment (Content-Disposition), so callers download it rather than rendering it inline.
   getMessageMediaBlob: (id: string, chatId: string, messageId: string, signal?: AbortSignal) =>
     requestBlob(
-      `/sessions/${id}/messages/${encodeURIComponent(chatId)}/${encodeURIComponent(messageId)}/media`,
+      `/sessions/${id}/messages/${encodeURIComponent(chatId)}/${encodeURIComponent(messageId)}/media?inline=true`,
       signal,
     ),
   getSubscribedChannels: (id: string) => request<Channel[]>(`/sessions/${id}/channels`),

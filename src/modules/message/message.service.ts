@@ -7,12 +7,12 @@ import { MessageProjector } from '../session/message-projector.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
 import { ReplyMessageDto, ClickButtonDto } from './dto/message-actions.dto';
-import { Message } from './entities/message.entity';
+import { Message, MessageDirection } from './entities/message.entity';
 import { HookManager, applySendingGate } from '../../core/hooks';
 import { SendPacingService } from './send-pacing.service';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveJidCandidates as expandJidCandidates } from '../../engine/identity/jid-candidates';
-import { parseWaId } from '../../engine/identity/wa-id';
+import { parseWaId, chatKind } from '../../engine/identity/wa-id';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import { StorageService, isMissingObjectError } from '../../common/storage/storage.service';
@@ -153,12 +153,13 @@ function bareUserDigits(id: string): string[] {
 export const DEFAULT_PIN_DURATION_SECONDS = 86400;
 
 /**
- * Mimetypes an archived chat-media file may be served as. Everything else — documents, and notably
- * `image/svg+xml`, which is scriptable despite the `image/` prefix — is served as inert
- * octet-stream so the media endpoint cannot host active content on the API origin.
+ * Mimetypes an archived chat-media file may be served as. Images, video, audio and PDF documents
+ * are rendered safely by modern browsers with appropriate CSP headers. Scriptable documents like
+ * `image/svg+xml` or `text/html` are served as inert octet-stream so the media endpoint cannot host
+ * active content on the API origin.
  */
 const INERT_MEDIA_MIMETYPE =
-  /^(image\/(jpeg|png|gif|webp|bmp)|video\/(mp4|webm|quicktime|3gpp)|audio\/(mpeg|mp4|ogg|aac|wav|webm))$/;
+  /^(image\/(jpeg|png|gif|webp|bmp)|video\/(mp4|webm|quicktime|3gpp)|audio\/(mpeg|mp4|ogg|aac|wav|webm)|application\/pdf)$/;
 
 /**
  * The declared mimetype's normalized essence when it is safe to echo back, else inert octet-stream.
@@ -673,6 +674,20 @@ export class MessageService implements PluginMessagePort {
         const liveMedia = await engine.downloadMessageMedia(chatId, messageId);
         if (liveMedia && liveMedia.data) {
           const bytes = Buffer.from(liveMedia.data, 'base64');
+          // Cache live-downloaded media to storage so subsequent requests (and offline viewing) succeed
+          try {
+            if (this.storageService) {
+              const mime = liveMedia.mimetype || 'application/octet-stream';
+              const ext = mime.split('/')[1]?.split(';')[0] || 'bin';
+              const key = `chat-media/${sessionId}/${messageId}.${ext}`;
+              await this.storageService.putFile(key, bytes);
+              if (row) {
+                await this.messageRepository.update({ id: row.id }, { mediaPath: key, mediaMimetype: mime });
+              }
+            }
+          } catch (archiveErr) {
+            this.logger.debug?.(`Failed to cache live media: ${String(archiveErr)}`);
+          }
           return {
             stream: Readable.from([bytes]),
             size: bytes.length,
@@ -714,13 +729,49 @@ export class MessageService implements PluginMessagePort {
     deep = false,
     signal?: AbortSignal,
   ) {
-    const engine = this.getEngine(sessionId);
-    const ceiling = deep ? MessageService.MAX_DEEP_CHAT_HISTORY_LIMIT : MessageService.MAX_CHAT_HISTORY_LIMIT;
-    const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), ceiling) : 50;
-    const media = deep ? false : includeMedia;
-    return signal
-      ? engine.getChatHistory(chatId, safeLimit, media, undefined, signal)
-      : engine.getChatHistory(chatId, safeLimit, media);
+    try {
+      const engine = this.getEngine(sessionId);
+      const ceiling = deep ? MessageService.MAX_DEEP_CHAT_HISTORY_LIMIT : MessageService.MAX_CHAT_HISTORY_LIMIT;
+      const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), ceiling) : 50;
+      const media = deep ? false : includeMedia;
+      const history = await (signal
+        ? engine.getChatHistory(chatId, safeLimit, media, undefined, signal)
+        : engine.getChatHistory(chatId, safeLimit, media));
+
+      if (Array.isArray(history) && history.length > 0) {
+        void this.messageProjector
+          .persistHistoryMessages(sessionId, engine, history)
+          .catch(err => this.logger.debug?.(`Failed to persist history: ${String(err)}`));
+      }
+
+      return history;
+    } catch (error) {
+      // Offline fallback: when engine is disconnected, stopped or getChatHistory fails,
+      // load messages from local database instead of failing with HTTP 409
+      this.logger.debug?.(`Engine getChatHistory unavailable for ${sessionId}/${chatId}, reading from DB: ${String(error)}`);
+      const candidates = await this.resolveJidCandidates(chatId);
+      const rows = await this.messageRepository.find({
+        where: { sessionId, chatId: In(candidates) },
+        order: { timestamp: 'DESC', id: 'DESC' },
+        take: limit || 50,
+      });
+
+      return rows.map(r => ({
+        id: r.waMessageId || r.id,
+        from: r.from,
+        to: r.to,
+        chatId: r.chatId,
+        body: r.body || '',
+        type: r.type as any,
+        timestamp: r.timestamp || Math.floor(r.createdAt.getTime() / 1000),
+        fromMe: r.direction === MessageDirection.OUTGOING,
+        isGroup: r.chatId.endsWith('@g.us'),
+        kind: chatKind(r.chatId),
+        isStatusBroadcast: false,
+        contact: r.chatName ? { name: r.chatName } : undefined,
+        media: (r.metadata as any)?.media,
+      }));
+    }
   }
 
   // ========== Delete Message ==========

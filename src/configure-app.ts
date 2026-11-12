@@ -105,7 +105,9 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
           mediaSrc: ["'self'", 'data:', 'blob:', 'https:'],
           connectSrc: ["'self'"],
           fontSrc: ["'self'"],
-          objectSrc: ["'none'"],
+          frameSrc: ["'self'", 'blob:', 'data:'],
+          childSrc: ["'self'", 'blob:', 'data:'],
+          objectSrc: ["'self'", 'blob:', 'data:'],
           // Auto-upgrade HTTP→HTTPS in production, unless CSP_UPGRADE_INSECURE_REQUESTS opts out for an
           // HTTP-only private-network deployment (otherwise the browser forces the dashboard to https). (#611)
           upgradeInsecureRequests: isUpgradeInsecureRequestsEnabled(

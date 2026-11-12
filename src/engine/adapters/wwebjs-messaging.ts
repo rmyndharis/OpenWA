@@ -1314,7 +1314,11 @@ export class WwebjsMessaging {
       if (msg.hasQuotedMsg) {
         try {
           const quoted = await msg.getQuotedMessage();
-          out.quotedMessage = { id: quoted.id._serialized, body: quoted.body };
+          const rawQuoted = quoted as unknown as { caption?: string; type?: string };
+          out.quotedMessage = {
+            id: quoted.id._serialized,
+            body: quoted.body || rawQuoted.caption || (rawQuoted.type && rawQuoted.type !== 'chat' ? `[${rawQuoted.type}]` : ''),
+          };
         } catch (error) {
           this.host.logger.warn(`Failed to resolve quoted message for ${msg.id._serialized}: ${String(error)}`);
         }
