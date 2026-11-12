@@ -25,13 +25,14 @@ export function mapEngineHistoryMessage(h: EngineHistoryMessage): ChatMessage {
     direction: h.fromMe ? 'outgoing' : 'incoming',
     status: 'read',
     timestamp: h.timestamp,
+    mediaPath: HISTORY_MEDIA_TYPES.has(h.type) ? `engine-history/${h.id}` : undefined,
     createdAt: new Date((h.timestamp ?? 0) * 1000).toISOString(),
     metadata: (() => {
       const metadata: ChatMessageView['metadata'] = {};
       if (h.media) {
-        metadata.media = h.media;
+        metadata.media = h.media.data ? h.media : { ...h.media, archived: true };
       } else if (HISTORY_MEDIA_TYPES.has(h.type)) {
-        metadata.media = { mimetype: '', omitted: true };
+        metadata.media = { mimetype: '', omitted: true, archived: true };
       }
       if (h.quotedMessage) metadata.quotedMessage = h.quotedMessage;
       if (h.call) metadata.call = h.call;
@@ -240,7 +241,12 @@ export type MessageMedia = {
 
 export const getMediaSrc = (media?: MessageMedia): string => {
   if (!media || !media.data) return '';
-  if (media.data.startsWith('data:') || media.data.startsWith('http://') || media.data.startsWith('https://')) {
+  if (
+    media.data.startsWith('data:') ||
+    media.data.startsWith('blob:') ||
+    media.data.startsWith('http://') ||
+    media.data.startsWith('https://')
+  ) {
     return media.data;
   }
   return `data:${media.mimetype};base64,${media.data}`;

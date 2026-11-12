@@ -93,6 +93,7 @@ describe('GET /sessions/:sessionId/messages/:chatId/:messageId/media', () => {
   let port: number;
   const archive = { getMedia: jest.fn() };
   const repository = { findOne: jest.fn() };
+  const engines = { get: jest.fn() };
 
   async function start(type: 'local' | 's3'): Promise<void> {
     storage = new StorageService({
@@ -105,7 +106,7 @@ describe('GET /sessions/:sessionId/messages/:chatId/:messageId/media', () => {
     };
     const service = new MessageService(
       repository as never,
-      {} as never,
+      engines as never,
       {} as never,
       {} as never,
       lids as never,
@@ -149,6 +150,8 @@ describe('GET /sessions/:sessionId/messages/:chatId/:messageId/media', () => {
       type: 'video',
       metadata: { media: { mimetype: 'video/mp4', data: INLINE.toString('base64') } },
     });
+    engines.get.mockReset();
+    engines.get.mockReturnValue(undefined);
   });
 
   afterEach(async () => {
@@ -261,5 +264,37 @@ describe('GET /sessions/:sessionId/messages/:chatId/:messageId/media', () => {
       String(INLINE.length),
       INLINE.toString(),
     ]);
+  });
+
+  it('falls back to the live engine when media is missing locally', async () => {
+    archive.getMedia.mockResolvedValue(null);
+    repository.findOne.mockResolvedValue(null);
+    const liveBytes = Buffer.from('live media payload from whatsapp');
+    engines.get.mockReturnValue({
+      downloadMessageMedia: jest.fn().mockResolvedValue({
+        data: liveBytes.toString('base64'),
+        mimetype: 'image/jpeg',
+      }),
+    });
+    await start('local');
+
+    const answer = await get(port, ROUTE);
+
+    expect(answer.status).toBe(200);
+    expect(answer.headers['content-type']).toBe('image/jpeg');
+    expect(answer.body.toString()).toBe(liveBytes.toString());
+  });
+
+  it('answers 404 when neither local store nor live engine has media', async () => {
+    archive.getMedia.mockResolvedValue(null);
+    repository.findOne.mockResolvedValue(null);
+    engines.get.mockReturnValue({
+      downloadMessageMedia: jest.fn().mockResolvedValue(null),
+    });
+    await start('local');
+
+    const answer = await get(port, ROUTE);
+
+    expect(answer.status).toBe(404);
   });
 });

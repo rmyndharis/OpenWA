@@ -645,24 +645,46 @@ export class MessageService implements PluginMessagePort {
       where: { sessionId, chatId: In(chatIds), waMessageId: messageId },
     });
     const inline = (row?.metadata as { media?: { data?: unknown; mimetype?: unknown; omitted?: unknown } })?.media;
+    // A revoked message's media is gone, even on a row cleared before revokes dropped it.
+    if (row?.type === 'revoked') {
+      throw new NotFoundException('No media stored for this message');
+    }
+
     if (
-      // A revoked message's media is gone, even on a row cleared before revokes dropped it.
-      row?.type === 'revoked' ||
-      !inline ||
-      inline.omitted ||
-      typeof inline.data !== 'string' ||
-      !inline.data ||
-      typeof inline.mimetype !== 'string' ||
-      !inline.mimetype ||
+      inline &&
+      !inline.omitted &&
+      typeof inline.data === 'string' &&
+      inline.data &&
+      typeof inline.mimetype === 'string' &&
+      inline.mimetype &&
       // A URL-based send persists the URL STRING as `data` (buildMediaInput: `data: base64 ||
       // dto.url!`) — the bytes were fetched at send time and never stored. Decoding the URL as
       // base64 would serve garbage, so report it as absent. Same discriminator as the send path.
-      /^https?:\/\//i.test(inline.data)
+      !/^https?:\/\//i.test(inline.data)
     ) {
-      throw new NotFoundException('No media stored for this message');
+      const bytes = Buffer.from(inline.data, 'base64');
+      return { stream: Readable.from([bytes]), size: bytes.length, mimetype: inertMimetype(inline.mimetype) };
     }
-    const bytes = Buffer.from(inline.data, 'base64');
-    return { stream: Readable.from([bytes]), size: bytes.length, mimetype: inertMimetype(inline.mimetype) };
+
+    // Fallback: ask the live engine (whatsapp-web.js) to download it live from WhatsApp instead of immediately throwing 404
+    const engine = typeof this.engines?.get === 'function' ? this.engines.get(sessionId) : undefined;
+    if (engine && typeof engine.downloadMessageMedia === 'function') {
+      try {
+        const liveMedia = await engine.downloadMessageMedia(chatId, messageId);
+        if (liveMedia && liveMedia.data) {
+          const bytes = Buffer.from(liveMedia.data, 'base64');
+          return {
+            stream: Readable.from([bytes]),
+            size: bytes.length,
+            mimetype: inertMimetype(liveMedia.mimetype || 'application/octet-stream'),
+          };
+        }
+      } catch (error) {
+        this.logger.debug(`Live media download failed for message ${messageId}: ${String(error)}`);
+      }
+    }
+
+    throw new NotFoundException('No media stored for this message');
   }
 
   /** Maximum messages a single getChatHistory call may request from the engine. */

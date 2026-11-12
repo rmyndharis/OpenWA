@@ -1378,6 +1378,15 @@ export interface MessageOperationsCapability {
 
   /** Remove a message's pin. Unpinning takes no duration — an existing pin's window is irrelevant. */
   unpinMessage(chatId: string, messageId: string): Promise<void>;
+
+  /**
+   * Download a message's media on demand from WhatsApp if available.
+   * Returns base64 data, mimetype, and optional filename, or null if unavailable / not media.
+   */
+  downloadMessageMedia?(
+    chatId: string,
+    messageId: string,
+  ): Promise<{ data: string; mimetype: string; filename?: string } | null>;
 }
 
 /**

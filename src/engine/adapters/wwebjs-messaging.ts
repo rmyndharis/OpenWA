@@ -552,6 +552,34 @@ export class WwebjsMessaging {
    * is false, `quotedMsgOptions` stays empty and the send proceeds unquoted (Injected/Utils.js:
    * 187-195). That one is upstream behaviour we cannot switch off from here.
    */
+  /**
+   * Resolve a message id to its serialized form if it is a bare stanza id (e.g. from an earlier
+   * session or DB row). WhatsApp Web's page scripts require full serialized message ids for quotes
+   * (window.Store.Msg.get).
+   */
+  private async resolveSerializedMessageId(chatId: string, messageId?: string): Promise<string | undefined> {
+    if (!messageId) return undefined;
+    if (SERIALIZED_MESSAGE_ID.test(messageId)) return messageId;
+    if (typeof this.client()?.getChatById !== 'function') return messageId;
+    try {
+      const chat = await this.readBeforeSend('resolveSerializedMessageId', () =>
+        this.client()
+          .getChatById(chatId)
+          .catch(error => recoverGroupChatById(this.host, 'resolveSerializedMessageId', chatId, error)),
+      );
+      if (chat && typeof chat.fetchMessages === 'function') {
+        const messages = await this.readBeforeSend('resolveSerializedMessageId', () => chat.fetchMessages({ limit: 100 }));
+        const found = messages.find(m => m.id?._serialized === messageId || m.id?.id === messageId);
+        if (found) {
+          return readWid(found.id) || messageId;
+        }
+      }
+    } catch {
+      // Fallback to messageId
+    }
+    return messageId;
+  }
+
   private quoteOptions(quotedMessageId?: string): { quotedMessageId?: string; ignoreQuoteErrors?: boolean } {
     return quotedMessageId ? { quotedMessageId, ignoreQuoteErrors: false } : {};
   }
@@ -671,12 +699,13 @@ export class WwebjsMessaging {
     if (options?.customPreview) {
       throw markNothingSent(new EngineNotSupportedError('sendTextMessage(customPreview)'));
     }
+    const resolvedQuotedId = await this.resolveSerializedMessageId(chatId, options?.quotedMessageId);
     const sendOptions: {
       mentions?: string[];
       linkPreview?: boolean;
       quotedMessageId?: string;
       ignoreQuoteErrors?: boolean;
-    } = this.quoteOptions(options?.quotedMessageId);
+    } = this.quoteOptions(resolvedQuotedId);
     if (mentions?.length) sendOptions.mentions = neutralMentions(mentions);
     if (options?.linkPreview === false) sendOptions.linkPreview = false;
 
@@ -686,7 +715,7 @@ export class WwebjsMessaging {
         Object.keys(sendOptions).length
           ? this.client().sendMessage(to, text, sendOptions)
           : this.client().sendMessage(to, text),
-      options?.quotedMessageId,
+      resolvedQuotedId,
     );
     return toMessageResult(msg);
   }
@@ -737,6 +766,7 @@ export class WwebjsMessaging {
     if (extraOptions?.sendMediaAsDocument && !messageMedia.filename) {
       messageMedia.filename = 'file';
     }
+    const resolvedQuotedId = await this.resolveSerializedMessageId(chatId, media.quotedMessageId);
     const msg = await this.sendResolved(
       chatId,
       to =>
@@ -746,9 +776,9 @@ export class WwebjsMessaging {
           // sendAudioAsVoice only for audio, sendMediaAsDocument only for documents;
           // {...undefined} contributes no keys.
           ...extraOptions,
-          ...this.quoteOptions(media.quotedMessageId),
+          ...this.quoteOptions(resolvedQuotedId),
         }),
-      media.quotedMessageId,
+      resolvedQuotedId,
     ).catch((error: unknown) => {
       noteVideoLoadTimeout(this.host, error, messageMedia.mimetype);
       throw error;
@@ -768,10 +798,11 @@ export class WwebjsMessaging {
       name: location.description || '',
       address: location.address || '',
     });
+    const resolvedQuotedId = await this.resolveSerializedMessageId(chatId, location.quotedMessageId);
     const msg = await this.sendResolved(
       chatId,
-      to => this.client().sendMessage(to, loc, this.quoteOptions(location.quotedMessageId)),
-      location.quotedMessageId,
+      to => this.client().sendMessage(to, loc, this.quoteOptions(resolvedQuotedId)),
+      resolvedQuotedId,
     );
     return toMessageResult(msg);
   }
@@ -783,14 +814,15 @@ export class WwebjsMessaging {
     // can't inject extra vCard fields — the previous inline build interpolated raw values.
     const vcard = buildVCard(contact);
 
+    const resolvedQuotedId = await this.resolveSerializedMessageId(chatId, contact.quotedMessageId);
     const msg = await this.sendResolved(
       chatId,
       to =>
         this.client().sendMessage(to, vcard, {
           parseVCards: true,
-          ...this.quoteOptions(contact.quotedMessageId),
+          ...this.quoteOptions(resolvedQuotedId),
         }),
-      contact.quotedMessageId,
+      resolvedQuotedId,
     );
     return toMessageResult(msg);
   }
@@ -817,17 +849,18 @@ export class WwebjsMessaging {
       );
     }
 
+    const resolvedQuotedId = await this.resolveSerializedMessageId(chatId, media.quotedMessageId);
     const msg = await this.sendResolved(
       chatId,
       to =>
         this.client().sendMessage(to, messageMedia, {
           sendMediaAsSticker: true,
-          ...this.quoteOptions(media.quotedMessageId),
+          ...this.quoteOptions(resolvedQuotedId),
           // Same options bag every other media send uses, so the library tags a sticker exactly as it
           // tags an image. Omitted when empty to leave an untagged sticker call unchanged.
           ...(media.mentions?.length ? { mentions: neutralMentions(media.mentions) } : {}),
         }),
-      media.quotedMessageId,
+      resolvedQuotedId,
     );
     return toMessageResult(msg);
   }
@@ -846,15 +879,16 @@ export class WwebjsMessaging {
     // allowMultipleAnswers.
     type PollSendOptions = ConstructorParameters<typeof Poll>[2];
     const pollOptions = { allowMultipleAnswers: poll.allowMultipleAnswers === true } as PollSendOptions;
+    const resolvedQuotedId = await this.resolveSerializedMessageId(chatId, poll.quotedMessageId);
     const msg = await this.sendResolved(
       chatId,
       to =>
         this.client().sendMessage(
           to,
           new Poll(poll.name, poll.options, pollOptions),
-          this.quoteOptions(poll.quotedMessageId),
+          this.quoteOptions(resolvedQuotedId),
         ),
-      poll.quotedMessageId,
+      resolvedQuotedId,
     );
     return toMessageResult(msg);
   }
@@ -873,7 +907,25 @@ export class WwebjsMessaging {
         throw markNothingSent(new MessageNotFoundError(quotedMsgId, chatId));
       }
       const messages = await this.readBeforeSend('replyToMessage', () => chat.fetchMessages({ limit: 100 }));
-      const quotedMsg = messages.find(m => m.id._serialized === quotedMsgId);
+      let quotedMsg = messages.find(m => m.id?._serialized === quotedMsgId || m.id?.id === quotedMsgId);
+
+      if (!quotedMsg && SERIALIZED_MESSAGE_ID.test(quotedMsgId) && typeof this.client().getMessageById === 'function') {
+        try {
+          const found = await this.client().getMessageById(quotedMsgId);
+          if (found) quotedMsg = found;
+        } catch {
+          // Continue
+        }
+      }
+
+      if (!quotedMsg && typeof chat.fetchMessages === 'function') {
+        try {
+          const moreMessages = await this.readBeforeSend('replyToMessage', () => chat.fetchMessages({ limit: 250 }));
+          quotedMsg = moreMessages.find(m => m.id?._serialized === quotedMsgId || m.id?.id === quotedMsgId);
+        } catch {
+          // Continue
+        }
+      }
 
       if (!quotedMsg) {
         throw markNothingSent(new MessageNotFoundError(quotedMsgId));
@@ -910,7 +962,25 @@ export class WwebjsMessaging {
         throw markNothingSent(new MessageNotFoundError(messageId, fromChatId));
       }
       const messages = await this.readBeforeSend('forwardMessage', () => chat.fetchMessages({ limit: 100 }));
-      const msgToForward = messages.find(m => m.id._serialized === messageId);
+      let msgToForward = messages.find(m => m.id?._serialized === messageId || m.id?.id === messageId);
+
+      if (!msgToForward && SERIALIZED_MESSAGE_ID.test(messageId) && typeof this.client().getMessageById === 'function') {
+        try {
+          const found = await this.client().getMessageById(messageId);
+          if (found) msgToForward = found;
+        } catch {
+          // Continue
+        }
+      }
+
+      if (!msgToForward && typeof chat.fetchMessages === 'function') {
+        try {
+          const moreMessages = await this.readBeforeSend('forwardMessage', () => chat.fetchMessages({ limit: 250 }));
+          msgToForward = moreMessages.find(m => m.id?._serialized === messageId || m.id?.id === messageId);
+        } catch {
+          // Continue
+        }
+      }
 
       if (!msgToForward) {
         throw markNothingSent(new MessageNotFoundError(messageId));
@@ -1016,7 +1086,15 @@ export class WwebjsMessaging {
         throw new MessageNotFoundError(messageId, chatId);
       }
       const messages = await chat.fetchMessages({ limit: 100 });
-      const message = messages.find(m => m.id._serialized === messageId);
+      let message = messages.find(m => m.id?._serialized === messageId || m.id?.id === messageId);
+      if (!message && SERIALIZED_MESSAGE_ID.test(messageId) && typeof this.client().getMessageById === 'function') {
+        try {
+          const found = await this.client().getMessageById(messageId);
+          if (found) message = found;
+        } catch {
+          // Continue
+        }
+      }
       if (!message) {
         throw new MessageNotFoundError(messageId, chatId);
       }
@@ -1038,7 +1116,15 @@ export class WwebjsMessaging {
         throw new MessageNotFoundError(messageId, chatId);
       }
       const messages = await chat.fetchMessages({ limit: 100 });
-      const message = messages.find(m => m.id._serialized === messageId);
+      let message = messages.find(m => m.id?._serialized === messageId || m.id?.id === messageId);
+      if (!message && SERIALIZED_MESSAGE_ID.test(messageId) && typeof this.client().getMessageById === 'function') {
+        try {
+          const found = await this.client().getMessageById(messageId);
+          if (found) message = found;
+        } catch {
+          // Continue
+        }
+      }
       if (!message) {
         throw new MessageNotFoundError(messageId, chatId);
       }
@@ -1072,11 +1158,15 @@ export class WwebjsMessaging {
    */
   async getMessageReceipts(chatId: string, messageId: string): Promise<MessageReceipts> {
     this.host.ensureReady();
+    let resolvedId = messageId;
+    if (!SERIALIZED_MESSAGE_ID.test(messageId)) {
+      resolvedId = (await this.resolveSerializedMessageId(chatId, messageId)) || messageId;
+    }
     // getMessageById throws an unnamed page error (a 500) for anything but a full serialized id, so any other
     // shape is answered here, without a page call: no message has one.
-    if (!SERIALIZED_MESSAGE_ID.test(messageId)) throw new MessageNotFoundError(messageId, chatId);
+    if (!SERIALIZED_MESSAGE_ID.test(resolvedId)) throw new MessageNotFoundError(messageId, chatId);
     const info = await this.withPage('getMessageReceipts', async () => {
-      const message = await this.client().getMessageById(messageId);
+      const message = await this.client().getMessageById(resolvedId);
       if (!message || !(await this.isInChat(message, chatId))) {
         throw new MessageNotFoundError(messageId, chatId);
       }
@@ -1229,8 +1319,8 @@ export class WwebjsMessaging {
           this.host.logger.warn(`Failed to resolve quoted message for ${msg.id._serialized}: ${String(error)}`);
         }
       }
-      if (includeMedia && msg.hasMedia) {
-        if (mediaBudget <= 0) {
+      if (msg.hasMedia) {
+        if (!includeMedia || mediaBudget <= 0) {
           out.media = declaredOnlyMedia(msg);
         } else {
           try {
@@ -1423,5 +1513,72 @@ export class WwebjsMessaging {
       throw new EngineRefusedError(`the unpin of message ${messageId} was rejected — in a group only admins may unpin`);
     }
     this.host.logger.debug('Unpinned message', { chatId, messageId });
+  }
+
+  async downloadMessageMedia(
+    chatId: string,
+    messageId: string,
+  ): Promise<{ data: string; mimetype: string; filename?: string } | null> {
+    this.host.ensureReady();
+    return this.withPage('downloadMessageMedia', async () => {
+      let message: Message | undefined;
+
+      // 1. If it's a full serialized id, try getMessageById
+      if (SERIALIZED_MESSAGE_ID.test(messageId)) {
+        try {
+          const found = await this.client().getMessageById(messageId);
+          if (found) {
+            message = found;
+          }
+        } catch {
+          // getMessageById may throw if not found or page error
+        }
+      }
+
+      // 2. If not found yet, fetch recent messages in the chat
+      let resolvedId = messageId;
+      if (!message) {
+        try {
+          const chat = await this.client()
+            .getChatById(chatId)
+            .catch(error => recoverGroupChatById(this.host, 'downloadMessageMedia', chatId, error));
+          if (chat) {
+            const messages = await chat.fetchMessages({ limit: 100 });
+            message = messages.find(m => m.id?._serialized === messageId || m.id?.id === messageId);
+          }
+        } catch {
+          // Continue
+        }
+      }
+
+      if (message) {
+        resolvedId = readWid(message.id) ?? messageId;
+      }
+
+      const clientAny = this.client() as unknown as {
+        pupPage?: { evaluate: <T, A>(fn: (arg: A) => Promise<T>, arg: A) => Promise<T> };
+      };
+      if (!clientAny?.pupPage) return null;
+
+      const maxBytes = inboundMediaMaxBytes();
+      try {
+        const download = await clientAny.pupPage.evaluate(downloadMediaInPage, {
+          msgId: resolvedId,
+          maxBytes,
+        });
+
+        if (download && download.data) {
+          return {
+            data: download.data,
+            mimetype: download.mimetype || 'application/octet-stream',
+            filename: download.filename,
+          };
+        }
+      } catch (err) {
+        this.host.logger.warn(`downloadMessageMedia failed in page for ${resolvedId}: ${String(err)}`);
+      }
+
+      return null;
+    });
   }
 }

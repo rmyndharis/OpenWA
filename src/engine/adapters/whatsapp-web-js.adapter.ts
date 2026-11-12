@@ -760,6 +760,13 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
     return this.messaging.editMessage(chatId, messageId, body, mentions);
   }
 
+  downloadMessageMedia(
+    chatId: string,
+    messageId: string,
+  ): Promise<{ data: string; mimetype: string; filename?: string } | null> {
+    return this.messaging.downloadMessageMedia(chatId, messageId);
+  }
+
   // Get Profile Picture
   getProfilePicture(contactId: string): Promise<string | null> {
     return this.contacts.getProfilePicture(contactId);

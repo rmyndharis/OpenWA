@@ -19,6 +19,9 @@ import {
   ChevronDown,
   Clock,
   CornerUpLeft,
+  Download,
+  ExternalLink,
+  FileText,
   Loader2,
   MessageSquare,
   Smile,
@@ -104,6 +107,46 @@ const POINTER_FOCUS_WINDOW_MS = 1000;
 /** The WhatsApp id of the message a bubble belongs to, which outlives the key React gives its element. */
 const waIdOf = (element: HTMLElement): string | null =>
   element.closest('[data-wa-message-id]')?.getAttribute('data-wa-message-id') ?? null;
+
+function canBrowserHandle(mimetype?: string, filename?: string): boolean {
+  const mime = (mimetype || '').toLowerCase();
+  const name = (filename || '').toLowerCase();
+  return (
+    mime === 'application/pdf' ||
+    name.endsWith('.pdf') ||
+    mime.startsWith('image/') ||
+    mime.startsWith('video/') ||
+    mime.startsWith('audio/') ||
+    mime === 'text/plain'
+  );
+}
+
+function extensionFromMime(mimetype?: string): string {
+  if (!mimetype) return '';
+  const map: Record<string, string> = {
+    'application/pdf': 'pdf',
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'video/mp4': 'mp4',
+    'audio/mpeg': 'mp3',
+    'audio/ogg': 'ogg',
+    'audio/wav': 'wav',
+    'text/plain': 'txt',
+    'application/zip': 'zip',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  };
+  return map[mimetype.toLowerCase()] || mimetype.split('/')[1]?.split(';')[0] || '';
+}
+
+function formatBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function ChatThread({
   sessionId,
@@ -271,12 +314,22 @@ function ChatThread({
   const [buttonClick, setButtonClick] = useState<
     Record<string, { loadingId?: string; done?: boolean; selectedId?: string }>
   >({});
+  const [loadedMedia, setLoadedMedia] = useState<
+    Record<string, { url: string; mimetype: string; filename?: string }>
+  >({});
+  const activeBlobUrlsRef = useRef<string[]>([]);
+  useEffect(() => {
+    return () => {
+      activeBlobUrlsRef.current.forEach(u => URL.revokeObjectURL(u));
+      activeBlobUrlsRef.current = [];
+    };
+  }, []);
+
   const downloadMedia = useCallback(
     async (message: ChatMessageView) => {
-      const messageId = message.waMessageId;
+      const messageId = message.waMessageId || message.id;
       if (!sessionId || !messageId) return;
       setMediaFetch(prev => ({ ...prev, [messageId]: 'loading' }));
-      let objectUrl: string | null = null;
       const sameKey = keepsSameKey();
       try {
         // A 429 and the 503 of a full S3 download pool are refusals to try again, as the archived previews do.
@@ -289,25 +342,70 @@ function ChatThread({
           [429, 503],
         );
         if (!sameKey()) return;
-        objectUrl = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = objectUrl;
-        // The stored filename when there is one; the message id is a unique fallback that keeps two
-        // downloads from the same thread apart.
-        link.download = message.metadata?.media?.filename || messageId;
-        link.click();
+        const objectUrl = URL.createObjectURL(blob);
+        activeBlobUrlsRef.current.push(objectUrl);
+
+        const filename = message.metadata?.media?.filename || message.body || '';
+        const mimetype = blob.type || message.metadata?.media?.mimetype || '';
+
+        setLoadedMedia(prev => ({
+          ...prev,
+          [messageId]: { url: objectUrl, mimetype, filename },
+        }));
+
         setMediaFetch(prev => {
           const next = { ...prev };
           delete next[messageId];
           return next;
         });
+
+        const msgType = message.type;
+        const isImageOrMedia =
+          msgType === 'image' ||
+          msgType === 'sticker' ||
+          msgType === 'video' ||
+          msgType === 'audio' ||
+          msgType === 'voice';
+
+        if (isImageOrMedia) {
+          // Images and media are displayed directly in the chat conversation window through loadedMedia!
+          // No file download triggered.
+        } else {
+          // Document / file:
+          const isPdf = mimetype === 'application/pdf' || /\.pdf$/i.test(filename);
+          let opened = false;
+          if (
+            isPdf &&
+            typeof window !== 'undefined' &&
+            window.open &&
+            !navigator.userAgent?.includes('jsdom')
+          ) {
+            try {
+              const tab = window.open(objectUrl, '_blank');
+              if (tab) opened = true;
+            } catch {
+              opened = false;
+            }
+          }
+          if (!opened) {
+            const link = document.createElement('a');
+            link.href = objectUrl;
+            let safeFilename = filename && filename !== messageId ? filename : '';
+            if (!safeFilename) {
+              const ext = extensionFromMime(mimetype);
+              safeFilename = `document-${messageId.slice(-8)}${ext ? '.' + ext : ''}`;
+            }
+            link.download = safeFilename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          }
+        }
       } catch {
         if (!sameKey()) return;
         // 404 covers every "there are no bytes" case the route documents (URL-based send, media
         // download disabled, over the inbound cap). Say so on the bubble rather than failing mutely.
         setMediaFetch(prev => ({ ...prev, [messageId]: 'failed' }));
-      } finally {
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
       }
     },
     [sessionId, activeChat.id],
@@ -596,10 +694,27 @@ function ChatThread({
               );
             }
             if (!mediaInfo) return null;
-            if (mediaInfo.omitted) {
+            const loaded =
+              (msg.waMessageId ? loadedMedia[msg.waMessageId] : undefined) ||
+              (msg.id ? loadedMedia[msg.id] : undefined);
+            const effectiveMediaInfo = loaded
+              ? {
+                  ...mediaInfo,
+                  data: loaded.url,
+                  mimetype: loaded.mimetype || mediaInfo.mimetype,
+                  filename: loaded.filename || mediaInfo.filename,
+                  omitted: false,
+                }
+              : mediaInfo;
+
+            if (effectiveMediaInfo.omitted) {
               // Not a plain label: the bytes exist behind the per-message media route, so this is the
               // only handle the viewer has on them.
               const fetchState = msg.waMessageId ? mediaFetch[msg.waMessageId] : undefined;
+              const docName = effectiveMediaInfo?.filename || msg.body || '';
+              const isPdf =
+                effectiveMediaInfo?.mimetype === 'application/pdf' || /\.pdf$/i.test(docName);
+
               const downloadButton = (
                 <button
                   type="button"
@@ -609,8 +724,36 @@ function ChatThread({
                 >
                   {fetchState === 'loading' ? (
                     <Loader2 size={14} className="animate-spin" />
+                  ) : fetchState === 'failed' ? (
+                    <>📎 {t('chats.status.mediaUnavailable')}</>
+                  ) : msg.type === 'document' ? (
+                    <span className="chat-document-omitted-content">
+                      <span className={`chat-document-icon-box ${isPdf ? 'pdf' : ''}`}>
+                        {isPdf ? (
+                          <span className="chat-document-pdf-badge">
+                            <FileText size={18} />
+                            <span className="chat-document-pdf-tag">PDF</span>
+                          </span>
+                        ) : (
+                          <FileText size={18} />
+                        )}
+                      </span>
+                      <span className="chat-document-info">
+                        <span className="chat-document-title">
+                          {docName || (isPdf ? 'Document.pdf' : t('chats.media.document', 'Document'))}
+                        </span>
+                        <span className="chat-document-meta">
+                          {effectiveMediaInfo?.sizeBytes ? formatBytes(effectiveMediaInfo.sizeBytes) : ''}
+                          {effectiveMediaInfo?.sizeBytes && isPdf ? ' • ' : ''}
+                          {isPdf ? 'PDF' : ''}
+                        </span>
+                      </span>
+                      <span className="chat-document-action">
+                        {isPdf ? <ExternalLink size={16} /> : <Download size={16} />}
+                      </span>
+                    </span>
                   ) : (
-                    <>📎 {t(fetchState === 'failed' ? 'chats.status.mediaUnavailable' : 'chats.media.omitted')}</>
+                    <>📎 {t('chats.media.omitted')}</>
                   )}
                 </button>
               );
@@ -628,14 +771,14 @@ function ChatThread({
                       ? 'audio'
                       : null;
               const waMessageId = msg.waMessageId;
-              if (mediaInfo.archived && msg.mediaPath && previewKind && sessionId && waMessageId) {
+              if (effectiveMediaInfo.archived && msg.mediaPath && previewKind && sessionId && waMessageId) {
                 return (
                   <ArchivedMediaPreview
                     key={`${sessionId}:${activeChat.id}:${waMessageId}`}
                     kind={previewKind}
                     load={signal => sessionApi.getMessageMediaBlob(sessionId, activeChat.id, waMessageId, signal)}
-                    alt={mediaInfo.filename || t('chats.media.image')}
-                    filename={mediaInfo.filename}
+                    alt={effectiveMediaInfo.filename || t('chats.media.image')}
+                    filename={effectiveMediaInfo.filename}
                     id={msg.id}
                     scrollRootRef={messagesContainerRef}
                     fallback={downloadButton}
@@ -646,7 +789,7 @@ function ChatThread({
               }
               return downloadButton;
             }
-            const mediaSrc = getMediaSrc(mediaInfo);
+            const mediaSrc = getMediaSrc(effectiveMediaInfo);
             if (!mediaSrc) return null;
 
             switch (msg.type) {
@@ -658,7 +801,7 @@ function ChatThread({
                   <div className="message-media-image">
                     <img
                       src={mediaSrc}
-                      alt={mediaInfo.filename || t('chats.media.image')}
+                      alt={effectiveMediaInfo.filename || t('chats.media.image')}
                       className="chat-image-media"
                       ref={measureMedia}
                       onLoad={onMediaLoad}
@@ -695,21 +838,69 @@ function ChatThread({
                   </div>
                 );
               case 'document':
-              default:
+              default: {
+                const docName = effectiveMediaInfo.filename || msg.body || '';
+                const isPdf =
+                  effectiveMediaInfo.mimetype === 'application/pdf' || /\.pdf$/i.test(docName);
                 return (
                   <div className="message-media-document">
                     {/* A document sent by URL links off-site, where browsers ignore `download`, so a plain
                         click would navigate the dashboard away; open it in a new tab instead. */}
                     <a
                       href={mediaSrc}
-                      download={mediaInfo.filename || 'document'}
+                      download={effectiveMediaInfo.filename || 'document'}
                       className="chat-document-media"
                       {...(/^https?:\/\//i.test(mediaSrc) ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                      onClick={e => {
+                        if (isPdf && mediaSrc) {
+                          e.preventDefault();
+                          if (mediaSrc.startsWith('data:')) {
+                            const parts = mediaSrc.split(',');
+                            const byteCharacters = atob(parts[1]);
+                            const byteNumbers = new Array(byteCharacters.length);
+                            for (let i = 0; i < byteCharacters.length; i++) {
+                              byteNumbers[i] = byteCharacters.charCodeAt(i);
+                            }
+                            const blob = new Blob([new Uint8Array(byteNumbers)], { type: 'application/pdf' });
+                            const url = URL.createObjectURL(blob);
+                            activeBlobUrlsRef.current.push(url);
+                            window.open(url, '_blank');
+                          } else {
+                            window.open(mediaSrc, '_blank');
+                          }
+                        } else if (canBrowserHandle(effectiveMediaInfo.mimetype, docName) && mediaSrc) {
+                          e.preventDefault();
+                          window.open(mediaSrc, '_blank');
+                        }
+                      }}
                     >
-                      📎 {mediaInfo.filename || t('chats.downloadDocument')}
+                      <span className={`chat-document-icon-box ${isPdf ? 'pdf' : ''}`}>
+                        {isPdf ? (
+                          <span className="chat-document-pdf-badge">
+                            <FileText size={18} />
+                            <span className="chat-document-pdf-tag">PDF</span>
+                          </span>
+                        ) : (
+                          <FileText size={18} />
+                        )}
+                      </span>
+                      <span className="chat-document-info">
+                        <span className="chat-document-title">
+                          {docName || (isPdf ? 'Document.pdf' : t('chats.downloadDocument'))}
+                        </span>
+                        <span className="chat-document-meta">
+                          {effectiveMediaInfo.sizeBytes ? formatBytes(effectiveMediaInfo.sizeBytes) : ''}
+                          {effectiveMediaInfo.sizeBytes && isPdf ? ' • ' : ''}
+                          {isPdf ? 'PDF' : ''}
+                        </span>
+                      </span>
+                      <span className="chat-document-action">
+                        {isPdf ? <ExternalLink size={16} /> : <Download size={16} />}
+                      </span>
                     </a>
                   </div>
                 );
+              }
             }
           };
 

@@ -2585,6 +2585,77 @@
   background: color-mix(in srgb, var(--chat-bubble-text) 10%, transparent);
 }
 
+.chats-page .chat-document-omitted-content {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  text-align: left;
+}
+
+.chats-page .chat-document-icon-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--chat-bubble-text) 12%, transparent);
+  color: var(--chat-bubble-text);
+}
+
+.chats-page .chat-document-icon-box.pdf {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.chats-page .chat-document-pdf-badge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.chats-page .chat-document-pdf-tag {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin-top: 1px;
+}
+
+.chats-page .chat-document-info {
+  display: inline-flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.chats-page .chat-document-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--chat-bubble-text);
+}
+
+.chats-page .chat-document-meta {
+  font-size: 0.725rem;
+  opacity: 0.75;
+  margin-top: 2px;
+}
+
+.chats-page .chat-document-action {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+  margin-left: 0.5rem;
+}
+
 /* =============================================================================
    HOVER MENU, REPLIES, REACTIONS, AND DELETIONS
    ============================================================================= */

@@ -725,11 +725,36 @@ export class MessageSendService {
       if (inFlight && (!chatId || inFlight.chatId === chatId || expanded.includes(inFlight.chatId))) {
         return typeof inFlight.body === 'string' ? inFlight.body : '';
       }
-      const quoted = await this.messageRepository.findOne({
+      let quoted = await this.messageRepository.findOne({
         where: chatId
           ? { sessionId, chatId: In([...new Set([chatId, ...expanded])]), waMessageId: quotedMessageId }
           : { sessionId, waMessageId: quotedMessageId },
       });
+      if (!quoted && quotedMessageId.includes('_')) {
+        const parts = quotedMessageId.split('_');
+        const stanzaId = parts[2];
+        if (stanzaId) {
+          quoted = await this.messageRepository.findOne({
+            where: chatId
+              ? { sessionId, chatId: In([...new Set([chatId, ...expanded])]), waMessageId: stanzaId }
+              : { sessionId, waMessageId: stanzaId },
+          });
+        }
+      } else if (!quoted && !quotedMessageId.includes('_')) {
+        const chatIds = chatId ? [...new Set([chatId, ...expanded])] : [];
+        const qb = this.messageRepository
+          .createQueryBuilder('message')
+          .where('message.sessionId = :sessionId', { sessionId });
+        if (chatIds.length) {
+          qb.andWhere('message.chatId IN (:...chatIds)', { chatIds });
+        }
+        quoted = await qb
+          .andWhere('(message.waMessageId LIKE :patternEnd OR message.waMessageId LIKE :patternMid)', {
+            patternEnd: `%_${quotedMessageId}`,
+            patternMid: `%_${quotedMessageId}_%`,
+          })
+          .getOne();
+      }
       return quoted?.body || '';
     } catch (err) {
       this.logger.warn(`Failed to resolve quoted message ${quotedMessageId}`, { error: String(err) });
