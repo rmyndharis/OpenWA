@@ -40,7 +40,7 @@ const refresh = child => ({
   attrs: { id: 'fixture-refresh', from: 's.whatsapp.net', type: 'companion_reg_refresh' },
   content: child ? [{ tag: child, attrs: {} }] : [],
 });
-async function boot(t, { qrTimeout = 10000 } = {}) {
+async function boot(t, { qrTimeout = 10000, ...config } = {}) {
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   await once(server, 'listening');
   server.on('connection', client =>
@@ -57,8 +57,8 @@ async function boot(t, { qrTimeout = 10000 } = {}) {
       debug() {},
       info() {},
       warn() {},
-      error() {
-        errors.push(true);
+      error(...args) {
+        errors.push(args);
       },
     };
   const creds = initAuthCreds();
@@ -74,6 +74,7 @@ async function boot(t, { qrTimeout = 10000 } = {}) {
     waWebSocketUrl: `ws://127.0.0.1:${server.address().port}`,
     connectTimeoutMs: 5000,
     qrTimeout,
+    ...config,
   });
   if (!sock.ws.isOpen) await once(sock.ws, 'open');
   const qrs = [],
@@ -206,3 +207,80 @@ test(
     assert.ok(sock.ws.isOpen);
   },
 );
+// WhatsApp delivers some accounts' contact statuses as a top-level <status> node. Unanswered, the server ends
+// the stream about 50 minutes later ("Stream Errored (ack)") and redelivers it on every reconnect.
+const statusStanza = (attrs = {}) => ({
+  tag: 'status',
+  attrs: { id: 'fixture-status', from: '5511999999999@s.whatsapp.net', type: 'media', ...attrs },
+});
+const STATUS_ACK = { id: 'fixture-status', to: '5511999999999@s.whatsapp.net', class: 'status', type: 'media' };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Wait for the first ack (or error), so a slow runner needs time rather than failing; then settle() for a second one.
+async function until(predicate, what, timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  while (!predicate()) {
+    assert.ok(Date.now() < deadline, `timed out waiting for ${what}`);
+    await sleep(10);
+  }
+}
+const settle = () => sleep(100);
+const ackFailures = errors => errors.filter(args => args[1] === "unexpected error in 'acking status stanza'");
+function collectAcks(server) {
+  const acks = [];
+  server.on('fixture-frame', async frame => {
+    try {
+      const offset = frame.subarray(0, 2).toString() === 'WA' ? 7 : 3;
+      const node = await decodeBinaryNode(frame.subarray(offset));
+      if (node.tag === 'ack') acks.push(node);
+    } catch {}
+  });
+  return acks;
+}
+for (const [name, attrs] of [
+  ['a live', {}],
+  ['an offline', { offline: '1' }],
+])
+  test(`${name} <status> stanza is acknowledged once, as class status`, { timeout: 10000 }, async t => {
+    const { sock, creds, server, errors } = await boot(t);
+    creds.me = { id: 'fixture@s.whatsapp.net', name: 'fixture' };
+    const acks = collectAcks(server);
+    deliver(sock.ws, statusStanza(attrs));
+    await until(() => acks.length > 0, 'the ack');
+    await settle();
+    assert.deepEqual(
+      acks.map(ack => ack.attrs),
+      [STATUS_ACK],
+    );
+    assert.equal(errors.length, 0);
+  });
+test('a <status> stanza from an ignored JID is acknowledged on the fast path', { timeout: 10000 }, async t => {
+  const { sock, creds, server, errors } = await boot(t, { shouldIgnoreJid: () => true });
+  creds.me = { id: 'fixture@s.whatsapp.net', name: 'fixture' };
+  const acks = collectAcks(server);
+  deliver(sock.ws, statusStanza());
+  await until(() => acks.length > 0, 'the ack');
+  await settle();
+  assert.deepEqual(
+    acks.map(ack => ack.attrs),
+    [STATUS_ACK],
+  );
+  assert.equal(errors.length, 0);
+});
+for (const [name, config] of [
+  ['an ignored JID', { shouldIgnoreJid: () => true }],
+  ['a handled JID', {}],
+])
+  test(`a failed ack of <status> from ${name} is reported, not thrown`, { timeout: 10000 }, async t => {
+    const { sock, creds, errors } = await boot(t, config);
+    creds.me = { id: 'fixture@s.whatsapp.net', name: 'fixture' };
+    const unhandled = [];
+    const onUnhandled = reason => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    t.after(() => process.off('unhandledRejection', onUnhandled));
+    await sock.ws.close();
+    deliver(sock.ws, statusStanza());
+    await until(() => ackFailures(errors).length > 0, 'the reported ack failure');
+    await settle();
+    assert.equal(ackFailures(errors).length, 1);
+    assert.deepEqual(unhandled, []);
+  });

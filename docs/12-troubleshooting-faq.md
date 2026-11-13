@@ -865,8 +865,11 @@ rm -rf node_modules/whatsapp-web.js && npm ci
   cannot be set, an app-state resync that never settles
 - On Baileys, the process exits with `TypeError: terminated` some seconds after an
   `Inbound media download passed MEDIA_DOWNLOAD_TIMEOUT_MS` warning (the media-stream patch is missing)
+- On Baileys, the log repeats `Baileys connection dropped; reconnecting` with `statusCode=500` and
+  `reason=Stream Errored (ack)` about every 50 minutes, and the account may stop receiving until the
+  session is restarted (the status-ack patch is missing)
 
-**Cause:** OpenWA applies fourteen exact source transforms to its engine libraries at install time
+**Cause:** OpenWA applies fifteen exact source transforms to its engine libraries at install time
 (docs/29 §29.3). The Docker image runs them without `--best-effort`, so a source shape a patcher
 cannot recognise fails the image build. Source installs run the Puppeteer compatibility transform
 without best-effort too, because browser teardown depends on it. The other transforms use
@@ -894,9 +897,11 @@ was cut short: an interrupted install left it half applied, and reinstalling `@w
 > `patch-wwebjs-201832.js` is not in that list. It carries its own startup check and its own entry
 > above, because a partially applied backport needs different advice than one that never ran.
 
-> A patch that never applied is not fatal on its own, with one exception: without
+> A patch that never applied is not fatal on its own, with two exceptions: without
 > `patch-baileys-media-stream.js`, a Baileys media download abandoned at `MEDIA_DOWNLOAD_TIMEOUT_MS` or
-> the byte cap can end the process with `TypeError: terminated`. Every other patch affects only the
+> the byte cap can end the process with `TypeError: terminated`, and without
+> `patch-baileys-status-ack.js`, an account that WhatsApp sends contact statuses to as `<status>`
+> stanzas drops its connection about every 50 minutes. Every other patch affects only the
 > capability it repairs and the rest of the gateway runs normally, which is why this is easy to misread
 > as a bug in one route.
 
