@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Log when an unlink clears the stored messages and chat states of a Baileys session, where only a failed clear was logged, and document that a reply, forward or reaction to a message from before the unlink answers `404` from then on (#2061). Thanks @rivenash for the report.
 
+### Fixed
+
+- Acknowledge the top-level `<status>` stanza that WhatsApp now sends some Baileys accounts in place of a status message, so the server stops closing the stream about 50 minutes later with `Stream Errored (ack)`: a new install-time patch, `scripts/patch-baileys-status-ack.js`, acknowledges and drops it, and a status delivered this way still does not reach the status store (#2064). Thanks @damar-glh for the report.
+
 ## [0.30.0] - 2026-11-10
 
 ### Added
