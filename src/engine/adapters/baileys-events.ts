@@ -40,9 +40,16 @@ import {
   mapBaileysStatus,
   setBaileysText,
 } from './baileys-message-mapper';
-import { buildEditedMessage } from './message-mapper';
+import { boundPollOptions, boundPollText, buildEditedMessage } from './message-mapper';
 import { toUnixSeconds } from './baileys-history';
-import { bytesOf, decryptSecretPayload, messageSecretOf, senderForms, withoutDevice } from './baileys-secret-payload';
+import {
+  bytesOf,
+  decryptSecretPayload,
+  hasSecretPayloadBounds,
+  messageSecretOf,
+  senderForms,
+  withoutDevice,
+} from './baileys-secret-payload';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { CallNotFoundError } from '../../common/errors/call-not-found.error';
 import {
@@ -312,6 +319,8 @@ export interface BaileysEventsHost {
   peekGroupMembers?(groupId: string): GroupMember[] | null;
   /** The phone user part the session knows for a lid, or null; no network read. */
   resolvePhone?(jid: string): string | null;
+  /** The lid jid the session knows for a phone jid or lid, or null; no network read. */
+  lidOf?(jid: string): string | null;
   /** The currently-registered onGroupEvent callback, if any (assigned at initialize()). */
   getOnGroupEvent(): EngineEventCallbacks['onGroupEvent'];
   /** The currently-registered onEventResponse callback, if any (assigned at initialize()). */
@@ -919,7 +928,10 @@ export class BaileysEvents {
       // direction, as a bodyless `unknown` message (see BAILEYS_NON_CONTENT_TYPES).
       if (contentType && BAILEYS_NON_CONTENT_TYPES.has(contentType)) {
         if (contentType === 'pollUpdateMessage') {
-          await this.processPollVote(b, msg, remoteJid, chatJid, normalizedRoot, opts.generation);
+          const pollId = normalizedRoot?.pollUpdateMessage?.pollCreationMessageKey?.id;
+          await this.prepareMessageChange(pollId, opts, () =>
+            this.processPollVote(b, msg, remoteJid, chatJid, normalizedRoot, opts.generation),
+          );
         }
         this.host.logger.debug('Dropping a message that carries no content of its own', {
           action: 'baileys_drop_non_content',
@@ -2926,7 +2938,12 @@ export class BaileysEvents {
       const targetId = pollUpdate?.pollCreationMessageKey?.id;
       const encPayload = bytesOf(pollUpdate?.vote?.encPayload);
       const encIv = bytesOf(pollUpdate?.vote?.encIv);
-      if (!targetId || !encPayload || !encIv) {
+      if (
+        !targetId ||
+        !encPayload ||
+        !encIv ||
+        !hasSecretPayloadBounds(encIv, encPayload, { allowEmptyPlaintext: true })
+      ) {
         this.host.logger.debug('Cannot read poll vote: missing creation key or ciphertext', {
           action: 'baileys_poll_vote_unreadable',
           msgId: msg.key.id ?? 'unknown',
@@ -2942,18 +2959,14 @@ export class BaileysEvents {
         ? (b.normalizeMessageContent(original.message) ?? original.message)
         : undefined;
       const rawPoll = extractBaileysRawPoll(normalizedPoll);
-      if (!original || !secret || !rawPoll) {
+      if (
+        !original ||
+        !secret ||
+        !hasSecretPayloadBounds(encIv, encPayload, { secret, allowEmptyPlaintext: true }) ||
+        !rawPoll
+      ) {
         this.host.logger.debug('Cannot read poll vote: target poll is missing, not a poll, or has no secret', {
           action: 'baileys_poll_vote_unreadable',
-          msgId: msg.key.id ?? 'unknown',
-          targetId,
-        });
-        return;
-      }
-
-      if (differentWaIds(keyChatIds(original.key), keyChatIds(msg.key), jid => this.host.toNeutralJid(jid))) {
-        this.host.logger.warn('Dropping a poll vote sent in a chat other than its poll', {
-          action: 'baileys_poll_vote_cross_chat',
           msgId: msg.key.id ?? 'unknown',
           targetId,
         });
@@ -2976,6 +2989,15 @@ export class BaileysEvents {
         return;
       }
 
+      if (this.readsAsForeign(original.key, msg.key, false, 'reaction')) {
+        this.host.logger.warn('Dropping a poll vote sent in a chat other than its poll', {
+          action: 'baileys_poll_vote_cross_chat',
+          msgId: msg.key.id ?? 'unknown',
+          targetId,
+        });
+        return;
+      }
+
       const selectedOptions = this.resolvePollVoteOptions(rawPoll.options, decrypted.selectedOptions);
       if (!selectedOptions) {
         this.host.logger.debug('Skipping poll vote carrying an unrecognized option hash', {
@@ -2988,16 +3010,26 @@ export class BaileysEvents {
 
       const timestampMs = this.toPollVoteTimestampMs(pollUpdate?.senderTimestampMs, msg.messageTimestamp);
       const voterRaw = keyParticipant(msg.key) ?? (msg.key.fromMe === true ? this.host.normalizedSelfJid() : remoteJid);
+      const voterId = this.host.toNeutralJid(voterRaw);
+      if (!voterId) {
+        this.host.logger.debug('Skipping poll vote with empty voter id', {
+          action: 'baileys_poll_vote_empty_voter',
+          msgId: msg.key.id ?? 'unknown',
+          targetId,
+        });
+        return;
+      }
+      const pollName = rawPoll.name ? boundPollText(rawPoll.name) : '';
       const event: PollVoteEvent = {
         pollMessageId: targetId,
         chatId: this.host.toNeutralJid(chatJid),
-        voterId: this.host.toNeutralJid(voterRaw),
+        voterId,
         selectedOptions,
-        ...(rawPoll.name ? { pollName: rawPoll.name } : {}),
+        ...(pollName ? { pollName } : {}),
         timestamp: Math.floor(timestampMs / 1000),
         timestampMs,
       };
-      this.host.getOnPollVote()?.(event);
+      this.announceWhenHandedOn(targetId, undefined, () => this.host.getOnPollVote()?.(event));
     } catch (error) {
       this.host.logger.debug('Could not process poll vote', {
         action: 'baileys_poll_vote_failed',
@@ -3014,16 +3046,24 @@ export class BaileysEvents {
 
   /**
    * The id forms to try for one party of a payload encrypted under a message secret: `senderForms`, with
-   * the account's own lid also tried as its phone number. A message written under phone addressing can be
-   * edited, reacted to or voted on under lid addressing, and the key names each party the way its own
-   * client did. Only that lid resolves here (host.toNeutralJid keeps a contact's lid as a lid); a
-   * contact's phone form is tried only when the key carries it as remoteJidAlt or participantAlt
-   * (senderForms).
+   * each lid also tried as its session-known phone number (`toNeutralJid` for the account's own lid or
+   * `host.resolvePhone` for a contact) and each phone form also tried as its session-known lid
+   * (`host.lidOf`). A message written under phone addressing can be edited, reacted to or voted on under
+   * lid addressing (or vice versa), even when the key omits `remoteJidAlt` or `participantAlt`.
    */
   private decryptionSenderForms(key: WAMessageKey, own: readonly string[]): string[] {
     const expanded = senderForms(key, own).flatMap(jid => {
-      const neutral = jid.endsWith('@lid') ? this.host.toNeutralJid(jid) : '';
-      return neutral.endsWith('@c.us') ? [jid, `${userPart(neutral)}@s.whatsapp.net`] : [jid];
+      const { kind } = parseWaId(jid);
+      if (kind === 'lid') {
+        const neutral = this.host.toNeutralJid(jid);
+        const phone = neutral.endsWith('@c.us') ? userPart(neutral) : this.host.resolvePhone?.(jid);
+        return phone ? [jid, `${userPart(phone)}@s.whatsapp.net`] : [jid];
+      }
+      if (kind === 'user') {
+        const lid = this.host.lidOf?.(jid);
+        return lid ? [jid, `${userPart(lid)}@lid`] : [jid];
+      }
+      return [jid];
     });
     return [...new Set(expanded)];
   }
@@ -3061,16 +3101,20 @@ export class BaileysEvents {
       if (!byHash.has(digest)) byHash.set(digest, option);
     }
     const resolved: string[] = [];
+    const seen = new Set<string>();
     for (const bytes of selectedHashes) {
-      const matched = byHash.get(Buffer.from(bytes).toString('hex'));
+      const hex = Buffer.from(bytes).toString('hex');
+      const matched = byHash.get(hex);
       if (matched === undefined) return undefined;
+      if (seen.has(hex)) continue;
+      seen.add(hex);
       resolved.push(matched);
     }
-    return resolved;
+    return boundPollOptions(resolved);
   }
 
   private toPollVoteTimestampMs(
-    senderTimestampMs: number | string | { toNumber(): number } | null | undefined,
+    senderTimestampMs: number | string | { toNumber?: () => number } | null | undefined,
     fallbackSeconds: number | string | { toNumber(): number } | null | undefined,
   ): number {
     if (senderTimestampMs != null) {
@@ -3078,7 +3122,9 @@ export class BaileysEvents {
         typeof senderTimestampMs === 'number'
           ? senderTimestampMs
           : typeof senderTimestampMs === 'object'
-            ? senderTimestampMs.toNumber()
+            ? typeof senderTimestampMs.toNumber === 'function'
+              ? senderTimestampMs.toNumber()
+              : Number.NaN
             : Number(senderTimestampMs);
       if (Number.isFinite(ms) && ms > 0) return Math.floor(ms);
     }

@@ -39,14 +39,31 @@ export interface SecretPayloadInput {
 }
 
 /**
+ * Whether an encrypted secret payload's iv, ciphertext and optional secret satisfy size bounds.
+ * An empty poll vote selection encodes to zero bytes (tag only), whereas edits and reactions carry plaintext.
+ */
+export function hasSecretPayloadBounds(
+  iv: Uint8Array,
+  payload: Uint8Array,
+  opts: { secret?: Uint8Array; allowEmptyPlaintext?: boolean } = {},
+): boolean {
+  const withinMin = opts.allowEmptyPlaintext ? payload.length >= TAG_BYTES : payload.length > TAG_BYTES;
+  return (
+    iv.length === IV_BYTES &&
+    withinMin &&
+    payload.length <= MAX_PAYLOAD_BYTES &&
+    (opts.secret === undefined || opts.secret.length === SECRET_BYTES)
+  );
+}
+
+/**
  * The plaintext of an edit or reaction payload, or undefined when no pair of the candidate ids
  * authenticates it. Never throws: a payload that is not for this message, or has been altered, is
  * simply not readable.
  */
 export function decryptSecretPayload(input: SecretPayloadInput): Buffer | undefined {
   const { kind, secret, iv, payload, targetId } = input;
-  if (!targetId || secret.length !== SECRET_BYTES || iv.length !== IV_BYTES) return undefined;
-  if (payload.length <= TAG_BYTES || payload.length > MAX_PAYLOAD_BYTES) return undefined;
+  if (!targetId || !hasSecretPayloadBounds(iv, payload, { secret })) return undefined;
   const authors = [...new Set(input.targetAuthors)].slice(0, MAX_FORMS);
   const modifiers = [...new Set(input.modifiers)].slice(0, MAX_FORMS);
   const salt = Buffer.alloc(32);
@@ -96,6 +113,7 @@ const WRAPPERS = [
   'associatedChildMessage',
   'groupStatusMessage',
   'groupStatusMessageV2',
+  'pollCreationMessageV4',
 ] as const;
 
 /** The secret a message carries, at the top level or inside the wrappers a disappearing chat adds. */
