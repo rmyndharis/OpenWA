@@ -1139,6 +1139,159 @@ describe('BaileysEvents.handleMessagesUpsert acks merged into the upsert', () =>
   });
 });
 
+describe('BaileysEvents partial decryption and ciphertext stubs', () => {
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 12; i++) await flush();
+  };
+
+  function setup() {
+    const logger = createLogger('BaileysEventsCiphertextSpec');
+    const debugSpy = jest.spyOn(logger, 'debug');
+    const stored = new Map<string, WAMessage>();
+    const onMessage = jest.fn();
+    const onMessageCreate = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        logger,
+        getStoredMessage: id => Promise.resolve(stored.get(id) ?? null),
+        putStoredMessage: msg => {
+          if (msg.key?.id) stored.set(msg.key.id, msg);
+          return Promise.resolve();
+        },
+        getOnMessage: () => onMessage,
+        getOnMessageCreate: () => onMessageCreate,
+      }),
+    );
+    return { events, stored, onMessage, onMessageCreate, debugSpy };
+  }
+
+  beforeEach(() => downloadMediaMessage.mockReset());
+
+  it('drops a partial decryption leaving only messageContextInfo with CIPHERTEXT stub before storing, and delivers a redelivery of the same id', async () => {
+    const { events, stored, onMessage, debugSpy } = setup();
+    const key = {
+      id: 'PARTIAL-1',
+      remoteJid: 'status@broadcast',
+      participant: '6281111111111@s.whatsapp.net',
+      fromMe: false,
+    };
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key,
+          messageTimestamp: 1_700_000_000,
+          messageStubType: 2,
+          message: { messageContextInfo: { deviceListMetadataVersion: 2 } },
+        },
+      ],
+    });
+    await settle();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(stored.size).toBe(0);
+    expect(debugSpy).toHaveBeenCalledWith(
+      'Dropping contentless protocol message',
+      expect.objectContaining({
+        action: 'baileys_drop_protocol_noise',
+        msgId: 'PARTIAL-1',
+        keys: ['messageContextInfo'],
+        ciphertextStub: true,
+      }),
+    );
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key,
+          messageTimestamp: 1_700_000_001,
+          message: {
+            extendedTextMessage: { text: 'real story' },
+            messageContextInfo: { deviceListMetadataVersion: 2 },
+          },
+        },
+      ],
+    });
+    await settle();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'PARTIAL-1',
+        chatId: 'status@broadcast',
+        type: 'text',
+        body: 'real story',
+      }),
+    );
+    expect(stored.has('PARTIAL-1')).toBe(true);
+  });
+
+  it('keeps emitting and storing a lone messageContextInfo as unknown when messageStubType is not CIPHERTEXT', async () => {
+    const { events, stored, onMessage } = setup();
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'UNK-CTX-1', remoteJid: '6281111111111@s.whatsapp.net', fromMe: false },
+          messageTimestamp: 1_700_000_000,
+          message: { messageContextInfo: { messageSecret: Buffer.from('cw==', 'base64') } },
+        },
+      ],
+    });
+    await settle();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'UNK-CTX-1',
+        type: 'unknown',
+      }),
+    );
+    expect(stored.has('UNK-CTX-1')).toBe(true);
+  });
+
+  it('still delivers a status with readable content when messageStubType is CIPHERTEXT', async () => {
+    const { events, stored, onMessage } = setup();
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key: {
+            id: 'ST-CIPHER-OK',
+            remoteJid: 'status@broadcast',
+            participant: '6281111111111@s.whatsapp.net',
+            fromMe: false,
+          },
+          messageTimestamp: 1_700_000_000,
+          messageStubType: 2,
+          message: {
+            extendedTextMessage: { text: 'readable status' },
+            messageContextInfo: { deviceListMetadataVersion: 2 },
+          },
+        },
+      ],
+    });
+    await settle();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'ST-CIPHER-OK',
+        chatId: 'status@broadcast',
+        type: 'text',
+        body: 'readable status',
+        fromMe: false,
+      }),
+    );
+    expect(stored.has('ST-CIPHER-OK')).toBe(true);
+  });
+});
+
 describe('BaileysEvents record of conflicting copies removed', () => {
   it('forgets the id removed longest ago once it holds its limit', async () => {
     const limit = BaileysEvents.DELETED_FOR_EVERYONE_LIMIT;

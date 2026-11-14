@@ -119,6 +119,9 @@ const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
   'messageHistoryBundle',
 ]);
 
+/** Wire value of `proto.WebMessageInfo.StubType.CIPHERTEXT`, set when part of a stanza failed to decrypt. */
+const CIPHERTEXT_STUB_TYPE = 2 as BaileysLib.proto.WebMessageInfo.StubType;
+
 /**
  * Whether two ids provably name different chats or people. Each side is a jid plus the other-dialect twin WhatsApp may
  * send beside it (`remoteJidAlt`, `participantAlt`), compared as `toNeutralJid` writes them, so a lid that function
@@ -943,13 +946,21 @@ export class BaileysEvents {
       // messageContextInfo }: nothing records which part the context info came from or that a field was
       // skipped, and a messageContextInfo field such as messageSecret is not proof of content either,
       // since the sending client decides what it carries. It stops once the proto knows the type.
+      // A stanza with a CIPHERTEXT stub lost part of its payload to a decryption failure; if what
+      // survived holds only protocol noise (even a lone messageContextInfo), drop it before storing
+      // so a redelivery carrying the real body is not skipped as a duplicate.
       const keys = Object.keys(normalizedRoot ?? {});
-      if (keys.every(k => PROTOCOL_NOISE_KEYS.has(k)) && keys.some(k => k !== 'messageContextInfo')) {
+      const ciphertextStub = msg.messageStubType === CIPHERTEXT_STUB_TYPE;
+      if (
+        keys.every(k => PROTOCOL_NOISE_KEYS.has(k)) &&
+        (ciphertextStub || keys.some(k => k !== 'messageContextInfo'))
+      ) {
         this.host.logger.debug('Dropping contentless protocol message', {
           action: 'baileys_drop_protocol_noise',
           msgId: msg.key.id,
           remoteJid,
           keys,
+          ...(ciphertextStub ? { ciphertextStub: true } : {}),
         });
         return;
       }
