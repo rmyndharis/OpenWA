@@ -56,8 +56,11 @@ const RECV_PATH = path.join('lib', 'Socket', 'messages-recv.js');
 
 const MARKER = 'OpenWA: decode and acknowledge the top-level <status> stanza';
 
-/** An upstream handler for the stanza, in whatever quoting the compiler emits. */
-const UPSTREAM_HANDLER = /['"`]CB:status['"`,]/;
+/**
+ * An upstream handler for the stanza, in whatever quoting the compiler emits. Only the registration
+ * counts: a comment or a log line that names the stanza answers nothing.
+ */
+const UPSTREAM_HANDLER = /\.on\(\s*['"`]CB:status['"`,]/;
 
 const MAP_FIND = `    const offlineNodeProcessor = makeOfflineNodeProcessor(new Map([
         ['message', handleMessage],
