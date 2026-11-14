@@ -1,11 +1,21 @@
-import { createCipheriv, createHmac } from 'node:crypto';
+import { createCipheriv, createHash, createHmac } from 'node:crypto';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
+import { compileFunction } from 'node:vm';
+import * as ts from 'typescript';
 import { BaileysEvents, type BaileysEventsHost } from './baileys-events';
 import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { inboundMediaConcurrency } from './inbound-media-cap';
 import { toNeutralJid } from '../identity/wa-id';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
-import type { Contact, EventResponseEvent, MessageReceiptEvent } from '../interfaces/whatsapp-engine.interface';
+import type {
+  Contact,
+  EventResponseEvent,
+  MessageReceiptEvent,
+  PollVoteEvent,
+} from '../interfaces/whatsapp-engine.interface';
 
 /**
  * `downloadMediaMessage` is a jest mock, not a silent no-op: the real-download branch
@@ -124,6 +134,7 @@ function makeHost(overrides: Partial<BaileysEventsHost> = {}): BaileysEventsHost
     getOnMessageReceipt: () => undefined,
     getOnGroupEvent: () => undefined,
     getOnEventResponse: () => undefined,
+    getOnPollVote: () => undefined,
     findContact: () => null,
     getOnCall: () => undefined,
     getOnPresenceUpdate: () => undefined,
@@ -2229,5 +2240,527 @@ describe('BaileysEvents changes waiting for the message they change', () => {
 
     expect(onMessageReaction).toHaveBeenCalledTimes(1);
     expect(jest.getTimerCount()).toBe(0);
+  });
+});
+
+describe('BaileysEvents poll votes', () => {
+  const findPackageDir = (start: string, pkgName: string): string => {
+    let dir = start;
+    for (;;) {
+      const candidate = join(dir, 'node_modules', ...pkgName.split('/'));
+      if (existsSync(join(candidate, 'package.json'))) return candidate;
+      const parent = dirname(dir);
+      if (parent === dir) throw new Error(`Unable to locate ${pkgName} package`);
+      dir = parent;
+    }
+  };
+
+  const loadBaileysModules = (): {
+    decryptPollVote: typeof import('@whiskeysockets/baileys').decryptPollVote;
+    proto: typeof import('@whiskeysockets/baileys').proto;
+  } => {
+    const baileysDir = findPackageDir(__dirname, '@whiskeysockets/baileys');
+    const cache = new Map<string, { exports: Record<string, unknown> }>();
+
+    const resolvePackageEntry = (fromDir: string, spec: string): string => {
+      const parts = spec.split('/');
+      const pkgName = spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+      const pkgDir = findPackageDir(fromDir, pkgName);
+      const pkgJson = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as {
+        main?: string;
+        exports?: Record<string, unknown>;
+      };
+      const subKey =
+        parts.length > (spec.startsWith('@') ? 2 : 1)
+          ? `./${parts.slice(spec.startsWith('@') ? 2 : 1).join('/')}`
+          : '.';
+      const pick = (node: unknown): string | undefined => {
+        if (typeof node === 'string') return node;
+        if (!node || typeof node !== 'object') return undefined;
+        const rec = node as Record<string, unknown>;
+        return pick(rec.import) ?? pick(rec.default) ?? pick(rec.node);
+      };
+      const targetExp = subKey === '.' ? (pkgJson.exports?.['.'] ?? pkgJson.exports) : pkgJson.exports?.[subKey];
+      const entry = pick(targetExp) ?? (subKey === '.' ? pkgJson.main : `./${subKey.slice(2)}`);
+      return resolve(pkgDir, entry ?? 'index.js');
+    };
+
+    const loadFile = (filePath: string): Record<string, unknown> => {
+      const cached = cache.get(filePath);
+      if (cached) return cached.exports;
+      const mod: { exports: Record<string, unknown> } = { exports: {} };
+      cache.set(filePath, mod);
+      const source = readFileSync(filePath, 'utf8');
+      const code = ts.transpileModule(source, {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true, target: ts.ScriptTarget.ES2022 },
+      }).outputText;
+      const baseRequire = createRequire(filePath);
+      const localRequire = (spec: string): unknown => {
+        if (spec.startsWith('./') || spec.startsWith('../')) {
+          let target = resolve(dirname(filePath), spec);
+          if (existsSync(target) && statSync(target).isDirectory()) target = join(target, 'index.js');
+          if (target.endsWith('.js') || target.endsWith('.mjs')) return loadFile(target);
+          return baseRequire(target);
+        }
+        try {
+          return baseRequire(spec);
+        } catch {
+          return loadFile(resolvePackageEntry(dirname(filePath), spec));
+        }
+      };
+      const fn = compileFunction(code, ['exports', 'require', 'module', '__filename', '__dirname']) as (
+        exports: Record<string, unknown>,
+        require: (spec: string) => unknown,
+        module: { exports: Record<string, unknown> },
+        filename: string,
+        dirname: string,
+      ) => void;
+      fn(mod.exports, localRequire, mod, filePath, dirname(filePath));
+      return mod.exports;
+    };
+
+    const procMod = loadFile(join(baileysDir, 'lib', 'Utils', 'process-message.js'));
+    const protoMod = loadFile(join(baileysDir, 'WAProto', 'index.js'));
+    return {
+      decryptPollVote: procMod.decryptPollVote as typeof import('@whiskeysockets/baileys').decryptPollVote,
+      proto: protoMod.proto as typeof import('@whiskeysockets/baileys').proto,
+    };
+  };
+
+  let proto!: typeof import('@whiskeysockets/baileys').proto;
+  let lib!: Awaited<ReturnType<BaileysEventsHost['loadLib']>>;
+
+  beforeAll(() => {
+    const real = loadBaileysModules();
+    proto = real.proto;
+    lib = {
+      ...libStub,
+      decryptPollVote: real.decryptPollVote,
+      proto: real.proto,
+    };
+  }, 30_000);
+  const group = '120363000000000001@g.us';
+  const otherGroup = '120363000000000002@g.us';
+  const selfPhone = '6280000000000@s.whatsapp.net';
+  const selfLid = '10000000000001@lid';
+  const peerPhone = '6281111111111@s.whatsapp.net';
+  const peerLid = '39900313301142@lid';
+  const voterPhone = '6282222222222@s.whatsapp.net';
+  const voterLid = '195700218425410@lid';
+  const secret = Buffer.alloc(32, 0x33);
+
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 6; i++) await new Promise(resolve => setImmediate(resolve));
+  };
+
+  function sealPollVote(
+    ids: { pollMsgId: string; pollCreatorJid: string; voterJid: string },
+    optionNames: string[],
+    withSecret: Buffer = secret,
+  ): { encPayload: Buffer; encIv: Buffer } {
+    const plaintext = proto.Message.PollVoteMessage.encode({
+      selectedOptions: optionNames.map(name => createHash('sha256').update(name).digest()),
+    }).finish();
+    const key0 = createHmac('sha256', Buffer.alloc(32)).update(withSecret).digest();
+    const sign = Buffer.concat([
+      Buffer.from(ids.pollMsgId),
+      Buffer.from(ids.pollCreatorJid),
+      Buffer.from(ids.voterJid),
+      Buffer.from('Poll Vote'),
+      Buffer.from([1]),
+    ]);
+    const encKey = createHmac('sha256', key0).update(sign).digest();
+    const iv = Buffer.alloc(12, 7);
+    const cipher = createCipheriv('aes-256-gcm', encKey, iv);
+    cipher.setAAD(Buffer.from(`${ids.pollMsgId}\u0000${ids.voterJid}`));
+    const encPayload = Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]);
+    return { encPayload, encIv: iv };
+  }
+
+  function makePoll(
+    options: string[],
+    opts: {
+      id?: string;
+      key?: Record<string, unknown>;
+      message?: Record<string, unknown>;
+      withSecret?: Buffer | null;
+      name?: string;
+    } = {},
+  ): WAMessage {
+    const id = opts.id ?? 'POLL1';
+    const poll = {
+      name: opts.name ?? 'Lunch?',
+      options: options.map(optionName => ({ optionName })),
+      selectableOptionsCount: 0,
+    };
+    const msgSecret =
+      opts.withSecret === null ? undefined : { messageSecret: (opts.withSecret ?? secret).toString('base64') };
+    return {
+      key: { id, remoteJid: group, participant: peerPhone, fromMe: false, ...opts.key },
+      messageTimestamp: 1_786_000_000,
+      message: opts.message ?? {
+        pollCreationMessageV3: poll,
+        ...(msgSecret ? { messageContextInfo: msgSecret } : {}),
+      },
+    };
+  }
+
+  function makeVoteEnvelope(
+    ids: { pollMsgId?: string; pollCreatorJid: string; voterJid: string },
+    optionNames: string[],
+    opts: {
+      key?: Record<string, unknown>;
+      senderTimestampMs?: unknown;
+      messageTimestamp?: number;
+      withSecret?: Buffer;
+      wrapped?: boolean;
+    } = {},
+  ): WAMessage {
+    const pollMsgId = ids.pollMsgId ?? 'POLL1';
+    const sealed = sealPollVote({ ...ids, pollMsgId }, optionNames, opts.withSecret ?? secret);
+    const pollUpdateMessage = {
+      pollCreationMessageKey: { id: pollMsgId, remoteJid: group, fromMe: false },
+      vote: sealed,
+      ...(opts.senderTimestampMs !== undefined ? { senderTimestampMs: opts.senderTimestampMs } : {}),
+    };
+    return {
+      key: { id: 'VOTE1', remoteJid: group, participant: voterPhone, fromMe: false, ...opts.key },
+      messageTimestamp: opts.messageTimestamp ?? 1_786_000_005,
+      message: opts.wrapped ? { ephemeralMessage: { message: { pollUpdateMessage } } } : { pollUpdateMessage },
+    } as unknown as WAMessage;
+  }
+
+  function setup(
+    extra: Partial<BaileysEventsHost> = {},
+    stored: WAMessage | null = makePoll(['Pizza', 'Sushi', 'Tacos']),
+  ) {
+    const logger = createLogger('BaileysEventsPollVoteSpec');
+    const debugSpy = jest.spyOn(logger, 'debug');
+    const warnSpy = jest.spyOn(logger, 'warn');
+    const onPollVote = jest.fn<void, [PollVoteEvent]>();
+    const onMessage = jest.fn();
+    const onMessageCreate = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        logger,
+        loadLib: () => Promise.resolve(lib),
+        toNeutralJid: jid => toNeutralJid(jid),
+        getSocketOrNull: () =>
+          ({ user: { id: '6280000000000:1@s.whatsapp.net', lid: selfLid } }) as unknown as WASocket,
+        getStoredMessage: (id: string) => Promise.resolve(stored && id === stored.key.id ? stored : null),
+        getOnMessage: () => onMessage,
+        getOnMessageCreate: () => onMessageCreate,
+        getOnPollVote: () => onPollVote,
+        ...extra,
+      }),
+    );
+    return { events, onPollVote, onMessage, onMessageCreate, debugSpy, warnSpy };
+  }
+
+  it('emits poll.vote for a single choice and never forwards to onMessage or onMessageCreate', async () => {
+    const { events, onPollVote, onMessage, onMessageCreate } = setup();
+    const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['Sushi'], {
+      key: { participant: voterPhone },
+      senderTimestampMs: 1_786_000_000_123,
+    });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+    await flush();
+
+    expect(onPollVote).toHaveBeenCalledTimes(1);
+    expect(onPollVote).toHaveBeenCalledWith({
+      pollMessageId: 'POLL1',
+      chatId: group,
+      voterId: '6282222222222@c.us',
+      selectedOptions: ['Sushi'],
+      pollName: 'Lunch?',
+      timestamp: 1_786_000_000,
+      timestampMs: 1_786_000_000_123,
+    });
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessageCreate).not.toHaveBeenCalled();
+  });
+
+  it('emits poll.vote with multiple selected options', async () => {
+    const { events, onPollVote, onMessage, onMessageCreate } = setup();
+    const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['Pizza', 'Tacos'], {
+      key: { participant: voterPhone },
+      senderTimestampMs: { toNumber: () => 1_786_000_002_456 },
+    });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+    await flush();
+
+    expect(onPollVote).toHaveBeenCalledWith({
+      pollMessageId: 'POLL1',
+      chatId: group,
+      voterId: '6282222222222@c.us',
+      selectedOptions: ['Pizza', 'Tacos'],
+      pollName: 'Lunch?',
+      timestamp: 1_786_000_002,
+      timestampMs: 1_786_000_002_456,
+    });
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessageCreate).not.toHaveBeenCalled();
+  });
+
+  it('emits selectedOptions: [] when a voter clears their selection', async () => {
+    const { events, onPollVote } = setup();
+    const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, [], {
+      key: { participant: voterPhone },
+      messageTimestamp: 1_786_000_010,
+    });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+    await flush();
+
+    expect(onPollVote).toHaveBeenCalledWith({
+      pollMessageId: 'POLL1',
+      chatId: group,
+      voterId: '6282222222222@c.us',
+      selectedOptions: [],
+      pollName: 'Lunch?',
+      timestamp: 1_786_000_010,
+      timestampMs: 1_786_000_010_000,
+    });
+  });
+
+  it('hashes raw option names without boundPollText/boundPollOptions truncation across poll proto versions', async () => {
+    const veryLong = 'L'.repeat(1100);
+    const manyOptions = Array.from({ length: 35 }, (_, i) => `Opt-${i}`);
+    manyOptions[34] = veryLong;
+    const pollContent = {
+      name: 'Big poll',
+      options: manyOptions.map(optionName => ({ optionName })),
+      selectableOptionsCount: 0,
+    };
+    const variants: Array<Record<string, unknown>> = [
+      { pollCreationMessage: pollContent },
+      { pollCreationMessageV2: pollContent },
+      { pollCreationMessageV3: pollContent },
+      { pollCreationMessageV4: { message: { pollCreationMessageV3: pollContent } } },
+      { pollCreationMessageV5: pollContent },
+      { ephemeralMessage: { message: { pollCreationMessageV3: pollContent } } },
+    ];
+
+    for (const inner of variants) {
+      const stored = makePoll(manyOptions, {
+        message: { ...inner, messageContextInfo: { messageSecret: secret.toString('base64') } },
+      });
+      const { events, onPollVote } = setup({}, stored);
+      const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, [veryLong], {
+        key: { participant: voterPhone },
+        senderTimestampMs: 1_786_000_003_000,
+        wrapped: true,
+      });
+
+      events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+      await flush();
+
+      expect(onPollVote).toHaveBeenCalledWith(
+        expect.objectContaining({
+          selectedOptions: [veryLong],
+        }),
+      );
+    }
+  });
+
+  it('decrypts when a LID voter answers a phone-stored poll (and own LID / phone forms)', async () => {
+    // Peer phone poll, LID voter carrying participantAlt phone form (sealed with LID or phone)
+    for (const sealedVoter of [voterLid, voterPhone]) {
+      const stored = makePoll(['A', 'B'], { key: { participant: peerPhone, fromMe: false } });
+      const { events, onPollVote } = setup({}, stored);
+      const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: sealedVoter }, ['A'], {
+        key: { participant: voterLid, participantAlt: voterPhone, fromMe: false },
+        senderTimestampMs: 1_786_000_004_000,
+      });
+      events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+      await flush();
+      expect(onPollVote).toHaveBeenCalledWith(expect.objectContaining({ voterId: voterLid, selectedOptions: ['A'] }));
+    }
+
+    // Own poll stored under fromMe + peer phone 1:1, voter arrives under LID sealed against ownLid
+    const ownStored = makePoll(['A', 'B'], {
+      key: { remoteJid: voterPhone, fromMe: true, participant: undefined },
+    });
+    const { events, onPollVote } = setup({}, ownStored);
+    const vote = makeVoteEnvelope({ pollCreatorJid: selfLid, voterJid: voterLid }, ['B'], {
+      key: { remoteJid: voterLid, remoteJidAlt: voterPhone, participant: undefined, fromMe: false },
+      senderTimestampMs: 1_786_000_004_500,
+    });
+    events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+    await flush();
+    expect(onPollVote).toHaveBeenCalledWith(
+      expect.objectContaining({ pollMessageId: 'POLL1', selectedOptions: ['B'] }),
+    );
+  });
+
+  it('decrypts when a phone voter answers a LID-stored poll (with Alt or resolved LID)', async () => {
+    const storedViaAlt = makePoll(['A', 'B'], {
+      key: { participant: peerLid, participantAlt: peerPhone, fromMe: false },
+    });
+    const { events: events1, onPollVote: onPollVote1 } = setup({}, storedViaAlt);
+    const vote1 = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['B'], {
+      key: { participant: voterPhone },
+      senderTimestampMs: 1_786_000_005_000,
+    });
+    events1.handleMessagesUpsert({ type: 'notify', messages: [vote1] });
+    await flush();
+    expect(onPollVote1).toHaveBeenCalledWith(
+      expect.objectContaining({ voterId: '6282222222222@c.us', selectedOptions: ['B'] }),
+    );
+
+    const storedWithoutAlt = makePoll(['A', 'B'], {
+      key: { remoteJid: peerLid, participant: undefined, fromMe: false },
+    });
+    const { events: events2, onPollVote: onPollVote2 } = setup(
+      {
+        toNeutralJid: (jid: string) => (jid === peerLid ? '6281111111111@c.us' : toNeutralJid(jid)),
+      },
+      storedWithoutAlt,
+    );
+    const vote2 = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: peerPhone }, ['A'], {
+      key: { remoteJid: peerPhone, participant: undefined },
+      senderTimestampMs: 1_786_000_005_500,
+    });
+    events2.handleMessagesUpsert({ type: 'notify', messages: [vote2] });
+    await flush();
+    expect(onPollVote2).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: '6281111111111@c.us', voterId: '6281111111111@c.us', selectedOptions: ['A'] }),
+    );
+  });
+
+  it('skips with debug log when poll is missing, not a poll, or lacks messageSecret', async () => {
+    const cases: Array<WAMessage | null> = [
+      null,
+      makePoll(['A'], {
+        message: { conversation: 'not a poll', messageContextInfo: { messageSecret: secret.toString('base64') } },
+      }),
+      makePoll(['A'], { withSecret: null }),
+    ];
+
+    for (const stored of cases) {
+      const { events, onPollVote, onMessage, onMessageCreate, debugSpy } = setup({}, stored);
+      const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['A']);
+      events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+      await flush();
+
+      expect(onPollVote).not.toHaveBeenCalled();
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(onMessageCreate).not.toHaveBeenCalled();
+      expect(debugSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ action: 'baileys_poll_vote_unreadable' }),
+      );
+    }
+  });
+
+  it('skips with debug log when the secret does not authenticate the vote', async () => {
+    const wrongSecret = Buffer.alloc(32, 0x99);
+    const { events, onPollVote, onMessage, onMessageCreate, debugSpy } = setup();
+    const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['Pizza'], {
+      withSecret: wrongSecret,
+    });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+    await flush();
+
+    expect(onPollVote).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessageCreate).not.toHaveBeenCalled();
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ action: 'baileys_poll_vote_unauthentic' }),
+    );
+  });
+
+  it('skips the entire vote when any decrypted option hash is unknown', async () => {
+    for (const chosen of [['Unknown'], ['Pizza', 'Unknown']]) {
+      const { events, onPollVote, onMessage, onMessageCreate, debugSpy } = setup();
+      const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, chosen);
+
+      events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+      await flush();
+
+      expect(onPollVote).not.toHaveBeenCalled();
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(onMessageCreate).not.toHaveBeenCalled();
+      expect(debugSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ action: 'baileys_poll_vote_unknown_option' }),
+      );
+    }
+  });
+
+  it('ignores a cross-chat vote even when the secret authenticates it', async () => {
+    const { events, onPollVote, onMessage, onMessageCreate, warnSpy } = setup();
+    const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['Sushi'], {
+      key: { remoteJid: otherGroup, participant: voterPhone },
+    });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+    await flush();
+
+    expect(onPollVote).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessageCreate).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ action: 'baileys_poll_vote_cross_chat' }),
+    );
+  });
+
+  it('reports fromMe votes under normalizedSelfJid in 1:1 and participant without device in groups', async () => {
+    const directStored = makePoll(['Yes', 'No'], {
+      key: { remoteJid: peerPhone, fromMe: false, participant: undefined },
+    });
+    const { events: directEvents, onPollVote: directCb } = setup({}, directStored);
+    const directVote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: selfPhone }, ['Yes'], {
+      key: { remoteJid: peerPhone, participant: undefined, fromMe: true },
+      senderTimestampMs: 1_786_000_006_000,
+    });
+    directEvents.handleMessagesUpsert({ type: 'notify', messages: [directVote] });
+    await flush();
+
+    expect(directCb).toHaveBeenCalledWith({
+      pollMessageId: 'POLL1',
+      chatId: '6281111111111@c.us',
+      voterId: '6280000000000@c.us',
+      selectedOptions: ['Yes'],
+      pollName: 'Lunch?',
+      timestamp: 1_786_000_006,
+      timestampMs: 1_786_000_006_000,
+    });
+
+    const { events: groupEvents, onPollVote: groupCb } = setup();
+    const groupVote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: selfPhone }, ['Tacos'], {
+      key: { remoteJid: group, participant: '6280000000000:2@s.whatsapp.net', fromMe: true },
+      senderTimestampMs: 1_786_000_007_000,
+    });
+    groupEvents.handleMessagesUpsert({ type: 'notify', messages: [groupVote] });
+    await flush();
+
+    expect(groupCb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: group,
+        voterId: '6280000000000@c.us',
+        selectedOptions: ['Tacos'],
+      }),
+    );
+  });
+
+  it('does not throw when onPollVote is not registered and drops vote traffic from content delivery', async () => {
+    const { events, onMessage, onMessageCreate } = setup({ getOnPollVote: () => undefined });
+    const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['Pizza']);
+
+    await expect(
+      (async () => {
+        events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+        await flush();
+      })(),
+    ).resolves.toBeUndefined();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessageCreate).not.toHaveBeenCalled();
   });
 });

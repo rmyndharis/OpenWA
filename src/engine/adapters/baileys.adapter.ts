@@ -205,6 +205,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       },
       getOnGroupEvent: () => this.callbacks.onGroupEvent,
       getOnEventResponse: () => this.callbacks.onEventResponse,
+      getOnPollVote: () => this.callbacks.onPollVote,
       getOnCall: () => this.callbacks.onCall,
       getOnPresenceUpdate: () => this.callbacks.onPresenceUpdate,
       getOnCallOutcome: () => this.callbacks.onCallOutcome,

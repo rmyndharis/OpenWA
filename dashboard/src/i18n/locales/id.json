@@ -690,7 +690,7 @@
       "session.restriction": "Saat WhatsApp membatasi akun atau mencabut pembatasan",
       "presence.update": "Saat obrolan yang dilanggani online, mengetik atau offline",
       "event.response": "Saat tamu menjawab undangan acara WhatsApp (hadir, tidak hadir, mungkin)",
-      "poll.vote": "Saat seseorang memilih atau membatalkan opsi pada polling (whatsapp-web.js)",
+      "poll.vote": "Saat seseorang memilih atau membatalkan opsi pada polling",
       "group.join": "Saat peserta bergabung atau ditambahkan ke grup",
       "group.leave": "Saat peserta keluar atau dikeluarkan dari grup",
       "group.update": "Saat nama, deskripsi atau pengaturan grup berubah",

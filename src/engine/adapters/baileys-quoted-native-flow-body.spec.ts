@@ -57,6 +57,7 @@ function build(): BaileysEvents {
     getOnMessageReceipt: noop,
     getOnGroupEvent: noop,
     getOnEventResponse: noop,
+    getOnPollVote: noop,
     findContact: () => null,
     getOnCall: noop,
     getOnPresenceUpdate: noop,

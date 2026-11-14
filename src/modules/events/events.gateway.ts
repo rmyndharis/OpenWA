@@ -1057,7 +1057,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     this.emitToRooms(sessionId, 'event.response', data);
   }
 
-  /** Emit a voter's new selection on a poll (whatsapp-web.js only). Payload mirrors the `poll.vote` webhook. */
+  /** Emit a voter's new selection on a poll. Payload mirrors the `poll.vote` webhook. */
   emitPollVote(sessionId: string, data: Record<string, unknown>) {
     this.emitToRooms(sessionId, 'poll.vote', data);
   }

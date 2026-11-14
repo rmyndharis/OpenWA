@@ -1085,6 +1085,14 @@ adapter boundary — none silently stubs.
   delivered. A message the session sent is held the same way as one it received, and an edit the
   account makes from its own phone is applied under the account's own id, plain or encrypted.
   whatsapp-web.js receives both already decrypted from WhatsApp Web.
+- **Inbound poll votes (`poll.vote`).** Baileys no longer reads a vote itself, so the adapter does,
+  with the library's `decryptPollVote` and the secret of the poll creation message in the session's
+  message store (`BAILEYS_MESSAGE_STORE_LIMIT`), and names the selected options by their SHA-256
+  hashes. A vote is not reported when its poll is no longer in the store, when it does not
+  authenticate against that poll, when it names an option the poll does not have, or when it arrives
+  in another chat than its poll. A cleared vote that authenticates is reported with
+  `selectedOptions: []`. Votes cast before the store held the poll are not backfilled.
+  whatsapp-web.js receives votes already decrypted from WhatsApp Web.
 - **`muteChat` addressing.** whatsapp-web.js resolves the chat before writing and answers `400` for a
   chatId it cannot resolve. Baileys keys the app-state patch to the id the session holds the chat under
   (the LID of a LID-migrated contact) and answers `200` for a chat it has never seen. A phone-number

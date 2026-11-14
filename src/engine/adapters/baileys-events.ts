@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { WACallEvent, WAMessage, WAMessageKey, WASocket } from '@whiskeysockets/baileys';
@@ -11,6 +12,7 @@ import {
   InboundReceipt,
   InboundTicket,
   ParticipantPresence,
+  PollVoteEvent,
   PresenceState,
   CallOutcome,
   IncomingMessage,
@@ -29,6 +31,7 @@ import {
   extractBaileysButtons,
   extractBaileysCommerce,
   extractBaileysPoll,
+  extractBaileysRawPoll,
   extractBaileysContext,
   extractBaileysLocation,
   isBaileysCatalogShare,
@@ -313,6 +316,8 @@ export interface BaileysEventsHost {
   getOnGroupEvent(): EngineEventCallbacks['onGroupEvent'];
   /** The currently-registered onEventResponse callback, if any (assigned at initialize()). */
   getOnEventResponse(): EngineEventCallbacks['onEventResponse'];
+  /** The currently-registered onPollVote callback, if any (assigned at initialize()). */
+  getOnPollVote(): EngineEventCallbacks['onPollVote'];
   /** A contact from the session's own store, by any id dialect; no network read. */
   findContact(contactId: string): Contact | null;
   /** The currently-registered onCall callback, if any (assigned at initialize()). */
@@ -913,6 +918,9 @@ export class BaileysEvents {
       // They only point at another message, so mapped they would reach consumers, in either
       // direction, as a bodyless `unknown` message (see BAILEYS_NON_CONTENT_TYPES).
       if (contentType && BAILEYS_NON_CONTENT_TYPES.has(contentType)) {
+        if (contentType === 'pollUpdateMessage') {
+          await this.processPollVote(b, msg, remoteJid, chatJid, normalizedRoot, opts.generation);
+        }
         this.host.logger.debug('Dropping a message that carries no content of its own', {
           action: 'baileys_drop_non_content',
           msgId: msg.key.id,
@@ -1575,25 +1583,15 @@ export class BaileysEvents {
         });
         return undefined;
       }
-      const user = this.host.getSocketOrNull()?.user;
-      const own = [user?.id, user?.lid].filter((jid): jid is string => !!jid).map(withoutDevice);
-      // The account's own lid is also tried as its phone number: a message written under phone addressing can
-      // be edited under lid addressing, and the key names each party the way its own client did. Only that lid
-      // resolves here (host.toNeutralJid keeps a contact's lid as a lid); a contact's phone form is tried only
-      // when the key carries it as remoteJidAlt or participantAlt (senderForms).
-      const withPhone = (forms: string[]): string[] =>
-        forms.flatMap(jid => {
-          const neutral = jid.endsWith('@lid') ? this.host.toNeutralJid(jid) : '';
-          return neutral.endsWith('@c.us') ? [jid, `${userPart(neutral)}@s.whatsapp.net`] : [jid];
-        });
+      const own = this.ownBareJids();
       const plaintext = decryptSecretPayload({
         kind: isEdit ? 'edit' : 'reaction',
         secret,
         iv,
         payload,
         targetId,
-        targetAuthors: withPhone(senderForms(original.key, own)),
-        modifiers: withPhone(senderForms(msg.key, own)),
+        targetAuthors: this.decryptionSenderForms(original.key, own),
+        modifiers: this.decryptionSenderForms(msg.key, own),
       });
       if (!plaintext) {
         this.host.logger.debug('An encrypted edit or reaction did not authenticate against its target', {
@@ -2905,6 +2903,184 @@ export class BaileysEvents {
       },
       jid => this.host.toNeutralJid(jid),
     );
+  }
+
+  /**
+   * Report a poll vote. The library exports `decryptPollVote` and no longer reads a vote itself, so the
+   * adapter does, with the secret of the stored poll creation message, and names each selected option by
+   * its SHA-256 hash. A vote it cannot read is skipped; the caller drops the message either way.
+   */
+  private async processPollVote(
+    b: typeof BaileysLib,
+    msg: WAMessage,
+    remoteJid: string,
+    chatJid: string,
+    content: WAMessage['message'],
+    generation: number,
+  ): Promise<void> {
+    try {
+      const pollUpdate = content?.pollUpdateMessage;
+      const targetId = pollUpdate?.pollCreationMessageKey?.id;
+      const encPayload = bytesOf(pollUpdate?.vote?.encPayload);
+      const encIv = bytesOf(pollUpdate?.vote?.encIv);
+      if (!targetId || !encPayload || !encIv) {
+        this.host.logger.debug('Cannot read poll vote: missing creation key or ciphertext', {
+          action: 'baileys_poll_vote_unreadable',
+          msgId: msg.key.id ?? 'unknown',
+          targetId: targetId ?? 'unknown',
+        });
+        return;
+      }
+
+      const original = await this.readTarget(targetId, 'reading the poll a vote targets');
+      if (generation !== this.storeGeneration) return;
+      const secret = messageSecretOf(original?.message);
+      const normalizedPoll = original?.message
+        ? (b.normalizeMessageContent(original.message) ?? original.message)
+        : undefined;
+      const rawPoll = extractBaileysRawPoll(normalizedPoll);
+      if (!original || !secret || !rawPoll) {
+        this.host.logger.debug('Cannot read poll vote: target poll is missing, not a poll, or has no secret', {
+          action: 'baileys_poll_vote_unreadable',
+          msgId: msg.key.id ?? 'unknown',
+          targetId,
+        });
+        return;
+      }
+
+      if (differentWaIds(keyChatIds(original.key), keyChatIds(msg.key), jid => this.host.toNeutralJid(jid))) {
+        this.host.logger.warn('Dropping a poll vote sent in a chat other than its poll', {
+          action: 'baileys_poll_vote_cross_chat',
+          msgId: msg.key.id ?? 'unknown',
+          targetId,
+        });
+        return;
+      }
+
+      const decrypted = this.decryptPollVoteWithCandidates(
+        b,
+        { encPayload, encIv },
+        { pollMsgId: targetId, pollEncKey: secret },
+        original.key,
+        msg.key,
+      );
+      if (!decrypted) {
+        this.host.logger.debug('A poll vote did not authenticate against its poll', {
+          action: 'baileys_poll_vote_unauthentic',
+          msgId: msg.key.id ?? 'unknown',
+          targetId,
+        });
+        return;
+      }
+
+      const selectedOptions = this.resolvePollVoteOptions(rawPoll.options, decrypted.selectedOptions);
+      if (!selectedOptions) {
+        this.host.logger.debug('Skipping poll vote carrying an unrecognized option hash', {
+          action: 'baileys_poll_vote_unknown_option',
+          msgId: msg.key.id ?? 'unknown',
+          targetId,
+        });
+        return;
+      }
+
+      const timestampMs = this.toPollVoteTimestampMs(pollUpdate?.senderTimestampMs, msg.messageTimestamp);
+      const voterRaw = keyParticipant(msg.key) ?? (msg.key.fromMe === true ? this.host.normalizedSelfJid() : remoteJid);
+      const event: PollVoteEvent = {
+        pollMessageId: targetId,
+        chatId: this.host.toNeutralJid(chatJid),
+        voterId: this.host.toNeutralJid(voterRaw),
+        selectedOptions,
+        ...(rawPoll.name ? { pollName: rawPoll.name } : {}),
+        timestamp: Math.floor(timestampMs / 1000),
+        timestampMs,
+      };
+      this.host.getOnPollVote()?.(event);
+    } catch (error) {
+      this.host.logger.debug('Could not process poll vote', {
+        action: 'baileys_poll_vote_failed',
+        msgId: msg.key.id ?? 'unknown',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private ownBareJids(): string[] {
+    const user = this.host.getSocketOrNull()?.user;
+    return [user?.id, user?.lid].filter((jid): jid is string => !!jid).map(withoutDevice);
+  }
+
+  /**
+   * The id forms to try for one party of a payload encrypted under a message secret: `senderForms`, with
+   * the account's own lid also tried as its phone number. A message written under phone addressing can be
+   * edited, reacted to or voted on under lid addressing, and the key names each party the way its own
+   * client did. Only that lid resolves here (host.toNeutralJid keeps a contact's lid as a lid); a
+   * contact's phone form is tried only when the key carries it as remoteJidAlt or participantAlt
+   * (senderForms).
+   */
+  private decryptionSenderForms(key: WAMessageKey, own: readonly string[]): string[] {
+    const expanded = senderForms(key, own).flatMap(jid => {
+      const neutral = jid.endsWith('@lid') ? this.host.toNeutralJid(jid) : '';
+      return neutral.endsWith('@c.us') ? [jid, `${userPart(neutral)}@s.whatsapp.net`] : [jid];
+    });
+    return [...new Set(expanded)];
+  }
+
+  private decryptPollVoteWithCandidates(
+    b: typeof BaileysLib,
+    vote: { encPayload: Buffer; encIv: Buffer },
+    ctx: { pollMsgId: string; pollEncKey: Buffer },
+    pollKey: WAMessageKey,
+    voteKey: WAMessageKey,
+  ): BaileysLib.proto.Message.IPollVoteMessage | undefined {
+    const own = this.ownBareJids();
+    const creators = this.decryptionSenderForms(pollKey, own);
+    const voters = this.decryptionSenderForms(voteKey, own);
+    for (const pollCreatorJid of creators) {
+      for (const voterJid of voters) {
+        try {
+          return b.decryptPollVote(vote, { ...ctx, pollCreatorJid, voterJid });
+        } catch {
+          // Not this JID pair or secret: AES-GCM authentication did not verify.
+        }
+      }
+    }
+    return undefined;
+  }
+
+  private resolvePollVoteOptions(
+    rawOptions: readonly string[],
+    selectedHashes: Uint8Array[] | null | undefined,
+  ): string[] | undefined {
+    if (!selectedHashes?.length) return [];
+    const byHash = new Map<string, string>();
+    for (const option of rawOptions) {
+      const digest = createHash('sha256').update(option).digest('hex');
+      if (!byHash.has(digest)) byHash.set(digest, option);
+    }
+    const resolved: string[] = [];
+    for (const bytes of selectedHashes) {
+      const matched = byHash.get(Buffer.from(bytes).toString('hex'));
+      if (matched === undefined) return undefined;
+      resolved.push(matched);
+    }
+    return resolved;
+  }
+
+  private toPollVoteTimestampMs(
+    senderTimestampMs: number | string | { toNumber(): number } | null | undefined,
+    fallbackSeconds: number | string | { toNumber(): number } | null | undefined,
+  ): number {
+    if (senderTimestampMs != null) {
+      const ms =
+        typeof senderTimestampMs === 'number'
+          ? senderTimestampMs
+          : typeof senderTimestampMs === 'object'
+            ? senderTimestampMs.toNumber()
+            : Number(senderTimestampMs);
+      if (Number.isFinite(ms) && ms > 0) return Math.floor(ms);
+    }
+    const msgSeconds = toUnixSeconds(fallbackSeconds);
+    return msgSeconds > 0 ? msgSeconds * 1000 : Date.now();
   }
 
   /** Protocol-message edit timestamps are milliseconds; the enclosing message timestamp is seconds. */

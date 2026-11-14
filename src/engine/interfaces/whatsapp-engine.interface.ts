@@ -1072,7 +1072,7 @@ export interface EngineEventCallbacks {
   onEventResponse?: (event: EventResponseEvent) => void;
   /**
    * Fired each time a voter changes their selection on a poll (consumers emit `poll.vote`).
-   * whatsapp-web.js only: Baileys never fires it.
+   * Baileys requires the poll creation message (and its secret) to remain in the session message store.
    */
   onPollVote?: (event: PollVoteEvent) => void;
   /**

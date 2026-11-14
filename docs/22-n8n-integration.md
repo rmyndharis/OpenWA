@@ -92,7 +92,7 @@ Start workflows when WhatsApp events occur.
 | `session.restriction`                             | WhatsApp restricted the account, or lifted it | Pausing outreach while an account is limited |
 | `presence.update`                                 | A watched chat's online/typing state changed  | Live agent hand-off, presence-aware routing  |
 | `event.response`                                  | A guest answered a WhatsApp event (Baileys)   | RSVP and attendance tracking                 |
-| `poll.vote`                                       | A voter changed their poll answer (wwebjs)    | Surveys, check-ins and approvals             |
+| `poll.vote`                                       | A voter changed their poll answer             | Surveys, check-ins and approvals             |
 | `call.accepted` / `call.rejected` / `call.missed` | A ringing call ended — **Baileys only**       | Missed-call follow-up, call logging          |
 | `group.join`                                      | Participant(s) joined a group                 | Welcome messages                             |
 | `group.leave`                                     | Participant(s) left a group                   | Churn tracking                               |
