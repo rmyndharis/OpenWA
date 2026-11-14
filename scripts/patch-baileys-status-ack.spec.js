@@ -7,7 +7,15 @@ const os = require('os');
 const path = require('path');
 const vm = require('vm');
 
-const { applyStatusAckPatch, isApplied, MAP_FIND, HANDLER_FIND, MARKER } = require('./patch-baileys-status-ack');
+const {
+  applyStatusAckPatch,
+  isApplied,
+  MAP_FIND,
+  HANDLER_FIND,
+  HANDLER_REPLACE,
+  ACK_ONLY_MAP,
+  MARKER,
+} = require('./patch-baileys-status-ack');
 const pairing = require('./patch-baileys-pairing');
 
 /**
@@ -96,6 +104,20 @@ test('fails when the library answers the stanza itself, so a second ack is never
   assert.equal(isApplied(dir), true);
 });
 
+test('a tree the acknowledge-only revision patched is upgraded to the file a fresh patch writes', t => {
+  const fresh = fakeBaileys(t);
+  applyStatusAckPatch(fresh.dir);
+  const ackOnly = recvSource(pairing.ACK_FIND)
+    .replace(MAP_FIND, () => ACK_ONLY_MAP)
+    .replace(HANDLER_FIND, () => HANDLER_REPLACE);
+  const { dir, file } = fakeBaileys(t, ackOnly);
+  // Half of what the patch does now, so the startup guard reports it.
+  assert.equal(isApplied(dir), false);
+  assert.equal(applyStatusAckPatch(dir).skipped, undefined);
+  assert.equal(fs.readFileSync(file, 'utf8'), fs.readFileSync(fresh.file, 'utf8'));
+  assert.equal(isApplied(dir), true);
+});
+
 test('composes with the pairing patcher in either order', t => {
   const results = [];
   for (const order of [
@@ -133,7 +155,7 @@ test('the find strings match the installed Baileys exactly once', () => {
   const real = path.join(__dirname, '..', 'node_modules', '@whiskeysockets', 'baileys', RECV);
   if (!fs.existsSync(real)) return; // no install in this checkout
   const source = fs.readFileSync(real, 'utf8');
-  if (source.includes(MARKER)) return; // postinstall already applied it
+  if (source.includes(MARKER) || source.includes(ACK_ONLY_MAP)) return; // postinstall already applied a revision of it
   assert.equal(count(source, MAP_FIND), 1);
   assert.equal(count(source, HANDLER_FIND), 1);
 });
