@@ -119,6 +119,9 @@ const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
   'messageHistoryBundle',
 ]);
 
+/** Wire value of `proto.WebMessageInfo.StubType.CIPHERTEXT`, set when part of a stanza failed to decrypt. */
+const CIPHERTEXT_STUB_TYPE = 2 as BaileysLib.proto.WebMessageInfo.StubType;
+
 /**
  * Whether two ids provably name different chats or people. Each side is a jid plus the other-dialect twin WhatsApp may
  * send beside it (`remoteJidAlt`, `participantAlt`), compared as `toNeutralJid` writes them, so a lid that function
@@ -576,11 +579,30 @@ export class BaileysEvents {
     return original;
   }
 
+  /**
+   * Marks a `status@broadcast` delivery posted by this account as `fromMe: true` on a shallow copy when
+   * Baileys left `fromMe` off (its broadcast decoder compares `participant` only against the phone jid,
+   * not the account's lid). Recognises `selfMatcher()` (`user.id` and `user.lid`) plus a lid whose phone
+   * number the session already resolved; on `status@broadcast` Baileys also writes the sender's alternate
+   * dialect to `remoteJidAlt`. Never mutates Baileys' message or key.
+   */
+  private withOwnStatusDirection(msg: WAMessage): WAMessage {
+    if (msg.key.fromMe === true || msg.key.remoteJid !== 'status@broadcast') return msg;
+    const isSelf = this.selfMatcher();
+    const ownPhone = userPart(this.host.normalizedSelfJid());
+    const isOwn = (jid: string | null | undefined): boolean =>
+      !!jid &&
+      (isSelf(jid) || (ownPhone !== '' && parseWaId(jid).kind === 'lid' && this.host.resolvePhone?.(jid) === ownPhone));
+    if (![msg.key.participant, msg.key.participantAlt, msg.key.remoteJidAlt].some(isOwn)) return msg;
+    return { ...msg, key: { ...msg.key, fromMe: true } };
+  }
+
   handleMessagesUpsert(event: { messages: WAMessage[]; type: string }): void {
-    for (const msg of event.messages) {
-      if (!msg.message || !msg.key?.remoteJid) {
+    for (const rawMsg of event.messages) {
+      if (!rawMsg.message || !rawMsg.key?.remoteJid) {
         continue; // protocol/empty messages carry no neutral content
       }
+      const msg = this.withOwnStatusDirection(rawMsg);
       // A receipt that arrives while this message's own upsert is still in Baileys' event buffer is merged
       // into the upsert and raised as no message-receipt.update, which the echo skip below would then drop
       // with the rest of the echo.
@@ -943,13 +965,21 @@ export class BaileysEvents {
       // messageContextInfo }: nothing records which part the context info came from or that a field was
       // skipped, and a messageContextInfo field such as messageSecret is not proof of content either,
       // since the sending client decides what it carries. It stops once the proto knows the type.
+      // A stanza with a CIPHERTEXT stub lost part of its payload to a decryption failure; if what
+      // survived holds only protocol noise (even a lone messageContextInfo), drop it before storing
+      // so a redelivery carrying the real body is not skipped as a duplicate.
       const keys = Object.keys(normalizedRoot ?? {});
-      if (keys.every(k => PROTOCOL_NOISE_KEYS.has(k)) && keys.some(k => k !== 'messageContextInfo')) {
+      const ciphertextStub = msg.messageStubType === CIPHERTEXT_STUB_TYPE;
+      if (
+        keys.every(k => PROTOCOL_NOISE_KEYS.has(k)) &&
+        (ciphertextStub || keys.some(k => k !== 'messageContextInfo'))
+      ) {
         this.host.logger.debug('Dropping contentless protocol message', {
           action: 'baileys_drop_protocol_noise',
           msgId: msg.key.id,
           remoteJid,
           keys,
+          ...(ciphertextStub ? { ciphertextStub: true } : {}),
         });
         return;
       }
