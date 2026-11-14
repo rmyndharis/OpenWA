@@ -1624,6 +1624,78 @@ describe('BaileysEvents event RSVPs (event.response)', () => {
 
     expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ responderId: phone }));
   });
+
+  it('drops an in-flight RSVP when fenceStoredWrites advances the generation', async () => {
+    const onEventResponse = jest.fn();
+    let releaseStore!: (v: null) => void;
+    const storeGate = new Promise<null>(resolve => {
+      releaseStore = resolve;
+    });
+    const events1 = new BaileysEvents(
+      makeHost({ getOnEventResponse: () => onEventResponse, getStoredMessage: () => storeGate }),
+    );
+
+    events1.handleMessagesUpdate([
+      {
+        key: eventKey,
+        update: {
+          eventResponses: [
+            rsvp({
+              eventResponseMessageKey: {
+                id: 'RSVP9',
+                remoteJid: group,
+                participant: '6282222222222@s.whatsapp.net',
+                fromMe: false,
+              },
+            }),
+          ],
+        },
+      },
+    ] as never);
+    await flush();
+    events1.fenceStoredWrites();
+    releaseStore(null);
+    await flush();
+
+    expect(onEventResponse).not.toHaveBeenCalled();
+
+    let releaseLib!: (lib: Awaited<ReturnType<BaileysEventsHost['loadLib']>>) => void;
+    const libGate = new Promise<Awaited<ReturnType<BaileysEventsHost['loadLib']>>>(resolve => {
+      releaseLib = resolve;
+    });
+    const events2 = new BaileysEvents(
+      makeHost({
+        getOnEventResponse: () => onEventResponse,
+        getStoredMessage: () =>
+          Promise.resolve({ key: eventKey, message: { eventMessage: { name: 'Launch' } } } as never),
+        loadLib: () => libGate,
+      }),
+    );
+
+    events2.handleMessagesUpdate([
+      {
+        key: eventKey,
+        update: {
+          eventResponses: [
+            rsvp({
+              eventResponseMessageKey: {
+                id: 'RSVP12',
+                remoteJid: group,
+                participant: '6282222222222@s.whatsapp.net',
+                fromMe: false,
+              },
+            }),
+          ],
+        },
+      },
+    ] as never);
+    await flush();
+    events2.fenceStoredWrites();
+    releaseLib(libStub);
+    await flush();
+
+    expect(onEventResponse).not.toHaveBeenCalled();
+  });
 });
 
 /**

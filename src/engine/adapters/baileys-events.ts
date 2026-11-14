@@ -2088,6 +2088,7 @@ export class BaileysEvents {
     const callback = this.host.getOnEventResponse();
     const envelope = rsvp.eventResponseMessageKey;
     if (!callback || !eventKey?.id || !eventKey.remoteJid || !envelope?.id) return;
+    const generation = this.storeGeneration;
     // Learned before any id below is canonicalized, as an inbound message does, so a guest answering
     // for the first time is not reported by lid once and by phone number afterwards.
     this.host.recordKeyLidMappings(envelope);
@@ -2097,6 +2098,7 @@ export class BaileysEvents {
     // revoke or reaction aimed at a message of another chat is. Fails open like those: a store that
     // cannot be read, or ids that cannot be compared, report the RSVP as before.
     const stored = await this.readStoredMessage(eventKey.id, 'reading the event an RSVP answers');
+    if (generation !== this.storeGeneration) return;
     if (stored && differentWaIds(keyChatIds(stored.key), keyChatIds(envelope), jid => this.host.toNeutralJid(jid))) {
       this.host.logger.warn('Dropping an event response sent in a chat other than its event', {
         msgId: eventKey.id,
@@ -2138,6 +2140,7 @@ export class BaileysEvents {
     }
     if (stored?.message) {
       const b = await this.host.loadLib();
+      if (generation !== this.storeGeneration) return;
       const name = b.normalizeMessageContent(stored.message)?.eventMessage?.name;
       if (name) event.eventName = name;
     }
