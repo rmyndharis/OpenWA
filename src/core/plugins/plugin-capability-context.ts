@@ -552,7 +552,10 @@ export class PluginCapabilityContext {
           pluginId: plugin.manifest.id,
           instanceId: key.instanceId,
         });
-        return m ? { providerConversationId: m.providerConversationId, handoverState: m.handoverState } : null;
+        if (!m) return null;
+        // The handover the instance holds for the chat, not this row's alone: see effectiveHandover.
+        const handoverState = await this.hostServices.getConversationMappingPort().effectiveHandover(m);
+        return { providerConversationId: m.providerConversationId, handoverState };
       },
       getByProvider: async (instanceId, providerConversationId) => {
         this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
@@ -560,8 +563,10 @@ export class PluginCapabilityContext {
           .getConversationMappingPort()
           .getByProvider(plugin.manifest.id, instanceId, providerConversationId);
         // Parity with get/upsert: a plugin may only read a mapping for a session it is activated for.
-        if (m) this.assertSessionActive(plugin, m.sessionId);
-        return m ? { sessionId: m.sessionId, chatId: m.chatId, handoverState: m.handoverState } : null;
+        if (!m) return null;
+        this.assertSessionActive(plugin, m.sessionId);
+        const handoverState = await this.hostServices.getConversationMappingPort().effectiveHandover(m);
+        return { sessionId: m.sessionId, chatId: m.chatId, handoverState };
       },
     } satisfies PluginMappingsCapability;
   }
