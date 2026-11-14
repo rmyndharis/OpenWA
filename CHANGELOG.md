@@ -13,7 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ctx.mappings.get` and `ctx.mappings.getByProvider` report the handover a plugin instance holds for a chat across its `@lid` and phone rows (`human`, else `closed`, else `bot`), so a plugin reading one row no longer misses a takeover recorded under the other.
 - Store the contact statuses WhatsApp delivers to some Baileys accounts as a top-level `<status>` stanza, which 0.30.1 acknowledged and dropped: `scripts/patch-baileys-status-ack.js` now decodes a stanza shaped as the status message it replaces, so it reaches the status list and the `status.received` webhook. A status that fails to decrypt is dropped, not retried (#2064). Thanks @damar-glh for the report.
+- A Baileys message or status that decrypts only in part and is left with no content is no longer stored or announced as an empty `unknown` message, so a redelivery that carries the content is not skipped as a duplicate.
+- A status the account posted is no longer listed among contact statuses on Baileys when WhatsApp names its poster by the account's lid.
 - Cap `poll.vote` at 32 `selectedOptions` of 1024 characters each and `pollName` at 1024 characters on both engines, as an inbound poll already is.
 - Read a contact's encrypted edit or reaction on Baileys when its key names one party by lid and the other by phone number without the alternate id, using the pairing the session already holds.
 

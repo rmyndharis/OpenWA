@@ -104,6 +104,15 @@ test('fails when the library answers the stanza itself, so a second ack is never
   assert.equal(isApplied(dir), true);
 });
 
+test('a mention of the stanza that registers nothing is not read as an upstream handler', t => {
+  const source = `${recvSource(pairing.ACK_FIND)}// nothing answers 'CB:status' here\nlogger.debug('unhandled CB:status');\n`;
+  const { dir, file } = fakeBaileys(t, source);
+  assert.equal(isApplied(dir), false);
+  assert.equal(applyStatusAckPatch(dir).skipped, undefined);
+  assert.equal(count(fs.readFileSync(file, 'utf8'), MARKER), 1);
+  assert.equal(isApplied(dir), true);
+});
+
 test('a tree the acknowledge-only revision patched is upgraded to the file a fresh patch writes', t => {
   const fresh = fakeBaileys(t);
   applyStatusAckPatch(fresh.dir);

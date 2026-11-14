@@ -349,11 +349,21 @@ describe('PluginLoaderService capability facade — ctx.net', () => {
 
 describe('PluginLoaderService capability facade — ctx.conversations', () => {
   let loader: PluginLoaderService;
-  let mappingService: { getByProvider: jest.Mock; get: jest.Mock; setHandover: jest.Mock };
+  let mappingService: {
+    getByProvider: jest.Mock;
+    get: jest.Mock;
+    setHandover: jest.Mock;
+    effectiveHandover: jest.Mock;
+  };
   let messageService: { sendText: jest.Mock; reply: jest.Mock };
 
   beforeEach(() => {
-    mappingService = { getByProvider: jest.fn(), get: jest.fn(), setHandover: jest.fn() };
+    mappingService = {
+      getByProvider: jest.fn(),
+      get: jest.fn(),
+      setHandover: jest.fn(),
+      effectiveHandover: jest.fn(),
+    };
     messageService = {
       sendText: jest.fn().mockResolvedValue({ messageId: 'wamid', timestamp: 1 }),
       reply: jest.fn().mockResolvedValue({ messageId: 'wamid', timestamp: 1 }),
@@ -442,6 +452,46 @@ describe('PluginLoaderService capability facade — ctx.conversations', () => {
     await ctx.conversations.send({ type: 'text', text: 'hi', sessionId: 'sess-1', chatId: '628@c.us' });
     expect(mappingService.getByProvider).not.toHaveBeenCalled();
     expect(messageService.sendText).toHaveBeenCalledWith('sess-1', { chatId: '628@c.us', text: 'hi' });
+  });
+
+  it('mappings.get resolves effective handoverState while keeping providerConversationId from requested row', async () => {
+    const ctx = contextFor(makePlugin(['*'], ['conversation:send']));
+    const key = { sessionId: 'sess-1', chatId: '111@lid', instanceId: 'inst-1' };
+
+    mappingService.get.mockResolvedValue({ ...mapping('sess-1'), chatId: '111@lid', handoverState: 'closed' });
+    mappingService.effectiveHandover.mockResolvedValueOnce('human');
+    expect(await ctx.mappings.get(key)).toEqual({ providerConversationId: 'conv-42', handoverState: 'human' });
+
+    mappingService.get.mockResolvedValue({ ...mapping('sess-1'), chatId: '111@lid', handoverState: 'bot' });
+    mappingService.effectiveHandover.mockResolvedValueOnce('closed');
+    expect(await ctx.mappings.get(key)).toEqual({ providerConversationId: 'conv-42', handoverState: 'closed' });
+
+    mappingService.effectiveHandover.mockResolvedValueOnce('bot');
+    expect(await ctx.mappings.get(key)).toEqual({ providerConversationId: 'conv-42', handoverState: 'bot' });
+  });
+
+  it('mappings.getByProvider resolves effective handoverState and keeps requested sessionId and chatId', async () => {
+    const ctx = contextFor(makePlugin(['*'], ['conversation:send'], ['sess-1']));
+    const row = { ...mapping('sess-1'), chatId: '111@lid', handoverState: 'closed' };
+    mappingService.getByProvider.mockResolvedValue(row);
+    mappingService.effectiveHandover.mockResolvedValue('human');
+
+    expect(await ctx.mappings.getByProvider('inst-1', 'conv-42')).toEqual({
+      sessionId: 'sess-1',
+      chatId: '111@lid',
+      handoverState: 'human',
+    });
+    expect(mappingService.effectiveHandover).toHaveBeenCalledWith(row);
+  });
+
+  it('mappings.getByProvider refuses a mapping of a session the plugin is not activated for', async () => {
+    const ctx = contextFor(makePlugin(['*'], ['conversation:send'], ['sess-2']));
+    mappingService.getByProvider.mockResolvedValue(mapping('sess-1'));
+
+    await expect(ctx.mappings.getByProvider('inst-1', 'conv-42')).rejects.toThrow(
+      'Plugin test-ext is not activated for session sess-1',
+    );
+    expect(mappingService.effectiveHandover).not.toHaveBeenCalled();
   });
 });
 

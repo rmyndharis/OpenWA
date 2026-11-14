@@ -9,6 +9,13 @@ import { LidMapping } from '../../engine/identity/lid-mapping.entity';
 const inList = (value: string, cond?: FindOperator<string>): boolean =>
   cond === undefined || (cond.value as unknown as string[]).includes(value);
 
+const createLidStore = (table: Array<{ lid: string; phone: string; isReported: boolean }>): LidMappingStoreService =>
+  new LidMappingStoreService({
+    find: ({ where }: { where: { lid?: FindOperator<string>; phone?: FindOperator<string> } }) =>
+      Promise.resolve(table.filter(r => inList(r.lid, where.lid) && inList(r.phone, where.phone))),
+    findOne: ({ where }: { where: { lid: string } }) => Promise.resolve(table.find(r => r.lid === where.lid) ?? null),
+  } as unknown as Repository<LidMapping>);
+
 describe('ConversationMappingService', () => {
   let ds: DataSource;
   let service: ConversationMappingService;
@@ -332,5 +339,83 @@ describe('ConversationMappingService', () => {
     // The forward-key collision is resolved in favor of sess-2's own (fresher) row; the stale one is gone.
     expect(await service.getByProvider('chatwoot', 'acct1', 'conv-1')).toBeNull();
     expect((await service.getByProvider('chatwoot', 'acct1', 'conv-2'))?.sessionId).toBe('sess-2');
+  });
+
+  describe('effectiveHandover across the lid and phone forms of one chat', () => {
+    const table = [
+      { lid: '111', phone: '628999', isReported: true },
+      { lid: '222', phone: '628999', isReported: true },
+    ];
+    let lidStore: LidMappingStoreService;
+    let repo: Repository<ConversationMapping>;
+    const baseKey: MappingKey = {
+      sessionId: 'sess-1',
+      chatId: '111@lid',
+      pluginId: 'chatwoot',
+      instanceId: 'acct1',
+    };
+    beforeEach(() => {
+      lidStore = createLidStore(table);
+      repo = ds.getRepository(ConversationMapping);
+      service = new ConversationMappingService(repo, lidStore);
+    });
+
+    it('returns human when requested row is closed and another form of the same instance is human', async () => {
+      await service.upsert(baseKey, 'conv-lid', { handoverState: 'closed' });
+      await service.upsert({ ...baseKey, chatId: '628999@c.us' }, 'conv-phone', { handoverState: 'human' });
+      const requested = await service.get(baseKey);
+      expect(requested?.handoverState).toBe('closed');
+      expect(await service.effectiveHandover(requested!)).toBe('human');
+    });
+
+    it('returns closed when requested row is bot and another form of the same instance is closed', async () => {
+      await service.upsert(baseKey, 'conv-lid');
+      await service.upsert({ ...baseKey, chatId: '628999@c.us' }, 'conv-phone', { handoverState: 'closed' });
+      const requested = await service.get(baseKey);
+      expect(requested?.handoverState).toBe('bot');
+      expect(await service.effectiveHandover(requested!)).toBe('closed');
+    });
+
+    it('ignores human rows belonging to another plugin, instance, or session', async () => {
+      await service.upsert(baseKey, 'conv-lid');
+      await service.upsert({ ...baseKey, chatId: '628999@c.us', pluginId: 'other-plugin' }, 'conv-other-p', {
+        handoverState: 'human',
+      });
+      await service.upsert({ ...baseKey, chatId: '628999@c.us', instanceId: 'acct2' }, 'conv-other-i', {
+        handoverState: 'human',
+      });
+      await service.upsert({ ...baseKey, chatId: '628999@c.us', sessionId: 'sess-2' }, 'conv-other-s', {
+        handoverState: 'human',
+      });
+      const requested = await service.get(baseKey);
+      expect(await service.effectiveHandover(requested!)).toBe('bot');
+    });
+
+    it('returns the row own handoverState when there are no sibling rows', async () => {
+      await service.upsert({ ...baseKey, chatId: 'solo@c.us' }, 'conv-solo-bot');
+      await service.upsert(baseKey, 'conv-lid-closed', { handoverState: 'closed' });
+      expect(await service.effectiveHandover((await service.get({ ...baseKey, chatId: 'solo@c.us' }))!)).toBe('bot');
+      expect(await service.effectiveHandover((await service.get(baseKey))!)).toBe('closed');
+    });
+
+    it('applies the same rule to a row loaded via getByProvider', async () => {
+      await service.upsert(baseKey, 'conv-lid', { handoverState: 'closed' });
+      await service.upsert({ ...baseKey, chatId: '222@lid' }, 'conv-lid-2', { handoverState: 'human' });
+      const row = await service.getByProvider('chatwoot', 'acct1', 'conv-lid');
+      expect(row?.chatId).toBe('111@lid');
+      expect(await service.effectiveHandover(row!)).toBe('human');
+    });
+
+    it('skips alias and repository queries when the requested row is already human', async () => {
+      await service.upsert(baseKey, 'conv-lid', { handoverState: 'human' });
+      await service.upsert({ ...baseKey, chatId: '628999@c.us' }, 'conv-phone', { handoverState: 'bot' });
+      const row = (await service.get(baseKey))!;
+      const repoFind = jest.spyOn(repo, 'find');
+      const lidLookup = jest.spyOn(lidStore, 'findPhoneForLid');
+
+      expect(await service.effectiveHandover(row)).toBe('human');
+      expect(repoFind).not.toHaveBeenCalled();
+      expect(lidLookup).not.toHaveBeenCalled();
+    });
   });
 });
