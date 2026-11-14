@@ -383,6 +383,10 @@ export interface PluginMappingsCapability {
 }
 ```
 
+`ctx.mappings.get` and `ctx.mappings.getByProvider` return the handover the plugin instance holds for
+the chat across its `@lid` and phone rows in the session: `human` outranks `closed`, which outranks
+`bot`. `providerConversationId`, `sessionId` and `chatId` are those of the row that was asked for.
+
 `ctx.net.fetch` returns a serializable response (`{ ok, status, statusText, headers, body }`, body as
 a string) — no streaming and no live `Response` object, because it must cross the worker boundary via
 structured clone. The request has a default 15 s / hard-cap 30 s timeout and a 10 MB response cap.

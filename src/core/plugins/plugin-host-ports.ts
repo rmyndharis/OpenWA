@@ -70,6 +70,10 @@ export interface PluginConversationMappingPort {
     instanceId: string,
     providerConversationId: string,
   ): Promise<PluginConversationMappingRow | null>;
+  /** Effective handover held by this instance across all known ID aliases (lid and phone) of the row's chat. */
+  effectiveHandover(
+    row: Pick<PluginConversationMappingRow, 'sessionId' | 'chatId' | 'pluginId' | 'instanceId' | 'handoverState'>,
+  ): Promise<HandoverState>;
   upsert(key: PluginMappingKey, providerConversationId: string): Promise<void>;
   delete(id: string): Promise<void>;
   setHandover(id: string, state: HandoverState): Promise<void>;

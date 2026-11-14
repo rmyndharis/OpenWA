@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ctx.mappings.get` and `ctx.mappings.getByProvider` report the handover a plugin instance holds for a chat across its `@lid` and phone rows (`human`, else `closed`, else `bot`), so a plugin reading one row no longer misses a takeover recorded under the other.
 - Store the contact statuses WhatsApp delivers to some Baileys accounts as a top-level `<status>` stanza, which 0.30.1 acknowledged and dropped: `scripts/patch-baileys-status-ack.js` now decodes a stanza shaped as the status message it replaces, so it reaches the status list and the `status.received` webhook. A status that fails to decrypt is dropped, not retried (#2064). Thanks @damar-glh for the report.
 
 ## [0.30.1] - 2026-11-14
