@@ -9,7 +9,13 @@ import {
   type PollVoteEvent,
 } from '../interfaces/whatsapp-engine.interface';
 import { readWid, type SerializedWid } from '../types/whatsapp-web-js.types';
-import { buildEditedMessage, buildIncomingMessageBase, mapContactFields } from './message-mapper';
+import {
+  boundPollOptions,
+  boundPollText,
+  buildEditedMessage,
+  buildIncomingMessageBase,
+  mapContactFields,
+} from './message-mapper';
 import { extractWwebjsCall, plannedInboundDownload, wwebjsAckToDeliveryStatus } from './wwebjs-messaging';
 import { admitInboundSafely, inboundMediaTimeoutMs, withInboundDownloadTimeout } from './inbound-media-cap';
 import { type WwebjsEngineHost } from './wwebjs-host';
@@ -425,10 +431,10 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       // Without the creation message whatsapp-web.js keeps only the local option ids, which no route
       // of this API takes, so an option it could not name is left out. A selection with no nameable
       // option is no report of what was chosen, and `[]` means a cleared vote, so it is skipped.
-      const selectedOptions = (vote.selectedOptions ?? [])
+      const rawSelected = (vote.selectedOptions ?? [])
         .map(option => option.name)
         .filter((name): name is string => typeof name === 'string');
-      if ((vote.selectedOptions?.length ?? 0) > 0 && selectedOptions.length === 0) {
+      if ((vote.selectedOptions?.length ?? 0) > 0 && rawSelected.length === 0) {
         host.logger.debug('Ignoring a poll vote whose options WhatsApp Web cannot name', {
           pollMessageId: readWid(pollId) ?? readWid(raw.parentMsgKey),
         });
@@ -441,8 +447,8 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         // Direction flag, as Message._getChatId (see message_revoke_everyone).
         chatId: (poll?.from ? (poll.fromMe ? poll.to : poll.from) : readWid(raw.parentMsgKey?.remote)) ?? '',
         voterId: readWid(raw.voter) ?? '',
-        selectedOptions,
-        ...(poll?.pollName ? { pollName: poll.pollName } : {}),
+        selectedOptions: boundPollOptions(rawSelected),
+        ...(poll?.pollName ? { pollName: boundPollText(poll.pollName) } : {}),
         timestamp: Math.floor(interactedAtMs / 1000),
         timestampMs: interactedAtMs,
       };

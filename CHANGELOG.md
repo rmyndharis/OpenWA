@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Report poll votes as `poll.vote` on Baileys, as whatsapp-web.js already does. A vote is read while the poll's creation message is still in the session's message store (`BAILEYS_MESSAGE_STORE_LIMIT`); earlier votes are not backfilled ([#2063](https://github.com/rmyndharis/OpenWA/issues/2063)). Thanks @Shreyas1702003 for the report.
+- Report poll votes as `poll.vote` on Baileys, as whatsapp-web.js already does. A vote is read while the poll's creation message is still in the session's message store (`BAILEYS_MESSAGE_STORE_LIMIT`); earlier votes are not backfilled (#2063). Thanks @Shreyas1702003 for the report.
 
 ### Fixed
 
@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Store the contact statuses WhatsApp delivers to some Baileys accounts as a top-level `<status>` stanza, which 0.30.1 acknowledged and dropped: `scripts/patch-baileys-status-ack.js` now decodes a stanza shaped as the status message it replaces, so it reaches the status list and the `status.received` webhook. A status that fails to decrypt is dropped, not retried (#2064). Thanks @damar-glh for the report.
 - A Baileys message or status that decrypts only in part and is left with no content is no longer stored or announced as an empty `unknown` message, so a redelivery that carries the content is not skipped as a duplicate.
 - A status the account posted is no longer listed among contact statuses on Baileys when WhatsApp names its poster by the account's lid.
+- Cap `poll.vote` at 32 `selectedOptions` of 1024 characters each and `pollName` at 1024 characters on both engines, as an inbound poll already is.
+- Read a contact's encrypted edit or reaction on Baileys when its key names one party by lid and the other by phone number without the alternate id, using the pairing the session already holds.
 
 ## [0.30.1] - 2026-11-14
 

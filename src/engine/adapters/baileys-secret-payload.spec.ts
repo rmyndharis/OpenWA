@@ -216,10 +216,13 @@ describe('messageSecretOf', () => {
 
   // The library unwraps these as well when it normalizes a message, so a secret that only sits inside one
   // (a photo of an album, a group status) has to be found there.
-  it.each(['associatedChildMessage', 'groupStatusMessage', 'groupStatusMessageV2'])('finds it inside %s', wrapper => {
-    const inner = { messageContextInfo: { messageSecret: secretText }, imageMessage: {} };
-    expect(messageSecretOf({ [wrapper]: { message: inner } })).toEqual(Buffer.alloc(32, 7));
-  });
+  it.each(['associatedChildMessage', 'groupStatusMessage', 'groupStatusMessageV2', 'pollCreationMessageV4'])(
+    'finds it inside %s',
+    wrapper => {
+      const inner = { messageContextInfo: { messageSecret: secretText }, imageMessage: {} };
+      expect(messageSecretOf({ [wrapper]: { message: inner } })).toEqual(Buffer.alloc(32, 7));
+    },
+  );
 
   it.each([[undefined], [null], [{ conversation: 'x' }], [{ messageContextInfo: {} }], ['text']])(
     'answers undefined for %p',

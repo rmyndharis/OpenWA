@@ -4112,6 +4112,32 @@ describe('WhatsAppWebJsAdapter vote_update (poll.vote)', () => {
     expect(() => client.emit('vote_update', null)).not.toThrow();
     expect(onPollVote).not.toHaveBeenCalled();
   });
+
+  it('bounds option texts, option count, and poll name on vote_update', () => {
+    const { onPollVote, client } = wireVoteHandler();
+    const longOption = 'A'.repeat(1100);
+    const longPollName = 'P'.repeat(1100);
+    const selectedOptions = Array.from({ length: 35 }, (_, i) => ({
+      name: i === 0 ? longOption : `Option ${i}`,
+      localId: i,
+    }));
+
+    client.emit(
+      'vote_update',
+      vote({
+        selectedOptions,
+        parentMessage: { ...ownPoll, pollName: longPollName },
+      }),
+    );
+
+    expect(onPollVote).toHaveBeenCalledTimes(1);
+    const event = (onPollVote.mock.calls as Array<[Record<string, unknown>]>)[0][0];
+    const bounded = event.selectedOptions as string[];
+    expect(bounded).toHaveLength(32);
+    expect(bounded[0]).toBe('A'.repeat(1024));
+    expect(bounded[31]).toBe('Option 31');
+    expect(event.pollName).toBe('P'.repeat(1024));
+  });
 });
 
 describe('WhatsAppWebJsAdapter message_reaction (id resolution across WA Web builds)', () => {

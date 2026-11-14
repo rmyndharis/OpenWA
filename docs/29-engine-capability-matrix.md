@@ -1090,8 +1090,10 @@ adapter boundary — none silently stubs.
   message store (`BAILEYS_MESSAGE_STORE_LIMIT`), and names the selected options by their SHA-256
   hashes. A vote is not reported when its poll is no longer in the store, when it does not
   authenticate against that poll, when it names an option the poll does not have, or when it arrives
-  in another chat than its poll. A cleared vote that authenticates is reported with
-  `selectedOptions: []`. Votes cast before the store held the poll are not backfilled.
+  in another chat than its poll (aside from a 1:1 vote on the account's own broadcast-list poll).
+  A cleared vote that authenticates is reported with `selectedOptions: []`. Both engines cap
+  `selectedOptions` at 32 entries and option texts and `pollName` at 1024 characters, matching
+  inbound poll creation messages. Votes cast before the store held the poll are not backfilled.
   whatsapp-web.js receives votes already decrypted from WhatsApp Web.
 - **`muteChat` addressing.** whatsapp-web.js resolves the chat before writing and answers `400` for a
   chatId it cannot resolve. Baileys keys the app-state patch to the id the session holds the chat under

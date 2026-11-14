@@ -751,11 +751,13 @@ export interface PollVoteEvent {
   /** Neutral id of the voter (the account itself when it voted from its phone). */
   voterId: string;
   /**
-   * The option texts now selected, exactly as they appear on the poll (the same strings `vote-poll`
-   * takes). An option the engine could not name is left out.
+   * The option texts now selected, capped to 32 options of 1024 characters like poll creation options
+   * (the same strings `vote-poll` takes when within WhatsApp's limits). Baileys drops the whole vote
+   * when any option hash does not match the poll; whatsapp-web.js omits individual unnamed options and
+   * skips a non-empty vote only when none can be named.
    */
   selectedOptions: string[];
-  /** The poll's question, when the creation message is available to read it from. */
+  /** The poll's question, when the creation message is available (truncated to 1024 characters). */
   pollName?: string;
   /** Unix seconds the voter changed the selection (sender clock). */
   timestamp: number;
