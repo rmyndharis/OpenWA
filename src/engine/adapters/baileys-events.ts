@@ -579,11 +579,30 @@ export class BaileysEvents {
     return original;
   }
 
+  /**
+   * Marks a `status@broadcast` delivery posted by this account as `fromMe: true` on a shallow copy when
+   * Baileys left `fromMe` off (its broadcast decoder compares `participant` only against the phone jid,
+   * not the account's lid). Recognises `selfMatcher()` (`user.id` and `user.lid`) plus a lid whose phone
+   * number the session already resolved; on `status@broadcast` Baileys also writes the sender's alternate
+   * dialect to `remoteJidAlt`. Never mutates Baileys' message or key.
+   */
+  private withOwnStatusDirection(msg: WAMessage): WAMessage {
+    if (msg.key.fromMe === true || msg.key.remoteJid !== 'status@broadcast') return msg;
+    const isSelf = this.selfMatcher();
+    const ownPhone = userPart(this.host.normalizedSelfJid());
+    const isOwn = (jid: string | null | undefined): boolean =>
+      !!jid &&
+      (isSelf(jid) || (ownPhone !== '' && parseWaId(jid).kind === 'lid' && this.host.resolvePhone?.(jid) === ownPhone));
+    if (![msg.key.participant, msg.key.participantAlt, msg.key.remoteJidAlt].some(isOwn)) return msg;
+    return { ...msg, key: { ...msg.key, fromMe: true } };
+  }
+
   handleMessagesUpsert(event: { messages: WAMessage[]; type: string }): void {
-    for (const msg of event.messages) {
-      if (!msg.message || !msg.key?.remoteJid) {
+    for (const rawMsg of event.messages) {
+      if (!rawMsg.message || !rawMsg.key?.remoteJid) {
         continue; // protocol/empty messages carry no neutral content
       }
+      const msg = this.withOwnStatusDirection(rawMsg);
       // A receipt that arrives while this message's own upsert is still in Baileys' event buffer is merged
       // into the upsert and raised as no message-receipt.update, which the echo skip below would then drop
       // with the rest of the echo.

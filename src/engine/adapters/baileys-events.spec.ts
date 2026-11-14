@@ -1292,6 +1292,224 @@ describe('BaileysEvents partial decryption and ciphertext stubs', () => {
   });
 });
 
+describe('BaileysEvents own status addressed by LID', () => {
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 12; i++) await flush();
+  };
+
+  function setup(overrides: Partial<BaileysEventsHost> = {}) {
+    const stored = new Map<string, WAMessage>();
+    const onMessage = jest.fn();
+    const onMessageCreate = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        toNeutralJid: jid => toNeutralJid(jid),
+        getSocketOrNull: () =>
+          ({ user: { id: '6280000000000:1@s.whatsapp.net', lid: '99999:1@lid' } }) as unknown as WASocket,
+        getStoredMessage: id => Promise.resolve(stored.get(id) ?? null),
+        putStoredMessage: msg => {
+          if (msg.key?.id) stored.set(msg.key.id, msg);
+          return Promise.resolve();
+        },
+        getOnMessage: () => onMessage,
+        getOnMessageCreate: () => onMessageCreate,
+        ...overrides,
+      }),
+    );
+    return { events, stored, onMessage, onMessageCreate };
+  }
+
+  beforeEach(() => {
+    downloadMediaMessage.mockReset();
+    downloadMediaMessage.mockImplementation(() => Promise.resolve(streamOf(Buffer.from('IMG'))));
+  });
+
+  it('treats an own status addressed by the account LID with fromMe false as own without mutating the input or downloading media, and consumes an API-sent echo', async () => {
+    const sentIds = new Set(['ST-API-1']);
+    const consumeOwnSend = jest.fn((id: string | null | undefined) => !!id && sentIds.delete(id));
+    const { events, stored, onMessage, onMessageCreate } = setup({ consumeOwnSend });
+    const rawKey = { id: 'ST-OWN-1', remoteJid: 'status@broadcast', participant: '99999@lid', fromMe: false };
+    const rawMsg: WAMessage = {
+      key: rawKey,
+      messageTimestamp: 1_700_000_000,
+      message: {
+        imageMessage: {
+          mimetype: 'image/jpeg',
+          fileLength: 64,
+          url: 'https://mmg.whatsapp.net/v/t62/x.enc',
+          directPath: '/v/t62/x.enc',
+        },
+      },
+    };
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [rawMsg] });
+    await settle();
+
+    expect(downloadMediaMessage).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessageCreate).toHaveBeenCalledTimes(1);
+    expect(onMessageCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'ST-OWN-1',
+        chatId: 'status@broadcast',
+        fromMe: true,
+        media: { mimetype: 'image/jpeg', filename: undefined, omitted: true, sizeBytes: 64 },
+      }),
+    );
+    expect(stored.get('ST-OWN-1')?.key.fromMe).toBe(true);
+    expect(rawMsg.key).toBe(rawKey);
+    expect(rawMsg.key.fromMe).toBe(false);
+
+    const echoKey = { id: 'ST-API-1', remoteJid: 'status@broadcast', participant: '99999@lid', fromMe: false };
+    const echoMsg: WAMessage = {
+      key: echoKey,
+      messageTimestamp: 1_700_000_001,
+      message: { extendedTextMessage: { text: 'api status' } },
+    };
+
+    events.handleMessagesUpsert({ type: 'append', messages: [echoMsg] });
+    await settle();
+
+    expect(consumeOwnSend).toHaveBeenCalledWith('ST-API-1');
+    expect(sentIds.has('ST-API-1')).toBe(false);
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessageCreate).toHaveBeenCalledTimes(1);
+    expect(stored.has('ST-API-1')).toBe(false);
+    expect(echoMsg.key.fromMe).toBe(false);
+  });
+
+  it('leaves a contact status unaffected', async () => {
+    const { events, stored, onMessage, onMessageCreate } = setup({
+      resolvePhone: jid => (jid === '11111@lid' ? '6281111111111' : null),
+    });
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'ST-CONTACT-1', remoteJid: 'status@broadcast', participant: '11111@lid', fromMe: false },
+          messageTimestamp: 1_700_000_000,
+          message: {
+            imageMessage: {
+              mimetype: 'image/jpeg',
+              fileLength: 3,
+              url: 'https://mmg.whatsapp.net/v/t62/contact.enc',
+              directPath: '/v/t62/contact.enc',
+            },
+          },
+        },
+      ],
+    });
+    await settle();
+
+    expect(downloadMediaMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'ST-CONTACT-1',
+        chatId: 'status@broadcast',
+        fromMe: false,
+      }),
+    );
+    expect(onMessageCreate).not.toHaveBeenCalled();
+    expect(stored.get('ST-CONTACT-1')?.key.fromMe).toBe(false);
+  });
+
+  it('reads the direction of a message outside the status feed as the library reports it', async () => {
+    const { events, onMessage, onMessageCreate } = setup();
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'GRP-1', remoteJid: '120363000000000001@g.us', participant: '99999@lid', fromMe: false },
+          messageTimestamp: 1_700_000_000,
+          message: { conversation: 'hello' },
+        },
+      ],
+    });
+    await settle();
+
+    expect(onMessageCreate).not.toHaveBeenCalled();
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 'GRP-1', fromMe: false }));
+  });
+
+  it('recognises the account LID via resolvePhone when credentials carry no user.lid', async () => {
+    const { events, stored, onMessage, onMessageCreate } = setup({
+      getSocketOrNull: () => ({ user: { id: '6280000000000:1@s.whatsapp.net' } }) as unknown as WASocket,
+      resolvePhone: jid => (jid === '99999@lid' ? '6280000000000' : null),
+    });
+    const rawKey = { id: 'ST-RESOLVED-LID', remoteJid: 'status@broadcast', participant: '99999@lid', fromMe: false };
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key: rawKey,
+          messageTimestamp: 1_700_000_000,
+          message: {
+            imageMessage: {
+              mimetype: 'image/jpeg',
+              fileLength: 64,
+              url: 'https://mmg.whatsapp.net/v/t62/own.enc',
+              directPath: '/v/t62/own.enc',
+            },
+          },
+        },
+      ],
+    });
+    await settle();
+
+    expect(downloadMediaMessage).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessageCreate).toHaveBeenCalledTimes(1);
+    expect(onMessageCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'ST-RESOLVED-LID',
+        chatId: 'status@broadcast',
+        fromMe: true,
+        media: { mimetype: 'image/jpeg', filename: undefined, omitted: true, sizeBytes: 64 },
+      }),
+    );
+    expect(stored.get('ST-RESOLVED-LID')?.key.fromMe).toBe(true);
+    expect(rawKey.fromMe).toBe(false);
+  });
+
+  it.each([
+    ['participantAlt', { participant: '99999@lid', participantAlt: '6280000000000@s.whatsapp.net' }],
+    ['remoteJidAlt', { participant: '99999@lid', remoteJidAlt: '6280000000000@s.whatsapp.net' }],
+  ])('recognises an own status via %s when credentials carry no user.lid', async (_field, altKeys) => {
+    const { events, stored, onMessage, onMessageCreate } = setup({
+      getSocketOrNull: () => ({ user: { id: '6280000000000:1@s.whatsapp.net' } }) as unknown as WASocket,
+    });
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'ST-ALT-SELF', remoteJid: 'status@broadcast', fromMe: false, ...altKeys },
+          messageTimestamp: 1_700_000_000,
+          message: {
+            imageMessage: {
+              mimetype: 'image/jpeg',
+              fileLength: 64,
+              url: 'https://mmg.whatsapp.net/v/t62/alt.enc',
+              directPath: '/v/t62/alt.enc',
+            },
+          },
+        },
+      ],
+    });
+    await settle();
+
+    expect(downloadMediaMessage).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessageCreate).toHaveBeenCalledWith(expect.objectContaining({ id: 'ST-ALT-SELF', fromMe: true }));
+    expect(stored.get('ST-ALT-SELF')?.key.fromMe).toBe(true);
+  });
+});
+
 describe('BaileysEvents record of conflicting copies removed', () => {
   it('forgets the id removed longest ago once it holds its limit', async () => {
     const limit = BaileysEvents.DELETED_FOR_EVERYONE_LIMIT;
