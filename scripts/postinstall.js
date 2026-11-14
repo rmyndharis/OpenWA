@@ -41,8 +41,9 @@
  *      notification ACKs and refreshing pairing credentials. A partial patch remains fatal.
  *  14. `node scripts/patch-baileys-media-stream.js --best-effort` when present, so an abandoned
  *      inbound media download cannot crash the process.
- *  15. `node scripts/patch-baileys-status-ack.js --best-effort` when present, acknowledging the
- *      top-level `<status>` stanza so the server stops ending the stream over it.
+ *  15. `node scripts/patch-baileys-status-ack.js --best-effort` when present, decoding and
+ *      acknowledging the top-level `<status>` stanza, so its status is delivered and the server stops
+ *      ending the stream over it.
  *  16. `node scripts/patch-wwebjs-puppeteer.js` when present. Browser teardown must use the
  *      connected getter required by Puppeteer 25; an unknown source shape aborts the install.
  *
