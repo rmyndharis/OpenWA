@@ -168,6 +168,32 @@ export class ConversationMappingService implements PluginConversationMappingPort
     return this.repo.findOne({ where: { pluginId, instanceId, providerConversationId } });
   }
 
+  /**
+   * Effective handover held by this plugin instance across every known ID form (`lid` and phone) of
+   * the row's chat: `human` outranks `closed`, which outranks `bot`, matching how the dispatch gate
+   * resolves split pre-pairing rows. Other plugins, instances, and sessions are excluded, and a
+   * `human` row returns immediately without alias or repository lookups.
+   */
+  async effectiveHandover(
+    row: Pick<ConversationMapping, 'sessionId' | 'chatId' | 'pluginId' | 'instanceId' | 'handoverState'>,
+  ): Promise<HandoverState> {
+    if (row.handoverState === 'human') return 'human';
+    const others = (await this.chatIdAliases(row.chatId)).filter(id => id !== row.chatId);
+    if (!others.length) return row.handoverState;
+    const siblings = await this.repo.find({
+      where: {
+        sessionId: row.sessionId,
+        pluginId: row.pluginId,
+        instanceId: row.instanceId,
+        chatId: In(others),
+      },
+    });
+    const states = [row.handoverState, ...siblings.map(s => s.handoverState)];
+    if (states.includes('human')) return 'human';
+    if (states.includes('closed')) return 'closed';
+    return 'bot';
+  }
+
   // A handover decision is about the chat, not one id form of it: it is written to every row this plugin
   // instance holds for the chat in the session, so a later write to one form (an idempotent upsert)
   // cannot revive or drop the decision through the other. A row rebound from a deleted session keeps
