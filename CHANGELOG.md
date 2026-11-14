@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-11-14
+
 ### Added
 
 - Log when an unlink clears the stored messages and chat states of a Baileys session, where only a failed clear was logged, and document that a reply, forward or reaction to a message from before the unlink answers `404` from then on (#2061). Thanks @rivenash for the report.
