@@ -1023,18 +1023,31 @@ export function mapBaileysStatus(status: number | null | undefined): DeliverySta
   }
 }
 
-/** Extract native poll versions from content already normalized by Baileys. */
-export function extractBaileysPoll(content: proto.IMessage): IncomingMessage['poll'] {
-  const poll = pollCreationOf(content) ?? pollCreationOf(content.pollCreationMessageV4?.message);
+/** Extract un-truncated poll question, raw options and multi-select flag from normalized content. */
+export function extractBaileysRawPoll(
+  content: proto.IMessage | null | undefined,
+): { name: string; options: string[]; allowMultipleAnswers: boolean } | undefined {
+  const poll = pollCreationOf(content) ?? pollCreationOf(content?.pollCreationMessageV4?.message);
   if (!poll) return undefined;
   const options = (poll.options ?? [])
     .map(option => option.optionName)
     .filter((option): option is string => typeof option === 'string');
   if (!options.length) return undefined;
   return {
-    name: boundPollText(poll.name ?? ''),
-    options: boundPollOptions(options),
+    name: poll.name ?? '',
+    options,
     allowMultipleAnswers: poll.selectableOptionsCount !== 1,
+  };
+}
+
+/** Extract native poll versions from content already normalized by Baileys. */
+export function extractBaileysPoll(content: proto.IMessage): IncomingMessage['poll'] {
+  const raw = extractBaileysRawPoll(content);
+  if (!raw) return undefined;
+  return {
+    name: boundPollText(raw.name),
+    options: boundPollOptions(raw.options),
+    allowMultipleAnswers: raw.allowMultipleAnswers,
   };
 }
 

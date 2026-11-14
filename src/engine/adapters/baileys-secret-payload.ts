@@ -3,9 +3,9 @@ import { createDecipheriv, hkdfSync } from 'node:crypto';
 /**
  * WhatsApp sends a contact's message edit, and a reaction in some chats, encrypted under the secret the
  * original message carries (`messageContextInfo.messageSecret`) instead of as the plain protocol or
- * reaction message the library understands. The library decrypts poll votes and event RSVPs that way
- * and nothing else, so these two reach the adapter as an opaque `secretEncryptedMessage` and
- * `encReactionMessage`.
+ * reaction message the library understands. The library decrypts event RSVPs on its own and exports
+ * `decryptPollVote` for poll updates, leaving edits and reactions to reach the adapter as an opaque
+ * `secretEncryptedMessage` and `encReactionMessage`.
  *
  * The key is derived as the library derives a poll vote's or an RSVP's: HKDF-SHA256 over the secret
  * with an all-zero salt and `<target id><target author><modifier><label>` as the info. The payload is

@@ -2920,6 +2920,14 @@ describe('BaileysAdapter inbound fan-out', () => {
       const mapped = (onHistoryMessages.mock.calls as Array<[IncomingMessage[]]>)[0][0];
       expect(mapped.map(m => m.id)).toEqual(['TEXT']);
     });
+
+    it('wires onPollVote through the BaileysEvents host', async () => {
+      const onPollVote = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize({ onPollVote });
+      const { events } = adapter as unknown as { events: { host: { getOnPollVote: () => unknown } } };
+      expect(events.host.getOnPollVote()).toBe(onPollVote);
+    });
   });
 
   it('surfaces inbound @mentions as neutral mentionedIds (contextInfo.mentionedJid)', async () => {

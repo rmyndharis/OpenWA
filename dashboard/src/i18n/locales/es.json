@@ -696,7 +696,7 @@
       "session.restriction": "Cuando WhatsApp restringe la cuenta o levanta una restricción",
       "presence.update": "Cuando un chat suscrito se conecta, escribe o se desconecta",
       "event.response": "Cuando un invitado responde a un evento de WhatsApp (asistirá, no asistirá, quizás)",
-      "poll.vote": "Cuando alguien marca o desmarca opciones de una encuesta (whatsapp-web.js)",
+      "poll.vote": "Cuando alguien marca o desmarca opciones de una encuesta",
       "group.join": "Cuando participantes se unen a un grupo o son añadidos",
       "group.leave": "Cuando participantes salen de un grupo o son eliminados",
       "group.update": "Cuando cambian el nombre, la descripción o los ajustes de un grupo",

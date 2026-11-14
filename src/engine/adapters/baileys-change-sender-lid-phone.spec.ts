@@ -71,6 +71,7 @@ function build(stored: Record<string, WAMessage>) {
     getOnMessageReceipt: noop,
     getOnGroupEvent: noop,
     getOnEventResponse: noop,
+    getOnPollVote: noop,
     findContact: () => null,
     getOnCall: noop,
     getOnPresenceUpdate: noop,

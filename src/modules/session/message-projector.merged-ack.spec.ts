@@ -154,6 +154,7 @@ describe('an ack merged into a message upsert reaches the stored row', () => {
       getOnMessageReceipt: () => undefined,
       getOnGroupEvent: () => undefined,
       getOnEventResponse: () => undefined,
+      getOnPollVote: () => undefined,
       findContact: () => null,
       getOnCall: () => undefined,
       getOnPresenceUpdate: () => undefined,
