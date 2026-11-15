@@ -93,7 +93,7 @@ describe('CreateSessionDto config validation', () => {
 });
 
 /**
- * The three keys the session reads are held to the same rules as PATCH /config. Stored unvalidated, an
+ * The four keys the session reads are held to the same rules as PATCH /config. Stored unvalidated, an
  * out-of-range value was clamped at start time without a word: -1 or 0.5 became 0 and disabled
  * reconnect, and the string "true" left autoRejectCalls off.
  */

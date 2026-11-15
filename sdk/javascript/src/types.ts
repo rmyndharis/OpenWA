@@ -192,7 +192,10 @@ export interface UpdateSessionConfigRequest {
   autoRejectCalls?: boolean | null;
   maxReconnectAttempts?: number | null;
   reconnectBaseDelay?: number | null;
-  /** Link preview for a send-text or send-template that sets neither `linkPreview` nor `customLinkPreview`. */
+  /**
+   * Link preview for a send-text or send-template that sets neither `linkPreview` nor `customLinkPreview`.
+   * `null` restores the engine's default.
+   */
   linkPreview?: boolean | null;
 }
 
@@ -262,7 +265,8 @@ export interface SendTextRequest {
   /**
    * Controls the URL preview. `false` suppresses it on both engines. Otherwise the engines differ:
    * whatsapp-web.js builds one in-page by default, while on Baileys a preview is OPT-IN — it needs
-   * `true`, because generating one is a blocking outbound fetch per URL.
+   * `true`, because generating one is a blocking outbound fetch of the first URL in the text. Unset,
+   * the session's `linkPreview` config applies when one is set (OpenWA 0.31.0 or later).
    */
   linkPreview?: boolean;
   /**

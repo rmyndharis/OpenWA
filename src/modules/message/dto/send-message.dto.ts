@@ -180,7 +180,8 @@ export class SendTextMessageDto {
       'Controls the URL preview, and the engines differ. On whatsapp-web.js WhatsApp Web builds one ' +
       'by default and `false` suppresses it. On Baileys previews are OPT-IN: `true` asks the gateway ' +
       'to fetch the page and attach one, while unset or `false` sends none — generating a preview is ' +
-      'a blocking outbound fetch per URL in the text, so it is never done unless asked for.',
+      'a blocking outbound fetch of the first URL in the text, so it is never done unless asked for. A ' +
+      'session can set its own default for an unset field: see `linkPreview` in the session config.',
     example: false,
   })
   // Implicit conversion turns EVERY non-empty string into true, so an unguarded `false` sent as a

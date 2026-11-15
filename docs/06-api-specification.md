@@ -1878,14 +1878,14 @@ Send a plain text message.
 
 **Request body** — `SendTextMessageDto`
 
-| Field             | Type     | Required | Constraints                                                     | Description                                                                                  |
-| ----------------- | -------- | -------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| chatId            | string   | Yes      | non-empty, max 255, `localpart@host`                            | `phone@c.us` or `groupId@g.us`                                                               |
-| text              | string   | Yes      | non-empty, max 4096                                             | Message text                                                                                 |
-| mentions          | string[] | No       | array of WIDs, max 1024 of 64 characters                        | WIDs to @mention (e.g. `["62811@c.us"]`). See **Mentions** below                             |
-| linkPreview       | boolean  | No       | —                                                               | `false` suppresses it; on Baileys `true` is required to get one. See **Link previews** below |
-| customLinkPreview | object   | No       | `{ url, title, description?, thumbnailUrl?, thumbnailBase64? }` | Attach a preview you supply. **Baileys only.** See **Link previews** below                   |
-| quotedMessageId   | string   | No       | non-empty                                                       | Quote an earlier message, making this a reply. See [Quoted sends](#quoted-sends) below       |
+| Field             | Type     | Required | Constraints                                                     | Description                                                                                                                                                     |
+| ----------------- | -------- | -------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| chatId            | string   | Yes      | non-empty, max 255, `localpart@host`                            | `phone@c.us` or `groupId@g.us`                                                                                                                                  |
+| text              | string   | Yes      | non-empty, max 4096                                             | Message text                                                                                                                                                    |
+| mentions          | string[] | No       | array of WIDs, max 1024 of 64 characters                        | WIDs to @mention (e.g. `["62811@c.us"]`). See **Mentions** below                                                                                                |
+| linkPreview       | boolean  | No       | —                                                               | `false` suppresses it; on Baileys `true` is required to get one. Unset, the session's `linkPreview` config applies when one is set. See **Link previews** below |
+| customLinkPreview | object   | No       | `{ url, title, description?, thumbnailUrl?, thumbnailBase64? }` | Attach a preview you supply. **Baileys only.** See **Link previews** below                                                                                      |
+| quotedMessageId   | string   | No       | non-empty                                                       | Quote an earlier message, making this a reply. See [Quoted sends](#quoted-sends) below                                                                          |
 
 ```json
 { "chatId": "628123456789@c.us", "text": "Hello from OpenWA!" }
@@ -1897,7 +1897,7 @@ Send a plain text message.
 
 **Link previews.** Sending `false` stops the preview on both engines. The two differ on what
 happens otherwise: whatsapp-web.js lets WhatsApp Web build one in-page (free, so it is the default),
-while on Baileys the gateway must fetch the page itself — a blocking outbound request per URL before
+while on Baileys the gateway must fetch the page itself — a blocking outbound request for the first URL in the text before
 the message can go out — so there a preview is **opt-in**:
 
 |                      | whatsapp-web.js                                                       | Baileys                                            |

@@ -7,7 +7,7 @@ import { TABLE_IMPORTERS } from '../infra/table-importers';
 
 /**
  * The bound applies to a config that is created. A row that already holds more (stored before the bound existed, or
- * restored from a backup) must keep loading and keep taking PATCH /config: the PATCH can add only the three
+ * restored from a backup) must keep loading and keep taking PATCH /config: the PATCH can add only the four
  * recognised scalar keys, and refusing it would leave the row's recognised keys unchangeable with no way to shrink
  * the blob through the API.
  */

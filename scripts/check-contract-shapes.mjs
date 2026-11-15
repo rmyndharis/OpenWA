@@ -250,7 +250,7 @@ const EXCLUDED = {
     CreateWebhookRequest:
       'BY DESIGN: `events` carries no omitempty, so a nil slice is sent as null, which the server treats like an absent key (default ["message.received"]), and an empty slice is sent as [] and refused with 400 (ArrayMinSize(1)). Adding omitempty would silently turn that empty slice into the default subscription. The harvester reads the missing omitempty as a required field, which the optional DTO field does not match',
     UpdateSessionConfigRequest:
-      'BY DESIGN: every component is `json:"-"` and MarshalJSON writes the body by hand, because the three fields need an explicit null to reset and Go cannot express "null" and "absent" through one pointer, so the harvester sees no wire fields at all',
+      'BY DESIGN: every component is `json:"-"` and MarshalJSON writes the body by hand, because the four fields need an explicit null to reset and Go cannot express "null" and "absent" through one pointer, so the harvester sees no wire fields at all',
     UpdateSessionProxyRequest:
       'BY DESIGN, same shape as UpdateSessionConfigRequest above: clearing a proxy needs an explicit null and `omitempty` on a nil pointer omits the key instead, so ProxyURL is `json:"-"` with a ClearProxyURL flag and MarshalJSON writes the body, leaving no wire fields for the harvester to see',
     ContactRecord:
@@ -268,7 +268,7 @@ const EXCLUDED = {
   },
   'sdk/java': {
     UpdateSessionConfigRequest:
-      'BY DESIGN: the three clear* components are client-side control flags consumed by UpdateSessionConfigRequestSerializer, which is what emits the explicit null; they never reach the wire',
+      'BY DESIGN: the four clear* components are client-side control flags consumed by UpdateSessionConfigRequestSerializer, which is what emits the explicit null; they never reach the wire',
     GroupSettings:
       'memberAddMode is a String because this record is also the PUT body; the MemberAddMode enum that GroupInfo uses would break callers that pass a string. The other components conform',
     StatusRecord:

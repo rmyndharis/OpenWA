@@ -620,10 +620,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * the request — leaves the stored value alone.
    *
    * No restart, and deliberately no engine call: `autoRejectCalls` is re-read from this row on
-   * every incoming call and `linkPreview` on every text send, so the write alone is what takes
-   * effect. The reconnect pair is read once per start() into reconnectStates, so it lands on the
-   * next start; that asymmetry is documented on the DTO rather than papered over by forcing a
-   * reconnect nobody asked for.
+   * every incoming call and `linkPreview` on every `send-text` or `send-template`, so the write
+   * alone is what takes effect. The reconnect pair is read once per start() into reconnectStates,
+   * so it lands on the next start; that asymmetry is documented on the DTO rather than papered
+   * over by forcing a reconnect nobody asked for.
    */
   async updateConfig(id: string, dto: UpdateSessionConfigDto): Promise<SessionConfigResponseDto> {
     // Compare-and-swap on the stored text: the write lands only while the column still holds the blob

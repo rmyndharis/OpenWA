@@ -127,7 +127,12 @@ function findFetchCall(method: string, path: string): FetchCall | undefined {
 // that answers with a stopped row; `startFailure`, `startResult` and `startGate` below change how a start
 // answers.
 // Mutable so a test can set the starting value and observe what a PATCH wrote back.
-let sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null as number | null, reconnectBaseDelay: 5000 };
+let sessionConfig = {
+  autoRejectCalls: false,
+  maxReconnectAttempts: null as number | null,
+  reconnectBaseDelay: 5000,
+  linkPreview: null as boolean | null,
+};
 let configPatchFails = false;
 let proxyGetFails = false;
 // How many of the next GET /api/sessions reads fail, as they do while the gateway is down.
@@ -2256,7 +2261,7 @@ async function openDetailFor(name: string): Promise<HTMLInputElement> {
 
 test('the auto-reject toggle reflects the stored config and patches only the key it owns', async () => {
   resetFetchCalls();
-  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000 };
+  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000, linkPreview: null };
   configPatchFails = false;
   renderSessions();
 
@@ -2276,7 +2281,7 @@ test('the auto-reject toggle reflects the stored config and patches only the key
 
 test('a rejected write reverts the toggle instead of leaving it showing a state the gateway never accepted', async () => {
   resetFetchCalls();
-  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000 };
+  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000, linkPreview: null };
   configPatchFails = true;
   renderSessions();
 
@@ -2297,7 +2302,7 @@ test('a rejected write reverts the toggle instead of leaving it showing a state 
 test('a toggle answer that lands after its modal closed does not change another session', async () => {
   const { screen, within, fireEvent, waitFor } = rtl;
   resetFetchCalls();
-  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000 };
+  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000, linkPreview: null };
   configPatchFails = false;
   let release!: () => void;
   configPatchGate = new Promise<void>(resolve => (release = resolve));
@@ -2320,7 +2325,7 @@ test('a toggle answer that lands after its modal closed does not change another 
 test('a session reopened while its toggle saves keeps the toggle locked until that save answers', async () => {
   const { screen, within, fireEvent, waitFor } = rtl;
   resetFetchCalls();
-  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000 };
+  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000, linkPreview: null };
   configPatchFails = false;
   let release!: () => void;
   configPatchGate = new Promise<void>(resolve => (release = resolve));
@@ -2340,7 +2345,7 @@ test('a session reopened while its toggle saves keeps the toggle locked until th
 test("one session's toggle answer does not unlock another session's pending toggle", async () => {
   const { screen, within, fireEvent, waitFor } = rtl;
   resetFetchCalls();
-  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000 };
+  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000, linkPreview: null };
   configPatchFails = false;
   let releaseFirst!: () => void;
   configPatchGate = new Promise<void>(resolve => (releaseFirst = resolve));
@@ -2366,7 +2371,7 @@ test("one session's toggle answer does not unlock another session's pending togg
 test('a failed toggle that lands after its modal closed does not revert another session', async () => {
   const { screen, within, fireEvent, waitFor } = rtl;
   resetFetchCalls();
-  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000 };
+  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000, linkPreview: null };
   configPatchFails = true;
   let release!: () => void;
   configPatchGate = new Promise<void>(resolve => (release = resolve));
@@ -2379,7 +2384,7 @@ test('a failed toggle that lands after its modal closed does not revert another 
     await waitFor(() => assert.equal(screen.queryByRole('dialog') === null, true));
 
     // The second session has auto-reject on.
-    sessionConfig = { autoRejectCalls: true, maxReconnectAttempts: null, reconnectBaseDelay: 5000 };
+    sessionConfig = { autoRejectCalls: true, maxReconnectAttempts: null, reconnectBaseDelay: 5000, linkPreview: null };
     const other = await openDetailFor('stale-engine');
     assert.equal(other.checked, true);
     assert.equal(other.disabled, false, 'the pending toggle of the closed modal locked this one');

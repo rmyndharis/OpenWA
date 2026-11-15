@@ -682,7 +682,7 @@ describe('SessionController: delete, QR and config routes write their record', (
   });
 
   it('updateConfig records the resulting config rather than the request', async () => {
-    const resulting = { autoRejectCalls: true, maxReconnectAttempts: 5, reconnectBaseDelay: 2000 };
+    const resulting = { autoRejectCalls: true, maxReconnectAttempts: 5, reconnectBaseDelay: 2000, linkPreview: null };
     sessionService.updateConfig.mockResolvedValue(resulting);
 
     await expect(controller.updateConfig(ID, { autoRejectCalls: true })).resolves.toBe(resulting);
