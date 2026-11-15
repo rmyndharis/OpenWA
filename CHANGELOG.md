@@ -15,11 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A `send-text` that a `message:sending` plugin rewrote to carry both `linkPreview: false` and `customLinkPreview` is refused with `400`, as the same request is; Baileys sent it with the supplied preview.
+- A `message:sending` plugin that rewrites a `send-text` to carry both `linkPreview: false` and `customLinkPreview` now gets the `400` the same request gets directly; Baileys sent it with the preview.
 - whatsapp-web.js: the header of an album no longer arrives as an empty `unknown` message, live, in the chat history or as a chat's last message; its photos and videos arrive as their own messages, as on Baileys (#2076).
-- whatsapp-web.js: the chat history (REST, MCP and plugin reads alike) returns a message deleted for everyone under the id of its stored row when its delete notice names the chat, or in a group the author, in the other id form, phone number or lid, that the gateway knows to be the same person; it was returned as the notice named it, so it still showed beside its stored copy (#2076).
+- whatsapp-web.js: the chat history (REST, MCP and plugin reads) returns a message deleted for everyone under the id of its stored row when its delete notice names the chat, or in a group the author, in the other id form (phone number or lid) and the gateway knows the two to be one person (#2076).
 - Dashboard: a message deleted for everyone is shown once when its history entry and its stored row name the chat or the author in different id forms, phone number and lid (#2076).
-- `PATCH /sessions/{sessionId}/config` on a session whose stored config is JSON but not an object, as a restored backup can hold, writes the recognised keys alone; it wrote the characters of a string or the items of an array back as keys.
+- `PATCH /sessions/{sessionId}/config` no longer writes the characters of a string or the items of an array back as keys when the stored config is JSON but not an object, as a restored backup can hold.
 
 ## [0.30.2] - 2026-11-15
 
