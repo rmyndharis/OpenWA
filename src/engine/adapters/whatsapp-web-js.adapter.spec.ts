@@ -1235,6 +1235,47 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
     ]);
   });
 
+  it('reports a deleted message in the id form of its chat when the delete notice names the chat in another one', async () => {
+    // Measured on a live session: a chat is known by its lid, and so is every id handed out for it, while the
+    // notice of an older delete names the original as `..._<phone>@c.us_...`.
+    const tombstone = (id: string, original: string | undefined, fromMe: boolean) => ({
+      id: { _serialized: id },
+      ...(original ? { protocolMessageKey: { _serialized: original } } : {}),
+      from: fromMe ? 'me' : '621@c.us',
+      to: fromMe ? '621@c.us' : 'me',
+      body: '',
+      type: 'revoked',
+      timestamp: 300,
+      fromMe,
+      hasMedia: false,
+      hasQuotedMsg: false,
+    });
+    const historyIds = async (requested: string, chatWid: string, entries: unknown[]) => {
+      const chat = { id: { _serialized: chatWid }, fetchMessages: jest.fn().mockResolvedValue(entries) };
+      const page = await readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) }).getChatHistory(
+        requested,
+        50,
+        false,
+      );
+      return page.map(m => m.id);
+    };
+
+    await expect(
+      historyIds('621@c.us', '148@lid', [
+        tombstone('false_621@c.us_NOTICE1', 'false_621@c.us_ORIG1', false),
+        tombstone('true_621@c.us_NOTICE2', 'true_621@c.us_ORIG2', true),
+        tombstone('false_621@c.us_NOTICE3', 'false_ORIG3', false),
+        tombstone('false_621@c.us_NOTICE4', undefined, false),
+      ]),
+    ).resolves.toEqual(['false_148@lid_ORIG1', 'true_148@lid_ORIG2', 'false_ORIG3', 'false_621@c.us_NOTICE4']);
+    // A group is one id form, so only the author can differ, and the notice is the only source for it.
+    await expect(
+      historyIds('120363000@g.us', '120363000@g.us', [
+        tombstone('false_120363000@g.us_NOTICE5_148@lid', 'false_120363000@g.us_ORIG5_621@c.us', false),
+      ]),
+    ).resolves.toEqual(['false_120363000@g.us_ORIG5_621@c.us']);
+  });
+
   it('keeps revoked tombstones in history and reports protocolMessageKey when present, or the tombstone id when absent', async () => {
     const directTombstone = {
       id: { _serialized: 'false_621@c.us_REVOKE1' },

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- whatsapp-web.js: the chat history returns a message deleted for everyone with the chat written in the chat's own id form, where a delete notice that named the chat by phone number left it under an id no stored row has (#2076).
+
 ## [0.30.2] - 2026-11-15
 
 ### Added

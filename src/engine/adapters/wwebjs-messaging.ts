@@ -386,6 +386,20 @@ function ensureSendable(chatId: string, shape: 'reply' | 'location' | 'contact c
 const SERIALIZED_MESSAGE_ID = /^(?:true|false)_[^_@]+@[^_@]+_[^_]+(?:_[^_]+)?$/;
 
 /**
+ * A message id (`fromMe_chat_stanza[_participant]`) with the chat written the way the chat itself is. A delete
+ * notice can name the chat by phone number where the chat, and so every id handed out for its messages, uses the
+ * lid; the stanza is the same in both. An id of another shape is left as it is.
+ */
+function inChatForm(messageId: string, chatWid: string | undefined): string {
+  const parts = messageId.split('_');
+  if (!chatWid || parts.length < 3) {
+    return messageId;
+  }
+  parts[1] = chatWid;
+  return parts.join('_');
+}
+
+/**
  * Messaging operations extracted from WhatsAppWebJsAdapter: the send paths (with the @c.us -> @lid
  * resolution cache), reactions, history, delete and edit. The adapter keeps the public methods as
  * thin forwarders and injects the shared host surface (./wwebjs-host) via closures, so the delegate
@@ -1139,6 +1153,7 @@ export class WwebjsMessaging {
     // Chat.fetchMessages only caps the page when `limit > 0` (Chat.js), so a 0/negative/NaN limit fails
     // OPEN and returns every loaded message. Substitute the default, as getChannelMessages does.
     const safeLimit = Number.isFinite(limit) && limit >= 1 ? Math.trunc(limit) : 50;
+    let chatWid: string | undefined;
     const messages = await this.withPage('getChatHistory', async () => {
       const chat = await this.client()
         .getChatById(chatId)
@@ -1149,6 +1164,7 @@ export class WwebjsMessaging {
       if (!chat) {
         return [];
       }
+      chatWid = readWid(chat.id);
       return chat.fetchMessages({ limit: safeLimit });
     });
     const results: IncomingMessage[] = [];
@@ -1193,7 +1209,7 @@ export class WwebjsMessaging {
         const originalKey = (msg as unknown as { protocolMessageKey?: SerializedWid | string }).protocolMessageKey;
         const originalId = readWid(originalKey);
         if (originalId) {
-          out.id = originalId;
+          out.id = inChatForm(originalId, chatWid);
         }
       }
       out.chatId = chatId;
