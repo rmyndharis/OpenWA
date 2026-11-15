@@ -7,6 +7,10 @@ import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
+// A role query walks the whole page, and the dialog's focus and removal land on later turns, so under a busy CI runner
+// the default one-second wait for them can run out before the page has done anything wrong.
+const SLOW_WAIT_MS = 5_000;
+
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 }
@@ -141,10 +145,10 @@ test('keyboard focus returns to Save Configuration when the restart dialog is pu
   rtl.fireEvent.click(save);
   const later = await rtl.screen.findByRole('button', { name: 'Restart Later' });
   // The dialog moves focus into itself in an effect after it mounts.
-  await rtl.waitFor(() => assert.ok(document.activeElement?.closest('[role="dialog"]')));
+  await rtl.waitFor(() => assert.ok(document.activeElement?.closest('[role="dialog"]')), { timeout: SLOW_WAIT_MS });
   later.focus();
   rtl.fireEvent.click(later);
-  await rtl.waitFor(() => assert.equal(rtl.screen.queryByRole('dialog'), null));
+  await rtl.waitFor(() => assert.equal(rtl.screen.queryByRole('dialog'), null), { timeout: SLOW_WAIT_MS });
   await rtl.waitFor(() => assert.equal(save.disabled, false));
 
   assert.equal(focusedName(), 'Save Configuration');
@@ -170,7 +174,7 @@ test('Escape from the restart dialog returns focus to Save Configuration', async
   rtl.fireEvent.click(save);
   const dialog = await rtl.screen.findByRole('dialog');
   rtl.fireEvent.keyDown(dialog, { key: 'Escape' });
-  await rtl.waitFor(() => assert.equal(rtl.screen.queryByRole('dialog') === null, true));
+  await rtl.waitFor(() => assert.equal(rtl.screen.queryByRole('dialog') === null, true), { timeout: SLOW_WAIT_MS });
   assert.equal(focusedName(), 'Save Configuration');
 });
 
