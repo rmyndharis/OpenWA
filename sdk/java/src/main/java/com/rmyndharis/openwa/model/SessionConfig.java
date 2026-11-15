@@ -13,4 +13,10 @@ package com.rmyndharis.openwa.model;
  * @param linkPreview link preview for a text send that sets none; null keeps the engine's default
  */
 public record SessionConfig(
-        Boolean autoRejectCalls, Integer maxReconnectAttempts, Integer reconnectBaseDelay, Boolean linkPreview) {}
+        Boolean autoRejectCalls, Integer maxReconnectAttempts, Integer reconnectBaseDelay, Boolean linkPreview) {
+
+    /** Back-compatible constructor without {@code linkPreview}. */
+    public SessionConfig(Boolean autoRejectCalls, Integer maxReconnectAttempts, Integer reconnectBaseDelay) {
+        this(autoRejectCalls, maxReconnectAttempts, reconnectBaseDelay, null);
+    }
+}

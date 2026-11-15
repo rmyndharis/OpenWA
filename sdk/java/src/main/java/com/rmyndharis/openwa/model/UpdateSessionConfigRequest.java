@@ -24,6 +24,25 @@ public record UpdateSessionConfigRequest(
         boolean clearReconnectBaseDelay,
         boolean clearLinkPreview) {
 
+    /** Back-compatible constructor without {@code linkPreview} or {@code clearLinkPreview}. */
+    public UpdateSessionConfigRequest(
+            Boolean autoRejectCalls,
+            Integer maxReconnectAttempts,
+            Integer reconnectBaseDelay,
+            boolean clearAutoRejectCalls,
+            boolean clearMaxReconnectAttempts,
+            boolean clearReconnectBaseDelay) {
+        this(
+                autoRejectCalls,
+                maxReconnectAttempts,
+                reconnectBaseDelay,
+                null,
+                clearAutoRejectCalls,
+                clearMaxReconnectAttempts,
+                clearReconnectBaseDelay,
+                false);
+    }
+
     public static Builder builder() {
         return new Builder();
     }

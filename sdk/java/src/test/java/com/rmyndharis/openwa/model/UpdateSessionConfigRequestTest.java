@@ -103,4 +103,20 @@ class UpdateSessionConfigRequestTest {
         assertEquals("http://h/api/sessions/s/proxy", tx.lastRequest().url());
         assertEquals("{\"proxyUrl\":null}", tx.lastRequest().body());
     }
+
+    @Test
+    void backCompatibleConstructorsLeaveLinkPreviewUnset() {
+        SessionConfig config = new SessionConfig(true, 5, 1000);
+        assertEquals(Boolean.TRUE, config.autoRejectCalls());
+        assertEquals(5, config.maxReconnectAttempts());
+        assertEquals(1000, config.reconnectBaseDelay());
+        assertEquals(null, config.linkPreview());
+
+        UpdateSessionConfigRequest req = new UpdateSessionConfigRequest(true, null, 2000, false, true, false);
+        assertEquals(null, req.linkPreview());
+        assertEquals(false, req.clearLinkPreview());
+        assertEquals(
+                "{\"autoRejectCalls\":true,\"maxReconnectAttempts\":null,\"reconnectBaseDelay\":2000}",
+                gson.toJson(req));
+    }
 }
