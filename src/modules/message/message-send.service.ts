@@ -48,6 +48,16 @@ function isUrlPointerMetadata(metadata: Record<string, unknown> | undefined): bo
   return typeof data === 'string' && /^https?:\/\//i.test(data);
 }
 
+/**
+ * Asking to suppress the preview AND to attach one is a contradiction, and guessing which half
+ * the caller meant would send a message they did not ask for either way.
+ */
+function assertOnePreviewChoice(dto: SendTextMessageDto): void {
+  if (dto.linkPreview === false && dto.customLinkPreview) {
+    throw new BadRequestException('linkPreview: false cannot be combined with customLinkPreview');
+  }
+}
+
 /** Persistence payload for one outbound row written by {@link MessageSendService.saveOutgoingMessage}. */
 export interface SaveOutgoingMessageData {
   waMessageId?: string;
@@ -114,11 +124,7 @@ export class MessageSendService {
   ) {}
 
   async sendText(sessionId: string, dto: SendTextMessageDto): Promise<MessageResponseDto> {
-    // Asking to suppress the preview AND to attach one is a contradiction, and guessing which half
-    // the caller meant would send a message they did not ask for either way.
-    if (dto.linkPreview === false && dto.customLinkPreview) {
-      throw new BadRequestException('linkPreview: false cannot be combined with customLinkPreview');
-    }
+    assertOnePreviewChoice(dto);
     const {
       message,
       finalDto,
@@ -135,7 +141,11 @@ export class MessageSendService {
         type: 'text',
         quotedMessageId: finalDto.quotedMessageId,
       }),
-      (d: SendTextMessageDto) => this.buildCustomPreview(d.customLinkPreview),
+      (d: SendTextMessageDto) => {
+        // Again on what the gate returned: a handler can rewrite the send into the same contradiction.
+        assertOnePreviewChoice(d);
+        return this.buildCustomPreview(d.customLinkPreview);
+      },
     );
 
     // Humanising "typing…" pause before the actual send (anti-automation signal). On by default;
@@ -143,8 +153,11 @@ export class MessageSendService {
     await this.simulateTypingIfEnabled(engine, finalDto.chatId, finalDto.text);
 
     // The session's default fills in only when the send left the preview open: a value in the
-    // request, or a preview the caller supplied, is the caller's choice and always wins.
-    const linkPreview = finalDto.linkPreview ?? (customPreview ? undefined : sessionLinkPreview);
+    // request, or a preview the caller supplied, is the caller's choice and always wins. Only a
+    // boolean is a choice: a plugin's send and a gate rewrite arrive without the DTO's rules, and
+    // the engines read anything else as unset.
+    const requested = typeof finalDto.linkPreview === 'boolean' ? finalDto.linkPreview : undefined;
+    const linkPreview = requested ?? (customPreview ? undefined : sessionLinkPreview);
 
     let result: MessageResult;
     try {
