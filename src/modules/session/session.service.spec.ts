@@ -11357,6 +11357,79 @@ describe('SessionService', () => {
       expect(startSpy).not.toHaveBeenCalled();
     });
 
+    it('names AUTO_START_SESSIONS when it is off and linked sessions stay down', async () => {
+      delete process.env.AUTO_START_SESSIONS;
+      (repository.count as jest.Mock).mockResolvedValue(2);
+      const logger = (service as unknown as { logger: { log: (...a: unknown[]) => void } }).logger;
+      const log = jest.spyOn(logger, 'log').mockImplementation(() => undefined);
+
+      service.onApplicationBootstrap();
+      await autoStartRun();
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('AUTO_START_SESSIONS is off'), {
+        action: 'auto_start_disabled',
+        count: 2,
+      });
+      expect(log.mock.calls[0][0]).toContain('POST /api/sessions/{sessionId}/start');
+      expect(repository.find).not.toHaveBeenCalled();
+    });
+
+    it('says nothing about AUTO_START_SESSIONS when no linked session is left down', async () => {
+      delete process.env.AUTO_START_SESSIONS;
+      (repository.count as jest.Mock).mockResolvedValue(0);
+      const logger = (service as unknown as { logger: { log: (...a: unknown[]) => void } }).logger;
+      const log = jest.spyOn(logger, 'log').mockImplementation(() => undefined);
+
+      service.onApplicationBootstrap();
+      await autoStartRun();
+
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it('counts the sessions auto-start would launch, with the same predicate', async () => {
+      const ownership = {
+        claimableWhere: jest.fn().mockReturnValue([{ nodeId: IsNull() }, { nodeId: 'node-a' }]),
+        onLeaseLoss: jest.fn(),
+        setEngineLiveness: jest.fn(),
+        startHeartbeat: jest.fn(),
+        stopHeartbeat: jest.fn(),
+        releaseAll: jest.fn().mockResolvedValue(undefined),
+      };
+      Object.assign(service as unknown as Record<string, unknown>, { ownership });
+      (repository.count as jest.Mock).mockResolvedValue(0);
+      (repository.find as jest.Mock).mockResolvedValue([]);
+
+      delete process.env.AUTO_START_SESSIONS;
+      service.onApplicationBootstrap();
+      await autoStartRun();
+      process.env.AUTO_START_SESSIONS = 'true';
+      service.onApplicationBootstrap();
+      await autoStartRun();
+
+      const [[{ where: counted }]] = (repository.count as jest.Mock).mock.calls as [[{ where: unknown }]];
+      const [[{ where: launched }]] = (repository.find as jest.Mock).mock.calls as [[{ where: unknown }]];
+      expect(counted).toEqual(launched);
+      expect(counted).toEqual([
+        { nodeId: IsNull(), phone: Not(IsNull()), status: SessionStatus.DISCONNECTED, desiredState: IsNull() },
+        { nodeId: 'node-a', phone: Not(IsNull()), status: SessionStatus.DISCONNECTED, desiredState: IsNull() },
+      ]);
+    });
+
+    it('keeps booting when the count behind the AUTO_START_SESSIONS hint fails', async () => {
+      delete process.env.AUTO_START_SESSIONS;
+      (repository.count as jest.Mock).mockRejectedValue(new Error('db down'));
+      const logger = (service as unknown as { logger: { warn: (...a: unknown[]) => void } }).logger;
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+      service.onApplicationBootstrap();
+      await expect(autoStartRun()).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledWith('Could not count the sessions auto-start would have started', {
+        action: 'auto_start_disabled_scan_failed',
+        error: 'db down',
+      });
+    });
+
     it('starts no engine when there are no previously-authenticated sessions', async () => {
       process.env.AUTO_START_SESSIONS = 'true';
       (repository.find as jest.Mock).mockResolvedValue([]);

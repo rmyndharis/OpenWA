@@ -88,7 +88,8 @@ docker compose restart openwa-api
 curl http://localhost:2785/api/health
 
 # Sessions reconnect on their own only with AUTO_START_SESSIONS=true. The production compose
-# leaves it unset (off), so start each session first:
+# leaves it unset (off), so start each session first. The boot log says how many it left down
+# (action=auto_start_disabled):
 #   curl -X POST -H "X-API-Key: $API_KEY" http://localhost:2785/api/sessions/{sessionId}/start
 # Check all sessions reconnected (id alongside status — the send below needs the id)
 curl -H "X-API-Key: $API_KEY" \
