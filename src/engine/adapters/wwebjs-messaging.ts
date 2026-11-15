@@ -19,7 +19,15 @@ import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
-import { chatKind, parseWaId, toNeutralJid, toParticipantWid, userPart } from '../identity/wa-id';
+import {
+  SERIALIZED_MESSAGE_ID,
+  chatKind,
+  messageIdInChat,
+  parseWaId,
+  toNeutralJid,
+  toParticipantWid,
+  userPart,
+} from '../identity/wa-id';
 import {
   chatHistoryMediaBudgetBytes,
   coerceDeclaredSize,
@@ -376,27 +384,6 @@ function ensureSendable(chatId: string, shape: 'reply' | 'location' | 'contact c
       new NotImplementedException(`whatsapp-web.js cannot send a ${shape} to ${to}; nothing was sent.`),
     );
   }
-}
-
-/**
- * A full serialized message id: `<fromMe>_<chat>_<id>`, plus one more segment on some messages (the sender of
- * a group message, or `out` on an own 1:1 message). Client.getMessageById parses the chat part in the page and
- * throws an unnamed error (a 500) for anything else, so this is checked before the page is asked.
- */
-const SERIALIZED_MESSAGE_ID = /^(?:true|false)_[^_@]+@[^_@]+_[^_]+(?:_[^_]+)?$/;
-
-/**
- * A message id (`fromMe_chat_stanza[_participant]`) with the chat written the way the chat itself is. A delete
- * notice can name the chat by phone number where the chat, and so every id handed out for its messages, uses the
- * lid; the stanza is the same in both. An id of another shape is left as it is.
- */
-function inChatForm(messageId: string, chatWid: string | undefined): string {
-  const parts = messageId.split('_');
-  if (!chatWid || parts.length < 3) {
-    return messageId;
-  }
-  parts[1] = chatWid;
-  return parts.join('_');
 }
 
 /**
@@ -1205,11 +1192,13 @@ export class WwebjsMessaging {
       if (msg.type === MessageTypes.REVOKED) {
         // WhatsApp Web lists a deleted message under the id of the delete notice, not the id the message
         // had, so a consumer holding the original could not match the two. The notice names the original
-        // in `protocolMessageKey`; report that id, and keep the entry's own when the key is absent.
+        // in `protocolMessageKey`; report that id, and keep the entry's own when the key is absent. The
+        // notice can name a person's chat by phone number where the chat, and so every id handed out for
+        // its messages, uses the lid: the chat is written the way the chat itself is.
         const originalKey = (msg as unknown as { protocolMessageKey?: SerializedWid | string }).protocolMessageKey;
         const originalId = readWid(originalKey);
         if (originalId) {
-          out.id = inChatForm(originalId, chatWid);
+          out.id = chatWid ? messageIdInChat(originalId, chatWid) : originalId;
         }
       }
       out.chatId = chatId;

@@ -198,3 +198,23 @@ export function chatKind(jid: string): ChatKind {
       return 'unknown';
   }
 }
+
+/**
+ * A full whatsapp-web.js message id: `<fromMe>_<chat>_<id>`, plus one more segment on some messages (the sender
+ * of a group message, or `out` on an own 1:1 message). Captures the direction, the chat and what follows it.
+ */
+export const SERIALIZED_MESSAGE_ID = /^(true|false)_([^_@]+@[^_@]+)_([^_]+(?:_[^_]+)?)$/;
+
+/**
+ * A whatsapp-web.js message id with its chat written as `chat`, for the one case where the same message goes
+ * by two ids: a person's chat named by phone number in one and by lid in the other. Anything else comes back
+ * unchanged: an id that is not a full serialized one, an id that names a group, a channel or a broadcast, and
+ * any id when `chat` is not a person's.
+ */
+export function messageIdInChat(messageId: string, chat: string): string {
+  const parts = SERIALIZED_MESSAGE_ID.exec(messageId);
+  if (!parts || chatKind(parts[2]) !== 'individual' || chatKind(chat) !== 'individual') {
+    return messageId;
+  }
+  return `${parts[1]}_${chat}_${parts[3]}`;
+}

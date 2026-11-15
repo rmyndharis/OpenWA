@@ -1274,6 +1274,28 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
         tombstone('false_120363000@g.us_NOTICE5_148@lid', 'false_120363000@g.us_ORIG5_621@c.us', false),
       ]),
     ).resolves.toEqual(['false_120363000@g.us_ORIG5_621@c.us']);
+    // Only a person's chat named in the other form is rewritten: a key that names a group or a broadcast list,
+    // one whose chat part is no id at all, and any key listed in a chat that is not a person's stay as they are.
+    await expect(
+      historyIds('621@c.us', '148@lid', [
+        tombstone('false_621@c.us_NOTICE6', 'false_120363000@g.us_ORIG6_621@c.us', false),
+        tombstone('false_621@c.us_NOTICE7', 'false_1700000000@broadcast_ORIG7_621@c.us', false),
+        tombstone('false_621@c.us_NOTICE8', 'false_ORIG_8', false),
+        tombstone('false_621@c.us_NOTICE9', 'false_621@c.us_ORIG_9_A_B', false),
+        tombstone('false_621@c.us_NOTICE10', 'true_621@c.us_ORIG10_out', true),
+      ]),
+    ).resolves.toEqual([
+      'false_120363000@g.us_ORIG6_621@c.us',
+      'false_1700000000@broadcast_ORIG7_621@c.us',
+      'false_ORIG_8',
+      'false_621@c.us_ORIG_9_A_B',
+      'true_148@lid_ORIG10_out',
+    ]);
+    await expect(
+      historyIds('120363000@g.us', '120363000@g.us', [
+        tombstone('false_120363000@g.us_NOTICE11_148@lid', 'false_621@c.us_ORIG11', false),
+      ]),
+    ).resolves.toEqual(['false_621@c.us_ORIG11']);
   });
 
   it('keeps revoked tombstones in history and reports protocolMessageKey when present, or the tombstone id when absent', async () => {

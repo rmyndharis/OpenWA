@@ -3,6 +3,7 @@ import {
   isAddressableParticipant,
   isChannelJid,
   isIndividualWid,
+  messageIdInChat,
   parseWaId,
   toNeutralJid,
   toParticipantWid,
@@ -211,6 +212,42 @@ describe('wa-id', () => {
     it('surfaces as an individual chat, not unknown', () => {
       expect(chatKind('628111@hosted')).toBe('individual');
       expect(chatKind('4707@hosted.lid')).toBe('individual');
+    });
+  });
+
+  describe('messageIdInChat', () => {
+    it("rewrites a person's chat to the form given, whichever way round", () => {
+      expect(messageIdInChat('false_628111@c.us_3EB0AA', '148@lid')).toBe('false_148@lid_3EB0AA');
+      expect(messageIdInChat('true_148@lid_3EB0AA', '628111@c.us')).toBe('true_628111@c.us_3EB0AA');
+      expect(messageIdInChat('true_628111@c.us_3EB0AA_out', '148@lid')).toBe('true_148@lid_3EB0AA_out');
+    });
+
+    it('leaves an id that names a group, a channel, a broadcast list or the status feed', () => {
+      for (const id of [
+        'false_120363000@g.us_3EB0AA_628111@c.us',
+        'false_120363111@newsletter_3EB0AA',
+        'false_1700000000@broadcast_3EB0AA_628111@c.us',
+        'false_status@broadcast_3EB0AA_628111@c.us',
+      ]) {
+        expect(messageIdInChat(id, '148@lid')).toBe(id);
+      }
+    });
+
+    it("leaves every id when the chat given is not a person's", () => {
+      expect(messageIdInChat('false_628111@c.us_3EB0AA', '120363000@g.us')).toBe('false_628111@c.us_3EB0AA');
+      expect(messageIdInChat('false_628111@c.us_3EB0AA', 'status@broadcast')).toBe('false_628111@c.us_3EB0AA');
+    });
+
+    it('leaves an id that is not a full serialized one', () => {
+      for (const id of [
+        '3EB0AA',
+        'false_3EB0AA',
+        'false_ORIG_3',
+        'maybe_628111@c.us_3EB0AA',
+        'false_628111@c.us_A_B_C',
+      ]) {
+        expect(messageIdInChat(id, '148@lid')).toBe(id);
+      }
     });
   });
 });
