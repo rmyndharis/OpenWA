@@ -221,6 +221,30 @@ export function messageIdInChat(messageId: string, chat: string): string {
   return SERIALIZED_MESSAGE_ID.test(renamed) ? renamed : messageId;
 }
 
+/** An id that names a person exactly as an engine writes it: digits, an optional device, a person's domain. */
+const PERSON_WID = /^\d{5,}(?::\d+)?@(?:c\.us|s\.whatsapp\.net|lid|hosted|hosted\.lid)$/;
+
+/** The author a group's whatsapp-web.js message id names in its fourth part, when that part names a person. */
+export function authorOfMessageId(messageId: string): string | undefined {
+  const parts = SERIALIZED_MESSAGE_ID.exec(messageId);
+  const fourth = parts?.[3].split('_')[1];
+  return parts && fourth && chatKind(parts[2]) === 'group' && PERSON_WID.test(fourth) ? fourth : undefined;
+}
+
+/**
+ * A group's whatsapp-web.js message id with its author written as `author`: the same message goes by two ids
+ * when one names its author by phone number and the other by lid. Anything else comes back unchanged: an id
+ * of a chat that is not a group, an id with no author part, an id that is not a full serialized one, and any
+ * id when `author` is not a person's id as an engine writes it.
+ */
+export function messageIdByAuthor(messageId: string, author: string): string {
+  const parts = SERIALIZED_MESSAGE_ID.exec(messageId);
+  if (!parts || !authorOfMessageId(messageId) || !PERSON_WID.test(author)) {
+    return messageId;
+  }
+  return `${parts[1]}_${parts[2]}_${parts[3].split('_')[0]}_${author}`;
+}
+
 const chatsOfPages = new WeakMap<object, string>();
 
 /**

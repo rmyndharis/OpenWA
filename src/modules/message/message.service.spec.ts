@@ -73,7 +73,12 @@ describe('MessageService', () => {
   let engines: EngineRegistry;
   let messageProjector: { recordOutboundMessageEdit: jest.Mock; recordRevoke: jest.Mock };
   let hookManager: jest.Mocked<Partial<HookManager>>;
-  let lidMappingStore: { findLidsForPhone: jest.Mock; findPhoneForLid: jest.Mock };
+  let lidMappingStore: {
+    findLidsForPhone: jest.Mock;
+    findPhoneForLid: jest.Mock;
+    lidsForPhonesPersisted: jest.Mock;
+    phonesForLidsPersisted: jest.Mock;
+  };
   let mockEngine: ReturnType<typeof createMockEngine>;
   let pacing: { assertSendAllowed: jest.Mock };
 
@@ -109,6 +114,8 @@ describe('MessageService', () => {
     lidMappingStore = {
       findLidsForPhone: jest.fn().mockResolvedValue([]),
       findPhoneForLid: jest.fn().mockResolvedValue(null),
+      lidsForPhonesPersisted: jest.fn().mockResolvedValue({}),
+      phonesForLidsPersisted: jest.fn().mockResolvedValue({}),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -800,7 +807,15 @@ describe('MessageService', () => {
     describe('a deleted message under the id of its stored row', () => {
       const LID = '148000111@lid';
       const PHONE = '628999111@c.us';
-      const entry = (id: string, type = 'revoked') => ({ id, type, body: '', from: 'a', to: 'b', chatId: LID });
+      const entry = (id: string, type = 'revoked', author?: string) => ({
+        id,
+        type,
+        body: '',
+        from: 'a',
+        to: 'b',
+        chatId: LID,
+        ...(author ? { author } : {}),
+      });
       const storedUnder = (...ids: string[]) =>
         (repository.find as jest.Mock).mockImplementation(
           ({ where }: { where: { waMessageId: { value: string[] } } }) =>
@@ -821,6 +836,9 @@ describe('MessageService', () => {
         storedUnder(`false_${LID}_AAA`);
         // No lid mapping: the chat asked for supplies the other form.
         expect(await idsOf(LID, [entry(`false_${PHONE}_AAA`)])).toEqual([`false_${LID}_AAA`]);
+        // A person's chat names no author, so the mapping is not read for one.
+        expect(lidMappingStore.lidsForPhonesPersisted).not.toHaveBeenCalled();
+        expect(lidMappingStore.phonesForLidsPersisted).not.toHaveBeenCalled();
       });
 
       it('takes the other form from the ids of the page when the chat asked for does not supply it', async () => {
@@ -894,6 +912,114 @@ describe('MessageService', () => {
         );
         expect(sizes).toEqual([500, 500, 200]);
         expect(new Set(asked()).size).toBe(1200);
+      });
+
+      describe('in a group, where the author can be named in the other form', () => {
+        const GROUP = '120363000111@g.us';
+        const BY_PHONE = `false_${GROUP}_AAA_628999111@c.us`;
+        const BY_LID = `false_${GROUP}_AAA_148000111@lid`;
+
+        it('takes the author form from the lid mapping, in one read for the phone numbers and one for the lids', async () => {
+          lidMappingStore.lidsForPhonesPersisted.mockResolvedValue({ '628999111': ['148000111'] });
+          lidMappingStore.phonesForLidsPersisted.mockResolvedValue({ '148000222': '628999222' });
+          storedUnder(BY_LID, `false_${GROUP}_CCC_628999222@c.us`);
+
+          const ids = await idsOf(GROUP, [
+            entry(BY_PHONE),
+            entry(`false_${GROUP}_BBB_628999111@c.us`),
+            entry(`false_${GROUP}_CCC_148000222@lid`),
+            entry(`false_${GROUP}_DDD_628999333@c.us`, 'text'),
+          ]);
+
+          expect(ids).toEqual([
+            BY_LID,
+            `false_${GROUP}_BBB_628999111@c.us`,
+            `false_${GROUP}_CCC_628999222@c.us`,
+            `false_${GROUP}_DDD_628999333@c.us`,
+          ]);
+          // Only the authors of deleted entries are asked for, each once, in a batch per form.
+          expect(lidMappingStore.lidsForPhonesPersisted).toHaveBeenCalledTimes(1);
+          expect(lidMappingStore.lidsForPhonesPersisted).toHaveBeenCalledWith(['628999111']);
+          expect(lidMappingStore.phonesForLidsPersisted).toHaveBeenCalledTimes(1);
+          expect(lidMappingStore.phonesForLidsPersisted).toHaveBeenCalledWith(['148000222']);
+        });
+
+        // The entry of a deleted message carries the fields of its delete notice: `author` is whoever
+        // deleted it, and in a group that can be an admin. Their own message with the same stanza is
+        // another message.
+        it('does not take the author of the delete notice for the author of the message', async () => {
+          storedUnder(`false_${GROUP}_AAA_148000999@lid`);
+          const ids = await idsOf(GROUP, [entry(BY_PHONE, 'revoked', '148000999@lid')]);
+          expect(ids).toEqual([BY_PHONE]);
+        });
+
+        it("takes the account's own id for a message it sent and deleted", async () => {
+          storedUnder(`true_${GROUP}_AAA_628999111@c.us`);
+          const own = { ...entry(`true_${GROUP}_AAA_148000111@lid`), fromMe: true, from: '628999111@c.us' };
+          expect(await idsOf(GROUP, [own])).toEqual([`true_${GROUP}_AAA_628999111@c.us`]);
+        });
+
+        it("does not take the account's id for a message somebody else sent or deleted", async () => {
+          // The account, an admin, deleted a member's message: the notice is its own, the message is not.
+          storedUnder(`false_${GROUP}_AAA_628999111@c.us`);
+          const deletedByAccount = {
+            ...entry(`false_${GROUP}_AAA_148000111@lid`),
+            fromMe: true,
+            from: '628999111@c.us',
+          };
+          expect(await idsOf(GROUP, [deletedByAccount])).toEqual([`false_${GROUP}_AAA_148000111@lid`]);
+          // Somebody else deleted the account's message: `from` is not the account.
+          storedUnder(`true_${GROUP}_AAA_628999222@c.us`);
+          const deletedByOther = {
+            ...entry(`true_${GROUP}_AAA_148000111@lid`),
+            fromMe: false,
+            from: '628999222@c.us',
+          };
+          expect(await idsOf(GROUP, [deletedByOther])).toEqual([`true_${GROUP}_AAA_148000111@lid`]);
+        });
+
+        it('gives every spelling of one author the forms the lid mapping knows', async () => {
+          lidMappingStore.lidsForPhonesPersisted.mockResolvedValue({ '628999111': ['148000111'] });
+          storedUnder(`false_${GROUP}_AAA_148000111@lid`, `false_${GROUP}_BBB_148000111@lid`);
+
+          const ids = await idsOf(GROUP, [
+            entry(`false_${GROUP}_AAA_628999111:2@c.us`),
+            entry(`false_${GROUP}_BBB_628999111@c.us`),
+          ]);
+
+          expect(ids).toEqual([`false_${GROUP}_AAA_148000111@lid`, `false_${GROUP}_BBB_148000111@lid`]);
+          expect(lidMappingStore.lidsForPhonesPersisted).toHaveBeenCalledWith(['628999111']);
+        });
+
+        it('keeps the id the engine reports when a row is stored under it, or when no row has another form', async () => {
+          lidMappingStore.lidsForPhonesPersisted.mockResolvedValue({ '628999111': ['148000111'] });
+          storedUnder(BY_PHONE, BY_LID);
+          expect(await idsOf(GROUP, [entry(BY_PHONE)])).toEqual([BY_PHONE]);
+          storedUnder();
+          expect(await idsOf(GROUP, [entry(BY_PHONE)])).toEqual([BY_PHONE]);
+        });
+
+        it('never takes another message of the group for it: the stanza and the direction stay', async () => {
+          lidMappingStore.lidsForPhonesPersisted.mockResolvedValue({ '628999111': ['148000111'] });
+          storedUnder(`false_${GROUP}_OTHER_148000111@lid`, `true_${GROUP}_AAA_148000111@lid`);
+          expect(await idsOf(GROUP, [entry(BY_PHONE)])).toEqual([BY_PHONE]);
+        });
+
+        it('asks the store for one more id per deleted entry, however many authors the page holds', async () => {
+          lidMappingStore.lidsForPhonesPersisted.mockImplementation((phones: string[]) =>
+            Promise.resolve(Object.fromEntries(phones.map(phone => [phone, [`148${phone.slice(3)}`]]))),
+          );
+          storedUnder();
+          const page = Array.from({ length: 300 }, (_, i) =>
+            entry(`false_${GROUP}_M${i}_628100${String(i).padStart(3, '0')}@c.us`, i < 40 ? 'revoked' : 'text'),
+          );
+          mockEngine.getChatHistory.mockResolvedValueOnce(page);
+
+          await service.getChatHistory('sess-1', GROUP, 2000, false, true);
+
+          expect(asked()).toHaveLength(80);
+          expect(lidMappingStore.lidsForPhonesPersisted).toHaveBeenCalledTimes(1);
+        });
       });
 
       it('looks nothing up for a page with no deleted message', async () => {

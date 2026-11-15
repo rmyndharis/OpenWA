@@ -13,7 +13,14 @@ import { HookManager, applySendingGate } from '../../core/hooks';
 import { SendPacingService } from './send-pacing.service';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveJidCandidates as expandJidCandidates } from '../../engine/identity/jid-candidates';
-import { SERIALIZED_MESSAGE_ID, chatOfPage, messageIdInChat, parseWaId } from '../../engine/identity/wa-id';
+import {
+  SERIALIZED_MESSAGE_ID,
+  authorOfMessageId,
+  chatOfPage,
+  messageIdByAuthor,
+  messageIdInChat,
+  parseWaId,
+} from '../../engine/identity/wa-id';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import { StorageService, isMissingObjectError } from '../../common/storage/storage.service';
@@ -713,8 +720,9 @@ export class MessageService implements PluginMessagePort {
   /**
    * Report each deleted message of a history page under the id its stored row has. The engine names it as its
    * delete notice does, and a notice can write a person's chat by phone number where the stored row has the
-   * lid, or the reverse. The other forms tried are the ones the lid mapping knows for the chat, the one the
-   * engine holds the chat under and the ones the ids of the page itself use, and an id changes only to one a
+   * lid, or the reverse, and in a group it can do the same to the author. The other forms tried are the ones
+   * the lid mapping knows, the one the engine holds the chat under, the ones the ids of the page itself use
+   * for the chat, and the account's own id for a message it sent and deleted. An id changes only to one a
    * stored row has. Best effort: the page stays as the engine gave it when the store cannot be read.
    */
   async nameDeletedByStoredId(sessionId: string, chatId: string, page: IncomingMessage[]): Promise<void> {
@@ -728,11 +736,22 @@ export class MessageService implements PluginMessagePort {
         const chat = SERIALIZED_MESSAGE_ID.exec(message.id)?.[2];
         if (chat) chats.add(chat);
       }
-      // Every other id the same message can go by, per deleted entry: none for a group or a channel, whose
-      // ids have one form.
+      // Every other id the same message can go by, per deleted entry: a person's chat in its other form, and
+      // in a group the author in theirs, as the lid mapping knows it. A channel's ids have one form.
+      const otherForms = await this.otherFormsOfAuthors(deleted.map(message => authorOfMessageId(message.id)));
       const others = new Map<IncomingMessage, string[]>();
       for (const message of deleted) {
         const forms = new Set([...chats].map(chat => messageIdInChat(message.id, chat)));
+        const author = authorOfMessageId(message.id);
+        if (author) {
+          for (const other of otherForms(author)) forms.add(messageIdByAuthor(message.id, other));
+          // The entry carries the fields of the delete notice, not of the message, so its `author` and
+          // `from` name whoever deleted it: in a group that can be an admin. Only a message the account
+          // both sent and deleted is known to be by `from`.
+          if (message.fromMe && message.id.startsWith('true_')) {
+            forms.add(messageIdByAuthor(message.id, message.from));
+          }
+        }
         forms.delete(message.id);
         if (forms.size > 0) others.set(message, [...forms]);
       }
@@ -755,6 +774,28 @@ export class MessageService implements PluginMessagePort {
         error: String(error),
       });
     }
+  }
+
+  /**
+   * The other id forms of the authors given, as the lid mapping knows them: a phone number for a lid, the lids
+   * of a phone number. Two batched reads however many authors there are, so a page of a busy group costs no
+   * more than a short one.
+   */
+  private async otherFormsOfAuthors(authors: (string | undefined)[]): Promise<(author: string) => string[]> {
+    const parts = { lid: new Set<string>(), phone: new Set<string>() };
+    for (const author of authors) {
+      if (!author) continue;
+      const { kind, userPart } = parseWaId(author);
+      parts[kind === 'lid' ? 'lid' : 'phone'].add(userPart);
+    }
+    const phones = parts.lid.size > 0 ? await this.lidMappingStore.phonesForLidsPersisted([...parts.lid]) : {};
+    const lids = parts.phone.size > 0 ? await this.lidMappingStore.lidsForPhonesPersisted([...parts.phone]) : {};
+    // Looked up by the user part, so every spelling of one author (a device suffix, a hosted dialect) gets them.
+    return author => {
+      const { kind, userPart } = parseWaId(author);
+      if (kind !== 'lid') return (lids[userPart] ?? []).map(lid => `${lid}@lid`);
+      return phones[userPart] ? [`${phones[userPart]}@c.us`] : [];
+    };
   }
 
   // ========== Delete Message ==========
