@@ -249,7 +249,7 @@ describe('the chat and group lists read the page walk', () => {
     ['ptt', 'voice'],
     ['audio', 'audio'],
     ['document', 'document'],
-    ['new_engine_kind', 'unknown'],
+    ['interactive', 'unknown'],
   ])('reports %s without needing preview text', async (rawType, type) => {
     const { host } = makeHost([
       { ...personal, lastMessage: { ...personal.lastMessage, type: rawType, body: '' } },
@@ -259,6 +259,47 @@ describe('the chat and group lists read the page walk', () => {
     expect(summaries[0]).toMatchObject({ lastMessageType: type });
     expect(summaries[0].lastMessage).toBeUndefined();
     expect(summaries[1].lastMessageType).toBeUndefined();
+  });
+
+  it.each([
+    ['system notice e2e_notification', { type: 'e2e_notification', body: 'security code changed' }],
+    ['system notice gp2', { type: 'gp2', body: 'Alice added Bob' }],
+    ['unlisted contentless entry', { type: 'new_engine_kind', body: '' }],
+  ])('omits lastMessage and lastMessageType when chat.lastMessage is a %s', async (_label, lastMessage) => {
+    const { host } = makeHost([{ ...personal, lastMessage: { ...personal.lastMessage, ...lastMessage } }]);
+
+    const summaries = await new WwebjsChats(host, {} as WwebjsMessaging).getChats();
+
+    expect(summaries[0].lastMessage).toBeUndefined();
+    expect(summaries[0].lastMessageType).toBeUndefined();
+  });
+
+  it('keeps lastMessageType for an unlisted type with a body or media and for revoked tombstones', async () => {
+    const { host } = makeHost([
+      {
+        ...personal,
+        id: { _serialized: '628111@c.us' },
+        lastMessage: { id: { _serialized: 'm1' }, type: 'new_engine_kind', body: 'hello' },
+      },
+      {
+        ...personal,
+        id: { _serialized: '628222@c.us' },
+        lastMessage: { id: { _serialized: 'm2' }, type: 'new_engine_kind', body: '', directPath: '/v/t62/1' },
+      },
+      {
+        ...personal,
+        id: { _serialized: '628333@c.us' },
+        lastMessage: { id: { _serialized: 'm3' }, type: 'revoked', body: '' },
+      },
+    ]);
+
+    const summaries = await new WwebjsChats(host, {} as WwebjsMessaging).getChats();
+
+    expect(summaries[0]).toMatchObject({ lastMessage: 'hello', lastMessageType: 'unknown' });
+    expect(summaries[1].lastMessage).toBeUndefined();
+    expect(summaries[1].lastMessageType).toBe('unknown');
+    expect(summaries[2].lastMessage).toBeUndefined();
+    expect(summaries[2].lastMessageType).toBe('revoked');
   });
 
   it('getGroups keeps only groups, with participants, admin flag and linked parent', async () => {

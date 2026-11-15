@@ -1113,6 +1113,196 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
       expect(m1.downloadMedia).not.toHaveBeenCalled();
     });
   });
+
+  it('skips system notices and unlisted contentless entries before any page lookup', async () => {
+    const gp2 = {
+      id: { _serialized: 'N_GP2' },
+      from: '120363000@g.us',
+      to: 'me',
+      author: '621@c.us',
+      body: 'Alice added Bob',
+      type: 'gp2',
+      timestamp: 100,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: true,
+      getContact: jest.fn(),
+      getQuotedMessage: jest.fn(),
+      ...onPage(jest.fn()),
+    };
+    const e2e = {
+      id: { _serialized: 'N_E2E' },
+      from: '120363000@g.us',
+      to: 'me',
+      body: '',
+      type: 'e2e_notification',
+      timestamp: 101,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+      getContact: jest.fn(),
+      getQuotedMessage: jest.fn(),
+      ...onPage(jest.fn()),
+    };
+    const unlistedEmpty = {
+      id: { _serialized: 'N_UNLISTED' },
+      from: '120363000@g.us',
+      to: 'me',
+      author: '621@c.us',
+      body: '',
+      type: 'future_group_notice',
+      timestamp: 102,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: true,
+      getContact: jest.fn(),
+      getQuotedMessage: jest.fn(),
+      ...onPage(jest.fn()),
+    };
+    const real = {
+      id: { _serialized: 'M_REAL' },
+      from: '120363000@g.us',
+      to: 'me',
+      author: '622@c.us',
+      body: 'real message',
+      type: 'chat',
+      timestamp: 103,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+      getContact: jest.fn().mockResolvedValue({ pushname: 'Bob' }),
+    };
+    const chat = { fetchMessages: jest.fn().mockResolvedValue([gp2, e2e, unlistedEmpty, real]) };
+    const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
+    const debugSpy = jest.spyOn((adapter as unknown as { logger: { debug: jest.Mock } }).logger, 'debug');
+
+    const out = await adapter.getChatHistory('120363000@g.us', 50, true);
+
+    expect(out.map(m => ({ id: m.id, body: m.body }))).toEqual([{ id: 'M_REAL', body: 'real message' }]);
+    for (const skipped of [gp2, e2e, unlistedEmpty]) {
+      expect(skipped.getContact).not.toHaveBeenCalled();
+      expect(skipped.getQuotedMessage).not.toHaveBeenCalled();
+      expect(skipped.downloadMedia).not.toHaveBeenCalled();
+    }
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ action: 'wwebjs_drop_notice', type: 'gp2' }),
+    );
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ action: 'wwebjs_drop_notice', type: 'e2e_notification' }),
+    );
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ action: 'wwebjs_drop_contentless', type: 'future_group_notice' }),
+    );
+  });
+
+  it('keeps listed empty-body types and unlisted entries that carry a body or media in history', async () => {
+    const entry = (id: string, type: string, body: string, hasMedia: boolean) => ({
+      id: { _serialized: id },
+      from: '621@c.us',
+      to: 'me',
+      body,
+      type,
+      timestamp: 200,
+      fromMe: false,
+      hasMedia,
+      hasQuotedMsg: false,
+    });
+    const chat = {
+      fetchMessages: jest
+        .fn()
+        .mockResolvedValue([
+          entry('L_INTERACTIVE', 'interactive', '', false),
+          entry('L_UNKNOWN', 'unknown', '', false),
+          entry('U_TEXT', 'future_text_kind', 'caption', false),
+          entry('U_MEDIA', 'future_media_kind', '', true),
+        ]),
+    };
+
+    const out = await readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) }).getChatHistory(
+      '621@c.us',
+      50,
+      false,
+    );
+
+    expect(out.map(m => ({ id: m.id, type: m.type, body: m.body }))).toEqual([
+      { id: 'L_INTERACTIVE', type: 'unknown', body: '' },
+      { id: 'L_UNKNOWN', type: 'unknown', body: '' },
+      { id: 'U_TEXT', type: 'unknown', body: 'caption' },
+      { id: 'U_MEDIA', type: 'unknown', body: '' },
+    ]);
+  });
+
+  it('keeps revoked tombstones in history and reports protocolMessageKey when present, or the tombstone id when absent', async () => {
+    const directTombstone = {
+      id: { _serialized: 'false_621@c.us_REVOKE1' },
+      protocolMessageKey: { _serialized: 'false_621@c.us_ORIG1' },
+      from: '621@c.us',
+      to: 'me',
+      body: '',
+      type: 'revoked',
+      timestamp: 300,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+    };
+    const groupTombstone = {
+      id: { _serialized: 'false_120363000@g.us_REVOKE2_621@c.us' },
+      protocolMessageKey: { _serialized: 'false_120363000@g.us_ORIG2_621@c.us' },
+      from: '120363000@g.us',
+      to: 'me',
+      author: '621@c.us',
+      body: '',
+      type: 'revoked',
+      timestamp: 301,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+    };
+    const renamedKeyTombstone = {
+      id: { _serialized: 'false_621@c.us_REVOKE3' },
+      protocolMessageKey: { $1: 'false_621@c.us_ORIG3' },
+      from: '621@c.us',
+      to: 'me',
+      body: '',
+      type: 'revoked',
+      timestamp: 302,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+    };
+    const withoutKeyTombstone = {
+      id: { _serialized: 'false_621@c.us_TOMB4' },
+      from: '621@c.us',
+      to: 'me',
+      body: '',
+      type: 'revoked',
+      timestamp: 303,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+    };
+    const chat = {
+      fetchMessages: jest
+        .fn()
+        .mockResolvedValue([directTombstone, groupTombstone, renamedKeyTombstone, withoutKeyTombstone]),
+    };
+
+    const out = await readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) }).getChatHistory(
+      '120363000@g.us',
+      50,
+      false,
+    );
+
+    expect(out.map(m => ({ id: m.id, type: m.type, body: m.body }))).toEqual([
+      { id: 'false_621@c.us_ORIG1', type: 'revoked', body: '' },
+      { id: 'false_120363000@g.us_ORIG2_621@c.us', type: 'revoked', body: '' },
+      { id: 'false_621@c.us_ORIG3', type: 'revoked', body: '' },
+      { id: 'false_621@c.us_TOMB4', type: 'revoked', body: '' },
+    ]);
+  });
 });
 
 describe('WhatsAppWebJsAdapter.sendPollMessage', () => {
@@ -1331,6 +1521,25 @@ describe('WhatsAppWebJsAdapter channels (#625 — wwebjs Client has no getChanne
     const fetchMessages = jest.fn().mockResolvedValue([]);
     const getChannels = jest.fn().mockResolvedValue([{ id: { _serialized: CHANNEL }, name: 'News', fetchMessages }]);
     await expect(readyAdapter({ getChannels }).getChannelMessages(CHANNEL)).resolves.toEqual([]);
+  });
+
+  it('getChannelMessages skips revoked entries and entries with neither body nor media while keeping text and media posts', async () => {
+    const fetchMessages = jest.fn().mockResolvedValue([
+      { id: { _serialized: 'REV1' }, type: 'revoked', body: '', timestamp: 1700000001, hasMedia: false },
+      { id: { _serialized: 'REV2' }, type: 'revoked', body: 'stale', timestamp: 1700000002, hasMedia: true },
+      { id: { _serialized: 'EMPTY1' }, type: 'chat', body: '', timestamp: 1700000003, hasMedia: false },
+      { id: { _serialized: 'EMPTY2' }, type: 'unknown_notice', body: '', timestamp: 1700000004, hasMedia: false },
+      { id: { _serialized: 'MEDIA_ONLY' }, type: 'image', body: '', timestamp: 1700000005, hasMedia: true },
+      { id: { _serialized: 'TEXT_ONLY' }, type: 'chat', body: 'news', timestamp: 1700000006, hasMedia: false },
+    ]);
+    const getChannels = jest.fn().mockResolvedValue([{ id: { _serialized: CHANNEL }, name: 'News', fetchMessages }]);
+
+    const result = await readyAdapter({ getChannels }).getChannelMessages(CHANNEL, 10);
+
+    expect(result).toEqual([
+      { id: 'MEDIA_ONLY', body: '', timestamp: 1700000005, hasMedia: true },
+      { id: 'TEXT_ONLY', body: 'news', timestamp: 1700000006, hasMedia: false },
+    ]);
   });
 
   it('getChannelById resolves from the subscribed-channel list (no getChannelById call)', async () => {
@@ -3494,6 +3703,81 @@ describe('WhatsAppWebJsAdapter status methods', () => {
     const result = await readyAdapter({ sendMessage: jest.fn(), getBroadcasts }).getContactStatuses();
     expect(result[0].media).toBeUndefined();
     expect(result[1].media).toBeUndefined();
+  });
+
+  it('getContactStatuses and getContactStatus skip revoked stories, system notices, and unlisted contentless entries', async () => {
+    const badDownload = jest.fn();
+    const skippedContact = jest.fn().mockResolvedValue({ id: { _serialized: '628999@c.us' } });
+    const filteredBroadcast = {
+      getContact: () => Promise.resolve({ id: { _serialized: '628111@c.us' }, name: 'Alice', pushname: 'Alice' }),
+      msgs: [
+        {
+          id: { _serialized: 'ST_REV' },
+          type: 'revoked',
+          body: '',
+          timestamp: 1700000040,
+          hasMedia: true,
+          ...onPage(badDownload),
+        },
+        {
+          id: { _serialized: 'ST_GP2' },
+          type: 'gp2',
+          body: 'notice',
+          timestamp: 1700000041,
+          hasMedia: false,
+        },
+        {
+          id: { _serialized: 'ST_E2E' },
+          type: 'e2e_notification',
+          body: '',
+          timestamp: 1700000042,
+          hasMedia: false,
+        },
+        {
+          id: { _serialized: 'ST_UNLISTED_EMPTY' },
+          type: 'future_story_notice',
+          body: '',
+          timestamp: 1700000043,
+          hasMedia: false,
+        },
+        {
+          id: { _serialized: 'ST_UNLISTED_TEXT' },
+          type: 'future_story_kind',
+          body: 'still text',
+          timestamp: 1700000044,
+          hasMedia: false,
+        },
+        {
+          id: { _serialized: 'ST_INTERACTIVE' },
+          type: 'interactive',
+          body: '',
+          timestamp: 1700000045,
+          hasMedia: false,
+        },
+        {
+          id: { _serialized: 'ST_OK' },
+          type: 'chat',
+          body: 'hello story',
+          timestamp: 1700000046,
+          hasMedia: false,
+        },
+      ],
+    };
+    const revokedOnlyBroadcast = {
+      getContact: skippedContact,
+      msgs: [{ id: { _serialized: 'ST_REV_ONLY' }, type: 'revoked', body: '', timestamp: 1700000050, hasMedia: false }],
+    };
+
+    const getBroadcasts = jest.fn().mockResolvedValue([revokedOnlyBroadcast, filteredBroadcast]);
+    const getBroadcastById = jest.fn().mockResolvedValue(filteredBroadcast);
+
+    const all = await readyAdapter({ sendMessage: jest.fn(), getBroadcasts }).getContactStatuses();
+    const one = await readyAdapter({ sendMessage: jest.fn(), getBroadcastById }).getContactStatus('628111@c.us');
+
+    expect(all.map(s => s.id)).toEqual(['ST_UNLISTED_TEXT', 'ST_INTERACTIVE', 'ST_OK']);
+    expect(one.map(s => s.id)).toEqual(['ST_UNLISTED_TEXT', 'ST_INTERACTIVE', 'ST_OK']);
+    expect(badDownload).not.toHaveBeenCalled();
+    expect(skippedContact).not.toHaveBeenCalled();
   });
 });
 
@@ -9845,6 +10129,27 @@ describe('WhatsAppWebJsAdapter raw-id extraction hardening', () => {
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('628111@c.us');
     expect(result[0].lastMessageType).toBe('image');
+  });
+
+  it('getChatsByLabel reports no last message type for a system notice or a contentless entry of an unlisted type', async () => {
+    const chat = (id: string, lastMessage: unknown) => ({
+      id: { _serialized: id },
+      name: id,
+      isGroup: true,
+      lastMessage,
+    });
+    const getChatsByLabelId = jest
+      .fn()
+      .mockResolvedValue([
+        chat('1@g.us', { type: 'gp2', body: '', hasMedia: false }),
+        chat('2@g.us', { type: 'new_engine_kind', body: '', hasMedia: false }),
+        chat('3@g.us', { type: 'interactive', body: '', hasMedia: false }),
+        chat('4@g.us', { type: 'new_engine_kind', body: 'text', hasMedia: false }),
+      ]);
+
+    const result = await readyAdapter({ getChatsByLabelId }).getChatsByLabel('7');
+
+    expect(result.map(c => c.lastMessageType)).toEqual([undefined, undefined, 'unknown', 'unknown']);
   });
 
   // getNumberId returns a raw page-context Wid; on a WA Web build that renamed _serialized to $1,

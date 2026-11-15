@@ -1,4 +1,4 @@
-import { type Client } from 'whatsapp-web.js';
+import { MessageTypes, type Client } from 'whatsapp-web.js';
 import { Channel, ChannelMessage } from '../interfaces/whatsapp-engine.interface';
 import { BusinessClient, WwjsChannelData, readWid } from '../types/whatsapp-web-js.types';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -230,7 +230,13 @@ export class WwebjsChannels {
     // limit fails OPEN and returns every loaded message. Substitute the default instead.
     const safeLimit = Number.isFinite(limit) && limit >= 1 ? Math.trunc(limit) : 50;
     const messages = await this.withPage('getChannelMessages', () => channel.fetchMessages({ limit: safeLimit }));
-    return (messages ?? []).map(msg => ({
+    // WhatsApp Web keeps a deleted update in the list, as a `revoked` entry with no text and no media, and
+    // the response has no field that could say so: a deleted update, and any entry that carries neither
+    // text nor media, is left out.
+    const posts = (messages ?? []).filter(
+      msg => msg.type !== MessageTypes.REVOKED && (Boolean(msg.body) || Boolean(msg.hasMedia)),
+    );
+    return posts.map(msg => ({
       // Read `$1` before the sentinel (#747), and don't `String()` the object branch: that turned an
       // unreadable id into the literal "undefined" rather than the empty sentinel every other path
       // uses. Read-only endpoint — never persisted, never ack-matched — so `''` carries no collision

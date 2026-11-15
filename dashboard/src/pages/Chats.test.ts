@@ -15,7 +15,16 @@ import { test, before, afterEach, mock, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { Session, Chat, ChatMessage, SearchHit, Channel, ChannelMessage, StatusUpdate } from '../services/api';
+import type {
+  Session,
+  Chat,
+  ChatMessage,
+  EngineHistoryMessage,
+  SearchHit,
+  Channel,
+  ChannelMessage,
+  StatusUpdate,
+} from '../services/api';
 import { MENTION_CLOSE, MENTION_OPEN } from '../utils/messageFormatter.ts';
 import { MEDIA_PAYLOAD_CACHE_LIMIT } from '../utils/chatMessages.ts';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
@@ -185,6 +194,8 @@ let firstPageGate: Promise<void> | null = null;
 
 // Rows Alice's first page serves after the fixture rows, so a test can put its own message in the thread.
 let firstPageExtra: ChatMessage[] = [];
+let firstPageOverride: ChatMessage[] | null = null;
+let historyExtra: EngineHistoryMessage[] = [];
 
 // The id a text send answers with. whatsapp-web.js answers '' when it cannot read the sent id back.
 let sendTextId = 'wamid.out.1';
@@ -351,10 +362,11 @@ function installFetchStub(): void {
         const gate = isFirstPage ? null : olderPageGate;
         return gate ? gate.then(answer) : Promise.resolve(answer());
       }
+      const rows = firstPageOverride ?? [DB_MESSAGE, OMITTED_MEDIA_MESSAGE, OMITTED_MEDIA_MESSAGE_2, ...firstPageExtra];
       const firstPage = () =>
         jsonResponse({
-          messages: [DB_MESSAGE, OMITTED_MEDIA_MESSAGE, OMITTED_MEDIA_MESSAGE_2, ...firstPageExtra],
-          total: 3 + firstPageExtra.length,
+          messages: rows,
+          total: rows.length,
         });
       return firstPageGate ? firstPageGate.then(firstPage) : Promise.resolve(firstPage());
     }
@@ -365,7 +377,7 @@ function installFetchStub(): void {
       return gate ? gate.then(bytes) : Promise.resolve(bytes());
     }
     if (method === 'GET' && /\/messages\/[^/]+\/history/.test(path)) {
-      return Promise.resolve(jsonResponse([]));
+      return Promise.resolve(jsonResponse(historyExtra));
     }
     if (method === 'GET' && path === `/api/sessions/${SESSION.id}/status`) {
       return Promise.resolve(jsonResponse({ statuses }));
@@ -461,6 +473,9 @@ afterEach(async () => {
   sendGate = null;
   firstPageGate = null;
   firstPageExtra = [];
+  firstPageOverride = null;
+  historyExtra = [];
+  window.sessionStorage.setItem('openwa_engine_type', 'baileys');
   sendTextId = 'wamid.out.1';
   sendImageId = 'wamid.out.image';
   sendImageFails = false;
@@ -5262,4 +5277,197 @@ test('a confirmed image send leaves the media viewer on the other image it shows
   await waitFor(() => assert.ok(thread.querySelector('[data-wa-message-id="wamid.out.image"] img.chat-image-media')));
   await flush();
   assert.equal(viewerSlideSrc(), 'http://localhost/media/a.png', 'the viewer left its image when a send was confirmed');
+});
+
+test('a deleted or empty channel entry renders no bubble alongside visible channel posts', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  engineType = 'whatsapp-web.js';
+  window.sessionStorage.setItem('openwa_engine_type', engineType);
+  channels = [{ id: '120363000000000001@newsletter', name: 'News' }];
+  channelPosts = [
+    { id: 'post-empty', body: '', timestamp: 1_700_000_000, hasMedia: false },
+    { id: 'post-real', body: 'Release shipped', timestamp: 1_700_000_060, hasMedia: false },
+  ];
+  const { container } = renderChats();
+  await screen.findByText('Alice');
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Channels' }));
+  fireEvent.click(await screen.findByText('News'));
+  await waitFor(() => assert.ok(container.querySelector('.channel-room .message-bubble .message-text')));
+  const bubbles = container.querySelectorAll('.channel-room .message-bubble');
+  assert.equal(bubbles.length, 1);
+  assert.ok(bubbles[0].textContent?.includes('Release shipped'));
+});
+
+test('a channel whose entries are all empty shows the empty room state', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  engineType = 'whatsapp-web.js';
+  window.sessionStorage.setItem('openwa_engine_type', engineType);
+  channels = [{ id: '120363000000000001@newsletter', name: 'News' }];
+  channelPosts = [
+    { id: 'post-empty-1', body: '', timestamp: 1_700_000_000, hasMedia: false },
+    { id: 'post-empty-2', body: '', timestamp: 1_700_000_060, hasMedia: false },
+  ];
+  const { container } = renderChats();
+  await screen.findByText('Alice');
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Channels' }));
+  fireEvent.click(await screen.findByText('News'));
+  await waitFor(() =>
+    assert.ok(
+      container
+        .querySelector('.channel-room .messages-empty')
+        ?.textContent?.includes('No messages yet. Send the first message to get started!'),
+    ),
+  );
+  assert.equal(container.querySelectorAll('.channel-room .message-bubble').length, 0);
+});
+
+test('deleting or editing the last visible message updates the sidebar preview even when an unrenderable unknown entry trails in the thread', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  firstPageExtra = [
+    {
+      ...DB_MESSAGE,
+      id: 'db-vis',
+      waMessageId: 'wamid.visible.last',
+      body: 'latest visible',
+      timestamp: 1_700_000_010,
+      createdAt: new Date(1_700_000_010_000).toISOString(),
+    },
+    {
+      ...DB_MESSAGE,
+      id: 'db-unk-tail',
+      waMessageId: 'wamid.unknown.tail',
+      type: 'unknown',
+      body: '',
+      timestamp: 1_700_000_020,
+      createdAt: new Date(1_700_000_020_000).toISOString(),
+    },
+  ];
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  const room = container.querySelector('.room-messages') as HTMLElement;
+  await within(room).findByText('latest visible');
+  const sidebar = container.querySelector('.chats-sidebar') as HTMLElement;
+
+  receiveEvent('message.edited', {
+    messageId: 'wamid.visible.last',
+    chatId: CHAT.id,
+    body: 'edited visible',
+    timestamp: 1_700_003_001,
+  });
+  await waitFor(() =>
+    assert.ok(within(sidebar).queryByText('edited visible'), 'sidebar did not update on edit before trailing unknown'),
+  );
+
+  revoke(CHAT.id, 'wamid.visible.last');
+  await waitFor(() =>
+    assert.ok(
+      !within(sidebar).queryByText('edited visible'),
+      'sidebar kept deleted message preview behind trailing unknown',
+    ),
+  );
+});
+
+test('wwebjs merged thread renders one deleted bubble and a revoke frame with only the history revoke id still refreshes summaries', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  engineType = 'whatsapp-web.js';
+  window.sessionStorage.setItem('openwa_engine_type', engineType);
+  firstPageOverride = [
+    {
+      ...DB_MESSAGE,
+      id: 'db-rev-orig',
+      waMessageId: 'true_15550001111@c.us_ORIG',
+      from: '15551234567@c.us',
+      to: CHAT.id,
+      direction: 'outgoing',
+      status: 'sent',
+      type: 'revoked',
+      body: '',
+      timestamp: 1_700_000_010,
+      createdAt: new Date(1_700_000_010_000).toISOString(),
+    },
+    {
+      ...DB_MESSAGE,
+      id: 'db-after',
+      waMessageId: 'wamid.after',
+      body: 'still here',
+      timestamp: 1_700_000_020,
+      createdAt: new Date(1_700_000_020_000).toISOString(),
+    },
+  ];
+  historyExtra = [
+    {
+      id: 'true_15550001111@c.us_HIST_PROTO',
+      chatId: CHAT.id,
+      from: '15551234567@c.us',
+      to: CHAT.id,
+      body: '',
+      type: 'revoked',
+      timestamp: 1_700_000_010,
+      fromMe: true,
+      isGroup: false,
+      kind: 'individual',
+    },
+  ];
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  const room = container.querySelector('.room-messages') as HTMLElement;
+  await within(room).findByText('still here');
+
+  assert.equal(container.querySelectorAll('.room-messages .message-bubble.revoked-type').length, 1);
+  assert.ok(container.querySelector('[data-wa-message-id="true_15550001111@c.us_ORIG"] .message-status-icon.sent'));
+
+  resetFetchCalls();
+  receiveEvent('message.revoked', {
+    id: 'true_15550001111@c.us_HIST_PROTO',
+    chatId: CHAT.id,
+    from: '15551234567@c.us',
+    to: CHAT.id,
+    body: '',
+    type: 'revoked',
+    timestamp: 1_700_003_000,
+  });
+  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`), 1));
+});
+
+test('a thread whose initial rows are all unrenderable unknown entries pins to the bottom when the first real message arrives', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  firstPageOverride = [
+    {
+      ...DB_MESSAGE,
+      id: 'db-unk',
+      waMessageId: 'wamid.unk',
+      body: '',
+      type: 'unknown',
+    },
+  ];
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  const room = container.querySelector('.room-messages') as HTMLElement;
+  await within(room).findByText('No messages yet. Send the first message to get started!');
+
+  Object.defineProperty(room, 'clientHeight', { value: 400, configurable: true });
+  Object.defineProperty(room, 'scrollHeight', { value: 1200, configurable: true });
+  let top = 0;
+  Object.defineProperty(room, 'scrollTop', {
+    configurable: true,
+    get: () => top,
+    set: (value: number) => {
+      top = value;
+    },
+  });
+
+  receiveEvent('message.received', {
+    id: 'wamid.first.real',
+    chatId: CHAT.id,
+    from: CHAT.id,
+    to: 'me',
+    body: 'first real hello',
+    type: 'text',
+    fromMe: false,
+    timestamp: 1_700_003_010,
+  });
+  await within(room).findByText('first real hello');
+  await waitFor(() => assert.equal(top, 1200, 'room did not pin to bottom when first renderable message arrived'));
 });

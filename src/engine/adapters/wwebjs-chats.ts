@@ -8,6 +8,7 @@ import { chatKind, isChannelJid } from '../identity/wa-id';
 import { WwebjsMessaging } from './wwebjs-messaging';
 import { type WwebjsEngineHost, rethrowIfNavigation } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
+import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
 import { mapWwebjsMessageType } from './message-mapper';
 
 /**
@@ -241,6 +242,11 @@ export class WwebjsChats {
         continue;
       }
 
+      const lastMessage =
+        chat.lastMessage && !isNotice(chat.lastMessage) && !isUnlistedContentless(chat.lastMessage)
+          ? chat.lastMessage
+          : undefined;
+
       summaries.push({
         id,
         name: chat.name || id,
@@ -249,8 +255,8 @@ export class WwebjsChats {
         unreadCount: chat.unreadCount || 0,
         timestamp: chat.timestamp || 0,
         // A location message's body is the base64 map thumbnail; don't surface it as the chat preview.
-        lastMessage: chat.lastMessage?.type === MessageTypes.LOCATION ? '📍' : chat.lastMessage?.body || undefined,
-        lastMessageType: chat.lastMessage ? mapWwebjsMessageType(chat.lastMessage.type) : undefined,
+        lastMessage: lastMessage?.type === MessageTypes.LOCATION ? '📍' : lastMessage?.body || undefined,
+        lastMessageType: lastMessage ? mapWwebjsMessageType(lastMessage.type) : undefined,
         archived: Boolean(chat.archived),
         pinned: Boolean(chat.pinned),
         // Chat.isMuted is the current verdict; muteExpiration is wwjs epoch SECONDS with -1 = forever.
