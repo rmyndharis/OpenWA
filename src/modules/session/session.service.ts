@@ -640,7 +640,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         throw sessionNotFound(id);
       }
       const stored = row.config;
-      const config = { ...((stored ? JSON.parse(stored) : null) as Record<string, unknown> | null) };
+      const parsed: unknown = stored ? JSON.parse(stored) : null;
+      // Stored JSON that is not an object (a restored backup can hold any) has no keys to keep, and
+      // spreading a string or an array would write its characters or items back as keys.
+      const config: Record<string, unknown> =
+        typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? { ...parsed } : {};
 
       for (const key of ['autoRejectCalls', 'maxReconnectAttempts', 'reconnectBaseDelay', 'linkPreview'] as const) {
         const value = dto[key];
