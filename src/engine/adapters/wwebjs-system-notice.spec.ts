@@ -22,6 +22,7 @@ const NOTICES = [
   'group_notification',
   'protocol',
   'debug',
+  'gp2',
 ];
 
 const settle = async (): Promise<void> => {
@@ -29,7 +30,10 @@ const settle = async (): Promise<void> => {
 };
 
 /** A model as whatsapp-web.js wraps it: nothing attached, nothing quoted. */
-const model = (type: string, opts: { fromMe?: boolean; body?: string; data?: Record<string, unknown> } = {}) => ({
+const model = (
+  type: string,
+  opts: { fromMe?: boolean; body?: string; hasMedia?: boolean; data?: Record<string, unknown> } = {},
+) => ({
   id: { _serialized: `${Boolean(opts.fromMe)}_${CHAT}_${type.toUpperCase()}1` },
   from: opts.fromMe ? SELF : CHAT,
   to: opts.fromMe ? CHAT : SELF,
@@ -37,7 +41,7 @@ const model = (type: string, opts: { fromMe?: boolean; body?: string; data?: Rec
   type,
   timestamp: 1_700_000_000,
   fromMe: Boolean(opts.fromMe),
-  hasMedia: false,
+  hasMedia: Boolean(opts.hasMedia),
   hasQuotedMsg: false,
   _data: opts.data ?? {},
   getContact: jest.fn(() => Promise.resolve(null)),
@@ -151,6 +155,12 @@ describe('a whatsapp-web.js system notice', () => {
       ['a template prompt with no text as unknown', 'hsm', {}, { type: 'unknown', body: '' }],
       ['an interactive prompt with no text as unknown', 'interactive', {}, { type: 'unknown', body: '' }],
       ['a native flow prompt with no text as unknown', 'native_flow', {}, { type: 'unknown', body: '' }],
+      ['a list message with no text as unknown', 'list', {}, { type: 'unknown', body: '' }],
+      ['a payment message with no text as unknown', 'payment', {}, { type: 'unknown', body: '' }],
+      ['a group v4 invite with no text as unknown', 'groups_v4_invite', {}, { type: 'unknown', body: '' }],
+      ['an oversized placeholder with no text as unknown', 'oversized', {}, { type: 'unknown', body: '' }],
+      ['an album container with no text as unknown', 'album', {}, { type: 'unknown', body: '' }],
+      ['a listed unknown entry with no text as unknown', 'unknown', {}, { type: 'unknown', body: '' }],
       ['a message deleted before it arrived as revoked', 'revoked', {}, { type: 'revoked', body: '' }],
     ])('still delivers %s', async (_what, type, opts, delivered) => {
       const { client, onMessage } = wired();
@@ -160,6 +170,78 @@ describe('a whatsapp-web.js system notice', () => {
 
       expect(onMessage).toHaveBeenCalledTimes(1);
       expect(onMessage).toHaveBeenCalledWith(expect.objectContaining(delivered), expect.anything());
+    });
+  });
+
+  describe('a contentless entry of a type whatsapp-web.js does not list', () => {
+    it('drops a received unlisted contentless entry with a debug log carrying its raw type', async () => {
+      const { client, logger, admitInbound, onMessage, onMessageCreate } = wired();
+      const entry = model('member_added_notice');
+
+      client.emit('message_create', entry);
+      client.emit('message', entry);
+      await settle();
+
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(onMessageCreate).not.toHaveBeenCalled();
+      expect(admitInbound).not.toHaveBeenCalled();
+      expect(entry.getContact).not.toHaveBeenCalled();
+      expect(logger.debug).toHaveBeenCalledTimes(1);
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ action: 'wwebjs_drop_contentless', type: 'member_added_notice' }),
+      );
+    });
+
+    it('drops an own unlisted contentless entry on message_create with a debug log carrying its raw type', async () => {
+      const { client, logger, admitInbound, onMessage, onMessageCreate } = wired();
+
+      client.emit('message_create', model('member_added_notice', { fromMe: true }));
+      await settle();
+
+      expect(onMessageCreate).not.toHaveBeenCalled();
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(admitInbound).not.toHaveBeenCalled();
+      expect(logger.debug).toHaveBeenCalledTimes(1);
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ action: 'wwebjs_drop_contentless', type: 'member_added_notice' }),
+      );
+    });
+
+    it('still delivers an unlisted entry when it carries a body', async () => {
+      const { client, onMessage, onMessageCreate } = wired();
+
+      client.emit('message', model('future_kind', { body: 'hello' }));
+      client.emit('message_create', model('future_kind', { fromMe: true, body: 'own hello' }));
+      await settle();
+
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(onMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'unknown', body: 'hello' }),
+        expect.anything(),
+      );
+      expect(onMessageCreate).toHaveBeenCalledTimes(1);
+      expect(onMessageCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'unknown', body: 'own hello' }),
+        expect.anything(),
+      );
+    });
+
+    it('still delivers an unlisted entry when hasMedia is true', async () => {
+      const { client, onMessage, onMessageCreate } = wired();
+
+      client.emit('message', model('future_media_kind', { hasMedia: true }));
+      client.emit('message_create', model('future_media_kind', { fromMe: true, hasMedia: true }));
+      await settle();
+
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'unknown', body: '' }), expect.anything());
+      expect(onMessageCreate).toHaveBeenCalledTimes(1);
+      expect(onMessageCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'unknown', body: '' }),
+        expect.anything(),
+      );
     });
   });
 });

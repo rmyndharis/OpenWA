@@ -29,6 +29,7 @@ import { sessionApi, type Chat } from '../../services/api';
 import {
   buildMentionNameMap,
   getMediaSrc,
+  isRenderableMessage,
   resolveMentions,
   senderKey,
   type ChatMessageView,
@@ -58,7 +59,7 @@ const sameDay = (a: number, b: number): boolean =>
   new Date(a * 1000).toDateString() === new Date(b * 1000).toDateString();
 
 // Delivered and read share a glyph and differ in colour only; the span around it spells the status out.
-const STATUS_ICONS: Record<ChatMessageView['status'], ReactElement> = {
+const STATUS_ICONS: Record<NonNullable<ChatMessageView['status']>, ReactElement> = {
   pending: <Clock size={14} />,
   sent: <Check size={16} />,
   delivered: <CheckCheck size={16} />,
@@ -127,6 +128,7 @@ function ChatThread({
   // Reply, react, delete and prompt taps all need an operator key, like the composer; a viewer
   // would only reach a 403.
   const { canWrite } = useRole();
+  const visibleMessages = useMemo(() => messages.filter(isRenderableMessage), [messages]);
 
   // The message actions sit behind hover, so a keyboard user reaches them through the bubble that carries
   // them: the bubbles are one tab stop (the focused message, else the newest), the arrow keys move between
@@ -138,10 +140,14 @@ function ChatThread({
   );
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   const tabStopId = useMemo(() => {
-    if (focusedMessageId && messages.some(m => m.id === focusedMessageId && hasActions(m))) return focusedMessageId;
-    for (let i = messages.length - 1; i >= 0; i--) if (hasActions(messages[i])) return messages[i].id;
+    if (focusedMessageId && visibleMessages.some(m => m.id === focusedMessageId && hasActions(m))) {
+      return focusedMessageId;
+    }
+    for (let i = visibleMessages.length - 1; i >= 0; i--) {
+      if (hasActions(visibleMessages[i])) return visibleMessages[i].id;
+    }
     return null;
-  }, [messages, focusedMessageId, hasActions]);
+  }, [visibleMessages, focusedMessageId, hasActions]);
   const onBubbleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // Only the bubble itself: a key pressed on an action button, the reaction popover or a link keeps
     // its own meaning.
@@ -242,7 +248,7 @@ function ChatThread({
               )
               .find(Boolean));
     target?.focus({ preventScroll: true });
-  }, [messages, hasActions, messagesContainerRef]);
+  }, [visibleMessages, hasActions, messagesContainerRef]);
 
   // "@<digits>" in a message body only ever means something once resolved against a participant
   // this thread has already seen post (see buildMentionNameMap) — recomputed only when the message
@@ -351,7 +357,7 @@ function ChatThread({
   // at 0 the thread is moved down by one pixel, so the next move up is a scroll. The write raises a scroll
   // event of its own, which is not the reader asking again: its position is kept here for the listener below
   // to skip. Once per failure, and never when the reader is anywhere else.
-  const olderFailed = !loadingMessages && !loadingOlderMessages && messagesError && messages.length > 0;
+  const olderFailed = !loadingMessages && !loadingOlderMessages && messagesError && visibleMessages.length > 0;
   const nudgedTopRef = useRef<number | null>(null);
   useEffect(() => {
     const el = messagesContainerRef.current;
@@ -503,7 +509,7 @@ function ChatThread({
           messages already loaded, which must not fall through to the full-screen error below: that would
           replace the loaded thread with a placeholder, collapsing the scroll container so the failed
           page can never be retried by scrolling. */}
-      {!loadingMessages && (loadingOlderMessages || (messagesError && messages.length > 0)) && (
+      {!loadingMessages && (loadingOlderMessages || (messagesError && visibleMessages.length > 0)) && (
         <div className={loadingOlderMessages ? 'messages-loading-older' : 'messages-loading-older failed'}>
           {loadingOlderMessages ? (
             <>
@@ -527,18 +533,18 @@ function ChatThread({
           <Loader2 className="animate-spin" size={32} />
           <span>{t('chats.loadingMessages')}</span>
         </div>
-      ) : messagesError && messages.length === 0 ? (
+      ) : messagesError && visibleMessages.length === 0 ? (
         <div className="messages-empty">
           <MessageSquare size={32} />
           <span>{t('chats.loadMessagesError')}</span>
         </div>
-      ) : messages.length === 0 ? (
+      ) : visibleMessages.length === 0 ? (
         <div className="messages-empty">
           <MessageSquare size={32} />
           <span>{t('chats.noMessagesInChat')}</span>
         </div>
       ) : (
-        messages.map((msg, index) => {
+        visibleMessages.map((msg, index) => {
           const isMe = msg.direction === 'outgoing';
           const ts = timestampOf(msg);
           const formattedTime = formatTime(ts);
@@ -546,7 +552,7 @@ function ChatThread({
           // Label who posted, WhatsApp-style: only in groups, only on incoming messages,
           // and only on the first of a consecutive run from the same sender (so a burst
           // from one person isn't repeated on every bubble).
-          const prev = messages[index - 1];
+          const prev = visibleMessages[index - 1];
           // A day pill heads the first message of each day. The first bubble of a run from one side
           // carries the tail and the wider gap, like WhatsApp; a new day starts a new run.
           const startsNewDay = !prev || !sameDay(timestampOf(prev), ts);
@@ -750,7 +756,7 @@ function ChatThread({
                     : {})}
                 >
                   <div
-                    className={`message-bubble ${isMe ? 'outgoing' : 'incoming'} ${msg.status} ${
+                    className={`message-bubble ${isMe ? 'outgoing' : 'incoming'}${msg.status ? ` ${msg.status}` : ''} ${
                       isMediaMessage ? 'media-type' : ''
                     } ${isRevoked ? 'revoked-type' : ''}`}
                   >
@@ -827,7 +833,7 @@ function ChatThread({
 
                       {/* Holds the room the time (and an edited label, whose width the language decides) takes
                           at the end of the last line, so the text never runs under them. */}
-                      <span className={`meta-spacer${isMe ? ' with-status' : ''}`} aria-hidden="true">
+                      <span className={`meta-spacer${isMe && msg.status ? ' with-status' : ''}`} aria-hidden="true">
                         {isEdited && <span className="meta-spacer-edited">{t('chats.edited')}</span>}
                       </span>
                       <span className="message-meta">
@@ -836,7 +842,7 @@ function ChatThread({
                         {/* delivered and read render the SAME glyph and differ only in colour, which
                           carries the meaning nowhere a screen reader or a colour-blind reader can
                           reach it. The status is spelled out for both. */}
-                        {isMe && (
+                        {isMe && msg.status && (
                           <span
                             className={`message-status-icon ${msg.status}`}
                             role="img"

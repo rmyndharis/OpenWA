@@ -8,10 +8,10 @@ export type { EngineHistoryMessage };
 // bubble. The DB copy of a recent message still wins in mergeChatMessages, so its real media is kept.
 const HISTORY_MEDIA_TYPES = new Set(['image', 'video', 'audio', 'voice', 'sticker', 'document']);
 
-// Normalize an engine history message into the DB ChatMessage shape the thread renders. Historical
-// messages have no live delivery state, so default to `read` (they are old/already-seen); real status
-// for current-session messages still comes from the DB copy and live websocket acks.
-export function mapEngineHistoryMessage(h: EngineHistoryMessage): ChatMessage {
+// Normalize an engine history message into the shape the thread renders. The engine history carries
+// no delivery state, so a row known only from it has no `status` and draws no tick; real status for
+// current-session messages comes from the DB copy and live websocket acks.
+export function mapEngineHistoryMessage(h: EngineHistoryMessage): ChatMessageView {
   return {
     id: h.id,
     waMessageId: h.id,
@@ -23,7 +23,6 @@ export function mapEngineHistoryMessage(h: EngineHistoryMessage): ChatMessage {
     body: h.body ?? '',
     type: h.type as MessageType,
     direction: h.fromMe ? 'outgoing' : 'incoming',
-    status: 'read',
     timestamp: h.timestamp,
     createdAt: new Date((h.timestamp ?? 0) * 1000).toISOString(),
     metadata: (() => {
@@ -41,16 +40,42 @@ export function mapEngineHistoryMessage(h: EngineHistoryMessage): ChatMessage {
   };
 }
 
-const msgKey = (m: ChatMessage): string => m.waMessageId ?? m.id;
-const msgTime = (m: ChatMessage): number =>
+const msgKey = (m: ChatMessageView): string => m.waMessageId ?? m.id;
+const msgTime = (m: ChatMessageView): number =>
   typeof m.timestamp === 'number' ? m.timestamp : Math.floor(Date.parse(m.createdAt) / 1000) || 0;
+
+// WhatsApp Web lists a message deleted for everyone under the id of the delete notice, not the id the
+// message had, so its history entry never pairs with the stored row by id and the thread drew the
+// deleted message twice. Such an entry IS the stored `revoked` row with the same direction, sender and
+// timestamp (measured on a live session: only the id differs). It is matched one to one and left out,
+// so the stored row, with its real status, is the one kept. A history-only deleted message has no
+// stored row to match and stays.
+function withoutStoredTwins(history: ChatMessageView[], db: ChatMessageView[]): ChatMessageView[] {
+  const historyKeys = new Set(history.map(msgKey));
+  const storedKeys = new Set(db.map(msgKey));
+  const unpaired = db.filter(s => s.type === 'revoked' && !historyKeys.has(msgKey(s)));
+  const leftOut = new Set<string>();
+  return history.filter(h => {
+    const key = msgKey(h);
+    if (leftOut.has(key)) return false;
+    if (h.type !== 'revoked' || storedKeys.has(key) || typeof h.timestamp !== 'number') return true;
+    const sender = h.author ?? h.from;
+    const twin = unpaired.findIndex(
+      s => s.direction === h.direction && (s.author ?? s.from) === sender && s.timestamp === h.timestamp,
+    );
+    if (twin === -1) return true;
+    unpaired.splice(twin, 1);
+    leftOut.add(key);
+    return false;
+  });
+}
 
 // Merge persisted DB messages with engine history into one ascending thread. The engine fills the
 // backfill (history from before the gateway captured anything); the DB copy wins on conflict so the
 // real delivery status survives. Deduped by the wweb.js serialized id (engine `id` == DB `waMessageId`).
-export function mergeChatMessages(db: ChatMessage[], history: ChatMessage[]): ChatMessage[] {
-  const byId = new Map<string, ChatMessage>();
-  for (const m of [...history, ...db]) {
+export function mergeChatMessages(db: ChatMessageView[], history: ChatMessageView[]): ChatMessageView[] {
+  const byId = new Map<string, ChatMessageView>();
+  for (const m of [...withoutStoredTwins(history, db), ...db]) {
     const key = msgKey(m);
     const hist = byId.get(key);
     // The DB copy wins (authoritative status) — but a legacy row has no stable sender id, so
@@ -246,7 +271,24 @@ export const getMediaSrc = (media?: MessageMedia): string => {
   return `data:${media.mimetype};base64,${media.data}`;
 };
 
-export interface ChatMessageView extends ChatMessage {
+/**
+ * Whether the thread has anything to draw for a row. An `unknown` row with no text, media, quote or
+ * prompt buttons would be a bubble holding a sender and a time and nothing else, so it is left out of
+ * the thread and of everything that asks which row is last.
+ */
+export function isRenderableMessage(msg: ChatMessageView): boolean {
+  if (msg.type !== 'unknown') return true;
+  const mediaInfo = msg.metadata?.media;
+  if (mediaInfo?.omitted || Boolean(mediaInfo && getMediaSrc(mediaInfo))) return true;
+  if (msg.body && (!mediaInfo || msg.body !== mediaInfo.filename)) return true;
+  if (msg.metadata?.quotedMessage) return true;
+  if (msg.direction !== 'outgoing' && (msg.metadata?.buttons?.length ?? 0) > 0) return true;
+  return false;
+}
+
+export interface ChatMessageView extends Omit<ChatMessage, 'status'> {
+  /** Absent on a row known only from the engine history, which carries no delivery state. */
+  status?: ChatMessage['status'];
   metadata?: {
     media?: MessageMedia;
     quotedMessage?: { id: string; body: string };

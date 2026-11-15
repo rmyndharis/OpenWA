@@ -2123,3 +2123,198 @@ test('a media download whose retry is answered after sign-out saves no file', as
     },
   );
 });
+
+test('outgoing history message without status draws no tick or undefined class while stored message keeps them', () => {
+  const histOutgoing: ChatMessageView = {
+    ...PROMPT,
+    id: 'hist-out',
+    waMessageId: 'true_15551234567@c.us_HIST',
+    from: '15559990000@c.us',
+    to: CHAT.id,
+    body: 'from phone history',
+    direction: 'outgoing',
+    status: undefined,
+    metadata: undefined,
+  };
+  const storedOutgoing: ChatMessageView = {
+    ...histOutgoing,
+    id: 'db-out',
+    waMessageId: 'true_15551234567@c.us_DB',
+    body: 'from stored db',
+    status: 'sent',
+    timestamp: PROMPT.timestamp! + 60,
+  };
+  const { container } = renderThread('operator', [histOutgoing, storedOutgoing]);
+
+  const histWrapper = container.querySelector('[data-wa-message-id="true_15551234567@c.us_HIST"]')!;
+  const histBubble = histWrapper.querySelector('.message-bubble')!;
+  const histSpacer = histWrapper.querySelector('.meta-spacer')!;
+  assert.equal(histWrapper.querySelector('.message-status-icon') === null, true);
+  assert.equal(histSpacer.classList.contains('with-status'), false);
+  assert.equal(histBubble.classList.contains('undefined'), false);
+  assert.ok(histWrapper.querySelector('.delete-btn'), 'outgoing history row with waMessageId stays deletable');
+
+  const dbWrapper = container.querySelector('[data-wa-message-id="true_15551234567@c.us_DB"]')!;
+  assert.ok(dbWrapper.querySelector('.message-status-icon.sent'));
+  assert.equal(dbWrapper.querySelector('.meta-spacer')?.classList.contains('with-status'), true);
+});
+
+test('empty unknown rows render nothing and preserve grouping, day pills, tab stop, and empty state', () => {
+  const groupChat: Chat = {
+    ...CHAT,
+    id: '120363000000000001@g.us',
+    name: 'Group',
+    isGroup: true,
+    kind: 'group',
+  };
+  const baseTs = 1_700_000_000;
+  const rows: ChatMessageView[] = [
+    {
+      ...PROMPT,
+      id: 'g-1',
+      waMessageId: 'wamid.g1',
+      chatId: groupChat.id,
+      from: groupChat.id,
+      author: 'alice@c.us',
+      chatName: 'Alice',
+      body: 'first from alice',
+      timestamp: baseTs,
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'unk-same-day',
+      waMessageId: 'wamid.unk.1',
+      chatId: groupChat.id,
+      from: groupChat.id,
+      author: 'bob@c.us',
+      chatName: 'Bob',
+      type: 'unknown',
+      body: '',
+      timestamp: baseTs + 30,
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'g-2',
+      waMessageId: 'wamid.g2',
+      chatId: groupChat.id,
+      from: groupChat.id,
+      author: 'alice@c.us',
+      chatName: 'Alice',
+      body: 'second from alice',
+      timestamp: baseTs + 60,
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'unk-own-day',
+      waMessageId: 'wamid.unk.2',
+      chatId: groupChat.id,
+      from: groupChat.id,
+      author: 'bob@c.us',
+      chatName: 'Bob',
+      type: 'unknown',
+      body: '',
+      timestamp: baseTs + 86_400,
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'g-3',
+      waMessageId: 'wamid.g3',
+      chatId: groupChat.id,
+      from: 'me',
+      to: groupChat.id,
+      direction: 'outgoing',
+      status: 'read',
+      body: 'my reply',
+      timestamp: baseTs + 2 * 86_400,
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'unk-tail',
+      waMessageId: 'wamid.unk.3',
+      chatId: groupChat.id,
+      from: groupChat.id,
+      author: 'bob@c.us',
+      chatName: 'Bob',
+      type: 'unknown',
+      body: '',
+      timestamp: baseTs + 2 * 86_400 + 30,
+      metadata: undefined,
+    },
+  ];
+
+  const { container } = renderThread('operator', rows, groupChat);
+  const wrappers = Array.from(container.querySelectorAll('.message-bubble-wrapper'));
+  assert.deepEqual(
+    wrappers.map(w => w.getAttribute('data-wa-message-id')),
+    ['wamid.g1', 'wamid.g2', 'wamid.g3'],
+  );
+  assert.equal(container.querySelectorAll('.day-separator').length, 2, 'empty unknown on its own day draws no pill');
+  assert.ok(wrappers[0].querySelector('.message-sender')?.textContent === 'Alice');
+  assert.equal(wrappers[0].classList.contains('run-start'), true);
+  assert.equal(
+    wrappers[1].querySelector('.message-sender') === null,
+    true,
+    'same sender run continues past skipped unknown row',
+  );
+  assert.equal(wrappers[1].classList.contains('run-start'), false);
+  const roving = wrappers[2].querySelector<HTMLElement>('[data-roving-message]');
+  assert.equal(roving?.getAttribute('tabindex'), '0', 'trailing skipped unknown row must not steal roving tabIndex');
+
+  rtl.cleanup();
+  const { container: onlyUnknown } = renderThread('operator', [
+    { ...PROMPT, id: 'only-unk', waMessageId: 'wamid.onlyunk', type: 'unknown', body: '', metadata: undefined },
+  ]);
+  assert.equal(onlyUnknown.querySelectorAll('.message-bubble-wrapper').length, 0);
+  assert.ok(
+    onlyUnknown
+      .querySelector('.messages-empty')
+      ?.textContent?.includes('No messages yet. Send the first message to get started!'),
+  );
+});
+
+test('unknown rows with renderable content plus revoked and masked rows still render bubbles', () => {
+  const rows: ChatMessageView[] = [
+    {
+      ...PROMPT,
+      id: 'u-body',
+      waMessageId: 'wamid.ubody',
+      type: 'unknown',
+      body: 'readable fallback',
+      metadata: undefined,
+    },
+    {
+      ...PROMPT,
+      id: 'u-media',
+      waMessageId: 'wamid.umedia',
+      type: 'unknown',
+      body: '',
+      metadata: { media: { mimetype: 'application/pdf', omitted: true } },
+    },
+    {
+      ...PROMPT,
+      id: 'u-quote',
+      waMessageId: 'wamid.uquote',
+      type: 'unknown',
+      body: '',
+      metadata: { quotedMessage: { id: 'q1', body: 'quoted' } },
+    },
+    {
+      ...PROMPT,
+      id: 'u-btn',
+      waMessageId: 'wamid.ubtn',
+      type: 'unknown',
+      body: '',
+      direction: 'incoming',
+      metadata: { buttons: [{ id: 'b1', text: 'Tap' }] },
+    },
+    { ...PROMPT, id: 'rev-1', waMessageId: 'wamid.rev1', type: 'revoked', body: '', metadata: undefined },
+    { ...PROMPT, id: 'mask-1', waMessageId: 'wamid.mask1', type: 'masked', body: '', metadata: undefined },
+  ];
+  const { container } = renderThread('operator', rows);
+  assert.equal(container.querySelectorAll('.message-bubble').length, 6);
+});
