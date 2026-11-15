@@ -43,12 +43,6 @@ export function mapEngineHistoryMessage(h: EngineHistoryMessage): ChatMessageVie
 const msgKey = (m: ChatMessageView): string => m.waMessageId ?? m.id;
 const msgTime = (m: ChatMessageView): number =>
   typeof m.timestamp === 'number' ? m.timestamp : Math.floor(Date.parse(m.createdAt) / 1000) || 0;
-// The part of a whatsapp-web.js message id (`fromMe_chat_stanza[_author]`) that does not depend on the id
-// form the chat and the author are named in: the direction and the stanza.
-const stanzaKey = (m: ChatMessageView): string | undefined => {
-  const [fromMe, , stanza] = msgKey(m).split('_');
-  return stanza ? `${fromMe}_${stanza}` : undefined;
-};
 
 // WhatsApp Web lists a message deleted for everyone under the id of the delete notice, not the id the
 // message had, so its history entry never pairs with the stored row by id and the thread drew the
@@ -56,35 +50,60 @@ const stanzaKey = (m: ChatMessageView): string | undefined => {
 // timestamp (measured on a live session: only the id differs). It is matched one to one and left out,
 // so the stored row, with its real status, is the one kept. A history-only deleted message has no
 // stored row to match and stays.
-//
-// The entry can also carry the id the message had with the chat, or the author, named in the other id
-// form (phone number where the stored row has the lid): also measured live, on messages deleted by a
-// party that addressed the chat by phone number. The stanza is the same in both, so that pairs them.
 function withoutStoredTwins(history: ChatMessageView[], db: ChatMessageView[]): ChatMessageView[] {
   const historyKeys = new Set(history.map(msgKey));
   const storedKeys = new Set(db.map(msgKey));
   const unpaired = db.filter(s => s.type === 'revoked' && !historyKeys.has(msgKey(s)));
   const leftOut = new Set<string>();
-  const pair = (h: ChatMessageView, isTwin: (s: ChatMessageView) => boolean): void => {
+  return history.filter(h => {
     const key = msgKey(h);
-    if (h.type !== 'revoked' || storedKeys.has(key) || leftOut.has(key)) return;
-    const twin = unpaired.findIndex(isTwin);
-    if (twin === -1) return;
+    if (leftOut.has(key)) return false;
+    if (h.type !== 'revoked' || storedKeys.has(key) || typeof h.timestamp !== 'number') return true;
+    const sender = h.author ?? h.from;
+    const twin = unpaired.findIndex(
+      s => s.direction === h.direction && (s.author ?? s.from) === sender && s.timestamp === h.timestamp,
+    );
+    if (twin === -1) return true;
     unpaired.splice(twin, 1);
     leftOut.add(key);
-  };
-  // By stanza first, over every entry: that match is certain, and one made by sender and time before it
-  // could take the row a later entry is.
+    return false;
+  });
+}
+
+// A whatsapp-web.js message id is `<fromMe>_<chat>_<stanza>`, plus the author on a group message or `out` on
+// an own 1:1 one. A person's chat, and an author, can be named by phone number in one id and by lid in
+// another id of the same message; the direction and the stanza are what the two share. Undefined for an id
+// in any other form.
+const SERIALIZED_MESSAGE_ID = /^(true|false)_[^_@]+@[^_@]+_([^_]+)(?:_[^_]+)?$/;
+const stanzaKey = (m: ChatMessageView): string | undefined => {
+  const parts = SERIALIZED_MESSAGE_ID.exec(msgKey(m));
+  return parts ? `${parts[1]}_${parts[2]}` : undefined;
+};
+
+// A deleted message's history entry that names the chat, or the author, in the other id form than its
+// stored row (measured live: the party that deleted the message addressed the chat by phone number, the
+// stored row has the lid) is put under the stored row's id, so the two merge as any pair with one id does:
+// the stored row is kept, and is shown deleted even if the delete never reached it.
+function underStoredKeys(history: ChatMessageView[], db: ChatMessageView[]): ChatMessageView[] {
+  const storedKeys = new Set(db.map(msgKey));
+  const storedByStanza = new Map<string, string>();
+  for (const s of db) {
+    const stanza = stanzaKey(s);
+    if (stanza) storedByStanza.set(stanza, msgKey(s));
+  }
+  // Decided per id, not per entry: a page that lists one message twice lists that message, deleted or not.
+  const moved = new Map<string, string>();
   for (const h of history) {
+    const key = msgKey(h);
+    if (h.type !== 'revoked' || storedKeys.has(key)) continue;
     const stanza = stanzaKey(h);
-    if (stanza) pair(h, s => stanzaKey(s) === stanza);
+    const storedKey = stanza && storedByStanza.get(stanza);
+    if (storedKey) moved.set(key, storedKey);
   }
-  for (const h of history) {
-    if (typeof h.timestamp !== 'number') continue;
-    const sender = h.author ?? h.from;
-    pair(h, s => s.direction === h.direction && (s.author ?? s.from) === sender && s.timestamp === h.timestamp);
-  }
-  return history.filter(h => !leftOut.has(msgKey(h)));
+  return history.map(h => {
+    const storedKey = moved.get(msgKey(h));
+    return storedKey ? { ...h, waMessageId: storedKey } : h;
+  });
 }
 
 // Merge persisted DB messages with engine history into one ascending thread. The engine fills the
@@ -92,7 +111,7 @@ function withoutStoredTwins(history: ChatMessageView[], db: ChatMessageView[]): 
 // real delivery status survives. Deduped by the wweb.js serialized id (engine `id` == DB `waMessageId`).
 export function mergeChatMessages(db: ChatMessageView[], history: ChatMessageView[]): ChatMessageView[] {
   const byId = new Map<string, ChatMessageView>();
-  for (const m of [...withoutStoredTwins(history, db), ...db]) {
+  for (const m of [...withoutStoredTwins(underStoredKeys(history, db), db), ...db]) {
     const key = msgKey(m);
     const hist = byId.get(key);
     // The DB copy wins (authoritative status) — but a legacy row has no stable sender id, so

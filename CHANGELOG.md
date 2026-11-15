@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - whatsapp-web.js: the chat history returns a message deleted for everyone under the id of its stored row, or in the chat's own id form when none is stored, where a delete notice that named the chat by phone number left it under an id no stored row has (#2076).
-- Dashboard: a message deleted for everyone is shown once when its history entry and its stored row name the chat in different id forms, phone number and lid (#2076).
+- Dashboard: a message deleted for everyone is shown once when its history entry and its stored row name the chat or the author in different id forms, phone number and lid (#2076).
 
 ## [0.30.2] - 2026-11-15
 

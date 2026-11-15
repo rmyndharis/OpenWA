@@ -1108,18 +1108,65 @@ test('mergeChatMessages: a deleted message listed under another form of the chat
     merged.map(m => [m.waMessageId, m.status]),
     [['false_148@lid_3EB0FE6B', 'read']],
   );
+  // The other way round: a row stored while the chat was known by phone number, an entry under the lid.
+  assert.deepEqual(
+    drawn([db({ ...stored, waMessageId: 'false_628@c.us_3EB0FE6B' })], [entry('false_148@lid_3EB0FE6B')]),
+    ['false_628@c.us_3EB0FE6B'],
+  );
   // A group id has a fourth part, the author, and that part can be in the other form as well.
   assert.deepEqual(
     drawn([db({ ...stored, waMessageId: 'false_g@g.us_3EB0FE6B_148@lid' })], [entry('false_g@g.us_3EB0FE6B_628@c.us')]),
     ['false_g@g.us_3EB0FE6B_148@lid'],
   );
+  // A row the delete never reached is the same message all the same: it is shown deleted, without its text.
+  assert.deepEqual(
+    mergeChatMessages([{ ...stored, type: 'text', body: 'secret' }], [entry('false_628@c.us_3EB0FE6B')]).map(m => [
+      m.waMessageId,
+      m.type,
+      m.body,
+    ]),
+    [['false_148@lid_3EB0FE6B', 'revoked', '']],
+  );
+  // Two entries for one stored row, one in each form, are still one message, and so is an entry listed twice,
+  // once from before the delete.
+  assert.deepEqual(drawn([stored], [entry('false_148@lid_3EB0FE6B'), entry('false_628@c.us_3EB0FE6B')]), [
+    'false_148@lid_3EB0FE6B',
+  ]);
+  assert.deepEqual(
+    drawn([stored], [entry('false_628@c.us_3EB0FE6B', { type: 'text', body: 'hi' }), entry('false_628@c.us_3EB0FE6B')]),
+    ['false_148@lid_3EB0FE6B'],
+  );
 
-  // The same stanza sent the other way is another message, and so is one that is not deleted.
+  // An entry that has a stored row under its own id belongs to that row, whatever else shares the stanza.
+  assert.deepEqual(
+    mergeChatMessages(
+      [
+        db({ ...stored, id: 'row-b', waMessageId: 'false_628@c.us_3EB0FE6B', type: 'text', body: 'gone' }),
+        db({ ...stored, id: 'row-a', waMessageId: 'false_148@lid_3EB0FE6B', type: 'text', body: 'kept' }),
+      ],
+      [entry('false_628@c.us_3EB0FE6B')],
+    )
+      .map(m => [m.waMessageId, m.type, m.body])
+      .sort(),
+    [
+      ['false_148@lid_3EB0FE6B', 'text', 'kept'],
+      ['false_628@c.us_3EB0FE6B', 'revoked', ''],
+    ],
+  );
+
+  // The same stanza sent the other way is another message, and so is an entry that is not deleted.
   assert.equal(drawn([stored], [entry('true_628@c.us_3EB0FE6B', { fromMe: true })]).length, 2);
   assert.equal(drawn([stored], [entry('false_628@c.us_3EB0FE6B', { type: 'text', body: 'hi' })]).length, 2);
-  assert.equal(drawn([{ ...stored, type: 'text', body: 'hi' }], [entry('false_628@c.us_3EB0FE6B')]).length, 2);
-  // An id that is not in the three or four part form has no stanza to go by.
-  assert.equal(drawn([db({ ...stored, waMessageId: '3EB0FE6B' })], [entry('3EB0FE6B_X')]).length, 2);
+  // Only a full whatsapp-web.js id has a stanza to go by: not a bare key, not an id of some other make with
+  // underscores in it, not one whose first part is no direction, and not a stanza that holds an underscore.
+  for (const [storedId, entryId] of [
+    ['3EB0FE6B', '3EB0FE6B_X'],
+    ['msg_2026_01', 'msg_2025_01'],
+    ['maybe_148@lid_3EB0FE6B', 'maybe_628@c.us_3EB0FE6B'],
+    ['false_148@lid_MSG_1_111@lid', 'false_628@c.us_MSG_2_222@lid'],
+  ]) {
+    assert.equal(drawn([db({ ...stored, waMessageId: storedId })], [entry(entryId)]).length, 2, entryId);
+  }
 
   // A stanza match is decided before a match by sender and time: here the first entry is another deleted
   // message of the same sender and second, and it must not take the row that the second entry is.
