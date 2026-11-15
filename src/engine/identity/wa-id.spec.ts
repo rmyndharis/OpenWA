@@ -2,8 +2,10 @@ import {
   chatKind,
   isAddressableParticipant,
   isChannelJid,
+  authorOfMessageId,
   chatOfPage,
   isIndividualWid,
+  messageIdByAuthor,
   messageIdInChat,
   parseWaId,
   rememberChatOfPage,
@@ -253,6 +255,61 @@ describe('wa-id', () => {
         'false_628111222@c.us_A_B_C',
       ]) {
         expect(messageIdInChat(id, '148000111@lid')).toBe(id);
+      }
+    });
+  });
+
+  describe('messageIdByAuthor', () => {
+    const GROUP = 'false_120363000111@g.us_3EB0AA';
+
+    it("rewrites a group message's author to the form given, whichever way round", () => {
+      expect(messageIdByAuthor(`${GROUP}_628111222@c.us`, '148000111@lid')).toBe(`${GROUP}_148000111@lid`);
+      expect(messageIdByAuthor(`${GROUP}_148000111@lid`, '628111222@c.us')).toBe(`${GROUP}_628111222@c.us`);
+      expect(messageIdByAuthor(`${GROUP}_148000111@lid`, '628111222:2@s.whatsapp.net')).toBe(
+        `${GROUP}_628111222:2@s.whatsapp.net`,
+      );
+      expect(authorOfMessageId(`${GROUP}_628111222@c.us`)).toBe('628111222@c.us');
+      // The hosted dialects name a person too, as an author read and as one written.
+      for (const hosted of ['628111222@hosted', '148000111@hosted.lid']) {
+        expect(authorOfMessageId(`${GROUP}_${hosted}`)).toBe(hosted);
+        expect(messageIdByAuthor(`${GROUP}_628111222@c.us`, hosted)).toBe(`${GROUP}_${hosted}`);
+      }
+    });
+
+    it('leaves an id that names no author of a group', () => {
+      for (const id of [
+        GROUP,
+        'true_628111222@c.us_3EB0AA_out',
+        'false_628999111@c.us_3EB0AA_628111222@c.us',
+        'false_status@broadcast_3EB0AA_628111222@c.us',
+        `${GROUP}_120363000222@g.us`,
+        `${GROUP}_ 628111222@c.us `,
+        `${GROUP}_628111222:1 2@c.us`,
+        `${GROUP}_628111222@C.US`,
+        `${GROUP}_1234@c.us`,
+        '3EB0AA',
+        `${GROUP}_x_y`,
+      ]) {
+        expect(messageIdByAuthor(id, '148000111@lid')).toBe(id);
+        expect(authorOfMessageId(id)).toBeUndefined();
+      }
+    });
+
+    it("leaves every id when the author given is not a person's id as an engine writes it", () => {
+      const id = `${GROUP}_628111222@c.us`;
+      for (const author of [
+        '120363000111@g.us',
+        'out',
+        'foo_bar@c.us',
+        '628111222:1_2@c.us',
+        '628111222:1 2@c.us',
+        '628111222:1:bad@c.us',
+        ' 148000111@lid',
+        '148000111@lid\n',
+        '148000111@LID',
+        '',
+      ]) {
+        expect(messageIdByAuthor(id, author)).toBe(id);
       }
     });
   });
