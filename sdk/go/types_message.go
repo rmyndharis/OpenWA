@@ -23,7 +23,7 @@ type SendTextRequest struct {
 	// engines differ: whatsapp-web.js builds one in-page by default, while on Baileys a preview is
 	// OPT-IN — it needs true, because generating one is a blocking outbound fetch of the
 	// first URL in the text. Unset, the session's linkPreview config applies when one is set (OpenWA
-	// 0.31.0 or later).
+	// 0.30.3 or later).
 	LinkPreview *bool `json:"linkPreview,omitempty"`
 	// CustomLinkPreview attaches a preview you supply instead of one fetched from the URL. The page is
 	// not fetched, so it works even for a URL the gateway cannot reach. Baileys only — whatsapp-web.js

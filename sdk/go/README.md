@@ -1,6 +1,6 @@
 # OpenWA Go SDK
 
-This document describes `main`. The `linkPreview` key of a session's config is an unreleased addition after SDK 0.11.0 and requires OpenWA 0.31.0 or later. `Messages.Receipts` requires OpenWA 0.28.0 or later. `Contacts.Lid` requires OpenWA 0.27.1 or later. `Groups.SetMemberLabel`, `SearchQuery.Match`, `CustomLinkPreview.ThumbnailURL` and `CustomLinkPreview.ThumbnailBase64` require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later. The `message.receipt` and `poll.vote` webhook event names require OpenWA 0.26.0 or later.
+This document describes `main`. The `linkPreview` key of a session's config is an unreleased addition after SDK 0.11.0 and requires OpenWA 0.30.3 or later. `Messages.Receipts` requires OpenWA 0.28.0 or later. `Contacts.Lid` requires OpenWA 0.27.1 or later. `Groups.SetMemberLabel`, `SearchQuery.Match`, `CustomLinkPreview.ThumbnailURL` and `CustomLinkPreview.ThumbnailBase64` require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later. The `message.receipt` and `poll.vote` webhook event names require OpenWA 0.26.0 or later.
 
 Idiomatic Go client for the [OpenWA](https://github.com/rmyndharis/OpenWA) WhatsApp
 API Gateway. Stdlib-only (no dependencies), context-first, with typed errors and
