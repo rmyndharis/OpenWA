@@ -178,7 +178,7 @@ export interface SessionConfig {
   autoRejectCalls: boolean;
   maxReconnectAttempts: number | null;
   reconnectBaseDelay: number;
-  /** Link preview for a text send that sets none; `null` keeps the engine's default. */
+  /** Link preview of a `send-text` or `send-template` that sets none; `null` keeps the engine's default. */
   linkPreview: boolean | null;
 }
 

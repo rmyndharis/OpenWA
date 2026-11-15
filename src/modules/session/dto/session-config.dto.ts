@@ -121,7 +121,7 @@ export class SessionConfigResponseDto {
 
   @ApiProperty({
     description:
-      "Link preview default for a text send that sets none; `null` means the engine's own default " +
+      "Link preview default of a `send-text` or `send-template` that sets none; `null` means the engine's own default " +
       '(a preview on whatsapp-web.js, none on Baileys)',
     example: false,
     nullable: true,

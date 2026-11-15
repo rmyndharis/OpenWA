@@ -4,7 +4,7 @@ import { CreateSessionDto } from './create-session.dto';
 import { MAX_SESSION_CONFIG_BYTES } from './recognised-session-config.validator';
 
 /**
- * Only three keys of a session's `config` are ever read; the rest is stored but ignored, and every session read
+ * Only four keys of a session's `config` are ever read; the rest is stored but ignored, and every session read
  * (the list of up to 1000 rows, each session route, boot auto-start and the takeover sweep) loads and parses the
  * whole column. A create body therefore must not be able to park an arbitrarily large blob there.
  */

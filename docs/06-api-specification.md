@@ -313,7 +313,7 @@ Get a single session by ID.
 
 #### GET /api/sessions/:sessionId/config
 
-Get the effective tunable configuration for a session. Only the three recognised keys are reported,
+Get the effective tunable configuration for a session. Only the four recognised keys are reported,
 resolved through the same clamps the engine applies — the opaque stored `config` column is never
 echoed back (it is stripped from `SessionResponseDto` alongside the raw `proxyUrl` column, and anything else placed
 in it is stored but ignored).
@@ -347,7 +347,7 @@ key does and the moment it is read.
 Merge a patch into the session's tunable configuration. No restart is required or performed:
 omitted keys keep their stored value, and an explicit `null` clears a key back to its default (the
 only way back to unlimited reconnect attempts once a cap is set). `autoRejectCalls` is re-read on
-every incoming call and `linkPreview` on every text send, so both apply immediately; the two reconnect settings are read once per start
+every incoming call and `linkPreview` on every `send-text` and `send-template`, so both apply immediately; the two reconnect settings are read once per start
 and therefore apply on the next start, leaving a reconnect sequence already in flight alone.
 
 **Auth:** API key (OPERATOR) · **Scope:** session-scoped
@@ -360,12 +360,12 @@ and therefore apply on the next start, leaving a reconnect sequence already in f
 
 **Request body** — `UpdateSessionConfigDto` (any subset; each key also accepts `null`)
 
-| Field                  | Type    | Constraints               | Description                                                                                                                                                                                      |
-| ---------------------- | ------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `autoRejectCalls`      | boolean | none                      | Auto-reject every incoming call as soon as it rings (Baileys only)                                                                                                                               |
-| `maxReconnectAttempts` | number  | integer, 0–20             | Reconnect attempt cap (`0` disables reconnect; `null` = unlimited). Bounds the gateway's own reconnect: every reconnect on whatsapp-web.js, and on Baileys only the one after a logged-out close |
-| `reconnectBaseDelay`   | number  | integer, 1000–300000 (ms) | Base delay of the reconnect backoff, on the same engine scope                                                                                                                                    |
-| `linkPreview`          | boolean | none                      | Link preview of a `send-text` or `send-template` that sets neither `linkPreview` nor `customLinkPreview`; a value in the request wins. `null` restores the engine's default                      |
+| Field                  | Type    | Constraints               | Description                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------- | ------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autoRejectCalls`      | boolean | none                      | Auto-reject every incoming call as soon as it rings (Baileys only)                                                                                                                                                                                                                                                                                                                                                                          |
+| `maxReconnectAttempts` | number  | integer, 0–20             | Reconnect attempt cap (`0` disables reconnect; `null` = unlimited). Bounds the gateway's own reconnect: every reconnect on whatsapp-web.js, and on Baileys only the one after a logged-out close                                                                                                                                                                                                                                            |
+| `reconnectBaseDelay`   | number  | integer, 1000–300000 (ms) | Base delay of the reconnect backoff, on the same engine scope                                                                                                                                                                                                                                                                                                                                                                               |
+| `linkPreview`          | boolean | none                      | Link preview of a `send-text` or `send-template` that sets neither `linkPreview` nor `customLinkPreview`; a value in the request wins. On Baileys, `true` makes the gateway fetch the page for the first URL in the text on every matching send, those of plugins, automation rules and MCP tools that leave the field out included. `null` restores the engine's default. See [Link previews](#post-apisessionssessionidmessagessend-text) |
 
 ```json
 { "maxReconnectAttempts": 5 }
@@ -585,7 +585,7 @@ Create a new WhatsApp session.
 
 Minimal: `{ "name": "my-bot" }`.
 
-The limit on `config` applies when a session is created: its serialised form may be at most 16384 bytes, unrecognised keys included, and a larger one answers `400`. The three recognised keys take under 100 of them; the rest is room for keys of your own, which are stored and ignored. A session that already holds more, restored from a backup or stored by an earlier version, keeps working: reading it and `PATCH /api/sessions/:sessionId/config` are not bounded.
+The limit on `config` applies when a session is created: its serialised form may be at most 16384 bytes, unrecognised keys included, and a larger one answers `400`. The four recognised keys take under 100 of them; the rest is room for keys of your own, which are stored and ignored. A session that already holds more, restored from a backup or stored by an earlier version, keeps working: reading it and `PATCH /api/sessions/:sessionId/config` are not bounded.
 
 **Optional — per-session egress proxy.** Route a session's traffic through a proxy only if your
 network cannot reach WhatsApp directly. Set `proxyUrl` on the same request:
