@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.3] - 2026-11-15
+
 ### Added
 
 - Session config key `linkPreview`: the default for a `send-text` or `send-template` that sets neither `linkPreview` nor `customLinkPreview`; a value in the request wins (#2080). Thanks @arraisfilho.
