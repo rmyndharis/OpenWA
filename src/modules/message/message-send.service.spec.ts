@@ -89,6 +89,7 @@ describe('MessageSendService', () => {
 
     sessionService = {
       findOne: jest.fn().mockResolvedValue({ id: 'sess-1', phone: '628123456789' }),
+      getLinkPreviewDefault: jest.fn().mockResolvedValue(undefined),
     };
 
     engines = new EngineRegistry();
@@ -265,6 +266,61 @@ describe('MessageSendService', () => {
       await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'hi' });
 
       expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('628123456789@c.us', 'hi');
+    });
+
+    it("sends with the session's link-preview default when the request sets none", async () => {
+      (sessionService.getLinkPreviewDefault as jest.Mock).mockResolvedValueOnce(false);
+
+      await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'see https://example.com' });
+
+      expect(sessionService.getLinkPreviewDefault).toHaveBeenCalledWith('sess-1');
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith(
+        '628123456789@c.us',
+        'see https://example.com',
+        undefined,
+        { linkPreview: false },
+      );
+    });
+
+    it("lets the request's linkPreview win over the session default", async () => {
+      const input = { chatId: '628123456789@c.us', text: 'see https://example.com', linkPreview: true };
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: { sessionId: 'sess-1', input, type: 'text' },
+      });
+      (sessionService.getLinkPreviewDefault as jest.Mock).mockResolvedValueOnce(false);
+
+      await service.sendText('sess-1', input);
+
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith(
+        '628123456789@c.us',
+        'see https://example.com',
+        undefined,
+        { linkPreview: true },
+      );
+    });
+
+    it('does not apply the session default to a send that supplies its own preview', async () => {
+      const input = {
+        chatId: '628123456789@c.us',
+        text: 'see https://example.com',
+        customLinkPreview: { url: 'https://example.com', title: 'Example' },
+      };
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: { sessionId: 'sess-1', input, type: 'text' },
+      });
+      (sessionService.getLinkPreviewDefault as jest.Mock).mockResolvedValue(false);
+
+      await service.sendText('sess-1', input);
+
+      expect(sessionService.getLinkPreviewDefault).not.toHaveBeenCalled();
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith(
+        '628123456789@c.us',
+        'see https://example.com',
+        undefined,
+        { customPreview: { url: 'https://example.com', title: 'Example' } },
+      );
     });
 
     it('threads a caller-supplied preview through to the engine', async () => {

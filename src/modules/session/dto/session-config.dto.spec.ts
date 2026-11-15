@@ -52,6 +52,22 @@ describe('UpdateSessionConfigDto', () => {
     });
   });
 
+  describe('linkPreview', () => {
+    it.each([
+      [false, false],
+      ['false', false],
+      ['true', true],
+      [null, null],
+    ])('reads %p as %p', (input, expected) => {
+      expect(errorsFor({ linkPreview: input })).toHaveLength(0);
+      expect(parse({ linkPreview: input }).linkPreview).toBe(expected);
+    });
+
+    it.each(['yes', '0', ''])('rejects the ambiguous spelling %p', input => {
+      expect(errorsFor({ linkPreview: input }).length).toBeGreaterThan(0);
+    });
+  });
+
   describe('bounds mirror resolveReconnectConfig', () => {
     it.each([0, 1, 20])('accepts maxReconnectAttempts %i', v => {
       expect(errorsFor({ maxReconnectAttempts: v })).toHaveLength(0);

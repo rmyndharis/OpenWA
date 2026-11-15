@@ -19134,7 +19134,7 @@
           },
           "config": {
             "type": "object",
-            "description": "Session configuration. Only three keys are read: autoRejectCalls (boolean, default false, Baileys engine only) rejects incoming calls as soon as they ring, and the call.received event is still emitted first; maxReconnectAttempts (0-20, default unlimited) caps consecutive reconnects (the count restarts once the session has stayed READY for 5 minutes) and reconnectBaseDelay (1000-300000 ms, default 5000) sets the backoff base, both for the gateway's own reconnect only (on Baileys the engine retries a transient drop itself, with a fixed backoff and no cap). Anything else is stored but ignored, up to 16384 bytes for the whole object serialised as JSON (a larger one is refused with 400). All three can be changed later with PATCH /api/sessions/{sessionId}/config without a restart: autoRejectCalls applies from the next incoming call, the two reconnect settings from the next session start.",
+            "description": "Session configuration. Only four keys are read: autoRejectCalls (boolean, default false, Baileys engine only) rejects incoming calls as soon as they ring, and the call.received event is still emitted first; maxReconnectAttempts (0-20, default unlimited) caps consecutive reconnects (the count restarts once the session has stayed READY for 5 minutes); reconnectBaseDelay (1000-300000 ms, default 5000) sets the backoff base, both for the gateway's own reconnect only (on Baileys the engine retries a transient drop itself, with a fixed backoff and no cap); and linkPreview (boolean, default unset) is the link preview of a send-text or send-template that sets neither linkPreview nor customLinkPreview. Anything else is stored but ignored, up to 16384 bytes for the whole object serialised as JSON (a larger one is refused with 400). All four can be changed later with PATCH /api/sessions/{sessionId}/config without a restart: autoRejectCalls applies from the next incoming call, linkPreview from the next send, the two reconnect settings from the next session start.",
             "example": {
               "autoRejectCalls": false,
               "maxReconnectAttempts": 5,
@@ -19300,12 +19300,19 @@
             "type": "number",
             "description": "Base reconnect backoff in milliseconds, on the same engine scope as `maxReconnectAttempts`",
             "example": 5000
+          },
+          "linkPreview": {
+            "type": "boolean",
+            "description": "Link preview default for a text send that sets none; `null` means the engine's own default (a preview on whatsapp-web.js, none on Baileys)",
+            "example": false,
+            "nullable": true
           }
         },
         "required": [
           "autoRejectCalls",
           "maxReconnectAttempts",
-          "reconnectBaseDelay"
+          "reconnectBaseDelay",
+          "linkPreview"
         ]
       },
       "UpdateSessionConfigDto": {
@@ -19331,6 +19338,12 @@
             "minimum": 1000,
             "maximum": 300000,
             "example": 5000,
+            "nullable": true
+          },
+          "linkPreview": {
+            "type": "boolean",
+            "description": "Link preview for a send-text or send-template that sets neither `linkPreview` nor `customLinkPreview`; a value in the request always wins. `false` sends without a preview on both engines. `true` asks for one: on whatsapp-web.js that is already the default, on Baileys it makes the gateway fetch the page before every such send. Send `null` to go back to the engine's default. Takes effect from the next send, and the session is not restarted.",
+            "example": false,
             "nullable": true
           }
         }

@@ -2,7 +2,7 @@ import { plainToInstance } from 'class-transformer';
 import { ValidationArguments, ValidatorConstraint, ValidatorConstraintInterface, validateSync } from 'class-validator';
 import { UpdateSessionConfigDto } from './session-config.dto';
 
-const RECOGNISED_KEYS = ['autoRejectCalls', 'maxReconnectAttempts', 'reconnectBaseDelay'] as const;
+const RECOGNISED_KEYS = ['autoRejectCalls', 'maxReconnectAttempts', 'reconnectBaseDelay', 'linkPreview'] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -14,7 +14,7 @@ function recognisedKeys(config: Record<string, unknown>): UpdateSessionConfigDto
 }
 
 /**
- * The create body's `config`, with the three keys the session reads coerced exactly as PATCH /config
+ * The create body's `config`, with the four keys the session reads coerced exactly as PATCH /config
  * coerces them (`"true"` to `true`, `"5"` to `5`), so a value that route accepts is stored typed.
  * Unknown keys are kept as sent: they are stored but ignored. A non-object is left for `@IsObject`.
  */
@@ -27,7 +27,7 @@ export function normaliseSessionConfig(value: unknown): unknown {
 }
 
 /**
- * The most a create body's `config` may hold, in bytes of JSON. Only the three recognised keys are read (79 bytes at
+ * The most a create body's `config` may hold, in bytes of JSON. Only the four recognised keys are read (99 bytes at
  * their largest) and every session read loads and parses the whole stored column, so the rest is capped at what an
  * operator plausibly keeps beside them. It bounds what is created, not what is stored: a row that already holds more
  * (restored, or stored before the bound) still loads and still takes PATCH /config.
@@ -50,7 +50,7 @@ function configErrors(value: unknown): string[] {
 }
 
 /**
- * Hold the create route's `config` to the rules PATCH /config enforces on the same three keys. Without
+ * Hold the create route's `config` to the rules PATCH /config enforces on the same four keys. Without
  * it the values were stored as sent and clamped at start time without a word: `-1` or `0.5` turned
  * reconnect off, `50` became `20`, and `"yes"` left autoRejectCalls off. The object as a whole is held to
  * MAX_SESSION_CONFIG_BYTES.

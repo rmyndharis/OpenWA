@@ -58,6 +58,19 @@ class UpdateSessionConfigRequestTest {
     }
 
     @Test
+    void linkPreviewIsSentAndCleared() {
+        assertEquals(
+                "{\"linkPreview\":false}",
+                gson.toJson(UpdateSessionConfigRequest.builder().linkPreview(false).build()));
+        assertEquals(
+                "{\"linkPreview\":null}",
+                gson.toJson(UpdateSessionConfigRequest.builder()
+                        .linkPreview(true)
+                        .clearLinkPreview()
+                        .build()));
+    }
+
+    @Test
     void oneClearedFieldDoesNotDragTheOthersIn() {
         assertEquals(
                 "{\"autoRejectCalls\":true,\"maxReconnectAttempts\":null}",

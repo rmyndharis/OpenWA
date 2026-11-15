@@ -155,6 +155,7 @@ describe('Session content lifetime', () => {
       db.getRepository(Message),
       {
         findOne: (id: string) => db.getRepository(Session).findOneByOrFail({ id }),
+        getLinkPreviewDefault: () => Promise.resolve(undefined),
       } as unknown as SessionService,
       engines,
       hooks,

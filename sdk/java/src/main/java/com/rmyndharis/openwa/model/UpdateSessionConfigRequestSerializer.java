@@ -35,6 +35,11 @@ public final class UpdateSessionConfigRequestSerializer implements JsonSerialize
         } else if (src.reconnectBaseDelay() != null) {
             out.addProperty("reconnectBaseDelay", src.reconnectBaseDelay());
         }
+        if (src.clearLinkPreview()) {
+            out.add("linkPreview", null);
+        } else if (src.linkPreview() != null) {
+            out.addProperty("linkPreview", src.linkPreview());
+        }
         return out;
     }
 }

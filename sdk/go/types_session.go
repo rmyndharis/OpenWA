@@ -269,18 +269,20 @@ type SessionStatsOverview struct {
 }
 
 // SessionConfig is a session's effective runtime configuration. A nil MaxReconnectAttempts means
-// unlimited — not unset. AutoRejectCalls works on Baileys only: whatsapp-web.js stores the flag but
-// cannot reject a call, so calls keep ringing there.
+// unlimited — not unset; a nil LinkPreview means the engine's own default. AutoRejectCalls works on
+// Baileys only: whatsapp-web.js stores the flag but cannot reject a call, so calls keep ringing there.
 type SessionConfig struct {
-	AutoRejectCalls      bool `json:"autoRejectCalls"`
-	MaxReconnectAttempts *int `json:"maxReconnectAttempts"`
-	ReconnectBaseDelay   int  `json:"reconnectBaseDelay"`
+	AutoRejectCalls      bool  `json:"autoRejectCalls"`
+	MaxReconnectAttempts *int  `json:"maxReconnectAttempts"`
+	ReconnectBaseDelay   int   `json:"reconnectBaseDelay"`
+	LinkPreview          *bool `json:"linkPreview"`
 }
 
 // UpdateSessionConfigRequest is a partial update of a session's config, merged in any session state
 // with no restart, re-link or QR scan. AutoRejectCalls applies immediately, on Baileys only (whatsapp-web.js
-// stores the flag but cannot reject a call); MaxReconnectAttempts and ReconnectBaseDelay apply on the
-// next start.
+// stores the flag but cannot reject a call), and so does LinkPreview, the preview of a send-text or
+// send-template that sets neither linkPreview nor customLinkPreview; MaxReconnectAttempts and
+// ReconnectBaseDelay apply on the next start.
 //
 // The route needs THREE states per field, not two: a key that is absent leaves the value unchanged, a
 // key sent as explicit null clears it back to the default, and a value sets it. A `*int` with
@@ -292,6 +294,7 @@ type UpdateSessionConfigRequest struct {
 	AutoRejectCalls      *bool `json:"-"`
 	MaxReconnectAttempts *int  `json:"-"`
 	ReconnectBaseDelay   *int  `json:"-"`
+	LinkPreview          *bool `json:"-"`
 
 	// ClearMaxReconnectAttempts sends an explicit null, restoring unlimited reconnect attempts. It
 	// wins over MaxReconnectAttempts if both are set.
@@ -300,6 +303,8 @@ type UpdateSessionConfigRequest struct {
 	ClearAutoRejectCalls bool `json:"-"`
 	// ClearReconnectBaseDelay sends an explicit null, restoring the server default.
 	ClearReconnectBaseDelay bool `json:"-"`
+	// ClearLinkPreview sends an explicit null, restoring the engine's own default.
+	ClearLinkPreview bool `json:"-"`
 }
 
 // MarshalJSON emits only the fields the caller actually addressed: a Clear* flag becomes an explicit
@@ -321,6 +326,11 @@ func (r UpdateSessionConfigRequest) MarshalJSON() ([]byte, error) {
 		out["reconnectBaseDelay"] = nil
 	} else if r.ReconnectBaseDelay != nil {
 		out["reconnectBaseDelay"] = *r.ReconnectBaseDelay
+	}
+	if r.ClearLinkPreview {
+		out["linkPreview"] = nil
+	} else if r.LinkPreview != nil {
+		out["linkPreview"] = *r.LinkPreview
 	}
 	return json.Marshal(out)
 }

@@ -141,13 +141,18 @@ export class MessageSendService {
     // SIMULATE_TYPING=false disables it.
     await this.simulateTypingIfEnabled(engine, finalDto.chatId, finalDto.text);
 
+    // The session's default fills in only when the send left the preview open: a value in the
+    // request, or a preview the caller supplied, is the caller's choice and always wins.
+    const linkPreview =
+      finalDto.linkPreview ?? (customPreview ? undefined : await this.sessionService.getLinkPreviewDefault(sessionId));
+
     let result: MessageResult;
     try {
       // The call is widened ONLY as far as the caller actually asked. A send with neither mentions
       // nor a preview choice keeps its two-argument shape, and one with mentions alone keeps its
       // three — trailing `undefined`s would be harmless to the engines but would rewrite the call
       // shape of every existing send for no behavioural gain.
-      const { linkPreview, quotedMessageId } = finalDto;
+      const { quotedMessageId } = finalDto;
       if (linkPreview !== undefined || customPreview || quotedMessageId) {
         result = await engine.sendTextMessage(finalDto.chatId, finalDto.text, finalDto.mentions, {
           ...(linkPreview === undefined ? {} : { linkPreview }),

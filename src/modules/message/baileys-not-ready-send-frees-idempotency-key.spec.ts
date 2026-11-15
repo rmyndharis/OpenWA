@@ -116,7 +116,13 @@ describe('a keyed Baileys send refused with the not-ready 409', () => {
             update: jest.fn().mockResolvedValue({ affected: 1 }),
           },
         },
-        { provide: SessionService, useValue: { findOne: jest.fn().mockResolvedValue({ id: 'sess-1' }) } },
+        {
+          provide: SessionService,
+          useValue: {
+            findOne: jest.fn().mockResolvedValue({ id: 'sess-1' }),
+            getLinkPreviewDefault: jest.fn().mockResolvedValue(undefined),
+          },
+        },
         { provide: EngineRegistry, useValue: engines },
         {
           provide: HookManager,

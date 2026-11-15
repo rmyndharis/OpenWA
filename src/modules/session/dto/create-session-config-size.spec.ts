@@ -27,7 +27,12 @@ describe('POST /sessions config size', () => {
   });
 
   it('accepts every documented key at its maximum, far below the bound', async () => {
-    const largest = { autoRejectCalls: false, maxReconnectAttempts: 20, reconnectBaseDelay: 300_000 };
+    const largest = {
+      autoRejectCalls: false,
+      maxReconnectAttempts: 20,
+      reconnectBaseDelay: 300_000,
+      linkPreview: false,
+    };
 
     await expect(validate({ name: 'largest-config', config: largest })).resolves.toBeDefined();
     expect(MAX_SESSION_CONFIG_BYTES).toBeGreaterThanOrEqual(4 * bytes(largest));

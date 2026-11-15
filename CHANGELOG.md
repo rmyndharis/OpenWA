@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `linkPreview` to the session config, set at `POST /api/sessions` or with `PATCH /api/sessions/{sessionId}/config`: a `send-text` or `send-template` that sets neither `linkPreview` nor `customLinkPreview` takes it, so a session can send without previews while its clients leave the field out; a value in the request still wins, and `GET /api/sessions/{sessionId}/config` reports it (`null` when unset). The JavaScript, Python, Go, Java and PHP SDKs accept it (#2080).
+
 ## [0.30.2] - 2026-11-15
 
 ### Added

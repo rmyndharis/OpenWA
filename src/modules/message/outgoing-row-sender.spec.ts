@@ -92,7 +92,10 @@ describe('the sender stored on an outgoing row', () => {
     const pacing = new SendPacingService(messages, sessions, new ConfigService({}));
     sender = new MessageSendService(
       messages,
-      { findOne: (id: string) => sessions.findOneByOrFail({ id }) } as unknown as SessionService,
+      {
+        findOne: (id: string) => sessions.findOneByOrFail({ id }),
+        getLinkPreviewDefault: () => Promise.resolve(undefined),
+      } as unknown as SessionService,
       engines,
       hooks,
       {} as TemplateService,
