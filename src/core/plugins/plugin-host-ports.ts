@@ -1,4 +1,4 @@
-import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 // Type-only, on purpose: they keep the port signatures aligned with the real services without
 // creating any runtime module edge from core back into a feature module.
 import type { MessageResponseDto } from '../../modules/message/dto';
@@ -34,6 +34,8 @@ export interface PluginMessagePort {
     sessionId: string,
     dto: { chatId: string; latitude: number; longitude: number; description?: string },
   ): Promise<MessageResponseDto>;
+  /** Report the deleted messages of an engine history page under the ids their stored rows have, in place. */
+  nameDeletedByStoredId(sessionId: string, chatId: string, page: IncomingMessage[]): Promise<void>;
 }
 
 /** Live-engine resolution + the deleted-session probe the capability gates rely on. */

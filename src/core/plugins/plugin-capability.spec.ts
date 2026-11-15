@@ -201,9 +201,17 @@ describe('PluginLoaderService capability facade — ctx.engine', () => {
   let loader: PluginLoaderService;
   let moduleRef: { get: jest.Mock };
 
-  function build(getEngineReturn: unknown): { sessionService: { getEngine: jest.Mock } } {
+  function build(getEngineReturn: unknown): {
+    sessionService: { getEngine: jest.Mock };
+    messagePort: { nameDeletedByStoredId: jest.Mock };
+  } {
     const sessionService = { getEngine: jest.fn().mockReturnValue(getEngineReturn) };
-    moduleRef = { get: jest.fn().mockReturnValue(sessionService) };
+    const messagePort = { nameDeletedByStoredId: jest.fn().mockResolvedValue(undefined) };
+    moduleRef = {
+      get: jest
+        .fn()
+        .mockImplementation((token: unknown) => (token === PLUGIN_MESSAGE_PORT ? messagePort : sessionService)),
+    };
     const configService = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
     const pluginStorage = {
       createPluginStorage: jest.fn().mockReturnValue({}),
@@ -214,7 +222,7 @@ describe('PluginLoaderService capability facade — ctx.engine', () => {
       pluginStorage,
       moduleRef as unknown as ModuleRef,
     );
-    return { sessionService };
+    return { sessionService, messagePort };
   }
 
   function contextFor(plugin: PluginInstance): PluginContext {
@@ -276,6 +284,54 @@ describe('PluginLoaderService capability facade — ctx.engine', () => {
     const ctx = contextFor(makePlugin(['*'], ['engine:read']));
     await ctx.engine.getChatHistory('sess-1', 'c@c.us', 500, true);
     expect(engine.getChatHistory).toHaveBeenCalledWith('c@c.us', 100, true); // 500 clamped to 100
+  });
+
+  it('engine.getChatHistory names a deleted message as the REST history does, by the id of its stored row', async () => {
+    const page = [{ id: 'false_628999111@c.us_AAA', type: 'revoked' }];
+    const engine = { getChatHistory: jest.fn().mockResolvedValue(page) };
+    const { messagePort } = build(engine);
+    messagePort.nameDeletedByStoredId.mockImplementation(
+      (_session: string, _chat: string, entries: { id: string }[]) => {
+        entries[0].id = 'false_148000111@lid_AAA';
+        return Promise.resolve();
+      },
+    );
+    const ctx = contextFor(makePlugin(['*'], ['engine:read']));
+
+    const out = await ctx.engine.getChatHistory('sess-1', '148000111@lid');
+
+    expect(messagePort.nameDeletedByStoredId).toHaveBeenCalledWith('sess-1', '148000111@lid', page);
+    expect(out).toBe(page);
+    expect(out.map(m => m.id)).toEqual(['false_148000111@lid_AAA']);
+  });
+
+  it('engine.getChatHistory reads history on a host that cannot name deleted messages by their stored rows', async () => {
+    const deleted = [{ id: 'false_628999111@c.us_AAA', type: 'revoked' }];
+    const plain = [{ id: 'false_628999111@c.us_BBB', type: 'text' }];
+    const engine = { getChatHistory: jest.fn() };
+    const { sessionService, messagePort } = build(engine);
+    const ctx = contextFor(makePlugin(['*'], ['engine:read']));
+
+    // A page with no deleted message does not reach for the message port at all.
+    engine.getChatHistory.mockResolvedValueOnce(plain);
+    expect(await ctx.engine.getChatHistory('sess-1', '628999111@c.us')).toBe(plain);
+    expect(moduleRef.get).not.toHaveBeenCalledWith(PLUGIN_MESSAGE_PORT, { strict: false });
+
+    // The port fails, is bound to something that has no such method, or is not provided: the page still comes back.
+    messagePort.nameDeletedByStoredId.mockRejectedValueOnce(new Error('database is locked'));
+    engine.getChatHistory.mockResolvedValueOnce(deleted);
+    expect(await ctx.engine.getChatHistory('sess-1', '628999111@c.us')).toBe(deleted);
+
+    moduleRef.get.mockImplementation((token: unknown) => (token === PLUGIN_MESSAGE_PORT ? {} : sessionService));
+    engine.getChatHistory.mockResolvedValueOnce(deleted);
+    expect(await ctx.engine.getChatHistory('sess-1', '628999111@c.us')).toBe(deleted);
+
+    moduleRef.get.mockImplementation((token: unknown) => {
+      if (token === PLUGIN_MESSAGE_PORT) throw new Error('Nest could not find PLUGIN_MESSAGE_PORT element');
+      return sessionService;
+    });
+    engine.getChatHistory.mockResolvedValueOnce(deleted);
+    expect(await ctx.engine.getChatHistory('sess-1', '628999111@c.us')).toBe(deleted);
   });
 
   it('engine.getChatHistory defaults the limit and clamps a non-positive value to 1', async () => {
