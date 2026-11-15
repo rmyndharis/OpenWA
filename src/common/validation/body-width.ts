@@ -19,7 +19,7 @@ export const MAX_BODY_ARRAY_LENGTH = 10_000;
  * quadratic in its keys: this bound, more than the total, keeps one request near a second. No request field comes
  * near it: the free-form maps are a message's template variables (limited by the 4,096 characters of its text), a
  * webhook's headers (50) and the config objects, where those of plugins and integration instances have the keys their
- * schema declares and a session's is held to 16 KiB with three recognised keys.
+ * schema declares and a session's is held to 16 KiB with four recognised keys.
  */
 export const MAX_BODY_OBJECT_KEYS = 1_000;
 

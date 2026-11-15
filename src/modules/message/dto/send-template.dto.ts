@@ -86,7 +86,8 @@ export class SendTemplateMessageDto {
     description:
       'Controls the URL preview on the rendered body, with the same engine split as send-text: ' +
       'whatsapp-web.js builds one by default and `false` suppresses it, while on Baileys previews ' +
-      'are opt-in and only `true` attaches one.',
+      'are opt-in and only `true` attaches one. Unset, the `linkPreview` of the session config applies ' +
+      'when one is set.',
     example: false,
   })
   // Same guard as send-text: implicit conversion would turn the string "false" into true.

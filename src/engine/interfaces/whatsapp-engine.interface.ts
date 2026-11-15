@@ -1271,7 +1271,8 @@ export interface MessagingCapability {
    *
    * `linkPreview: false` suppresses the URL preview on BOTH engines. Otherwise the two differ:
    * whatsapp-web.js builds one in-page by default, while on Baileys a preview is OPT-IN — only
-   * `linkPreview: true` produces one, because generating it is a blocking outbound fetch per URL.
+   * `linkPreview: true` produces one, because generating it is a blocking outbound fetch of the
+   * first URL in the text.
    */
   sendTextMessage(
     chatId: string,

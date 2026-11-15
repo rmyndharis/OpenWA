@@ -10405,7 +10405,7 @@ describe('BaileysAdapter link preview', () => {
     expect(sentContent()).not.toHaveProperty('linkPreview');
   });
 
-  // Previews are OPT-IN on this engine: generation means a blocking outbound fetch per URL before
+  // Previews are OPT-IN on this engine: generation means a blocking outbound fetch of the first URL before
   // the message can go out (a bulk campaign carrying a slow URL would stall on every message), and
   // the documented engine default is that Baileys builds none.
   it('suppresses generation for a plain send, and for a send that says nothing about previews', async () => {
