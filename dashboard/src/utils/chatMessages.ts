@@ -43,6 +43,12 @@ export function mapEngineHistoryMessage(h: EngineHistoryMessage): ChatMessageVie
 const msgKey = (m: ChatMessageView): string => m.waMessageId ?? m.id;
 const msgTime = (m: ChatMessageView): number =>
   typeof m.timestamp === 'number' ? m.timestamp : Math.floor(Date.parse(m.createdAt) / 1000) || 0;
+// The part of a whatsapp-web.js message id (`fromMe_chat_stanza[_author]`) that does not depend on the id
+// form the chat and the author are named in: the direction and the stanza.
+const stanzaKey = (m: ChatMessageView): string | undefined => {
+  const [fromMe, , stanza] = msgKey(m).split('_');
+  return stanza ? `${fromMe}_${stanza}` : undefined;
+};
 
 // WhatsApp Web lists a message deleted for everyone under the id of the delete notice, not the id the
 // message had, so its history entry never pairs with the stored row by id and the thread drew the
@@ -50,24 +56,35 @@ const msgTime = (m: ChatMessageView): number =>
 // timestamp (measured on a live session: only the id differs). It is matched one to one and left out,
 // so the stored row, with its real status, is the one kept. A history-only deleted message has no
 // stored row to match and stays.
+//
+// The entry can also carry the id the message had with the chat, or the author, named in the other id
+// form (phone number where the stored row has the lid): also measured live, on messages deleted by a
+// party that addressed the chat by phone number. The stanza is the same in both, so that pairs them.
 function withoutStoredTwins(history: ChatMessageView[], db: ChatMessageView[]): ChatMessageView[] {
   const historyKeys = new Set(history.map(msgKey));
   const storedKeys = new Set(db.map(msgKey));
   const unpaired = db.filter(s => s.type === 'revoked' && !historyKeys.has(msgKey(s)));
   const leftOut = new Set<string>();
-  return history.filter(h => {
+  const pair = (h: ChatMessageView, isTwin: (s: ChatMessageView) => boolean): void => {
     const key = msgKey(h);
-    if (leftOut.has(key)) return false;
-    if (h.type !== 'revoked' || storedKeys.has(key) || typeof h.timestamp !== 'number') return true;
-    const sender = h.author ?? h.from;
-    const twin = unpaired.findIndex(
-      s => s.direction === h.direction && (s.author ?? s.from) === sender && s.timestamp === h.timestamp,
-    );
-    if (twin === -1) return true;
+    if (h.type !== 'revoked' || storedKeys.has(key) || leftOut.has(key)) return;
+    const twin = unpaired.findIndex(isTwin);
+    if (twin === -1) return;
     unpaired.splice(twin, 1);
     leftOut.add(key);
-    return false;
-  });
+  };
+  // By stanza first, over every entry: that match is certain, and one made by sender and time before it
+  // could take the row a later entry is.
+  for (const h of history) {
+    const stanza = stanzaKey(h);
+    if (stanza) pair(h, s => stanzaKey(s) === stanza);
+  }
+  for (const h of history) {
+    if (typeof h.timestamp !== 'number') continue;
+    const sender = h.author ?? h.from;
+    pair(h, s => s.direction === h.direction && (s.author ?? s.from) === sender && s.timestamp === h.timestamp);
+  }
+  return history.filter(h => !leftOut.has(msgKey(h)));
 }
 
 // Merge persisted DB messages with engine history into one ascending thread. The engine fills the
