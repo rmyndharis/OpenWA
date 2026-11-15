@@ -19,6 +19,9 @@ import {
   ChevronDown,
   Clock,
   CornerUpLeft,
+  Download,
+  Eye,
+  FileText,
   Loader2,
   MessageSquare,
   Smile,
@@ -28,6 +31,7 @@ import { useRole } from '../../hooks/useRole';
 import { sessionApi, type Chat } from '../../services/api';
 import {
   buildMentionNameMap,
+  formatBytes,
   getMediaSrc,
   isRenderableMessage,
   resolveMentions,
@@ -83,6 +87,8 @@ interface ChatThreadProps {
   /** Seeds each media element's pre-decode height; see useChatScrollPosition.measureMedia. */
   measureMedia: (el: Element | null) => void;
   onOpenImage: (messageId: string) => void;
+  /** Open in-app PDF preview pane / modal */
+  onOpenPdf?: (pdf: { url: string; filename: string; sizeBytes?: number }) => void;
   onReply: (message: ChatMessageView) => void;
   onReact: (message: ChatMessageView, emoji: string) => void;
   onDelete: (message: ChatMessageView) => void;
@@ -119,6 +125,7 @@ function ChatThread({
   onMediaLoad,
   measureMedia,
   onOpenImage,
+  onOpenPdf,
   onReply,
   onReact,
   onDelete,
@@ -277,6 +284,17 @@ function ChatThread({
   const [buttonClick, setButtonClick] = useState<
     Record<string, { loadingId?: string; done?: boolean; selectedId?: string }>
   >({});
+
+  const activeBlobUrlsRef = useRef<string[]>([]);
+  useEffect(() => {
+    return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      for (const url of activeBlobUrlsRef.current) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, []);
+
   const downloadMedia = useCallback(
     async (message: ChatMessageView) => {
       const messageId = message.waMessageId;
@@ -602,6 +620,9 @@ function ChatThread({
               );
             }
             if (!mediaInfo) return null;
+            const isPdf =
+              mediaInfo.mimetype === 'application/pdf' ||
+              Boolean(mediaInfo.filename && /\.pdf$/i.test(mediaInfo.filename));
             if (mediaInfo.omitted) {
               // Not a plain label: the bytes exist behind the per-message media route, so this is the
               // only handle the viewer has on them.
@@ -609,14 +630,60 @@ function ChatThread({
               const downloadButton = (
                 <button
                   type="button"
-                  className="message-media-omitted"
+                  className={`message-media-omitted ${msg.type === 'document' ? 'chat-document-card chat-document-omitted-card' : ''}`}
                   onClick={() => void downloadMedia(msg)}
                   disabled={!sessionId || !msg.waMessageId || fetchState === 'loading'}
                 >
                   {fetchState === 'loading' ? (
                     <Loader2 size={14} className="animate-spin" />
+                  ) : fetchState === 'failed' ? (
+                    <>📎 {t('chats.status.mediaUnavailable')}</>
+                  ) : msg.type === 'document' ? (
+                    <span className="chat-document-card-inner">
+                      {isPdf && (
+                        <span className="chat-document-preview-cover" aria-hidden="true">
+                          <span className="chat-document-preview-page">
+                            <div className="chat-document-preview-page-lines">
+                              <div className="line header-line" />
+                              <div className="line" />
+                              <div className="line short" />
+                            </div>
+                            <span className="chat-document-preview-watermark">PDF</span>
+                          </span>
+                          <span className="chat-document-preview-hover-tag">
+                            <Eye size={14} />
+                            <span>{t('chats.media.preview')}</span>
+                          </span>
+                        </span>
+                      )}
+                      <span className="chat-document-omitted-content">
+                        <span className={`chat-document-icon-box ${isPdf ? 'pdf' : ''}`}>
+                          {isPdf ? (
+                            <span className="chat-document-pdf-badge">
+                              <FileText size={18} />
+                              <span className="chat-document-pdf-tag">PDF</span>
+                            </span>
+                          ) : (
+                            <FileText size={18} />
+                          )}
+                        </span>
+                        <span className="chat-document-info">
+                          <span className="chat-document-title">
+                            {mediaInfo.filename || (isPdf ? 'Document.pdf' : t('chats.downloadDocument'))}
+                          </span>
+                          <span className="chat-document-meta">
+                            {mediaInfo.sizeBytes ? formatBytes(mediaInfo.sizeBytes) : ''}
+                            {mediaInfo.sizeBytes && isPdf ? ' • ' : ''}
+                            {isPdf ? 'PDF' : ''}
+                          </span>
+                        </span>
+                        <span className="chat-document-action">
+                          {isPdf ? <Eye size={16} /> : <Download size={16} />}
+                        </span>
+                      </span>
+                    </span>
                   ) : (
-                    <>📎 {t(fetchState === 'failed' ? 'chats.status.mediaUnavailable' : 'chats.media.omitted')}</>
+                    <>📎 {t('chats.media.omitted')}</>
                   )}
                 </button>
               );
@@ -701,21 +768,94 @@ function ChatThread({
                   </div>
                 );
               case 'document':
-              default:
+              default: {
+                const docName = mediaInfo.filename || '';
+                const safeDocName = docName || (isPdf ? 'Document.pdf' : 'document');
+                const openDocumentPreview = (e: React.MouseEvent) => {
+                  if (isPdf) {
+                    e.preventDefault();
+                    let previewUrl = mediaSrc;
+                    if (mediaSrc.startsWith('data:')) {
+                      try {
+                        const parts = mediaSrc.split(',');
+                        const byteCharacters = atob(parts[1]);
+                        const byteNumbers = new Array(byteCharacters.length);
+                        for (let i = 0; i < byteCharacters.length; i++) {
+                          byteNumbers[i] = byteCharacters.charCodeAt(i);
+                        }
+                        const blob = new Blob([new Uint8Array(byteNumbers)], { type: 'application/pdf' });
+                        previewUrl = URL.createObjectURL(blob);
+                        activeBlobUrlsRef.current.push(previewUrl);
+                      } catch {
+                        // Fallback to data URL
+                      }
+                    }
+                    if (onOpenPdf) {
+                      onOpenPdf({
+                        url: previewUrl,
+                        filename: docName || 'Document.pdf',
+                        sizeBytes: mediaInfo.sizeBytes,
+                      });
+                    } else {
+                      window.open(previewUrl, '_blank');
+                    }
+                  }
+                };
+
                 return (
                   <div className="message-media-document">
-                    {/* A document sent by URL links off-site, where browsers ignore `download`, so a plain
-                        click would navigate the dashboard away; open it in a new tab instead. */}
                     <a
                       href={mediaSrc}
-                      download={mediaInfo.filename || 'document'}
-                      className="chat-document-media"
+                      download={safeDocName}
+                      className="chat-document-media chat-document-card"
                       {...(/^https?:\/\//i.test(mediaSrc) ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                      onClick={isPdf ? openDocumentPreview : undefined}
                     >
-                      📎 {mediaInfo.filename || t('chats.downloadDocument')}
+                      {isPdf && (
+                        <span className="chat-document-preview-cover" aria-hidden="true">
+                          <span className="chat-document-preview-page">
+                            <div className="chat-document-preview-page-lines">
+                              <div className="line header-line" />
+                              <div className="line" />
+                              <div className="line short" />
+                            </div>
+                            <span className="chat-document-preview-watermark">PDF</span>
+                          </span>
+                          <span className="chat-document-preview-hover-tag">
+                            <Eye size={14} />
+                            <span>{t('chats.media.preview')}</span>
+                          </span>
+                        </span>
+                      )}
+                      <span className="chat-document-omitted-content">
+                        <span className={`chat-document-icon-box ${isPdf ? 'pdf' : ''}`}>
+                          {isPdf ? (
+                            <span className="chat-document-pdf-badge">
+                              <FileText size={18} />
+                              <span className="chat-document-pdf-tag">PDF</span>
+                            </span>
+                          ) : (
+                            <FileText size={18} />
+                          )}
+                        </span>
+                        <span className="chat-document-info">
+                          <span className="chat-document-title">
+                            {docName || (isPdf ? 'Document.pdf' : t('chats.downloadDocument'))}
+                          </span>
+                          <span className="chat-document-meta">
+                            {mediaInfo.sizeBytes ? formatBytes(mediaInfo.sizeBytes) : ''}
+                            {mediaInfo.sizeBytes && isPdf ? ' • ' : ''}
+                            {isPdf ? 'PDF' : ''}
+                          </span>
+                        </span>
+                        <span className="chat-document-action">
+                          {isPdf ? <Eye size={16} /> : <Download size={16} />}
+                        </span>
+                      </span>
                     </a>
                   </div>
                 );
+              }
             }
           };
 

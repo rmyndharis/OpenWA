@@ -49,7 +49,9 @@
     "refresh": "Yenile",
     "errorGeneric": "Bir hata oluştu",
     "unknownError": "Bilinmeyen hata",
-    "retry": "Yeniden Dene"
+    "retry": "Yeniden Dene",
+    "maximize": "Büyüt",
+    "restore": "Geri yükle"
   },
   "theme": {
     "light": "Açık",
@@ -82,7 +84,9 @@
       "callVideo": "Görüntülü arama",
       "callVideoMissed": "Cevapsız görüntülü arama",
       "omitted": "Medya",
-      "image": "Görsel"
+      "image": "Görsel",
+      "preview": "Önizleme",
+      "openInNewTab": "Yeni sekmede aç"
     },
     "subtitle": "WhatsApp mesajlarını gerçek zamanlı gönderin ve yanıtlayın",
     "noSessionsTitle": "Bağlı oturum yok",

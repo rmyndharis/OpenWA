@@ -309,6 +309,13 @@ export const getMediaSrc = (media?: MessageMedia): string => {
   return `data:${media.mimetype};base64,${media.data}`;
 };
 
+export function formatBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 /**
  * Whether the thread has anything to draw for a row. An `unknown` row with no text, media, quote or
  * prompt buttons would be a bubble holding a sender and a time and nothing else, so it is left out of

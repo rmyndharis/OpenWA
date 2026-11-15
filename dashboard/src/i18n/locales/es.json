@@ -51,7 +51,9 @@
     "unknownError": "Error desconocido",
     "showApiKey": "Mostrar clave API",
     "hideApiKey": "Ocultar clave API",
-    "retry": "Reintentar"
+    "retry": "Reintentar",
+    "maximize": "Maximizar",
+    "restore": "Restaurar"
   },
   "theme": {
     "light": "Claro",
@@ -84,7 +86,9 @@
       "callVideo": "Videollamada",
       "callVideoMissed": "Videollamada perdida",
       "omitted": "Multimedia",
-      "image": "Imagen"
+      "image": "Imagen",
+      "preview": "Vista previa",
+      "openInNewTab": "Abrir en una pestaña nueva"
     },
     "subtitle": "Envía y responde mensajes de WhatsApp en tiempo real",
     "noSessionsTitle": "Sin sesiones conectadas",
