@@ -267,6 +267,123 @@ describe('MessageSendService', () => {
       expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('628123456789@c.us', 'hi');
     });
 
+    it("sends with the session's link-preview default when the request sets none", async () => {
+      (sessionService.findOne as jest.Mock).mockImplementationOnce((id: string) =>
+        Promise.resolve({
+          id,
+          phone: '628123456789',
+          config: id === 'sess-1' ? { linkPreview: false } : {},
+        }),
+      );
+
+      await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'see https://example.com' });
+
+      expect(sessionService.findOne).toHaveBeenCalledTimes(1);
+      expect(sessionService.findOne).toHaveBeenCalledWith('sess-1');
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith(
+        '628123456789@c.us',
+        'see https://example.com',
+        undefined,
+        { linkPreview: false },
+      );
+    });
+
+    it("lets the request's linkPreview win over the session default", async () => {
+      const input = { chatId: '628123456789@c.us', text: 'see https://example.com', linkPreview: true };
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: { sessionId: 'sess-1', input, type: 'text' },
+      });
+      (sessionService.findOne as jest.Mock).mockResolvedValueOnce({
+        id: 'sess-1',
+        phone: '628123456789',
+        config: { linkPreview: false },
+      });
+
+      await service.sendText('sess-1', input);
+
+      expect(sessionService.findOne).toHaveBeenCalledTimes(1);
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith(
+        '628123456789@c.us',
+        'see https://example.com',
+        undefined,
+        { linkPreview: true },
+      );
+    });
+
+    it('lets an explicit false in the request override a session default of true', async () => {
+      const input = { chatId: '628123456789@c.us', text: 'see https://example.com', linkPreview: false };
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: { sessionId: 'sess-1', input, type: 'text' },
+      });
+      (sessionService.findOne as jest.Mock).mockResolvedValueOnce({
+        id: 'sess-1',
+        phone: '628123456789',
+        config: { linkPreview: true },
+      });
+
+      await service.sendText('sess-1', input);
+
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith(
+        '628123456789@c.us',
+        'see https://example.com',
+        undefined,
+        { linkPreview: false },
+      );
+    });
+
+    it('keeps the three-argument call shape for mentions when no preview option or session default is set', async () => {
+      const input = { chatId: '120363000111@g.us', text: 'hi @62811', mentions: ['62811@c.us'] };
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: { sessionId: 'sess-1', input, type: 'text' },
+      });
+
+      await service.sendText('sess-1', input);
+
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('120363000111@g.us', 'hi @62811', ['62811@c.us']);
+    });
+
+    it('treats a non-boolean stored config.linkPreview as unset', async () => {
+      (sessionService.findOne as jest.Mock).mockResolvedValueOnce({
+        id: 'sess-1',
+        phone: '628123456789',
+        config: { linkPreview: 'yes' },
+      });
+
+      await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'see https://example.com' });
+
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('628123456789@c.us', 'see https://example.com');
+    });
+
+    it('does not apply the session default to a send that supplies its own preview', async () => {
+      const input = {
+        chatId: '628123456789@c.us',
+        text: 'see https://example.com',
+        customLinkPreview: { url: 'https://example.com', title: 'Example' },
+      };
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: { sessionId: 'sess-1', input, type: 'text' },
+      });
+      (sessionService.findOne as jest.Mock).mockResolvedValueOnce({
+        id: 'sess-1',
+        phone: '628123456789',
+        config: { linkPreview: false },
+      });
+
+      await service.sendText('sess-1', input);
+
+      expect(sessionService.findOne).toHaveBeenCalledTimes(1);
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith(
+        '628123456789@c.us',
+        'see https://example.com',
+        undefined,
+        { customPreview: { url: 'https://example.com', title: 'Example' } },
+      );
+    });
+
     it('threads a caller-supplied preview through to the engine', async () => {
       const input = {
         chatId: '628123456789@c.us',
@@ -723,6 +840,33 @@ describe('MessageSendService', () => {
       await service.sendTemplate('sess-1', { chatId: 'test@c.us', templateId: 'tpl-1' });
 
       expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('test@c.us', 'Hi there');
+    });
+
+    it('inherits the session linkPreview default in sendTemplate and lets the request win', async () => {
+      (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'See https://example.com' }));
+      (sessionService.findOne as jest.Mock).mockResolvedValueOnce({
+        id: 'sess-1',
+        phone: '628123456789',
+        config: { linkPreview: false },
+      });
+
+      await service.sendTemplate('sess-1', { chatId: 'test@c.us', templateId: 'tpl-1' });
+
+      expect(mockEngine.sendTextMessage).toHaveBeenNthCalledWith(1, 'test@c.us', 'See https://example.com', undefined, {
+        linkPreview: false,
+      });
+
+      (sessionService.findOne as jest.Mock).mockResolvedValueOnce({
+        id: 'sess-1',
+        phone: '628123456789',
+        config: { linkPreview: false },
+      });
+
+      await service.sendTemplate('sess-1', { chatId: 'test@c.us', templateId: 'tpl-1', linkPreview: true });
+
+      expect(mockEngine.sendTextMessage).toHaveBeenNthCalledWith(2, 'test@c.us', 'See https://example.com', undefined, {
+        linkPreview: true,
+      });
     });
 
     it('should propagate NotFoundException when the template cannot be resolved', async () => {
@@ -1801,6 +1945,16 @@ describe('MessageSendService', () => {
       await expect(send()).rejects.toThrow();
 
       expect(release).toHaveBeenCalledTimes(1);
+      expect(repository.save).not.toHaveBeenCalled();
+    });
+
+    it('releases pacing as unused and saves no PENDING row when reading the session fails', async () => {
+      (sessionService.findOne as jest.Mock).mockRejectedValueOnce(new Error('db read failed'));
+
+      await expect(service.sendText('sess-1', { chatId: 'test@c.us', text: 'hi' })).rejects.toThrow('db read failed');
+
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledWith(false);
       expect(repository.save).not.toHaveBeenCalled();
     });
 

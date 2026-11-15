@@ -111,6 +111,7 @@ describe('CreateSessionDto config keys through the global pipe', () => {
     [{ maxReconnectAttempts: 50 }, 'config.maxReconnectAttempts must not be greater than 20'],
     [{ reconnectBaseDelay: 500 }, 'config.reconnectBaseDelay must not be less than 1000'],
     [{ autoRejectCalls: 'yes' }, 'config.autoRejectCalls must be a boolean value'],
+    [{ linkPreview: 'no' }, 'config.linkPreview must be a boolean value'],
   ])('refuses %j with a 400 naming the key', async (config, message) => {
     const error = await create(config).then(
       () => undefined,
@@ -123,8 +124,18 @@ describe('CreateSessionDto config keys through the global pipe', () => {
   });
 
   it('stores the strict spellings PATCH /config accepts as their typed values', async () => {
-    const dto = await create({ autoRejectCalls: 'true', maxReconnectAttempts: '5', reconnectBaseDelay: 2000 });
-    expect(dto.config).toEqual({ autoRejectCalls: true, maxReconnectAttempts: 5, reconnectBaseDelay: 2000 });
+    const dto = await create({
+      autoRejectCalls: 'true',
+      maxReconnectAttempts: '5',
+      reconnectBaseDelay: 2000,
+      linkPreview: 'false',
+    });
+    expect(dto.config).toEqual({
+      autoRejectCalls: true,
+      maxReconnectAttempts: 5,
+      reconnectBaseDelay: 2000,
+      linkPreview: false,
+    });
   });
 
   it('keeps unknown keys and leaves absent ones absent', async () => {

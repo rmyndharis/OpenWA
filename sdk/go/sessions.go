@@ -24,8 +24,8 @@ func (s *SessionsService) GetConfig(ctx context.Context, sessionID string) (*Ses
 }
 
 // UpdateConfig merges the given keys into a session's stored configuration, running or stopped,
-// with no restart or re-link. AutoRejectCalls applies immediately; MaxReconnectAttempts and
-// ReconnectBaseDelay apply on the next start.
+// with no restart or re-link. AutoRejectCalls and LinkPreview apply immediately; MaxReconnectAttempts
+// and ReconnectBaseDelay apply on the next start.
 func (s *SessionsService) UpdateConfig(ctx context.Context, sessionID string, body UpdateSessionConfigRequest) (*SessionConfig, error) {
 	var out SessionConfig
 	err := s.client.do(ctx, "PATCH", "/api/sessions/"+pathEscape(sessionID)+"/config", nil, body, &out)

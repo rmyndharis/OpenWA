@@ -3,7 +3,7 @@ import { IsBoolean, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-boolean';
 
 /**
- * The three keys the session service actually reads out of the opaque `config` column. Anything
+ * The four keys the session service actually reads out of the opaque `config` column. Anything
  * else stored there is ignored (see docs/05-database-design.md), so this DTO is the whole tunable
  * surface rather than a subset of it.
  *
@@ -72,13 +72,29 @@ export class UpdateSessionConfigDto {
   @Min(1000)
   @Max(300000)
   reconnectBaseDelay?: number | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Link preview for a send-text or send-template that sets neither `linkPreview` nor ' +
+      '`customLinkPreview`; a value in the request always wins. `false` sends without a preview on ' +
+      'both engines. `true` asks for one: on whatsapp-web.js that is already the default, on Baileys it ' +
+      'makes the gateway fetch the page before every such send. Send `null` to go back to the ' +
+      "engine's default. Takes effect from the next send, and the session is not restarted.",
+    example: false,
+    nullable: true,
+    type: Boolean,
+  })
+  @ToStrictBoolean()
+  @IsOptional()
+  @IsBoolean()
+  linkPreview?: boolean | null;
 }
 
 /**
  * The effective configuration, not the stored blob. `config` is deliberately stripped from
  * SessionResponseDto because it is an opaque column an operator may have put anything into
  * (alongside the credential-bearing proxyUrl) — echoing it back would leak that. Reporting only
- * the three recognised keys keeps that guarantee while still letting a caller confirm what landed.
+ * the four recognised keys keeps that guarantee while still letting a caller confirm what landed.
  *
  * Values are resolved through resolveReconnectConfig, so what is reported is what the engine will
  * actually do, including for legacy rows whose stored values fall outside the accepted range.
@@ -102,4 +118,14 @@ export class SessionConfigResponseDto {
     example: 5000,
   })
   reconnectBaseDelay!: number;
+
+  @ApiProperty({
+    description:
+      "Link preview default of a `send-text` or `send-template` that sets none; `null` means the engine's own default " +
+      '(a preview on whatsapp-web.js, none on Baileys)',
+    example: false,
+    nullable: true,
+    type: Boolean,
+  })
+  linkPreview!: boolean | null;
 }

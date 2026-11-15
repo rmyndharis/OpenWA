@@ -78,6 +78,12 @@ import type { PluginSessionPort } from '../../core/plugins/plugin-host-ports';
 /** Stagger before the single transient-launch retry; short - the claim is held while it waits. */
 const SESSION_START_RETRY_DELAY_MS = 2_000;
 
+/** `config.linkPreview` when it is a boolean; anything else left in the opaque blob means no default. */
+export function linkPreviewDefault(config: unknown): boolean | null {
+  const value = (config as Record<string, unknown> | null)?.linkPreview;
+  return typeof value === 'boolean' ? value : null;
+}
+
 /**
  * A launch failure worth one retry: infrastructure said "not now" (a 5xx, a transport death, a
  * database error while persisting status), not the session or the caller being refused. HTTP 4xx
@@ -548,7 +554,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   /**
-   * Project the opaque `config` column onto the three keys the engine actually reads, resolved
+   * Project the opaque `config` column onto the four keys the gateway actually reads, resolved
    * through the same clamp the engine uses — so a legacy row holding an out-of-range value reports
    * what will really happen rather than what someone once wrote.
    */
@@ -560,6 +566,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       autoRejectCalls: config?.autoRejectCalls === true,
       maxReconnectAttempts: Number.isFinite(maxAttempts) ? maxAttempts : null,
       reconnectBaseDelay: baseDelay,
+      linkPreview: linkPreviewDefault(config),
     };
   }
 
@@ -578,9 +585,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * the request — leaves the stored value alone.
    *
    * No restart, and deliberately no engine call: `autoRejectCalls` is re-read from this row on
-   * every incoming call, so the write alone is what takes effect. The reconnect pair is read once
-   * per start() into reconnectStates, so it lands on the next start; that asymmetry is documented
-   * on the DTO rather than papered over by forcing a reconnect nobody asked for.
+   * every incoming call and `linkPreview` on every text send, so the write alone is what takes
+   * effect. The reconnect pair is read once per start() into reconnectStates, so it lands on the
+   * next start; that asymmetry is documented on the DTO rather than papered over by forcing a
+   * reconnect nobody asked for.
    */
   async updateConfig(id: string, dto: UpdateSessionConfigDto): Promise<SessionConfigResponseDto> {
     // Compare-and-swap on the stored text: the write lands only while the column still holds the blob
@@ -599,7 +607,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const stored = row.config;
       const config = { ...((stored ? JSON.parse(stored) : null) as Record<string, unknown> | null) };
 
-      for (const key of ['autoRejectCalls', 'maxReconnectAttempts', 'reconnectBaseDelay'] as const) {
+      for (const key of ['autoRejectCalls', 'maxReconnectAttempts', 'reconnectBaseDelay', 'linkPreview'] as const) {
         const value = dto[key];
         if (value === undefined) continue;
         if (value === null) {
