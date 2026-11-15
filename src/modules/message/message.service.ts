@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, ObjectLiteral, Repository } from 'typeorm';
 import { Readable } from 'stream';
 import { EngineRegistry } from '../../engine/engine-registry.service';
+import type { IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { MessageProjector } from '../session/message-projector.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
@@ -12,7 +13,7 @@ import { HookManager, applySendingGate } from '../../core/hooks';
 import { SendPacingService } from './send-pacing.service';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveJidCandidates as expandJidCandidates } from '../../engine/identity/jid-candidates';
-import { parseWaId } from '../../engine/identity/wa-id';
+import { messageIdInChat, parseWaId } from '../../engine/identity/wa-id';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import { StorageService, isMissingObjectError } from '../../common/storage/storage.service';
@@ -696,9 +697,47 @@ export class MessageService implements PluginMessagePort {
     const ceiling = deep ? MessageService.MAX_DEEP_CHAT_HISTORY_LIMIT : MessageService.MAX_CHAT_HISTORY_LIMIT;
     const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), ceiling) : 50;
     const media = deep ? false : includeMedia;
-    return signal
+    const page = await (signal
       ? engine.getChatHistory(chatId, safeLimit, media, undefined, signal)
-      : engine.getChatHistory(chatId, safeLimit, media);
+      : engine.getChatHistory(chatId, safeLimit, media));
+    await this.nameDeletedByStoredId(sessionId, chatId, page);
+    return page;
+  }
+
+  /**
+   * Report each deleted message of a history page under the id its stored row has. The engine names it with a
+   * person's chat in the chat's own id form; a row stored while the chat was known by the other one (by phone
+   * number, before it moved to the lid) keeps that form, and that is the id a consumer holds. Best effort: the
+   * page stays as the engine gave it when the store cannot be read.
+   */
+  private async nameDeletedByStoredId(sessionId: string, chatId: string, page: IncomingMessage[]): Promise<void> {
+    if (!page.some(message => message.type === 'revoked')) return;
+    try {
+      const chats = await this.resolveJidCandidates(chatId);
+      // Every other id the same message can go by, per deleted entry: none for a group or a channel, whose
+      // ids have one form.
+      const others = new Map<IncomingMessage, string[]>();
+      for (const message of page) {
+        if (message.type !== 'revoked') continue;
+        const forms = chats.map(chat => messageIdInChat(message.id, chat)).filter(id => id !== message.id);
+        if (forms.length > 0) others.set(message, [...new Set(forms)]);
+      }
+      if (others.size === 0) return;
+      const rows = await this.messageRepository.find({
+        select: { waMessageId: true },
+        where: { sessionId, waMessageId: In([...others].flatMap(([message, forms]) => [message.id, ...forms])) },
+      });
+      const stored = new Set(rows.map(row => row.waMessageId));
+      for (const [message, forms] of others) {
+        if (!stored.has(message.id)) message.id = forms.find(id => stored.has(id)) ?? message.id;
+      }
+    } catch (error) {
+      this.logger.warn('Could not match the deleted messages of a chat history to their stored rows', {
+        sessionId,
+        chatId,
+        error: String(error),
+      });
+    }
   }
 
   // ========== Delete Message ==========
