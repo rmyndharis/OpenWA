@@ -18,7 +18,7 @@ describe('UpdateSessionConfigDto', () => {
   });
 
   describe('null clears a key', () => {
-    it.each(['autoRejectCalls', 'maxReconnectAttempts', 'reconnectBaseDelay'])(
+    it.each(['autoRejectCalls', 'maxReconnectAttempts', 'reconnectBaseDelay', 'linkPreview'])(
       'accepts an explicit null for %s and preserves it as null',
       key => {
         expect(errorsFor({ [key]: null })).toHaveLength(0);
@@ -49,6 +49,22 @@ describe('UpdateSessionConfigDto', () => {
 
     it.each(['yes', '1', 'off', ''])('rejects the ambiguous spelling %p rather than guessing', input => {
       expect(errorsFor({ autoRejectCalls: input }).length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('linkPreview', () => {
+    it.each([
+      [false, false],
+      ['false', false],
+      ['true', true],
+      [null, null],
+    ])('reads %p as %p', (input, expected) => {
+      expect(errorsFor({ linkPreview: input })).toHaveLength(0);
+      expect(parse({ linkPreview: input }).linkPreview).toBe(expected);
+    });
+
+    it.each(['yes', '0', ''])('rejects the ambiguous spelling %p', input => {
+      expect(errorsFor({ linkPreview: input }).length).toBeGreaterThan(0);
     });
   });
 

@@ -119,16 +119,17 @@ const customLinkPreviewSchema = refuseUnknownArguments(
 
 /**
  * Mirrors the REST `linkPreview` field of the two routes that carry text (send-text, send-template). The engines
- * differ, and the description is all an agent has to go on: whatsapp-web.js builds a preview by default, Baileys
- * only when it is asked to.
+ * differ, and the description is all an agent has to go on: when omitted, the session's `linkPreview` default wins
+ * if set, otherwise whatsapp-web.js builds a preview by default and Baileys only when asked to.
  */
 const linkPreviewSchema = z
   .boolean()
   .optional()
   .describe(
-    'Controls the URL preview, and the engines differ. whatsapp-web.js builds one by default and false ' +
-      'suppresses it. On Baileys a preview is opt-in: true fetches the page and attaches one, while unset or ' +
-      'false sends none.',
+    'Controls the URL preview. When omitted, uses the session config `linkPreview` default if set, otherwise ' +
+      'the engine default. On whatsapp-web.js a preview is built by default and false suppresses it. On Baileys ' +
+      'a preview is opt-in: true fetches the page and attaches one, while false (or unset with no session ' +
+      'default) sends none.',
   );
 
 /**
