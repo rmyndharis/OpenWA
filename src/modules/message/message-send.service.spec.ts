@@ -259,6 +259,26 @@ describe('MessageSendService', () => {
       );
     });
 
+    it('takes the linkPreview a message:sending handler set on a send that had none', async () => {
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: {
+          sessionId: 'sess-1',
+          type: 'text',
+          input: { chatId: '628123456789@c.us', text: 'see https://example.com', linkPreview: false },
+        },
+      });
+
+      await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'see https://example.com' });
+
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith(
+        '628123456789@c.us',
+        'see https://example.com',
+        undefined,
+        { linkPreview: false },
+      );
+    });
+
     // A send that asks for nothing must keep the exact call it made before this option existed —
     // a trailing undefined would be harmless to the engines but would rewrite every existing send.
     it('leaves the plain send shape untouched when no preview choice is made', async () => {
@@ -353,6 +373,45 @@ describe('MessageSendService', () => {
       });
 
       await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'see https://example.com' });
+
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('628123456789@c.us', 'see https://example.com');
+    });
+
+    // A plugin's send and a `message:sending` rewrite reach here without the DTO's rules, so the
+    // value may be anything. Only a boolean is a choice; anything else must not displace the default.
+    it.each(['false', 'no', 0, 1, {}])(
+      'keeps the session default when linkPreview arrives as %p rather than a boolean',
+      async value => {
+        const input = { chatId: '628123456789@c.us', text: 'see https://example.com', linkPreview: value as never };
+        (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+          continue: true,
+          data: { sessionId: 'sess-1', input, type: 'text' },
+        });
+        (sessionService.findOne as jest.Mock).mockResolvedValueOnce({
+          id: 'sess-1',
+          phone: '628123456789',
+          config: { linkPreview: false },
+        });
+
+        await service.sendText('sess-1', input);
+
+        expect(mockEngine.sendTextMessage).toHaveBeenCalledWith(
+          '628123456789@c.us',
+          'see https://example.com',
+          undefined,
+          { linkPreview: false },
+        );
+      },
+    );
+
+    it('sends a linkPreview that is not a boolean as a plain send when the session sets no default', async () => {
+      const input = { chatId: '628123456789@c.us', text: 'see https://example.com', linkPreview: 'true' as never };
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: { sessionId: 'sess-1', input, type: 'text' },
+      });
+
+      await service.sendText('sess-1', input);
 
       expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('628123456789@c.us', 'see https://example.com');
     });
@@ -503,6 +562,32 @@ describe('MessageSendService', () => {
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
 
+      // Refused on the request alone: no plugin is asked to moderate a send that cannot be made.
+      expect(hookManager.execute).not.toHaveBeenCalled();
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+
+    // The request is checked before the gate; the gate can still hand back the same contradiction.
+    it('refuses a send that a message:sending handler rewrote to suppress the preview and attach one', async () => {
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: {
+          sessionId: 'sess-1',
+          type: 'text',
+          input: {
+            chatId: '628123456789@c.us',
+            text: 'see https://example.com',
+            linkPreview: false,
+            customLinkPreview: { url: 'https://example.com', title: 'Example' },
+          },
+        },
+      });
+
+      await expect(
+        service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'see https://example.com' }),
+      ).rejects.toThrow('linkPreview: false cannot be combined with customLinkPreview');
+
+      expect(repository.save).not.toHaveBeenCalled();
       expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
     });
 

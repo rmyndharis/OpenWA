@@ -313,8 +313,9 @@ export interface ConversationSendEnvelope {
   /**
    * Ask the engine for a link preview on a plain text send. Baileys generates one only when this is
    * `true`, so a plugin relaying a URL gets a bare link without it; whatsapp-web.js previews by
-   * default and takes `false` to suppress. Ignored on media, location and quoted sends, which route
-   * through engine paths that take no preview option.
+   * default and takes `false` to suppress. Left out, or given as anything but a boolean, the send
+   * takes the session's `linkPreview` config default when one is set. Ignored on media, location
+   * and quoted sends, which route through engine paths that take no preview option.
    */
   linkPreview?: boolean;
   /** WGS84 coordinates; required for type 'location', ignored otherwise. `text` doubles as the
