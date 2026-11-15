@@ -11329,6 +11329,11 @@ describe('SessionService', () => {
     // it; every assertion about what it did has to await the run, or it reads a loop that has
     // not started yet and passes for the wrong reason.
     const autoStartRun = (): Promise<void> => (service as unknown as { autoStartRun: Promise<void> }).autoStartRun;
+    // The count behind the AUTO_START_SESSIONS hint is not kept on that run: a shutdown has nothing to
+    // wait for there. It settles within a few microtasks of a mocked count.
+    const hintSettled = async (): Promise<void> => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    };
 
     const originalFlag = process.env.AUTO_START_SESSIONS;
     // A sleep a case holds on node:timers/promises, the module object every test in the worker shares. It
@@ -11364,7 +11369,7 @@ describe('SessionService', () => {
       const log = jest.spyOn(logger, 'log').mockImplementation(() => undefined);
 
       service.onApplicationBootstrap();
-      await autoStartRun();
+      await hintSettled();
 
       expect(log).toHaveBeenCalledWith(expect.stringContaining('AUTO_START_SESSIONS is off'), {
         action: 'auto_start_disabled',
@@ -11381,7 +11386,7 @@ describe('SessionService', () => {
       const log = jest.spyOn(logger, 'log').mockImplementation(() => undefined);
 
       service.onApplicationBootstrap();
-      await autoStartRun();
+      await hintSettled();
 
       expect(log).not.toHaveBeenCalled();
     });
@@ -11401,7 +11406,7 @@ describe('SessionService', () => {
 
       delete process.env.AUTO_START_SESSIONS;
       service.onApplicationBootstrap();
-      await autoStartRun();
+      await hintSettled();
       process.env.AUTO_START_SESSIONS = 'true';
       service.onApplicationBootstrap();
       await autoStartRun();
@@ -11415,6 +11420,39 @@ describe('SessionService', () => {
       ]);
     });
 
+    it('does not make a shutdown wait for the count behind the hint, and says nothing once it has begun', async () => {
+      delete process.env.AUTO_START_SESSIONS;
+      let answer!: (count: number) => void;
+      (repository.count as jest.Mock).mockReturnValue(new Promise<number>(resolve => (answer = resolve)));
+      const logger = (service as unknown as { logger: { log: () => void; warn: () => void } }).logger;
+      const log = jest.spyOn(logger, 'log').mockImplementation(() => undefined);
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+      service.onApplicationBootstrap();
+      // Resolves while the count is still out: nothing is launching, so there is nothing to wait for.
+      await service.onModuleDestroy();
+      answer(3);
+      await hintSettled();
+
+      expect(warn).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it('logs no warning for a count that the shutdown cut short', async () => {
+      delete process.env.AUTO_START_SESSIONS;
+      let fail!: (error: Error) => void;
+      (repository.count as jest.Mock).mockReturnValue(new Promise<number>((_, reject) => (fail = reject)));
+      const logger = (service as unknown as { logger: { warn: () => void } }).logger;
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+      service.onApplicationBootstrap();
+      await service.onModuleDestroy();
+      fail(new Error('The database connection is not open'));
+      await hintSettled();
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+
     it('keeps booting when the count behind the AUTO_START_SESSIONS hint fails', async () => {
       delete process.env.AUTO_START_SESSIONS;
       (repository.count as jest.Mock).mockRejectedValue(new Error('db down'));
@@ -11422,7 +11460,7 @@ describe('SessionService', () => {
       const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
 
       service.onApplicationBootstrap();
-      await expect(autoStartRun()).resolves.toBeUndefined();
+      await hintSettled();
 
       expect(warn).toHaveBeenCalledWith('Could not count the sessions auto-start would have started', {
         action: 'auto_start_disabled_scan_failed',

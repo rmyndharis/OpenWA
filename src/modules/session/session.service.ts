@@ -293,14 +293,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     if (!resolveFeatureFlags(this.configService).autoStartSessions) {
       // Off by default for multi-replica safety, and silent otherwise: a restart leaves linked sessions
-      // disconnected with no error on them, so the boot names the setting once. Detached like the run
-      // below, and a failed count only costs the hint.
-      this.autoStartRun = this.reportSessionsLeftDown().catch((error: unknown) => {
-        this.logger.warn('Could not count the sessions auto-start would have started', {
-          action: 'auto_start_disabled_scan_failed',
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
+      // disconnected with no error on them, so the boot names the setting once. Detached, and not kept
+      // on autoStartRun: nothing is launching, so a shutdown has nothing to wait for.
+      void this.noteSessionsLeftDown();
       return;
     }
 
@@ -337,14 +332,28 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }));
   }
 
-  private async reportSessionsLeftDown(): Promise<void> {
-    const count = await this.sessionRepository.count({ where: this.autoStartWhere() });
-    if (!count) return;
-    this.logger.log(
-      `${count} previously authenticated session(s) left disconnected: AUTO_START_SESSIONS is off. ` +
-        'Start each with POST /api/sessions/{sessionId}/start, or set AUTO_START_SESSIONS=true on a single-instance deployment',
-      { action: 'auto_start_disabled', count },
-    );
+  /**
+   * Say how many linked sessions stay disconnected because AUTO_START_SESSIONS is off, and how to start
+   * them. Called at boot, and by the takeover sweep when it corrects a session a vanished node left
+   * behind, which was not down yet when the boot counted. Never rejects: a failed count only costs the
+   * hint, and neither the hint nor that failure is worth a line once the gateway is shutting down.
+   */
+  async noteSessionsLeftDown(): Promise<void> {
+    try {
+      const count = await this.sessionRepository.count({ where: this.autoStartWhere() });
+      if (!count || this.stopping) return;
+      this.logger.log(
+        `${count} previously authenticated session(s) left disconnected: AUTO_START_SESSIONS is off. ` +
+          'Start each with POST /api/sessions/{sessionId}/start, or set AUTO_START_SESSIONS=true on a single-instance deployment',
+        { action: 'auto_start_disabled', count },
+      );
+    } catch (error) {
+      if (this.stopping) return;
+      this.logger.warn('Could not count the sessions auto-start would have started', {
+        action: 'auto_start_disabled_scan_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Log at boot how many linked sessions stay disconnected because `AUTO_START_SESSIONS` is off, and how to start them (`action=auto_start_disabled`) (#2082). Thanks @arraisfilho.
+- Log how many linked sessions stay disconnected because `AUTO_START_SESSIONS` is off, and how to start them: at boot, and when a session a vanished node left behind is marked disconnected (`action=auto_start_disabled`) (#2082). Thanks @arraisfilho.
 
 ### Fixed
 
