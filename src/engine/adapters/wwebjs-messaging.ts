@@ -19,7 +19,15 @@ import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
-import { chatKind, parseWaId, toNeutralJid, toParticipantWid, userPart } from '../identity/wa-id';
+import {
+  SERIALIZED_MESSAGE_ID,
+  chatKind,
+  parseWaId,
+  rememberChatOfPage,
+  toNeutralJid,
+  toParticipantWid,
+  userPart,
+} from '../identity/wa-id';
 import {
   chatHistoryMediaBudgetBytes,
   coerceDeclaredSize,
@@ -377,13 +385,6 @@ function ensureSendable(chatId: string, shape: 'reply' | 'location' | 'contact c
     );
   }
 }
-
-/**
- * A full serialized message id: `<fromMe>_<chat>_<id>`, plus one more segment on some messages (the sender of
- * a group message, or `out` on an own 1:1 message). Client.getMessageById parses the chat part in the page and
- * throws an unnamed error (a 500) for anything else, so this is checked before the page is asked.
- */
-const SERIALIZED_MESSAGE_ID = /^(?:true|false)_[^_@]+@[^_@]+_[^_]+(?:_[^_]+)?$/;
 
 /**
  * Messaging operations extracted from WhatsAppWebJsAdapter: the send paths (with the @c.us -> @lid
@@ -1139,6 +1140,7 @@ export class WwebjsMessaging {
     // Chat.fetchMessages only caps the page when `limit > 0` (Chat.js), so a 0/negative/NaN limit fails
     // OPEN and returns every loaded message. Substitute the default, as getChannelMessages does.
     const safeLimit = Number.isFinite(limit) && limit >= 1 ? Math.trunc(limit) : 50;
+    let chatWid: string | undefined;
     const messages = await this.withPage('getChatHistory', async () => {
       const chat = await this.client()
         .getChatById(chatId)
@@ -1149,9 +1151,13 @@ export class WwebjsMessaging {
       if (!chat) {
         return [];
       }
+      chatWid = readWid(chat.id);
       return chat.fetchMessages({ limit: safeLimit });
     });
     const results: IncomingMessage[] = [];
+    // The chat can be asked for by phone number and held by WhatsApp Web under the lid: say which, for the
+    // caller that matches the page to stored rows.
+    if (chatWid) rememberChatOfPage(results, chatWid);
     // Aggregate base64 budget across the whole pass: the per-message cap bounds ONE blob, but without
     // an aggregate bound a 100-message history could stack ~100 × 50 MiB into one response. Once the
     // running total crosses the budget, later media messages get the declared-only `omitted` marker —

@@ -198,3 +198,42 @@ export function chatKind(jid: string): ChatKind {
       return 'unknown';
   }
 }
+
+/**
+ * A full whatsapp-web.js message id: `<fromMe>_<chat>_<id>`, plus one more segment on some messages (the sender
+ * of a group message, or `out` on an own 1:1 message). Captures the direction, the chat and what follows it.
+ */
+export const SERIALIZED_MESSAGE_ID = /^(true|false)_([^_@]+@[^_@]+)_([^_]+(?:_[^_]+)?)$/;
+
+/**
+ * A whatsapp-web.js message id with its chat written as `chat`, for the one case where the same message goes
+ * by two ids: a person's chat named by phone number in one and by lid in the other. Anything else comes back
+ * unchanged: an id that is not a full serialized one, an id that names a group, a channel or a broadcast, and
+ * any id when `chat` does not name a person or would not leave a serialized id behind.
+ */
+export function messageIdInChat(messageId: string, chat: string): string {
+  const parts = SERIALIZED_MESSAGE_ID.exec(messageId);
+  const person = chat.trim();
+  if (!parts || !isIndividualWid(parts[2]) || !isIndividualWid(person)) {
+    return messageId;
+  }
+  const renamed = `${parts[1]}_${person}_${parts[3]}`;
+  return SERIALIZED_MESSAGE_ID.test(renamed) ? renamed : messageId;
+}
+
+const chatsOfPages = new WeakMap<object, string>();
+
+/**
+ * Keep the id the engine itself knows a chat by, for the history page read from it. A caller can ask for a
+ * person's chat by phone number while the engine holds it under the lid, and the entries of the page do not
+ * always say so: a page of deleted messages names the chat as each delete notice did. Held weakly, so it goes
+ * with the page.
+ */
+export function rememberChatOfPage(page: object, chat: string): void {
+  chatsOfPages.set(page, chat);
+}
+
+/** The id kept by {@link rememberChatOfPage} for a history page, if the engine gave one. */
+export function chatOfPage(page: object): string | undefined {
+  return chatsOfPages.get(page);
+}

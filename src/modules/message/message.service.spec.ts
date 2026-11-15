@@ -12,6 +12,7 @@ import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.in
 import { HookManager } from '../../core/hooks';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { LidMapping } from '../../engine/identity/lid-mapping.entity';
+import { rememberChatOfPage } from '../../engine/identity/wa-id';
 import { SendPacingService } from './send-pacing.service';
 
 /** The `In([...])` condition a lid-table fake honours; an absent condition matches every row. */
@@ -81,6 +82,7 @@ describe('MessageService', () => {
       create: jest.fn().mockImplementation((data: Partial<Message>) => ({ id: 'msg-uuid-1', ...data }) as Message),
       save: jest.fn().mockImplementation(msg => Promise.resolve(msg)),
       findOne: jest.fn().mockResolvedValue(null),
+      find: jest.fn().mockResolvedValue([]),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
       delete: jest.fn().mockResolvedValue({ affected: 1 }),
       createQueryBuilder: jest.fn(),
@@ -792,6 +794,127 @@ describe('MessageService', () => {
       it('still clamps to 100 when deep is not set (regression guard)', async () => {
         await service.getChatHistory('sess-1', 'test@c.us', 500, false, false);
         expect(mockEngine.getChatHistory).toHaveBeenLastCalledWith('test@c.us', 100, false);
+      });
+    });
+
+    describe('a deleted message under the id of its stored row', () => {
+      const LID = '148000111@lid';
+      const PHONE = '628999111@c.us';
+      const entry = (id: string, type = 'revoked') => ({ id, type, body: '', from: 'a', to: 'b', chatId: LID });
+      const storedUnder = (...ids: string[]) =>
+        (repository.find as jest.Mock).mockImplementation(
+          ({ where }: { where: { waMessageId: { value: string[] } } }) =>
+            Promise.resolve(
+              ids.filter(id => where.waMessageId.value.includes(id)).map(waMessageId => ({ waMessageId })),
+            ),
+        );
+      const asked = (): string[] =>
+        (repository.find as jest.Mock).mock.calls.flatMap(
+          ([{ where }]: [{ where: { waMessageId: { value: string[] } } }]) => where.waMessageId.value,
+        );
+      const idsOf = async (chatId: string, page: ReturnType<typeof entry>[]) => {
+        mockEngine.getChatHistory.mockResolvedValueOnce(page);
+        return (await service.getChatHistory('sess-1', chatId)).map(m => m.id);
+      };
+
+      it('reports the lid form of a row when the delete notice named the chat by phone number', async () => {
+        storedUnder(`false_${LID}_AAA`);
+        // No lid mapping: the chat asked for supplies the other form.
+        expect(await idsOf(LID, [entry(`false_${PHONE}_AAA`)])).toEqual([`false_${LID}_AAA`]);
+      });
+
+      it('takes the other form from the ids of the page when the chat asked for does not supply it', async () => {
+        storedUnder(`false_${LID}_AAA`);
+        const ids = await idsOf(PHONE, [entry(`false_${LID}_ZZZ`, 'text'), entry(`false_${PHONE}_AAA`)]);
+        expect(ids).toEqual([`false_${LID}_ZZZ`, `false_${LID}_AAA`]);
+      });
+
+      it('takes the other form from the id the engine holds the chat under when the page has no entry in it', async () => {
+        storedUnder(`false_${LID}_AAA`);
+        // Asked for by phone number, no lid mapping, and every entry of the page named as its delete notice did.
+        const page = [entry(`false_${PHONE}_AAA`)];
+        expect(
+          await idsOf(
+            PHONE,
+            page.map(m => ({ ...m })),
+          ),
+        ).toEqual([`false_${PHONE}_AAA`]);
+        rememberChatOfPage(page, LID);
+        expect(await idsOf(PHONE, page)).toEqual([`false_${LID}_AAA`]);
+      });
+
+      it('keeps the id the engine reports when a row is stored under it, whatever else is stored', async () => {
+        // A row stored while the chat was known by phone number, and a message stored under both forms.
+        storedUnder(`false_${PHONE}_AAA`, `true_${PHONE}_BBB`, `true_${LID}_BBB`);
+        const ids = await idsOf(LID, [entry(`false_${PHONE}_AAA`), entry(`true_${PHONE}_BBB`)]);
+        expect(ids).toEqual([`false_${PHONE}_AAA`, `true_${PHONE}_BBB`]);
+      });
+
+      it('reports the form the lid mapping knows when neither the page nor the chat asked for has it', async () => {
+        lidMappingStore.findPhoneForLid.mockResolvedValue('628999111');
+        storedUnder(`false_${PHONE}_AAA`);
+
+        const ids = await idsOf(LID, [
+          entry(`false_${LID}_AAA`),
+          entry(`false_${LID}_CCC`),
+          entry(`false_${LID}_DDD`, 'text'),
+        ]);
+
+        // AAA is stored in the other form only, CCC nowhere; DDD is not deleted and is not looked up.
+        expect(ids).toEqual([`false_${PHONE}_AAA`, `false_${LID}_CCC`, `false_${LID}_DDD`]);
+        expect(repository.find).toHaveBeenCalledTimes(1);
+        const [{ select, where }] = (repository.find as jest.Mock).mock.calls[0] as [
+          { select: unknown; where: { sessionId: string } },
+        ];
+        expect(select).toEqual({ waMessageId: true });
+        expect(where.sessionId).toBe('sess-1');
+        expect(asked().sort()).toEqual(
+          [
+            `false_${LID}_AAA`,
+            `false_${PHONE}_AAA`,
+            'false_628999111@s.whatsapp.net_AAA',
+            `false_${LID}_CCC`,
+            `false_${PHONE}_CCC`,
+            'false_628999111@s.whatsapp.net_CCC',
+          ].sort(),
+        );
+      });
+
+      it('asks for a deep page in several statements and still finds a row named in a later one', async () => {
+        storedUnder(`false_${LID}_M599`);
+        const page = Array.from({ length: 600 }, (_, i) => entry(`false_${PHONE}_M${i}`));
+        mockEngine.getChatHistory.mockResolvedValueOnce(page);
+
+        const ids = (await service.getChatHistory('sess-1', LID, 2000, false, true)).map(m => m.id);
+
+        expect(ids[599]).toBe(`false_${LID}_M599`);
+        expect(ids[0]).toBe(`false_${PHONE}_M0`);
+        const sizes = (repository.find as jest.Mock).mock.calls.map(
+          ([{ where }]: [{ where: { waMessageId: { value: string[] } } }]) => where.waMessageId.value.length,
+        );
+        expect(sizes).toEqual([500, 500, 200]);
+        expect(new Set(asked()).size).toBe(1200);
+      });
+
+      it('looks nothing up for a page with no deleted message', async () => {
+        lidMappingStore.findPhoneForLid.mockResolvedValue('628999111');
+        expect(await idsOf(LID, [entry(`false_${PHONE}_AAA`, 'text')])).toEqual([`false_${PHONE}_AAA`]);
+        expect(lidMappingStore.findPhoneForLid).not.toHaveBeenCalled();
+        expect(repository.find).not.toHaveBeenCalled();
+      });
+
+      it('does not ask the store about a deleted message whose id has one form', async () => {
+        // A group id, an id that is not a full one, and a person chat known by a single form.
+        expect(
+          await idsOf('120363000111@g.us', [entry('false_120363000111@g.us_AAA_148000111@lid'), entry('3EB0CCC')]),
+        ).toEqual(['false_120363000111@g.us_AAA_148000111@lid', '3EB0CCC']);
+        expect(await idsOf(LID, [entry(`false_${LID}_AAA`)])).toEqual([`false_${LID}_AAA`]);
+        expect(repository.find).not.toHaveBeenCalled();
+      });
+
+      it('returns the page as the engine gave it when the store cannot be read', async () => {
+        (repository.find as jest.Mock).mockRejectedValue(new Error('database is locked'));
+        expect(await idsOf(LID, [entry(`false_${PHONE}_AAA`)])).toEqual([`false_${PHONE}_AAA`]);
       });
     });
   });

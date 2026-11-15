@@ -313,15 +313,31 @@ export class PluginCapabilityContext {
         this.resolveEngineRead(plugin, sessionId).getContactById(contactId),
       checkNumberExists: async (sessionId, phone) => this.resolveEngineRead(plugin, sessionId).checkNumberExists(phone),
       getChats: async sessionId => this.resolveEngineRead(plugin, sessionId).getChats(),
-      getChatHistory: async (sessionId, chatId, limit, includeMedia) =>
-        this.resolveEngineRead(plugin, sessionId).getChatHistory(
+      getChatHistory: async (sessionId, chatId, limit, includeMedia) => {
+        const page = await this.resolveEngineRead(plugin, sessionId).getChatHistory(
           chatId,
           // Clamp to the REST non-deep ceiling (MessageService.MAX_CHAT_HISTORY_LIMIT = 100) so an
           // untrusted plugin can't request an unbounded history fetch. A non-finite limit (a sandboxed
           // caller's arg is unvalidated) takes the default: NaN would reach the engine as "no limit".
           Math.min(Math.max(typeof limit === 'number' && Number.isFinite(limit) ? Math.trunc(limit) : 50, 1), 100),
           includeMedia ?? false,
-        ),
+        );
+        // As the REST history does: a deleted message goes by the id of its stored row, the id the plugin
+        // was handed when the message arrived. Best effort, and asked only for a page that holds one: a
+        // host without the message module still reads history.
+        if (page.some(message => message.type === 'revoked')) {
+          try {
+            await this.hostServices.getMessagePort().nameDeletedByStoredId(sessionId, chatId, page);
+          } catch (error) {
+            this.logger.warn(
+              `[${plugin.manifest.id}] Could not match the deleted messages of a chat history to their stored rows`,
+              { sessionId, error: String(error) },
+              { pluginId: plugin.manifest.id },
+            );
+          }
+        }
+        return page;
+      },
       canonicalChatId: async (sessionId, chatId) => {
         this.resolveEngineRead(plugin, sessionId);
         const parsed = parseWaId(chatId);
