@@ -1173,14 +1173,29 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
       hasQuotedMsg: false,
       getContact: jest.fn().mockResolvedValue({ pushname: 'Bob' }),
     };
-    const chat = { fetchMessages: jest.fn().mockResolvedValue([gp2, e2e, unlistedEmpty, real]) };
+    // The header of an album: its photos are entries of their own.
+    const album = { ...e2e, id: { _serialized: 'N_ALBUM' }, type: 'album', author: '621@c.us', ...onPage(jest.fn()) };
+    // A listed kind the gateway maps to nothing stays, as an empty `unknown` message.
+    const interactive = { ...real, id: { _serialized: 'M_INTERACTIVE' }, body: '', type: 'interactive' };
+    const chat = { fetchMessages: jest.fn().mockResolvedValue([gp2, e2e, unlistedEmpty, album, interactive, real]) };
     const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
     const debugSpy = jest.spyOn((adapter as unknown as { logger: { debug: jest.Mock } }).logger, 'debug');
 
     const out = await adapter.getChatHistory('120363000@g.us', 50, true);
 
-    expect(out.map(m => ({ id: m.id, body: m.body }))).toEqual([{ id: 'M_REAL', body: 'real message' }]);
-    for (const skipped of [gp2, e2e, unlistedEmpty]) {
+    expect(out.map(m => ({ id: m.id, type: m.type, body: m.body }))).toEqual([
+      { id: 'M_INTERACTIVE', type: 'unknown', body: '' },
+      { id: 'M_REAL', type: 'text', body: 'real message' },
+    ]);
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ action: 'wwebjs_drop_notice', type: 'album' }),
+    );
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ action: 'wwebjs_keep_unmapped', msgId: 'M_INTERACTIVE', type: 'interactive' }),
+    );
+    for (const skipped of [gp2, e2e, unlistedEmpty, album]) {
       expect(skipped.getContact).not.toHaveBeenCalled();
       expect(skipped.getQuotedMessage).not.toHaveBeenCalled();
       expect(skipped.downloadMedia).not.toHaveBeenCalled();

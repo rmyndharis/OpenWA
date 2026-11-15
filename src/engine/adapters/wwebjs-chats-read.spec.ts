@@ -264,6 +264,7 @@ describe('the chat and group lists read the page walk', () => {
   it.each([
     ['system notice e2e_notification', { type: 'e2e_notification', body: 'security code changed' }],
     ['system notice gp2', { type: 'gp2', body: 'Alice added Bob' }],
+    ['album header', { type: 'album', body: '' }],
     ['unlisted contentless entry', { type: 'new_engine_kind', body: '' }],
   ])('omits lastMessage and lastMessageType when chat.lastMessage is a %s', async (_label, lastMessage) => {
     const { host } = makeHost([{ ...personal, lastMessage: { ...personal.lastMessage, ...lastMessage } }]);
