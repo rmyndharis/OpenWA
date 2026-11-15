@@ -10,6 +10,7 @@ import {
 import { SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { toMessageMedia } from './wwebjs-messaging';
+import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
 import { type WwebjsEngineHost, requireClient, withPage, reportPageDeath } from './wwebjs-host';
 import { noteVideoLoadTimeout } from './wwebjs-video-load-timeout';
 
@@ -97,13 +98,22 @@ export class WwebjsStatus {
       if (!broadcast?.msgs?.length) {
         continue;
       }
+      const eligible = broadcast.msgs.filter(
+        msg =>
+          msg.type !== MessageTypes.REVOKED &&
+          !isNotice(msg, this.host.logger) &&
+          !isUnlistedContentless(msg, this.host.logger),
+      );
+      if (eligible.length === 0) {
+        continue;
+      }
       const contact = await broadcast.getContact();
       const contactSummary = {
         id: contact.id._serialized,
         ...(contact.name ? { name: contact.name } : {}),
         ...(contact.pushname ? { pushName: contact.pushname } : {}),
       };
-      for (const msg of broadcast.msgs) {
+      for (const msg of eligible) {
         const ts = new Date(msg.timestamp * 1000);
         // Reuse the same capped/limited/timeout-bounded inbound media download the live message path
         // uses (capInboundMediaFor), so a seeded status renders identically to one that arrived live.

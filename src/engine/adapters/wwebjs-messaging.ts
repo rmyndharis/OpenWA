@@ -37,6 +37,7 @@ import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.
 import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
 import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
+import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
 import { noteVideoLoadTimeout } from './wwebjs-video-load-timeout';
 
 /**
@@ -1175,12 +1176,26 @@ export class WwebjsMessaging {
       if (signal?.aborted) {
         break;
       }
+      // Drop system notices and unlisted contentless entries before any page lookup (contact, quote, media).
+      if (isNotice(msg, this.host.logger) || isUnlistedContentless(msg, this.host.logger)) {
+        continue;
+      }
       // Reuse the shared mapper so history messages carry the same author/contact
       // enrichment as live incoming messages (#223). The mapper defaults chatId to
       // msg.from, which is wrong here (history includes fromMe messages whose `from`
       // is our own number), so override it to the requested chat and recompute the
       // chatId-derived flags (isGroup, isStatusBroadcast, kind) from the real chat.
       const out = buildIncomingMessageBase(msg);
+      if (msg.type === MessageTypes.REVOKED) {
+        // WhatsApp Web lists a deleted message under the id of the delete notice, not the id the message
+        // had, so a consumer holding the original could not match the two. The notice names the original
+        // in `protocolMessageKey`; report that id, and keep the entry's own when the key is absent.
+        const originalKey = (msg as unknown as { protocolMessageKey?: SerializedWid | string }).protocolMessageKey;
+        const originalId = readWid(originalKey);
+        if (originalId) {
+          out.id = originalId;
+        }
+      }
       out.chatId = chatId;
       out.isGroup = chatId.endsWith('@g.us');
       out.isStatusBroadcast = chatId === 'status@broadcast';

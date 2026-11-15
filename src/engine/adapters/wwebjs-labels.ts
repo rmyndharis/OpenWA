@@ -11,6 +11,7 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { type WwebjsEngineHost, rethrowIfNavigation, withPage } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
 import { isPageInvariant, readChats, recoverGroupChatById } from './wwebjs-chats';
+import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
 
 /** The labels on a chat, read IN-PAGE as window.WWebJS.getChatLabels reads them without refreshing group metadata. */
 export async function readLocalChatLabels(chatId: string): Promise<Label[] | null> {
@@ -120,7 +121,11 @@ export class WwebjsLabels {
         kind: chatKind(id),
         unreadCount: chat.unreadCount || 0,
         timestamp: chat.timestamp || 0,
-        lastMessageType: chat.lastMessage ? mapWwebjsMessageType(chat.lastMessage.type) : undefined,
+        // As getChats: an entry nobody sent is not the chat's last message.
+        lastMessageType:
+          chat.lastMessage && !isNotice(chat.lastMessage) && !isUnlistedContentless(chat.lastMessage)
+            ? mapWwebjsMessageType(chat.lastMessage.type)
+            : undefined,
         archived: Boolean(chat.archived),
         pinned: Boolean(chat.pinned),
         muted: Boolean(chat.isMuted),
