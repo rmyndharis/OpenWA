@@ -94,10 +94,7 @@ describe('MessageSendService preparation pacing', () => {
     engines.set('s1', engine as unknown as IWhatsAppEngine);
     sender = new MessageSendService(
       messages,
-      {
-        findOne: (id: string) => sessions.findOneByOrFail({ id }),
-        getLinkPreviewDefault: () => Promise.resolve(undefined),
-      } as never,
+      { findOne: (id: string) => sessions.findOneByOrFail({ id }) } as never,
       engines,
       hooks,
       {} as never,

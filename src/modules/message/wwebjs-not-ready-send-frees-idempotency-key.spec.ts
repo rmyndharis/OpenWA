@@ -96,13 +96,7 @@ describe('a keyed whatsapp-web.js send refused with the not-ready 409', () => {
           },
         },
         { provide: getRepositoryToken(Message, 'data'), useValue: repository },
-        {
-          provide: SessionService,
-          useValue: {
-            findOne: jest.fn().mockResolvedValue({ id: 'sess-1' }),
-            getLinkPreviewDefault: jest.fn().mockResolvedValue(undefined),
-          },
-        },
+        { provide: SessionService, useValue: { findOne: jest.fn().mockResolvedValue({ id: 'sess-1' }) } },
         { provide: EngineRegistry, useValue: engines },
         {
           provide: HookManager,

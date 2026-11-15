@@ -5,7 +5,7 @@ import { markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { mergeSentMetadata, updateMessageMetadata } from './message-metadata';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, QueryDeepPartialEntity } from 'typeorm';
-import { SessionService } from '../session/session.service';
+import { SessionService, linkPreviewDefault } from '../session/session.service';
 import { MessageProjector } from '../session/message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
@@ -124,6 +124,7 @@ export class MessageSendService {
       finalDto,
       engine,
       prepared: customPreview,
+      sessionLinkPreview,
     } = await this.applySendingGate(
       sessionId,
       'text',
@@ -143,8 +144,7 @@ export class MessageSendService {
 
     // The session's default fills in only when the send left the preview open: a value in the
     // request, or a preview the caller supplied, is the caller's choice and always wins.
-    const linkPreview =
-      finalDto.linkPreview ?? (customPreview ? undefined : await this.sessionService.getLinkPreviewDefault(sessionId));
+    const linkPreview = finalDto.linkPreview ?? (customPreview ? undefined : sessionLinkPreview);
 
     let result: MessageResult;
     try {
@@ -193,7 +193,13 @@ export class MessageSendService {
     input: T,
     buildPending: (finalDto: T, prepared: P) => SaveOutgoingMessageData | Promise<SaveOutgoingMessageData>,
     prepare?: (finalDto: T) => P,
-  ): Promise<{ finalDto: T; engine: IWhatsAppEngine; prepared: P; message: Message }> {
+  ): Promise<{
+    finalDto: T;
+    engine: IWhatsAppEngine;
+    prepared: P;
+    message: Message;
+    sessionLinkPreview?: boolean;
+  }> {
     // Pacing runs BEFORE the plugin gate, so a send that policy forbids never reaches a plugin at
     // all — plugins should not be asked to moderate, or given the chance to rewrite, traffic that is
     // not going to be sent. The consequence is deliberate and documented in the hook contract: a
@@ -223,10 +229,18 @@ export class MessageSendService {
       lifetime.assertCurrent();
       const engine = this.getEngine(sessionId);
       const prepared = prepare?.(finalDto) as P;
-      const message = await this.saveOutgoingMessage(sessionId, await buildPending(finalDto, prepared), lifetime);
+      let sessionLinkPreview: boolean | undefined;
+      const message = await this.saveOutgoingMessage(
+        sessionId,
+        await buildPending(finalDto, prepared),
+        lifetime,
+        config => {
+          sessionLinkPreview = linkPreviewDefault(config) ?? undefined;
+        },
+      );
       lifetime.assertCurrent();
       persisted = true;
-      return { finalDto, engine, prepared, message };
+      return { finalDto, engine, prepared, message, sessionLinkPreview };
     } finally {
       release?.(persisted);
       lifetime.close();
@@ -797,11 +811,13 @@ export class MessageSendService {
     sessionId: string,
     data: SaveOutgoingMessageData,
     lifetime?: SessionWriteScope,
+    onSessionConfig?: (config: unknown) => void,
   ): Promise<Message> {
     const scope =
       lifetime ?? captureSessionWrites(this.messageRepository.manager?.connection ?? this.messageRepository, sessionId);
     try {
       const session = await this.sessionService.findOne(sessionId);
+      onSessionConfig?.(session?.config);
       // Resolved here rather than in each sender: reply and click-button build their own
       // `metadata.quotedMessage` and never reach this branch, so every OTHER quoting sender (media,
       // location, contact, poll, quoted text) used to persist an id with an empty body and the

@@ -18,7 +18,7 @@ describe('UpdateSessionConfigDto', () => {
   });
 
   describe('null clears a key', () => {
-    it.each(['autoRejectCalls', 'maxReconnectAttempts', 'reconnectBaseDelay'])(
+    it.each(['autoRejectCalls', 'maxReconnectAttempts', 'reconnectBaseDelay', 'linkPreview'])(
       'accepts an explicit null for %s and preserves it as null',
       key => {
         expect(errorsFor({ [key]: null })).toHaveLength(0);

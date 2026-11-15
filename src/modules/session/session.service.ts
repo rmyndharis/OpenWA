@@ -79,7 +79,7 @@ import type { PluginSessionPort } from '../../core/plugins/plugin-host-ports';
 const SESSION_START_RETRY_DELAY_MS = 2_000;
 
 /** `config.linkPreview` when it is a boolean; anything else left in the opaque blob means no default. */
-function linkPreviewDefault(config: unknown): boolean | null {
+export function linkPreviewDefault(config: unknown): boolean | null {
   const value = (config as Record<string, unknown> | null)?.linkPreview;
   return typeof value === 'boolean' ? value : null;
 }
@@ -568,20 +568,6 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       reconnectBaseDelay: baseDelay,
       linkPreview: linkPreviewDefault(config),
     };
-  }
-
-  /**
-   * The session's `config.linkPreview`, read without the rest of the row: it is looked up on every
-   * text send that leaves the preview to the session, so it reads one column instead of loading the
-   * session. `undefined` for an unknown session as well, since the send itself reports that.
-   */
-  async getLinkPreviewDefault(id: string): Promise<boolean | undefined> {
-    const row = await this.sessionRepository
-      .createQueryBuilder('session')
-      .select('session.config', 'config')
-      .where('session.id = :id', { id })
-      .getRawOne<{ config: string | null }>();
-    return linkPreviewDefault(row?.config ? JSON.parse(row.config) : null) ?? undefined;
   }
 
   async getConfig(id: string): Promise<SessionConfigResponseDto> {

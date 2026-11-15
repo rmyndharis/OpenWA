@@ -12123,17 +12123,6 @@ describe('SessionService', () => {
       expect(cleared.linkPreview).toBeNull();
     });
 
-    it('reads the linkPreview default for a send, ignoring a non-boolean left in the column', async () => {
-      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ config: { linkPreview: false } }));
-      await expect(service.getLinkPreviewDefault('sess-uuid-1')).resolves.toBe(false);
-
-      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ config: { linkPreview: 'no' } }));
-      await expect(service.getLinkPreviewDefault('sess-uuid-1')).resolves.toBeUndefined();
-
-      (repository.findOne as jest.Mock).mockResolvedValue(null);
-      await expect(service.getLinkPreviewDefault('sess-uuid-1')).resolves.toBeUndefined();
-    });
-
     it('does not read a truthy non-boolean as opted in, matching maybeAutoRejectCall', async () => {
       // The column is opaque, so a legacy row can hold anything. maybeAutoRejectCall gates on
       // `=== true`; reporting 'yes' as enabled here would tell an operator calls are being rejected
