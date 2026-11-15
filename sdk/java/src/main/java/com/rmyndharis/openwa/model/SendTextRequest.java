@@ -47,7 +47,7 @@ public record SendTextRequest(
 
         /**
          * {@code false} suppresses the URL preview. Guaranteed only in that direction: unset means the
-         * session's {@code linkPreview} config when one is set (OpenWA 0.31.0 or later), else the
+         * session's {@code linkPreview} config when one is set (OpenWA 0.30.3 or later), else the
          * engine default, and the engines differ — whatsapp-web.js asks WhatsApp Web to build a
          * preview by default; on Baileys a preview is OPT-IN and needs {@code true}.
          */

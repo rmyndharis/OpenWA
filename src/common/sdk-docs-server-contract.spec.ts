@@ -30,7 +30,7 @@ describe('SDK compatibility note', () => {
     expect(PREVIEW_IMAGE_FIELDS.filter(field => !paragraph.includes(field.toLowerCase()))).toEqual([]);
   });
 
-  // A gateway before 0.31.0 answers a PATCH config that carries `linkPreview` with 400 (forbidNonWhitelisted) and
+  // A gateway before 0.30.3 answers a PATCH config that carries `linkPreview` with 400 (forbidNonWhitelisted) and
   // stores the key unread at creation, so every SDK document says which release it needs. The PHP SDK sends the
   // same body, so its README is held to it too.
   it.each([
@@ -42,6 +42,6 @@ describe('SDK compatibility note', () => {
     'sdk/php/README.md',
     'docs/18-sdk-design.md',
   ])('%s names the session linkPreview key and the gateway release it needs', path => {
-    expect(requirementsParagraph(path)).toMatch(/`linkPreview` key of a session's config[^`]*OpenWA 0\.31\.0/);
+    expect(requirementsParagraph(path)).toMatch(/`linkPreview` key of a session's config[^`]*OpenWA 0\.30\.3/);
   });
 });
