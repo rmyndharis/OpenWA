@@ -322,12 +322,6 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   /**
-   * Launch every previously authenticated session this node may claim, one at a time.
-   *
-   * Sequential with a throttle by design — these are Chromium launches — which is exactly why it
-   * cannot run inside the bootstrap hook. See onApplicationBootstrap.
-   */
-  /**
    * The rows boot auto-start launches: linked, disconnected, not stopped by an operator, and claimable
    * by this node. Without the claim every replica scans the same rows and races to launch the same
    * engines, which is a WhatsApp account being opened twice, not merely duplicated work. A session an
@@ -353,6 +347,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     );
   }
 
+  /**
+   * Launch every previously authenticated session this node may claim, one at a time.
+   *
+   * Sequential with a throttle by design — these are Chromium launches — which is exactly why it
+   * cannot run inside the bootstrap hook. See onApplicationBootstrap.
+   */
   private async autoStartSessions(): Promise<void> {
     const sessions = await this.sessionRepository.find({ where: this.autoStartWhere() });
 

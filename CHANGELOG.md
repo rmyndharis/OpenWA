@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- With `AUTO_START_SESSIONS` off, the boot logs a line with the number of linked sessions it left disconnected, naming the setting and `POST /api/sessions/{sessionId}/start` (`action=auto_start_disabled`). Nothing is logged when no linked session is left down (#2082).
+- Log at boot how many linked sessions stay disconnected because `AUTO_START_SESSIONS` is off, and how to start them (`action=auto_start_disabled`) (#2082). Thanks @arraisfilho.
 
 ### Fixed
 
