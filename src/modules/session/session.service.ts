@@ -345,6 +345,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * hint, and neither the hint nor that failure is worth a line once the gateway is shutting down.
    */
   async noteSessionsLeftDown(): Promise<void> {
+    if (this.stopping) return;
     try {
       const count = await this.sessionRepository.count({ where: this.autoStartWhere() });
       if (!count || this.stopping) return;

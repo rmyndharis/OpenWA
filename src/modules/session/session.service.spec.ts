@@ -11438,6 +11438,16 @@ describe('SessionService', () => {
       expect(log).not.toHaveBeenCalled();
     });
 
+    it('does not even count once the gateway is shutting down', async () => {
+      delete process.env.AUTO_START_SESSIONS;
+      (repository.count as jest.Mock).mockResolvedValue(2);
+
+      await service.onModuleDestroy();
+      await service.noteSessionsLeftDown();
+
+      expect(repository.count).not.toHaveBeenCalled();
+    });
+
     it('logs no warning for a count that the shutdown cut short', async () => {
       delete process.env.AUTO_START_SESSIONS;
       let fail!: (error: Error) => void;

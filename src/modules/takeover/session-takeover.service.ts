@@ -152,8 +152,12 @@ export class SessionTakeoverService implements OnApplicationBootstrap, OnModuleD
     }
 
     if (!resolveFeatureFlags(this.configService).autoStartSessions) {
-      // A session corrected here was not down yet when the boot counted, so the hint is given now.
-      if (corrected.length > 0) await this.sessionService.noteSessionsLeftDown();
+      // A linked session corrected here was not down yet when the boot counted, so the hint is given now:
+      // only for one auto-start would have launched, and without waiting, so a slow count holds no sweep.
+      const wentDown = lapsed.some(
+        session => corrected.includes(session.id) && Boolean(session.phone) && !session.desiredState,
+      );
+      if (wentDown) void this.sessionService.noteSessionsLeftDown();
       return;
     }
     const eligible = lapsed.filter(session => this.isEligible(session));
