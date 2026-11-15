@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- whatsapp-web.js: the chat history (REST, MCP and plugin reads alike) returns a message deleted for everyone under the id of its stored row when its delete notice names the chat in the other id form, phone number or lid; it was returned as the notice named it, so it still showed beside its stored copy (#2076).
+
 ## [0.30.2] - 2026-11-15
 
 ### Added

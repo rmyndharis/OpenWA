@@ -36,6 +36,7 @@ import { DataSource } from 'typeorm';
 import { EngineRegistry } from '../engine-registry.service';
 import { LidMapping } from '../identity/lid-mapping.entity';
 import { LidMappingStoreService } from '../identity/lid-mapping-store.service';
+import { chatOfPage } from '../identity/wa-id';
 import { Session } from '../../modules/session/entities/session.entity';
 import { SessionLidResolver } from '../../modules/session/session-lid-resolver.service';
 import { ChatScopeService } from '../../modules/auth/chat-scope.service';
@@ -1233,6 +1234,19 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
       { id: 'U_TEXT', type: 'unknown', body: 'caption' },
       { id: 'U_MEDIA', type: 'unknown', body: '' },
     ]);
+  });
+
+  it('remembers the id WhatsApp Web holds a chat under for the history page read from it', async () => {
+    const pageOf = (chat: unknown) =>
+      readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) }).getChatHistory('628999111@c.us', 50, false);
+    const fetchMessages = jest.fn().mockResolvedValue([]);
+
+    // Asked for by phone number, held under the lid; the id is read under either property name.
+    expect(chatOfPage(await pageOf({ id: { _serialized: '148000111@lid' }, fetchMessages }))).toBe('148000111@lid');
+    expect(chatOfPage(await pageOf({ id: { $1: '148000111@lid' }, fetchMessages }))).toBe('148000111@lid');
+    // A chat with no readable id, and a chat this account cannot see, leave nothing behind.
+    expect(chatOfPage(await pageOf({ fetchMessages }))).toBeUndefined();
+    expect(chatOfPage(await pageOf(undefined))).toBeUndefined();
   });
 
   it('keeps revoked tombstones in history and reports protocolMessageKey when present, or the tombstone id when absent', async () => {
