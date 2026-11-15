@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Session config key `linkPreview`: the default for a `send-text` or `send-template` that sets neither `linkPreview` nor `customLinkPreview`; a value in the request wins (#2080). Thanks @arraisfilho.
+
 ### Fixed
 
 - whatsapp-web.js: the chat history (REST, MCP and plugin reads alike) returns a message deleted for everyone under the id of its stored row when its delete notice names the chat in the other id form, phone number or lid; it was returned as the notice named it, so it still showed beside its stored copy (#2076).

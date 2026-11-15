@@ -1765,6 +1765,8 @@ func TestUpdateSessionConfigEmitsThreeStates(t *testing.T) {
 		{"a value sets it", UpdateSessionConfigRequest{MaxReconnectAttempts: Ptr(5)}, `{"maxReconnectAttempts":5}`},
 		{"clear sends explicit null", UpdateSessionConfigRequest{ClearMaxReconnectAttempts: true}, `{"maxReconnectAttempts":null}`},
 		{"clear wins over a value", UpdateSessionConfigRequest{MaxReconnectAttempts: Ptr(5), ClearMaxReconnectAttempts: true}, `{"maxReconnectAttempts":null}`},
+		{"a link preview default is sent", UpdateSessionConfigRequest{LinkPreview: Ptr(false)}, `{"linkPreview":false}`},
+		{"clearing the link preview sends null", UpdateSessionConfigRequest{ClearLinkPreview: true}, `{"linkPreview":null}`},
 	}
 	for _, c := range cases {
 		b, err := json.Marshal(c.req)

@@ -41,11 +41,11 @@ class SessionsResource
     }
 
     /**
-     * Update a session's configuration, in any state, without a restart, re-link or QR scan (all three
-     * fields were fixed at creation before this route existed). `autoRejectCalls` applies immediately;
-     * `maxReconnectAttempts` and `reconnectBaseDelay` apply on the next start.
+     * Update a session's configuration, in any state, without a restart, re-link or QR scan.
+     * `autoRejectCalls` and `linkPreview` apply immediately; `maxReconnectAttempts` and
+     * `reconnectBaseDelay` apply on the next start.
      *
-     * @param array<string,mixed> $body autoRejectCalls, maxReconnectAttempts, reconnectBaseDelay
+     * @param array<string,mixed> $body autoRejectCalls, maxReconnectAttempts, reconnectBaseDelay, linkPreview
      *
      * @return array<string,mixed>
      */

@@ -25,7 +25,7 @@ if (API_ORIGIN) warnIfInsecureHttpUrl(API_ORIGIN, 'VITE_API_URL');
 // =============================================================================
 
 /**
- * The three tunable keys, as the gateway resolves them — not the raw stored column, which the API
+ * The four tunable keys, as the gateway resolves them — not the raw stored column, which the API
  * never returns. `maxReconnectAttempts` is null when reconnects are unlimited, which is the default
  * and which no number in the accepted 0-20 range can express.
  */
@@ -33,6 +33,7 @@ export interface SessionConfig {
   autoRejectCalls: boolean;
   maxReconnectAttempts: number | null;
   reconnectBaseDelay: number;
+  linkPreview: boolean | null;
 }
 
 export type SessionProxyType = 'http' | 'https' | 'socks4' | 'socks5';

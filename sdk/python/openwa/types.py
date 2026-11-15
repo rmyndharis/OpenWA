@@ -294,13 +294,15 @@ class UpdateSessionProxyRequest(TypedDict, total=False):
 class SessionConfig(TypedDict):
     """A session's effective runtime configuration.
 
-    ``None`` on ``maxReconnectAttempts`` means unlimited -- not unset. ``autoRejectCalls`` works on
+    ``None`` on ``maxReconnectAttempts`` means unlimited -- not unset; ``None`` on ``linkPreview``
+    means the engine's own default. ``autoRejectCalls`` works on
     Baileys only: whatsapp-web.js stores the flag but cannot reject a call, so calls keep ringing there.
     """
 
     autoRejectCalls: bool
     maxReconnectAttempts: int | None
     reconnectBaseDelay: int
+    linkPreview: bool | None
 
 
 class UpdateSessionConfigRequest(TypedDict, total=False):
@@ -308,12 +310,14 @@ class UpdateSessionConfigRequest(TypedDict, total=False):
 
     Send ``None`` for ``maxReconnectAttempts`` to restore unlimited retries, which no in-range number
     can express. ``autoRejectCalls`` works on Baileys only: whatsapp-web.js stores the flag but cannot
-    reject a call, so calls keep ringing there.
+    reject a call, so calls keep ringing there. ``linkPreview`` is the preview of a send-text or
+    send-template that sets neither ``linkPreview`` nor ``customLinkPreview``.
     """
 
     autoRejectCalls: bool | None
     maxReconnectAttempts: int | None
     reconnectBaseDelay: int | None
+    linkPreview: bool | None
 
 
 class CreateSessionRequest(TypedDict):

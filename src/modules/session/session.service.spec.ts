@@ -12067,6 +12067,7 @@ describe('SessionService', () => {
         autoRejectCalls: false,
         maxReconnectAttempts: null,
         reconnectBaseDelay: 5000,
+        linkPreview: null,
       });
     });
 
@@ -12104,6 +12105,24 @@ describe('SessionService', () => {
       expect(writtenConfig()).toEqual({ maxReconnectAttempts: 5, reconnectBaseDelay: 9000, autoRejectCalls: true });
     });
 
+    it('stores a linkPreview default and clears it on an explicit null', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ config: { autoRejectCalls: true } }));
+
+      const set = await service.updateConfig('sess-uuid-1', { linkPreview: false });
+
+      expect(writtenConfig()).toEqual({ autoRejectCalls: true, linkPreview: false });
+      expect(set.linkPreview).toBe(false);
+
+      (repository.update as jest.Mock).mockClear();
+      (repository.findOne as jest.Mock).mockResolvedValue(
+        createMockSession({ config: { autoRejectCalls: true, linkPreview: false } }),
+      );
+      const cleared = await service.updateConfig('sess-uuid-1', { linkPreview: null });
+
+      expect(writtenConfig()).toEqual({ autoRejectCalls: true });
+      expect(cleared.linkPreview).toBeNull();
+    });
+
     it('does not read a truthy non-boolean as opted in, matching maybeAutoRejectCall', async () => {
       // The column is opaque, so a legacy row can hold anything. maybeAutoRejectCall gates on
       // `=== true`; reporting 'yes' as enabled here would tell an operator calls are being rejected
@@ -12124,6 +12143,7 @@ describe('SessionService', () => {
         autoRejectCalls: false,
         maxReconnectAttempts: 20,
         reconnectBaseDelay: 1000,
+        linkPreview: null,
       });
     });
 
