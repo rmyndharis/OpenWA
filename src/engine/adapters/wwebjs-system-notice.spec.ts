@@ -23,6 +23,8 @@ const NOTICES = [
   'protocol',
   'debug',
   'gp2',
+  // Not a notice, but left out for the same reason: the header of an album, whose media arrive on their own.
+  'album',
 ];
 
 const settle = async (): Promise<void> => {
@@ -159,7 +161,6 @@ describe('a whatsapp-web.js system notice', () => {
       ['a payment message with no text as unknown', 'payment', {}, { type: 'unknown', body: '' }],
       ['a group v4 invite with no text as unknown', 'groups_v4_invite', {}, { type: 'unknown', body: '' }],
       ['an oversized placeholder with no text as unknown', 'oversized', {}, { type: 'unknown', body: '' }],
-      ['an album container with no text as unknown', 'album', {}, { type: 'unknown', body: '' }],
       ['a listed unknown entry with no text as unknown', 'unknown', {}, { type: 'unknown', body: '' }],
       ['a message deleted before it arrived as revoked', 'revoked', {}, { type: 'revoked', body: '' }],
     ])('still delivers %s', async (_what, type, opts, delivered) => {
@@ -207,6 +208,39 @@ describe('a whatsapp-web.js system notice', () => {
         expect.any(String),
         expect.objectContaining({ action: 'wwebjs_drop_contentless', type: 'member_added_notice' }),
       );
+    });
+
+    it('delivers a contentless entry of a listed kind the gateway does not map, and logs its raw type', async () => {
+      const { client, logger, onMessage, onMessageCreate } = wired();
+
+      client.emit('message', model('interactive'));
+      client.emit('message_create', model('unknown', { fromMe: true }));
+      await settle();
+
+      expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'unknown', body: '' }), expect.anything());
+      expect(onMessageCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'unknown', body: '' }),
+        expect.anything(),
+      );
+      expect(
+        logger.debug.mock.calls.map(([, meta]: [string, { action: string; type: string }]) => [meta.action, meta.type]),
+      ).toEqual([
+        ['wwebjs_keep_unmapped', 'interactive'],
+        ['wwebjs_keep_unmapped', 'unknown'],
+      ]);
+    });
+
+    it('logs nothing for a kept entry that carries something, or whose kind the gateway maps', async () => {
+      const { client, logger, onMessage } = wired();
+
+      client.emit('message', model('interactive', { body: 'Pick one' }));
+      client.emit('message', model('unknown', { hasMedia: true }));
+      client.emit('message', model('chat'));
+      client.emit('message', model('revoked'));
+      await settle();
+
+      expect(onMessage).toHaveBeenCalledTimes(4);
+      expect(logger.debug).not.toHaveBeenCalled();
     });
 
     it('still delivers an unlisted entry when it carries a body', async () => {
