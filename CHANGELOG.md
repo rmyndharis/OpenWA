@@ -10,10 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Session config key `linkPreview`: the default for a `send-text` or `send-template` that sets neither `linkPreview` nor `customLinkPreview`; a value in the request wins (#2080). Thanks @arraisfilho.
+- whatsapp-web.js: log the raw type of a message kept as an empty `unknown` (`wwebjs_keep_unmapped`, at `LOG_LEVEL=debug`), so a kind the gateway does not map can be named.
 - Log how many linked sessions stay disconnected because `AUTO_START_SESSIONS` is off, and how to start them: at boot, and when a session a vanished node left behind is marked disconnected (`action=auto_start_disabled`) (#2082). Thanks @arraisfilho.
 
 ### Fixed
 
+- whatsapp-web.js: the header of an album no longer arrives as an empty `unknown` message, live, in the chat history or as a chat's last message; its photos and videos arrive as their own messages, as on Baileys (#2076).
 - whatsapp-web.js: the chat history (REST, MCP and plugin reads alike) returns a message deleted for everyone under the id of its stored row when its delete notice names the chat in the other id form, phone number or lid; it was returned as the notice named it, so it still showed beside its stored copy (#2076).
 - Dashboard: a message deleted for everyone is shown once when its history entry and its stored row name the chat or the author in different id forms, phone number and lid (#2076).
 

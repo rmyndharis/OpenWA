@@ -15,6 +15,7 @@ import {
   buildEditedMessage,
   buildIncomingMessageBase,
   mapContactFields,
+  mapWwebjsMessageType,
 } from './message-mapper';
 import { extractWwebjsCall, plannedInboundDownload, wwebjsAckToDeliveryStatus } from './wwebjs-messaging';
 import { admitInboundSafely, inboundMediaTimeoutMs, withInboundDownloadTimeout } from './inbound-media-cap';
@@ -74,6 +75,9 @@ const NOTICE_TYPES: ReadonlySet<string> = new Set<string>([
   MessageTypes.PROTOCOL,
   MessageTypes.DEBUG,
   MessageTypes.GP2,
+  // The header of an album. Its photos and videos are entries of their own, so the header carries nothing,
+  // and mapped it reached the session as an empty `unknown` message. The Baileys adapter leaves it out too.
+  MessageTypes.ALBUM,
 ]);
 
 const LISTED_MESSAGE_TYPES: ReadonlySet<string> = new Set<string>(Object.values(MessageTypes));
@@ -108,10 +112,23 @@ export function isNotice(msg: WwebjsEntryProbe, logger?: WwebjsDropLogger): bool
  * Whether an entry is of a kind whatsapp-web.js does not list (`MessageTypes`) and carries neither text nor media:
  * something WhatsApp Web added to the chat that is not a message anyone can read, which mapped would be an `unknown`
  * message with an empty body. The raw type is logged so the kind can be named later. A listed type (`interactive`,
- * `hsm`, `unknown`, `revoked`, ...) stays whatever it carries, and so does an unlisted one with a body or media.
+ * `hsm`, `unknown`, `revoked`, ...) stays whatever it carries, and so does an unlisted one with a body or media; the
+ * raw type of a listed one that stays with nothing in it and maps to `unknown` is logged as well.
  */
 export function isUnlistedContentless(msg: WwebjsEntryProbe, logger?: WwebjsDropLogger): boolean {
-  if (LISTED_MESSAGE_TYPES.has(msg.type) || Boolean(msg.body) || Boolean(msg.hasMedia)) {
+  if (Boolean(msg.body) || Boolean(msg.hasMedia)) {
+    return false;
+  }
+  if (LISTED_MESSAGE_TYPES.has(msg.type)) {
+    // Kept: the library lists the kind, so a participant sent it. One the gateway maps to nothing reaches
+    // the session as an empty `unknown` message, and the raw type is the only way to tell which kind it was.
+    if (mapWwebjsMessageType(msg.type) === 'unknown') {
+      logger?.debug('Keeping a contentless entry of a kind the gateway does not map', {
+        action: 'wwebjs_keep_unmapped',
+        msgId: readWid(msg.id),
+        type: msg.type,
+      });
+    }
     return false;
   }
   logger?.debug('Dropping a contentless entry of a type whatsapp-web.js does not list', {
