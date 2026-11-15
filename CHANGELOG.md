@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.2] - 2026-11-15
+
 ### Added
 
 - Report poll votes as `poll.vote` on Baileys, as whatsapp-web.js already does. A vote is read while the poll's creation message is still in the session's message store (`BAILEYS_MESSAGE_STORE_LIMIT`); earlier votes are not backfilled (#2063). Thanks @Shreyas1702003 for the report.
