@@ -32,9 +32,11 @@ describe('SessionTakeoverService', () => {
     svc: SessionTakeoverService;
     start: jest.Mock;
     markLapsedDisconnected: jest.Mock;
+    noteSessionsLeftDown: jest.Mock;
   } => {
     const start = opts.startImpl ?? jest.fn().mockResolvedValue({});
     const markLapsedDisconnected = jest.fn().mockResolvedValue([]);
+    const noteSessionsLeftDown = jest.fn().mockResolvedValue(undefined);
     const config = {
       get: (key: string, def?: unknown) =>
         ({
@@ -45,14 +47,14 @@ describe('SessionTakeoverService', () => {
     } as unknown as ConfigService;
     const hasStartCapacity = jest.fn((max: number) => (opts.slotHolders ?? 0) < max);
     const svc = new SessionTakeoverService(
-      { start, markLapsedDisconnected, hasStartCapacity } as unknown as SessionService,
+      { start, markLapsedDisconnected, noteSessionsLeftDown, hasStartCapacity } as unknown as SessionService,
       {
         lapsedHeldByOthers: jest.fn().mockResolvedValue(rows),
         leaseTtlMs: 60_000,
       } as unknown as SessionOwnershipService,
       config,
     );
-    return { svc, start, markLapsedDisconnected };
+    return { svc, start, markLapsedDisconnected, noteSessionsLeftDown };
   };
 
   afterEach(() => {
@@ -230,6 +232,50 @@ describe('SessionTakeoverService', () => {
 
     expect(markLapsedDisconnected).toHaveBeenCalledTimes(1);
     expect(start).not.toHaveBeenCalled();
+  });
+
+  it('with auto-start off, says so when it corrects a linked session a vanished node left behind', async () => {
+    // Such a row still looked alive when the boot made its count, so that count missed it.
+    const off = build([lapsed({ name: 'a' })], { autoStart: false });
+    off.markLapsedDisconnected.mockResolvedValue(['id-a']);
+    await off.svc.sweep();
+    expect(off.noteSessionsLeftDown).toHaveBeenCalledTimes(1);
+    expect(off.start).not.toHaveBeenCalled();
+
+    // Nothing corrected, or a correction that failed: nothing new went down, so nothing is said.
+    const quiet = build([lapsed({ name: 'a' })], { autoStart: false });
+    await quiet.svc.sweep();
+    quiet.markLapsedDisconnected.mockRejectedValue(new Error('db down'));
+    await quiet.svc.sweep();
+    expect(quiet.noteSessionsLeftDown).not.toHaveBeenCalled();
+
+    // A corrected session auto-start would not have launched is no news either: one never linked, or one an
+    // operator stopped. Saying so again would only repeat the count the boot already gave.
+    const unlinked = build(
+      [
+        lapsed({ name: 'qr', phone: null, status: SessionStatus.QR_READY }),
+        lapsed({ name: 's', desiredState: 'stopped' }),
+      ],
+      { autoStart: false },
+    );
+    unlinked.markLapsedDisconnected.mockResolvedValue(['id-qr', 'id-s']);
+    await unlinked.svc.sweep();
+    expect(unlinked.noteSessionsLeftDown).not.toHaveBeenCalled();
+
+    // With auto-start on the session is adopted instead.
+    const on = build([lapsed({ name: 'a' })]);
+    on.markLapsedDisconnected.mockResolvedValue(['id-a']);
+    await on.svc.sweep();
+    expect(on.noteSessionsLeftDown).not.toHaveBeenCalled();
+    expect(on.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not hold a sweep for the count behind that hint', async () => {
+    const { svc, markLapsedDisconnected, noteSessionsLeftDown } = build([lapsed({ name: 'a' })], { autoStart: false });
+    markLapsedDisconnected.mockResolvedValue(['id-a']);
+    noteSessionsLeftDown.mockReturnValue(new Promise<void>(() => undefined));
+
+    await expect(svc.sweep()).resolves.toBeUndefined();
   });
 
   it('corrects stale statuses BEFORE adopting, so the write cannot land on a live engine', async () => {

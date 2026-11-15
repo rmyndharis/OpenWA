@@ -297,7 +297,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // same way and must keep its lease alive.
     this.ownership?.startHeartbeat();
 
-    if (!resolveFeatureFlags(this.configService).autoStartSessions) return;
+    if (!resolveFeatureFlags(this.configService).autoStartSessions) {
+      // Off by default for multi-replica safety, and silent otherwise: a restart leaves linked sessions
+      // disconnected with no error on them, so the boot names the setting once. Detached, and not kept
+      // on autoStartRun: nothing is launching, so a shutdown has nothing to wait for.
+      void this.noteSessionsLeftDown();
+      return;
+    }
 
     // DETACHED, deliberately. Nest binds the HTTP listener only after every onApplicationBootstrap
     // hook has settled, and this loop's duration is unbounded: one engine initialization is at least
@@ -317,25 +323,54 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   /**
+   * The rows boot auto-start launches: linked, disconnected, not stopped by an operator, and claimable
+   * by this node. Without the claim every replica scans the same rows and races to launch the same
+   * engines, which is a WhatsApp account being opened twice, not merely duplicated work. A session an
+   * operator stopped (desiredState 'stopped') stays down until an explicit start.
+   */
+  private autoStartWhere(): FindOptionsWhere<Session>[] {
+    const claimable = this.ownership?.claimableWhere() ?? [{}];
+    return claimable.map(clause => ({
+      ...clause,
+      phone: Not(IsNull()),
+      status: SessionStatus.DISCONNECTED,
+      desiredState: IsNull(),
+    }));
+  }
+
+  /**
+   * Say how many linked sessions stay disconnected because AUTO_START_SESSIONS is off, and how to start
+   * them. Called at boot, and by the takeover sweep when it corrects a session a vanished node left
+   * behind, which was not down yet when the boot counted. Never rejects: a failed count only costs the
+   * hint, and neither the hint nor that failure is worth a line once the gateway is shutting down.
+   */
+  async noteSessionsLeftDown(): Promise<void> {
+    if (this.stopping) return;
+    try {
+      const count = await this.sessionRepository.count({ where: this.autoStartWhere() });
+      if (!count || this.stopping) return;
+      this.logger.log(
+        `${count} previously authenticated session(s) left disconnected: AUTO_START_SESSIONS is off. ` +
+          'Start each with POST /api/sessions/{sessionId}/start, or set AUTO_START_SESSIONS=true on a single-instance deployment',
+        { action: 'auto_start_disabled', count },
+      );
+    } catch (error) {
+      if (this.stopping) return;
+      this.logger.warn('Could not count the sessions auto-start would have started', {
+        action: 'auto_start_disabled_scan_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
    * Launch every previously authenticated session this node may claim, one at a time.
    *
    * Sequential with a throttle by design — these are Chromium launches — which is exactly why it
    * cannot run inside the bootstrap hook. See onApplicationBootstrap.
    */
   private async autoStartSessions(): Promise<void> {
-    // Restricted to sessions this node may claim. Without it every replica scans the same rows and
-    // races to launch the same engines, which is a WhatsApp account being opened twice, not merely
-    // duplicated work.
-    // A session an operator stopped (desiredState 'stopped') stays down until an explicit start.
-    const claimable = this.ownership?.claimableWhere() ?? [{}];
-    const sessions = await this.sessionRepository.find({
-      where: claimable.map(clause => ({
-        ...clause,
-        phone: Not(IsNull()),
-        status: SessionStatus.DISCONNECTED,
-        desiredState: IsNull(),
-      })),
-    });
+    const sessions = await this.sessionRepository.find({ where: this.autoStartWhere() });
 
     if (sessions.length === 0) return;
 

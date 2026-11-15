@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Session config key `linkPreview`: the default for a `send-text` or `send-template` that sets neither `linkPreview` nor `customLinkPreview`; a value in the request wins (#2080). Thanks @arraisfilho.
 - whatsapp-web.js: log the raw type of a message kept as an empty `unknown` (`wwebjs_keep_unmapped`, at `LOG_LEVEL=debug`), so a kind the gateway does not map can be named.
+- Log how many linked sessions stay disconnected because `AUTO_START_SESSIONS` is off, and how to start them: at boot, and when a session a vanished node left behind is marked disconnected (`action=auto_start_disabled`) (#2082). Thanks @arraisfilho.
 
 ### Fixed
 

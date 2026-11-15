@@ -142,15 +142,24 @@ export class SessionTakeoverService implements OnApplicationBootstrap, OnModuleD
     // Idempotent, because DISCONNECTED is not one of the statuses it acts on. A failure leaves no
     // write pending, so the adopt loop still runs; the next pass retries the correction.
     const goneBefore = new Date(Date.now() - this.ownership.leaseTtlMs * STRANDED_LEASE_TTL_MULTIPLE);
+    let corrected: string[] = [];
     try {
-      await this.sessionService.markLapsedDisconnected(lapsed, goneBefore);
+      corrected = await this.sessionService.markLapsedDisconnected(lapsed, goneBefore);
     } catch (error) {
       this.logger.warn('Lapsed session status correction failed', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
 
-    if (!resolveFeatureFlags(this.configService).autoStartSessions) return;
+    if (!resolveFeatureFlags(this.configService).autoStartSessions) {
+      // A linked session corrected here was not down yet when the boot counted, so the hint is given now:
+      // only for one auto-start would have launched, and without waiting, so a slow count holds no sweep.
+      const wentDown = lapsed.some(
+        session => corrected.includes(session.id) && Boolean(session.phone) && !session.desiredState,
+      );
+      if (wentDown) void this.sessionService.noteSessionsLeftDown();
+      return;
+    }
     const eligible = lapsed.filter(session => this.isEligible(session));
     if (eligible.length === 0) return;
 
