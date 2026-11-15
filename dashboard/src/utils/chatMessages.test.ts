@@ -1082,6 +1082,151 @@ test('mergeChatMessages: keeps unmatched history revoked rows and matches twins 
   assert.equal(idMatchedPlusExtra.length, 2);
 });
 
+test('mergeChatMessages: a deleted message listed under another form of the chat id is drawn once', () => {
+  // Measured on a live session: the stored row is under the chat's lid and the history entry under the phone
+  // number, with the same stanza. The sender can be in the other form too, and the time a second apart.
+  const stored = db({
+    id: 'row-lid',
+    waMessageId: 'false_148@lid_3EB0FE6B',
+    chatId: '148@lid',
+    from: '148@lid',
+    type: 'revoked',
+    direction: 'incoming',
+    status: 'read',
+    timestamp: 1793549202,
+    body: '',
+  });
+  const entry = (id: string, over: Partial<EngineHistoryMessage> = {}) =>
+    mapEngineHistoryMessage(
+      hist({ id, chatId: '148@lid', from: '628@c.us', type: 'revoked', timestamp: 1793549203, body: '', ...over }),
+    );
+  const drawn = (rows: ChatMessage[], history: ReturnType<typeof entry>[]) =>
+    mergeChatMessages(rows, history).map(m => m.waMessageId);
+
+  const merged = mergeChatMessages([stored], [entry('false_628@c.us_3EB0FE6B')]);
+  assert.deepEqual(
+    merged.map(m => [m.waMessageId, m.status]),
+    [['false_148@lid_3EB0FE6B', 'read']],
+  );
+  // The other way round: a row stored while the chat was known by phone number, an entry under the lid.
+  assert.deepEqual(
+    drawn([db({ ...stored, waMessageId: 'false_628@c.us_3EB0FE6B' })], [entry('false_148@lid_3EB0FE6B')]),
+    ['false_628@c.us_3EB0FE6B'],
+  );
+  // A group id has a fourth part, the author, and that part can be in the other form as well.
+  assert.deepEqual(
+    drawn([db({ ...stored, waMessageId: 'false_g@g.us_3EB0FE6B_148@lid' })], [entry('false_g@g.us_3EB0FE6B_628@c.us')]),
+    ['false_g@g.us_3EB0FE6B_148@lid'],
+  );
+  // A row the delete never reached is the same message all the same: it is shown deleted, without its text.
+  assert.deepEqual(
+    mergeChatMessages([{ ...stored, type: 'text', body: 'secret' }], [entry('false_628@c.us_3EB0FE6B')]).map(m => [
+      m.waMessageId,
+      m.type,
+      m.body,
+    ]),
+    [['false_148@lid_3EB0FE6B', 'revoked', '']],
+  );
+  // An entry listed twice, once from before the delete, is still that one message.
+  assert.deepEqual(
+    drawn([stored], [entry('false_628@c.us_3EB0FE6B', { type: 'text', body: 'hi' }), entry('false_628@c.us_3EB0FE6B')]),
+    ['false_148@lid_3EB0FE6B'],
+  );
+  // A stored row the page lists under its own id is not deleted by an entry that only shares its stanza.
+  assert.deepEqual(
+    mergeChatMessages(
+      [db({ ...stored, waMessageId: 'false_g@g.us_3EB0FE6B_111@c.us', type: 'text', body: 'still here' })],
+      [
+        entry('false_g@g.us_3EB0FE6B_111@c.us', { type: 'text', body: 'still here' }),
+        entry('false_g@g.us_3EB0FE6B_222@c.us'),
+      ],
+    )
+      .map(m => [m.waMessageId, m.type, m.body])
+      .sort(),
+    [
+      ['false_g@g.us_3EB0FE6B_111@c.us', 'text', 'still here'],
+      ['false_g@g.us_3EB0FE6B_222@c.us', 'revoked', ''],
+    ],
+  );
+  // An entry that has a stored row under its own id belongs to that row, whatever else shares the stanza.
+  assert.deepEqual(
+    mergeChatMessages(
+      [
+        db({ ...stored, id: 'row-b', waMessageId: 'false_628@c.us_3EB0FE6B', type: 'text', body: 'gone' }),
+        db({ ...stored, id: 'row-a', waMessageId: 'false_148@lid_3EB0FE6B', type: 'text', body: 'kept' }),
+      ],
+      [entry('false_628@c.us_3EB0FE6B')],
+    )
+      .map(m => [m.waMessageId, m.type, m.body])
+      .sort(),
+    [
+      ['false_148@lid_3EB0FE6B', 'text', 'kept'],
+      ['false_628@c.us_3EB0FE6B', 'revoked', ''],
+    ],
+  );
+
+  // The same stanza sent the other way is another message, and so is an entry that is not deleted.
+  assert.equal(drawn([stored], [entry('true_628@c.us_3EB0FE6B', { fromMe: true })]).length, 2);
+  assert.equal(drawn([stored], [entry('false_628@c.us_3EB0FE6B', { type: 'text', body: 'hi' })]).length, 2);
+  // Only a full whatsapp-web.js id has a stanza to go by: not a bare key, not an id of some other make with
+  // underscores in it, not one whose first part is no direction, and not a stanza that holds an underscore.
+  for (const [storedId, entryId] of [
+    ['3EB0FE6B', '3EB0FE6B_X'],
+    ['msg_2026_01', 'msg_2025_01'],
+    ['maybe_148@lid_3EB0FE6B', 'maybe_628@c.us_3EB0FE6B'],
+    ['false_148@lid_MSG_1_111@lid', 'false_628@c.us_MSG_2_222@lid'],
+    ['false_148@lid_v1_9f8a7b6c', 'false_628@c.us_v1_1a2b3c4d'],
+    ['false_148@lid_3EB0FE6B_111@lid_out', 'false_628@c.us_3EB0FE6B_111@lid_out'],
+  ]) {
+    assert.equal(drawn([db({ ...stored, waMessageId: storedId })], [entry(entryId)]).length, 2, entryId);
+  }
+
+  // A stanza match is decided before a match by sender and time: here the first entry is another deleted
+  // message of the same sender and second, and it must not take the row that the second entry is.
+  const sameSecond = entry('false_148@lid_OTHER', { from: '148@lid', timestamp: 1793549202 });
+  assert.deepEqual(drawn([stored], [sameSecond, entry('false_628@c.us_3EB0FE6B')]).sort(), [
+    'false_148@lid_3EB0FE6B',
+    'false_148@lid_OTHER',
+  ]);
+});
+
+test('mergeChatMessages: a match by sender and time needs a known time, and an entry listed twice takes one row', () => {
+  const row = (waMessageId: string, timestamp?: number) =>
+    db({
+      id: waMessageId,
+      waMessageId,
+      author: 'alice@c.us',
+      type: 'revoked',
+      direction: 'incoming',
+      timestamp,
+      body: '',
+    });
+  const entry = (id: string, timestamp?: number) =>
+    mapEngineHistoryMessage(
+      hist({ id, author: 'alice@c.us', type: 'revoked', timestamp: timestamp as number, body: '' }),
+    );
+  const drawn = (rows: ChatMessage[], history: ReturnType<typeof entry>[]) =>
+    mergeChatMessages(rows, history)
+      .map(m => m.waMessageId)
+      .sort();
+
+  // Neither side knows the time, so nothing says the two are one message.
+  assert.deepEqual(drawn([row('false_g@g.us_A1')], [entry('false_g@g.us_N1')]), ['false_g@g.us_A1', 'false_g@g.us_N1']);
+
+  // Two messages deleted in the same second, the first listed twice: the repeat must not take the second row.
+  assert.deepEqual(
+    drawn(
+      [row('false_g@g.us_A1', 1782054500), row('false_g@g.us_A2', 1782054500)],
+      [
+        entry('false_g@g.us_N1', 1782054500),
+        entry('false_g@g.us_N1', 1782054500),
+        entry('false_g@g.us_N2', 1782054500),
+      ],
+    ),
+    ['false_g@g.us_A1', 'false_g@g.us_A2'],
+  );
+});
+
 test('mergeChatMessages: never merges two stored revoked rows with each other', () => {
   const s1 = db({
     id: 'row-1',
