@@ -32,6 +32,9 @@ class ShortConnectTimeoutAdapter extends RedisIoAdapter {
   }
 }
 
+// Room past the real-time deadlines below, so a missed condition fails its expectation rather than the test.
+jest.setTimeout(20_000);
+
 describe('a refused /events handshake', () => {
   let app: INestApplication;
   let peers: WebSocket[];
@@ -85,18 +88,24 @@ describe('a refused /events handshake', () => {
     return { frames, closed: () => closed };
   };
   const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+  /** Wait in real time for a condition the sockets reach on their own, up to a deadline. */
+  const until = async (condition: () => boolean, deadlineMs = 5_000): Promise<boolean> => {
+    const deadline = Date.now() + deadlineMs;
+    while (!condition() && Date.now() < deadline) await wait(10);
+    return condition();
+  };
 
   it('closes the connection of a peer refused for its key, as it does one refused at the root namespace', async () => {
     const refused = open('40/events,{"apiKey":"owa_k1_not_a_key"}');
     const rootPeer = open('40');
 
-    await wait(250);
     // The refusal reached the peer: an UNAUTHORIZED frame, then the namespace disconnect.
+    await until(() => refused.frames.some(frame => frame.startsWith('41/events')));
     expect(refused.frames.some(frame => frame.includes('UNAUTHORIZED'))).toBe(true);
     expect(refused.frames.some(frame => frame.startsWith('41/events'))).toBe(true);
 
     // Past the connect timeout neither peer holds a namespace, and neither may hold a connection.
-    await wait(500);
+    await until(() => rootPeer.closed() && refused.closed());
     expect({ rootPeerClosed: rootPeer.closed(), refusedPeerClosed: refused.closed() }).toEqual({
       rootPeerClosed: true,
       refusedPeerClosed: true,
@@ -107,7 +116,7 @@ describe('a refused /events handshake', () => {
     // 10 handshakes a minute per address are validated; the rest are refused as RATE_LIMITED.
     const opened = Array.from({ length: 12 }, () => open('40/events,{"apiKey":"owa_k1_not_a_key"}'));
 
-    await wait(900);
+    await until(() => opened.every(peer => peer.closed()));
     expect(opened.some(peer => peer.frames.some(frame => frame.includes('RATE_LIMITED')))).toBe(true);
     expect(opened.filter(peer => !peer.closed()).length).toBe(0);
   });
