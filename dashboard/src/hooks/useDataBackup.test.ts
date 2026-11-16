@@ -39,7 +39,7 @@ before(async () => {
   createElementOriginal = document.createElement;
   const { i18nReady, default: i18n } = await import('../i18n/index.ts');
   await i18nReady;
-  i18nT = (key, options) => i18n.t(key, options) as string;
+  i18nT = (key, options) => i18n.t(key, options ?? {}) as string;
   globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     if (url.endsWith('/api/infra/import-data')) {
