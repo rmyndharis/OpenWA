@@ -118,7 +118,8 @@ export interface PageMediaDownload {
  * WhatsApp serves, and upstream base64-encodes and ships whatever it decrypts, so an understated
  * `fileLength` brought an arbitrarily large string over the protocol into Node. An over-cap payload
  * comes back with its size and no data. `undefined` and `null` keep upstream's meaning: no usable
- * media.
+ * media. whatsapp-web.js 1.34.8 reads the blob from WhatsApp Web's own cache instead
+ * (`WWebJS.resolveMediaBlob`); this keeps the decrypt, which is what lets it measure before encoding.
  */
 export async function downloadMediaInPage(args: {
   msgId: string;
