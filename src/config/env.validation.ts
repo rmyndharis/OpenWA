@@ -328,6 +328,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS', // 0 = failure rows keep no payload (no redrive)
     'EXPORT_INLINE_MEDIA_BUDGET_BYTES', // 0 = a data export carries no inline media at all
     'MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES', // 0 = a message list carries no inline media at all
+    'MCP_MAX_RESULT_BYTES', // 0 = no cap on an MCP tool result; `100k` would have read as no cap
     'CHAT_MEDIA_ARCHIVE_TTL_DAYS', // 0 = keep archived chat media forever
     'INGRESS_RETRY_DELAY_MS', // 0 = retry without backoff
     'REDIS_CACHE_DB',

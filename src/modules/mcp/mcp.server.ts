@@ -15,7 +15,7 @@ import { UnresolvedApiKeyException, type AuthService } from '../auth/auth.servic
 import { allowUnauthenticatedAuditRow } from '../audit/auth-failure-audit-limiter';
 import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
-import { handleToolError, smartToolResult } from './tool-result';
+import { handleToolError, readMaxResultBytes, smartToolResult } from './tool-result';
 import type { KeyRateLimiter } from './mcp-rate-limit';
 import { limiterKeyForIp, parseTrustedProxies, resolveClientIp } from '../../common/utils/ip';
 import { resolveBodyLimit } from '../../config/bootstrap-security';
@@ -106,6 +106,7 @@ function buildServer(
   auditService: AuditService | undefined,
   reqContext: McpRequestContext,
   chatScope?: ChatScopeService,
+  maxResultBytes = 0,
 ): McpServer {
   const server = new McpServer(
     { name: serverInfo.name, version: serverInfo.version },
@@ -145,7 +146,7 @@ function buildServer(
             chatScope,
             extra.signal,
           );
-          return smartToolResult(result as object);
+          return smartToolResult(result as object, maxResultBytes);
         } catch (error) {
           return handleToolError(error);
         }
@@ -160,6 +161,11 @@ export interface MountMcpServerOptions {
   basePath?: string;
   serverInfo?: { name: string; version: string };
   readOnly?: boolean;
+  /**
+   * The most a tool result may weigh, in UTF-8 bytes, before it is truncated instead of offloaded as a blob.
+   * Defaults to `MCP_MAX_RESULT_BYTES`; 0 or unset means no cap.
+   */
+  maxResultBytes?: number;
 }
 
 /**
@@ -259,6 +265,7 @@ export function mountMcpServer(
   const basePath = (options.basePath ?? '/mcp').replace(/\/$/, '') || '/mcp';
   const serverInfo = options.serverInfo ?? { name: 'openwa', version: '0.0.0' };
   const readOnly = resolveMcpReadOnly(options.readOnly);
+  const maxResultBytes = options.maxResultBytes ?? readMaxResultBytes();
 
   // Eagerly compute the tool list at mount time to validate the registry is populated
   // and to emit the log line once. The actual McpServer is re-created per request to
@@ -276,6 +283,7 @@ export function mountMcpServer(
       auditService,
       resolveReqContext(req),
       chatScope,
+      maxResultBytes,
     );
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     try {

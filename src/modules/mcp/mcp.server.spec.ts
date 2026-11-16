@@ -588,6 +588,48 @@ describe('mountMcpServer (raw-Express request-handling path)', () => {
     expect(h.auditService.logWarn).not.toHaveBeenCalled();
   });
 
+  describe('result cap (MCP_MAX_RESULT_BYTES)', () => {
+    const prev = process.env.MCP_MAX_RESULT_BYTES;
+    afterEach(() => {
+      if (prev === undefined) delete process.env.MCP_MAX_RESULT_BYTES;
+      else process.env.MCP_MAX_RESULT_BYTES = prev;
+    });
+
+    const callWithBigResult = async (options: MountMcpServerOptions): Promise<{ content: Array<{ type: string }> }> => {
+      const h = mount(options);
+      h.authService.validateApiKey.mockResolvedValue({ id: 'k1' });
+      h.tool.handler = () => Promise.resolve({ rows: 'x'.repeat(50000) });
+      await post(h, { jsonrpc: '2.0', id: 1 });
+      return (await toolCallback()(
+        { sessionId: 's1', to: '123', text: 'hi' },
+        { requestInfo: { headers: { 'x-api-key': 'good-key' } } },
+      )) as { content: Array<{ type: string }> };
+    };
+
+    it('leaves a result alone when no cap is set: over 32 KB it is the blob, as before', async () => {
+      delete process.env.MCP_MAX_RESULT_BYTES;
+      expect((await callWithBigResult({ readOnly: false })).content.map(c => c.type)).toEqual(['text', 'resource']);
+    });
+
+    it('truncates to the cap set by the maxResultBytes option', async () => {
+      const result = await callWithBigResult({ readOnly: false, maxResultBytes: 1000 });
+      expect(result.content).toHaveLength(1);
+      expect((result.content[0] as unknown as { text: string }).text).toContain('[truncated: 50011 bytes');
+    });
+
+    it('truncates to the cap set by MCP_MAX_RESULT_BYTES, read once when the server is mounted', async () => {
+      process.env.MCP_MAX_RESULT_BYTES = '2000';
+      const result = await callWithBigResult({ readOnly: false });
+      expect(result.content).toHaveLength(1);
+      expect((result.content[0] as unknown as { text: string }).text.length).toBeLessThan(2200);
+    });
+
+    it('lets the option switch the env cap off with 0', async () => {
+      process.env.MCP_MAX_RESULT_BYTES = '2000';
+      expect((await callWithBigResult({ readOnly: false, maxResultBytes: 0 })).content).toHaveLength(2);
+    });
+  });
+
   it('hands the SDK request cancellation signal to the tool handler', async () => {
     const h = mount();
     h.authService.validateApiKey.mockResolvedValue({ id: 'k1' });

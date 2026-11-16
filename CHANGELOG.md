@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MCP: an opt-in cap on the size of a tool result, `MCP_MAX_RESULT_BYTES`. Unset or `0`, the default, changes nothing: a result over 32 KiB is still returned as an embedded base64 resource of any size. When set, a result whose payload is larger comes back as one text item cut at that many bytes, never inside a UTF-8 character, with a note of its full size, for clients that put the whole result in the model's context. A malformed value fails the boot.
+
 ## [0.30.3] - 2026-11-16
 
 ### Added
