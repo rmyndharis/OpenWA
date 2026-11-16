@@ -160,6 +160,14 @@ code is a transferable join capability, so it sits at OPERATOR like the QR endpo
 | **Label**      | list, get, chats for a label, labels on a chat                     | upsert, delete, add to chat, remove from chat                                                 |
 | **Automation** | rules list, get (OPERATOR)                                         | —                                                                                             |
 
+Each tool is advertised with a `title` and the MCP annotations `readOnlyHint`, `destructiveHint`,
+`idempotentHint` and `openWorldHint`. The `title` is the human name a client shows, the tool name split into
+words (`MessageSendText` is "Message send text") unless the descriptor sets `title`. `openWorldHint` says
+whether the tool reaches outside this server: it is `true` for every write, and for the reads that query
+WhatsApp live instead of the local database (`ContactCheckNumber`, `ContactGetProfilePicture`,
+`MessageHistory`, `GroupFindOne`, `GroupGetInviteCode`), `false` for the rest. A client may run a read-only,
+closed-world tool without asking each time.
+
 > **Labels split across the engines**, and each tool's description says which way. Every label
 > _read_ needs whatsapp-web.js — Baileys exposes no label query at all. Editing a label (upsert,
 > delete) needs Baileys — whatsapp-web.js cannot change a label. Only tagging and untagging a chat
@@ -349,6 +357,8 @@ Guidelines:
 - Mark writes with `tier: 'write'` and the appropriate `requiredRole`. Give a read the same
   `requiredRole` as the REST route it mirrors: the webhook and automation-rule reads,
   `GroupGetInviteCode` and `ContactCheckNumber` sit at OPERATOR because their REST routes do.
+- Leave `title` unset unless the name split into words reads badly. Set `openWorld: true` on a read that
+  queries WhatsApp live instead of the local database; a write is open-world without it.
 - Use `sessionScoped: true` and a non-empty `sessionId` field for any per-session tool so
   the scope check applies.
 - A snapshot test (`tool-registry.spec.ts`) locks the public tool-name set; update it

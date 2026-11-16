@@ -16,6 +16,7 @@ import { allowUnauthenticatedAuditRow } from '../audit/auth-failure-audit-limite
 import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { handleToolError, smartToolResult } from './tool-result';
+import { deriveToolTitle } from './tool-title';
 import type { KeyRateLimiter } from './mcp-rate-limit';
 import { limiterKeyForIp, parseTrustedProxies, resolveClientIp } from '../../common/utils/ip';
 import { resolveBodyLimit } from '../../config/bootstrap-security';
@@ -117,6 +118,7 @@ function buildServer(
     server.registerTool(
       tool.name,
       {
+        title: tool.title ?? deriveToolTitle(tool.name),
         description: tool.description,
         // The SDK's InputArgs is inferred from this property. Widening it to the whole
         // `ZodRawShapeCompat | AnySchema` constraint would collapse the callback type it derives, so
@@ -126,6 +128,7 @@ function buildServer(
           readOnlyHint: tool.tier === 'read',
           destructiveHint: tool.destructive ?? false,
           idempotentHint: tool.idempotent ?? tool.tier === 'read',
+          openWorldHint: tool.openWorld ?? tool.tier === 'write',
         },
       },
       async (input: Record<string, unknown>, extra: ToolExtra) => {

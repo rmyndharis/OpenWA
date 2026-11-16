@@ -17,23 +17,24 @@ import type { ToolRegistryService } from '../../core/agent-tools/tool-registry.s
 import type { AuthService } from '../auth/auth.service';
 import type { AuditService } from '../audit/audit.service';
 import { LoggerService } from '../../common/services/logger.service';
+import { allAgentTools, type AgentToolDeps } from '../../core/agent-tools/tools';
 
 // The request-handling path news up an McpServer + StreamableHTTPServerTransport per POST. Both SDK
 // classes are mocked so tests can observe the per-request transport (handleRequest args) and invoke
 // the registered tool callbacks exactly as the SDK would — no sockets, no MCP protocol traffic.
 // The closures dereference the mock handles lazily, so the factories stay valid before module init.
 type ToolCallback = (input: Record<string, unknown>, extra: unknown) => Promise<unknown>;
-const mockRegisteredTools: Array<{ name: string; callback: ToolCallback }> = [];
+const mockRegisteredTools: Array<{ name: string; config: Record<string, unknown>; callback: ToolCallback }> = [];
 const mockServerConnect = jest.fn<Promise<void>, unknown[]>();
 const mockServerClose = jest.fn<Promise<void>, unknown[]>();
 jest.mock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
   McpServer: jest.fn().mockImplementation(() => ({
     registerTool: (
       name: string,
-      _config: unknown,
+      config: Record<string, unknown>,
       callback: (input: Record<string, unknown>, extra: unknown) => Promise<unknown>,
     ) => {
-      mockRegisteredTools.push({ name, callback });
+      mockRegisteredTools.push({ name, config, callback });
     },
     connect: (...args: unknown[]) => mockServerConnect(...args),
     close: () => mockServerClose(),
@@ -690,5 +691,122 @@ describe('mountMcpServer (raw-Express request-handling path)', () => {
       error: { code: -32603, message: 'Internal server error' },
       id: null,
     });
+  });
+});
+
+describe('tool title and openWorldHint (what the SDK is given for each tool)', () => {
+  const drive = async (tools: AnyToolDescriptor[]): Promise<Map<string, Record<string, unknown>>> => {
+    mockRegisteredTools.length = 0;
+    let routeHandlers: unknown[] = [];
+    const adapter = {
+      post: jest.fn((_path: string, ...handlers: unknown[]) => {
+        routeHandlers = handlers;
+      }),
+      get: jest.fn(),
+      delete: jest.fn(),
+    };
+    const authService = { validateApiKey: jest.fn(), hasPermission: jest.fn(() => true) };
+    mockServerConnect.mockReset().mockResolvedValue(undefined);
+    mockServerClose.mockReset().mockResolvedValue(undefined);
+    mockHandleRequest.mockReset().mockResolvedValue(undefined);
+    mockTransportClose.mockReset().mockResolvedValue(undefined);
+    mountMcpServer(
+      adapter as unknown as Parameters<typeof mountMcpServer>[0],
+      { list: jest.fn(() => tools) } as unknown as ToolRegistryService,
+      authService as unknown as AuthService,
+      new KeyRateLimiter(1000, 60_000),
+      new KeyRateLimiter(1000, 60_000),
+      { readOnly: false },
+      { logWarn: jest.fn() } as unknown as AuditService,
+    );
+    const handler = routeHandlers[routeHandlers.length - 1] as (req: Request, res: Response) => Promise<void>;
+    const res = { on: jest.fn(), status: jest.fn(), json: jest.fn(), headersSent: false };
+    res.status.mockReturnValue(res);
+    res.json.mockReturnValue(res);
+    const req = {
+      method: 'POST',
+      path: '/mcp',
+      headers: {},
+      body: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      socket: { remoteAddress: '203.0.113.7' },
+    } as unknown as Request;
+    await handler(req, res as unknown as Response);
+    return new Map(mockRegisteredTools.map(t => [t.name, t.config]));
+  };
+
+  const stub = (name: string, extra: Partial<AnyToolDescriptor>): AnyToolDescriptor =>
+    ({
+      name,
+      description: 'd',
+      inputSchema: z.object({}),
+      tier: 'read',
+      handler: jest.fn(),
+      ...extra,
+    }) as unknown as AnyToolDescriptor;
+  const hints = (config: Record<string, unknown>): Record<string, unknown> =>
+    config.annotations as Record<string, unknown>;
+
+  it('derives the title from the name unless the tool sets one', async () => {
+    const configs = await drive([
+      stub('MessageSendText', { tier: 'write' }),
+      stub('SessionFindAll', {}),
+      stub('SessionGetQRCode', { title: 'QR code for linking' }),
+    ]);
+    expect(configs.get('MessageSendText')?.title).toBe('Message send text');
+    expect(configs.get('SessionFindAll')?.title).toBe('Session find all');
+    expect(configs.get('SessionGetQRCode')?.title).toBe('QR code for linking');
+  });
+
+  it('a write tool is open-world, a plain read is not, and openWorld overrides the tier', async () => {
+    const configs = await drive([
+      stub('W', { tier: 'write' }),
+      stub('R', {}),
+      stub('RLive', { openWorld: true }),
+      stub('WClosed', { tier: 'write', openWorld: false }),
+    ]);
+    expect(hints(configs.get('W') as Record<string, unknown>).openWorldHint).toBe(true);
+    expect(hints(configs.get('R') as Record<string, unknown>).openWorldHint).toBe(false);
+    expect(hints(configs.get('RLive') as Record<string, unknown>).openWorldHint).toBe(true);
+    expect(hints(configs.get('WClosed') as Record<string, unknown>).openWorldHint).toBe(false);
+  });
+
+  it('keeps the existing hints beside the new one', async () => {
+    const configs = await drive([stub('R', {})]);
+    expect(hints(configs.get('R') as Record<string, unknown>)).toEqual({
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+  });
+
+  it('every tool of the real surface gets a non-empty title and a boolean openWorldHint', async () => {
+    const tools = allAgentTools(new Proxy({}, { get: () => ({}) }) as unknown as AgentToolDeps);
+    const configs = await drive(tools);
+    expect(configs.size).toBe(tools.length);
+    for (const config of configs.values()) {
+      expect(typeof config.title).toBe('string');
+      expect((config.title as string).length).toBeGreaterThan(0);
+      expect(typeof hints(config).openWorldHint).toBe('boolean');
+    }
+  });
+
+  it('on the real surface: every write is open-world, a DB-only read is not, a live WhatsApp read is', async () => {
+    const tools = allAgentTools(new Proxy({}, { get: () => ({}) }) as unknown as AgentToolDeps);
+    const configs = await drive(tools);
+    const open = (name: string): unknown => hints(configs.get(name) as Record<string, unknown>).openWorldHint;
+    for (const t of tools.filter(t => t.tier === 'write')) expect([t.name, open(t.name)]).toEqual([t.name, true]);
+    for (const name of ['MessageList', 'SessionFindAll', 'SessionGetStats', 'WebhooksList', 'AutomationRuleFindAll']) {
+      expect([name, open(name)]).toEqual([name, false]);
+    }
+    for (const name of [
+      'ContactCheckNumber',
+      'ContactGetProfilePicture',
+      'MessageHistory',
+      'GroupFindOne',
+      'GroupGetInviteCode',
+    ]) {
+      expect([name, open(name)]).toEqual([name, true]);
+    }
   });
 });

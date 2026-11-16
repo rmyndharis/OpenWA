@@ -11,11 +11,18 @@ export interface ToolDescriptor<I = unknown> {
   description: string;
   /** Input contract: validates the call AND is advertised to the agent. */
   inputSchema: z.ZodType<I>;
+  /** Human-readable name shown to the user (MCP `title`). Defaults to the name split into words: 'Message send text'. */
+  title?: string;
   tier: 'read' | 'write';
   /** True for irreversible or state-overwriting ops; surfaced to MCP clients as destructiveHint. */
   destructive?: boolean;
   /** Safe to repeat without additional effect. Defaults to (tier === 'read'). */
   idempotent?: boolean;
+  /**
+   * True when the tool reaches entities outside this server, surfaced to MCP clients as openWorldHint. Defaults to
+   * (tier === 'write'): every write goes to WhatsApp. Set it on a read that queries WhatsApp live instead of the local DB.
+   */
+  openWorld?: boolean;
   /** Minimum role; checked via AuthService.hasPermission. */
   requiredRole?: ApiKeyRole;
   /** If true, input MUST carry `sessionId`, checked against the key's allowedSessions. */
