@@ -6758,57 +6758,28 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     );
   });
 
-  // downloadMediaInPage copies the page side of Message#downloadMedia. The fingerprint pins the whole
-  // upstream method, comments and formatting aside, so any whatsapp-web.js release that changes it fails
-  // here; the other checks hold the copy to upstream's modules, accessors, literals and call arguments.
-  // A tree an older OpenWA install patched carries the copy's `mimetype` option and is read without it.
-  it('matches the page download of the installed whatsapp-web.js', () => {
+  // downloadMediaInPage keeps the explicit decrypt of whatsapp-web.js 1.34.7's Message#downloadMedia, with the
+  // `mimetype` option current WhatsApp Web builds need, because it measures the decrypted length before encoding.
+  // 1.34.8 replaced that method with a read from WhatsApp Web's own blob cache (WWebJS.resolveMediaBlob), which
+  // has no such measure. The fingerprint pins that upstream function, comments and formatting aside, so a release
+  // that changes how upstream gets at the media fails here and the copy is checked against it again.
+  it('matches the media download of the installed whatsapp-web.js', () => {
     const squash = (src: string) =>
       src
         .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
         .replace(/\s+/g, ' ')
         .replace(/ ?([^\w$ ]) ?/g, '$1')
         .replace(/,(?=[)}\]])/g, '');
-    const upstreamFile = fs.readFileSync(require.resolve('whatsapp-web.js/src/structures/Message.js'), 'utf8');
-    const start = upstreamFile.indexOf('async downloadMedia()');
-    const method = squash(upstreamFile.slice(start, upstreamFile.indexOf('\n    /**', start))).replace(
-      'type:msg.type,mimetype:msg.mimetype,signal:',
-      'type:msg.type,signal:',
-    );
-    const upstream = method.slice(method.indexOf('async(msgId)=>'), method.indexOf('},this.id._serialized'));
-    const ours = fs.readFileSync(path.join(__dirname, 'wwebjs-messaging.ts'), 'utf8');
-    const fn = ours.slice(ours.indexOf('export async function downloadMediaInPage'));
-    const own = squash(fn.slice(0, fn.indexOf('\n}\n'))).split('const collection=')[1] ?? '';
-    const members = (src: string) => [...new Set([...src.matchAll(/(?<!\.)\.([A-Za-z_]\w*)/g)].map(m => m[1]))].sort();
-    const literals = (src: string) => [...new Set([...src.matchAll(/'(\w+)'/g)].map(m => m[1]))].sort();
-    const call = (src: string, name: string) =>
-      (new RegExp(`\\.${name}\\(\\{[^}]*\\}\\)`).exec(src)?.[0] ?? '').replace(/downloadQpl:\w+/, 'downloadQpl:qpl');
+    const utils = fs.readFileSync(require.resolve('whatsapp-web.js/src/util/Injected/Utils.js'), 'utf8');
+    const start = utils.indexOf('window.WWebJS.resolveMediaBlob = async');
+    const resolveMediaBlob = squash(utils.slice(start, utils.indexOf('\n    };\n', start)));
 
     expect(start).toBeGreaterThan(-1);
-    expect(createHash('sha256').update(method).digest('hex')).toBe(
-      'f70f7cd8393bc60149745b7901bb96eece28a2940eaee4725e71ce615cf9ec73',
+    expect(createHash('sha256').update(resolveMediaBlob).digest('hex')).toBe(
+      'a86f35cd071c58efa582f02eac750b1353458f728a460c5e363a36f8c64f924f',
     );
-    expect(literals(own)).toEqual(literals(upstream));
-    // The copy measures the decrypted length instead of reporting the declared `size`, and names a
-    // rejection from its `name`, class, `message`, `status` and the page's `Debug.VERSION`.
-    expect(members(own)).toEqual(
-      [
-        ...members(upstream).filter(m => m !== 'size'),
-        'byteLength',
-        'maxBytes',
-        'msgId',
-        'sizeBytes',
-        'name',
-        'message',
-        'constructor',
-        'Debug',
-        'VERSION',
-      ].sort(),
-    );
-    expect(call(own, 'downloadMedia')).toBe(call(upstream, 'downloadMedia'));
-    expect(call(own, 'downloadAndMaybeDecrypt')).toBe(
-      call(upstream, 'downloadAndMaybeDecrypt').replace('type:msg.type,', 'type:msg.type,mimetype:msg.mimetype,'),
-    );
+    // The one page helper the copy still shares with upstream.
+    expect(utils).toContain('window.WWebJS.arrayBufferToBase64Async = ');
   });
 });
 
