@@ -188,18 +188,22 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
         setIsLanguageMenuOpen(false);
       }
     };
+    // Taken on window in the capture phase and marked handled, like the session picker's: the page's own Escape
+    // handlers (the open chat, the emoji picker) skip a handled key, so one press closes only this list. A dialog
+    // above the list keeps its own Escape.
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || document.querySelector('[role="dialog"]')) return;
+      event.preventDefault();
       setIsLanguageMenuOpen(false);
       // The focused item goes with the menu, so focus returns to the button that opened it.
       if (languageMenuRef.current?.contains(document.activeElement)) languageButtonRef.current?.focus();
     };
 
     document.addEventListener('mousedown', closeOnOutsideClick);
-    document.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('keydown', closeOnEscape, true);
     return () => {
       document.removeEventListener('mousedown', closeOnOutsideClick);
-      document.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('keydown', closeOnEscape, true);
     };
   }, [isLanguageMenuOpen]);
 
@@ -314,21 +318,21 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
               onClick={() => setIsLanguageMenuOpen(open => !open)}
               title={languageButtonName}
               aria-label={languageButtonName}
-              aria-haspopup="menu"
               aria-expanded={isLanguageMenuOpen}
             >
               <Languages size={18} />
               {!collapsed && <span>{languageLabel}</span>}
             </button>
+            {/* A disclosure of plain buttons, not role="menu": it keeps no roving focus or arrow keys, and the
+                role would promise them. */}
             {isLanguageMenuOpen && (
-              <div className="language-menu-list" role="menu" aria-label={t('common.language')}>
+              <div className="language-menu-list" role="group" aria-label={t('common.language')}>
                 {languageOptions.map(option => (
                   <button
                     key={option.value}
                     className={`language-menu-item ${option.value === currentLang ? 'active' : ''}`}
                     onClick={() => changeLanguage(option.value)}
-                    role="menuitemradio"
-                    aria-checked={option.value === currentLang}
+                    aria-current={option.value === currentLang ? 'true' : undefined}
                   >
                     <span>{option.label}</span>
                   </button>

@@ -237,11 +237,11 @@ for (const how of ['Escape', 'a pick'] as const) {
     const { container } = renderLayout();
     const button = container.querySelector<HTMLButtonElement>('.language-menu > button')!;
     rtl.fireEvent.click(button);
-    const item = rtl.screen.getAllByRole('menuitemradio')[0];
+    const item = rtl.within(rtl.screen.getByRole('group', { name: 'Language' })).getAllByRole('button')[0];
     item.focus();
     if (how === 'Escape') rtl.fireEvent.keyDown(document, { key: 'Escape' });
     else rtl.fireEvent.click(item);
-    assert.equal(rtl.screen.queryByRole('menu') === null, true, 'the menu stayed open');
+    assert.equal(rtl.screen.queryByRole('group', { name: 'Language' }) === null, true, 'the menu stayed open');
     assert.ok(document.activeElement === button, `focus is on ${document.activeElement?.tagName}`);
   });
 }
