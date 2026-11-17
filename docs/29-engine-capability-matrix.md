@@ -1075,7 +1075,7 @@ adapter boundary — none silently stubs.
   through the gateway stayed listed as unread. The value is what Baileys last reported for the chat, an
   increment and not a running total: a chat whose unread messages arrived one at a time is listed with
   `1`. A receipt that names only older messages, or only the account's own (which Baileys leaves out of a
-  receipt), leaves the count, and so does one a newer message overtook; a session restarted since holds
+  receipt), leaves the count, and so does one a newer message overtook, recorded or still being processed; a session restarted since holds
   no received message to compare, and takes any received id for the read. Only a chat marked unread by
   hand (listed with `unreadCount` `-1`, by `markUnread` or on the phone) takes a second write,
   `chatModify` with `markRead: true`, which undoes the mark in the account's app state.
