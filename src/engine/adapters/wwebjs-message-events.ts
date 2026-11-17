@@ -16,6 +16,7 @@ import {
   buildIncomingMessageBase,
   mapContactFields,
   mapWwebjsMessageType,
+  wwebjsBody,
 } from './message-mapper';
 import { extractWwebjsCall, plannedInboundDownload, wwebjsAckToDeliveryStatus } from './wwebjs-messaging';
 import { admitInboundSafely, inboundMediaTimeoutMs, withInboundDownloadTimeout } from './inbound-media-cap';
@@ -624,7 +625,7 @@ async function handleIncoming(
         if (quoted) {
           incomingMessage.quotedMessage = {
             id: quoted.id._serialized,
-            body: quoted.body,
+            body: wwebjsBody(quoted),
           };
         }
       } catch (error) {

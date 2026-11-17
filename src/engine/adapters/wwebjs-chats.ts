@@ -9,7 +9,7 @@ import { WwebjsMessaging } from './wwebjs-messaging';
 import { type WwebjsEngineHost, rethrowIfNavigation } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
-import { mapWwebjsMessageType } from './message-mapper';
+import { mapWwebjsMessageType, wwebjsBody } from './message-mapper';
 
 /**
  * Build the chat list IN-PAGE with the same `window.WWebJS.getChatModel` whatsapp-web.js's own
@@ -255,7 +255,8 @@ export class WwebjsChats {
         unreadCount: chat.unreadCount || 0,
         timestamp: chat.timestamp || 0,
         // A location message's body is the base64 map thumbnail; don't surface it as the chat preview.
-        lastMessage: lastMessage?.type === MessageTypes.LOCATION ? '📍' : lastMessage?.body || undefined,
+        lastMessage:
+          lastMessage?.type === MessageTypes.LOCATION ? '📍' : (lastMessage && wwebjsBody(lastMessage)) || undefined,
         lastMessageType: lastMessage ? mapWwebjsMessageType(lastMessage.type) : undefined,
         archived: Boolean(chat.archived),
         pinned: Boolean(chat.pinned),
