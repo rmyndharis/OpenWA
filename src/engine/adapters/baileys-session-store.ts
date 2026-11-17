@@ -1041,6 +1041,24 @@ export class BaileysSessionStore {
     return m ? { key: m.key, timestamp: m.timestamp } : null;
   }
 
+  /** Whether the chat carries an unread mark set by hand, which WhatsApp syncs as a negative count. */
+  isMarkedUnread(chatId: string): boolean {
+    return [...new Set(this.chatTwins(chatId))].some(key => (this.chats.get(key)?.unreadCount ?? 0) < 0);
+  }
+
+  /**
+   * The session read the chat: its count of unread messages goes back to zero under every record the
+   * chat is filed as. Baileys raises the count with each message received and lowers it for no receipt
+   * this session sends, so a chat read through the gateway stayed listed as unread. A mark set by hand
+   * (see {@link isMarkedUnread}) is not a count and is left alone: only the write that undoes it clears it.
+   */
+  clearUnread(chatId: string): void {
+    for (const key of new Set(this.chatTwins(chatId))) {
+      const chat = this.chats.get(key);
+      if (chat?.unreadCount && chat.unreadCount > 0) this.chats.set(key, { ...chat, unreadCount: 0 });
+    }
+  }
+
   /**
    * The newest entry `map` holds for a chat under any of its spellings. A message recorded under the
    * contact's lid before the lid->phone mapping was learned stays on the lid twin while the chat key

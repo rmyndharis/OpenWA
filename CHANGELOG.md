@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Dashboard: starting an audio or video message pauses the one already playing, where both kept playing at once (#2106). Thanks @mbdali.
+- Baileys: `POST /api/sessions/{sessionId}/chats/read` sets the chat's `unreadCount` back to `0` and undoes an unread mark set by `chats/unread`; the count used to stay, so the dashboard's unread badge came back on every reload (#2109). Thanks @juanbracamonte.
 
 ### Documentation
 

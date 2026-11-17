@@ -8265,6 +8265,34 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     ]);
   });
 
+  it('sendSeen sets the unread count the chat is listed with back to zero, with no second write', async () => {
+    // Baileys raises the count with each message received and lowers it for no receipt this session
+    // sends, so the chat stayed listed as unread after a read that answered success.
+    const adapter = await readyWithMessage();
+    fakeSock.fire('chats.update', [{ id: '628111@s.whatsapp.net', unreadCount: 1 }]);
+    expect(await adapter.getChats()).toEqual([expect.objectContaining({ unreadCount: 1 })]);
+    expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+    expect(await adapter.getChats()).toEqual([expect.objectContaining({ unreadCount: 0 })]);
+    expect(fakeSock.chatModify).not.toHaveBeenCalled();
+  });
+
+  it('sendSeen undoes an unread mark set by hand, keyed to the newest message of the chat', async () => {
+    const adapter = await readyWithMessage();
+    fakeSock.fire('chats.update', [{ id: '628111@s.whatsapp.net', unreadCount: -1 }]);
+    expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+    expect(fakeSock.chatModify).toHaveBeenCalledWith(
+      {
+        markRead: true,
+        lastMessages: [
+          { key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'M1' }, messageTimestamp: 1700000020 },
+        ],
+      },
+      '628111@s.whatsapp.net',
+    );
+    // This socket replays no patch. The mark stays listed until WhatsApp confirms the write that undoes it.
+    expect(await adapter.getChats()).toEqual([expect.objectContaining({ unreadCount: -1 })]);
+  });
+
   it.each([
     ['@c.us', '628111@c.us'],
     ['@s.whatsapp.net', '628111@s.whatsapp.net'],

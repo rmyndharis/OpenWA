@@ -1782,6 +1782,9 @@ export interface ChatCapability {
    *
    * `authors` maps a message id to who posted it, for a group: a receipt names its sender, and an id the
    * engine never kept (history backfill) has no key to read it from. An id with neither is not acknowledged.
+   *
+   * Once the receipt is out, Baileys resets the unread count it lists the chat with, and undoes an unread
+   * mark set by hand. The answer reports the receipt alone: a mark that cannot be undone is logged.
    */
   sendSeen(
     chatId: string,

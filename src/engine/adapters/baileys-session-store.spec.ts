@@ -1319,6 +1319,44 @@ describe('BaileysSessionStore', () => {
       );
     });
 
+    it.each([
+      ['its phone', '628111@c.us'],
+      ['its lid', LID],
+    ])('sets the unread count back to zero under both records once the chat is read by %s', (_form, chatId) => {
+      const s = new BaileysSessionStore();
+      s.upsertChats([
+        { id: PHONE, name: 'Alice', unreadCount: 1, conversationTimestamp: 10 },
+        { id: LID, unreadCount: 2, conversationTimestamp: 50 },
+        { id: '628222@s.whatsapp.net', unreadCount: 3, conversationTimestamp: 60 },
+      ]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      s.clearUnread(chatId);
+      expect(s.listChats()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: LID, unreadCount: 0 }),
+          expect.objectContaining({ id: '628111@c.us', unreadCount: 0 }),
+          expect.objectContaining({ id: '628222@c.us', unreadCount: 3 }),
+        ]),
+      );
+    });
+
+    it('lists no chat for a read of one it holds no record of', () => {
+      const s = new BaileysSessionStore();
+      s.clearUnread('628333@c.us');
+      expect(s.listChats()).toEqual([]);
+    });
+
+    it('leaves an unread mark set by hand to the write that undoes it', () => {
+      const s = new BaileysSessionStore();
+      s.upsertChats([{ id: PHONE, unreadCount: -1, conversationTimestamp: 10 }]);
+      expect(s.isMarkedUnread('628111@c.us')).toBe(true);
+      s.clearUnread('628111@c.us');
+      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', unreadCount: -1 })]);
+      // The patch Baileys replays for the read mark is what clears it.
+      s.upsertChats([{ id: PHONE, unreadCount: 0 }]);
+      expect(s.isMarkedUnread('628111@c.us')).toBe(false);
+    });
+
     it('shows a preview filed under the lid before the mapping on the merged row, newest first', () => {
       const s = new BaileysSessionStore();
       const msg = (remoteJid: string, id: string, ts: number) => ({
