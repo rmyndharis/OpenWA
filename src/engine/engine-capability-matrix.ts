@@ -316,8 +316,9 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     evidence:
       'Curated for a hazard, not a gap: both engines return a code. wwjs Client.requestPairingCode ' +
       '(Client.js) runs in the shared WhatsApp Web page and calls ' +
-      'PairingCodeLinkUtils.setPairingType + initializeAltDeviceLinking before startAltLinkingFlow, ' +
-      'checking no precondition; measured twice (2026-09-17, 2026-09-18) a request for a number that ' +
+      'setPairingType + initializeAltDeviceLinking before startAltLinkingFlow (on PairingCodeLinkUtils ' +
+      'before 1.34.8, on WAWebAltDeviceLinkingApi since), checking no precondition; measured twice on ' +
+      'the earlier release (2026-09-17, 2026-09-18) a request for a number that ' +
       'already had a linked session was followed within about a minute by WhatsApp revoking that ' +
       'device, whatsapp-web.js deleting its credentials and the session returning to qr_ready. It ' +
       'also arms an in-page 3-minute re-request interval that mints a fresh code and notifies the ' +

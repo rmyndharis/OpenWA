@@ -188,7 +188,7 @@ test('invalid instance secrets show the matching localized length guidance', asy
       for (const [label, value, key, options] of errors) {
         fireEvent.change(secret, { target: { value } });
         fireEvent.click(screen.getByRole('button', { name: i18n.t('common.create') }));
-        const expected = i18n.t(key, options);
+        const expected = i18n.t(key, options ?? {});
         assert.equal(screen.getByText(expected).textContent, expected, `${language}: ${label}`);
         if (key === 'common.fieldTooLong') {
           assert.match(expected, /512/, language);
