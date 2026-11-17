@@ -8433,6 +8433,130 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     expect(await adapter.getChats()).toEqual([expect.objectContaining({ unreadCount: -1 })]);
   });
 
+  describe('an unread mark set by hand that a message received since has replaced in the count', () => {
+    const JID = '628111@s.whatsapp.net';
+    // The chat is marked unread, then M2 arrives: Baileys reports its count on the same field as the mark.
+    const markedThenMessaged = async (): Promise<BaileysAdapter> => {
+      const adapter = await readyWithMessage();
+      fakeSock.fire('chats.update', [{ id: JID, unreadCount: -1 }]);
+      fakeSock.fire('chats.update', [{ id: JID, unreadCount: 1, conversationTimestamp: 1700000030 }]);
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { remoteJid: JID, fromMe: false, id: 'M2' },
+            message: { conversation: 'new' },
+            messageTimestamp: 1700000030,
+          },
+        ],
+      });
+      await new Promise(r => setImmediate(r));
+      return adapter;
+    };
+    const unread = async (adapter: BaileysAdapter): Promise<number | undefined> =>
+      (await adapter.getChats()).find(chat => chat.id === '628111@c.us')?.unreadCount;
+
+    it('is undone by the read that covers the message, as the mark is still on the account', async () => {
+      const adapter = await markedThenMessaged();
+      expect(await unread(adapter)).toBe(1);
+
+      expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+
+      expect(fakeSock.readMessages).toHaveBeenCalledWith([{ remoteJid: JID, fromMe: false, id: 'M2' }]);
+      expect(fakeSock.chatModify).toHaveBeenCalledWith(
+        {
+          markRead: true,
+          lastMessages: [{ key: { remoteJid: JID, fromMe: false, id: 'M2' }, messageTimestamp: 1700000030 }],
+        },
+        JID,
+      );
+      expect(await unread(adapter)).toBe(0);
+    });
+
+    it('lists the chat marked unread again when WhatsApp refuses the write that undoes it', async () => {
+      const adapter = await markedThenMessaged();
+      fakeSock.chatModify.mockRejectedValueOnce(new Error('App state key not present!'));
+
+      expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+
+      expect(await unread(adapter)).toBe(-1);
+      // The next read tries the write again.
+      expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+      expect(fakeSock.chatModify).toHaveBeenCalledTimes(2);
+      expect(await unread(adapter)).toBe(0);
+    });
+
+    it('is forgotten once the phone reads the chat', async () => {
+      const adapter = await markedThenMessaged();
+      fakeSock.fire('chats.update', [{ id: JID, unreadCount: 0 }]); // the read on the phone, synced
+      fakeSock.fire('chats.update', [{ id: JID, unreadCount: 1, conversationTimestamp: 1700000040 }]);
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { remoteJid: JID, fromMe: false, id: 'M3' },
+            message: { conversation: 'later' },
+            messageTimestamp: 1700000040,
+          },
+        ],
+      });
+      await new Promise(r => setImmediate(r));
+
+      expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
+      expect(await unread(adapter)).toBe(0);
+    });
+
+    it('stays for a read that does not cover the message', async () => {
+      const adapter = await markedThenMessaged();
+
+      expect(await adapter.sendSeen('628111@c.us', ['M1'])).toBe(true); // the older message only
+
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
+      expect(await unread(adapter)).toBe(1);
+      // The read that covers M2 still finds the mark.
+      expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+      expect(fakeSock.chatModify).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the count of messages that arrived while the mark was being undone', async () => {
+      const adapter = await markedThenMessaged();
+      let confirm!: () => void;
+      fakeSock.chatModify.mockImplementationOnce(() => new Promise<void>(resolve => (confirm = resolve)));
+      try {
+        const read = adapter.sendSeen('628111@c.us');
+        for (let turn = 0; turn < 50 && !fakeSock.chatModify.mock.calls.length; turn++) {
+          await new Promise(r => setImmediate(r));
+        }
+        expect(fakeSock.chatModify).toHaveBeenCalledTimes(1);
+        // Three more arrive on the record the mark was on, and the write they did not see is confirmed.
+        fakeSock.fire('chats.update', [{ id: JID, unreadCount: 3, conversationTimestamp: 1700000050 }]);
+        fakeSock.fire('messages.upsert', {
+          type: 'notify',
+          messages: [
+            {
+              key: { remoteJid: JID, fromMe: false, id: 'M5' },
+              message: { conversation: 'more' },
+              messageTimestamp: 1700000050,
+            },
+          ],
+        });
+        await new Promise(r => setImmediate(r));
+        confirm();
+        expect(await read).toBe(true);
+
+        expect(await unread(adapter)).toBe(3);
+        // The mark is gone with the write: the read that covers them sends no second one.
+        expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+        expect(fakeSock.chatModify).toHaveBeenCalledTimes(1);
+        expect(await unread(adapter)).toBe(0);
+      } finally {
+        fakeSock.chatModify.mockReset().mockResolvedValue(undefined);
+      }
+    });
+  });
+
   it('sendSeen keeps the count for a message that no receipt named', async () => {
     const adapter = await readyWithMessage();
     fakeSock.fire('chats.update', [{ id: '628111@s.whatsapp.net', unreadCount: 1 }]);

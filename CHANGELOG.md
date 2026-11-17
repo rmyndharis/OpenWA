@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard: a shared contact shows as a card with its name and phone, in the thread, the chat list and a quoted reply, where the raw `BEGIN:VCARD` text was printed (#2110). Thanks @juanbracamonte.
 - whatsapp-web.js: a message that shares several contacts had an empty `body`; it now holds their vCards, newline-joined as on Baileys. The chat list preview and a quote of such a message carry them too.
 - whatsapp-web.js: block asks WhatsApp for a number's privacy id when the page holds none, so a number the session never talked to can be blocked.
+- Baileys: a read also undoes an unread mark set by hand when a message received after it had put its count in place of the mark, where the chat stayed marked unread on the account.
 - Baileys: a contact's encrypted edit or reaction, a pin, an album header or an event RSVP no longer lists the chat as unread on its own; the engine counts each as a received message.
 - Baileys: encrypted edits and reactions of one message are applied in the order they arrived, where the older one could end as the final text or emoji after an offline replay on PostgreSQL.
 - Baileys: a poll vote on the account's own broadcast-list poll is reported only when it arrives in a 1:1 chat, as documented; a vote from a group, the list or the status chat was reported too.
