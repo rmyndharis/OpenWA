@@ -556,18 +556,23 @@ Where a failure mode recurs across engines, `src/common/errors/` defines a named
 the NestJS exception carrying the right status, so throwing it from an adapter maps to the intended
 HTTP code with no filter involved:
 
-| Error                                                                                        | Extends                        | Status |
-| -------------------------------------------------------------------------------------------- | ------------------------------ | ------ |
-| `EngineNotSupportedError`                                                                    | `NotImplementedException`      | 501    |
-| `ChannelMediaNotSupportedError`                                                              | `NotImplementedException`      | 501    |
-| `EngineNotReadyError`                                                                        | `ConflictException`            | 409    |
-| `EngineRefusedError`                                                                         | `ForbiddenException`           | 403    |
-| `EngineTransportError`                                                                       | `ServiceUnavailableException`  | 503    |
-| `ChatLabelsUnsupportedError`                                                                 | `UnprocessableEntityException` | 422    |
-| `CallNotFoundError` / `ChannelNotFoundError` / `GroupNotFoundError` / `MessageNotFoundError` | `NotFoundException`            | 404    |
+| Error                                                                                                               | Extends                        | Status |
+| ------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------ |
+| `EngineNotSupportedError`                                                                                           | `NotImplementedException`      | 501    |
+| `ChannelMediaNotSupportedError`                                                                                     | `NotImplementedException`      | 501    |
+| `EngineNotReadyError`                                                                                               | `ConflictException`            | 409    |
+| `EngineRefusedError`                                                                                                | `ForbiddenException`           | 403    |
+| `EngineTransportError`                                                                                              | `ServiceUnavailableException`  | 503    |
+| `ChatLabelsUnsupportedError`                                                                                        | `UnprocessableEntityException` | 422    |
+| `CallNotFoundError` / `ChannelNotFoundError` / `GroupNotFoundError` / `LabelNotFoundError` / `MessageNotFoundError` | `NotFoundException`            | 404    |
+| `InvalidInviteCodeError` / `RecipientUnreachableError`                                                              | `BadRequestException`          | 400    |
+| `EnginePageError`                                                                                                   | `InternalServerErrorException` | 500    |
+| `RecipientLookupUnansweredError`                                                                                    | `EnginePageError`              | 500    |
+| `EngineNotSentError` / `EngineThrottledError`                                                                       | `EngineTransportError`         | 503    |
 
-Add a new one only when the condition is engine-agnostic and recurs; a one-off stays an inline
-`throw new BadRequestException(...)`.
+`src/common/errors/` holds the full set; `LidNotMappedError` there is the one plain `Error`, which engines
+throw for a caller to catch, and it carries no status. Add a new one only when the condition is
+engine-agnostic and recurs; a one-off stays an inline `throw new BadRequestException(...)`.
 
 > Do not introduce a response envelope. A `ResponseInterceptor`/`HttpExceptionFilter` pair that
 > wrapped every payload in `{ success, data, meta }` was written once, never registered, and has
