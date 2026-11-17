@@ -8,8 +8,22 @@
 
 import { isComposingKey } from './composition.ts';
 
-const FOCUSABLE =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+// What the Tab key can reach. A control with tabindex="-1" is out of the Tab order, so it is no end of the trap: the
+// unselected tab of a row that moves focus with the arrow keys would otherwise count as the first control.
+const FOCUSABLE = [
+  'button:not([disabled])',
+  '[href]',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]',
+]
+  .map(selector => `${selector}:not([tabindex="-1"])`)
+  .join(', ');
+
+// Node.compareDocumentPosition bits, spelled out because the binder also runs where there is no Node global.
+const DOCUMENT_POSITION_PRECEDING = 2;
+const DOCUMENT_POSITION_FOLLOWING = 4;
 
 // Stack of currently-open dialogs, most recently opened last. Every binder listens for keydown on
 // the same document in the capture phase, and stopPropagation() does NOT stop same-target
@@ -69,14 +83,24 @@ export function bindModalA11y(
       }
       const first = focusables[0];
       const last = focusables[focusables.length - 1];
+      // A control outside the Tab order can still hold focus: the tab a row of tabs moved off of when another was
+      // selected without taking focus, as an assistive technology does. Tab moves on from where it sits in the page,
+      // so one before the first stop or after the last would leave the dialog.
+      const beyond = (edge: HTMLElement, side: number): boolean =>
+        !focusables.includes(doc.activeElement as HTMLElement) &&
+        typeof edge.compareDocumentPosition === 'function' &&
+        (edge.compareDocumentPosition(doc.activeElement as Node) & side) !== 0;
       if (!card.contains(doc.activeElement)) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus();
-      } else if (event.shiftKey && (doc.activeElement === first || doc.activeElement === card)) {
+      } else if (
+        event.shiftKey &&
+        (doc.activeElement === first || doc.activeElement === card || beyond(first, DOCUMENT_POSITION_PRECEDING))
+      ) {
         // The card is focusable itself (a click on dialog text lands there), and Shift+Tab from it would leave.
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && doc.activeElement === last) {
+      } else if (!event.shiftKey && (doc.activeElement === last || beyond(last, DOCUMENT_POSITION_FOLLOWING))) {
         event.preventDefault();
         first.focus();
       }
