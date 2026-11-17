@@ -2042,6 +2042,14 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     await store.reload();
     release();
     await expect(older).resolves.toBe(true);
+    // The reload cannot tell whether the write under way had reached the table when it read, so it left the lid
+    // uncached; the read after the write settled warms it from the table, and the old acknowledgment changed nothing.
+    expect(store.getCached('111')).toBeUndefined();
+    const deadline = performance.now() + 5000;
+    while (store.getCached('111') === undefined) {
+      if (performance.now() >= deadline) throw new Error('the lid was not warmed from the table');
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
     expect(store.resolveLid('111@lid')).toBe('628222');
     expect(await store.findPhoneForLid('111@lid')).toBe('628222');
   });
@@ -3593,6 +3601,66 @@ describe('LidMappingStoreService: the table statements of one lid run in the ord
 
     expect(await rowOf('333')).toMatchObject({ phone: '628555', isReported: true });
     expect(store.resolveLid('333@lid')).toBe('628555');
+  });
+
+  it('does not take from a reload the row of a lid whose negative is still under way', async () => {
+    const second = hold('update');
+    const negative = store.remember('333', null, LIVE); // its owner's, so it will clear the phone
+    await second.reached; // the statement that clears the row has not run yet
+
+    await store.reload(); // as the data import does after its commit: the row still holds the phone
+
+    second.release();
+    await expect(negative).resolves.toBe(true);
+    await settled('333');
+
+    expect(await rowOf('333')).toMatchObject({ phone: null });
+    expect(await store.findPhoneForLid('333@lid')).toBeNull();
+    expect(store.resolveLid('333@lid')).toBeNull();
+    expect(store.lidsForPhone('628333')).toEqual([]);
+  });
+
+  it('does not take from a reload the row of a lid whose report began while the read was out', async () => {
+    const find = repo.find.bind(repo) as (...args: unknown[]) => Promise<unknown>;
+    let release!: () => void;
+    let read!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const answered = new Promise<void>(resolve => (read = resolve));
+    jest.spyOn(repo, 'find').mockImplementationOnce((async (...args: unknown[]) => {
+      const rows = await find(...args); // the snapshot: the pair as it was
+      read();
+      await gate;
+      return rows;
+    }) as never);
+    const reloading = store.reload();
+    await answered;
+    await expect(store.remember('333', '628777', LIVE)).resolves.toBe(true); // a whole write while the answer is out
+    release();
+    await reloading;
+    await settled('333');
+
+    // The snapshot's phone is not the lid's any more, and nothing cached answers it.
+    expect(store.lidsForPhone('628333')).toEqual([]);
+    expect(store.getCached('333')).toBeUndefined(); // uncached: this read warms it from the table
+    const deadline = performance.now() + 5000;
+    while (store.getCached('333') === undefined) {
+      if (performance.now() >= deadline) throw new Error('the lid was not warmed from the table');
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+    expect(store.resolveLid('333@lid')).toBe('628777');
+  });
+
+  it('takes from a reload every row whose lid has no write under way', async () => {
+    await store.remember('444', '628444', LIVE);
+    const second = hold('update');
+    const negative = store.remember('333', null, LIVE);
+    await second.reached;
+
+    await store.reload();
+
+    expect(store.getCached('444')).toBe('628444');
+    second.release();
+    await negative;
   });
 
   it('does not make the write of another lid wait', async () => {

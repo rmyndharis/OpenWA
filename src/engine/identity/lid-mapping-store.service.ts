@@ -183,6 +183,11 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
    * of two reports, or a pair behind the negative that cleared it.
    */
   private readonly turns = new Map<string, Promise<void>>();
+  /**
+   * For each {@link reload} whose table read is out, the lids with a write under way when it began or begun since.
+   * Its snapshot may predate what those writes store.
+   */
+  private readonly reloadsOut = new Set<Set<string>>();
   /** When a failed write was last logged, on {@link now}, and how many have failed since without a line. */
   private readonly writeWarning = { at: -Infinity, held: 0 };
   /**
@@ -240,6 +245,12 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     // Dropped before the read too: a restore may have replaced the table, so if the read fails, a lid
     // not cached must read through rather than trust a stale absence.
     this.absentFromTable.clear();
+    // A lid whose write is under way when the read starts, or begins while it is out, is not taken from the
+    // snapshot: the row may predate what that write stores, and the entry would go on answering it once the write
+    // has landed (the phone a negative cleared, or the one a report replaced). It stays uncached, and the next read
+    // warms it once its writes have settled (see warmFromTable).
+    const raced = new Set(this.unsettledWrites.keys());
+    this.reloadsOut.add(raced);
     try {
       // Deterministic preload: an unordered find() followed by LRU eviction keeps an ARBITRARY
       // subset once the table exceeds the cap. Order by last-write and take at most the cap, so
@@ -263,13 +274,15 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       // Oldest first, so the newest row ends at the most-recent end of the LRU rather than the first
       // one evicted.
       for (const row of rows.reverse()) {
-        this.index(row.lid, row.phone, row.sessionId, row.isReported);
+        if (!raced.has(row.lid)) this.index(row.lid, row.phone, row.sessionId, row.isReported);
       }
       this.logger.log(
         `Loaded ${rows.length} lid->phone mappings into cache${this.maxCachedLids ? ` (cap ${this.maxCachedLids})` : ''}`,
       );
     } catch (err) {
       this.logger.warn(`Could not preload lid->phone mappings: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.reloadsOut.delete(raced);
     }
   }
 
@@ -566,6 +579,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     writing.latestOperation = operation;
     if (actual) writing.latestReport = operation;
     this.unsettledWrites.set(lid, writing);
+    for (const raced of this.reloadsOut) raced.add(lid);
     if (this.pendingLookups.has(lid)) this.racedLookups.add(lid);
     return writing;
   }
