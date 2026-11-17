@@ -3,6 +3,8 @@ import { BufferJSON } from '@whiskeysockets/baileys';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { DataSource } from 'typeorm';
 import { BaileysEvents, type BaileysEventsHost } from './baileys-events';
+import { BaileysHistory, type BaileysHistoryHost } from './baileys-history';
+import { BaileysSessionStore } from './baileys-session-store';
 import { BaileysStoredMessage } from './baileys-stored-message.entity';
 import { BaileysMessageStoreService } from './baileys-message-store.service';
 import { Session, SessionStatus } from '../../modules/session/entities/session.entity';
@@ -121,7 +123,8 @@ describe('a disappearing message received while STORE_EPHEMERAL_MESSAGES is off'
   /** The copy the store holds, after every write of the id it has already been handed has landed. */
   const copyOf = (id: string): Promise<WAMessage | null> => service.getMessage('s1', id);
 
-  function newEvents(): BaileysEvents {
+  /** `previews`, when given, is the session store the adapter keeps the chat list in; otherwise nothing is recorded. */
+  function newEvents(previews?: BaileysSessionStore): BaileysEvents {
     const noop = (): void => undefined;
     const logger = createLogger('BaileysEphemeralStoredCopySpec');
     debug = jest.spyOn(logger, 'debug');
@@ -135,8 +138,18 @@ describe('a disappearing message received while STORE_EPHEMERAL_MESSAGES is off'
       normalizedSelfJid: () => '6280000000000@s.whatsapp.net',
       inboundLimiter: new ConcurrencyLimiter(4),
       recordKeyLidMappings: noop,
-      recordMessage: noop,
-      recordMessageEdit: noop,
+      recordMessage: previews
+        ? (
+            msg: WAMessage,
+            type: Parameters<BaileysSessionStore['recordMessage']>[1],
+            order?: number,
+            withhold?: boolean,
+          ) => previews.recordMessage(msg, type, order, withhold)
+        : noop,
+      recordMessageEdit: previews
+        ? (...args: Parameters<BaileysSessionStore['recordMessageEdit']>) => previews.recordMessageEdit(...args)
+        : noop,
+      nextMessageOrder: previews ? () => previews.nextMessageOrder() : undefined,
       consumeOwnSend: () => false,
       getStoredMessage: (id: string) => service.getMessage('s1', id),
       putStoredMessage: (m: WAMessage) => service.put('s1', m),
@@ -319,6 +332,102 @@ describe('a disappearing message received while STORE_EPHEMERAL_MESSAGES is off'
 
       expect(edited).toEqual(['plain edit']);
       expect(reacted).toEqual(['thumbs up']);
+    });
+  });
+
+  describe('its text in the chat list', () => {
+    const chatRow = (previews: BaileysSessionStore) => previews.listChats().find(chat => chat.id === group);
+
+    it('is not kept as the preview, though the message still counts as the newest', async () => {
+      const previews = new BaileysSessionStore(undefined, 's1');
+      const events = newEvents(previews);
+
+      deliver(events, disappearing());
+      await until(() => delivered.length === 1, 'the message to be handed on');
+
+      expect(chatRow(previews)).toMatchObject({ lastMessage: '', timestamp: 1_786_000_000 });
+      expect(previews.lastInboundMessage(group)?.key.id).toBe('VANISH1');
+    });
+
+    it('is not put back by a plain edit of the message', async () => {
+      const previews = new BaileysSessionStore(undefined, 's1');
+      const events = newEvents(previews);
+      deliver(events, disappearing());
+      await until(() => delivered.length === 1, 'the message to be handed on');
+
+      deliver(
+        events,
+        received('EDIT1', {
+          protocolMessage: { type: 14, key: { id: 'VANISH1' }, editedMessage: { conversation: 'plain edit' } },
+        }),
+      );
+      await until(() => edited.length === 1, 'the plain edit to be announced');
+
+      expect(chatRow(previews)?.lastMessage).toBe('');
+    });
+
+    it('gives way to the text of a newer message', async () => {
+      const previews = new BaileysSessionStore(undefined, 's1');
+      const events = newEvents(previews);
+      deliver(events, disappearing());
+      await until(() => delivered.length === 1, 'the first message to be handed on');
+
+      deliver(events, { ...ordinary(), messageTimestamp: 1_786_000_100 });
+      await until(() => delivered.length === 2, 'the newer message to be handed on');
+
+      expect(chatRow(previews)?.lastMessage).toBe('an ordinary message');
+    });
+
+    it('is the preview while the flag is on', async () => {
+      process.env.STORE_EPHEMERAL_MESSAGES = 'true';
+      const previews = new BaileysSessionStore(undefined, 's1');
+      const events = newEvents(previews);
+
+      deliver(events, disappearing());
+      await until(() => delivered.length === 1, 'the message to be handed on');
+
+      expect(chatRow(previews)?.lastMessage).toBe('this should vanish');
+    });
+
+    it('is the preview when it is the account that typed it on its phone', async () => {
+      const previews = new BaileysSessionStore(undefined, 's1');
+      const events = newEvents(previews);
+
+      deliver(events, disappearing('TYPED1', { participant: undefined, fromMe: true }));
+      await until(() => typed.length === 1, 'the message to be handed on');
+
+      expect(chatRow(previews)?.lastMessage).toBe('this should vanish');
+    });
+
+    it.each([
+      ['off', 'false', ''],
+      ['on', 'true', 'this should vanish'],
+    ])('is the preview %s when history carries it', async (_flag, value, preview) => {
+      process.env.STORE_EPHEMERAL_MESSAGES = value;
+      const previews = new BaileysSessionStore(undefined, 's1');
+      const host = {
+        getSocket: () => ({}) as WASocket,
+        logger: createLogger('BaileysEphemeralStoredCopySpec'),
+        loadLib: () => Promise.resolve(lib),
+        normalizedSelfJid: () => '6280000000000@s.whatsapp.net',
+        toNeutralJid: (jid: string) => previews.toNeutralJid(jid),
+        toEngineJid: (jid: string) => previews.toEngineJid(jid),
+        extractEphemeralDuration: (msg: WAMessage) => previews.extractEphemeralDuration(msg),
+        recordMessage: (
+          msg: WAMessage,
+          type: Parameters<BaileysSessionStore['recordMessage']>[1],
+          order?: number,
+          withhold?: boolean,
+        ) => previews.recordMessage(msg, type, order, withhold),
+        recordMessageEdit: () => undefined,
+        upsertContacts: () => undefined,
+        getOnHistoryMessages: () => () => Promise.resolve([]),
+        getStoredWriteGeneration: () => 0,
+      } as unknown as BaileysHistoryHost;
+
+      await new BaileysHistory(host).captureHistoryMessages([disappearing()]);
+
+      expect(chatRow(previews)?.lastMessage).toBe(preview);
     });
   });
 });

@@ -129,6 +129,22 @@ export function isEphemeralStorageEnabled(): boolean {
 }
 
 /**
+ * Whether the session drops a message it received: STORE_EPHEMERAL_MESSAGES=false and a chat with a disappearing-messages
+ * timer. What the account sent, here or from its phone, is announced and can be changed, and a status is the status
+ * store's, so those are not dropped. The engine keeps no copy of a dropped message and no text of it as a chat preview.
+ */
+export function isDroppedEphemeral(
+  message: Pick<IncomingMessage, 'ephemeralDuration' | 'fromMe' | 'isStatusBroadcast'>,
+): boolean {
+  return (
+    !isEphemeralStorageEnabled() &&
+    (message.ephemeralDuration ?? 0) > 0 &&
+    !message.fromMe &&
+    !message.isStatusBroadcast
+  );
+}
+
+/**
  * Default aggregate base64 budget for one getChatHistory(includeMedia=true) call: 25 MiB of inlined
  * payload. The per-message cap (MEDIA_DOWNLOAD_MAX_BYTES) bounds ONE blob, but a 100-message history
  * could otherwise stack ~100 × 50 MiB of base64 into a single response (and its JSON serialisation).

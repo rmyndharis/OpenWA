@@ -12,6 +12,8 @@ interface LastMessage {
   timestamp: number;
   text: string;
   type?: MessageType;
+  /** The session dropped this message (STORE_EPHEMERAL_MESSAGES=false): no text of it is kept, an edit's included. */
+  withheld?: true;
   /** Where the message stands in the order this session observed them, which settles a tie in `timestamp`. */
   order: number;
 }
@@ -688,7 +690,7 @@ export class BaileysSessionStore {
     return ++this.messageOrder;
   }
 
-  recordMessage(msg: WAMessage, type?: MessageType, order = this.nextMessageOrder()): void {
+  recordMessage(msg: WAMessage, type?: MessageType, order = this.nextMessageOrder(), withhold = false): void {
     const chatId = msg.key?.remoteJid;
     if (!chatId || !msg.key) {
       return;
@@ -736,9 +738,10 @@ export class BaileysSessionStore {
       return; // keep the newest
     }
     // The text the message was announced with: inside a disappearing chat's or a view-once envelope, and a
-    // photo's, video's or document's caption. A deleted message previews nothing, whatever it held.
-    const text = type === 'revoked' ? '' : baileysMessageText(msg.message);
-    this.lastMessages.set(key, { key: msg.key, timestamp, text, type, order });
+    // photo's, video's or document's caption. A deleted message previews nothing, whatever it held, and neither does
+    // one the session drops: its key, time and place in the order still decide which message is newest.
+    const text = type === 'revoked' || withhold ? '' : baileysMessageText(msg.message);
+    this.lastMessages.set(key, { key: msg.key, timestamp, text, type, order, ...(withhold ? { withheld: true } : {}) });
   }
 
   /**
@@ -785,7 +788,7 @@ export class BaileysSessionStore {
         // A delete is final: an edit that reaches the preview afterwards must not bring the deleted text back.
         if (existing?.type === 'revoked' && type !== 'revoked') continue;
         if (existing?.key.id === messageId && (!accept || accept(existing.key)))
-          previews.set(key, { ...existing, text, type: type ?? existing.type });
+          previews.set(key, { ...existing, text: existing.withheld ? '' : text, type: type ?? existing.type });
       }
     }
   }

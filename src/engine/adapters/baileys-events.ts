@@ -58,7 +58,7 @@ import {
   coerceDeclaredSize,
   inboundMediaMaxBytes,
   inboundMediaTimeoutMs,
-  isEphemeralStorageEnabled,
+  isDroppedEphemeral,
   isMediaDownloadEnabled,
   runUnderGlobalMediaGate,
   withInboundDownloadTimeout,
@@ -261,8 +261,11 @@ export interface BaileysEventsHost {
   recordKeyLidMappings(
     key: Pick<WAMessageKey, 'remoteJid' | 'remoteJidAlt' | 'participant' | 'participantAlt' | 'fromMe'>,
   ): void;
-  /** Seed the chat's last-message preview + sort time from an inbound message. */
-  recordMessage(msg: WAMessage, type?: MessageType, order?: number): void;
+  /**
+   * Seed the chat's last-message preview + sort time from an inbound message. `withhold` keeps its text out of the
+   * preview, for a message the session drops (see isDroppedEphemeral): its key, time and place in the order still count.
+   */
+  recordMessage(msg: WAMessage, type?: MessageType, order?: number, withhold?: boolean): void;
   /** Reserve a message's place in the observed order on arrival, ahead of any limiter, store or media wait. */
   nextMessageOrder?(): number;
   /** Apply a message edit to the chat preview, when `accept` (if given) accepts the key the preview holds. */
@@ -1078,13 +1081,9 @@ export class BaileysEvents {
         incoming.body = editedBody;
       }
       // A message the session drops under STORE_EPHEMERAL_MESSAGES=false is never announced, so no copy of its content is
-      // kept here either. What the account sent or typed on its phone is announced and can be changed, and a status
-      // is the status store's: they keep theirs.
-      const dropped =
-        !isEphemeralStorageEnabled() &&
-        (incoming.ephemeralDuration ?? 0) > 0 &&
-        msg.key.fromMe !== true &&
-        !incoming.isStatusBroadcast;
+      // kept here either, nor its text in the chat preview. What the account sent or typed on its phone is announced
+      // and can be changed, and a status is the status store's: they keep theirs.
+      const dropped = isDroppedEphemeral(incoming);
       if (opts.generation === this.storeGeneration && !dropped) {
         void this.host.putStoredMessage(toStore)?.catch(err =>
           this.host.logger.warn('Failed to persist message to store', {
@@ -1104,7 +1103,7 @@ export class BaileysEvents {
         const receipt = opts.ticket ? emit?.(incoming, opts.ticket) : emit?.(incoming);
         this.watchOutcome(msg.key, receipt);
       }
-      this.host.recordMessage(msg, deleted ? 'revoked' : incoming.type, opts.order);
+      this.host.recordMessage(msg, deleted ? 'revoked' : incoming.type, opts.order, dropped);
       if (deleted) {
         this.host.recordMessageEdit(chatJid, storedId, '', 'revoked');
       } else if (editedBody !== undefined && storedId !== null) {
