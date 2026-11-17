@@ -177,14 +177,16 @@
   color: var(--text-secondary);
 }
 
+/* Underlined at rest: the green is no cue by itself against the slate sentence it sits in (1.4:1). */
 .login-container .login-help a {
   color: var(--primary-text);
-  text-decoration: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
   font-weight: 500;
 }
 
 .login-container .login-help a:hover {
-  text-decoration: underline;
+  text-decoration-thickness: 2px;
 }
 
 .login-container .login-footer {
