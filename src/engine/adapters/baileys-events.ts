@@ -413,7 +413,7 @@ export class BaileysEvents {
    */
   private readonly inboundInFlight = new Map<
     string,
-    { key: WAMessageKey; message: WAMessage['message']; done: Promise<void> }
+    { key: WAMessageKey; message: WAMessage['message']; done: Promise<void>; timestamp: number; order: number }
   >();
 
   /**
@@ -706,6 +706,8 @@ export class BaileysEvents {
           key: msg.key,
           message: msg.message,
           done: Promise.all([this.inboundInFlight.get(id)?.done, processed]).then(() => undefined),
+          timestamp: toUnixSeconds(msg.messageTimestamp),
+          order: order ?? 0,
         };
         this.inboundInFlight.set(id, tracked);
         void tracked.done.finally(() => {
@@ -718,6 +720,27 @@ export class BaileysEvents {
         });
       }
     }
+  }
+
+  /**
+   * The messages the account received that this session is still processing (a download, the queue for a slot) and
+   * Baileys has counted as unread already, which it does when the message arrives and not once it is recorded: where
+   * each belongs, and its place in the order observed. What Baileys takes for no message (a reaction, an edit sent as
+   * a protocol message) is not listed, nor what this session drops as no message of its own (see
+   * BAILEYS_NON_CONTENT_TYPES), which would otherwise keep a chat unread until the next read.
+   */
+  receivedInFlight(): Array<{ chatJid: string; id: string; timestamp: number; order: number }> {
+    const b = this.host.getLoadedLib?.();
+    const received = [];
+    for (const [id, { key, message, timestamp, order }] of this.inboundInFlight) {
+      if (key.fromMe === true || !key.remoteJid) continue;
+      if (b) {
+        const type = b.getContentType(b.normalizeMessageContent(message ?? undefined) ?? message ?? undefined);
+        if (!b.isRealMessage({ key, message }) || (type !== undefined && BAILEYS_NON_CONTENT_TYPES.has(type))) continue;
+      }
+      received.push({ chatJid: baileysChatJid(key.remoteJid, key.participant, false), id, timestamp, order });
+    }
+    return received;
   }
 
   /** The ack Baileys' event buffer merged into the upsert of a message the account sent, as an update. */

@@ -182,6 +182,8 @@ jest.mock('@whiskeysockets/baileys', () => ({
     }
   },
   getContentType: jest.fn(() => 'conversation'),
+  // What Baileys counts as unread: every message of these tests is real content, so this is identity-true.
+  isRealMessage: jest.fn(() => true),
   // The adapter now downloads via 'stream' mode, so resolve to an async-iterable of chunks (factory is
   // hoisted above imports, so this stays inline; tests override with the `streamOf` helper below).
   downloadMediaMessage: jest.fn(() =>
@@ -8307,6 +8309,230 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     // An older message of the chat is acknowledged; M1, the newest, is not.
     expect(await adapter.sendSeen('628111@c.us', ['M0'])).toBe(true);
     expect(await adapter.getChats()).toEqual([expect.objectContaining({ unreadCount: 1 })]);
+  });
+
+  describe('a read while the session is still processing a message Baileys has counted', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+    const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+      getContentType: jest.Mock;
+      downloadMediaMessage: jest.Mock;
+    };
+    const PHONE_JID = '628111@s.whatsapp.net';
+    const LID_JID = '484848@lid';
+
+    /** Content types as the library names them: the key of the message that says what it is. */
+    beforeEach(() => {
+      baileys.getContentType.mockImplementation((content?: Record<string, unknown>) =>
+        Object.keys(content ?? {}).find(k => k === 'conversation' || k.endsWith('Message')),
+      );
+    });
+    afterEach(() => {
+      baileys.getContentType.mockReset().mockImplementation(() => 'conversation');
+      baileys.downloadMediaMessage
+        .mockReset()
+        .mockImplementation(() => Promise.resolve(streamOf(Buffer.from('IMGDATA'))));
+    });
+
+    /** Waits for `condition` between event-loop turns and fails at the deadline instead of hanging. */
+    const until = async (condition: () => boolean | Promise<boolean>, what: string, ms = 5_000): Promise<void> => {
+      const deadline = Date.now() + ms;
+      while (!(await condition())) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    };
+    const received = (id: string, timestamp: number, message: Record<string, unknown>, jid = PHONE_JID) => ({
+      type: 'notify',
+      messages: [{ key: { remoteJid: jid, fromMe: false, id }, message, messageTimestamp: timestamp }],
+    });
+    const image = { imageMessage: { mimetype: 'image/jpeg' } };
+    /** The next media download stays pending until the function this returns releases it. */
+    const holdDownload = (): (() => void) => {
+      let release!: () => void;
+      baileys.downloadMediaMessage.mockReturnValueOnce(
+        new Promise(resolve => {
+          release = () => resolve(streamOf(Buffer.from('JPEG')));
+        }),
+      );
+      return release;
+    };
+    const downloads = (): number => baileys.downloadMediaMessage.mock.calls.length;
+    const listed = async (adapter: BaileysAdapter, id = '628111@c.us') =>
+      (await adapter.getChats()).find(chat => chat.id === id);
+    const recorded = (adapter: BaileysAdapter, type: string) => async (): Promise<boolean> =>
+      (await listed(adapter))?.lastMessageType === type;
+
+    it('keeps the count of a message that is still downloading', async () => {
+      const adapter = await readyWithMessage(); // M1, a text, is recorded as the newest message received
+      const release = holdDownload();
+      // Baileys flushes the chat update before the message it counts; the message is recorded once its media is in.
+      fakeSock.fire('chats.update', [{ id: PHONE_JID, unreadCount: 1, conversationTimestamp: 1700000030 }]);
+      fakeSock.fire('messages.upsert', received('M2', 1700000030, image));
+      await until(() => downloads() === 1, 'the download of M2');
+
+      expect(await adapter.sendSeen('628111@c.us')).toBe(true); // names M1, the newest the session has recorded
+      expect(fakeSock.readMessages).toHaveBeenCalledWith([{ remoteJid: PHONE_JID, fromMe: false, id: 'M1' }]);
+      release();
+      await until(recorded(adapter, 'image'), 'M2 recorded');
+
+      // M2 was recorded after its download and no receipt named it: it is unread, and the list says so.
+      expect(await listed(adapter)).toEqual(expect.objectContaining({ unreadCount: 1 }));
+    });
+
+    it('keeps the count of a message recorded before the read that did not name it', async () => {
+      const adapter = await readyWithMessage();
+      const release = holdDownload();
+      fakeSock.fire('chats.update', [{ id: PHONE_JID, unreadCount: 1, conversationTimestamp: 1700000030 }]);
+      fakeSock.fire('messages.upsert', received('M2', 1700000030, image));
+      await until(() => downloads() === 1, 'the download of M2');
+      release();
+      await until(recorded(adapter, 'image'), 'M2 recorded');
+
+      expect(await adapter.sendSeen('628111@c.us', ['M1'])).toBe(true);
+
+      expect(await listed(adapter)).toEqual(expect.objectContaining({ unreadCount: 1 }));
+    });
+
+    it('resets the count when the message still downloading is older than the one the read names', async () => {
+      const adapter = await readyWithMessage();
+      const release = holdDownload();
+      // Baileys counts both at once; the text finishes first, the photo, sent before it, is still downloading.
+      fakeSock.fire('chats.update', [{ id: PHONE_JID, unreadCount: 2, conversationTimestamp: 1700000030 }]);
+      fakeSock.fire('messages.upsert', received('M0', 1700000025, image));
+      fakeSock.fire('messages.upsert', received('M2', 1700000030, { conversation: 'text' }));
+      await until(() => downloads() === 1, 'the download of M0');
+      await until(async () => (await listed(adapter))?.lastMessage === 'text', 'M2 recorded');
+
+      expect(await adapter.sendSeen('628111@c.us', ['M2'])).toBe(true);
+
+      expect(await listed(adapter)).toEqual(expect.objectContaining({ unreadCount: 0 }));
+      release();
+      await until(
+        () => fakeStore.put.mock.calls.some(([, stored]) => (stored as { key: { id: string } }).key.id === 'M0'),
+        'M0 stored',
+      );
+      expect(await listed(adapter)).toEqual(expect.objectContaining({ unreadCount: 0 }));
+    });
+
+    it('keeps the count through a burst that is still downloading, and resets it for the read of its last message', async () => {
+      const adapter = await readyWithMessage();
+      const releases = [holdDownload(), holdDownload(), holdDownload()];
+      fakeSock.fire('chats.update', [{ id: PHONE_JID, unreadCount: 3, conversationTimestamp: 1700000050 }]);
+      ['B0', 'B1', 'B2'].forEach((id, i) => fakeSock.fire('messages.upsert', received(id, 1700000030 + i * 10, image)));
+      await until(() => downloads() === 3, 'the downloads of the burst');
+
+      expect(await adapter.sendSeen('628111@c.us', ['M1'])).toBe(true); // three are still downloading
+      expect(await listed(adapter)).toEqual(expect.objectContaining({ unreadCount: 3 }));
+      releases.forEach(release => release());
+      await until(async () => (await listed(adapter))?.lastMessageType === 'image', 'the burst recorded');
+      await until(
+        () =>
+          fakeStore.put.mock.calls.filter(([, stored]) => /^B\d$/.test((stored as { key: { id: string } }).key.id))
+            .length === 3,
+        'the burst stored',
+      );
+
+      expect(await adapter.sendSeen('628111@c.us', ['B0', 'B1', 'B2'])).toBe(true); // names the newest, nothing in flight
+      expect(await listed(adapter)).toEqual(expect.objectContaining({ unreadCount: 0 }));
+    });
+
+    it('keeps the count of a message recorded under the lid record while the unread mark was being undone', async () => {
+      const adapter = await readyWithMessage(); // M1 is recorded under the phone and is the newest message received
+      fakeSock.fire('lid-mapping.update', { lid: LID_JID, pn: PHONE_JID });
+      fakeSock.fire('chats.update', [{ id: PHONE_JID, unreadCount: -1, conversationTimestamp: 1700000020 }]);
+      let confirm!: () => void;
+      // Baileys replays an own app-state write as a chat update of the record it was keyed to (the phone), before the
+      // write resolves (appPatch, emitOwnEvents); a live replay is not conditional on the newer messages of the chat.
+      fakeSock.chatModify.mockImplementationOnce(
+        (_change: unknown, jid: string) =>
+          new Promise<void>(resolve => {
+            confirm = () => {
+              fakeSock.fire('chats.update', [{ id: jid, unreadCount: 0 }]);
+              resolve();
+            };
+          }),
+      );
+      try {
+        const read = adapter.sendSeen('628111@c.us');
+        await until(() => fakeSock.chatModify.mock.calls.length === 1, 'the write that undoes the mark');
+        expect(fakeSock.readMessages).toHaveBeenCalledTimes(1);
+        // M2 arrives under the contact's lid and is recorded: its count is on the lid record, which no write named.
+        fakeSock.fire('chats.update', [{ id: LID_JID, unreadCount: 1, conversationTimestamp: 1700000030 }]);
+        fakeSock.fire('messages.upsert', received('M2', 1700000030, { conversation: 'again' }, LID_JID));
+        await until(async () => (await listed(adapter, LID_JID))?.lastMessage === 'again', 'M2 recorded');
+        // The list keeps the two ids of the contact as two rows, each with the count of its own record.
+        expect((await listed(adapter))?.unreadCount).toBe(-1);
+        expect((await listed(adapter, LID_JID))?.unreadCount).toBe(1);
+        confirm();
+        expect(await read).toBe(true);
+
+        // M2 was not named by the receipt and is unread: a read that a newer message overtook leaves the count.
+        expect((await listed(adapter))?.unreadCount).toBe(0);
+        expect((await listed(adapter, LID_JID))?.unreadCount).toBe(1);
+      } finally {
+        fakeSock.chatModify.mockReset().mockResolvedValue(undefined);
+      }
+    });
+
+    it('lists the chat unread again for a message recorded while the unread mark was being undone', async () => {
+      const adapter = await readyWithMessage();
+      fakeSock.fire('chats.update', [{ id: PHONE_JID, unreadCount: -1, conversationTimestamp: 1700000020 }]);
+      let confirm!: () => void;
+      fakeSock.chatModify.mockImplementationOnce(
+        (_change: unknown, jid: string) =>
+          new Promise<void>(resolve => {
+            confirm = () => {
+              fakeSock.fire('chats.update', [{ id: jid, unreadCount: 0 }]); // the replay of the write
+              resolve();
+            };
+          }),
+      );
+      try {
+        const read = adapter.sendSeen('628111@c.us');
+        await until(() => fakeSock.chatModify.mock.calls.length === 1, 'the write that undoes the mark');
+        fakeSock.fire('chats.update', [{ id: PHONE_JID, unreadCount: 1, conversationTimestamp: 1700000030 }]);
+        fakeSock.fire('messages.upsert', received('M2', 1700000030, { conversation: 'again' }));
+        await until(async () => (await listed(adapter))?.lastMessage === 'again', 'M2 recorded');
+        confirm();
+        expect(await read).toBe(true);
+
+        expect(await listed(adapter)).toEqual(expect.objectContaining({ unreadCount: 1 }));
+      } finally {
+        fakeSock.chatModify.mockReset().mockResolvedValue(undefined);
+      }
+    });
+
+    it('keeps the chat unread for a message still downloading when the write that undoes the mark returns', async () => {
+      const adapter = await readyWithMessage();
+      fakeSock.fire('chats.update', [{ id: PHONE_JID, unreadCount: -1, conversationTimestamp: 1700000020 }]);
+      let confirm!: () => void;
+      fakeSock.chatModify.mockImplementationOnce(
+        (_change: unknown, jid: string) =>
+          new Promise<void>(resolve => {
+            confirm = () => {
+              fakeSock.fire('chats.update', [{ id: jid, unreadCount: 0 }]); // Baileys replays its own write
+              resolve();
+            };
+          }),
+      );
+      const release = holdDownload();
+      try {
+        const read = adapter.sendSeen('628111@c.us');
+        await until(() => fakeSock.chatModify.mock.calls.length === 1, 'the write that undoes the mark');
+        fakeSock.fire('chats.update', [{ id: PHONE_JID, unreadCount: 1, conversationTimestamp: 1700000030 }]);
+        fakeSock.fire('messages.upsert', received('M2', 1700000030, image));
+        await until(() => downloads() === 1, 'the download of M2');
+        confirm(); // the replay zeroes the record the count landed on, and M2 is still downloading
+        expect(await read).toBe(true);
+
+        expect(await listed(adapter)).toEqual(expect.objectContaining({ unreadCount: 1 }));
+        release();
+        await until(recorded(adapter, 'image'), 'M2 recorded');
+        expect(await listed(adapter)).toEqual(expect.objectContaining({ unreadCount: 1 }));
+      } finally {
+        fakeSock.chatModify.mockReset().mockResolvedValue(undefined);
+      }
+    });
   });
 
   it.each([
