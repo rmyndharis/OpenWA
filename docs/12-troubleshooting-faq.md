@@ -959,6 +959,12 @@ above, not as a default worth pre-emptively setting.
 - "File too large" error
 - "Unsupported media type" error
 - Upload timeout
+- A send with a `url` answers `400` `Destination address is not allowed` for an address that is public
+
+**A `url` that redirects:** that text is also what a `url` gets when it answers with a redirect (`3xx`, such as http to
+https, a CDN or a link shortener). Redirects are never followed, and `SSRF_ALLOWED_HOSTS` does not lift the refusal: send
+the address the redirect leads to. On a send, the server log line `Outbound media fetch blocked by SSRF guard` names the
+reason, and `Refusing to follow redirect from <url>` is a redirect.
 
 **Solutions:**
 
