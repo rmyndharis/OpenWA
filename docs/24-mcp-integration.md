@@ -210,6 +210,10 @@ the path, so the model sees the data only if it has a file-reading tool; a clien
 alone shows it nothing. Page a tool that can return many rows (`SessionGetChats`, `ContactFindAll`,
 `GroupFindAll`, `MessageList`) with `limit` and `offset` to stay under the limit.
 
+`SessionFindAll`, `SessionGetChats`, `ContactFindAll`, `GroupFindAll` and `WebhooksList` answer a bare
+array with no total, 1000 rows a call at most and also when `limit` is omitted. A full page therefore
+means there may be more rows, and the description of `limit` tells the agent to ask again with `offset`.
+
 `MessageList` leaves media out: a media message is listed with an `{ omitted, sizeBytes }` marker in
 place of its payload. A call that sets `inlineMedia: true` gets the payloads inline as base64, up to a
 per-response budget (`MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES`, 8 MiB by default; the newest payload is
