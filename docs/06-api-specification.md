@@ -3109,7 +3109,9 @@ Remove the group's picture. The account must be a group admin.
 
 **Response** `200` — `{ "success": true, "message": "Group picture removed" }`
 
-**Errors:** `400` the id does not name a group, or the session is not active · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (admin rights required; on whatsapp-web.js also a group that has no picture to remove, which WhatsApp Web does not tell apart from missing rights, so a repeat of a removal that was applied answers `403`) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+On whatsapp-web.js, removing a picture that is already absent also answers `200` when the account may edit the group's info (an admin, or a member of a group whose info is open to every member) and WhatsApp reports no picture for the group, so a repeat is safe there.
+
+**Errors:** `400` the id does not name a group, or the session is not active · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (admin rights required; on whatsapp-web.js also a group with no picture when the account may not edit the group's info or the participant list does not name it, since WhatsApp Web does not tell the two apart) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### GET /api/sessions/:sessionId/groups/:groupId/invite-code
 

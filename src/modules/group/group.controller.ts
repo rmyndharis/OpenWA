@@ -683,9 +683,10 @@ export class GroupController {
   @ApiResponse({
     status: 403,
     description:
-      'The engine refused the change: admin rights are required. On whatsapp-web.js also a group that has no ' +
-      'picture to remove, which WhatsApp Web does not tell apart from missing rights, so a repeat of a removal ' +
-      'that was applied answers this.',
+      'The engine refused the change: admin rights are required. On whatsapp-web.js WhatsApp Web does not tell ' +
+      'a group with no picture from missing rights: the route answers 200 for an account that may edit the ' +
+      "group's info once WhatsApp reports no picture, and this where it may not or the participant list does " +
+      'not name it.',
   })
   @ApiResponse({
     status: 503,
