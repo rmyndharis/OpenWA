@@ -641,7 +641,7 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `appPatch`                        | 🔩 plumbing                                                                                                                                                                 |
 | `assertSessions`                  | 🔩 plumbing                                                                                                                                                                 |
-| `chatModify`                      | ✅ `sendSeen` (`markRead: true`), `markUnread`, `clearChatMessages`, `archiveChat`, `muteChat`, `pinChat`, `deleteChat`, `deleteMessage`, `starMessage`                    |
+| `chatModify`                      | ✅ `sendSeen` (`markRead: true`), `markUnread`, `clearChatMessages`, `archiveChat`, `muteChat`, `pinChat`, `deleteChat`, `deleteMessage`, `starMessage`                     |
 | `cleanDirtyBits`                  | 🔩 plumbing                                                                                                                                                                 |
 | `createParticipantNodes`          | 🔩 plumbing                                                                                                                                                                 |
 | `digestKeyBundle`                 | 🔩 plumbing                                                                                                                                                                 |
@@ -1026,7 +1026,7 @@ adapter boundary — none silently stubs.
   or only on the phone. Baileys writes only its own credentials, showed no such effect and is not
   refused. Link by QR when the session of that number must stay up.
 - **`archiveChat` / `clearChatMessages` / `deleteChat` / `sendSeen` / `markUnread` (baileys).** The
-  five `chatModify` actions (archive, clear, delete, unread, and `sendSeen`'s `markRead: true`) are keyed to the chat's newest message:
+  four `chatModify` actions (archive, clear, delete, unread) are keyed to the chat's newest message:
   the one the session holds in memory, else the newest one the gateway stored (#1891). Only the rows
   of the account the session is linked to count, as in the chat list above: a stored message names
   that account in `to` when it was received and in `from` when it was sent, so a session linked to
@@ -1055,17 +1055,23 @@ adapter boundary — none silently stubs.
   `false` otherwise; unread also resolves `false` for an archived chat, which the phone leaves unmarked
   without a range. `sendSeen`
   without message ids is `readMessages([key])` for the newest _received_ (not `fromMe`) message, in
-  memory or stored, since Baileys drops own keys from a receipt, then `chatModify({ markRead: true })`
-  keyed the same way as the other chat writes so the account's own `unreadCount` clears (the peer
-  receipt alone does not). A chat with no such message resolves
+  memory or stored, since Baileys drops own keys from a receipt. A chat with no such message resolves
   `false`, so one holding only this account's own sends answers `POST chats/read` with
   `{"success": false}`, where whatsapp-web.js marks it read from the page-side chat object without
-  needing any local history. When receipts go out but the session holds no message or listed chat to
-  key the badge clear, the route still answers `{"success": true}` — the receipt is the success
-  contract; the badge clear is skipped rather than inventing a range.
+  needing any local history.
   With message ids, a group id the message store never held (history backfill) takes its receipt's
   participant from the author the gateway stored for it; one with no stored author is left out of the
   receipt, and the answer is `false` when no id could be named.
+  Once a receipt has gone out, `sendSeen` sets the chat's `unreadCount` back to `0` in the session's own
+  chat list and sends nothing for it: Baileys raises the count with every message received and lowers it
+  for no receipt the session sends, so a chat read through the gateway stayed listed as unread. Only a
+  chat marked unread by hand (listed with `unreadCount` `-1`, by `markUnread` or on the phone) takes a
+  second write, `chatModify` with `markRead: true`, which undoes the mark in the account's app state.
+  That write is keyed as the four writes are, except that the stored message standing in for a session
+  with none in memory is the newest _received_ one, and it is never sent without a range: what the
+  phone does with a read mark that names no message is not established. It does not change the answer.
+  When WhatsApp refuses it or does not confirm it within the request budget, a warning is logged,
+  `POST chats/read` still answers `{"success": true}` for the receipt, and the chat stays marked unread.
 - **`setProfileName` / `setProfilePicture` / `deleteProfilePicture` refusals (baileys).**
   whatsapp-web.js reads a page-side verdict for all three (`setDisplayName` and `setProfilePicture`
   resolve `false`, `deleteProfilePicture` resolves an explicit `false`) and raises a `403`. The
