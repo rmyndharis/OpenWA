@@ -10,31 +10,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - MCP: every tool is advertised with a `title`, the name a client shows: the tool name split into words, or the `title` its descriptor sets (#2098). Thanks @sudipta-prodevs.
-- MCP: `MCP_MAX_RESULT_BYTES`, an opt-in cap for clients that put a whole tool result in the model's context. When set, every result is one text item, cut at that many bytes with a note of its full size, and none is offloaded as a base64 resource; unset or `0`, the default, changes nothing (#2100). Thanks @sudipta-prodevs.
+- MCP: `MCP_MAX_RESULT_BYTES`, an opt-in cap for clients that put a whole tool result in the model's context. When set, every result, an error answer included, is one text item, cut at that many bytes with a note of its full size, and none is offloaded as a base64 resource; unset or `0`, the default, changes nothing (#2100). Thanks @sudipta-prodevs.
 
 ### Changed
 
-- whatsapp-web.js: block and unblock use the library's own LID handling, so an unblock no longer clears an entry the same person holds under a second id, such as a phone-keyed block from before the LID migration. The install-time block patch is retired.
+- whatsapp-web.js: block and unblock use the library's own LID handling, so an unblock no longer also removes an entry the same person holds under a second id, such as a phone-keyed block from before the LID migration (see Upgrade notes), and a number WhatsApp holds no privacy id for answers `400`. The install-time block patch is retired.
 - The MCP `MessageList` tool lists a media message without its payload unless the call sets `inlineMedia: true`, where it carried the base64 inline up to the 8 MiB budget, so one photo made the result larger than an MCP client takes.
 - Dashboard: a document in a chat shows as a card with its file name, its size where known and a PDF mark, and a click still downloads it; one left out of the message list showed only `Media` (#2105). Thanks @mbdali.
 
 ### Fixed
 
 - Dashboard: starting an audio or video message pauses the one already playing, where both kept playing at once (#2106). Thanks @mbdali.
-- Baileys: `POST /api/sessions/{sessionId}/chats/read` sets the chat's `unreadCount` back to `0` and undoes an unread mark set by `chats/unread`; the count used to stay, so the dashboard's unread badge came back on every reload (#2109). Thanks @juanbracamonte.
+- Baileys: `POST /api/sessions/{sessionId}/chats/read` sets the chat's `unreadCount` back to `0` when the receipt names the chat's newest received message, and undoes an unread mark set by `chats/unread` on every record of the chat; the count used to stay, so the dashboard's unread badge came back on every reload (#2109). Thanks @juanbracamonte.
 - Dashboard: a shared contact shows as a card with its name and phone, in the thread, the chat list and a quoted reply, where the raw `BEGIN:VCARD` text was printed (#2110). Thanks @juanbracamonte.
-- whatsapp-web.js: several contacts shared in one message arrive with their vCards newline-joined in `body`, as on Baileys, where the body was empty; the chat list preview and a quote of such a message carry them too.
-- Baileys: `POST /api/sessions/{sessionId}/chats/read` resets a chat's `unreadCount` only when the receipt names the chat's newest received message; a read of older messages or of the account's own, or one a newer message overtook, used to zero the count of a chat that still had unread messages. An unread mark undone on one record of a chat is cleared on its other record too, where it made every later read write the mark again.
-- MCP: under `MCP_MAX_RESULT_BYTES` an error answer is cut at the cap too; a refusal that lists every invalid value of a wide argument came back whole, several times the cap. A cap larger than a number holds exactly is no longer read as no cap.
-- whatsapp-web.js: block and unblock ask WhatsApp for a number's privacy id when the page holds none, so a number the session never talked to can be blocked; a number WhatsApp holds no id for answers `400`, where an unblock answered `500`.
+- whatsapp-web.js: a message that shares several contacts had an empty `body`; it now holds their vCards, newline-joined as on Baileys. The chat list preview and a quote of such a message carry them too.
+- whatsapp-web.js: block asks WhatsApp for a number's privacy id when the page holds none, so a number the session never talked to can be blocked.
+- Baileys: a contact's encrypted edit or reaction, a pin, an album header or an event RSVP no longer lists the chat as unread on its own; the engine counts each as a received message.
+- Baileys: encrypted edits and reactions of one message are applied in the order they arrived, where the older one could end as the final text or emoji after an offline replay on PostgreSQL.
+- Baileys: a poll vote on the account's own broadcast-list poll is reported only when it arrives in a 1:1 chat, as documented; a vote from a group, the list or the status chat was reported too.
+- Baileys: with `STORE_EPHEMERAL_MESSAGES=false`, a message received in a disappearing chat leaves no copy in `baileys_stored_messages` and no text as the chat's `lastMessage`, and its media is not downloaded, where its content stayed in the database, in backups and in the chat list (see Upgrade notes).
+- Overlapping updates of one privacy id's phone mapping are written in the order they were made; the older one could land last and stay in `lid_mappings`, on a PostgreSQL pool or when both were made in the same turn.
+- The in-memory privacy id mapping reloaded after a data import skips an id whose write is still under way, where it could keep answering the phone that write cleared or replaced.
+- whatsapp-web.js: the writes that are safe to repeat (contact, profile, channel, group setting, label and message reaction, edit, delete, star, pin and vote, status delete), and the reads of a group's invite code and a chat's labels, answer `503` when WhatsApp Web does not answer within the protocol timeout, where they answered `500`; sends, status posts and the other writes keep their answer, except for a timeout in the group lookup made before a group write, which answers `503` as nothing has been applied.
+- whatsapp-web.js: `message.ack` is no longer announced for an entry the account sent of a kind the gateway does not list, with no text or media; it has no `message.sent`.
+- whatsapp-web.js: the `403` of `DELETE /api/sessions/{sessionId}/groups/{groupId}/picture` says it also covers a group with no picture to remove, where it named missing admin rights alone.
+- A media `url` that carries a user name or password is refused with `400` on every route that fetches one, where it answered `500`, counted toward the send breaker and held the `Idempotency-Key`.
+- The status posts and the profile and group picture routes answer `400`, not `500`, for a media `url` that resolves to an internal address, does not resolve or redirects.
+- Webhook events for messages whose id the engine could not read (an empty id on whatsapp-web.js) each get their own `X-OpenWA-Idempotency-Key` and outbox record, where they shared one, so a receiver that deduplicates on the key kept only the first.
+- `scripts/restore.sh` refuses an archive that holds the SQLite data store while `DATABASE_TYPE` is `postgres`, before it writes anything; it wrote the file to a path named after the database, where the app never reads it, and answered `Restore complete` (see Upgrade notes).
+- A failed `PUT /api/infra/config` write answers with the overlay path relative to the working directory and the error code, where it carried the filesystem error that named the host data directory; the full error is in the server log.
+- Dashboard: a message search hit on a shared contact shows its name and phone, where it listed the raw `BEGIN:VCARD` lines.
+- Dashboard: text fields, selects and textareas draw a border at 3:1 contrast in the light and dark themes, where it was the 1.2:1 card hairline.
+- Dashboard: a focused field draws a 1px ring in the focus colour beside its border, and a hovered select draws that colour, where hover was fainter than the border at rest in the light theme.
+- Dashboard: the config field of a plugin instance resizes downwards only, where dragging it sideways pushed it out of its dialog.
+- Stop the dashboard's language list announcing itself as a menu to screen readers: it is a plain list of buttons that marks the language in use as current.
+- Let the dashboard's tab rows (Number Checker, QR pairing, plugin install and configuration, chat sidebar, group info) take the arrow keys, Home and End, with the selected tab as the row's one Tab stop.
+- Say that the search or status filter emptied the dashboard's Sessions list instead of telling the operator, a viewer included, to create a session.
+- Underline the documentation link on the dashboard's sign-in card at rest, as its colour alone does not set it apart from the sentence.
+- Show the dashboard's empty Sessions Overview message on one centred line instead of wrapping it inside the first table column.
+- Mark `event.response` and the `call.accepted`, `call.rejected` and `call.missed` webhook events as Baileys only in the dashboard's event list, as they never fire on whatsapp-web.js.
+- Warn in the dashboard's Revoke and Delete confirmations of an API key that the dashboard is signed in with that key and the action signs the operator out.
+- PHP SDK: an empty request body is sent as `{}` instead of `[]`, which the gateway refused with `400` on config, proxy, webhook and template updates.
+- Java SDK: an API error with a JSON body can be Java-serialized, where it threw `NotSerializableException` for the Gson body.
 
 ### Documentation
 
 - Say in the `limit` description of the MCP tools that answer a bare list (`SessionFindAll`, `SessionGetChats`, `ContactFindAll`, `GroupFindAll`, `WebhooksList`) that a call returns at most 1000 rows, also when `limit` is omitted, so a full page may not be the whole list.
+- Correct the 0.27.0 rollback hazard in the migration guide: run `migration:revert:prod` until `migration:show:prod` lists `AddChatStateDeletedAt1791700000000` as pending; it said once, which since 0.28.0 only drops the status media index.
+- Say in the docs that `INGRESS_DISPATCH_TIMEOUT_MS`, `SANDBOX_HOOK_TIMEOUT_MS` and `SANDBOX_SEARCH_TIMEOUT_MS` are fixed budgets and not settings, and give the ingress `202` text in `openapi.json` the 5 s figure in place of the name.
+- Name 0.16.0, the first release without `ENABLE_SWAGGER=true` in `.env.example`, in the `SECURITY.md` note on a copied `.env`.
+- State in the API reference how long a session `restriction` stays: a stop, start or logout keeps it until the engine reports a lift, the link reaches `ready`, its `expiresAt` passes or the session is deleted.
+- Say in the API reference that a cross-form reaction, like an edit or delete, needs a reported pairing and is otherwise neither stored nor announced.
+- List the message receipts route among the chat-scoped routes in the API reference.
+- Say in the API reference and the troubleshooting FAQ that a media `url` that answers with a redirect is refused with `Destination address is not allowed`, and that `SSRF_ALLOWED_HOSTS` does not lift it.
+- Say in the API reference and the engine caveats that the stored `body` of an API-sent contact card, poll, location or captionless document differs by engine.
+- Say in the API reference and the engine caveats that under `STORE_EPHEMERAL_MESSAGES=false` the whatsapp-web.js history read and chat list still return a disappearing message, which WhatsApp Web holds until it expires.
+- State in the integration guide that about a thousand unreadable pending ingress rows are tolerated and that past that, healthy stranded rows wait until the unreadable ones are repaired or deleted.
 
 ### Dependencies
 
-- Update `whatsapp-web.js` to 1.34.8, which carries the message-id fix OpenWA backported, the media-id fix and a LID-aware block and unblock; the ready-sync patch now keeps only the `eventsAttached` marker.
+- Update `whatsapp-web.js` to 1.34.8, which carries the message-id fix OpenWA backported, the media-id fix and a LID-aware block and unblock, and ends its wait for the page's connection to WhatsApp after `WWEBJS_AUTH_TIMEOUT_MS` (see Upgrade notes); the ready-sync patch now keeps only the `eventsAttached` marker.
 - Update `@aws-sdk/client-s3` to 3.1168.0, `bullmq` to 6.7.6, `@bull-board/api`, `@bull-board/express` and `@bull-board/nestjs` to 9.13.1, `typeorm` to 1.1.3, `puppeteer` to 25.17.0, `dotenv` to 18.0.10 and the `@nestjs` packages to 11.2.10 in the gateway.
 - Update `better-sqlite3` to 13.1.1 in the gateway, which bundles SQLite 3.54.1.
 - Update `i18next` to 27.1.1, `react-i18next` to 18.0.1 and `lucide-react` to 1.72.0 in the dashboard bundle. react-i18next 18 ignores `shouldUnescape`, so the API key confirmation no longer passes it.
@@ -44,7 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade notes (behavior changes)
 
 - An MCP `MessageList` call that does not set `inlineMedia` returns each media message with an `{ omitted, sizeBytes }` marker in place of its payload, where it returned the base64 inline; pass `inlineMedia: true` to get the bytes. `GET /api/sessions/{sessionId}/messages` still inlines by default.
-- A source install that runs the Chrome Puppeteer downloads (no `PUPPETEER_EXECUTABLE_PATH`) moves from Chrome 156 to 157 with Puppeteer 25.17.0, so a rollback to 0.30.3 or earlier crosses a browser major and deletes the stored whatsapp-web.js logins unless `sessions/` is restored from a backup taken before the first start on this release (see `docs/11-operational-runbooks.md`); the images pin their own browser and do not change, and Baileys sessions are unaffected.
+- A source install that runs the Chrome Puppeteer downloads (no `PUPPETEER_EXECUTABLE_PATH`) moves from Chrome 156 to 157 with Puppeteer 25.17.0, so a rollback to 0.30.3 or earlier crosses a browser major and deletes the stored whatsapp-web.js logins unless `sessions/` is restored from a backup taken before the first start on this release (see `docs/11-operational-runbooks.md`); the images do not follow Puppeteer's browser: the amd64 image pins its own Chrome and the arm64 image runs the chromium Debian ships when it is built, whose major can differ between releases; Baileys sessions are unaffected.
+- whatsapp-web.js 1.34.8 ends its wait for the page's connection to WhatsApp to open after `WWEBJS_AUTH_TIMEOUT_MS` (30000 ms unless set), where 1.34.7 waited with no limit of its own; a start on a host where that connection takes longer now fails, and a session that ends `failed` is not started again at boot by `AUTO_START_SESSIONS`. Raise `WWEBJS_AUTH_TIMEOUT_MS` there and start the session (see `docs/12-troubleshooting-faq.md`).
+- A whatsapp-web.js unblock (`DELETE /api/sessions/{sessionId}/contacts/{contactId}/block`) now unblocks only the entry under the number's privacy id; 0.26.0 to 0.30.3 also unblocked an entry the same person held under a second id, such as a phone-keyed block from before the LID migration. A contact that stays blocked after an unblock needs that entry unblocked on the phone.
+- `scripts/restore.sh` exits `1` before it writes anything when the archive holds the SQLite data store and `DATABASE_TYPE` is `postgres`; 0.30.3 exited `0` after writing a file the app never reads (see `docs/14-migration-guide.md`).
+- With `STORE_EPHEMERAL_MESSAGES=false`, Baileys no longer keeps incoming disappearing messages, so a reply, forward, reaction, star, pin, unpin, delete by id, button click or quote of one, a group read receipt that names one, and an encrypted edit, reaction or vote aimed at it, no longer work, an RSVP to an event posted there is not reported, and the chat list carries no `lastMessage` text for one. Rows stored before the upgrade stay until the store's count cap evicts them.
 
 ## [0.30.3] - 2026-11-16
 
