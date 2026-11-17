@@ -65,7 +65,11 @@ backed by `localStorage` — there is no Zustand store.
    hairline `--border` (1.23:1 on white): it is 3:1 or better (SC 1.4.11) on every surface a field is
    drawn on or filled with, in the light theme and in both dark paths, and the box around a search
    field or a custom select takes it too. `dashboard/src/field-border-contrast.test.ts` fails the build
-   when a field rule goes back to the hairline. Focus, hover and error keep their own borders.
+   when a field rule goes back to the hairline. Focus, hover and error keep their own borders: a
+   focused field also draws a 1px ring in `--focus-ring` in front of its glow (an error field rings
+   in `--error`), and a hover is never fainter than the border at rest.
+   `dashboard/src/field-focus-hover.test.ts` fails the build when a field focus rule paints the focus
+   border without the ring, or a field hover rule paints a border fainter than the one at rest.
    Known gap: the exclusive button groups report `aria-pressed` without arrow-key roving focus. Every
    page has a render test, but only Infrastructure's resolves the caption references
    against a real DOM; elsewhere they are checked structurally. Treat the claim as directional, not
