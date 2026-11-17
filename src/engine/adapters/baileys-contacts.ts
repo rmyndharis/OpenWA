@@ -49,6 +49,10 @@ export interface BaileysContactsHost {
   lastMessage(chatId: string): { key: WAMessageKey; timestamp: number; jid: string } | null;
   /** The newest message the chat received, the one a read receipt can acknowledge, or null when none. */
   lastInboundMessage(chatId: string): { key: WAMessageKey; timestamp: number } | null;
+  /** Whether the chat carries an unread mark set by hand (a negative unread count). */
+  isMarkedUnread(chatId: string): boolean;
+  /** Set the chat's count of unread messages back to zero; a mark set by hand is left alone. */
+  clearUnread(chatId: string): void;
   /** The `<lid>@lid` known for a 1:1 chat or a person under any spelling of it, or null (always for a group). */
   lidOf(jid: string): string | null;
   /** Every spelling of one chat the session can connect: the id, its engine form, and its lid or phone twin. */
@@ -441,7 +445,40 @@ export class BaileysContacts {
     // raw TypeError on an unanswered one — no Boom, so nothing downstream can classify it. Marking
     // a chat read is idempotent, so bounding it is safe: a repeat costs nothing.
     await this.confirmed(this.sock(socket).readMessages(keys), 'the read receipt');
+    // The receipt tells the sender and leaves the chat's unread count alone: Baileys raises it with every
+    // message received and lowers it for no receipt of ours, so a read answered success and the unread
+    // badge was back on the next reload. The count is this session's own bookkeeping and is reset here.
+    // Only a mark set by hand lives in the account's app state and costs a second round trip to undo.
+    if (this.host.isMarkedUnread(chatId)) await this.undoUnreadMark(socket, chatId, stored);
+    this.host.clearUnread(chatId);
     return true;
+  }
+
+  /**
+   * Undo an unread mark set by hand, the half `markUnread` writes the other way. Without it the chat
+   * stays marked unread, on the account's devices and in the chat list, after it was read here.
+   *
+   * Keyed like the other chat writes ({@link chatWriteRange}), and skipped for a chat with no message to
+   * key it to: what the phone does with a read mark that names no message has not been established (for
+   * an unread mark it has, see {@link markUnread}).
+   *
+   * Never fails the read. The receipt is out by now and is what the answer reports, so a mark WhatsApp
+   * does not confirm is logged and the chat stays marked unread until the next read of it.
+   */
+  private async undoUnreadMark(socket: WASocket, chatId: string, stored?: StoredChatMessageLookup): Promise<void> {
+    try {
+      const range = await this.chatWriteRange(socket, chatId, stored);
+      if (!range) return;
+      await this.confirmed(
+        this.sock(socket).chatModify({ markRead: true, lastMessages: range.lastMessages }, range.jid),
+        'the read mark',
+      );
+    } catch (err) {
+      this.host.logger.warn('Sent the read receipt of a chat but could not undo its unread mark', {
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**

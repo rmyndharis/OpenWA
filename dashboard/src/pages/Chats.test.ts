@@ -5471,3 +5471,30 @@ test('a thread whose initial rows are all unrenderable unknown entries pins to t
   await within(room).findByText('first real hello');
   await waitFor(() => assert.equal(top, 1200, 'room did not pin to bottom when first renderable message arrived'));
 });
+
+test('playing an audio or video element pauses other active media on the page', () => {
+  const { cleanup } = rtl;
+  renderChats();
+
+  const audio1 = document.createElement('audio');
+  const audio2 = document.createElement('audio');
+  let audio1Paused = false;
+  Object.defineProperty(audio1, 'paused', { get: () => audio1Paused, configurable: true });
+  Object.defineProperty(audio2, 'paused', { get: () => false, configurable: true });
+  audio1.pause = () => {
+    audio1Paused = true;
+  };
+
+  document.body.appendChild(audio1);
+  document.body.appendChild(audio2);
+
+  // Play event on audio2 is captured by document listener and pauses audio1
+  const EventCtor = audio2.ownerDocument.defaultView?.Event || Event;
+  audio2.dispatchEvent(new EventCtor('play', { bubbles: false }));
+
+  assert.equal(audio1Paused, true, 'audio1 should have been paused when audio2 played');
+
+  audio1.remove();
+  audio2.remove();
+  cleanup();
+});
