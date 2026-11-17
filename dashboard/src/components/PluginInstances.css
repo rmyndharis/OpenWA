@@ -154,6 +154,8 @@
   width: 100%;
   min-height: 96px;
   font-family: monospace;
+  /* Downwards only, as every other textarea: dragged sideways it outgrew the dialog body, which cut its border off. */
+  resize: vertical;
 }
 
 /* The dialog's input rule does not reach a textarea, so it states the focus the inputs beside it show. */

@@ -311,6 +311,13 @@ test('the textareas of the API key and plugin instance dialogs state their own f
     assert.ok(rule, `${file} has no ${selector} rule`);
     assert.equal(decl(rule.body, 'border-color'), 'var(--focus-ring)', `${selector} paints no focus border`);
     assert.ok(ringIn(rule.body, '--focus-ring'), `${selector} draws no ring`);
+    // Dragged sideways, the field outgrows the dialog body, which cuts its border and ring off.
+    const atRest = selector.replace(/:focus$/, '');
+    const rest = scanned.filter(r => r.file === file && r.selectors.includes(atRest));
+    assert.ok(
+      rest.some(r => decl(r.body, 'resize') === 'vertical'),
+      `${atRest} can be resized sideways`,
+    );
   }
 });
 
