@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { searchApi, type SearchHit } from '../services/api';
 import { renderHighlightedSnippet, buildSearchParams } from '../utils/search-highlight';
 import { isComposingKey } from '../utils/composition';
+import { contactSnippet } from '../utils/vcard';
 import { useTranslation } from 'react-i18next';
 import './GlobalSearch.css';
 
@@ -205,9 +206,12 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
                   <bdi>{h.chatId}</bdi> · <bdi>{new Date(h.timestamp * 1000).toLocaleString()}</bdi>
                 </div>
                 <div className="global-search-hit-snippet">
-                  {renderHighlightedSnippet(h.snippet).map((seg, i) =>
-                    seg.marked ? <mark key={i}>{seg.text}</mark> : <span key={i}>{seg.text}</span>,
-                  )}
+                  {/* The excerpt of a shared contact is a window of its vCard lines: read it like the chat list row. */}
+                  {h.type === 'contact'
+                    ? contactSnippet(h.body, t('chats.media.contact'))
+                    : renderHighlightedSnippet(h.snippet).map((seg, i) =>
+                        seg.marked ? <mark key={i}>{seg.text}</mark> : <span key={i}>{seg.text}</span>,
+                      )}
                 </div>
               </button>
             ))}
