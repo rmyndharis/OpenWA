@@ -335,6 +335,66 @@ describe('a disappearing message received while STORE_EPHEMERAL_MESSAGES is off'
     });
   });
 
+  describe('its media', () => {
+    const photo = (id: string, timer: Record<string, unknown> = { contextInfo: { expiration: DAY } }): WAMessage => {
+      const imageMessage = { url: 'https://mmg.whatsapp.net/v/photo.enc', mimetype: 'image/jpeg', fileLength: 3 };
+      return received(id, { ephemeralMessage: { message: { imageMessage: { ...imageMessage, ...timer } } } });
+    };
+    const download = jest.mocked(lib.downloadMediaMessage);
+
+    beforeEach(() => {
+      download.mockReset();
+      download.mockImplementation((() =>
+        Promise.resolve(
+          (async function* () {
+            await Promise.resolve();
+            yield Buffer.from('abc');
+          })(),
+        )) as never);
+    });
+
+    it('is not fetched, as the session drops the message', async () => {
+      const events = newEvents();
+
+      deliver(events, photo('PHOTO1'));
+      await until(() => delivered.length === 1, 'the message to be handed on');
+
+      expect(download).not.toHaveBeenCalled();
+    });
+
+    it('is planned as no download, so the message waits for no room', () => {
+      const events = newEvents();
+
+      expect(events.plannedMediaDownload(lib, photo('PHOTO1'))).toBe(false);
+      expect(events.plannedMediaDownload(lib, photo('PHOTO2', {}))).toBe(true); // a chat with no timer
+      process.env.STORE_EPHEMERAL_MESSAGES = 'true';
+      expect(events.plannedMediaDownload(lib, photo('PHOTO1'))).toBe(true);
+    });
+
+    it.each([
+      ['is on', 'true'],
+      ['is not set', undefined],
+    ])('is fetched when the flag %s', async (_when, value) => {
+      if (value === undefined) delete process.env.STORE_EPHEMERAL_MESSAGES;
+      else process.env.STORE_EPHEMERAL_MESSAGES = value;
+      const events = newEvents();
+
+      deliver(events, photo('PHOTO1'));
+      await until(() => delivered.length === 1, 'the message to be handed on');
+
+      expect(download).toHaveBeenCalledTimes(1);
+    });
+
+    it('is fetched for a message of a chat with no disappearing timer', async () => {
+      const events = newEvents();
+
+      deliver(events, photo('PHOTO2', {}));
+      await until(() => delivered.length === 1, 'the message to be handed on');
+
+      expect(download).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('its text in the chat list', () => {
     const chatRow = (previews: BaileysSessionStore) => previews.listChats().find(chat => chat.id === group);
 

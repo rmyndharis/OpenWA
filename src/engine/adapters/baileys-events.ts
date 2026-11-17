@@ -802,6 +802,15 @@ export class BaileysEvents {
     );
   }
 
+  /** Whether the session drops `msg` under STORE_EPHEMERAL_MESSAGES=false, by the timer its content carries. */
+  private dropsAsEphemeral(msg: WAMessage, ephemeralDuration: number | undefined): boolean {
+    return isDroppedEphemeral({
+      ephemeralDuration,
+      fromMe: msg.key.fromMe === true,
+      isStatusBroadcast: msg.key.remoteJid === 'status@broadcast',
+    });
+  }
+
   /**
    * Whether processing `msg` downloads its media: the gates of {@link resolveInboundMedia}, read before
    * the processing starts. True when the module is not loaded yet, which cannot happen once a socket
@@ -814,6 +823,7 @@ export class BaileysEvents {
     return (
       isBaileysMediaType(b.getContentType(normalized)) &&
       !ownStatusPost &&
+      !this.dropsAsEphemeral(msg, extractBaileysContext(normalized ?? {}).ephemeralDuration) &&
       isMediaDownloadEnabled() &&
       coerceDeclaredSize(mediaSubMessage(normalized ?? {})?.fileLength) <= inboundMediaMaxBytes()
     );
@@ -2949,10 +2959,13 @@ export class BaileysEvents {
     // Body: text first, then media caption, then WhatsApp Business interactive shapes (#562).
     const body = extractBaileysBody(normalized);
     const location = extractBaileysLocation(normalized, contentType);
-    const media = await this.resolveInboundMedia(msg, contentType, content, b, opts?.skipMediaDownload === true, opts);
     // The quote, the disappearing-messages timer, the mentions and the status styling all come from
     // one region of the content — see BaileysMessageContext.
     const context = extractBaileysContext(normalized);
+    // A message the session drops under STORE_EPHEMERAL_MESSAGES=false is neither stored nor announced, so its media
+    // is not fetched: the marker stands in, as for any download that is skipped.
+    const skipMedia = opts?.skipMediaDownload === true || this.dropsAsEphemeral(msg, context.ephemeralDuration);
+    const media = await this.resolveInboundMedia(msg, contentType, content, b, skipMedia, opts);
     // Commerce ids (order token, product id): the generic path sees an empty body and drops them,
     // and they are the only handle a caller has on the order or the product.
     const commerce = extractBaileysCommerce(normalized, contentType);

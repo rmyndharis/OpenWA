@@ -1116,8 +1116,9 @@ adapter boundary — none silently stubs.
   reaction or delete of it is announced as before, and so is a message the account sent or typed on its phone in that
   chat, which keeps its copy, and a status. A redelivery of one is handed to the session again and dropped there.
   Rows written before the flag was turned off stay until the count cap evicts them. While such a message is a chat's
-  newest, the chat is listed with an empty `lastMessage`. whatsapp-web.js has no store of its own to govern: WhatsApp
-  Web holds the message until it expires, so `getChatHistory` and the chat list's `lastMessage` still return it there.
+  newest, the chat is listed with an empty `lastMessage`, and its media is not downloaded. whatsapp-web.js has no
+  store of its own to govern: WhatsApp Web holds the message until it expires, so `getChatHistory` and the chat
+  list's `lastMessage` still return it there.
 - **Inbound poll votes (`poll.vote`).** Baileys no longer reads a vote itself, so the adapter does,
   with the library's `decryptPollVote` and the secret of the poll creation message in the session's
   message store (`BAILEYS_MESSAGE_STORE_LIMIT`), and names the selected options by their SHA-256
