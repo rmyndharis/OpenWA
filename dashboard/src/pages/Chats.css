@@ -2554,6 +2554,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .message-contact-phone {
@@ -2729,6 +2732,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
   color: var(--chat-bubble-text);
 }
 

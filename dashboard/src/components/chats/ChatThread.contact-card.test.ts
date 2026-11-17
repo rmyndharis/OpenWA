@@ -133,3 +133,20 @@ test('a quote of a shared contact keeps the phone one left-to-right run after an
     `the quoted phone is left to the direction of the name: ${JSON.stringify(quote.textContent)}`,
   );
 });
+
+const LONG_NAME = 'Maria Fernanda de los Angeles Gutierrez Rodriguez Hernandez del Valle Montes';
+
+// The card cuts a name longer than its width with an ellipsis, and it is the only place the page shows the contact's
+// name, so the whole name stays reachable: the chat name, the room heading and the session name carry a title too.
+test('a contact card cut by its width still names the contact in full', () => {
+  const container = renderThread([
+    message({ body: vcard(LONG_NAME, PHONE) }),
+    message({ id: 'db-2', waMessageId: 'wamid.2', body: 'BEGIN:VCARD\nEND:VCARD' }),
+  ]);
+  const names = [...container.querySelectorAll('.message-contact-name')];
+  assert.equal(names.length, 2);
+  assert.equal(names[0].textContent, LONG_NAME);
+  for (const name of names) {
+    assert.equal(name.getAttribute('title'), name.textContent, `the name is cut with no title: ${name.outerHTML}`);
+  }
+});

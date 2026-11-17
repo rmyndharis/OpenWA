@@ -622,7 +622,9 @@ function ChatThread({
                         <User size={22} />
                       </span>
                       <span className="message-contact-fields">
-                        <span className="message-contact-name">{card.name || label}</span>
+                        <span className="message-contact-name" title={card.name || label}>
+                          {card.name || label}
+                        </span>
                         {card.phone ? (
                           <span className="message-contact-phone">
                             <bdi dir="ltr">{card.phone}</bdi>
@@ -639,6 +641,7 @@ function ChatThread({
               mediaInfo.mimetype === 'application/pdf' ||
               Boolean(mediaInfo.filename && /\.pdf$/i.test(mediaInfo.filename));
             // What a document is called and how large it is; a click on the card downloads it.
+            const documentName = mediaInfo.filename || t('chats.downloadDocument');
             const documentMeta = [mediaInfo.sizeBytes ? formatFileSize(mediaInfo.sizeBytes) : '', isPdf ? 'PDF' : '']
               .filter(Boolean)
               .join(' \u2022 ');
@@ -655,7 +658,9 @@ function ChatThread({
                   )}
                 </span>
                 <span className="chat-document-info">
-                  <span className="chat-document-title">{mediaInfo.filename || t('chats.downloadDocument')}</span>
+                  <span className="chat-document-title" title={documentName}>
+                    {documentName}
+                  </span>
                   {documentMeta && <span className="chat-document-meta">{documentMeta}</span>}
                 </span>
                 <span className="chat-document-action">
