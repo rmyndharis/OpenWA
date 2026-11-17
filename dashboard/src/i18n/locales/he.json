@@ -361,6 +361,14 @@
         "always": "תמיד"
       },
       "saveContactUnavailable": "נדרש מספר טלפון ידוע: לשיחה זו יש רק מזהה פרטיות (@lid)."
+    },
+    "slash": {
+      "title": "תשובות מוכנות",
+      "hint": "הקלידו /שם ואנטר כדי לשלוח תבנית מעמוד Templates",
+      "placeholder": "הודעה או /תבנית…",
+      "empty": "אין תבנית תואמת",
+      "needsVars": "לתבנית יש {{variables}} — מלאו ואז שלחו",
+      "unknown": "אין תבנית בשם \"{{name}}\""
     }
   },
   "errorBoundary": {

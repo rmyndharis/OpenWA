@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type SetStateAction } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Loader2, Plus, Send, Smile, X } from 'lucide-react';
@@ -7,12 +7,23 @@ import { type ChatMessageView } from '../../utils/chatMessages';
 import { chatTitle } from '../../utils/formatPhone';
 import { buildMediaSendPayload, buildOptimisticMetadata, quotedIdOf } from '../../utils/composerSend';
 import { messagesQueryKey, useChatMessagesActions, upsertCachedMessage } from '../../hooks/useChatMessages';
+import { useTemplatesQuery } from '../../hooks/queries';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import type { ScrollDirection } from '../../utils/scrollDecision';
 import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
 import { BULK_CAPTION_MAX_LENGTH, captionLength } from '../../utils/bulkMedia';
 import { isComposingKey } from '../../utils/composition';
+import {
+  filterTemplatesBySlash,
+  findTemplateBySlashName,
+  isSlashDraft,
+  normalizeTemplateName,
+  renderTemplateText,
+  slashDraftFilter,
+  slashQuery,
+  templateNeedsVariables,
+} from '../../utils/templateSlash';
 
 // The gateway's bound on the text of a send and of a reply, MESSAGE_TEXT_MAX_LENGTH in
 // src/modules/message/dto/send-message.dto.ts. A caption is bounded at BULK_CAPTION_MAX_LENGTH, as SendMediaMessageDto
@@ -98,11 +109,25 @@ function ChatComposer({
   const textTooLong = !attachmentIsAudio && textLength > textMax;
 
   const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
+  // Highlight in the `/name` template picker (ArrowUp/Down). Reset whenever the draft changes.
+  const [slashHighlight, setSlashHighlight] = useState(0);
   // Monotonic token invalidating an in-flight attachment FileReader: picking a second file (or
   // removing the attachment) before `onload` fires must win over the late-arriving bytes —
   // otherwise the slower read overwrites the newer pick. Same pattern as composeImageReadSeq.
   const attachmentReadSeq = useRef(0);
   const tempSeqRef = useRef(0);
+
+  // Session templates power `/hola`-style shortcuts in the composer (Templates page is the editor).
+  const templatesQuery = useTemplatesQuery(selectedSessionId, canWrite && !!selectedSessionId);
+  const templates = templatesQuery.data ?? [];
+  const slashOpen = canWrite && !attachment && isSlashDraft(messageInput);
+  const slashMatches = useMemo(
+    () => (slashOpen ? filterTemplatesBySlash(templates, slashDraftFilter(messageInput)) : []),
+    [slashOpen, templates, messageInput],
+  );
+  useEffect(() => {
+    setSlashHighlight(0);
+  }, [messageInput, slashOpen]);
 
   // Leaving this conversation — switching to another chat, or unmounting when the room closes —
   // invalidates an in-flight read, so its late `onload` drops the bytes instead of staging them
@@ -224,13 +249,70 @@ function ChatComposer({
     setShowEmojiPicker(false);
   };
 
+  const pickSlashTemplate = (name: string) => {
+    const rendered = applySlashTemplate(name);
+    if (rendered === null) return;
+    setMessageInput(rendered);
+    textInputRef.current?.focus();
+  };
+
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!slashOpen || slashMatches.length === 0 || isComposingKey(event.nativeEvent)) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setSlashHighlight(i => (i + 1) % slashMatches.length);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setSlashHighlight(i => (i - 1 + slashMatches.length) % slashMatches.length);
+      return;
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      const picked = slashMatches[slashHighlight] ?? slashMatches[0];
+      if (picked) pickSlashTemplate(picked.name);
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setMessageInput('');
+    }
+  };
+
+  const applySlashTemplate = (name: string): string | null => {
+    const template = findTemplateBySlashName(templates, name);
+    if (!template) {
+      showErrorToast(t('chats.slash.unknown', { name }));
+      return null;
+    }
+    const rendered = renderTemplateText(template);
+    if (templateNeedsVariables(template)) {
+      // Leave the copy in the field so the operator can replace {{vars}} before sending.
+      setMessageInput(rendered);
+      showErrorToast(t('chats.slash.needsVars'));
+      return null;
+    }
+    return rendered;
+  };
+
   // 7. Handle sending a message / media
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!selectedSessionId || !activeChat || sending || textTooLong) return;
 
-    const textToSend = messageInput.trim();
+    let textToSend = messageInput.trim();
     if (!textToSend && !attachment) return;
+
+    // `/hola` → send the session template named `hola` (create/edit them on the Templates page).
+    const slashName = !attachment ? slashQuery(textToSend) : null;
+    if (slashName) {
+      const exact = findTemplateBySlashName(templates, slashName);
+      const picked = exact ?? slashMatches[slashHighlight] ?? slashMatches[0];
+      const rendered = applySlashTemplate(picked?.name ?? slashName);
+      if (rendered === null) return;
+      textToSend = rendered;
+    }
 
     // With focus in the composer form, the field takes it before the Send button disables (it does once the text is
     // cleared): the browser drops focus from a disabled control to the page, and the next message would be typed
@@ -410,6 +492,31 @@ function ChatComposer({
         </div>
       )}
 
+      {/* `/hola` shortcuts: session Templates filtered by the draft after `/`. */}
+      {slashOpen && (
+        <div className="composer-banner slash-template-picker" role="listbox" aria-label={t('chats.slash.title')}>
+          <div className="slash-template-hint">{t('chats.slash.hint')}</div>
+          {slashMatches.length === 0 ? (
+            <div className="slash-template-empty">{t('chats.slash.empty')}</div>
+          ) : (
+            slashMatches.map((template, index) => (
+              <button
+                key={template.id}
+                type="button"
+                role="option"
+                aria-selected={index === slashHighlight}
+                className={`slash-template-item${index === slashHighlight ? ' active' : ''}`}
+                onMouseEnter={() => setSlashHighlight(index)}
+                onClick={() => pickSlashTemplate(template.name)}
+              >
+                <span className="slash-template-name">/{normalizeTemplateName(template.name)}</span>
+                <span className="slash-template-preview">{renderTemplateText(template)}</span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+
       {/* Message input bar */}
       <footer className="room-input-footer">
         <form onSubmit={handleSend} className="input-form">
@@ -434,15 +541,19 @@ function ChatComposer({
                 canWrite
                   ? attachment && !attachmentIsAudio
                     ? t('chats.captionPlaceholder')
-                    : t('chats.messagePlaceholder')
+                    : templates.length > 0
+                      ? t('chats.slash.placeholder')
+                      : t('chats.messagePlaceholder')
                   : t('chats.noPermission')
               }
               value={messageInput}
               onChange={e => setMessageInput(e.target.value)}
+              onKeyDown={handleComposerKeyDown}
               // Never disabled by a send: it holds focus through it, and handleSend refuses a second send meanwhile.
               disabled={!canWrite}
               ref={textInputRef}
               className="message-text-input"
+              autoComplete="off"
             />
             <button
               type="button"

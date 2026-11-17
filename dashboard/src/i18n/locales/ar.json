@@ -371,6 +371,14 @@
         "always": "دائمًا"
       },
       "saveContactUnavailable": "يتطلب رقم هاتف معروفًا: لهذه المحادثة معرّف خصوصية فقط (@lid)."
+    },
+    "slash": {
+      "title": "ردود جاهزة",
+      "hint": "اكتب /الاسم ثم Enter لإرسال قالب من صفحة Templates",
+      "placeholder": "رسالة أو /قالب…",
+      "empty": "لا يوجد قالب مطابق",
+      "needsVars": "هذا القالب يحتوي على {{variables}} — أكملها ثم أرسل",
+      "unknown": "لا يوجد قالب باسم \"{{name}}\""
     }
   },
   "errorBoundary": {

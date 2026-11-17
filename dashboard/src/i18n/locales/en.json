@@ -350,6 +350,14 @@
         "always": "Always"
       },
       "saveContactUnavailable": "Needs a known phone number: this chat has only a privacy id (@lid)."
+    },
+    "slash": {
+      "title": "Canned replies",
+      "hint": "Type /name and Enter to send a template from the Templates page",
+      "placeholder": "Message or /template…",
+      "empty": "No template matches",
+      "needsVars": "This template has {{variables}} — fill them in, then send",
+      "unknown": "No template named \"{{name}}\""
     }
   },
   "errorBoundary": {

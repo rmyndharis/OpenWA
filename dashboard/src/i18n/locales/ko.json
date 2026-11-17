@@ -350,6 +350,14 @@
         "always": "항상"
       },
       "saveContactUnavailable": "알려진 전화번호가 필요합니다. 이 채팅에는 개인정보 보호 ID(@lid)만 있습니다."
+    },
+    "slash": {
+      "title": "빠른 답장",
+      "hint": "Templates 페이지의 템플릿을 보내려면 /이름 입력 후 Enter",
+      "placeholder": "메시지 또는 /템플릿…",
+      "empty": "일치하는 템플릿 없음",
+      "needsVars": "이 템플릿에 {{variables}}가 있습니다 — 채운 뒤 보내세요",
+      "unknown": "\"{{name}}\" 템플릿이 없습니다"
     }
   },
   "errorBoundary": {

@@ -355,6 +355,14 @@
         "always": "Toujours"
       },
       "saveContactUnavailable": "Nécessite un numéro de téléphone connu : cette discussion n’a qu’un identifiant de confidentialité (@lid)."
+    },
+    "slash": {
+      "title": "Réponses rapides",
+      "hint": "Tapez /nom puis Entrée pour envoyer un modèle de la page Templates",
+      "placeholder": "Message ou /modèle…",
+      "empty": "Aucun modèle ne correspond",
+      "needsVars": "Ce modèle a des {{variables}} — complétez-les puis envoyez",
+      "unknown": "Aucun modèle nommé « {{name}} »"
     }
   },
   "errorBoundary": {

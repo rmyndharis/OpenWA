@@ -2955,6 +2955,58 @@
 /* =============================================================================
    COMPOSER: attachment, emoji and reply panels, and the input bar
    ============================================================================= */
+.chats-page .slash-template-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: 14rem;
+  overflow: auto;
+  padding: 0.55rem 0.65rem;
+}
+
+.chats-page .slash-template-hint,
+.chats-page .slash-template-empty {
+  color: var(--chat-meta);
+  font-size: 0.8rem;
+  padding: 0.15rem 0.25rem 0.35rem;
+}
+
+.chats-page .slash-template-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.45rem 0.55rem;
+  border: none;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chats-page .slash-template-item:hover,
+.chats-page .slash-template-item.active {
+  background: color-mix(in srgb, var(--chat-meta) 14%, transparent);
+}
+
+.chats-page .slash-template-name {
+  font-weight: 650;
+  font-size: 0.9rem;
+}
+
+.chats-page .slash-template-preview {
+  color: var(--chat-meta);
+  font-size: 0.8rem;
+  line-height: 1.3;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chats-page .composer-banner {
   background: var(--chat-panel-header);
   padding-block: 0.625rem;

@@ -355,6 +355,14 @@
         "always": "Sempre"
       },
       "saveContactUnavailable": "Precisa de um número de telefone conhecido: esta conversa tem só um ID de privacidade (@lid)."
+    },
+    "slash": {
+      "title": "Respostas rápidas",
+      "hint": "Digite /nome e Enter para enviar um template da página Templates",
+      "placeholder": "Mensagem ou /template…",
+      "empty": "Nenhum template corresponde",
+      "needsVars": "Este template tem {{variables}} — preencha e envie",
+      "unknown": "Nenhum template chamado \"{{name}}\""
     }
   },
   "errorBoundary": {

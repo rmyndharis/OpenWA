@@ -350,6 +350,14 @@
         "always": "Immer"
       },
       "saveContactUnavailable": "Braucht eine bekannte Telefonnummer: Dieser Chat hat nur eine Datenschutz-ID (@lid)."
+    },
+    "slash": {
+      "title": "Schnellantworten",
+      "hint": "/name und Enter sendet eine Vorlage aus Templates",
+      "placeholder": "Nachricht oder /vorlage…",
+      "empty": "Keine passende Vorlage",
+      "needsVars": "Diese Vorlage hat {{variables}} — bitte ausfüllen und senden",
+      "unknown": "Keine Vorlage namens „{{name}}“"
     }
   },
   "errorBoundary": {

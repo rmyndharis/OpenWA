@@ -350,6 +350,14 @@
         "always": "Selalu"
       },
       "saveContactUnavailable": "Memerlukan nomor telepon yang diketahui: obrolan ini hanya memiliki ID privasi (@lid)."
+    },
+    "slash": {
+      "title": "Balasan cepat",
+      "hint": "Ketik /nama lalu Enter untuk mengirim template dari halaman Templates",
+      "placeholder": "Pesan atau /template…",
+      "empty": "Tidak ada template yang cocok",
+      "needsVars": "Template ini punya {{variables}} — isi lalu kirim",
+      "unknown": "Tidak ada template bernama \"{{name}}\""
     }
   },
   "errorBoundary": {

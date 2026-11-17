@@ -350,6 +350,14 @@
         "always": "始终"
       },
       "saveContactUnavailable": "需要已知的电话号码：此聊天只有隐私 ID（@lid）。"
+    },
+    "slash": {
+      "title": "快捷回复",
+      "hint": "输入 /名称 并回车，发送 Templates 页中的模板",
+      "placeholder": "消息或 /模板…",
+      "empty": "没有匹配的模板",
+      "needsVars": "该模板含 {{variables}} — 填写后再发送",
+      "unknown": "没有名为“{{name}}”的模板"
     }
   },
   "errorBoundary": {
