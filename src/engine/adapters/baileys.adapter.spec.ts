@@ -8373,6 +8373,41 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     });
   });
 
+  describe('a disappearing message received while STORE_EPHEMERAL_MESSAGES is off', () => {
+    // Through the adapter's own wiring: the session store takes the decision the events handler made.
+    const saved = process.env.STORE_EPHEMERAL_MESSAGES;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.STORE_EPHEMERAL_MESSAGES;
+      else process.env.STORE_EPHEMERAL_MESSAGES = saved;
+    });
+    const vanishing = {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'V1' },
+          message: { extendedTextMessage: { text: 'this should vanish', contextInfo: { expiration: 86_400 } } },
+          messageTimestamp: 1700000050,
+        },
+      ],
+    };
+
+    it.each([
+      ['no text of it while the flag is off', 'false', ''],
+      ['its text while the flag is on', 'true', 'this should vanish'],
+    ])('lists the chat with %s', async (_what, value, preview) => {
+      process.env.STORE_EPHEMERAL_MESSAGES = value;
+      const adapter = await readyWithMessage();
+
+      fakeSock.fire('messages.upsert', vanishing);
+      const listed = async () => (await adapter.getChats()).find(chat => chat.id === '628111@c.us');
+      for (let i = 0; i < 200 && (await listed())?.timestamp !== 1700000050; i++) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
+
+      expect(await listed()).toMatchObject({ timestamp: 1700000050, lastMessage: preview });
+    });
+  });
+
   it('sendSeen undoes an unread mark set by hand, keyed to the newest message of the chat', async () => {
     const adapter = await readyWithMessage();
     fakeSock.fire('chats.update', [{ id: '628111@s.whatsapp.net', unreadCount: -1 }]);
