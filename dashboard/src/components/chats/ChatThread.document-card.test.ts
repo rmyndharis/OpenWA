@@ -159,7 +159,10 @@ test('the card keeps its content box and its file name while the document is fet
   );
   // The spinner takes the place of the download mark, so the card does not change size.
   assert.ok(pressed.querySelector('.chat-document-action .animate-spin'), 'the card shows no progress');
-  assert.equal(pressed.querySelector('.chat-document-action svg:not(.animate-spin)'), null);
+  assert.ok(
+    pressed.querySelector('.chat-document-action svg:not(.animate-spin)') === null,
+    'the download mark is still drawn while the document is fetched',
+  );
   assert.equal(pressed.querySelector('.chat-document-meta')?.textContent, '2.4 MB \u2022 PDF');
   // Let the held answer land, so no request outlives the test.
   release();
@@ -200,7 +203,10 @@ test('media that is not a document keeps its plain label while it is fetched and
   assert.match(button.textContent ?? '', /Media/);
   rtl.fireEvent.click(button);
   await rtl.waitFor(() => assert.match(button.textContent ?? '', /Media unavailable/), { timeout: 10_000 });
-  assert.equal(button.querySelector('.chat-document-card-content'), null);
+  assert.ok(
+    button.querySelector('.chat-document-card-content') === null,
+    'media that is not a document drew a document card',
+  );
 });
 
 // The tag on a PDF's icon repeats the kind the size line names, in 8px text that cannot reach 4.5:1 on the red tint: it
@@ -213,4 +219,24 @@ test('the PDF tag on a document icon is hidden from assistive technology, and th
   assert.ok(tag, 'a PDF draws its tag');
   assert.equal(tag.getAttribute('aria-hidden'), 'true');
   assert.match(container.querySelector('.chat-document-meta')?.textContent ?? '', /PDF/);
+});
+
+// WhatsApp often sends a document with no extension in its name, and a name that ends in .pdf may arrive with a generic
+// mimetype: either one marks the card as a PDF, and a document that is neither is not marked.
+test('a document is marked PDF by its mimetype or by its file name, and by neither it is not', () => {
+  const container = renderThread([
+    document_('by-mimetype', { mimetype: 'application/pdf', filename: 'invoice', data: 'JVBERi0=' }),
+    document_('by-name', { mimetype: 'application/octet-stream', filename: 'Invoice.PDF', data: 'JVBERi0=' }),
+    document_('neither', { mimetype: 'application/octet-stream', filename: 'invoice.docx', data: 'AAAA' }),
+  ]);
+  const cards = [...container.querySelectorAll('.chat-document-card')];
+  assert.equal(cards.length, 3, 'every document should draw a card');
+  assert.deepEqual(
+    cards.map(card => card.querySelector('.chat-document-pdf-tag') !== null),
+    [true, true, false],
+  );
+  assert.deepEqual(
+    cards.map(card => card.querySelector('.chat-document-meta')?.textContent),
+    ['PDF', 'PDF', undefined],
+  );
 });
