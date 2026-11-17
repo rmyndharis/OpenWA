@@ -165,9 +165,7 @@ export function Dashboard() {
             <span>{t('dashboard.columns.actions')}</span>
           </div>
           {sessions.length === 0 ? (
-            <div className="table-row" style={{ justifyContent: 'center', color: 'var(--text-muted)' }}>
-              {t('dashboard.noSessions')}
-            </div>
+            <div className="table-row table-row-empty">{t('dashboard.noSessions')}</div>
           ) : (
             sessions.map(session => (
               <div key={session.id} className="table-row">

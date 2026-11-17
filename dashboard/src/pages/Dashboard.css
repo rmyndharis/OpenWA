@@ -183,6 +183,14 @@
   border-bottom: none;
 }
 
+/* The message of an empty table runs across the row. Left as an item of the five-track grid it wrapped inside the
+   first 140px track. */
+.dashboard .sessions-table .table-row.table-row-empty {
+  display: block;
+  text-align: center;
+  color: var(--text-muted);
+}
+
 .dashboard .session-info-cell {
   display: flex;
   flex-direction: column;
