@@ -970,7 +970,29 @@ export class WwebjsLifecycle {
         action: 'page_navigation_reinject_window',
         graced: this.isInNavigationReinjectWindow(),
       });
+      if (ready) this.closeWindowOfIntactPage(this.navigationCount);
     });
+  }
+
+  /**
+   * Close the window a navigation just opened when the page came through it whole. Since 1.34.8 whatsapp-web.js
+   * re-injects only into a page that lost its helpers: after a navigation inside the document, which keeps them,
+   * it runs nothing and emits no 'ready', so the window stayed open for its whole grace, or until the watchdog's
+   * next probe, and every operation answered 409 for a page that was working. The page is asked the way the
+   * library asks it, and the window closes only for helpers with their event bridge attached. A page that
+   * reloaded has neither yet, and a read that fails, or that a newer navigation overtook, closes nothing.
+   */
+  private closeWindowOfIntactPage(navigation: number): void {
+    const client = this.client;
+    // Unlike the probe's read, a page that cannot be asked is not taken for intact: the window stays as it is.
+    const page = (client as unknown as { pupPage?: { evaluate?: unknown } } | null)?.pupPage;
+    if (!client || typeof page?.evaluate !== 'function') return;
+    void this.pageHasWwebjsHelpers(client).then(
+      intact => {
+        if (intact && !eventBridgeUnattached(client) && this.client === client) this.closeRecoveredEpisode(navigation);
+      },
+      () => undefined,
+    );
   }
 
   /**

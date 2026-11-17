@@ -37,7 +37,17 @@ describe('liveness of a ready page after a reload', () => {
     lifecycle.attachPuppeteerLifecycleListeners();
     return { adapter, client };
   };
+  // A page that has just reloaded holds none of the helpers yet, which is what the adapter's own read at the
+  // navigation finds; the reads a test scripts for the probe start after it.
   const reload = (client: FakeClient): void => {
+    client.pupPage.evaluate.mockImplementationOnce(() => Promise.resolve(false));
+    client.pupPage.emit('framenavigated', { url: () => 'https://web.whatsapp.com/' });
+  };
+  /** The adapter's own read of the page when a navigation lands, counted apart from the reads a probe makes. */
+  const AT_NAVIGATION = 1;
+  // A navigation inside the document: the page keeps its helpers, and the adapter's read finds them.
+  const navigateWithinDocument = (client: FakeClient): void => {
+    client.pupPage.evaluate.mockImplementationOnce(() => Promise.resolve(true));
     client.pupPage.emit('framenavigated', { url: () => 'https://web.whatsapp.com/' });
   };
   const later = (ms: number): void => {
@@ -110,7 +120,7 @@ describe('liveness of a ready page after a reload', () => {
     await expect(adapter.probeLiveness()).resolves.toBe(true);
 
     // Once by the 'ready' itself and once by the probe that started before that read answered; never after.
-    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(2);
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION + 2);
   });
 
   it('never answers dead inside the reload grace while the helpers are still missing', async () => {
@@ -180,7 +190,7 @@ describe('liveness of a ready page after a reload', () => {
 
     client.pupPage.evaluate.mockResolvedValue(false);
     await expect(adapter.probeLiveness()).resolves.toBe(false);
-    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(2);
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION + 2);
   });
 
   // A loaded renderer after a reload that did re-inject: getState() answers CONNECTED after 7 s and the helpers read
@@ -214,7 +224,7 @@ describe('liveness of a ready page after a reload', () => {
     const answers = await watchdogAnswers(adapter, 6);
 
     expect(answers).toEqual([true, true, true, true, false, false]);
-    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(6);
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION + 6);
   });
 
   // A page stuck reloading that never re-injects: each late no is about a page the next reload replaces, but the
@@ -315,7 +325,7 @@ describe('liveness of a ready page after a reload', () => {
     client.getState.mockRejectedValue(new Error('Execution context was destroyed.'));
     reload(client);
     await expect(adapter.probeLiveness()).resolves.toBe(true);
-    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(1);
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(2 * AT_NAVIGATION + 1);
   });
 
   /**
@@ -460,14 +470,14 @@ describe('liveness of a ready page after a reload', () => {
 
       await adapter.probeLiveness();
       await adapter.probeLiveness();
-      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(2);
+      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION + 2);
 
       bridge(client, true);
       await expect(adapter.probeLiveness()).resolves.toBe(true);
       later(NAVIGATION_EPISODE_CAP_MS);
       client.pupPage.evaluate.mockResolvedValue(false);
       await expect(adapter.probeLiveness()).resolves.toBe(true);
-      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(3);
+      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION + 3);
     });
 
     it('closes the reload when the attach that was pending completes and the page re-emits ready', async () => {
@@ -565,6 +575,67 @@ describe('liveness of a ready page after a reload', () => {
 
       const lifecycle = (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle;
       expect(lifecycle.isPageWithoutHelpers()).toBe(false);
+    });
+  });
+
+  // Since 1.34.8 whatsapp-web.js re-injects only into a page that lost its helpers. After a navigation inside
+  // the document it runs nothing and emits no 'ready', so nothing closed the window this navigation opened.
+  describe('a navigation that leaves the page with its helpers', () => {
+    const lifecycleOf = (adapter: WhatsAppWebJsAdapter): WwebjsLifecycle =>
+      (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle;
+    const settle = (): Promise<void> => jest.advanceTimersByTimeAsync(0);
+
+    it('closes the window at once, where it stayed open for its grace', async () => {
+      const { adapter, client } = wire();
+      navigateWithinDocument(client);
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(true);
+
+      await settle();
+
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(false);
+      // Verified by that read, so a probe asks the page for nothing more.
+      await expect(adapter.probeLiveness()).resolves.toBe(true);
+      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION);
+    });
+
+    it('keeps the window for a page that reloaded and holds no helpers yet', async () => {
+      const { adapter, client } = wire();
+      reload(client);
+      await settle();
+
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(true);
+    });
+
+    it('keeps the window while the helpers are there but the event bridge is not attached', async () => {
+      const { adapter, client } = wire();
+      (client as FakeClient & { eventsAttached?: boolean }).eventsAttached = false;
+      navigateWithinDocument(client);
+      await settle();
+
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(true);
+    });
+
+    it('keeps the window when the page could not be read', async () => {
+      const { adapter, client } = wire();
+      client.pupPage.evaluate.mockImplementationOnce(() =>
+        Promise.reject(new Error('Execution context was destroyed.')),
+      );
+      client.pupPage.emit('framenavigated', { url: () => 'https://web.whatsapp.com/' });
+      await settle();
+
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(true);
+    });
+
+    it('does not let a read that a reload overtook close the window of that reload', async () => {
+      const { adapter, client } = wire();
+      // The first navigation kept the page whole, but its answer lands after the page has reloaded.
+      client.pupPage.evaluate.mockImplementationOnce(() => delayed(true, 2_000));
+      client.pupPage.emit('framenavigated', { url: () => 'https://web.whatsapp.com/' });
+      reload(client);
+
+      await jest.advanceTimersByTimeAsync(3_000);
+
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(true);
     });
   });
 });
