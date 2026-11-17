@@ -469,7 +469,10 @@ often inside WSL2 or a resource-constrained container while WhatsApp Web is stil
 **Cause:** whatsapp-web.js waits a fixed 30000ms for WhatsApp Web to finish its initial load before
 generating the QR, and then up to the same time again for the page's connection to WhatsApp to open. On a
 slow first boot either window can expire before the page is ready. The start then answers `504` and the
-session is marked `failed` with the reason `auth timeout`.
+session is marked `failed` with the reason `auth timeout`. Both waits and the browser launch have to fit in
+the start deadline, which is 30 seconds more than `WWEBJS_AUTH_TIMEOUT_MS` (at least 60 seconds). A start
+that is still progressing when that deadline passes also answers `504`, but the engine is stopped and the
+session is `disconnected`, not `failed`.
 
 **Fix:** raise the boot/inject wait (milliseconds) with `WWEBJS_AUTH_TIMEOUT_MS`:
 
@@ -478,7 +481,8 @@ session is marked `failed` with the reason `auth timeout`.
 WWEBJS_AUTH_TIMEOUT_MS=120000
 ```
 
-Restart the container after setting it. Leave it unset to keep the default (30000ms).
+Restart the container after setting it; the start deadline grows with it. Leave it unset to keep the default
+(30000ms).
 
 ### Issue: Session fails to launch with `chrome_crashpad_handler: --database is required`
 

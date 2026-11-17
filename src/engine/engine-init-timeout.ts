@@ -39,6 +39,12 @@ export function resolveAuthTimeoutMs(): number | undefined {
  * slow init mid-auth. Floor 60s for the hang case; otherwise the configured auth window plus 30s for
  * launch/navigation/post-inject overhead.
  *
+ * It clears ONE auth window plus 30s, not two. whatsapp-web.js 1.34.8 spends up to authTimeoutMs on the
+ * wait for WA Web's JS and again on the wait for the page's connection to WhatsApp, so a start that
+ * uses both can be cut here first. A start cut by this deadline answers the generic 504 and leaves the
+ * session `disconnected` (a reconnect attempt's row stays `initializing`); the library's own timeout answers the
+ * auth-timeout 504 and leaves it `failed`.
+ *
  * WWEBJS_AUTH_TIMEOUT_MS can only ever RAISE this above the 60s floor, never lower it, so a
  * Baileys session whose operator set it for whatsapp-web.js gets a more generous deadline — never a
  * shorter one. Giving the two engines separate windows would need its own env var and is a
