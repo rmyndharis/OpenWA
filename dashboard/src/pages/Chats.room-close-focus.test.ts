@@ -253,6 +253,20 @@ test('opening another row preserves focus on that row', async () => {
   assert.equal(focusedRow(), 'Carol');
 });
 
+test('a pointer click on a row focuses the message field', async () => {
+  await openAlice();
+  const row = rtl.screen.getByText('Carol', { selector: '.chat-item-name' }).closest<HTMLElement>('[role="button"]')!;
+  rtl.fireEvent.click(row, { detail: 1 });
+  await rtl.screen.findByRole('heading', { name: 'Carol' });
+  await rtl.waitFor(() =>
+    assert.equal(
+      document.activeElement?.classList.contains('message-text-input'),
+      true,
+      `focus is on "${document.activeElement?.tagName}", not the message field`,
+    ),
+  );
+});
+
 for (const visible of [true, false]) {
   test(`closing a room ${visible ? 'keeps a visible list row in place' : 'reveals an off-screen list row'}`, async () => {
     const container = await openAlice();

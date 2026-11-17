@@ -123,7 +123,18 @@ const ChatListRow = memo(
         data-chat-id={chat.id}
         aria-current={active ? 'true' : undefined}
         className={`chat-item-card ${active ? 'active' : ''} ${chat.unreadCount !== 0 ? 'unread' : ''}`}
-        onClick={() => onSelectChat(chat)}
+        onClick={e => {
+          onSelectChat(chat);
+          // Pointer clicks (detail ≥ 1) move the caret to the composer so typing can start at once.
+          // Keyboard activation keeps focus on the row (Enter/Space use onKeyDown; a synthesized
+          // click has detail 0). See Chats.room-close-focus "opening another row preserves focus".
+          if (e.detail < 1) return;
+          requestAnimationFrame(() => {
+            document
+              .querySelector<HTMLInputElement>('input.message-text-input:not(:disabled)')
+              ?.focus({ preventScroll: true });
+          });
+        }}
         onKeyDown={e => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();

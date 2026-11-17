@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Dashboard: type `/name` in the chat composer to send a session Template of that name. Thanks @juanbracamonte.
+- Dashboard: a pointer click that opens a chat focuses the message field so typing can start without an extra click; a keyboard selection keeps focus on the row.
 - Dashboard: starting an audio or video message pauses the one already playing, where both kept playing at once (#2106). Thanks @mbdali.
 - Baileys: `POST /api/sessions/{sessionId}/chats/read` sets the chat's `unreadCount` back to `0` when the receipt names the chat's newest received message, and undoes an unread mark set by `chats/unread` on every record of the chat; the count used to stay, so the dashboard's unread badge came back on every reload (#2109). Thanks @juanbracamonte.
 - Dashboard: a shared contact shows as a card with its name and phone, in the thread, the chat list and a quoted reply, where the raw `BEGIN:VCARD` text was printed (#2110). Thanks @juanbracamonte.
