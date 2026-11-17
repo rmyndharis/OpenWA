@@ -564,7 +564,8 @@ export class MessageController {
     description:
       SEND_503 +
       ' ' +
-      'The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; ' +
+      'The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the ' +
+      'request budget. The change may or may not have been applied; ' +
       'repeating the request is safe, since it converges on the same state.',
   })
   async react(@Param('sessionId') sessionId: string, @Body() dto: ReactMessageDto): Promise<{ success: boolean }> {
@@ -876,7 +877,8 @@ export class MessageController {
   @ApiResponse({
     status: 503,
     description:
-      'The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; ' +
+      'The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the ' +
+      'request budget. The change may or may not have been applied; ' +
       'repeating the request is safe, since it converges on the same state.',
   })
   async votePoll(@Param('sessionId') sessionId: string, @Body() dto: VotePollDto): Promise<{ success: boolean }> {
@@ -909,7 +911,8 @@ export class MessageController {
     description:
       SEND_503 +
       ' ' +
-      'The whatsapp-web.js page connection died mid-request. The pin may or may not have been applied; a ' +
+      'The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the ' +
+      'request budget. The pin may or may not have been applied; a ' +
       'retry is safe, but it restarts the pin duration from the moment it succeeds.',
   })
   async pinMessage(@Param('sessionId') sessionId: string, @Body() dto: PinMessageDto): Promise<{ success: boolean }> {
@@ -937,7 +940,8 @@ export class MessageController {
     description:
       SEND_503 +
       ' ' +
-      'The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; ' +
+      'The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the ' +
+      'request budget. The change may or may not have been applied; ' +
       'repeating the request is safe, since it converges on the same state.',
   })
   async unpinMessage(
@@ -1006,7 +1010,8 @@ export class MessageController {
     description:
       SEND_503 +
       ' ' +
-      'The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; ' +
+      'The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the ' +
+      'request budget. The change may or may not have been applied; ' +
       'repeating the request is safe, since it converges on the same state.',
   })
   async edit(@Param('sessionId') sessionId: string, @Body() dto: EditMessageDto): Promise<MessageResponseDto> {
