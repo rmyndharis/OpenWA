@@ -379,7 +379,15 @@ export class WwebjsContacts {
     const parsed = parseWaId(contactId);
     if (parsed.kind !== 'user') return;
     const [found] = await this.client().getContactLidAndPhone([`${parsed.userPart}@c.us`]);
-    if (!found?.lid) throw new RecipientUnreachableError(contactId);
+    if (!found?.lid) {
+      // WhatsApp was just asked, so a missing chat is not a cause here, and the send path's advice to message the
+      // number first would not change the answer. Two replies carry no id: no account, and an account with none.
+      throw new RecipientUnreachableError(
+        contactId,
+        `WhatsApp gave no privacy id for ${contactId}, so it cannot be blocked or unblocked. Either the number is ` +
+          'not on WhatsApp, or WhatsApp has not reported an id for it.',
+      );
+    }
   }
 
   async blockContact(contactId: string): Promise<void> {
