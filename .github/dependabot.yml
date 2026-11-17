@@ -29,7 +29,7 @@ updates:
       # a separate matter from this ignore; pin with ~ rather than ^ when a 6.0.x bump lands.
       - dependency-name: "typescript"
         versions: [">=7.0.0"]
-      # better-sqlite3 v13 is now the SHIPPED line (manifest ^13.0.3, and the package.json override
+      # better-sqlite3 v13 is now the SHIPPED line (manifest ^13, and the package.json override
       # `better-sqlite3: $better-sqlite3` forces TypeORM's optional ^12 peer onto the root version,
       # so npm ci resolves clean), and the release boot smoke proves the 13.x prebuild loads on
       # both architectures in the toolchain-less node:22-slim image. The original three grounds
