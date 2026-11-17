@@ -7434,7 +7434,9 @@ describe('WhatsAppWebJsAdapter navigation re-inject grace (#1081)', () => {
 
     await expect(adapter.getChats()).rejects.toBeInstanceOf(EngineNotReadyError);
     await expect(adapter.getChats()).rejects.toThrow(/reload/i);
-    expect(evaluate).not.toHaveBeenCalled();
+    // The one read is the adapter's own, asking at the navigation whether the page kept its helpers. Neither
+    // refused operation reached the page.
+    expect(evaluate).toHaveBeenCalledTimes(1);
   });
 
   it('lets engine operations through again once the window has expired', async () => {

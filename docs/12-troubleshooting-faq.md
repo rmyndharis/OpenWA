@@ -467,7 +467,9 @@ credentials) and create it anew; or pin `WWEBJS_WEB_VERSION`.
 often inside WSL2 or a resource-constrained container while WhatsApp Web is still loading.
 
 **Cause:** whatsapp-web.js waits a fixed 30000ms for WhatsApp Web to finish its initial load before
-generating the QR. On a slow first boot that window can expire before the page is ready.
+generating the QR, and then up to the same time again for the page's connection to WhatsApp to open. On a
+slow first boot either window can expire before the page is ready. The start then answers `504` and the
+session is marked `failed` with the reason `auth timeout`.
 
 **Fix:** raise the boot/inject wait (milliseconds) with `WWEBJS_AUTH_TIMEOUT_MS`:
 
