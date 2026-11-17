@@ -1,4 +1,4 @@
-import type { proto } from '@whiskeysockets/baileys';
+import type { Chat, proto } from '@whiskeysockets/baileys';
 import {
   DeliveryStatus,
   EventResponseKind,
@@ -26,6 +26,33 @@ export const BAILEYS_NON_CONTENT_TYPES: ReadonlySet<string> = new Set([
   'secretEncryptedMessage',
   'encCommentMessage',
 ]);
+
+/**
+ * A live chat update without the unread count Baileys raised for a message that is none of its own. Baileys counts
+ * whatever is not a plain reaction, edit, delete or poll vote as a received message, so a contact's encrypted edit or
+ * reaction, a pin, an album header or an event RSVP listed the chat as unread with nothing new to read. Only an update
+ * that counts exactly that one message is recognised: Baileys' event buffer adds the counts of one flush and keeps
+ * the last message alone, so a larger count may hold a message of its own and is left as it is. For the same reason
+ * the message has to be one Baileys counts, received and with no stub type: after a contact's text, the account's own
+ * pin or edit in the same flush leaves the text's count of one beside a message that was never counted.
+ *
+ * One case cannot be told apart: an unread mark set on the phone that Baileys delivers in the same flush just before
+ * such a message, as after a reconnect. The buffer folds the mark into the message's count and emits exactly what the
+ * message alone produces, so the mark is not listed. It stays on the account, and the phone still shows it.
+ */
+export function withoutNonContentUnread(
+  update: Partial<Chat>,
+  typeOf: (content: proto.IMessage | null | undefined) => string | undefined,
+): Partial<Chat> {
+  if (update.unreadCount !== 1) return update;
+  const counted = update.messages?.[0]?.message;
+  if (!counted || counted.key?.fromMe === true || counted.messageStubType) return update;
+  const type = typeOf(counted.message);
+  if (type === undefined || !BAILEYS_NON_CONTENT_TYPES.has(type)) return update;
+  const uncounted = { ...update };
+  delete uncounted.unreadCount;
+  return uncounted;
+}
 
 /**
  * Map Baileys' `EventResponseMessage.EventResponseType` (UNKNOWN=0, GOING=1, NOT_GOING=2, MAYBE=3)

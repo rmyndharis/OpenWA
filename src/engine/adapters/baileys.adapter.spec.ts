@@ -8278,6 +8278,101 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     expect(fakeSock.chatModify).not.toHaveBeenCalled();
   });
 
+  describe('a chat update that counts a message that is none of its own', () => {
+    // Baileys raises the count for whatever is not a plain reaction, edit, delete or poll vote, and hands the message
+    // it counted along with the update.
+    const counting = (content: Record<string, unknown>, unreadCount = 1, beside: Record<string, unknown> = {}) => [
+      {
+        id: '628111@s.whatsapp.net',
+        unreadCount,
+        conversationTimestamp: 1700000040,
+        messages: [
+          {
+            message: {
+              key: { remoteJid: '628111@s.whatsapp.net', fromMe: beside.fromMe === true, id: 'X1' },
+              message: content,
+              ...(beside.stub ? { messageStubType: beside.stub } : {}),
+            },
+          },
+        ],
+      },
+    ];
+    const unread = async (adapter: BaileysAdapter): Promise<number | undefined> =>
+      (await adapter.getChats()).find(chat => chat.id === '628111@c.us')?.unreadCount;
+
+    beforeEach(() => {
+      jest
+        .requireMock<Record<string, jest.Mock>>('@whiskeysockets/baileys')
+        .getContentType.mockImplementation(realGetContentType);
+    });
+
+    it.each([
+      ['an encrypted edit', { secretEncryptedMessage: {} }],
+      ['an encrypted reaction', { encReactionMessage: {} }],
+      ['a pin', { pinInChatMessage: {} }],
+      ['an album header', { albumMessage: {} }],
+      ['an event RSVP', { encEventResponseMessage: {} }],
+    ])('does not list the chat as unread for %s', async (_what, content) => {
+      const adapter = await readyWithMessage();
+
+      fakeSock.fire('chats.update', counting(content));
+
+      expect(await unread(adapter)).toBe(0);
+    });
+
+    it('lists the chat as unread for a message of its own', async () => {
+      const adapter = await readyWithMessage();
+
+      fakeSock.fire('chats.update', counting({ conversation: 'new' }));
+
+      expect(await unread(adapter)).toBe(1);
+    });
+
+    it.each([
+      ['a count', 1],
+      ['a mark set by hand', -1],
+    ])('leaves %s the chat already has', async (_what, held) => {
+      const adapter = await readyWithMessage();
+      fakeSock.fire('chats.update', [{ id: '628111@s.whatsapp.net', unreadCount: held }]);
+
+      fakeSock.fire('chats.update', counting({ secretEncryptedMessage: {} }));
+
+      expect(await unread(adapter)).toBe(held);
+    });
+
+    it('leaves the count of a flush that adds up several messages, which may hold one of its own', async () => {
+      const adapter = await readyWithMessage();
+
+      fakeSock.fire('chats.update', counting({ secretEncryptedMessage: {} }, 2));
+
+      expect(await unread(adapter)).toBe(2);
+    });
+
+    // Baileys adds a received message's count and keeps the last message of the flush alone: after a contact's text,
+    // the account's own pin or edit leaves the text's count beside a message that was never counted.
+    it.each([
+      ["the account's own pin", { pinInChatMessage: {} }, { fromMe: true }],
+      ["the account's own encrypted edit", { secretEncryptedMessage: {} }, { fromMe: true }],
+      ['a message with a stub type', { secretEncryptedMessage: {} }, { stub: 2 }],
+    ])('keeps a count of one that stands beside %s, which Baileys did not count', async (_what, content, beside) => {
+      const adapter = await readyWithMessage();
+
+      fakeSock.fire('chats.update', counting(content, 1, beside));
+
+      expect(await unread(adapter)).toBe(1);
+    });
+
+    it('stays read after a read when a contact then edits a message', async () => {
+      const adapter = await readyWithMessage();
+      fakeSock.fire('chats.update', [{ id: '628111@s.whatsapp.net', unreadCount: 1 }]);
+      expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+
+      fakeSock.fire('chats.update', counting({ secretEncryptedMessage: {} }));
+
+      expect(await unread(adapter)).toBe(0);
+    });
+  });
+
   it('sendSeen undoes an unread mark set by hand, keyed to the newest message of the chat', async () => {
     const adapter = await readyWithMessage();
     fakeSock.fire('chats.update', [{ id: '628111@s.whatsapp.net', unreadCount: -1 }]);
