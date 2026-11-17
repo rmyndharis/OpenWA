@@ -58,6 +58,7 @@ import {
   coerceDeclaredSize,
   inboundMediaMaxBytes,
   inboundMediaTimeoutMs,
+  isEphemeralStorageEnabled,
   isMediaDownloadEnabled,
   runUnderGlobalMediaGate,
   withInboundDownloadTimeout,
@@ -1076,7 +1077,15 @@ export class BaileysEvents {
         if (editedBody !== incoming.body || edit?.afterOtherText) incoming.originalBody = incoming.body;
         incoming.body = editedBody;
       }
-      if (opts.generation === this.storeGeneration) {
+      // A message the session drops under STORE_EPHEMERAL_MESSAGES=false is never announced, so no copy of its content is
+      // kept here either. What the account sent or typed on its phone is announced and can be changed, and a status
+      // is the status store's: they keep theirs.
+      const dropped =
+        !isEphemeralStorageEnabled() &&
+        (incoming.ephemeralDuration ?? 0) > 0 &&
+        msg.key.fromMe !== true &&
+        !incoming.isStatusBroadcast;
+      if (opts.generation === this.storeGeneration && !dropped) {
         void this.host.putStoredMessage(toStore)?.catch(err =>
           this.host.logger.warn('Failed to persist message to store', {
             error: err instanceof Error ? err.message : String(err),
