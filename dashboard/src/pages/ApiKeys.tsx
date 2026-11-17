@@ -839,9 +839,9 @@ export function ApiKeys() {
               components={{ strong: <strong /> }}
               // The key's name is free text. Without escaping, a name carrying markup became elements of the
               // message: a styled tag handed React a string for `style`, which throws and took the whole page
-              // down. Escaped on interpolation and unescaped for display, it stays the text it was typed as.
+              // down. Escaped on interpolation and decoded again by Trans for display, it stays the text it was
+              // typed as.
               tOptions={{ interpolation: { escapeValue: true } }}
-              shouldUnescape
             />
           </p>
         </Modal>

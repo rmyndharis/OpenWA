@@ -154,12 +154,12 @@ describe('the patchers this repository actually ships', () => {
 
 describe('unappliedPatchesMessage', () => {
   it('names the library, the count, every patcher and a command that fixes one', () => {
-    const message = unappliedPatchesMessage('wwebjs', ['patch-wwebjs-block', 'patch-wwebjs-status']);
+    const message = unappliedPatchesMessage('wwebjs', ['patch-wwebjs-media-id', 'patch-wwebjs-status']);
 
     expect(message).toContain('whatsapp-web.js');
     expect(message).toContain('missing 2');
-    expect(message).toContain('patch-wwebjs-block, patch-wwebjs-status');
-    expect(message).toContain('node scripts/patch-wwebjs-block.js');
+    expect(message).toContain('patch-wwebjs-media-id, patch-wwebjs-status');
+    expect(message).toContain('node scripts/patch-wwebjs-media-id.js');
     expect(message).toContain('docs/12-troubleshooting-faq.md');
   });
 

@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - MCP: every tool is advertised with a `title` (the tool name split into words, or a `title` the descriptor sets) and the `openWorldHint` annotation: `true` for a write and for a read that queries WhatsApp live (`ContactCheckNumber`, `ContactGetProfilePicture`, `MessageHistory`, `GroupFindOne`, `GroupGetInviteCode`), set with the new `openWorld` field of a tool descriptor.
 
+### Changed
+
+- whatsapp-web.js: block and unblock use the library's own LID handling, so an unblock no longer clears an entry the same person holds under a second id, such as a phone-keyed block from before the LID migration. The install-time block patch is retired.
+
+### Dependencies
+
+- Update `whatsapp-web.js` to 1.34.8, which carries the message-id fix OpenWA backported, the media-id fix and a LID-aware block and unblock; the ready-sync patch now keeps only the `eventsAttached` marker.
+- Update `@aws-sdk/client-s3` to 3.1168.0, `bullmq` to 6.7.6, `@bull-board/api`, `@bull-board/express` and `@bull-board/nestjs` to 9.13.1, `typeorm` to 1.1.3, `puppeteer` to 25.17.0, `dotenv` to 18.0.10 and the `@nestjs` packages to 11.2.10 in the gateway.
+- Update `better-sqlite3` to 13.1.1 in the gateway, which bundles SQLite 3.54.1.
+- Update `i18next` to 27.1.1, `react-i18next` to 18.0.1 and `lucide-react` to 1.72.0 in the dashboard bundle. react-i18next 18 ignores `shouldUnescape`, so the API key confirmation no longer passes it.
+- Update `vite` to 8.3.8, `@vitejs/plugin-react` to 6.3.0 and `jsdom` to 31.0.1 in the dashboard, `prettier` to 3.10.1 and `typescript-eslint` to 8.72.2 in the gateway and the dashboard, and `concurrently` to 10.0.7 and `supertest` to 7.3.2 in the gateway; these are build, lint and test tooling only.
+- Update `guzzlehttp/guzzle` to 8.5.0 in the PHP SDK lockfile; this touches development and test setups only.
+
 ## [0.30.3] - 2026-11-16
 
 ### Added
