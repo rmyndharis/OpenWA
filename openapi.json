@@ -11992,7 +11992,7 @@
             }
           },
           "403": {
-            "description": "The engine refused the change — admin rights required. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The engine refused the change: admin rights are required. On whatsapp-web.js also a group that has no picture to remove, which WhatsApp Web does not tell apart from missing rights, so a repeat of a removal that was applied answers this. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {

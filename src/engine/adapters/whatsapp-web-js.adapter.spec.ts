@@ -1697,6 +1697,14 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
         readyAdapter(groupChat({ deletePicture: refused })).deleteGroupPicture('g@g.us'),
       ).rejects.toBeInstanceOf(EngineRefusedError);
     });
+
+    it('refuses a delete WhatsApp Web did not attempt, and names both causes it has', async () => {
+      // WWebJS.deletePicture resolves undefined when canDelete() is false: no picture, or no right to edit the info.
+      const notAttempted = jest.fn().mockResolvedValue(undefined);
+      const attempt = readyAdapter(groupChat({ deletePicture: notAttempted })).deleteGroupPicture('g@g.us');
+      await expect(attempt).rejects.toBeInstanceOf(EngineRefusedError);
+      await expect(attempt).rejects.toThrow(/did not attempt it, as when the group has no picture or admin rights/);
+    });
   });
 
   describe('addressbook contacts', () => {

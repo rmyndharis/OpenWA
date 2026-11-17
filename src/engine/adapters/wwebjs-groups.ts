@@ -580,7 +580,18 @@ export class WwebjsGroups {
 
   async deleteGroupPicture(groupId: string): Promise<void> {
     const groupChat = await this.requireGroupChat(groupId, 'deleteGroupPicture');
-    const ok = await withPageWrite(this.host, 'deleteGroupPicture', () => groupChat.deletePicture());
+    const ok: boolean | undefined = await withPageWrite(this.host, 'deleteGroupPicture', () =>
+      groupChat.deletePicture(),
+    );
+    // WhatsApp Web answers nothing, not false, when it does not attempt the delete: the group has no picture, or the
+    // account may not edit the group's info. The two cannot be told apart here, and a success could be a picture left
+    // in place, so it stays a refusal whose text names both.
+    if (ok === undefined) {
+      throw new EngineRefusedError(
+        `Failed to delete the picture for group ${groupId}: WhatsApp Web did not attempt it, as when the group has ` +
+          'no picture or admin rights are required',
+      );
+    }
     if (!ok) {
       throw new EngineRefusedError(`Failed to delete the picture for group ${groupId} — admin rights required`);
     }
