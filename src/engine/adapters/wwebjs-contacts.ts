@@ -3,6 +3,7 @@ import { InternalServerErrorException } from '@nestjs/common';
 import { Contact } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
+import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { readWid, type SerializedWid } from '../types/whatsapp-web-js.types';
 import { type WwebjsEngineHost, rethrowIfNavigation, withPage } from './wwebjs-host';
@@ -366,9 +367,25 @@ export class WwebjsContacts {
     this.host.logger.debug('Deleted addressbook contact', { contactId });
   }
 
+  /**
+   * WhatsApp blocks and unblocks a contact by its privacy id, and whatsapp-web.js takes that id from what the
+   * page already holds for the number. For a number the page holds none for (one this session never talked to)
+   * `unblock()` died reading the missing id, a bare TypeError that reached the caller as a 500, and `block()`
+   * handed WhatsApp a contact with no id at all. The library's own lookup asks WhatsApp when the page holds no
+   * id and leaves the answer in the page, so it runs first. A number WhatsApp answers no id for cannot be
+   * blocked or unblocked, and is refused the way Baileys refuses an id it cannot map.
+   */
+  private async requirePrivacyId(contactId: string): Promise<void> {
+    const parsed = parseWaId(contactId);
+    if (parsed.kind !== 'user') return;
+    const [found] = await this.client().getContactLidAndPhone([`${parsed.userPart}@c.us`]);
+    if (!found?.lid) throw new RecipientUnreachableError(contactId);
+  }
+
   async blockContact(contactId: string): Promise<void> {
     this.host.ensureReady();
     await withPage(this.host, 'blockContact', async () => {
+      await this.requirePrivacyId(contactId);
       const contact = await this.client().getContactById(contactId);
       // The contact acts through its own client, which getClient's readiness check never sees again.
       this.host.ensureReady();
@@ -393,6 +410,7 @@ export class WwebjsContacts {
   async unblockContact(contactId: string): Promise<void> {
     this.host.ensureReady();
     await withPage(this.host, 'unblockContact', async () => {
+      await this.requirePrivacyId(contactId);
       const contact = await this.client().getContactById(contactId);
       this.host.ensureReady();
       await contact.unblock();

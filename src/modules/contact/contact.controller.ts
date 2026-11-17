@@ -332,7 +332,7 @@ export class ContactController {
     description:
       'Session is not started, or the id does not name an individual. On Baileys also an id the session ' +
       'cannot map between phone and privacy-id form (a `@lid` with no known phone to block, a phone-based ' +
-      'id with no known `@lid`).',
+      'id with no known `@lid`). On whatsapp-web.js also a number WhatsApp, asked for it, holds no privacy id for.',
   })
   @ApiResponse({
     status: 503,
@@ -361,7 +361,8 @@ export class ContactController {
     status: 400,
     description:
       'Session is not started, or the id does not name an individual. On Baileys also a phone-based id ' +
-      'the session cannot map to its privacy id (`@lid`).',
+      'the session cannot map to its privacy id (`@lid`). On whatsapp-web.js also a number WhatsApp, asked for ' +
+      'it, holds no privacy id for.',
   })
   @ApiResponse({
     status: 503,

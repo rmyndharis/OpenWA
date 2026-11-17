@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - whatsapp-web.js: several contacts shared in one message arrive with their vCards newline-joined in `body`, as on Baileys, where the body was empty; the chat list preview and a quote of such a message carry them too.
 - Baileys: `POST /api/sessions/{sessionId}/chats/read` resets a chat's `unreadCount` only when the receipt names the chat's newest received message; a read of older messages or of the account's own, or one a newer message overtook, used to zero the count of a chat that still had unread messages. An unread mark undone on one record of a chat is cleared on its other record too, where it made every later read write the mark again.
 - MCP: under `MCP_MAX_RESULT_BYTES` an error answer is cut at the cap too; a refusal that lists every invalid value of a wide argument came back whole, several times the cap. A cap larger than a number holds exactly is no longer read as no cap.
+- whatsapp-web.js: block and unblock ask WhatsApp for a number's privacy id when the page holds none, so a number the session never talked to can be blocked; a number WhatsApp holds no id for answers `400`, where an unblock answered `500`.
 
 ### Documentation
 
