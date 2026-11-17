@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - MCP: every tool is advertised with a `title`, the name a client shows: the tool name split into words, or the `title` its descriptor sets (#2098). Thanks @sudipta-prodevs.
-- MCP: an opt-in cap on the size of a tool result, `MCP_MAX_RESULT_BYTES`. Unset or `0`, the default, changes nothing: a result over 32 KiB is still returned as an embedded base64 resource of any size. When set, a result whose payload is larger comes back as one text item cut at that many bytes, never inside a UTF-8 character, with a note of its full size, for clients that put the whole result in the model's context. A malformed value fails the boot.
+- MCP: `MCP_MAX_RESULT_BYTES`, an opt-in cap for clients that put a whole tool result in the model's context. When set, every result is one text item, cut at that many bytes with a note of its full size, and none is offloaded as a base64 resource; unset or `0`, the default, changes nothing (#2100). Thanks @sudipta-prodevs.
 
 ### Changed
 

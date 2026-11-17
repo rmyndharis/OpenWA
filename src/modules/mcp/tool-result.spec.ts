@@ -256,9 +256,10 @@ describe('handleToolError code', () => {
   });
 });
 
-describe('smartToolResult with MCP_MAX_RESULT_BYTES (an opt-in cap above the inline limit)', () => {
+describe('smartToolResult with MCP_MAX_RESULT_BYTES (an opt-in cap that makes every result text)', () => {
   const note = (total: number): string =>
-    `\n…[truncated: ${total} bytes in all; narrow the request (limit/offset) to see the rest]`;
+    `\n…[truncated: ${total} bytes in all; ` +
+    'narrow the request, with limit and offset where the tool takes them, to see the rest]';
   const blobOf = (result: ReturnType<typeof smartToolResult>): string => {
     const resource = result.content[1];
     if (resource?.type !== 'resource' || !('blob' in resource.resource)) throw new Error('expected a blob resource');
@@ -313,20 +314,22 @@ describe('smartToolResult with MCP_MAX_RESULT_BYTES (an opt-in cap above the inl
   });
 
   it('does not truncate a payload exactly at the cap, and does at one byte over', () => {
-    const atCap = 'x'.repeat(40000); // over the 32 KB inline limit, so it is the blob as today
-    const exact = smartToolResult(atCap, 40000);
-    expect(exact.content).toHaveLength(2);
-    expect(blobOf(exact)).toBe(atCap);
+    const atCap = 'x'.repeat(40000); // over the 32 KB inline limit: text all the same, because a cap is set
+    expect(smartToolResult(atCap, 40000).content).toEqual([{ type: 'text', text: atCap }]);
     expect(smartToolResult(atCap + 'x', 40000).content).toEqual([{ type: 'text', text: atCap + note(40001) }]);
     const small = 'x'.repeat(100);
     expect(smartToolResult(small, 100).content).toEqual([{ type: 'text', text: small }]);
   });
 
-  it('still returns the blob for a payload between the inline limit and the cap', () => {
+  // The blob of a payload under the cap is that payload in base64, a third larger: 120 kB under a 150000 cap would
+  // reach the client as 160000 characters. And a client that shows the model text alone would show it none of it.
+  it('returns text, never the blob, for a payload between the inline limit and the cap', () => {
     const mid = 'x'.repeat(50000);
-    const result = smartToolResult(mid, 100000);
-    expect(result.content).toHaveLength(2);
-    expect(blobOf(result)).toBe(mid);
+    expect(smartToolResult(mid, 100000).content).toEqual([{ type: 'text', text: mid }]);
+    const rows = Array.from({ length: 1200 }, (_, i) => ({ id: `chat-${i}`, name: 'n'.repeat(80) }));
+    const json = JSON.stringify(rows);
+    expect(Buffer.byteLength(json)).toBeGreaterThan(INLINE_RESULT_MAX_BYTES);
+    expect(smartToolResult(rows, 150000).content).toEqual([{ type: 'text', text: json }]);
   });
 
   it('checks the cap first, so a cap below the inline limit truncates a payload that would have been text', () => {

@@ -164,8 +164,8 @@ export interface MountMcpServerOptions {
   serverInfo?: { name: string; version: string };
   readOnly?: boolean;
   /**
-   * The most a tool result may weigh, in UTF-8 bytes, before it is truncated instead of offloaded as a blob.
-   * Defaults to `MCP_MAX_RESULT_BYTES`; 0 or unset means no cap.
+   * A cap on a tool result, in UTF-8 bytes: with one set, every result is text, cut at the cap, and none is
+   * offloaded as a blob. Defaults to `MCP_MAX_RESULT_BYTES`; 0 or unset means no cap.
    */
   maxResultBytes?: number;
 }

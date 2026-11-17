@@ -28,7 +28,7 @@
 | **OAuth 2.1 (public exposure)**   | 🔜 Planned     | Static API key is used today (suitable for self-hosted/internal)               |
 | **Agent-action audit provenance** | 🔜 Planned     | Mark audited actions as agent-initiated                                        |
 | **Env-tunable rate limits**       | ✅ Implemented | `MCP_RATE_LIMIT_MAX` / `MCP_RATE_LIMIT_WINDOW_MS`                              |
-| **Opt-in result size cap**        | ✅ Implemented | `MCP_MAX_RESULT_BYTES` (off by default): truncate instead of offloading a blob |
+| **Opt-in result size cap**        | ✅ Implemented | `MCP_MAX_RESULT_BYTES` (off by default): text only, cut at the cap             |
 | **Additional tool domains**       | 🔜 Planned     | template management / channels / catalog / status (labels/automation now ship) |
 
 ---
@@ -214,13 +214,14 @@ message's media inline as base64, up to a per-response budget
 `inlineMedia: false` to get the rows without it.
 
 **Capping a result (`MCP_MAX_RESULT_BYTES`).** The offloaded blob has no upper bound, and a client that puts the
-whole result in the model's context (claude.ai, ChatGPT) fails or degrades past about 150000 characters. Set
-`MCP_MAX_RESULT_BYTES` to a byte count (for example `100000`) to bound it. A result whose UTF-8 payload is larger
-comes back as one text item instead of the blob: the payload cut to at most that many bytes, never inside a
-character, then `…[truncated: <n> bytes in all; narrow the request (limit/offset) to see the rest]`. This check
-comes first, so it also applies to a cap below 32 KiB. A result at or under the cap behaves as above: text up to
-32 KiB, the blob past it. Unset or `0`, the default, means no cap, and Claude Code keeps getting the blob it saves
-to a file. The value is read once when the server mounts; a malformed one (`100k`) fails the boot.
+whole result in the model's context (claude.ai, ChatGPT) fails or degrades past a size: claude.ai documents about
+150000 characters for one tool result. Set `MCP_MAX_RESULT_BYTES` to a byte count (for example `100000`) for such
+a client. Every result is then one text item and nothing is offloaded: a payload at or under the cap comes back
+whole, also past 32 KiB, and a larger one is cut to at most that many bytes, never inside a character, then
+`…[truncated: <n> bytes in all; narrow the request, with limit and offset where the tool takes them, to see the rest]`.
+The note comes after the cut, so leave about 200 bytes under the client's limit; a count in bytes is never
+smaller than the count in characters. Unset or `0`, the default, means no cap, and Claude Code keeps getting the
+blob it saves to a file. The value is read once when the server mounts; a malformed one (`100k`) fails the boot.
 
 The text of a tool error is cut at 4096 characters and ends with
 `... [truncated, <n> characters in all]`. Several services name the id the caller sent in their
@@ -315,7 +316,7 @@ MCP_ENABLED=true npm run start:prod   # or set MCP_ENABLED in your .env / compos
 MCP_READONLY=false                    # expose write tools (default is read-only when unset)
 MCP_RATE_LIMIT_MAX=60                 # max tool calls per key per window (default 60)
 MCP_RATE_LIMIT_WINDOW_MS=60000        # sliding window in ms (default 60000 = 1 min)
-MCP_MAX_RESULT_BYTES=100000           # truncate a tool result larger than this many bytes (default 0 = no cap)
+MCP_MAX_RESULT_BYTES=100000           # every tool result as text, cut at this many bytes (default 0 = no cap)
 MCP_IP_RATE_LIMIT_MAX=120             # pre-auth per-IP message cap per window (default 120)
 MCP_IP_RATE_LIMIT_WINDOW_MS=60000     # per-IP window in ms (default 60000 = 1 min)
 ```

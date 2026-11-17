@@ -11,8 +11,8 @@ const logger = createLogger('Mcp');
  * machine and tells the model just the path, so the model sees the data only if it has a file tool and a
  * client that forwards text alone shows none. An ordinary page of rows (a few dozen sessions, chats or
  * messages) therefore has to fit under this; only a payload past it is offloaded, to keep the context compact.
- * An operator who serves clients that cannot take a large blob can bound the whole result with
- * `MCP_MAX_RESULT_BYTES`, which is checked before this limit (see {@link smartToolResult}); unset, this is all there is.
+ * An operator who serves clients that cannot take a blob can set `MCP_MAX_RESULT_BYTES`, which turns the offload
+ * off and returns every result as text, cut at that size (see {@link smartToolResult}); unset, this is all there is.
  */
 export const INLINE_RESULT_MAX_BYTES = 32 * 1024;
 
@@ -39,13 +39,15 @@ function utf8SafeEnd(bytes: Buffer, max: number): number {
 /**
  * Format a tool result.
  *
- * With `maxResultBytes` above 0 (the operator's `MCP_MAX_RESULT_BYTES`), a payload larger than it comes back as ONE
- * text item: its first `maxResultBytes` bytes, cut at a character boundary, and a note with the full size. That
- * check comes first, for the clients that put a whole result in the model's context (claude.ai, ChatGPT) and fail
- * past a size, where the blob below would be that same data in base64.
+ * With `maxResultBytes` above 0 (the operator's `MCP_MAX_RESULT_BYTES`), the result is always ONE text item, for the
+ * clients that put a whole result in the model's context (claude.ai, ChatGPT) and fail past a size: a payload at or
+ * under the cap whole, a larger one as its first `maxResultBytes` bytes, cut at a character boundary, and a note
+ * with the full size. Nothing is offloaded, because the blob is the same data in base64: a third larger, so a
+ * payload under the cap could still pass the size the cap was set for, and unreadable to a client that shows the
+ * model text alone.
  *
- * Otherwise, and for a payload at or under the cap, a payload up to {@link INLINE_RESULT_MAX_BYTES} is inlined as
- * text and a larger one is offloaded to an embedded base64 resource so the response stays compact.
+ * Without a cap, a payload up to {@link INLINE_RESULT_MAX_BYTES} is inlined as text and a larger one is offloaded
+ * to an embedded base64 resource so the response stays compact.
  */
 export function smartToolResult(data: string | object | object[], maxResultBytes = 0): CallToolResult {
   // JSON.stringify(undefined) is undefined, not a string — a handler that resolves void would turn
@@ -54,9 +56,12 @@ export function smartToolResult(data: string | object | object[], maxResultBytes
   const mimeType = typeof data === 'string' ? 'text/plain' : 'application/json';
   const ext = typeof data === 'string' ? 'txt' : 'json';
   const buffer = Buffer.from(text);
-  if (maxResultBytes > 0 && buffer.byteLength > maxResultBytes) {
+  if (maxResultBytes > 0) {
+    if (buffer.byteLength <= maxResultBytes) return { content: [{ type: 'text', text }] };
     const head = buffer.subarray(0, utf8SafeEnd(buffer, maxResultBytes)).toString('utf8');
-    const note = `\n…[truncated: ${buffer.byteLength} bytes in all; narrow the request (limit/offset) to see the rest]`;
+    const note =
+      `\n…[truncated: ${buffer.byteLength} bytes in all; ` +
+      'narrow the request, with limit and offset where the tool takes them, to see the rest]';
     return { content: [{ type: 'text', text: head + note }] };
   }
   if (buffer.byteLength > INLINE_RESULT_MAX_BYTES) {
