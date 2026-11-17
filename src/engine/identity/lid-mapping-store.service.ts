@@ -175,6 +175,14 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
    * Kept only while the cache holds that phone, until a current write lands or a negative clears it.
    */
   private readonly failedWrites = new Set<string>();
+  /**
+   * The table statements of each lid with a write under way, as one chain. A pool hands the statements of two writes
+   * to two connections, which can apply them in either order, and on any database a write of two statements (a
+   * negative, a display lookup) lets the statement of a call made in the same turn in between them. So the table could
+   * end on what the older call said: a report behind the display lookup that contradicted it, the phone of the earlier
+   * of two reports, or a pair behind the negative that cleared it.
+   */
+  private readonly turns = new Map<string, Promise<void>>();
   /** When a failed write was last logged, on {@link now}, and how many have failed since without a line. */
   private readonly writeWarning = { at: -Infinity, held: 0 };
   /**
@@ -405,16 +413,18 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     const reporters = this.seenBy.get(lid);
     const writing = this.beginWrite(lid, lookup);
     try {
-      await this.repo
-        .createQueryBuilder()
-        .insert()
-        .values({ lid, phone, sessionId: sessionId ?? null, updatedAt: new Date() })
-        .orIgnore()
-        .execute();
-      const { affected } = await this.repo.update(
-        { lid, phone: Raw(column => `${column} <> :lookupPhone`, { lookupPhone: phone }), isReported: true },
-        { isReported: false, updatedAt: () => '"updatedAt"' },
-      );
+      const { affected } = await this.inTurn(lid, async () => {
+        await this.repo
+          .createQueryBuilder()
+          .insert()
+          .values({ lid, phone, sessionId: sessionId ?? null, updatedAt: new Date() })
+          .orIgnore()
+          .execute();
+        return this.repo.update(
+          { lid, phone: Raw(column => `${column} <> :lookupPhone`, { lookupPhone: phone }), isReported: true },
+          { isReported: false, updatedAt: () => '"updatedAt"' },
+        );
+      });
       if (
         affected &&
         writing.latestOperation === lookup &&
@@ -463,29 +473,32 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       this.secondLidOwed.delete(lid);
     }
     try {
-      if (seen && phone !== null) {
-        // A peer may have changed or revoked this row since this node counted the report. Keep the
-        // owner and timestamp for the same phone, but let the latest actual report replace another one.
-        const changed = '"lid_mappings"."phone" IS NULL OR "lid_mappings"."phone" <> EXCLUDED."phone"';
-        const [insert, parameters] = this.repo
-          .createQueryBuilder('lid_mappings')
-          .insert()
-          .values({ lid, phone, sessionId: sessionId ?? null, isReported: true, updatedAt: new Date() })
-          .getQueryAndParameters();
-        await this.repo.query(
-          insert +
-            ` ON CONFLICT ("lid") DO UPDATE SET "phone" = EXCLUDED."phone", "isReported" = true, ` +
-            `"sessionId" = CASE WHEN ${changed} THEN EXCLUDED."sessionId" ELSE "lid_mappings"."sessionId" END, ` +
-            `"updatedAt" = CASE WHEN ${changed} THEN EXCLUDED."updatedAt" ELSE "lid_mappings"."updatedAt" END ` +
-            `WHERE ${changed} OR "lid_mappings"."isReported" = false`,
-          parameters,
-        );
-      } else if (phone === null) await this.clear(lid, sessionId ?? null, seen, report);
-      else {
-        await this.repo.upsert({ lid, phone, sessionId: sessionId ?? null, isReported: true, updatedAt: new Date() }, [
-          'lid',
-        ]);
-      }
+      await this.inTurn(lid, async () => {
+        if (seen && phone !== null) {
+          // A peer may have changed or revoked this row since this node counted the report. Keep the
+          // owner and timestamp for the same phone, but let the latest actual report replace another one.
+          const changed = '"lid_mappings"."phone" IS NULL OR "lid_mappings"."phone" <> EXCLUDED."phone"';
+          const [insert, parameters] = this.repo
+            .createQueryBuilder('lid_mappings')
+            .insert()
+            .values({ lid, phone, sessionId: sessionId ?? null, isReported: true, updatedAt: new Date() })
+            .getQueryAndParameters();
+          await this.repo.query(
+            insert +
+              ` ON CONFLICT ("lid") DO UPDATE SET "phone" = EXCLUDED."phone", "isReported" = true, ` +
+              `"sessionId" = CASE WHEN ${changed} THEN EXCLUDED."sessionId" ELSE "lid_mappings"."sessionId" END, ` +
+              `"updatedAt" = CASE WHEN ${changed} THEN EXCLUDED."updatedAt" ELSE "lid_mappings"."updatedAt" END ` +
+              `WHERE ${changed} OR "lid_mappings"."isReported" = false`,
+            parameters,
+          );
+        } else if (phone === null) await this.clear(lid, sessionId ?? null, seen, report);
+        else {
+          await this.repo.upsert(
+            { lid, phone, sessionId: sessionId ?? null, isReported: true, updatedAt: new Date() },
+            ['lid'],
+          );
+        }
+      });
       // Count only a stored report in this phone's current cache epoch. A late completion after
       // P -> Q -> P must not count the first P as a report of the replacement P.
       if (phone !== null && reporters && this.seenBy.get(lid) === reporters) {
@@ -525,6 +538,25 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       if (owed?.queued && writing.check === owed) writing.check = undefined; // a landed write queued it
       this.endWrite(lid, writing);
     }
+  }
+
+  /**
+   * Run the table statements of a write once those of every write of the lid that began before it have ended, in
+   * success or failure. Called in the turn the write begins, before any await, so the order is the order of the calls.
+   */
+  private inTurn<T>(lid: string, statements: () => Promise<T>): Promise<T> {
+    const previous = this.turns.get(lid);
+    // With no write of the lid under way the statements start at once, as they always did.
+    const run = previous ? previous.then(statements) : statements();
+    const ended = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.turns.set(lid, ended);
+    void ended.then(() => {
+      if (this.turns.get(lid) === ended) this.turns.delete(lid);
+    });
+    return run;
   }
 
   /** Keep report and lookup ordering until all older writes settle, without counting a lookup as a report. */
@@ -593,7 +625,11 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       ? replaceable.slice(1).map(where => ({ ...where, phone: Not(IsNull()) }))
       : replaceable;
     const { affected } = await this.repo.update(eligible, { phone: null, sessionId, isReported: true, updatedAt });
-    if (!affected || this.unsettledWrites.get(lid)?.latestReport !== report) return;
+    if (!affected) return;
+    // A newer report of a phone owns the cached entry. A newer negative says what this one did, so the entry goes
+    // now: left to that negative, it would stay if its statement failed, answering a phone the table has cleared.
+    const latest = this.unsettledWrites.get(lid)?.latestReport as { phone: string | null } | undefined;
+    if (latest !== report && latest?.phone !== null) return;
     const cached = this.lidToPhone.get(lid);
     this.lidToPhone.delete(lid);
     this.unreported.delete(lid);
@@ -679,8 +715,8 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       queued.forEach((newLid, i) => {
         if (!held.includes(newLid)) {
           // Its row holds another phone by now, or a conflicting display lookup marked it unreported. If this node
-          // still holds this phone for it, the row is another node's, an older write that committed last (a pool can
-          // reorder commits) or that lookup's: the next write of this phone to land checks it again.
+          // still holds this phone for it, the row is another node's or that lookup's: the next write of this phone to
+          // land checks it again.
           const check = lids.get(newLid);
           if (check && this.lidToPhone.get(newLid) === phone && !this.secondLidOwed.has(newLid))
             this.oweSecondLid(newLid, { ...check, queued: false });
