@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - whatsapp-web.js: block and unblock use the library's own LID handling, so an unblock no longer clears an entry the same person holds under a second id, such as a phone-keyed block from before the LID migration. The install-time block patch is retired.
+- The MCP `MessageList` tool lists a media message without its payload unless the call sets `inlineMedia: true`, where it carried the base64 inline up to the 8 MiB budget, so one photo made the result larger than an MCP client takes.
+
+### Documentation
+
+- Say in the `limit` description of the MCP tools that answer a bare list (`SessionFindAll`, `SessionGetChats`, `ContactFindAll`, `GroupFindAll`, `WebhooksList`) that a call returns at most 1000 rows, also when `limit` is omitted, so a full page may not be the whole list.
 
 ### Dependencies
 
@@ -24,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update `i18next` to 27.1.1, `react-i18next` to 18.0.1 and `lucide-react` to 1.72.0 in the dashboard bundle. react-i18next 18 ignores `shouldUnescape`, so the API key confirmation no longer passes it.
 - Update `vite` to 8.3.8, `@vitejs/plugin-react` to 6.3.0 and `jsdom` to 31.0.1 in the dashboard, `prettier` to 3.10.1 and `typescript-eslint` to 8.72.2 in the gateway and the dashboard, and `concurrently` to 10.0.7 and `supertest` to 7.3.2 in the gateway; these are build, lint and test tooling only.
 - Update `guzzlehttp/guzzle` to 8.5.0 in the PHP SDK lockfile; this touches development and test setups only.
+
+### Upgrade notes (behavior changes)
+
+- An MCP `MessageList` call that does not set `inlineMedia` returns each media message with an `{ omitted, sizeBytes }` marker in place of its payload, where it returned the base64 inline; pass `inlineMedia: true` to get the bytes. `GET /api/sessions/{sessionId}/messages` still inlines by default.
 
 ## [0.30.3] - 2026-11-16
 
