@@ -342,7 +342,13 @@ mark without a second enqueue, and a job that failed with no such copy is not re
 `failed` with a dead-letter row guaranteed as above, so none is written while a copy can still
 deliver. A `pending` row found without a payload (only possible for imported/corrupt history —
 payloads are retired only with a recorded outcome) is excluded from the sweep and never replayed
-empty; nothing logs it, and it stays `pending` until `INGRESS_DEDUP_RETENTION_DAYS` prunes it.
+empty; nothing logs it, and it stays `pending` until `INGRESS_DEDUP_RETENTION_DAYS` prunes it. A
+`pending` row whose stored payload does not parse (again only imported or hand-edited history) is
+logged as `ingress_reconcile_row_unreadable` and left untouched: the sweep sets it aside for an hour
+(it remembers up to 1000 such rows, and a restart forgets them) and the retention hand-off skips it
+for the rest of its run. With more than about a thousand of them, the healthy stranded rows behind
+them are neither replayed nor dead-lettered until the unreadable rows are repaired or deleted in the
+database.
 
 **Plugin restore window.** The gateway opens its port before a slow plugin restore has finished (see
 [19](./19-plugin-architecture.md), Restore on boot), so a delivery can arrive for a plugin that has no
