@@ -711,6 +711,30 @@ test('a typed draft survives closing and reopening the room', async () => {
   assert.equal(input.value, 'draft survives');
 });
 
+test('a parked draft shows on its list row and clears while that chat is open', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  const { container } = renderChats();
+  const aliceRow = () =>
+    within(container.querySelector('.chats-sidebar') as HTMLElement)
+      .getByText('Alice')
+      .closest('[role="button"]') as HTMLElement;
+
+  await screen.findByText(SESSION.name);
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'unsent for alice' } });
+
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+  await waitFor(() => assert.ok(aliceRow().querySelector('.chat-item-draft-label'), 'draft label missing on Alice'));
+  assert.match(aliceRow().querySelector('.chat-item-snippet')?.textContent ?? '', /unsent for alice/);
+
+  fireEvent.click(within(container.querySelector('.chats-sidebar') as HTMLElement).getByText('Alice'));
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+  await waitFor(() => assert.equal(aliceRow().querySelector('.chat-item-draft-label'), null));
+  const input = screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
+  assert.equal(input.selectionStart, input.value.length, 'caret was not at the end of the restored draft');
+});
+
 // A draft is the chat's, like a staged file or reply: carried into another chat, the next Enter would deliver it to
 // the wrong recipient. It is kept for the chat it was typed in, so looking at another one loses nothing.
 test('a typed draft stays with its chat: another chat opens with its own, and the first gets it back', async () => {

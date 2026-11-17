@@ -57,6 +57,8 @@ interface ChatSidebarProps {
     onFilterChange: (filter: ChatListFilter) => void;
     activeChatId?: string;
     pictures?: Record<string, string | null>;
+    /** Parked composer text by chat id (current session). Shown on rows that are not open. */
+    drafts?: Record<string, string>;
     onSelectChat: (chat: Chat) => void;
     /** The actions behind the chevron on a group or 1:1 row. */
     rowActions?: ChatRowActions;
@@ -87,6 +89,8 @@ interface ChatListRowProps {
   formatChatTime: (timestamp?: number) => string;
   /** The day the list was drawn on (Date.toDateString), which decides Today and Yesterday in the time. */
   today: string;
+  /** Unsent composer text parked for this chat; omitted while the room is open. */
+  draft?: string;
   onSelectChat: (chat: Chat) => void;
   rowActions?: ChatRowActions;
   menuOpen: boolean;
@@ -104,6 +108,7 @@ const ChatListRow = memo(
     active,
     pictureUrl,
     formatChatTime,
+    draft,
     onSelectChat,
     rowActions,
     menuOpen,
@@ -112,10 +117,12 @@ const ChatListRow = memo(
     const { t } = useTranslation();
     const onOpenChange = useCallback((open: boolean) => onMenuOpenChange(chat.id, open), [onMenuOpenChange, chat.id]);
     // Contact shares store the raw vCard in lastMessage; show name/phone (or a label) instead.
-    const snippet =
+    const lastSnippet =
       chat.lastMessageType === 'contact' || isVCardBody(chat.lastMessage)
         ? contactSnippet(chat.lastMessage, `👤 ${t('chats.media.contact')}`)
         : chat.lastMessage || '';
+    const showDraft = Boolean(draft) && !active;
+    const snippetTitle = showDraft ? draft : lastSnippet;
     const card = (
       <div
         role="button"
@@ -148,9 +155,17 @@ const ChatListRow = memo(
           </div>
           <div className="chat-item-bottom">
             {/* An empty snippet with a timestamp is a message with no text (a voice note, a sticker,
-                an uncaptioned photo), not an empty chat. */}
-            <span className="chat-item-snippet" title={snippet}>
-              {snippet || (!chat.timestamp && <span className="no-message">{t('chats.noMessageYet')}</span>)}
+                an uncaptioned photo), not an empty chat. A parked draft replaces the last-message
+                preview until the room is open again. */}
+            <span className="chat-item-snippet" title={snippetTitle || undefined}>
+              {showDraft ? (
+                <>
+                  <span className="chat-item-draft-label">{t('chats.draftLabel')}</span>
+                  {` ${draft}`}
+                </>
+              ) : (
+                lastSnippet || (!chat.timestamp && <span className="no-message">{t('chats.noMessageYet')}</span>)
+              )}
             </span>
             {(chat.muted || chat.pinned) && (
               <span className="chat-item-flags">
@@ -195,6 +210,7 @@ const ChatListRow = memo(
     a.pictureUrl === b.pictureUrl &&
     a.formatChatTime === b.formatChatTime &&
     a.today === b.today &&
+    a.draft === b.draft &&
     a.onSelectChat === b.onSelectChat &&
     a.menuOpen === b.menuOpen &&
     a.onMenuOpenChange === b.onMenuOpenChange &&
@@ -410,6 +426,7 @@ function ChatSidebar({
                 pictureUrl={chatsTab.pictures?.[chat.id]}
                 formatChatTime={formatChatTime}
                 today={today}
+                draft={chatsTab.drafts?.[chat.id]}
                 onSelectChat={chatsTab.onSelectChat}
                 rowActions={chatsTab.rowActions}
                 menuOpen={menuChatId === chat.id}

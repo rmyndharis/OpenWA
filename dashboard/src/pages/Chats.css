@@ -904,6 +904,11 @@
   font-style: italic;
 }
 
+.chats-page .chat-item-snippet .chat-item-draft-label {
+  color: var(--chat-accent-text);
+  font-weight: 500;
+}
+
 .chats-page .chat-unread-badge {
   display: inline-flex;
   align-items: center;

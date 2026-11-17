@@ -90,6 +90,7 @@
     "loadingChats": "Sohbetler yükleniyor...",
     "empty": "Sohbet yok",
     "noMessageYet": "Henüz mesaj yok",
+    "draftLabel": "Taslak:",
     "unreadBadge": "{{count}} okunmamış mesaj",
     "unreadBadge_other": "{{count}} okunmamış mesaj",
     "markedUnread": "Okunmadı olarak işaretlendi",

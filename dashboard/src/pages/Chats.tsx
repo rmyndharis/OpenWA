@@ -409,27 +409,80 @@ export function Chats() {
   // Each thread, by session and chat, keeps the text typed into it. Opening another one, in this session or another,
   // puts the composer's text away under the thread it was typed in and brings back the one of the thread opened;
   // closing the room and reopening it changes nothing. A layout effect, so the next room is never drawn with the text of
-  // the last one.
+  // the last one. `chatDrafts` mirrors parked drafts for the current session so the list can show them; the open chat
+  // keeps its text only in the composer (the row shows the last message, as WhatsApp does).
   const draftsRef = useRef(new Map<string, string>());
   const draftKeyRef = useRef<string | null>(null);
+  const [chatDrafts, setChatDrafts] = useState<Record<string, string>>({});
   const openChatId = activeChat?.id;
+  const chatIdFromDraftKey = (key: string) => key.slice(key.indexOf('\u0000') + 1);
+  const sessionOfDraftKey = (key: string) => key.slice(0, key.indexOf('\u0000'));
+  const parkDraftInList = (chatId: string, text: string) => {
+    setChatDrafts(prev => {
+      if (text === '') {
+        if (!(chatId in prev)) return prev;
+        const { [chatId]: _removed, ...rest } = prev;
+        return rest;
+      }
+      if (prev[chatId] === text) return prev;
+      return { ...prev, [chatId]: text };
+    });
+  };
+  const clearDraftFromList = (chatId: string) => {
+    setChatDrafts(prev => {
+      if (!(chatId in prev)) return prev;
+      const { [chatId]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
   useLayoutEffect(() => {
-    if (openChatId === undefined) return;
+    if (openChatId === undefined) {
+      const parked = draftKeyRef.current;
+      // Only surface a parked draft for the session still selected — a session switch clears the room first and
+      // would otherwise paint the previous account's text onto this session's row with the same chat id.
+      if (parked !== null && sessionOfDraftKey(parked) === selectedSessionId) {
+        parkDraftInList(chatIdFromDraftKey(parked), messageInput);
+      } else if (parked !== null) {
+        setChatDrafts({});
+      }
+      return;
+    }
     const key = readKey(selectedSessionId, openChatId);
     const previous = draftKeyRef.current;
-    if (previous === key) return;
+    if (previous === key) {
+      clearDraftFromList(openChatId);
+      return;
+    }
     draftKeyRef.current = key;
-    if (previous !== null && messageInput !== '') draftsRef.current.set(previous, messageInput);
+    if (previous !== null) {
+      const prevChatId = chatIdFromDraftKey(previous);
+      if (messageInput !== '') {
+        draftsRef.current.set(previous, messageInput);
+        if (sessionOfDraftKey(previous) === selectedSessionId) parkDraftInList(prevChatId, messageInput);
+      } else {
+        draftsRef.current.delete(previous);
+        if (sessionOfDraftKey(previous) === selectedSessionId) clearDraftFromList(prevChatId);
+      }
+    }
     setMessageInput(draftsRef.current.get(key) ?? '');
     draftsRef.current.delete(key);
+    clearDraftFromList(openChatId);
   }, [selectedSessionId, openChatId, messageInput]);
   // A refused send gives back the text it took from the field, as the draft of its thread, unless something was typed
   // there since: its failed bubble lasts only until the thread is read again, and then the text was nowhere.
-  const restoreRefusedDraft = useCallback((sessionId: string, chatId: string, text: string) => {
-    const key = readKey(sessionId, chatId);
-    if (draftKeyRef.current === key) setMessageInput(current => (current === '' ? text : current));
-    else if (!draftsRef.current.get(key)) draftsRef.current.set(key, text);
-  }, []);
+  const restoreRefusedDraft = useCallback(
+    (sessionId: string, chatId: string, text: string) => {
+      const key = readKey(sessionId, chatId);
+      if (draftKeyRef.current === key) setMessageInput(current => (current === '' ? text : current));
+      else if (!draftsRef.current.get(key)) {
+        draftsRef.current.set(key, text);
+        if (sessionId === selectedSessionId) {
+          setChatDrafts(prev => (prev[chatId] === text ? prev : { ...prev, [chatId]: text }));
+        }
+      }
+    },
+    [selectedSessionId],
+  );
 
   // Per-chat scroll-position memory + auto-scroll heuristic.
   // Pass `hasRenderableMessages` as the loaded signal: it stays stable once the
@@ -2211,6 +2264,7 @@ export function Chats() {
               archive: { count: archivedCount, showing: showArchived, onToggle: () => setShowArchived(v => !v) },
               activeChatId: activeChat?.id,
               pictures: listPics.data,
+              drafts: chatDrafts,
               onSelectChat: setActiveChat,
             }}
             channelsTab={{
