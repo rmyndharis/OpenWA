@@ -14,10 +14,12 @@ import { WwebjsContacts } from './wwebjs-contacts';
 import { type WwebjsMessaging } from './wwebjs-messaging';
 import { type WwebjsEngineHost } from './wwebjs-host';
 import { createLogger } from '../../common/services/logger.service';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
+import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 
 /**
  * Provoked from the INSTALLED puppeteer-core rather than copied from it. The guard exists to
@@ -212,6 +214,10 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
     joinGroupViaInviteCode: ['acceptInvite', host => new WwebjsGroups(host).joinGroupViaInviteCode('AbCdEf')],
     getChatsByLabel: ['getChatsByLabelId', host => new WwebjsLabels(host).getChatsByLabel('7')],
     getContactById: ['getContactById', host => new WwebjsContacts(host).getContactById('628@c.us')],
+    upsertContact: ['saveOrEditAddressbookContact', host => new WwebjsContacts(host).upsertContact('628@c.us', 'Ada')],
+    deleteContact: ['deleteAddressbookContact', host => new WwebjsContacts(host).deleteContact('628@c.us')],
+    blockContact: ['getContactLidAndPhone', host => new WwebjsContacts(host).blockContact('628@c.us')],
+    unblockContact: ['getContactLidAndPhone', host => new WwebjsContacts(host).unblockContact('628@c.us')],
     sendSeen: ['getChatById', host => chats(host).sendSeen(CHAT)],
     clearChatMessages: ['getChatById', host => chats(host).clearChatMessages(CHAT)],
     archiveChat: ['archiveChat', host => chats(host).archiveChat(CHAT, true)],
@@ -286,5 +292,85 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
     } else {
       await expect(call(host)).resolves.toBe(verdict ?? null);
     }
+  });
+
+  // A write got no answer either way, and its route documents a 503 for that: the request budget, not a raw 500.
+  // Block and unblock first ask WhatsApp for the contact's privacy id and then write on the contact itself, so
+  // the budget can run out in any of three steps.
+  describe.each([
+    ['blockContact', 'block'],
+    ['unblockContact', 'unblock'],
+  ] as const)('%s', (op, action) => {
+    const PRIVACY_ID = '100000000000001@lid';
+    const run = (host: WwebjsEngineHost): Promise<void> => new WwebjsContacts(host)[op]('628@c.us');
+    const found = (): jest.Mock => jest.fn().mockResolvedValue([{ lid: PRIVACY_ID }]);
+    const steps: Array<[string, (timeout: Error) => Record<string, jest.Mock>]> = [
+      ['the privacy id lookup', timeout => ({ getContactLidAndPhone: jest.fn().mockRejectedValue(timeout) })],
+      [
+        'the contact read',
+        timeout => ({ getContactLidAndPhone: found(), getContactById: jest.fn().mockRejectedValue(timeout) }),
+      ],
+      [
+        `the ${action} itself`,
+        timeout => ({
+          getContactLidAndPhone: found(),
+          getContactById: jest.fn().mockResolvedValue({ [action]: jest.fn().mockRejectedValue(timeout) }),
+        }),
+      ],
+    ];
+
+    it.each(steps)('answers a protocolTimeout in %s with a 503 and reports no death', async (_step, client) => {
+      const timeout = new Error(await puppeteerProtocolTimeoutMessage());
+      const { host, reportIfPageTransportError } = makeHost(client(timeout));
+
+      const error = await run(host).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(EngineTransportError);
+      expect((error as Error).message).toContain(op);
+      expect(reportIfPageTransportError).not.toHaveBeenCalled();
+    });
+
+    // Negative twins: what the closure already answered stays what it answers.
+    it('keeps the 400 for a number WhatsApp holds no privacy id for', async () => {
+      const { host } = makeHost({ getContactLidAndPhone: jest.fn().mockResolvedValue([{}]) });
+
+      await expect(run(host)).rejects.toBeInstanceOf(RecipientUnreachableError);
+    });
+
+    it('keeps the 409 for a session that went away after the contact was read', async () => {
+      const { host } = makeHost({
+        getContactLidAndPhone: found(),
+        getContactById: jest.fn().mockResolvedValue({ [action]: jest.fn() }),
+      });
+      // The first check is the call's own, the second the write's, after the awaits in between.
+      (host.ensureReady as unknown as jest.Mock)
+        .mockImplementationOnce(() => undefined)
+        .mockImplementationOnce(() => {
+          throw new EngineNotReadyError();
+        });
+
+      await expect(run(host)).rejects.toBeInstanceOf(EngineNotReadyError);
+    });
+
+    it('passes an ordinary refusal of the write through unchanged', async () => {
+      const refusal = new Error('Evaluation failed: not allowed');
+      const { host, reportIfPageTransportError } = makeHost({
+        getContactLidAndPhone: found(),
+        getContactById: jest.fn().mockResolvedValue({ [action]: jest.fn().mockRejectedValue(refusal) }),
+      });
+
+      await expect(run(host)).rejects.toBe(refusal);
+      expect(reportIfPageTransportError).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    ['upsertContact', 'saveOrEditAddressbookContact'],
+    ['deleteContact', 'deleteAddressbookContact'],
+  ])('%s passes an ordinary refusal through unchanged', async (op, method) => {
+    const refusal = new Error('Evaluation failed: not allowed');
+    const { host } = makeHost({ [method]: jest.fn().mockRejectedValue(refusal) });
+
+    await expect(OPS[op][1](host)).rejects.toBe(refusal);
   });
 });

@@ -8,7 +8,7 @@ import { type createLogger } from '../../common/services/logger.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { type WhatsAppWebJsConfig } from './whatsapp-web-js.adapter';
-import { PAGE_RELOADING_MESSAGE, isNavigationError, toCapturedPageError } from './wwebjs-lifecycle';
+import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 
 /**
  * Shared host surface for the delegates extracted from WhatsAppWebJsAdapter (./wwebjs-groups,
@@ -85,6 +85,26 @@ export async function withPage<T>(host: WwebjsEngineHost, context: string, op: (
     if (host.isPageTransportError(error)) {
       host.reportIfPageTransportError(error, context);
       throw new EngineTransportError(`Transport died during ${context}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * {@link withPage} for a write that converges when repeated. A command that outran Puppeteer's protocol budget got
+ * no answer either way and is no page death, so it is the 503 the route documents (the change may or may not have
+ * been applied), not the raw timeout as a 500, and nothing is reported: a slow renderer is not a dead one. Every
+ * other outcome is withPage's.
+ *
+ * Not for a read that folds a failure into a verdict (getNumberId answers the typed number when the phone read of
+ * a migrated number fails), and not for a write that does not converge (see {@link reportPageDeath}).
+ */
+export async function withPageWrite<T>(host: WwebjsEngineHost, context: string, op: () => Promise<T>): Promise<T> {
+  try {
+    return await withPage(host, context, op);
+  } catch (error) {
+    if (isProtocolTimeout(error)) {
+      throw new EngineTransportError(`WhatsApp Web did not answer in time during ${context}`);
     }
     throw error;
   }
