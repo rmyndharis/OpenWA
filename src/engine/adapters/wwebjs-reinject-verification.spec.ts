@@ -683,3 +683,144 @@ describe('a re-inject that throws in a reloaded page', () => {
     );
   });
 });
+
+/**
+ * whatsapp-web.js 1.34.8 registers its framenavigated listener before the launch's own inject. A navigation that
+ * lands while that inject waits for the page to boot makes the listener start another, which aborts the first, and
+ * the aborted one resolves: initialize() resolves although the inject that took over is still running, unawaited.
+ */
+describe('a launch whose first inject a navigation handed over', () => {
+  type Launching = Client & { inject: () => Promise<void> };
+  let rmSpy: jest.SpyInstance;
+  let initSpy: jest.SpyInstance;
+  let injectSpy: jest.SpyInstance;
+  let savedWebVersion: string | undefined;
+  const unhandled = jest.fn();
+
+  beforeEach(() => {
+    savedWebVersion = process.env.WWEBJS_WEB_VERSION;
+    process.env.WWEBJS_WEB_VERSION = 'off';
+    rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    unhandled.mockClear();
+    process.on('unhandledRejection', unhandled);
+  });
+  afterEach(() => {
+    process.off('unhandledRejection', unhandled);
+    rmSpy.mockRestore();
+    initSpy.mockRestore();
+    injectSpy.mockRestore();
+    if (savedWebVersion === undefined) delete process.env.WWEBJS_WEB_VERSION;
+    else process.env.WWEBJS_WEB_VERSION = savedWebVersion;
+  });
+
+  /**
+   * A launch in which `injects` run one after another: the first is the one initialize() awaits, each later one is
+   * started by the listener with nothing awaiting it, as in the library.
+   */
+  const launchWith = (injects: Array<() => Promise<void>>): void => {
+    let call = 0;
+    injectSpy = jest
+      .spyOn(Client.prototype as unknown as { inject: () => Promise<void> }, 'inject')
+      .mockImplementation(() => injects[call++]());
+    initSpy = jest
+      .spyOn(Client.prototype as unknown as { initialize: () => Promise<void> }, 'initialize')
+      .mockImplementation(async function (this: Launching) {
+        const own = this.inject();
+        for (let later = 1; later < injects.length; later++) void this.inject();
+        await own;
+      });
+  };
+  const newAdapter = (): WhatsAppWebJsAdapter =>
+    new WhatsAppWebJsAdapter({ sessionId: 'sess-handover', sessionDataPath: './data/sessions', puppeteer: {} });
+  const aborted = (): Promise<void> => Promise.resolve();
+  // The library rejects with a bare string, which a mock can hand over where a literal Promise.reject may not.
+  const failing = (reason: string): (() => Promise<void>) => jest.fn<Promise<void>, []>().mockRejectedValue(reason);
+  const macrotask = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+  it('fails the launch with what the inject that took over failed with, and leaves no unhandled rejection', async () => {
+    launchWith([aborted, failing('auth timeout')]);
+    const adapter = newAdapter();
+    const onError = jest.fn();
+
+    await expect(adapter.initialize({ onError })).rejects.toBe('auth timeout');
+
+    expect(adapter.getStatus()).toBe(EngineStatus.FAILED);
+    expect(onError).toHaveBeenCalledWith('auth timeout');
+    await macrotask();
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('does not count the launch as finished until the inject that took over has settled', async () => {
+    let finish: () => void = () => undefined;
+    launchWith([aborted, () => new Promise<void>(resolve => (finish = resolve))]);
+    const adapter = newAdapter();
+    let launched = false;
+    const launch = adapter.initialize({}).then(() => (launched = true));
+
+    // The sweeps that run before a launch take real time, so wait for the library's initialize() to have started
+    // both injects. It has resolved by then: its own inject was the aborted one.
+    for (let turn = 0; turn < 2000 && injectSpy.mock.calls.length < 2; turn++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    expect(injectSpy).toHaveBeenCalledTimes(2);
+    for (let turn = 0; turn < 5; turn++) await macrotask();
+    expect(launched).toBe(false);
+
+    finish();
+    await launch;
+    expect(launched).toBe(true);
+  });
+
+  it('follows the newest inject when the page navigates again', async () => {
+    launchWith([aborted, aborted, failing('auth timeout')]);
+    const adapter = newAdapter();
+
+    await expect(adapter.initialize({})).rejects.toBe('auth timeout');
+    expect(injectSpy).toHaveBeenCalledTimes(3);
+    await macrotask();
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('logs a re-inject that fails once the launch is over, as before', async () => {
+    launchWith([aborted, aborted, failing('ready timeout')]);
+    initSpy.mockImplementation(async function (this: Launching) {
+      const own = this.inject();
+      void this.inject();
+      await own;
+    });
+    const adapter = newAdapter();
+    const warn = jest.spyOn((adapter as unknown as { logger: { warn: () => void } }).logger, 'warn');
+    await adapter.initialize({});
+    const client = (adapter as unknown as { client: Launching }).client;
+
+    await expect(client.inject()).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('re-inject'),
+      expect.objectContaining({ sessionId: 'sess-handover', action: 'page_reinject_failed', error: 'ready timeout' }),
+    );
+  });
+
+  // 1.34.8 waits for WhatsApp Web's socket under authTimeoutMs too, and that wait rejects with Puppeteer's error.
+  const socketWaitTimeout = (): Error =>
+    Object.assign(new Error('Waiting failed: 30000ms exceeded'), { name: 'TimeoutError' });
+
+  it.each<[string, Array<() => Promise<void>>]>([
+    ['the launch itself', [() => Promise.reject(socketWaitTimeout())]],
+    ['the inject that took over', [aborted, () => Promise.reject(socketWaitTimeout())]],
+  ])('reports the socket wait running out in %s as the auth timeout', async (_where, injects) => {
+    launchWith(injects);
+    const adapter = newAdapter();
+    const onError = jest.fn();
+
+    await expect(adapter.initialize({ onError })).rejects.toBe('auth timeout');
+    expect(onError).toHaveBeenCalledWith('auth timeout');
+  });
+
+  it('leaves any other failure of the launch as it is', async () => {
+    const failure = new Error('Failed to launch the browser process!');
+    launchWith([() => Promise.reject(failure)]);
+
+    await expect(newAdapter().initialize({})).rejects.toBe(failure);
+  });
+});
