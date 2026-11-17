@@ -1107,6 +1107,17 @@ adapter boundary — none silently stubs.
   delivered. A message the session sent is held the same way as one it received, and an edit the
   account makes from its own phone is applied under the account's own id, plain or encrypted.
   whatsapp-web.js receives both already decrypted from WhatsApp Web.
+- **Disappearing messages under `STORE_EPHEMERAL_MESSAGES=false` (baileys).** The flag also keeps the adapter's own
+  copy of a message received in a disappearing-messages chat out of `baileys_stored_messages`, which has no age limit
+  and is part of a backup. Without the copy, a reply to, forward of, edit of, reaction to, star of, pin or unpin of,
+  delete of, button click on or quote of such a message answers `404`, a group read receipt that names one leaves it
+  out, an encrypted edit, reaction or poll vote aimed at it is not delivered once the message has been processed, and
+  an RSVP to an event it carries is not reported. A plain edit,
+  reaction or delete of it is announced as before, and so is a message the account sent or typed on its phone in that
+  chat, which keeps its copy, and a status. A redelivery of one is handed to the session again and dropped there.
+  Rows written before the flag was turned off stay until the count cap evicts them. While such a message is a chat's
+  newest, the chat is listed with an empty `lastMessage`. whatsapp-web.js has no store of its own to govern: WhatsApp
+  Web holds the message until it expires, so `getChatHistory` and the chat list's `lastMessage` still return it there.
 - **Inbound poll votes (`poll.vote`).** Baileys no longer reads a vote itself, so the adapter does,
   with the library's `decryptPollVote` and the secret of the poll creation message in the session's
   message store (`BAILEYS_MESSAGE_STORE_LIMIT`), and names the selected options by their SHA-256
