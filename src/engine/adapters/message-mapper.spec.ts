@@ -6,6 +6,7 @@ import {
   POLL_TEXT_MAX_LENGTH,
   RawContactFields,
   RawMessageFields,
+  wwebjsBody,
 } from './message-mapper';
 
 describe('buildIncomingMessageBase', () => {
@@ -191,6 +192,39 @@ describe('buildIncomingMessageBase', () => {
     const r = buildIncomingMessageBase({ ...base, title: 'Sample', productId: '2', orderId: '1' });
     expect(r.product).toBeUndefined();
     expect(r.order).toBeUndefined();
+  });
+});
+
+describe('wwebjsBody', () => {
+  const card = (name: string) => `BEGIN:VCARD\nVERSION:3.0\nFN:${name}\nEND:VCARD`;
+
+  it('joins the vCards of several contacts shared together, which arrive with no body', () => {
+    const shared = { type: 'multi_vcard', body: '', vCards: [card('Ana'), card('Budi')] };
+    expect(wwebjsBody(shared)).toBe(`${card('Ana')}\n${card('Budi')}`);
+    // WhatsApp Web holds the body of such a message as null, not as an empty string.
+    expect(wwebjsBody({ ...shared, body: null as unknown as string })).toBe(`${card('Ana')}\n${card('Budi')}`);
+  });
+
+  it('leaves every other body as it is', () => {
+    expect(wwebjsBody({ type: 'vcard', body: card('Ana'), vCards: [card('Ana')] })).toBe(card('Ana'));
+    expect(wwebjsBody({ type: 'chat', body: 'hi', vCards: [] })).toBe('hi');
+    expect(wwebjsBody({ type: 'multi_vcard', body: 'kept', vCards: [card('Ana')] })).toBe('kept');
+    expect(wwebjsBody({ type: 'multi_vcard', body: '' })).toBe('');
+  });
+
+  it('reaches the message a webhook and the message list carry', () => {
+    const r = buildIncomingMessageBase({
+      id: { _serialized: 'MSG1' },
+      from: '123@c.us',
+      to: 'me@c.us',
+      body: '',
+      type: 'multi_vcard',
+      vCards: [card('Ana'), card('Budi')],
+      timestamp: 1700000000,
+      fromMe: false,
+    });
+    expect(r.type).toBe('contact');
+    expect(r.body).toBe(`${card('Ana')}\n${card('Budi')}`);
   });
 });
 
