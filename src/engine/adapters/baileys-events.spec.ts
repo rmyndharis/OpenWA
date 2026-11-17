@@ -3476,6 +3476,85 @@ describe('BaileysEvents poll votes', () => {
     );
   });
 
+  describe('a vote on the account own broadcast-list poll', () => {
+    const listPoll = () =>
+      makePoll(['Yes', 'No'], { key: { remoteJid: '1786000000@broadcast', fromMe: true, participant: undefined } });
+    const voteFrom = (key: Record<string, unknown>, voterJid = voterPhone) =>
+      makeVoteEnvelope({ pollCreatorJid: selfPhone, voterJid }, ['Yes'], {
+        key: { participant: undefined, fromMe: false, ...key },
+        senderTimestampMs: 1_786_000_009_000,
+      });
+
+    it('accepts a vote the recipient casts from its 1:1 chat addressed by lid', async () => {
+      const { events, onPollVote } = setup({}, listPoll());
+
+      events.handleMessagesUpsert({ type: 'notify', messages: [voteFrom({ remoteJid: voterLid }, voterLid)] });
+      await flush();
+
+      expect(onPollVote).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pollMessageId: 'POLL1',
+          chatId: voterLid,
+          voterId: voterLid,
+          selectedOptions: ['Yes'],
+        }),
+      );
+    });
+
+    it.each([
+      ['a group chat', group],
+      ['the broadcast list itself', '1786000000@broadcast'],
+      ['the status chat', 'status@broadcast'],
+    ])('drops a vote that arrives in %s', async (_where, remoteJid) => {
+      const { events, onPollVote, warnSpy } = setup({}, listPoll());
+
+      events.handleMessagesUpsert({
+        type: 'notify',
+        messages: [voteFrom({ remoteJid, participant: voterPhone })],
+      });
+      await flush();
+
+      expect(onPollVote).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Dropping a poll vote sent in a chat other than its poll',
+        expect.objectContaining({ action: 'baileys_poll_vote_cross_chat', targetId: 'POLL1' }),
+      );
+    });
+
+    it('judges a vote on a list poll the account received as before, by the chat the poll is filed under', async () => {
+      const received = makePoll(['Yes', 'No'], {
+        key: { remoteJid: '1786000000@broadcast', fromMe: false, participant: peerPhone },
+      });
+      const { events, onPollVote } = setup({}, received);
+      const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['Yes'], {
+        key: { remoteJid: '1786000000@broadcast', participant: voterPhone },
+        senderTimestampMs: 1_786_000_009_000,
+      });
+
+      events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+      await flush();
+
+      expect(onPollVote).toHaveBeenCalledWith(
+        expect.objectContaining({ pollMessageId: 'POLL1', selectedOptions: ['Yes'] }),
+      );
+    });
+
+    it('still reports a vote on a poll the account sent to a group, from that group', async () => {
+      const { events, onPollVote } = setup(
+        {},
+        makePoll(['Yes', 'No'], { key: { fromMe: true, participant: undefined } }),
+      );
+
+      events.handleMessagesUpsert({
+        type: 'notify',
+        messages: [voteFrom({ remoteJid: group, participant: voterPhone })],
+      });
+      await flush();
+
+      expect(onPollVote).toHaveBeenCalledWith(expect.objectContaining({ chatId: group, selectedOptions: ['Yes'] }));
+    });
+  });
+
   it('reads messageSecret nested inside pollCreationMessageV4', async () => {
     const stored = makePoll(['One', 'Two'], {
       message: {

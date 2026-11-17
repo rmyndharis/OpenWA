@@ -3054,7 +3054,13 @@ export class BaileysEvents {
         return;
       }
 
-      if (this.readsAsForeign(original.key, msg.key, false, 'reaction')) {
+      // A poll the account sent to a broadcast list is filed under the list, which no chat can match, so
+      // readsAsForeign lets every vote through. Each recipient votes from its 1:1 chat, and only that is exempt.
+      const ownListPoll = original.key.fromMe === true && !!original.key.remoteJid?.endsWith('@broadcast');
+      if (
+        this.readsAsForeign(original.key, msg.key, false, 'reaction') ||
+        (ownListPoll && chatKind(remoteJid) !== 'individual')
+      ) {
         this.host.logger.warn('Dropping a poll vote sent in a chat other than its poll', {
           action: 'baileys_poll_vote_cross_chat',
           msgId: msg.key.id ?? 'unknown',
