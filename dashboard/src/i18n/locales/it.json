@@ -51,9 +51,7 @@
     "refresh": "Aggiorna",
     "errorGeneric": "Si è verificato un errore",
     "unknownError": "Errore sconosciuto",
-    "retry": "Riprova",
-    "maximize": "Ingrandisci",
-    "restore": "Ripristina"
+    "retry": "Riprova"
   },
   "theme": {
     "light": "Chiaro",
@@ -87,9 +85,7 @@
       "callVideo": "Videochiamata",
       "callVideoMissed": "Videochiamata persa",
       "omitted": "Media",
-      "image": "Immagine",
-      "preview": "Anteprima",
-      "openInNewTab": "Apri in una nuova scheda"
+      "image": "Immagine"
     },
     "subtitle": "Invia e rispondi ai messaggi WhatsApp in tempo reale",
     "noSessionsTitle": "Nessuna sessione connessa",

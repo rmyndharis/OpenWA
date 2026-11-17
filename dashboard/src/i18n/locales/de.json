@@ -49,9 +49,7 @@
     "refresh": "Aktualisieren",
     "errorGeneric": "Ein Fehler ist aufgetreten",
     "unknownError": "Unbekannter Fehler",
-    "retry": "Erneut versuchen",
-    "maximize": "Maximieren",
-    "restore": "Wiederherstellen"
+    "retry": "Erneut versuchen"
   },
   "theme": {
     "light": "Hell",
@@ -85,9 +83,7 @@
       "callVideo": "Videoanruf",
       "callVideoMissed": "Verpasster Videoanruf",
       "omitted": "Medien",
-      "image": "Bild",
-      "preview": "Vorschau",
-      "openInNewTab": "In neuem Tab öffnen"
+      "image": "Bild"
     },
     "subtitle": "WhatsApp-Nachrichten in Echtzeit senden und beantworten",
     "noSessionsTitle": "Keine verbundenen Sitzungen",

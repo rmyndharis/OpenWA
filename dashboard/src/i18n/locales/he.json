@@ -53,9 +53,7 @@
     "refresh": "רענון",
     "errorGeneric": "אירעה שגיאה",
     "unknownError": "שגיאה לא ידועה",
-    "retry": "נסה שוב",
-    "maximize": "הגדל",
-    "restore": "שחזר"
+    "retry": "נסה שוב"
   },
   "theme": {
     "light": "בהיר",
@@ -89,9 +87,7 @@
       "callVideo": "שיחת וידאו",
       "callVideoMissed": "שיחת וידאו שלא נענתה",
       "omitted": "מדיה",
-      "image": "תמונה",
-      "preview": "תצוגה מקדימה",
-      "openInNewTab": "פתח בכרטיסייה חדשה"
+      "image": "תמונה"
     },
     "subtitle": "שליחה ומענה להודעות WhatsApp בזמן אמת",
     "noSessionsTitle": "אין סשנים מחוברים",

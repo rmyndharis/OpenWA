@@ -49,9 +49,7 @@
     "refresh": "刷新",
     "errorGeneric": "发生错误",
     "unknownError": "未知错误",
-    "retry": "重试",
-    "maximize": "最大化",
-    "restore": "还原"
+    "retry": "重试"
   },
   "theme": {
     "light": "浅色",
@@ -85,9 +83,7 @@
       "callVideo": "视频通话",
       "callVideoMissed": "未接视频通话",
       "omitted": "媒体",
-      "image": "图片",
-      "preview": "预览",
-      "openInNewTab": "在新标签页中打开"
+      "image": "图片"
     },
     "subtitle": "实时发送和回复 WhatsApp 消息",
     "noSessionsTitle": "没有已连接的会话",

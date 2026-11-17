@@ -49,9 +49,7 @@
     "refresh": "Muat ulang",
     "errorGeneric": "Terjadi kesalahan",
     "unknownError": "Kesalahan tidak diketahui",
-    "retry": "Coba lagi",
-    "maximize": "Maksimalkan",
-    "restore": "Pulihkan"
+    "retry": "Coba lagi"
   },
   "theme": {
     "light": "Terang",
@@ -85,9 +83,7 @@
       "callVideo": "Panggilan video",
       "callVideoMissed": "Panggilan video tak terjawab",
       "omitted": "Media",
-      "image": "Gambar",
-      "preview": "Pratinjau",
-      "openInNewTab": "Buka di tab baru"
+      "image": "Gambar"
     },
     "subtitle": "Kirim dan balas pesan WhatsApp secara real-time",
     "noSessionsTitle": "Tidak ada sesi terhubung",

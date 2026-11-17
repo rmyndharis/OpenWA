@@ -213,6 +213,52 @@ test('a document sent by URL opens in a new tab instead of navigating the dashbo
   assert.equal(inline.getAttribute('download'), 'inline.pdf');
 });
 
+test('a document shows as a card with its name and size, whether the page holds it or has to fetch it', () => {
+  const media = (id: string, type: ChatMessageView['type'], info: Record<string, unknown>): ChatMessageView => ({
+    ...PROMPT,
+    id,
+    waMessageId: `wamid.${id}`,
+    body: '',
+    type,
+    metadata: { media: { mimetype: 'application/pdf', filename: `${id}.pdf`, ...info } },
+  });
+  const { container } = renderThread('operator', [
+    media('held', 'document', { data: 'JVBERi0=' }),
+    media('left-out', 'document', { omitted: true, sizeBytes: 2 * 1024 * 1024 }),
+    media('sheet', 'document', {
+      omitted: true,
+      sizeBytes: 3072,
+      mimetype: 'application/vnd.ms-excel',
+      filename: 'sheet.xls',
+    }),
+    media('photo', 'image', { omitted: true, sizeBytes: 3072, mimetype: 'image/jpeg', filename: 'photo.jpg' }),
+  ]);
+  const card = (id: string) => container.querySelector(`[data-wa-message-id="wamid.${id}"] .chat-document-card`);
+  const text = (id: string, part: string) => card(id)?.querySelector(`.chat-document-${part}`)?.textContent;
+
+  // Held by the page: the card is the link that downloads it. No size is known for it, so only the kind is named.
+  assert.equal(card('held')?.tagName, 'A');
+  assert.equal(card('held')?.getAttribute('download'), 'held.pdf');
+  assert.equal(text('held', 'title'), 'held.pdf');
+  assert.equal(text('held', 'meta'), 'PDF');
+
+  // Left out of the list: the card is the button that fetches it, and carries the size the marker gave.
+  assert.equal(card('left-out')?.tagName, 'BUTTON');
+  assert.equal(text('left-out', 'title'), 'left-out.pdf');
+  assert.equal(text('left-out', 'meta'), '2 MB \u2022 PDF');
+
+  // Not a PDF: no PDF mark, the size alone.
+  assert.equal(text('sheet', 'title'), 'sheet.xls');
+  assert.equal(text('sheet', 'meta'), '3 KB');
+  assert.equal(card('sheet')?.querySelector('.chat-document-pdf-tag'), null);
+
+  // Media that is not a document keeps its plain label.
+  const photo = container.querySelector('[data-wa-message-id="wamid.photo"] button.message-media-omitted');
+  assert.ok(photo);
+  assert.equal(photo.classList.contains('chat-document-card'), false);
+  assert.equal(photo.querySelector('.chat-document-title'), null);
+});
+
 test('archive-only media previews inline from the media route; a plain omitted marker and a document keep the button', async () => {
   // MESSAGE_INLINE_MEDIA=archive leaves `{ omitted, archived }` on the row: the image rendered inline
   // before, so it must still. The over-budget marker (no `archived`) must not fetch on render, and a

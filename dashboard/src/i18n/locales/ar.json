@@ -57,9 +57,7 @@
     "refresh": "تحديث",
     "errorGeneric": "حدث خطأ",
     "unknownError": "خطأ غير معروف",
-    "retry": "إعادة المحاولة",
-    "maximize": "تكبير",
-    "restore": "استعادة"
+    "retry": "إعادة المحاولة"
   },
   "theme": {
     "light": "فاتح",
@@ -93,9 +91,7 @@
       "callVideo": "مكالمة فيديو",
       "callVideoMissed": "مكالمة فيديو فائتة",
       "omitted": "وسائط",
-      "image": "صورة",
-      "preview": "معاينة",
-      "openInNewTab": "فتح في علامة تبويب جديدة"
+      "image": "صورة"
     },
     "subtitle": "أرسل ورد على رسائل واتساب في الوقت الفعلي",
     "noSessionsTitle": "لا توجد جلسات متصلة",
