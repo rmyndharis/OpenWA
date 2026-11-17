@@ -91,13 +91,14 @@ export async function withPage<T>(host: WwebjsEngineHost, context: string, op: (
 }
 
 /**
- * {@link withPage} for a write that converges when repeated. A command that outran Puppeteer's protocol budget got
- * no answer either way and is no page death, so it is the 503 the route documents (the change may or may not have
- * been applied), not the raw timeout as a 500, and nothing is reported: a slow renderer is not a dead one. Every
- * other outcome is withPage's.
+ * {@link withPage} for a write that converges when repeated, and for the lookups it makes before it writes. A
+ * command that outran Puppeteer's protocol budget got no answer either way and is no page death, so it is the 503 the
+ * route documents (the change may or may not have been applied), not the raw timeout as a 500, and nothing is
+ * reported: a slow renderer is not a dead one. Every other outcome is withPage's.
  *
  * Not for a read that folds a failure into a verdict (getNumberId answers the typed number when the phone read of
- * a migrated number fails), and not for a write that does not converge (see {@link reportPageDeath}).
+ * a migrated number fails), and not for the write itself when it does not converge (see {@link reportPageDeath}):
+ * only the lookup in front of such a write has applied nothing yet.
  */
 export async function withPageWrite<T>(host: WwebjsEngineHost, context: string, op: () => Promise<T>): Promise<T> {
   try {

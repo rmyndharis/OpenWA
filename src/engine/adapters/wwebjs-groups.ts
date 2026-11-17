@@ -19,7 +19,7 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { toMessageMedia } from './wwebjs-messaging';
-import { type WwebjsEngineHost, rethrowIfNavigation, withPage, reportPageDeath } from './wwebjs-host';
+import { type WwebjsEngineHost, rethrowIfNavigation, withPage, withPageWrite, reportPageDeath } from './wwebjs-host';
 import { isNavigationError, isProtocolTimeout } from './wwebjs-lifecycle';
 import { listChats, recoverGroupChatById } from './wwebjs-chats';
 
@@ -368,7 +368,7 @@ export class WwebjsGroups {
     const chat = await this.requireGroupChat(groupId, 'setGroupSubject');
     // GroupChat.setSubject resolves false when WA Web rejects the change (e.g. the account lacks
     // admin rights; index.d.ts:1982) instead of throwing — surface the refusal, not a false success.
-    const ok = await withPage(this.host, 'setGroupSubject', () => chat.setSubject(subject));
+    const ok = await withPageWrite(this.host, 'setGroupSubject', () => chat.setSubject(subject));
     if (!ok) {
       throw new EngineRefusedError(`Failed to set the subject for group ${groupId} — admin rights required`);
     }
@@ -377,7 +377,7 @@ export class WwebjsGroups {
   async setGroupDescription(groupId: string, description: string): Promise<void> {
     const chat = await this.requireGroupChat(groupId, 'setGroupDescription');
     // Same discarded-boolean contract as setSubject (index.d.ts:1984).
-    const ok = await withPage(this.host, 'setGroupDescription', () => chat.setDescription(description));
+    const ok = await withPageWrite(this.host, 'setGroupDescription', () => chat.setDescription(description));
     if (!ok) {
       throw new EngineRefusedError(`Failed to set the description for group ${groupId} — admin rights required`);
     }
@@ -388,7 +388,7 @@ export class WwebjsGroups {
     // Typed Promise<string>, but WA Web yields nothing when the account is not an admin of the
     // group — and String(undefined) is the literal 'undefined', which the caller renders as the
     // link "https://chat.whatsapp.com/undefined". Same refusal contract as setDescription.
-    const inviteCode = await withPage(this.host, 'getGroupInviteCode', () => chat.getInviteCode());
+    const inviteCode = await withPageWrite(this.host, 'getGroupInviteCode', () => chat.getInviteCode());
     if (!inviteCode) {
       throw new EngineRefusedError(`Failed to get the invite code for group ${groupId} — admin rights required`);
     }
@@ -514,13 +514,14 @@ export class WwebjsGroups {
 
   /**
    * Resolve a group chat or throw: the shared preamble of the group settings writes. The lookup is a
-   * read that runs before any write, so a dead page answers 503 with the death signal even for the
-   * non-idempotent callers: nothing has been applied yet. A session that went away during the lookup
-   * answers the not-ready 409 for the same reason. `context` names the caller's operation.
+   * read that runs before any write, so a dead page answers 503 with the death signal, and a lookup that
+   * outran the protocol budget answers 503 without one, even for the non-idempotent callers: nothing has
+   * been applied yet. A session that went away during the lookup answers the not-ready 409 for the same
+   * reason. `context` names the caller's operation.
    */
   private async requireGroupChat(groupId: string, context: string): Promise<GroupChat> {
     this.host.ensureReady();
-    const chat = await withPage(this.host, context, () =>
+    const chat = await withPageWrite(this.host, context, () =>
       this.client()
         .getChatById(groupId)
         .catch(error => recoverGroupChatById(this.host, context, groupId, error)),
@@ -554,7 +555,7 @@ export class WwebjsGroups {
     const groupChat = await this.requireGroupChat(groupId, 'setGroupMessagesAdminsOnly');
     // Resolves false instead of throwing when the account lacks admin rights (GroupChat.js:503) —
     // surface that as an error rather than a silent no-op.
-    const ok = await withPage(this.host, 'setGroupMessagesAdminsOnly', () =>
+    const ok = await withPageWrite(this.host, 'setGroupMessagesAdminsOnly', () =>
       groupChat.setMessagesAdminsOnly(adminsOnly),
     );
     if (!ok) {
@@ -571,7 +572,7 @@ export class WwebjsGroups {
     // The fetch can outlast the session, and the chat writes through the client that read it.
     this.host.ensureReady();
     // GroupChat.setPicture, NOT Client.setProfilePicture — the latter targets the own account.
-    const ok = await withPage(this.host, 'setGroupPicture', () => groupChat.setPicture(picture));
+    const ok = await withPageWrite(this.host, 'setGroupPicture', () => groupChat.setPicture(picture));
     if (!ok) {
       throw new EngineRefusedError(`Failed to set the picture for group ${groupId} — admin rights required`);
     }
@@ -579,7 +580,7 @@ export class WwebjsGroups {
 
   async deleteGroupPicture(groupId: string): Promise<void> {
     const groupChat = await this.requireGroupChat(groupId, 'deleteGroupPicture');
-    const ok = await withPage(this.host, 'deleteGroupPicture', () => groupChat.deletePicture());
+    const ok = await withPageWrite(this.host, 'deleteGroupPicture', () => groupChat.deletePicture());
     if (!ok) {
       throw new EngineRefusedError(`Failed to delete the picture for group ${groupId} — admin rights required`);
     }
@@ -590,7 +591,7 @@ export class WwebjsGroups {
   // means mode 'admins'.
   async setGroupMemberAddMode(groupId: string, mode: GroupMemberAddMode): Promise<void> {
     const groupChat = await this.requireGroupChat(groupId, 'setGroupMemberAddMode');
-    const ok = await withPage(this.host, 'setGroupMemberAddMode', () =>
+    const ok = await withPageWrite(this.host, 'setGroupMemberAddMode', () =>
       groupChat.setAddMembersAdminsOnly(mode === 'admins'),
     );
     if (!ok) {
@@ -603,7 +604,7 @@ export class WwebjsGroups {
   // Set "only admins can edit group info" (locked/restrict)
   async setGroupInfoAdminsOnly(groupId: string, adminsOnly: boolean): Promise<void> {
     const groupChat = await this.requireGroupChat(groupId, 'setGroupInfoAdminsOnly');
-    const ok = await withPage(this.host, 'setGroupInfoAdminsOnly', () => groupChat.setInfoAdminsOnly(adminsOnly));
+    const ok = await withPageWrite(this.host, 'setGroupInfoAdminsOnly', () => groupChat.setInfoAdminsOnly(adminsOnly));
     if (!ok) {
       throw new EngineRefusedError(
         `Failed to update the info-admins-only setting for group ${groupId} — admin rights required`,

@@ -11,7 +11,7 @@ import { SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { toMessageMedia } from './wwebjs-messaging';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
-import { type WwebjsEngineHost, requireClient, withPage, reportPageDeath } from './wwebjs-host';
+import { type WwebjsEngineHost, requireClient, withPage, withPageWrite, reportPageDeath } from './wwebjs-host';
 import { noteVideoLoadTimeout } from './wwebjs-video-load-timeout';
 
 /**
@@ -227,7 +227,7 @@ export class WwebjsStatus {
     // resolves to no message returns silently, which keeps the documented idempotent 200. Caught
     // outside withPage so a dead page still answers 503 first.
     try {
-      await this.withPage('deleteStatus', () => this.client().revokeStatusMessage(statusId));
+      await withPageWrite(this.host, 'deleteStatus', () => this.client().revokeStatusMessage(statusId));
     } catch (error) {
       if (typeof error === 'string' && error.startsWith('Invalid usage!')) {
         throw new EngineRefusedError("Only the account's own statuses can be deleted");
