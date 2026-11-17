@@ -400,6 +400,10 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     if (msg.fromMe === false) return;
     // The account's own notice was never handed over as a sent message, so its ack would point at nothing.
     if (isNotice(msg, host.logger)) return;
+    // Nor was an own entry of an unlisted kind with no text and no media, which the creation path dropped and logged.
+    // Only one that names its type: an ack with an unreadable type is forwarded, as with an unreadable fromMe (#747).
+    const type: unknown = msg.type;
+    if (typeof type === 'string' && type !== '' && isUnlistedContentless(msg)) return;
     // Map the whatsapp-web.js MessageAck integer to the neutral DeliveryStatus here, at the
     // adapter boundary, so no downstream consumer ever sees engine-specific ack codes. The chat is
     // derived as Message._getChatId derives it (the same direction flag the revoked handler uses),
