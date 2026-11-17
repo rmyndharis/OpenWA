@@ -909,6 +909,8 @@ export function Chats() {
         activeChatId: canWrite ? activeChat?.id : undefined,
         // A location message's body is the (multi-KB) base64 map thumbnail; show a label instead.
         locationLabel: `📍 ${t('chats.media.location')}`,
+        // A contact message's body is the raw vCard; show a short label instead.
+        contactLabel: `👤 ${t('chats.media.contact')}`,
       };
       liveRowsRef.current.set(newMsg.chatId, chatsRequestRef.current);
       const { needsSidebarRefetch } = applyIncomingToChatList(chatsRef.current, newMsg, listOptions);

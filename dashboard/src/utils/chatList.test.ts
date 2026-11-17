@@ -9,6 +9,7 @@ const chat = (id: string, over: Partial<ChatListEntry> = {}): ChatListEntry => (
   ...over,
 });
 
+const CONTACT = '👤 Contact';
 const LOCATION = '📍 Location';
 
 test('an arriving message moves its chat to the top and refreshes the snippet', () => {
@@ -17,7 +18,7 @@ test('an arriving message moves its chat to the top and refreshes the snippet', 
   const { chats, needsSidebarRefetch } = applyIncomingToChatList(
     before,
     { chatId: 'b@c.us', body: 'hi', type: 'text', timestamp: 200 },
-    { locationLabel: LOCATION },
+    { locationLabel: LOCATION, contactLabel: CONTACT },
   );
 
   assert.equal(needsSidebarRefetch, false);
@@ -39,7 +40,7 @@ test('a location message shows the label, never its base64 body', () => {
   const { chats } = applyIncomingToChatList(
     [chat('a@c.us')],
     { chatId: 'a@c.us', body: 'data:image/jpeg;base64,AAAA…', type: 'location', timestamp: 200 },
-    { locationLabel: LOCATION },
+    { locationLabel: LOCATION, contactLabel: CONTACT },
   );
 
   assert.equal(chats[0].lastMessage, LOCATION);
@@ -49,21 +50,21 @@ test('unread increments only for an incoming message in a chat that is not open'
   const incomingElsewhere = applyIncomingToChatList(
     [chat('a@c.us', { unreadCount: 2 })],
     { chatId: 'a@c.us', body: 'hi', timestamp: 200 },
-    { activeChatId: 'b@c.us', locationLabel: LOCATION },
+    { activeChatId: 'b@c.us', locationLabel: LOCATION, contactLabel: CONTACT },
   );
   assert.equal(incomingElsewhere.chats[0].unreadCount, 3);
 
   const incomingOnScreen = applyIncomingToChatList(
     [chat('a@c.us', { unreadCount: 2 })],
     { chatId: 'a@c.us', body: 'hi', timestamp: 200 },
-    { activeChatId: 'a@c.us', locationLabel: LOCATION },
+    { activeChatId: 'a@c.us', locationLabel: LOCATION, contactLabel: CONTACT },
   );
   assert.equal(incomingOnScreen.chats[0].unreadCount, 2);
 
   const ownSend = applyIncomingToChatList(
     [chat('a@c.us', { unreadCount: 2 })],
     { chatId: 'a@c.us', body: 'hi', timestamp: 200, fromMe: true },
-    { activeChatId: 'b@c.us', locationLabel: LOCATION },
+    { activeChatId: 'b@c.us', locationLabel: LOCATION, contactLabel: CONTACT },
   );
   assert.equal(ownSend.chats[0].unreadCount, 2);
 });
@@ -72,7 +73,7 @@ test('a message into a chat marked unread counts as one unread, not zero', () =>
   const { chats } = applyIncomingToChatList(
     [chat('a@c.us', { unreadCount: -1 })],
     { chatId: 'a@c.us', body: 'hi', timestamp: 200 },
-    { activeChatId: 'b@c.us', locationLabel: LOCATION },
+    { activeChatId: 'b@c.us', locationLabel: LOCATION, contactLabel: CONTACT },
   );
   assert.equal(chats[0].unreadCount, 1);
 });
@@ -83,7 +84,7 @@ test('an unknown chat asks for a refetch, and leaves the list alone', () => {
   const { chats, needsSidebarRefetch } = applyIncomingToChatList(
     before,
     { chatId: 'new@c.us', body: 'hi', timestamp: 200 },
-    { locationLabel: LOCATION },
+    { locationLabel: LOCATION, contactLabel: CONTACT },
   );
 
   assert.equal(needsSidebarRefetch, true);
@@ -96,7 +97,7 @@ test('a LID-migrated own-send echo does NOT ask for a refetch (#583 R2)', () => 
   const { needsSidebarRefetch } = applyIncomingToChatList(
     [chat('a@c.us')],
     { chatId: '628111@lid', body: 'hi', timestamp: 200, fromMe: true },
-    { locationLabel: LOCATION },
+    { locationLabel: LOCATION, contactLabel: CONTACT },
   );
 
   assert.equal(needsSidebarRefetch, false);
@@ -107,7 +108,7 @@ test('an INCOMING message from an unknown @lid chat still asks for a refetch', (
   const { needsSidebarRefetch } = applyIncomingToChatList(
     [chat('a@c.us')],
     { chatId: '628111@lid', body: 'hi', timestamp: 200, fromMe: false },
-    { locationLabel: LOCATION },
+    { locationLabel: LOCATION, contactLabel: CONTACT },
   );
 
   assert.equal(needsSidebarRefetch, true);
@@ -137,4 +138,25 @@ test('promoteChatWithSnippet leaves an unknown chat alone rather than inventing 
   const before = [chat('a@c.us')];
 
   assert.equal(promoteChatWithSnippet(before, 'gone@c.us', 'x', 1), before);
+});
+
+test('a contact message shows the name on its card, not the raw vCard body', () => {
+  const before = [chat('a@c.us')];
+  const { chats } = applyIncomingToChatList(
+    before,
+    { chatId: 'a@c.us', body: 'BEGIN:VCARD\nFN:Carlos\nEND:VCARD', type: 'contact', timestamp: 200 },
+    { locationLabel: LOCATION, contactLabel: CONTACT },
+  );
+  assert.equal(chats[0].lastMessage, 'Carlos');
+  assert.equal(chats[0].lastMessageType, 'contact');
+});
+
+test('a contact message with no usable card falls back to the contact label', () => {
+  const opts = { locationLabel: LOCATION, contactLabel: CONTACT };
+  const incoming = (body: string | undefined) =>
+    applyIncomingToChatList([chat('a@c.us')], { chatId: 'a@c.us', body, type: 'contact', timestamp: 200 }, opts);
+  assert.equal(incoming('BEGIN:VCARD\nEND:VCARD').chats[0].lastMessage, CONTACT);
+  assert.equal(incoming(undefined).chats[0].lastMessage, CONTACT);
+  // A contact the gateway sent is stored as its name, which is already a snippet.
+  assert.equal(incoming('📇 Carol Jones').chats[0].lastMessage, '📇 Carol Jones');
 });
