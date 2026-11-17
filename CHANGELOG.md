@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Dashboard: a shared contact card renders as name + phone instead of the raw `BEGIN:VCARD` body in the thread and sidebar.
+
 ### Added
 
 - MCP: every tool is advertised with a `title`, the name a client shows: the tool name split into words, or the `title` its descriptor sets (#2098). Thanks @sudipta-prodevs.
