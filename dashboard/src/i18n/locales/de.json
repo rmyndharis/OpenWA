@@ -443,7 +443,8 @@
     },
     "empty": {
       "title": "Keine Sitzungen gefunden",
-      "description": "Erstelle eine neue Sitzung, um zu beginnen"
+      "description": "Erstelle eine neue Sitzung, um zu beginnen",
+      "filtered": "Keine Sitzung passt zur Suche oder zum Statusfilter."
     },
     "create": {
       "title": "Neue Sitzung erstellen",

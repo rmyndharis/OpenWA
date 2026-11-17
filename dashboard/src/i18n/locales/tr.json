@@ -443,7 +443,8 @@
     },
     "empty": {
       "title": "Oturum bulunamadı",
-      "description": "Başlamak için yeni bir oturum oluşturun"
+      "description": "Başlamak için yeni bir oturum oluşturun",
+      "filtered": "Aramayla veya durum filtresiyle eşleşen oturum yok."
     },
     "create": {
       "title": "Yeni Oturum Oluştur",

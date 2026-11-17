@@ -443,7 +443,8 @@
     },
     "empty": {
       "title": "Tidak ada sesi ditemukan",
-      "description": "Buat sesi baru untuk memulai"
+      "description": "Buat sesi baru untuk memulai",
+      "filtered": "Tidak ada sesi yang cocok dengan pencarian atau filter status."
     },
     "create": {
       "title": "Buat Sesi Baru",

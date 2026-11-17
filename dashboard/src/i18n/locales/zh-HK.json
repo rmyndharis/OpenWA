@@ -443,7 +443,8 @@
     },
     "empty": {
       "title": "找不到工作階段",
-      "description": "建立新工作階段即可開始"
+      "description": "建立新工作階段即可開始",
+      "filtered": "沒有符合搜尋或狀態篩選條件的工作階段。"
     },
     "create": {
       "title": "建立新工作階段",

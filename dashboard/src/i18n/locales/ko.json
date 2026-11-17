@@ -443,7 +443,8 @@
     },
     "empty": {
       "title": "세션이 없습니다",
-      "description": "새 세션을 만들어 시작하세요"
+      "description": "새 세션을 만들어 시작하세요",
+      "filtered": "검색어 또는 상태 필터와 일치하는 세션이 없습니다."
     },
     "create": {
       "title": "새 세션 생성",

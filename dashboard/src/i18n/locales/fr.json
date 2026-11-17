@@ -448,7 +448,8 @@
     },
     "empty": {
       "title": "Aucune session trouvée",
-      "description": "Créez une nouvelle session pour commencer"
+      "description": "Créez une nouvelle session pour commencer",
+      "filtered": "Aucune session ne correspond à la recherche ou au filtre de statut."
     },
     "create": {
       "title": "Créer une nouvelle session",

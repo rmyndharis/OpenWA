@@ -448,7 +448,8 @@
     },
     "empty": {
       "title": "No se encontraron sesiones",
-      "description": "Crea una nueva sesión para empezar"
+      "description": "Crea una nueva sesión para empezar",
+      "filtered": "Ninguna sesión coincide con la búsqueda o el filtro de estado."
     },
     "create": {
       "title": "Crear nueva sesión",

@@ -443,7 +443,8 @@
     },
     "empty": {
       "title": "未找到会话",
-      "description": "创建新会话即可开始"
+      "description": "创建新会话即可开始",
+      "filtered": "没有符合搜索或状态筛选条件的会话。"
     },
     "create": {
       "title": "创建新会话",

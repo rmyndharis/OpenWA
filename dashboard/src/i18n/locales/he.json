@@ -454,7 +454,8 @@
     },
     "empty": {
       "title": "לא נמצאו Sessions",
-      "description": "יש ליצור Session חדש כדי להתחיל"
+      "description": "יש ליצור Session חדש כדי להתחיל",
+      "filtered": "אין Sessions התואמים לחיפוש או למסנן הסטטוס."
     },
     "create": {
       "title": "יצירת Session חדש",

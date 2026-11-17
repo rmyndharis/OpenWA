@@ -443,7 +443,8 @@
     },
     "empty": {
       "title": "No sessions found",
-      "description": "Create a new session to get started"
+      "description": "Create a new session to get started",
+      "filtered": "No session matches the search or status filter."
     },
     "create": {
       "title": "Create New Session",
