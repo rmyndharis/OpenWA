@@ -107,7 +107,7 @@ worker runs it with retries and a dead letter; with it off, it runs inline. See 
   (see §25.6). With the queue on it never runs the plugin inline: providers enforce short acknowledgement
   deadlines, so the controller fast-acks and defers the work to the queue, and dispatches inline only while
   Redis is unreachable. With the queue off (the default) a route without a `response` contract runs the
-  plugin inline before its `202`, for at most `INGRESS_DISPATCH_TIMEOUT_MS` (5 s), and a route with one is
+  plugin inline before its `202`, for at most 5 s (`INGRESS_DISPATCH_TIMEOUT_MS`, fixed, not a setting), and a route with one is
   acked first and then dispatched inline, without the queue's retries. An inline dispatch that fails files a
   dead letter and leaves the row for the reconciler, and a delivery on a route without a `response` contract
   for a plugin still being restored is acked at once and dispatched by the reconciler once the plugin is up
@@ -287,7 +287,7 @@ dispatch when Redis is unreachable. Before Redis has ever connected, queue calls
 connects. Providers already deliver over unordered, at-least-once HTTP, so plugin handlers must be
 idempotent and treat ingress as a reconciliation trigger.
 
-An inline plugin webhook handler has **5 s** (`INGRESS_DISPATCH_TIMEOUT_MS`) to finish. Queued dispatch gets `SIMULATE_TYPING_MAX_MS` plus 5 s, capped at 25 s (10 s by default), below the default 30 s BullMQ lock. The host cannot cancel a
+An inline plugin webhook handler has **5 s** (`INGRESS_DISPATCH_TIMEOUT_MS`, fixed, not a setting) to finish. Queued dispatch gets `SIMULATE_TYPING_MAX_MS` plus 5 s, capped at 25 s (10 s by default), below the default 30 s BullMQ lock. The host cannot cancel a
 handler that overruns it: the attempt is recorded as failed, the conversation lock is released and the
 delivery is retried (queued) or dead-lettered (inline), while the first run goes on and its work still
 lands. A handler that calls a slow upstream, or sends media, can therefore run twice for one delivery.

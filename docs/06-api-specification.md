@@ -7323,7 +7323,7 @@ that declares `challenge` is the provider's verification handshake and answers o
 **Response** — the primary success path is `202`: the delivery is persisted and handed to
 its plugin. With the queue on it is queued for async plugin processing, and dispatched inline only
 while Redis is unreachable. With the queue off (the default) the `202` of a route without a response
-contract comes after the plugin ran inline, for at most `INGRESS_DISPATCH_TIMEOUT_MS` (5 s), and a
+contract comes after the plugin ran inline, for at most 5 s (`INGRESS_DISPATCH_TIMEOUT_MS`, fixed, not a setting), and a
 route with one is answered first and dispatched inline after, without the queue's retries; a failed
 inline dispatch files a dead letter and the ingress reconciler, while enabled, replays the stored
 delivery. `200` means the
