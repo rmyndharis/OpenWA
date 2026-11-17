@@ -924,17 +924,29 @@ export class BaileysEvents {
       // type drives routing here AND mapMessage. The protocol and reaction branches below read the
       // normalized content too: a client wraps an edit in `editedMessage`, and `ephemeralMessage` can hold
       // a revoke or a reaction just as well, so the raw root does not always carry them.
-      let normalizedRoot = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
-      let contentType = b.getContentType(normalizedRoot);
+      const normalizedRoot = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
+      const contentType = b.getContentType(normalizedRoot);
       // A contact's edit, and a reaction in some chats, arrive encrypted under the secret of the message
-      // they change. Read with the stored original's secret, they are handled below as the plain
-      // protocol or reaction message they stand for; one that cannot be read stays dropped as non-content.
+      // they change. Read with the stored original's secret, they are handled as the plain protocol or
+      // reaction message they stand for; one that cannot be read stays dropped as non-content. The read of
+      // the original is made in the queue of the message it changes, as every other change reads, so changes
+      // of one message are applied in the order they arrived in, whatever order the store answers the reads in.
       if (contentType === 'secretEncryptedMessage' || contentType === 'encReactionMessage') {
-        const revealed = await this.revealEncryptedModification(b, msg, normalizedRoot, contentType);
-        if (revealed) {
-          normalizedRoot = revealed.content;
-          contentType = revealed.contentType;
-        }
+        const encrypted =
+          contentType === 'secretEncryptedMessage'
+            ? normalizedRoot?.secretEncryptedMessage
+            : normalizedRoot?.encReactionMessage;
+        let handled = false;
+        await this.prepareMessageChange(encrypted?.targetMessageKey?.id, opts, async releasePreparation => {
+          const revealed = await this.revealEncryptedModification(b, msg, normalizedRoot, contentType);
+          if (!revealed) return;
+          handled = true;
+          await this.processMessageChange(b, msg, revealed.content, revealed.contentType, {
+            ...opts,
+            releasePreparation,
+          });
+        });
+        if (handled) return;
       }
 
       if (contentType === 'protocolMessage' || contentType === 'reactionMessage') {
