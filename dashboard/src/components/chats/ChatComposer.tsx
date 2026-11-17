@@ -137,16 +137,6 @@ function ChatComposer({
     setSlashHighlight(0);
   }, [messageInput, slashOpen]);
 
-  // Leaving this conversation — switching to another chat, or unmounting when the room closes —
-  // invalidates an in-flight read, so its late `onload` drops the bytes instead of staging them
-  // against whichever chat is open by then. The attachment state itself lives in the page.
-  useEffect(() => {
-    setShowEmojiPicker(false);
-    return () => {
-      attachmentReadSeq.current += 1;
-    };
-  }, [selectedSessionId, activeChat.id]);
-
   // Escape dismisses the emoji picker instead of closing the conversation behind it.
   //
   // On `document`, and in the capture phase, because neither alternative works: the picker is a div
@@ -177,6 +167,24 @@ function ChatComposer({
   const textInputRef = useRef<HTMLInputElement | null>(null);
   // How the Send button was last pressed: the pointerdown's pointerType ('touch' for a tap), '' after a key on it.
   const sendPressRef = useRef('');
+
+  // Leaving this conversation — switching to another chat, or unmounting when the room closes —
+  // invalidates an in-flight read, so its late `onload` drops the bytes instead of staging them
+  // against whichever chat is open by then. The attachment state itself lives in the page.
+  // Focus the composer after the chat-list click finishes, otherwise the row keeps the caret.
+  useEffect(() => {
+    setShowEmojiPicker(false);
+    let frame = 0;
+    if (canWrite) {
+      frame = requestAnimationFrame(() => {
+        textInputRef.current?.focus({ preventScroll: true });
+      });
+    }
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      attachmentReadSeq.current += 1;
+    };
+  }, [selectedSessionId, activeChat.id, canWrite]);
 
   // Popular emojis
   const popularEmojis = [
