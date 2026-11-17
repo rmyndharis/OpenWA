@@ -944,11 +944,11 @@ const contact3 = await getContact('id3');
 // ✅ Good: Parallel execution
 const [contact1, contact2, contact3] = await Promise.all([getContact('id1'), getContact('id2'), getContact('id3')]);
 
-// ✅ Good: Batch processing with concurrency limit
-import pLimit from 'p-limit';
+// ✅ Good: Batch processing with concurrency limit (the repo's own gate, no extra dependency)
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
-const limit = pLimit(5); // Max 5 concurrent
-const results = await Promise.all(chatIds.map(id => limit(() => sendMessage(id, text))));
+const gate = new ConcurrencyLimiter(5); // Max 5 concurrent
+const results = await Promise.all(chatIds.map(id => gate.run(() => sendMessage(id, text))));
 ```
 
 ### Memory Management
