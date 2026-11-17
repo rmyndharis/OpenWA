@@ -2344,13 +2344,16 @@
   color: var(--chat-meta);
 }
 
-/* Every muted line inside an outgoing bubble: --chat-meta is 3.27:1 on the dark green, and 2.87:1 on a quote there. */
+/* Every muted line inside an outgoing bubble: --chat-meta is 3.27:1 on the dark green, 2.87:1 on a quote there and
+   2.32:1 on a contact card. */
 .chats-page .message-bubble.outgoing .message-edited,
 .chats-page .message-bubble.outgoing .message-time,
 .chats-page .message-bubble.outgoing .message-quote-box,
 .chats-page .message-bubble.outgoing.revoked-type .message-text,
 .chats-page .message-bubble.outgoing .message-masked,
-.chats-page .message-bubble.outgoing .message-media-omitted {
+.chats-page .message-bubble.outgoing .message-media-omitted,
+.chats-page .message-bubble.outgoing .message-contact-phone,
+.chats-page .message-bubble.outgoing .chat-document-meta {
   color: var(--chat-meta-out);
 }
 
@@ -2525,8 +2528,9 @@
   background: color-mix(in srgb, var(--chat-meta) 12%, transparent);
 }
 
+/* A faint tint: --chat-meta-out is 4.53:1 on it over the dark green, and 3.73:1 on a 14% one. */
 .chats-page .message-bubble.outgoing .message-contact-card {
-  background: color-mix(in srgb, #fff 14%, transparent);
+  background: color-mix(in srgb, #fff 6%, transparent);
 }
 
 .chats-page .message-contact-avatar {
@@ -2539,6 +2543,11 @@
   background: color-mix(in srgb, var(--chat-meta) 18%, transparent);
   color: var(--chat-meta);
   flex-shrink: 0;
+}
+
+.chats-page .message-bubble.outgoing .message-contact-avatar {
+  background: color-mix(in srgb, var(--chat-meta-out) 18%, transparent);
+  color: var(--chat-meta-out);
 }
 
 .chats-page .message-contact-fields {
@@ -2677,6 +2686,12 @@
   border-color: color-mix(in srgb, var(--chat-bubble-text) 16%, transparent);
 }
 
+/* The hover tint is stronger than the resting one, which takes the muted size line under 4.5:1 on the dark and the
+   outgoing greens; under the pointer the line takes the title's colour. */
+.chats-page .chat-document-card:hover .chat-document-meta {
+  color: var(--chat-bubble-text);
+}
+
 .chats-page .chat-document-card-content {
   display: flex;
   align-items: center;
@@ -2738,9 +2753,11 @@
   color: var(--chat-bubble-text);
 }
 
+/* Muted by its token, as every other muted line of a bubble: an opacity over the inherited colour was 3.03:1 in an
+   outgoing bubble. */
 .chats-page .chat-document-meta {
   font-size: 0.725rem;
-  opacity: 0.75;
+  color: var(--chat-meta);
   margin-top: 2px;
 }
 

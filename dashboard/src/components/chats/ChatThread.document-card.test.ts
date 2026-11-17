@@ -202,3 +202,15 @@ test('media that is not a document keeps its plain label while it is fetched and
   await rtl.waitFor(() => assert.match(button.textContent ?? '', /Media unavailable/), { timeout: 10_000 });
   assert.equal(button.querySelector('.chat-document-card-content'), null);
 });
+
+// The tag on a PDF's icon repeats the kind the size line names, in 8px text that cannot reach 4.5:1 on the red tint: it
+// is a decoration, so a screen reader reads the kind once, from the size line.
+test('the PDF tag on a document icon is hidden from assistive technology, and the size line names the kind', () => {
+  const container = renderThread([
+    document_('held', { mimetype: 'application/pdf', filename: 'report.pdf', data: 'JVBERi0=' }),
+  ]);
+  const tag = container.querySelector('.chat-document-pdf-tag');
+  assert.ok(tag, 'a PDF draws its tag');
+  assert.equal(tag.getAttribute('aria-hidden'), 'true');
+  assert.match(container.querySelector('.chat-document-meta')?.textContent ?? '', /PDF/);
+});

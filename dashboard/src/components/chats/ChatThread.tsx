@@ -655,7 +655,9 @@ function ChatThread({
                   {isPdf ? (
                     <span className="chat-document-pdf-badge">
                       <FileText size={18} />
-                      <span className="chat-document-pdf-tag">PDF</span>
+                      <span className="chat-document-pdf-tag" aria-hidden="true">
+                        PDF
+                      </span>
                     </span>
                   ) : (
                     <FileText size={18} />
