@@ -159,6 +159,15 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES: '0' })).not.toThrow();
   });
 
+  it('rejects a malformed MCP_MAX_RESULT_BYTES (a `100k` would silently mean no cap) and accepts 0 and a byte count', () => {
+    for (const bad of ['100k', '-1', '1.5', 'abc', '1e5']) {
+      expect(() => validateEnv({ MCP_MAX_RESULT_BYTES: bad })).toThrow(/MCP_MAX_RESULT_BYTES/);
+    }
+    expect(() => validateEnv({ MCP_MAX_RESULT_BYTES: '0' })).not.toThrow();
+    expect(() => validateEnv({ MCP_MAX_RESULT_BYTES: '100000' })).not.toThrow();
+    expect(() => validateEnv({})).not.toThrow();
+  });
+
   it('rejects a NODE_ENV typo instead of silently selecting the permissive branch', () => {
     expect(() => validateEnv({ NODE_ENV: 'prod' })).toThrow(/NODE_ENV/);
     expect(() => validateEnv({ NODE_ENV: 'staging' })).toThrow(/NODE_ENV/);

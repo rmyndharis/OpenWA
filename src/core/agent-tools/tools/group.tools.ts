@@ -7,6 +7,7 @@ import {
   GROUP_NAME_MAX_LENGTH,
   GROUP_PARTICIPANTS_MAX,
 } from '../../../modules/group/dto/group.dto';
+import { listLimitSchema } from '../list-limit-schema';
 import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
 import { paginate } from '../../../common/utils/paginate';
 
@@ -24,7 +25,7 @@ export function groupTools(group: GroupService, session: Pick<SessionService, 'f
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
-        limit: z.number().int().min(1).max(1000).optional(),
+        limit: listLimitSchema,
         offset: z.number().int().min(0).optional(),
       }),
       handler: async (input, apiKey, chatScope) => {

@@ -11,6 +11,8 @@ export interface ToolDescriptor<I = unknown> {
   description: string;
   /** Input contract: validates the call AND is advertised to the agent. */
   inputSchema: z.ZodType<I>;
+  /** Human-readable name shown to the user (MCP `title`). Defaults to the name split into words: 'Message send text'. */
+  title?: string;
   tier: 'read' | 'write';
   /** True for irreversible or state-overwriting ops; surfaced to MCP clients as destructiveHint. */
   destructive?: boolean;

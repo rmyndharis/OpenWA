@@ -8,6 +8,7 @@ import {
   MARK_READ_MESSAGE_ID_PATTERN,
 } from '../../../modules/session/dto/mark-chat-read.dto';
 import { chatIdSchema, chatJidSchema } from '../chat-id-schema';
+import { listLimitSchema } from '../list-limit-schema';
 import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
 import { paginate } from '../../../common/utils/paginate';
 
@@ -21,7 +22,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
         'List the WhatsApp sessions this API key may access (id, name, status). Use to discover available sessions before calling session-scoped tools. Supports limit/offset paging and an exact, case-sensitive name filter.',
       tier: 'read',
       inputSchema: z.object({
-        limit: z.number().int().min(1).max(1000).optional(),
+        limit: listLimitSchema,
         offset: z.number().int().min(0).optional(),
         name: z.string().min(1).describe('Exact session name (case-sensitive)').optional(),
       }),
@@ -48,7 +49,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
-        limit: z.number().int().min(1).max(1000).optional(),
+        limit: listLimitSchema,
         offset: z.number().int().min(0).optional(),
       }),
       handler: async (input, apiKey, chatScope) => {

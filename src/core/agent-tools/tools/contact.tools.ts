@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import type { ContactService } from '../../../modules/contact/contact.service';
+import { listLimitSchema } from '../list-limit-schema';
 import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
 import { paginate } from '../../../common/utils/paginate';
 
@@ -16,7 +17,7 @@ export function contactTools(contact: ContactService): AnyToolDescriptor[] {
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
-        limit: z.number().int().min(1).max(1000).optional(),
+        limit: listLimitSchema,
         offset: z.number().int().min(0).optional(),
       }),
       handler: async (input, apiKey, chatScope) => {
