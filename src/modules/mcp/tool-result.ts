@@ -19,13 +19,13 @@ export const INLINE_RESULT_MAX_BYTES = 32 * 1024;
 /**
  * The opt-in cap on a result, from `MCP_MAX_RESULT_BYTES`: a positive decimal integer in UTF-8 bytes. Unset, blank,
  * `0` or anything else reads as 0, no cap, which is the behaviour before the knob existed. Boot validation rejects
- * a malformed value, so the lenient read only covers a process that skipped it.
+ * a malformed value, so the lenient read only covers a process that skipped it. A count past what a number holds
+ * exactly is still a cap, one no result reaches: read as no cap it would bring the base64 resource back.
  */
 export function readMaxResultBytes(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env['MCP_MAX_RESULT_BYTES']?.trim();
   if (!raw || !/^\d+$/.test(raw)) return 0;
-  const bytes = Number(raw);
-  return Number.isSafeInteger(bytes) ? bytes : 0;
+  return Math.min(Number(raw), Number.MAX_SAFE_INTEGER);
 }
 
 /** The end of the longest prefix of `bytes` that is at most `max` bytes and does not end inside a UTF-8 character. */
@@ -34,6 +34,32 @@ function utf8SafeEnd(bytes: Buffer, max: number): number {
   // A continuation byte (10xxxxxx) at the cut means the character that owns it started before the cut.
   while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
   return end;
+}
+
+/**
+ * `text` whole when it fits `maxResultBytes`, else its longest prefix that does, never cut inside a character,
+ * and a note with the full size and `advice`.
+ */
+function cutToCap(text: string, maxResultBytes: number, advice = ''): string {
+  const buffer = Buffer.from(text);
+  if (buffer.byteLength <= maxResultBytes) return text;
+  const head = buffer.subarray(0, utf8SafeEnd(buffer, maxResultBytes)).toString('utf8');
+  return `${head}\n…[truncated: ${buffer.byteLength} bytes in all${advice}]`;
+}
+
+/**
+ * An error answer under the cap, which {@link smartToolResult} applies to the others. A refusal is short as a
+ * rule, but one that lists each invalid value grows with the arguments sent: the SDK's own answer to arguments
+ * its schema refuses, and a service's list of validation messages.
+ */
+export function capToolError(result: CallToolResult, maxResultBytes: number): CallToolResult {
+  if (maxResultBytes <= 0) return result;
+  return {
+    ...result,
+    content: result.content.map(item =>
+      item.type === 'text' ? { ...item, text: cutToCap(item.text, maxResultBytes) } : item,
+    ),
+  };
 }
 
 /**
@@ -53,17 +79,13 @@ export function smartToolResult(data: string | object | object[], maxResultBytes
   // JSON.stringify(undefined) is undefined, not a string — a handler that resolves void would turn
   // a completed write into a thrown TypeError here, reported to the agent as a failure it retries.
   const text = typeof data === 'string' ? data : (JSON.stringify(data) ?? 'null');
+  if (maxResultBytes > 0) {
+    const advice = '; narrow the request, with limit and offset where the tool takes them, to see the rest';
+    return { content: [{ type: 'text', text: cutToCap(text, maxResultBytes, advice) }] };
+  }
   const mimeType = typeof data === 'string' ? 'text/plain' : 'application/json';
   const ext = typeof data === 'string' ? 'txt' : 'json';
   const buffer = Buffer.from(text);
-  if (maxResultBytes > 0) {
-    if (buffer.byteLength <= maxResultBytes) return { content: [{ type: 'text', text }] };
-    const head = buffer.subarray(0, utf8SafeEnd(buffer, maxResultBytes)).toString('utf8');
-    const note =
-      `\n…[truncated: ${buffer.byteLength} bytes in all; ` +
-      'narrow the request, with limit and offset where the tool takes them, to see the rest]';
-    return { content: [{ type: 'text', text: head + note }] };
-  }
   if (buffer.byteLength > INLINE_RESULT_MAX_BYTES) {
     const uri = `mcp://toolResult/${randomUUID()}.${ext}`;
     return {

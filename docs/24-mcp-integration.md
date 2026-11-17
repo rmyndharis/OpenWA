@@ -231,6 +231,12 @@ The note comes after the cut, so leave about 200 bytes under the client's limit;
 smaller than the count in characters. Unset or `0`, the default, means no cap, and Claude Code keeps getting the
 blob it saves to a file. The value is read once when the server mounts; a malformed one (`100k`) fails the boot.
 
+An error answer is cut at the same cap and ends with `…[truncated: <n> bytes in all]`. That covers the refusal
+the server writes for arguments a tool's schema rejects, which names each invalid value and so grows with the
+arguments sent. Media counts as text like everything else: a payload asked for with `inlineMedia: true` that does
+not fit under the cap arrives cut and cannot be decoded, and one message cannot be narrowed further, so under a
+cap fetch media from `GET /api/sessions/{sessionId}/messages/{chatId}/{messageId}/media`.
+
 The text of a tool error is cut at 4096 characters and ends with
 `... [truncated, <n> characters in all]`. Several services name the id the caller sent in their
 refusals, and a tool call can carry a far longer id than a REST path allows. The same cut applies to

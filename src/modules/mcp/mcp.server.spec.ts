@@ -629,6 +629,35 @@ describe('mountMcpServer (raw-Express request-handling path)', () => {
       process.env.MCP_MAX_RESULT_BYTES = '2000';
       expect((await callWithBigResult({ readOnly: false, maxResultBytes: 0 })).content).toHaveLength(2);
     });
+
+    // A refusal that lists every invalid value of a wide input, as a service's validation does.
+    const refuse = async (options: MountMcpServerOptions): Promise<{ isError?: boolean; text: string }> => {
+      const h = mount(options);
+      h.authService.validateApiKey.mockResolvedValue({ id: 'k1' });
+      const messages = Array.from({ length: 400 }, (_, i) => `vars.v${i} must be a string`);
+      h.tool.handler = () => Promise.reject(new BadRequestException(messages));
+      await post(h, { jsonrpc: '2.0', id: 1 });
+      const result = (await toolCallback()(
+        { sessionId: 's1', to: '123', text: 'hi' },
+        { requestInfo: { headers: { 'x-api-key': 'good-key' } } },
+      )) as { isError?: boolean; content: Array<{ text: string }> };
+      return { isError: result.isError, text: result.content[0].text };
+    };
+
+    it('leaves an error answer whole when no cap is set', async () => {
+      delete process.env.MCP_MAX_RESULT_BYTES;
+      const whole = await refuse({ readOnly: false });
+      expect(whole.isError).toBe(true);
+      expect(whole.text).not.toContain('[truncated:');
+      expect(Buffer.byteLength(whole.text)).toBeGreaterThan(5000);
+    });
+
+    it('cuts an error answer at the cap too, and keeps it an error', async () => {
+      const cut = await refuse({ readOnly: false, maxResultBytes: 1000 });
+      expect(cut.isError).toBe(true);
+      expect(cut.text).toMatch(/\[truncated: \d{4,} bytes in all\]$/);
+      expect(Buffer.byteLength(cut.text)).toBeLessThan(1100);
+    });
   });
 
   it('hands the SDK request cancellation signal to the tool handler', async () => {

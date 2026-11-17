@@ -7,7 +7,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { ChatScopeService } from '../auth/chat-scope.service';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
-import type { ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import express, { type Request, type RequestHandler, type Response } from 'express';
 import { invokeTool } from '../../core/agent-tools/tool-invoker';
 import type { ToolRegistryService } from '../../core/agent-tools/tool-registry.service';
@@ -15,7 +15,7 @@ import { UnresolvedApiKeyException, type AuthService } from '../auth/auth.servic
 import { allowUnauthenticatedAuditRow } from '../audit/auth-failure-audit-limiter';
 import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
-import { handleToolError, readMaxResultBytes, smartToolResult } from './tool-result';
+import { capToolError, handleToolError, readMaxResultBytes, smartToolResult } from './tool-result';
 import { deriveToolTitle } from './tool-title';
 import type { KeyRateLimiter } from './mcp-rate-limit';
 import { limiterKeyForIp, parseTrustedProxies, resolveClientIp } from '../../common/utils/ip';
@@ -94,6 +94,21 @@ function resolveReqContext(req: Request): McpRequestContext {
 export const MCP_MAX_TOOL_INPUT_ELEMENTS = 10_000;
 
 /**
+ * Put the answers the SDK writes itself under the result cap. It refuses a call whose arguments its schema
+ * rejects before the tool's callback runs, in a text that names each invalid value, so one wide argument (up to
+ * {@link MCP_MAX_TOOL_INPUT_ELEMENTS} elements) makes an answer of several hundred kilobytes.
+ *
+ * `createToolError` is private to the SDK, hence the cast; `sdk-error-cap.spec.ts` runs the real class, so a
+ * release that renames the method fails there instead of leaving these answers uncut.
+ */
+export function capSdkErrors(server: McpServer, maxResultBytes: number): void {
+  const sdk = server as unknown as { createToolError?: (message: string) => CallToolResult };
+  const createToolError = sdk.createToolError;
+  if (maxResultBytes <= 0 || typeof createToolError !== 'function') return;
+  sdk.createToolError = message => capToolError(createToolError.call(server, message), maxResultBytes);
+}
+
+/**
  * Build the MCP server ONCE and register all tools from the registry.
  * The SDK's `registerTool` accepts `AnySchema` (z4.$ZodType) directly, so we
  * pass `tool.inputSchema` verbatim — no `.shape` extraction needed.
@@ -113,6 +128,8 @@ function buildServer(
     { name: serverInfo.name, version: serverInfo.version },
     { capabilities: { tools: {}, logging: {} }, maxToolInputElements: MCP_MAX_TOOL_INPUT_ELEMENTS },
   );
+
+  capSdkErrors(server, maxResultBytes);
 
   const tools = registry.list({ readOnly });
   for (const tool of tools) {
@@ -150,7 +167,7 @@ function buildServer(
           );
           return smartToolResult(result as object, maxResultBytes);
         } catch (error) {
-          return handleToolError(error);
+          return capToolError(handleToolError(error), maxResultBytes);
         }
       },
     );
