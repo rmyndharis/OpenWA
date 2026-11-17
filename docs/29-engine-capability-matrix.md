@@ -1072,6 +1072,8 @@ adapter boundary — none silently stubs.
   phone does with a read mark that names no message is not established. It does not change the answer.
   When WhatsApp refuses it or does not confirm it within the request budget, a warning is logged,
   `POST chats/read` still answers `{"success": true}` for the receipt, and the chat stays marked unread.
+  A session restarted since the mark was set no longer lists it (`unreadCount` reads `0`, as above), so
+  its read sends the receipt alone and the mark stays on the account.
 - **`setProfileName` / `setProfilePicture` / `deleteProfilePicture` refusals (baileys).**
   whatsapp-web.js reads a page-side verdict for all three (`setDisplayName` and `setProfilePicture`
   resolve `false`, `deleteProfilePicture` resolves an explicit `false`) and raises a `403`. The
