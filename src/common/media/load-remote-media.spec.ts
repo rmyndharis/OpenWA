@@ -148,6 +148,14 @@ describe('loadRemoteMediaBuffer', () => {
     });
   });
 
+  // The credentials refusal parses the URL first; one that does not parse is the SSRF guard's to name.
+  it('leaves an unparsable URL to the SSRF guard', async () => {
+    const error = await loadRemoteMediaBuffer('http://', undefined).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SsrfBlockedError);
+    expect((error as Error).message).toMatch(/^Invalid URL/);
+    expect(undiciFetch).not.toHaveBeenCalled();
+  });
+
   /**
    * undici reports a session proxy that refuses the connection, cannot be resolved or fails its
    * handshake with the same `fetch failed` as an unreachable target. Answering 400 there blamed the

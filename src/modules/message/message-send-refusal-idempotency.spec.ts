@@ -41,6 +41,8 @@ describe('a keyed send refused before anything reaches WhatsApp', () => {
   let service: MessageSendService;
   let repository: Record<string, jest.Mock>;
   let release: jest.Mock;
+  let pacing: { assertSendAllowed: jest.Mock; recordSendFailure: jest.Mock; recordSendSuccess: jest.Mock };
+  let hooks: { execute: jest.Mock };
   let ds: DataSource;
   let interceptor: SendIdempotencyInterceptor;
   let sock: { onWhatsApp: jest.Mock; sendMessage: jest.Mock; waUploadToServer: jest.Mock };
@@ -130,24 +132,20 @@ describe('a keyed send refused before anything reaches WhatsApp', () => {
         messaging.sendStickerMessage(...args),
     } as unknown as IWhatsAppEngine);
     release = jest.fn();
+    pacing = {
+      assertSendAllowed: jest.fn().mockResolvedValue(release),
+      recordSendFailure: jest.fn(),
+      recordSendSuccess: jest.fn(),
+    };
+    hooks = { execute: jest.fn((_e: string, data: unknown) => Promise.resolve({ continue: true, data })) };
     const module = await Test.createTestingModule({
       providers: [
         MessageSendService,
-        {
-          provide: SendPacingService,
-          useValue: {
-            assertSendAllowed: jest.fn().mockResolvedValue(release),
-            recordSendFailure: jest.fn(),
-            recordSendSuccess: jest.fn(),
-          },
-        },
+        { provide: SendPacingService, useValue: pacing },
         { provide: getRepositoryToken(Message, 'data'), useValue: repository },
         { provide: SessionService, useValue: { findOne: jest.fn().mockResolvedValue({ id: 'sess-1' }) } },
         { provide: EngineRegistry, useValue: engines },
-        {
-          provide: HookManager,
-          useValue: { execute: jest.fn((_e: string, data: unknown) => Promise.resolve({ continue: true, data })) },
-        },
+        { provide: HookManager, useValue: hooks },
         { provide: TemplateService, useValue: { resolve: jest.fn() } },
       ],
     }).compile();
@@ -363,6 +361,59 @@ describe('a keyed send refused before anything reaches WhatsApp', () => {
 
     expect(error).toBeInstanceOf(BadRequestException);
     expect(client.sendMessage).not.toHaveBeenCalled();
+    expect(await keyState()).toBe('absent');
+  });
+
+  // The HTTP client refuses to build a request for a URL with a user name or password. Left as the raw TypeError
+  // it was a 500, counted toward the breaker, kept the key (the retry answered 409) and put the URL in the hook text.
+  it('send-image whose url carries credentials answers 400 on Baileys and frees the key; the retry runs again', async () => {
+    let requests = 0;
+    handler = (_req, res) => {
+      requests++;
+      res.writeHead(200, { 'content-type': 'image/png' }).end(PNG_BYTES);
+    };
+    const body = {
+      chatId: '628123456789@c.us',
+      url: base.replace('http://', 'http://user:secret@'),
+      mimetype: 'image/png',
+    };
+
+    const error = await failure('sendImage', body);
+
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect((error as BadRequestException).getStatus()).toBe(400);
+    expect(sock.sendMessage).not.toHaveBeenCalled();
+    expect(requests).toBe(0);
+    expect(await keyState()).toBe('absent');
+    expect(pacing.recordSendFailure).not.toHaveBeenCalled();
+    const hookCalls = hooks.execute.mock.calls as Array<[string, { error?: string }]>;
+    const failed = hookCalls.filter(([name]) => name === 'message:failed');
+    expect(failed).toHaveLength(1);
+    expect(failed[0][1].error).toBe('Media URL must not contain credentials (userinfo)');
+    // Not the 409 IDEMPOTENCY_OUTCOME_UNKNOWN of a send that may have gone out.
+    expect(await failure('sendImage', body)).toBeInstanceOf(BadRequestException);
+    expect(await keyState()).toBe('absent');
+  });
+
+  it('send-image whose url carries credentials answers 400 on whatsapp-web.js, before the page is asked', async () => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-1',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = { sendMessage: jest.fn() };
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    engines.set('sess-1', adapter);
+
+    const error = await failure('sendImage', {
+      chatId: '628123456789@c.us',
+      url: base.replace('http://', 'http://user:secret@'),
+    });
+
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    expect(pacing.recordSendFailure).not.toHaveBeenCalled();
     expect(await keyState()).toBe('absent');
   });
 
