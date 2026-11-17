@@ -55,9 +55,6 @@
     "light": "浅色",
     "dark": "深色",
     "system": "跟随系统",
-    "label": "主题：{{value}}",
-    "appearance": "外观",
-    "mode": "模式",
     "toggleTo": "切换到{{value}}"
   },
   "nav": {
@@ -85,7 +82,6 @@
       "omitted": "媒体",
       "image": "图片"
     },
-    "subtitle": "实时发送和回复 WhatsApp 消息",
     "noSessionsTitle": "没有已连接的会话",
     "noSessionsDesc": "请先从 <1>会话</1> 菜单连接一个 WhatsApp 会话，才能使用聊天功能。",
     "sessionLabel": "WhatsApp 会话",
@@ -419,9 +415,7 @@
   },
   "sessionStatus": {
     "created": "新建",
-    "idle": "空闲",
     "initializing": "正在启动...",
-    "connecting": "正在连接...",
     "qr_ready": "扫描 QR",
     "ready": "已连接",
     "disconnected": "已断开",

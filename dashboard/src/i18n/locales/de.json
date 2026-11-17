@@ -55,9 +55,6 @@
     "light": "Hell",
     "dark": "Dunkel",
     "system": "System",
-    "label": "Design: {{value}}",
-    "appearance": "Darstellung",
-    "mode": "Modus",
     "toggleTo": "Zu {{value}} wechseln"
   },
   "nav": {
@@ -85,7 +82,6 @@
       "omitted": "Medien",
       "image": "Bild"
     },
-    "subtitle": "WhatsApp-Nachrichten in Echtzeit senden und beantworten",
     "noSessionsTitle": "Keine verbundenen Sitzungen",
     "noSessionsDesc": "Bitte verbinde zuerst im Menü <1>Sitzungen</1> eine WhatsApp-Sitzung, um die Chat-Funktion zu verwenden.",
     "sessionLabel": "WhatsApp-Sitzung",
@@ -419,9 +415,7 @@
   },
   "sessionStatus": {
     "created": "Neu",
-    "idle": "Inaktiv",
     "initializing": "Wird gestartet...",
-    "connecting": "Verbindung wird hergestellt...",
     "qr_ready": "QR-Code scannen",
     "ready": "Verbunden",
     "disconnected": "Getrennt",

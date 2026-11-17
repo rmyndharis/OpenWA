@@ -57,9 +57,6 @@
     "light": "Claro",
     "dark": "Oscuro",
     "system": "Sistema",
-    "label": "Tema: {{value}}",
-    "appearance": "Apariencia",
-    "mode": "Modo",
     "toggleTo": "Cambiar a {{value}}"
   },
   "nav": {
@@ -87,7 +84,6 @@
       "omitted": "Multimedia",
       "image": "Imagen"
     },
-    "subtitle": "Envía y responde mensajes de WhatsApp en tiempo real",
     "noSessionsTitle": "Sin sesiones conectadas",
     "noSessionsDesc": "Conecta primero una sesión de WhatsApp desde el menú <1>Sesiones</1> para usar el chat.",
     "sessionLabel": "Sesión de WhatsApp",
@@ -424,9 +420,7 @@
   },
   "sessionStatus": {
     "created": "Nueva",
-    "idle": "Inactiva",
     "initializing": "Iniciando...",
-    "connecting": "Conectando...",
     "qr_ready": "Escanear QR",
     "ready": "Conectada",
     "disconnected": "Desconectada",

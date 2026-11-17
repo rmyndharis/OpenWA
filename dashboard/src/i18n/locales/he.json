@@ -59,9 +59,6 @@
     "light": "בהיר",
     "dark": "כהה",
     "system": "מערכת",
-    "label": "ערכת נושא: {{value}}",
-    "appearance": "מראה",
-    "mode": "מצב",
     "toggleTo": "עבור ל{{value}}"
   },
   "nav": {
@@ -89,7 +86,6 @@
       "omitted": "מדיה",
       "image": "תמונה"
     },
-    "subtitle": "שליחה ומענה להודעות WhatsApp בזמן אמת",
     "noSessionsTitle": "אין סשנים מחוברים",
     "noSessionsDesc": "יש לחבר סשן WhatsApp מתפריט <1>Sessions</1> תחילה כדי להשתמש בתכונת הצ'אט.",
     "sessionLabel": "סשן WhatsApp",
@@ -430,9 +426,7 @@
   },
   "sessionStatus": {
     "created": "חדש",
-    "idle": "בהמתנה",
     "initializing": "מאתחל...",
-    "connecting": "מתחבר...",
     "qr_ready": "סריקת QR",
     "ready": "מחובר",
     "disconnected": "מנותק",

@@ -63,9 +63,6 @@
     "light": "فاتح",
     "dark": "داكن",
     "system": "النظام",
-    "label": "المظهر: {{value}}",
-    "appearance": "المظهر",
-    "mode": "الوضع",
     "toggleTo": "التبديل إلى {{value}}"
   },
   "nav": {
@@ -93,7 +90,6 @@
       "omitted": "وسائط",
       "image": "صورة"
     },
-    "subtitle": "أرسل ورد على رسائل واتساب في الوقت الفعلي",
     "noSessionsTitle": "لا توجد جلسات متصلة",
     "noSessionsDesc": "يرجى أولاً توصيل جلسة واتساب من قائمة <1>الجلسات</1> لاستخدام ميزة المحادثة.",
     "sessionLabel": "جلسة واتساب",
@@ -440,9 +436,7 @@
   },
   "sessionStatus": {
     "created": "جديد",
-    "idle": "خامل",
     "initializing": "جارٍ البدء...",
-    "connecting": "جارٍ الاتصال...",
     "qr_ready": "امسح رمز QR",
     "ready": "متصل",
     "disconnected": "غير متصل",

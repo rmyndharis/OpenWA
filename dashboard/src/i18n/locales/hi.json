@@ -55,9 +55,6 @@
     "light": "लाइट",
     "dark": "डार्क",
     "system": "सिस्टम",
-    "label": "थीम: {{value}}",
-    "appearance": "दिखावट",
-    "mode": "मोड",
     "toggleTo": "{{value}} पर स्विच करें"
   },
   "nav": {
@@ -85,7 +82,6 @@
       "omitted": "मीडिया",
       "image": "छवि"
     },
-    "subtitle": "वास्तविक समय में WhatsApp संदेश भेजें और उत्तर दें",
     "noSessionsTitle": "कोई जुड़ा हुआ सत्र नहीं",
     "noSessionsDesc": "कृपया चैट सुविधा का उपयोग करने के लिए पहले <1>सत्र</1> मेनू से WhatsApp सत्र कनेक्ट करें।",
     "sessionLabel": "WhatsApp सत्र",
@@ -419,9 +415,7 @@
   },
   "sessionStatus": {
     "created": "नया",
-    "idle": "निष्क्रिय",
     "initializing": "शुरू हो रहा है...",
-    "connecting": "कनेक्ट हो रहा है...",
     "qr_ready": "QR स्कैन करें",
     "ready": "जुड़ा हुआ",
     "disconnected": "डिसकनेक्टेड",

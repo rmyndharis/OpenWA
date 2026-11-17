@@ -55,9 +55,6 @@
     "light": "Açık",
     "dark": "Koyu",
     "system": "Sistem",
-    "label": "Tema: {{value}}",
-    "appearance": "Görünüm",
-    "mode": "Mod",
     "toggleTo": "{{value}} moduna geç"
   },
   "nav": {
@@ -85,7 +82,6 @@
       "omitted": "Medya",
       "image": "Görsel"
     },
-    "subtitle": "WhatsApp mesajlarını gerçek zamanlı gönderin ve yanıtlayın",
     "noSessionsTitle": "Bağlı oturum yok",
     "noSessionsDesc": "Sohbet özelliğini kullanmak için lütfen önce <1>Oturumlar</1> menüsünden bir WhatsApp oturumu bağlayın.",
     "sessionLabel": "WhatsApp oturumu",
@@ -419,9 +415,7 @@
   },
   "sessionStatus": {
     "created": "Yeni",
-    "idle": "Boşta",
     "initializing": "Başlatılıyor...",
-    "connecting": "Bağlanıyor...",
     "qr_ready": "QR Tara",
     "ready": "Bağlandı",
     "disconnected": "Bağlantı Kesildi",

@@ -55,9 +55,6 @@
     "light": "淺色",
     "dark": "深色",
     "system": "跟隨系統",
-    "label": "主題：{{value}}",
-    "appearance": "外觀",
-    "mode": "模式",
     "toggleTo": "切換到{{value}}"
   },
   "nav": {
@@ -85,7 +82,6 @@
       "omitted": "媒體",
       "image": "圖片"
     },
-    "subtitle": "即時傳送和回覆 WhatsApp 訊息",
     "noSessionsTitle": "沒有已連線的工作階段",
     "noSessionsDesc": "請先從 <1>工作階段</1> 選單連線一個 WhatsApp 工作階段，才能使用聊天功能。",
     "sessionLabel": "WhatsApp 工作階段",
@@ -419,9 +415,7 @@
   },
   "sessionStatus": {
     "created": "新增",
-    "idle": "閒置",
     "initializing": "正在啟動...",
-    "connecting": "正在連線...",
     "qr_ready": "掃描 QR",
     "ready": "已連線",
     "disconnected": "已中斷連線",

@@ -55,9 +55,6 @@
     "light": "Terang",
     "dark": "Gelap",
     "system": "Sistem",
-    "label": "Tema: {{value}}",
-    "appearance": "Tampilan",
-    "mode": "Mode",
     "toggleTo": "Ganti ke {{value}}"
   },
   "nav": {
@@ -85,7 +82,6 @@
       "omitted": "Media",
       "image": "Gambar"
     },
-    "subtitle": "Kirim dan balas pesan WhatsApp secara real-time",
     "noSessionsTitle": "Tidak ada sesi terhubung",
     "noSessionsDesc": "Hubungkan sesi WhatsApp dari menu <1>Sesi</1> terlebih dahulu untuk menggunakan fitur obrolan.",
     "sessionLabel": "Sesi WhatsApp",
@@ -419,9 +415,7 @@
   },
   "sessionStatus": {
     "created": "Baru",
-    "idle": "Idle",
     "initializing": "Memulai...",
-    "connecting": "Menghubungkan...",
     "qr_ready": "Pindai QR",
     "ready": "Terhubung",
     "disconnected": "Terputus",
