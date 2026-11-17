@@ -441,6 +441,24 @@ export class BaileysContacts {
     // raw TypeError on an unanswered one — no Boom, so nothing downstream can classify it. Marking
     // a chat read is idempotent, so bounding it is safe: a repeat costs nothing.
     await this.confirmed(this.sock(socket).readMessages(keys), 'the read receipt');
+    // Clearing the account's own unread badge is a separate app-state write from the peer receipt.
+    // readMessages alone leaves unreadCount unchanged in the session store (and on linked devices),
+    // so POST /chats/read and the dashboard could answer success while the sidebar badge came back
+    // on every reload. markUnread already uses chatModify({ markRead: false }); markRead: true is
+    // the matching half. Rangeless is allowed for any chat the session lists (including archived):
+    // unlike unread, the phone applies a read mark without a range to those as well.
+    const range = await this.chatWriteRange(
+      socket,
+      chatId,
+      stored,
+      () => this.listedChats(chatId).length > 0,
+    );
+    if (range) {
+      await this.confirmed(
+        this.sock(socket).chatModify({ markRead: true, lastMessages: range.lastMessages }, range.jid),
+        'the read mark',
+      );
+    }
     return true;
   }
 

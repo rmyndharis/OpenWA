@@ -641,7 +641,7 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `appPatch`                        | 🔩 plumbing                                                                                                                                                                 |
 | `assertSessions`                  | 🔩 plumbing                                                                                                                                                                 |
-| `chatModify`                      | ✅ `markUnread`, `clearChatMessages`, `archiveChat`, `muteChat`, `pinChat`, `deleteChat`, `deleteMessage`, `starMessage`                                                    |
+| `chatModify`                      | ✅ `sendSeen` (`markRead: true`), `markUnread`, `clearChatMessages`, `archiveChat`, `muteChat`, `pinChat`, `deleteChat`, `deleteMessage`, `starMessage`                    |
 | `cleanDirtyBits`                  | 🔩 plumbing                                                                                                                                                                 |
 | `createParticipantNodes`          | 🔩 plumbing                                                                                                                                                                 |
 | `digestKeyBundle`                 | 🔩 plumbing                                                                                                                                                                 |
@@ -1026,7 +1026,7 @@ adapter boundary — none silently stubs.
   or only on the phone. Baileys writes only its own credentials, showed no such effect and is not
   refused. Link by QR when the session of that number must stay up.
 - **`archiveChat` / `clearChatMessages` / `deleteChat` / `sendSeen` / `markUnread` (baileys).** The
-  four `chatModify` actions (archive, clear, delete, unread) are keyed to the chat's newest message:
+  five `chatModify` actions (archive, clear, delete, unread, and `sendSeen`'s `markRead: true`) are keyed to the chat's newest message:
   the one the session holds in memory, else the newest one the gateway stored (#1891). Only the rows
   of the account the session is linked to count, as in the chat list above: a stored message names
   that account in `to` when it was received and in `from` when it was sent, so a session linked to
@@ -1055,10 +1055,14 @@ adapter boundary — none silently stubs.
   `false` otherwise; unread also resolves `false` for an archived chat, which the phone leaves unmarked
   without a range. `sendSeen`
   without message ids is `readMessages([key])` for the newest _received_ (not `fromMe`) message, in
-  memory or stored, since Baileys drops own keys from a receipt. A chat with no such message resolves
+  memory or stored, since Baileys drops own keys from a receipt, then `chatModify({ markRead: true })`
+  keyed the same way as the other chat writes so the account's own `unreadCount` clears (the peer
+  receipt alone does not). A chat with no such message resolves
   `false`, so one holding only this account's own sends answers `POST chats/read` with
   `{"success": false}`, where whatsapp-web.js marks it read from the page-side chat object without
-  needing any local history.
+  needing any local history. When receipts go out but the session holds no message or listed chat to
+  key the badge clear, the route still answers `{"success": true}` — the receipt is the success
+  contract; the badge clear is skipped rather than inventing a range.
   With message ids, a group id the message store never held (history backfill) takes its receipt's
   participant from the author the gateway stored for it; one with no stored author is left out of the
   receipt, and the answer is `false` when no id could be named.

@@ -24,10 +24,13 @@ function contacts(sock: Record<string, jest.Mock>, budgetMs: number): BaileysCon
     resolvePhone: () => null,
     listChats: () => [],
     lastMessage: () => LAST,
+    lastInboundMessage: () => LAST,
     chatDeletedAt: () => null,
     toEngineJid: (j: string) => j,
     chatJid: (j: string) => j,
+    chatTwins: (j: string) => [j],
     lidOf: () => null,
+    toNeutralJid: (j: string) => j,
   } as unknown as BaileysContactsHost;
   return new BaileysContacts(host, budgetMs);
 }
@@ -67,6 +70,16 @@ describe('contact and chat-state writes report an unconfirmed write', () => {
     ['deleteChat', 'chatModify', (c: BaileysContacts) => c.deleteChat('628123@c.us')],
   ])('%s', async (_n, method, call) => {
     await expect(call(contacts({ [method]: stub() }, 15))).rejects.toBeInstanceOf(EngineTransportError);
+  });
+
+  it('sendSeen reports an unanswered read mark after the receipt', async () => {
+    // sendSeen first awaits readMessages, then chatModify({ markRead: true }) to clear unreadCount.
+    // The receipt half answering is not enough: an unanswered badge clear must still surface 503.
+    await expect(
+      contacts({ readMessages: jest.fn().mockResolvedValue(undefined), chatModify: stub() }, 15).sendSeen(
+        '628123@c.us',
+      ),
+    ).rejects.toBeInstanceOf(EngineTransportError);
   });
 
   it('still resolves when WhatsApp answers inside the budget', async () => {

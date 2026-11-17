@@ -23,6 +23,12 @@ const toEngineJid = (jid: string): string => {
   return host === 'c.us' || host === 's.whatsapp.net' ? `${userPart}@s.whatsapp.net` : jid;
 };
 
+const LAST = {
+  key: { id: 'M1', remoteJid: '628123@s.whatsapp.net' },
+  timestamp: 1,
+  jid: '628123@s.whatsapp.net',
+};
+
 function makeHost(overrides: Partial<Record<keyof BaileysContactsHost, unknown>>): BaileysContactsHost {
   const host = {
     ensureReady: () => undefined,
@@ -33,10 +39,14 @@ function makeHost(overrides: Partial<Record<keyof BaileysContactsHost, unknown>>
     resolvePhone: () => null,
     findPersistedLidPhone: () => Promise.resolve(null),
     listChats: () => [],
-    lastInboundMessage: () => ({ key: { id: 'M1', remoteJid: '628123@s.whatsapp.net' }, timestamp: 1 }),
+    lastMessage: () => LAST,
+    lastInboundMessage: () => ({ key: LAST.key, timestamp: LAST.timestamp }),
     chatDeletedAt: () => null,
     getStoredMessages: () => Promise.resolve([]),
     toEngineJid,
+    chatJid: (jid: string) => toEngineJid(jid),
+    chatTwins: (jid: string) => [jid],
+    lidOf: () => null,
     ...overrides,
   } as unknown as BaileysContactsHost;
   const socket = host.getSocket();
@@ -47,8 +57,16 @@ function makeHost(overrides: Partial<Record<keyof BaileysContactsHost, unknown>>
   return host;
 }
 
+/** Socket methods for a sendSeen call: receipt plus the unread-badge clear. */
+function seenSock(readMessages: jest.Mock, chatModify: jest.Mock = jest.fn().mockResolvedValue(undefined)) {
+  return { readMessages, chatModify } as unknown as WASocket;
+}
+
 function contacts(sock: Record<string, jest.Mock>, budgetMs: number): BaileysContacts {
-  return new BaileysContacts(makeHost({ getSocket: () => sock as unknown as WASocket }), budgetMs);
+  // chatModify clears the account's unread badge after the peer receipt; default it so the
+  // receipt-focused cases do not throw when the mark-read half runs.
+  const withDefaults = { chatModify: jest.fn().mockResolvedValue(undefined), ...sock };
+  return new BaileysContacts(makeHost({ getSocket: () => withDefaults as unknown as WASocket }), budgetMs);
 }
 
 /** A stored message as the message store hands it back: the whole key, not a synthesised one. */
@@ -64,6 +82,45 @@ describe('sendSeen', () => {
   it('still resolves when WhatsApp answers inside the budget', async () => {
     const readMessages = jest.fn().mockResolvedValue(undefined);
     await expect(contacts({ readMessages }, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+  });
+
+  it('clears the account unread badge after the peer receipt', async () => {
+    // readMessages only acknowledges the peer. Without chatModify({ markRead: true }) the session
+    // store keeps unreadCount > 0, so POST /chats/read and the dashboard answered success while the
+    // sidebar badge came back on every reload.
+    const readMessages = jest.fn().mockResolvedValue(undefined);
+    const chatModify = jest.fn().mockResolvedValue(undefined);
+    await expect(contacts({ readMessages, chatModify }, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+    expect(chatModify).toHaveBeenCalledWith(
+      {
+        markRead: true,
+        lastMessages: [{ key: { ...LAST.key, fromMe: false }, messageTimestamp: LAST.timestamp }],
+      },
+      LAST.jid,
+    );
+  });
+
+  it('reports an unanswered read mark after the receipt went out', async () => {
+    const readMessages = jest.fn().mockResolvedValue(undefined);
+    await expect(
+      contacts({ readMessages, chatModify: jest.fn(never) }, 15).sendSeen('628123@c.us'),
+    ).rejects.toBeInstanceOf(EngineTransportError);
+    expect(readMessages).toHaveBeenCalled();
+  });
+
+  it('still answers true when no chat-write range exists to clear the badge', async () => {
+    // Receipts are the success contract; the badge clear is best-effort when the session holds a
+    // message or listed chat to key the app-state patch. A receipt-only case must not flip to false.
+    const readMessages = jest.fn().mockResolvedValue(undefined);
+    const chatModify = jest.fn().mockResolvedValue(undefined);
+    const host = makeHost({
+      getSocket: () => ({ readMessages, chatModify }) as unknown as WASocket,
+      lastMessage: () => null,
+      listChats: () => [],
+    });
+    await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', ['M9'])).resolves.toBe(true);
+    expect(readMessages).toHaveBeenCalled();
+    expect(chatModify).not.toHaveBeenCalled();
   });
 
   it('acknowledges every supplied message, not just the newest one', async () => {
@@ -84,7 +141,7 @@ describe('sendSeen', () => {
     // caller named, and the caller's own chat stayed unread.
     const readMessages = jest.fn().mockResolvedValue(undefined);
     const host = makeHost({
-      getSocket: () => ({ readMessages }) as unknown as WASocket,
+      getSocket: () => seenSock(readMessages),
       getStoredMessages: () =>
         Promise.resolve([stored({ id: 'X1', remoteJid: '628999@s.whatsapp.net', fromMe: false })]),
     });
@@ -102,7 +159,7 @@ describe('sendSeen', () => {
     // lost the real fromMe and participant.
     const readMessages = jest.fn().mockResolvedValue(undefined);
     const host = makeHost({
-      getSocket: () => ({ readMessages }) as unknown as WASocket,
+      getSocket: () => seenSock(readMessages),
       resolvePhone: (jid: string) => (jid === '9988@lid' ? '628123' : null),
       findPersistedLidPhone: (jid: string) => Promise.resolve(jid === '9988@lid' ? '628123' : null),
       getStoredMessages: () =>
@@ -120,7 +177,7 @@ describe('sendSeen', () => {
     // check into "accept anything spelled @lid". An unmapped lid stays itself and cannot match.
     const readMessages = jest.fn().mockResolvedValue(undefined);
     const host = makeHost({
-      getSocket: () => ({ readMessages }) as unknown as WASocket,
+      getSocket: () => seenSock(readMessages),
       getStoredMessages: () => Promise.resolve([stored({ id: 'L2', remoteJid: '7777@lid', fromMe: true })]),
     });
 
@@ -133,7 +190,7 @@ describe('sendSeen', () => {
     // have cost every receipt its participant and fromMe.
     const readMessages = jest.fn().mockResolvedValue(undefined);
     const host = makeHost({
-      getSocket: () => ({ readMessages }) as unknown as WASocket,
+      getSocket: () => seenSock(readMessages),
       getStoredMessages: () => Promise.resolve([stored({ id: 'D1', remoteJid: '628123@c.us', fromMe: true })]),
     });
 
@@ -147,7 +204,7 @@ describe('sendSeen', () => {
     const readMessages = jest.fn().mockResolvedValue(undefined);
     const key = { id: 'B1', remoteJid: '1700000000@broadcast', participant: '628123@s.whatsapp.net', fromMe: false };
     const host = makeHost({
-      getSocket: () => ({ readMessages }) as unknown as WASocket,
+      getSocket: () => seenSock(readMessages),
       getStoredMessages: () => Promise.resolve([stored(key)]),
     });
 
@@ -159,7 +216,7 @@ describe('sendSeen', () => {
     // The REST body rejects an explicit null, but this is the engine boundary; it used to throw a
     // TypeError here and surface as a 500.
     const readMessages = jest.fn().mockResolvedValue(undefined);
-    const host = makeHost({ getSocket: () => ({ readMessages }) as unknown as WASocket });
+    const host = makeHost({ getSocket: () => seenSock(readMessages) });
 
     await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', null as unknown as string[])).resolves.toBe(
       true,
@@ -172,7 +229,7 @@ describe('sendSeen', () => {
     // the message stays unread on the sender's side while the API answers success: true.
     const readMessages = jest.fn().mockResolvedValue(undefined);
     const host = makeHost({
-      getSocket: () => ({ readMessages }) as unknown as WASocket,
+      getSocket: () => seenSock(readMessages),
       getStoredMessages: () =>
         Promise.resolve([
           stored({ id: 'G1', remoteJid: '628999-1@g.us', fromMe: false, participant: '628123@s.whatsapp.net' }),
@@ -187,7 +244,7 @@ describe('sendSeen', () => {
   it('takes fromMe from the stored key rather than assuming inbound', async () => {
     const readMessages = jest.fn().mockResolvedValue(undefined);
     const host = makeHost({
-      getSocket: () => ({ readMessages }) as unknown as WASocket,
+      getSocket: () => seenSock(readMessages),
       getStoredMessages: () =>
         Promise.resolve([stored({ id: 'O1', remoteJid: '628123@s.whatsapp.net', fromMe: true })]),
     });
@@ -200,7 +257,7 @@ describe('sendSeen', () => {
     // back keeps the 1:1 case working instead of silently dropping the message from the receipt.
     const readMessages = jest.fn().mockResolvedValue(undefined);
     const host = makeHost({
-      getSocket: () => ({ readMessages }) as unknown as WASocket,
+      getSocket: () => seenSock(readMessages),
       getStoredMessages: () =>
         Promise.resolve([stored({ id: 'K1', remoteJid: '628123@s.whatsapp.net', fromMe: true })]),
     });
@@ -220,7 +277,7 @@ describe('sendSeen', () => {
 
     it('builds the key with the stored author as its participant', async () => {
       const readMessages = jest.fn().mockResolvedValue(undefined);
-      const host = makeHost({ getSocket: () => ({ readMessages }) as unknown as WASocket });
+      const host = makeHost({ getSocket: () => seenSock(readMessages) });
 
       await expect(
         new BaileysContacts(host, 500).sendSeen(GROUP, ['H1'], authors([['H1', '628123@c.us']])),
@@ -233,7 +290,7 @@ describe('sendSeen', () => {
 
     it('leaves a lid author in its own dialect', async () => {
       const readMessages = jest.fn().mockResolvedValue(undefined);
-      const host = makeHost({ getSocket: () => ({ readMessages }) as unknown as WASocket });
+      const host = makeHost({ getSocket: () => seenSock(readMessages) });
 
       await new BaileysContacts(host, 500).sendSeen(GROUP, ['H1'], authors([['H1', '9988@lid']]));
 
@@ -244,7 +301,7 @@ describe('sendSeen', () => {
 
     it('sends no key at all for an id whose author is unknown, and says nothing was acknowledged', async () => {
       const readMessages = jest.fn().mockResolvedValue(undefined);
-      const host = makeHost({ getSocket: () => ({ readMessages }) as unknown as WASocket });
+      const host = makeHost({ getSocket: () => seenSock(readMessages) });
 
       await expect(new BaileysContacts(host, 500).sendSeen(GROUP, ['H1', 'H2'])).resolves.toBe(false);
       await expect(
@@ -258,7 +315,7 @@ describe('sendSeen', () => {
       const readMessages = jest.fn().mockResolvedValue(undefined);
       const stored1 = { id: 'S1', remoteJid: GROUP, fromMe: false, participant: '628111@s.whatsapp.net' };
       const host = makeHost({
-        getSocket: () => ({ readMessages }) as unknown as WASocket,
+        getSocket: () => seenSock(readMessages),
         getStoredMessages: () => Promise.resolve([stored(stored1)]),
       });
 
@@ -284,7 +341,7 @@ describe('sendSeen', () => {
 
     it('keeps a stored key and leaves a one to one chat on its synthesised key whatever authors say', async () => {
       const readMessages = jest.fn().mockResolvedValue(undefined);
-      const host = makeHost({ getSocket: () => ({ readMessages }) as unknown as WASocket });
+      const host = makeHost({ getSocket: () => seenSock(readMessages) });
 
       await expect(
         new BaileysContacts(host, 500).sendSeen('628123@c.us', ['M1'], authors([['M1', '628555@c.us']])),
@@ -299,7 +356,7 @@ describe('sendSeen', () => {
     // and no receipt was ever sent. A caller that persisted the IDs is not subject to that.
     const readMessages = jest.fn().mockResolvedValue(undefined);
     const host = makeHost({
-      getSocket: () => ({ readMessages }) as unknown as WASocket,
+      getSocket: () => seenSock(readMessages),
       lastInboundMessage: () => null,
     });
     await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', ['M9'])).resolves.toBe(true);
@@ -309,7 +366,7 @@ describe('sendSeen', () => {
   it('works without a message store at all', async () => {
     const readMessages = jest.fn().mockResolvedValue(undefined);
     const host = makeHost({
-      getSocket: () => ({ readMessages }) as unknown as WASocket,
+      getSocket: () => seenSock(readMessages),
       getStoredMessages: () => undefined,
     });
     await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', ['M9'])).resolves.toBe(true);

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Baileys: `POST /sessions/{sessionId}/chats/read` (and the dashboard mark-as-read) now clears the account's own `unreadCount` via `chatModify({ markRead: true })` after the peer receipt. `readMessages` alone left the sidebar badges stuck after opening a chat.
+
 ### Added
 
 - MCP: every tool is advertised with a `title`, the name a client shows: the tool name split into words, or the `title` its descriptor sets (#2098). Thanks @sudipta-prodevs.
