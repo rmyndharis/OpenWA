@@ -1785,7 +1785,8 @@ export interface ChatCapability {
    *
    * Once a receipt that names the chat's newest received message is out, Baileys resets the unread count
    * it lists the chat with, and undoes an unread mark set by hand. The answer reports the receipt alone: a
-   * mark that cannot be undone is logged.
+   * mark WhatsApp refuses or does not confirm is logged, and a chat with no message to key the write to
+   * keeps its mark without a log line.
    */
   sendSeen(
     chatId: string,
