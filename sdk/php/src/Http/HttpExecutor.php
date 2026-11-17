@@ -293,7 +293,8 @@ class HttpExecutor
             }
         }
         if ($body !== null) {
-            $options['json'] = $body;
+            // json_encode writes an empty array as [], and every JSON body the gateway takes is an object.
+            $options['json'] = $body === [] ? new \stdClass() : $body;
         }
 
         $started = hrtime(true);
