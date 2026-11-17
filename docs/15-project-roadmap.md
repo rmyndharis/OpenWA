@@ -660,6 +660,13 @@ PR, and pushing the tag from `main` hands everything else to `.github/workflows/
 - The amd64 image's Chrome for Testing pin (`chrome@<version>` in the `Dockerfile`) is the current
   Stable in `last-known-good-versions.json`. Nothing else refreshes it and no image scan sees it, so
   bump it on `main` first, as the comment above that install describes.
+- The arm64 image has no pin: it installs the `chromium` Debian ships when the layer is built, and the
+  release workflow rebuilds that layer without cache, so its browser major can change between two releases
+  with nothing changed on `main`. Compare the major of the last release's image
+  (`docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/puppeteer-chrome ghcr.io/rmyndharis/openwa:<last> --version`)
+  with the Candidate that
+  `docker run --rm --platform linux/arm64 docker.io/node:22-slim sh -c 'apt-get update -qq >/dev/null; apt-cache policy chromium'`
+  prints, and when they differ give the release the same browser-major Upgrade note as an amd64 pin bump.
 - Name the version wherever the text was written before it was known, in a docs commit on `main` ahead of
   the release commit: every `next` in the Release column of the Known Upgrade Hazards table in
   `docs/14-migration-guide.md`, one for each hazard the release added, and every clause that says
