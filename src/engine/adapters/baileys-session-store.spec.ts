@@ -1357,6 +1357,22 @@ describe('BaileysSessionStore', () => {
       expect(s.isMarkedUnread('628111@c.us')).toBe(false);
     });
 
+    it('clears a mark from every record of the chat once the write that undoes it is confirmed', () => {
+      // The mark was set while the chat was keyed by its phone; newer messages count under its lid, which
+      // is the record Baileys clears. Left on the phone record, the mark made every later read undo it again.
+      const s = new BaileysSessionStore();
+      s.upsertChats([
+        { id: PHONE, unreadCount: -1, conversationTimestamp: 10 },
+        { id: LID, unreadCount: 1, conversationTimestamp: 50 },
+      ]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      expect(s.isMarkedUnread(LID)).toBe(true);
+      s.clearUnread(LID, true);
+      expect(s.isMarkedUnread(LID)).toBe(false);
+      expect(s.isMarkedUnread('628111@c.us')).toBe(false);
+      expect(s.listChats().map(chat => chat.unreadCount)).toEqual([0, 0]);
+    });
+
     it('shows a preview filed under the lid before the mapping on the merged row, newest first', () => {
       const s = new BaileysSessionStore();
       const msg = (remoteJid: string, id: string, ts: number) => ({

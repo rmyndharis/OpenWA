@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Baileys: `POST /api/sessions/{sessionId}/chats/read` sets the chat's `unreadCount` back to `0` and undoes an unread mark set by `chats/unread`; the count used to stay, so the dashboard's unread badge came back on every reload (#2109). Thanks @juanbracamonte.
 - Dashboard: a shared contact shows as a card with its name and phone, in the thread, the chat list and a quoted reply, where the raw `BEGIN:VCARD` text was printed (#2110). Thanks @juanbracamonte.
 - whatsapp-web.js: several contacts shared in one message arrive with their vCards newline-joined in `body`, as on Baileys, where the body was empty; the chat list preview and a quote of such a message carry them too.
+- Baileys: `POST /api/sessions/{sessionId}/chats/read` resets a chat's `unreadCount` only when the receipt names the chat's newest received message; a read of older messages or of the account's own, or one a newer message overtook, used to zero the count of a chat that still had unread messages. An unread mark undone on one record of a chat is cleared on its other record too, where it made every later read write the mark again.
 
 ### Documentation
 
