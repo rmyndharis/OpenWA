@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { LoggerService } from '../../common/services/logger.service';
 import {
+  capToolError,
   handleToolError,
   INLINE_RESULT_MAX_BYTES,
   readMaxResultBytes,
@@ -340,17 +341,24 @@ describe('smartToolResult with MCP_MAX_RESULT_BYTES (an opt-in cap that makes ev
 });
 
 describe('readMaxResultBytes', () => {
-  it.each([undefined, '', ' ', '0', '-5', '1.5', '100k', 'abc', '1e5', '99999999999999999999'])(
-    'reads %p as no cap',
-    raw => {
-      expect(readMaxResultBytes({ MCP_MAX_RESULT_BYTES: raw })).toBe(0);
-    },
-  );
+  it.each([undefined, '', ' ', '0', '-5', '1.5', '100k', 'abc', '1e5'])('reads %p as no cap', raw => {
+    expect(readMaxResultBytes({ MCP_MAX_RESULT_BYTES: raw })).toBe(0);
+  });
 
   it('reads a positive decimal integer', () => {
     expect(readMaxResultBytes({ MCP_MAX_RESULT_BYTES: '100000' })).toBe(100000);
     expect(readMaxResultBytes({ MCP_MAX_RESULT_BYTES: ' 100000 ' })).toBe(100000);
   });
+
+  // Read as no cap, such a value would hand the client the base64 resource the operator set a cap to avoid.
+  it.each(['9007199254740993', '99999999999999999999', '9'.repeat(400)])(
+    'reads a count past what a number holds exactly (%p) as a cap no result reaches',
+    raw => {
+      const cap = readMaxResultBytes({ MCP_MAX_RESULT_BYTES: raw });
+      expect(cap).toBe(Number.MAX_SAFE_INTEGER);
+      expect(smartToolResult({ rows: 'x'.repeat(INLINE_RESULT_MAX_BYTES * 2) }, cap).content).toHaveLength(1);
+    },
+  );
 
   it('reads process.env by default', () => {
     const prev = process.env.MCP_MAX_RESULT_BYTES;
@@ -363,5 +371,34 @@ describe('readMaxResultBytes', () => {
       if (prev === undefined) delete process.env.MCP_MAX_RESULT_BYTES;
       else process.env.MCP_MAX_RESULT_BYTES = prev;
     }
+  });
+});
+
+describe('capToolError', () => {
+  const refusal = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
+
+  it('leaves an error answer alone without a cap, and one that fits under it', () => {
+    const long = refusal('x'.repeat(5000));
+    expect(capToolError(long, 0)).toBe(long);
+    expect(capToolError(refusal('short'), 1000)).toEqual(refusal('short'));
+  });
+
+  it('cuts an error answer past the cap at a character boundary, keeps it an error, and gives no paging advice', () => {
+    const cut = capToolError(refusal('\u00e9'.repeat(3000)), 1001);
+    expect(cut.isError).toBe(true);
+    // 1001 falls inside a two-byte character, so the cut steps back to 1000 bytes: 500 whole characters.
+    expect(cut.content).toEqual([
+      { type: 'text', text: `${'\u00e9'.repeat(500)}\n\u2026[truncated: 6000 bytes in all]` },
+    ]);
+  });
+
+  it('cuts the list of messages a service refuses a wide input with', () => {
+    const messages = Array.from({ length: 400 }, (_, i) => `vars.v${i} must be a string`);
+    const answer = handleToolError(new BadRequestException(messages));
+    const whole = Buffer.byteLength((answer.content[0] as { text: string }).text);
+    expect(whole).toBeGreaterThan(2000);
+    const text = (capToolError(answer, 2000).content[0] as { text: string }).text;
+    expect(Buffer.byteLength(text.split('\n\u2026')[0])).toBe(2000);
+    expect(text.endsWith(`[truncated: ${whole} bytes in all]`)).toBe(true);
   });
 });
