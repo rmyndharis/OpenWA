@@ -732,7 +732,9 @@ per-page `React.lazy` imports in `App.tsx`. The build-time version (`__APP_VERSI
 via `define` from the **root** `package.json` — the file a release bumps — resolved relative to the
 config file rather than `process.cwd()`, because the dashboard is normally built from inside
 `dashboard/`, where a cwd-relative read picks up the release-untouched `dashboard/package.json`
-instead. `APP_VERSION` in the environment still overrides it.
+instead. `APP_VERSION` in the environment still overrides it. The one build option is
+`assetsInlineLimit`, which keeps a `.woff2` as a file: the gateway's CSP allows fonts from its own
+origin only (`font-src 'self'`), so a font Vite inlined as a `data:` URI would be refused.
 
 ```typescript
 // vite.config.ts
@@ -748,6 +750,8 @@ const { version: pkgVersion } = JSON.parse(readFileSync(new URL('../package.json
 export default defineConfig({
   plugins: [react()],
   appType: 'spa', // SPA fallback for client-side routing
+  // Fonts stay files: a small subset inlined as a data: URI is blocked by the gateway CSP (font-src 'self').
+  build: { assetsInlineLimit: file => (file.endsWith('.woff2') ? false : undefined) },
   define: {
     __APP_VERSION__: JSON.stringify(process.env.APP_VERSION || pkgVersion),
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
