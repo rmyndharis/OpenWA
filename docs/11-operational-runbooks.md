@@ -966,10 +966,12 @@ tar -tzf "$(ls -t ./backups/openwa-backup-*.tar.gz | head -n 1)"
 **Steps:**
 
 Use the repo's `scripts/restore.sh`. It restores `main.sqlite` (auth/audit) and a SQLite data store;
-for PostgreSQL it stages `database.sql` for the explicit import below. It also restores
-whatsapp-web.js/Baileys auth state, local media, plugins, and generated secret/config files, all as the
-archive holds them, so restore only archives you made. It snapshots the current data dir first so a
-bad restore can be undone:
+for PostgreSQL it stages `database.sql` for the explicit import below. An archive that holds the SQLite
+data store is refused, before anything is written, while `DATABASE_TYPE` is `postgres`: restore it into a
+SQLite install, then move that install as [14.3](./14-migration-guide.md#143-database-migration-sqlite--postgresql)
+shows. It also restores whatsapp-web.js/Baileys auth state, local media, plugins, and generated
+secret/config files, all as the archive holds them, so restore only archives you made. It snapshots the
+current data dir first so a bad restore can be undone:
 
 ```bash
 # 1. Stop the app (so files are quiescent)

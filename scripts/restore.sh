@@ -21,6 +21,9 @@
 #                       Both resolve EXACTLY like the app: the environment first, then ./.env, then
 #                       .env.generated (the archive's copy when it carries one, else the data dir's),
 #                       otherwise the app's ./data default (see lib-env.sh).
+#   DATABASE_TYPE     resolved the same way, and read only for an archive that holds the SQLite data store:
+#                     with postgres, where DATABASE_NAME names a database, the restore stops before it
+#                     writes anything
 #   OPENWA_DATA_DIR   the app's ./data directory to restore into, such as a volume's mountpoint on
 #                     the host (default: ./data); the ./data defaults, and a ./data/... path read
 #                     from ./.env or .env.generated, are taken under it
@@ -419,9 +422,20 @@ if [ -f "$STAGE/.env.generated" ]; then
   log "Paths not set in the environment or ./.env come from the archive's .env.generated."
 fi
 MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME "${DATA_DIR%/}/main.sqlite" path)"
-# DATABASE_NAME is only a target for an archive carrying the SQLite data store; a PostgreSQL dump is
-# loaded by hand, so a line for it the scripts cannot parse does not stop that restore.
+# DATABASE_TYPE and DATABASE_NAME matter only to an archive carrying the SQLite data store; a PostgreSQL dump is
+# loaded by hand, so a line for either the scripts cannot parse does not stop that restore. Under PostgreSQL
+# DATABASE_NAME names a database, so a SQLite data store has no target: it is refused before it is written to a file
+# named after that database. DATABASE_TYPE is a top-level assignment, so a line the scripts cannot parse stops the run.
 if [ -f "$STAGE/openwa.sqlite" ]; then
+  DATABASE_TYPE="$(openwa_resolve DATABASE_TYPE sqlite)"
+  if [ "$DATABASE_TYPE" = postgres ]; then
+    log "ERROR: the archive holds a SQLite data store (openwa.sqlite), but DATABASE_TYPE is postgres, so the app would not read it"
+    log "       nothing has been restored yet; to move a SQLite install to PostgreSQL, restore this archive into a SQLite"
+    log "       install, then export-data, switch and import-data as docs/14-migration-guide.md (14.3) shows; to run on"
+    log "       SQLite again, change DATABASE_TYPE and DATABASE_NAME first where they are set (the environment outranks"
+    log "       ./.env, which outranks the dashboard's .env.generated), then re-run"
+    exit 1
+  fi
   DATA_DB="$(openwa_resolve DATABASE_NAME "${DATA_DIR%/}/openwa.sqlite" path)"
 fi
 SESSIONS_DIR="$(openwa_resolve SESSION_DATA_PATH "$DATA_DIR/sessions" path)"
