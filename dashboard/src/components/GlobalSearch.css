@@ -12,7 +12,7 @@
   min-width: 12rem;
   height: 2.25rem;
   padding: 0 0.75rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius, 8px);
   background: var(--bg-white);
   color: var(--text-primary);

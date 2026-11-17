@@ -130,7 +130,7 @@ select {
   background-repeat: no-repeat;
   background-position: right 0.75rem center;
   background-size: 16px;
-  border: 1px solid var(--border, #e2e8f0);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
@@ -247,7 +247,7 @@ select:disabled {
 .modal-body input {
   width: 100%;
   padding: 0.875rem 1rem;
-  border: 1px solid var(--border, #e2e8f0);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   font-size: 0.9375rem;
   background: var(--bg-light, #f8fafc);

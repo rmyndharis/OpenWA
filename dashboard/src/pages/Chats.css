@@ -590,7 +590,7 @@
   padding-inline: 0.875rem;
   height: 40px;
   background: var(--chat-panel);
-  border: 1px solid var(--chat-divider);
+  border: 1px solid var(--control-border);
   border-radius: 10px;
   color: var(--chat-meta);
   box-sizing: border-box;
@@ -1187,7 +1187,7 @@
 .chats-page .chat-dialog-form input {
   padding-block: 0.625rem;
   padding-inline: 0.875rem;
-  border: 1px solid var(--chat-divider);
+  border: 1px solid var(--control-border);
   border-radius: 10px;
   background: var(--chat-panel-header);
   color: var(--text-primary);
@@ -1323,7 +1323,7 @@
   box-sizing: border-box;
   padding-block: 0.75rem;
   padding-inline: 1rem;
-  border: 1px solid var(--chat-divider);
+  border: 1px solid var(--control-border);
   border-radius: 10px;
   background: var(--chat-panel-header);
   color: var(--text-primary);
@@ -1590,7 +1590,7 @@
   padding-block: 0;
   padding-inline: 0.875rem;
   border: none;
-  border-bottom: 2px solid var(--chat-divider);
+  border-bottom: 2px solid var(--control-border);
   background: transparent;
   font-size: 1rem;
   color: var(--text-primary);
@@ -3119,7 +3119,7 @@
   height: 46px;
   box-sizing: border-box;
   background: var(--chat-panel);
-  border: 1px solid var(--chat-divider);
+  border: 1px solid var(--control-border);
   border-radius: 24px;
   transition:
     border-color 0.15s,
@@ -3460,7 +3460,7 @@
   width: 100%;
   padding-block: 0.625rem;
   padding-inline: 0.75rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius, 8px);
   background-color: var(--bg-light);
   color: var(--text-primary);
@@ -3498,7 +3498,7 @@
   width: 100%;
   height: 38px;
   padding: 2px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius, 8px);
   background: var(--bg-light);
   cursor: pointer;
