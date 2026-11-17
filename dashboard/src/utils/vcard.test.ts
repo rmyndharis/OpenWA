@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { contactCards, contactSnippet, isVCardBody, parseVCard, parseVCards } from './vcard.ts';
+import { isolateNumber } from './formatPhone.ts';
 
 const SAMPLE = `BEGIN:VCARD
 VERSION:3.0
@@ -27,10 +28,19 @@ test('parseVCards joins a multi-contact body', () => {
 });
 
 test('contactSnippet prefers name · phone over raw vCard text', () => {
-  assert.equal(contactSnippet(SAMPLE, 'Contact'), 'Carlos · +54 9 11 6186-2313');
+  assert.equal(contactSnippet(SAMPLE, 'Contact'), `Carlos · ${isolateNumber('+54 9 11 6186-2313')}`);
   assert.equal(contactSnippet('BEGIN:VCARD\nEND:VCARD', 'Contact'), 'Contact');
   assert.equal(isVCardBody(SAMPLE), true);
   assert.equal(isVCardBody('hello'), false);
+});
+
+test('contactSnippet joins the names of several cards, and a card with no name gives its phone', () => {
+  const second = SAMPLE.replaceAll('Carlos', 'Ana').replace('5491161862313', '5491111111111');
+  assert.equal(contactSnippet(`${SAMPLE}\n${second}`, 'Contact'), 'Carlos, Ana');
+  const nameless = 'BEGIN:VCARD\nTEL;waid=34600000000:+34 600 000 000\nEND:VCARD';
+  assert.equal(contactSnippet(`${SAMPLE}\n${nameless}`, 'Contact'), `Carlos, ${isolateNumber('+34 600 000 000')}`);
+  // Cards that hold neither a name nor a phone are no contacts: the label stands in for them.
+  assert.equal(contactSnippet('BEGIN:VCARD\nEND:VCARD\nBEGIN:VCARD\nEND:VCARD', 'Contact'), 'Contact');
 });
 
 test('parseVCard takes FN over N wherever N stands', () => {

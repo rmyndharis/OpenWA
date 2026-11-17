@@ -155,6 +155,37 @@ describe('sendSeen', () => {
     });
   });
 
+  describe('a message the session is still processing', () => {
+    // Baileys has counted it as unread when it arrived, before the session has recorded it, so the newest message
+    // recorded is not the newest the chat has received, and a read that names the recorded one has not read the chat.
+    it('keeps the count and the mark for a read that names the newest message recorded', async () => {
+      const readMessages = jest.fn().mockResolvedValue(undefined);
+      const chatModify = jest.fn().mockResolvedValue(undefined);
+      const clearUnread = jest.fn();
+      const host = makeHost({
+        getSocket: () => ({ readMessages, chatModify }) as unknown as WASocket,
+        hasUnrecordedInbound: () => true,
+        isMarkedUnread: () => true,
+        clearUnread,
+      });
+      await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+      expect(readMessages).toHaveBeenCalledWith([LAST.key]);
+      expect(clearUnread).not.toHaveBeenCalled();
+      expect(chatModify).not.toHaveBeenCalled();
+    });
+
+    it('resets the count of a read when nothing the chat received is unrecorded', async () => {
+      const clearUnread = jest.fn();
+      const host = makeHost({
+        getSocket: () => ({ readMessages: jest.fn().mockResolvedValue(undefined) }) as unknown as WASocket,
+        hasUnrecordedInbound: () => false,
+        clearUnread,
+      });
+      await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+      expect(clearUnread).toHaveBeenCalledWith('628123@c.us', false);
+    });
+  });
+
   it('leaves the unread count alone when the receipt was not confirmed', async () => {
     const clearUnread = jest.fn();
     const host = makeHost({ getSocket: () => ({ readMessages: jest.fn(never) }) as unknown as WASocket, clearUnread });
@@ -244,6 +275,90 @@ describe('sendSeen', () => {
       await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', ['M9'])).resolves.toBe(true);
       expect(readMessages).toHaveBeenCalled();
       expect(chatModify).not.toHaveBeenCalled();
+    });
+
+    describe('with a message arriving while the mark is being undone', () => {
+      /**
+       * A host that records, in order, what the read does to the counts, the marks and the write. `write` is the
+       * write itself, told how to make a message arrive (recorded) and how to leave one still being processed.
+       */
+      const undoing = (
+        write: (arrive: () => void, startProcessing: () => void) => Promise<void>,
+        overrides: Partial<Record<keyof BaileysContactsHost, unknown>> = {},
+      ) => {
+        const steps: string[] = [];
+        let newest = LAST.key;
+        let processing = false;
+        const chatModify = jest.fn(() => {
+          steps.push('write');
+          return write(
+            () => {
+              newest = { id: 'M2', remoteJid: LAST.jid };
+            },
+            () => {
+              processing = true;
+            },
+          );
+        });
+        const { host, warn } = marked(chatModify, {
+          lastInboundMessage: () => ({ key: newest, timestamp: LAST.timestamp }),
+          hasUnrecordedInbound: () => processing,
+          clearUnread: (_chat: string, marks?: boolean) => steps.push(marks ? 'clear marks' : 'clear counts'),
+          keepUnread: () => steps.push('keep unread'),
+          ...overrides,
+        });
+        return { host, steps, warn };
+      };
+      const arrives = (arrive: () => void): Promise<void> => {
+        arrive();
+        return Promise.resolve();
+      };
+
+      it('resets the counts before the write and the marks once it is confirmed, and lists nothing again', async () => {
+        const { host, steps } = undoing(() => Promise.resolve());
+        await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+        expect(steps).toEqual(['clear counts', 'write', 'clear marks']);
+      });
+
+      it('lists the chat unread again for a message recorded while the write was out', async () => {
+        const { host, steps } = undoing(arrive => arrives(arrive));
+        await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+        expect(steps).toEqual(['clear counts', 'write', 'clear marks', 'keep unread']);
+      });
+
+      it('lists the chat unread again for a message still being processed when the write returns', async () => {
+        const { host, steps } = undoing((_arrive, startProcessing) => {
+          startProcessing();
+          return Promise.resolve();
+        });
+        await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+        expect(steps).toEqual(['clear counts', 'write', 'clear marks', 'keep unread']);
+      });
+
+      it('lists nothing again for a message the caller named', async () => {
+        const { host, steps } = undoing(arrive => arrives(arrive));
+        await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', ['M1', 'M2'])).resolves.toBe(true);
+        expect(steps).toEqual(['clear counts', 'write', 'clear marks']);
+      });
+
+      it('keeps the mark of a write WhatsApp refuses, and lists the chat unread again for the message that arrived', async () => {
+        const { host, steps, warn } = undoing(arrive => {
+          arrive();
+          return Promise.reject(new Error('App state key not present!'));
+        });
+        await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+        expect(steps).toEqual(['clear counts', 'write', 'keep unread']);
+        expect(warn).toHaveBeenCalledWith(
+          'Sent the read receipt of a chat but could not undo its unread mark',
+          expect.objectContaining({ chatId: '628123@c.us' }),
+        );
+      });
+
+      it('still answers for the receipt on a host that cannot list the chat unread again', async () => {
+        const { host, steps } = undoing(arrive => arrives(arrive), { keepUnread: undefined });
+        await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+        expect(steps).toEqual(['clear counts', 'write', 'clear marks']);
+      });
     });
   });
 

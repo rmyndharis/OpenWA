@@ -680,7 +680,13 @@ export class GroupController {
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiResponse({ status: 200, description: 'Group picture removed', type: GroupAckResponseDto })
   @ApiResponse({ status: 400, description: 'The id does not name a group, or the session is not active' })
-  @ApiResponse({ status: 403, description: 'The engine refused the change — admin rights required' })
+  @ApiResponse({
+    status: 403,
+    description:
+      'The engine refused the change: admin rights are required. On whatsapp-web.js also a group that has no ' +
+      'picture to remove, which WhatsApp Web does not tell apart from missing rights, so a repeat of a removal ' +
+      'that was applied answers this.',
+  })
   @ApiResponse({
     status: 503,
     description:

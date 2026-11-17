@@ -128,7 +128,7 @@ export interface SessionEngineWiringHost {
 }
 
 /**
- * The engine-callback wiring table extracted from SessionEngineLifecycle.initializeEngine: the 17
+ * The engine-callback wiring table extracted from SessionEngineLifecycle.initializeEngine: the
  * callbacks passed to engine.initialize(). Plain class (NOT a NestJS provider — the lifecycle's
  * constructor signature is frozen by specs), built inside the lifecycle's constructor. Stateless:
  * buildCallbacks closes over (id, engine, sessionName) and reaches the lifecycle exclusively

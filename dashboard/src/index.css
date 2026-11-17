@@ -130,20 +130,23 @@ select {
   background-repeat: no-repeat;
   background-position: right 0.75rem center;
   background-size: 16px;
-  border: 1px solid var(--border, #e2e8f0);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
+/* The brand fill is 1.98:1 on white, fainter than the border at rest; the focus colour is stronger on every surface. */
 select:hover {
-  border-color: var(--primary, #25d366);
+  border-color: var(--focus-ring);
 }
 
 select:focus {
   outline: none;
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 select:disabled {
@@ -247,7 +250,7 @@ select:disabled {
 .modal-body input {
   width: 100%;
   padding: 0.875rem 1rem;
-  border: 1px solid var(--border, #e2e8f0);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   font-size: 0.9375rem;
   background: var(--bg-light, #f8fafc);
@@ -259,7 +262,9 @@ select:disabled {
   outline: none;
   border-color: var(--focus-ring);
   background: var(--bg-white, #fff);
-  box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 /* The rule above is meant for TEXT inputs. Radios/checkboxes would otherwise stretch to width:100%

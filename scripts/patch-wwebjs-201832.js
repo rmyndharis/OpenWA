@@ -4,11 +4,12 @@
  *
  * Background: WhatsApp Web build 2.3000.x (rolled out ~2026-07-14) renamed the
  * serialized message-id property `id._serialized` to `id.$1` (a minifier-mangled
- * name). whatsapp-web.js 1.34.7 (what OpenWA pins) reads `_serialized` in the
+ * name). whatsapp-web.js releases before 1.34.8 read `_serialized` in the
  * Message constructor and ~40 downstream sites, so message ids, acks, quoted-
  * message resolution, and media downloads all break. Upstream fix #201832 adds a
  * `Base._normalizeId()` helper and reapplies it across the model constructors.
- * This script backports that fix into node_modules at image build time.
+ * This script backports that fix into node_modules at image build time. 1.34.8, which OpenWA
+ * pins, ships it, so on that release the script stands down.
  *
  * Self-removing: it no-ops once every site it writes already carries this
  * backport's text, as a release that ships #201832 as merged does. A release that

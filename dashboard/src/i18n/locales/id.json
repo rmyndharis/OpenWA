@@ -55,9 +55,6 @@
     "light": "Terang",
     "dark": "Gelap",
     "system": "Sistem",
-    "label": "Tema: {{value}}",
-    "appearance": "Tampilan",
-    "mode": "Mode",
     "toggleTo": "Ganti ke {{value}}"
   },
   "nav": {
@@ -85,7 +82,6 @@
       "omitted": "Media",
       "image": "Gambar"
     },
-    "subtitle": "Kirim dan balas pesan WhatsApp secara real-time",
     "noSessionsTitle": "Tidak ada sesi terhubung",
     "noSessionsDesc": "Hubungkan sesi WhatsApp dari menu <1>Sesi</1> terlebih dahulu untuk menggunakan fitur obrolan.",
     "sessionLabel": "Sesi WhatsApp",
@@ -419,9 +415,7 @@
   },
   "sessionStatus": {
     "created": "Baru",
-    "idle": "Idle",
     "initializing": "Memulai...",
-    "connecting": "Menghubungkan...",
     "qr_ready": "Pindai QR",
     "ready": "Terhubung",
     "disconnected": "Terputus",
@@ -443,7 +437,8 @@
     },
     "empty": {
       "title": "Tidak ada sesi ditemukan",
-      "description": "Buat sesi baru untuk memulai"
+      "description": "Buat sesi baru untuk memulai",
+      "filtered": "Tidak ada sesi yang cocok dengan pencarian atau filter status."
     },
     "create": {
       "title": "Buat Sesi Baru",
@@ -690,16 +685,16 @@
       "session.reconnect_loop": "Saat sesi terus gagal terhubung kembali",
       "session.restriction": "Saat WhatsApp membatasi akun atau mencabut pembatasan",
       "presence.update": "Saat obrolan yang dilanggani online, mengetik atau offline",
-      "event.response": "Saat tamu menjawab undangan acara WhatsApp (hadir, tidak hadir, mungkin)",
+      "event.response": "Saat tamu menjawab undangan acara WhatsApp (hadir, tidak hadir, mungkin) (hanya Baileys)",
       "poll.vote": "Saat seseorang memilih atau membatalkan opsi pada polling",
       "group.join": "Saat peserta bergabung atau ditambahkan ke grup",
       "group.leave": "Saat peserta keluar atau dikeluarkan dari grup",
       "group.update": "Saat nama, deskripsi atau pengaturan grup berubah",
       "group.join_request": "Saat seseorang meminta bergabung ke grup yang dikelola sesi ini",
       "call.received": "Saat panggilan masuk mulai berdering",
-      "call.accepted": "Saat panggilan dijawab",
-      "call.rejected": "Saat panggilan ditolak",
-      "call.missed": "Saat panggilan tidak terjawab",
+      "call.accepted": "Saat panggilan dijawab (hanya Baileys)",
+      "call.rejected": "Saat panggilan ditolak (hanya Baileys)",
+      "call.missed": "Saat panggilan tidak terjawab (hanya Baileys)",
       "status.received": "Saat kontak memposting status",
       "all": "Semua kejadian kecuali message.receipt, yang harus disebutkan secara eksplisit"
     },
@@ -829,6 +824,7 @@
       "revokeTitle": "Cabut Kunci API",
       "deleteMessage": "Yakin ingin menghapus permanen <strong>{{name}}</strong>? Tindakan ini tidak dapat dibatalkan.",
       "revokeMessage": "Yakin ingin mencabut <strong>{{name}}</strong>? Kunci ini tidak akan berfungsi lagi.",
+      "signedIn": "Anda masuk ke dasbor ini menggunakan kunci ini. Mencabut atau menghapusnya akan membuat Anda keluar.",
       "delete": "Hapus",
       "revoke": "Cabut"
     },

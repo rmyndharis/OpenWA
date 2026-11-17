@@ -960,9 +960,9 @@ test('the emoji picker yields Escape to a surface layered above it', async () =>
   fireEvent.click(screen.getByTitle('Pick emoji'));
   await waitFor(() => assert.ok(container.querySelector('.chats-emoji-picker'), 'the emoji picker did not open'));
 
-  // The media viewer and the language menu render their own role while open, and the picker can
-  // still be open underneath. Taking the key there would dismiss the thing the operator is not
-  // looking at. Stand one in rather than driving the viewer, which lives in a third-party portal.
+  // The media viewer renders its own role while open, and the picker can still be open underneath.
+  // Taking the key there would dismiss the thing the operator is not looking at. Stand one in
+  // rather than driving the viewer, which lives in a third-party portal.
   const overlay = document.createElement('div');
   overlay.setAttribute('role', 'dialog');
   document.body.appendChild(overlay);

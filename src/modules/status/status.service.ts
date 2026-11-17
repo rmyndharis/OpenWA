@@ -7,6 +7,7 @@ import type { Status, StatusResult, StatusPostOptions } from '../../engine/inter
 import { assertBase64WithinMediaCap, resolveMediaBody, stripBase64DataUri } from '../message/media-cap.util';
 import { HookManager, applySendingGate } from '../../core/hooks';
 import { SendPacingService, countsTowardSendBreaker } from '../message/send-pacing.service';
+import { clientFacingSsrfError } from '../../common/media/client-facing-ssrf-error';
 import { isMediaUrl } from '../../common/media/media-url';
 import { createLogger } from '../../common/services/logger.service';
 
@@ -126,6 +127,7 @@ export class StatusService {
    * wrapper, so a policy refusal never feeds the breaker — and neither do the client-fault checks
    * the adapters run inside the call (Baileys refuses a status with no recipients, a media URL can
    * be SSRF-blocked): those say nothing about the account's standing. See countsTowardSendBreaker.
+   * A media URL the SSRF guard refused leaves as the caller's 400, not as the guard's own error.
    */
   private async recordedPost(
     sessionId: string,
@@ -147,7 +149,7 @@ export class StatusService {
           ...(error instanceof Error && error.cause instanceof Error ? { cause: error.cause.message } : {}),
         });
       }
-      throw error;
+      throw clientFacingSsrfError(error);
     }
   }
 

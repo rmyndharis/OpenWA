@@ -110,6 +110,8 @@
 #       to read it, and otherwise, with no psql on PATH too, names the psql versions the load needs
 #
 #   (ax) the archive listing helper finds a member listed first in a listing that outgrows a pipe buffer
+#   (ay) restore refuses an archive that holds the SQLite data store, before it writes anything, while DATABASE_TYPE is
+#       postgres (from the environment, ./.env or the archive's .env.generated), and still restores a PostgreSQL archive
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -1557,9 +1559,6 @@ for line in 'DATABASE_NAME="./data/active.sqlite" # data store' \
   fi
   if [ -n "$(ls "$AGB/out" 2>/dev/null)" ]; then
     fail "(ag) backup left an archive behind for an unparsed $key line"
-  fi
-  if [ "$key" = DATABASE_TYPE ]; then
-    continue # restore does not read it
   fi
   printf '%s\n' "$line" >"$AGB/dst/.env"
   set +e
@@ -3231,6 +3230,81 @@ for _ in 1 2 3 4 5; do
   fi
 done
 pass "(ax) tar_lists finds a member listed first in a listing that outgrows a pipe buffer"
+
+echo ""
+echo "==> (ay) an archive that holds the SQLite data store is refused while DATABASE_TYPE is postgres"
+# Under DATABASE_TYPE=postgres, DATABASE_NAME names a database. The restore chose what to write from the archive alone
+# and wrote the SQLite data store to a file named after that database (data/openwa.sqlite with no name set): a file the
+# app never opens, under "Restore complete".
+AY="$WORK/ay"
+mkdir -p "$AY/sqlite" "$AY/with-generated" "$AY/postgres"
+make_fixture "$AY/sqlite/main.sqlite" "ay-main"
+make_fixture "$AY/sqlite/openwa.sqlite" "ay-data"
+cp -R "$AY/sqlite/." "$AY/with-generated/"
+printf 'DATABASE_TYPE=postgres\n' >"$AY/with-generated/.env.generated"
+make_fixture "$AY/postgres/main.sqlite" "ay-main"
+printf -- '-- dump\n' >"$AY/postgres/database.sql"
+for archive in sqlite with-generated postgres; do
+  tar -czf "$AY/$archive.tar.gz" -C "$AY/$archive" .
+done
+# ay_restore <archive> <./.env content> [VAR=value...]: a restore into an empty directory, its output left in OUT_AY
+# and its exit status in rc.
+ay_restore() {
+  rm -rf "$AY/dst" && mkdir -p "$AY/dst"
+  [ -z "$2" ] || printf '%b' "$2" >"$AY/dst/.env"
+  set +e
+  OUT_AY="$(cd "$AY/dst" && env "${@:3}" "$RESTORE" "$1" 2>&1)"
+  rc=$?
+  set -e
+}
+# ay_refused <what>: the restore stopped with status 1 for the mismatch and left nothing behind but ./.env: no data
+# dir, no safety snapshot and no file named after the database.
+ay_refused() {
+  if [ "$rc" -ne 1 ] || ! grep -qF 'the archive holds a SQLite data store' <<<"$OUT_AY" ||
+    [ -n "$(find "$AY/dst" -mindepth 1 ! -name .env)" ]; then
+    fail "(ay) $1 was not refused before anything was written (rc $rc): $OUT_AY"
+  fi
+}
+# Control: the same archive restores where the install is SQLite, so the refusals below are not a broken fixture.
+ay_restore "$AY/sqlite.tar.gz" '' DATABASE_TYPE=sqlite
+if [ "$rc" -ne 0 ] || [ "$(db_fingerprint "$AY/dst/data/openwa.sqlite")" != "ay-data" ]; then
+  fail "(ay) a SQLite archive did not restore under DATABASE_TYPE=sqlite (rc $rc): $OUT_AY"
+fi
+ay_restore "$AY/sqlite.tar.gz" '' DATABASE_TYPE=postgres DATABASE_NAME=openwa
+ay_refused "a SQLite archive under DATABASE_TYPE=postgres and a database name in the environment"
+# The refusal names the supported move and both settings the way back needs, and does not offer the type alone: with
+# DATABASE_NAME still a database name that would write the file the refusal exists to prevent. It names every place
+# the settings can come from, not ./.env alone.
+if ! grep -qF 'docs/14-migration-guide.md' <<<"$OUT_AY" ||
+  ! grep -qF 'change DATABASE_TYPE and DATABASE_NAME first where they are set' <<<"$OUT_AY" ||
+  ! grep -qF 'the environment outranks' <<<"$OUT_AY" || grep -qF 'DATABASE_TYPE=sqlite' <<<"$OUT_AY"; then
+  fail "(ay) the refusal did not name the migration guide, both settings and where they are set: $OUT_AY"
+fi
+# The environment outranks ./.env, so a ./.env that says SQLite does not lift the refusal: the case the text above
+# exists for (a compose environment or a ConfigMap keeps DATABASE_TYPE).
+ay_restore "$AY/sqlite.tar.gz" 'DATABASE_TYPE=sqlite\nDATABASE_NAME=./data/openwa.sqlite\n' DATABASE_TYPE=postgres DATABASE_NAME=openwa
+ay_refused "a SQLite archive under DATABASE_TYPE=postgres in the environment although ./.env says sqlite"
+ay_restore "$AY/sqlite.tar.gz" '' DATABASE_TYPE=postgres
+ay_refused "a SQLite archive under DATABASE_TYPE=postgres with no database name"
+ay_restore "$AY/sqlite.tar.gz" 'DATABASE_TYPE=postgres\nDATABASE_NAME=openwa\n' DATABASE_HOST=db.example.invalid
+ay_refused "a SQLite archive under DATABASE_TYPE=postgres from ./.env"
+ay_restore "$AY/with-generated.tar.gz" '' DATABASE_HOST=db.example.invalid
+ay_refused "a SQLite archive whose own .env.generated selects postgres"
+# The environment decides before the archive's .env.generated does, as it does for the app.
+ay_restore "$AY/with-generated.tar.gz" '' DATABASE_TYPE=sqlite
+if [ "$rc" -ne 0 ] || [ "$(db_fingerprint "$AY/dst/data/openwa.sqlite")" != "ay-data" ]; then
+  fail "(ay) DATABASE_TYPE=sqlite in the environment did not outrank the archive's .env.generated (rc $rc): $OUT_AY"
+fi
+# A PostgreSQL archive is staged for the printed import under either type, and DATABASE_TYPE is not read for it, so a
+# line the scripts cannot parse does not stop that restore.
+for ay_env in 'DATABASE_TYPE=postgres\n' 'DATABASE_TYPE="postgres" # migrated\n'; do
+  ay_restore "$AY/postgres.tar.gz" "$ay_env" DATABASE_NAME=openwa
+  if [ "$rc" -ne 0 ] || [ ! -f "$AY/dst/data/database.sql" ] || [ -e "$AY/dst/openwa" ] ||
+    ! grep -qF 'psql --single-transaction' <<<"$OUT_AY"; then
+    fail "(ay) a PostgreSQL archive was not staged for the import with ./.env '$ay_env' (rc $rc): $OUT_AY"
+  fi
+done
+pass "(ay) a SQLite archive is refused under DATABASE_TYPE=postgres before anything is written"
 
 echo ""
 echo "All smoke tests passed!"

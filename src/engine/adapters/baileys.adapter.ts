@@ -168,7 +168,8 @@ export class BaileysAdapter implements IWhatsAppEngine {
       toUnixSeconds,
       inboundLimiter: this.inboundLimiter,
       recordKeyLidMappings: key => this.sessionStore.recordKeyLidMappings(key),
-      recordMessage: (msg, type, order?: number) => this.sessionStore.recordMessage(msg, type, order),
+      recordMessage: (msg, type, order?: number, withhold?: boolean) =>
+        this.sessionStore.recordMessage(msg, type, order, withhold),
       nextMessageOrder: () => this.sessionStore.nextMessageOrder(),
       recordMessageEdit: (
         chatId,
@@ -227,8 +228,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
       listChats: () => this.sessionStore.listChats(),
       lastMessage: chatId => this.sessionStore.lastMessage(chatId),
       lastInboundMessage: chatId => this.sessionStore.lastInboundMessage(chatId),
+      hasUnrecordedInbound: chatId => this.sessionStore.followsLastInbound(chatId, this.events.receivedInFlight()),
       isMarkedUnread: chatId => this.sessionStore.isMarkedUnread(chatId),
       clearUnread: (chatId, marks) => this.sessionStore.clearUnread(chatId, marks),
+      keepUnread: chatId => this.sessionStore.keepUnread(chatId),
       lidOf: jid => this.sessionStore.lidOf(jid),
       chatTwins: jid => this.sessionStore.chatTwins(jid),
       chatDeletedAt: chatId => this.sessionStore.chatDeletedAt(chatId),

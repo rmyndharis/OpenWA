@@ -1697,6 +1697,14 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
         readyAdapter(groupChat({ deletePicture: refused })).deleteGroupPicture('g@g.us'),
       ).rejects.toBeInstanceOf(EngineRefusedError);
     });
+
+    it('refuses a delete WhatsApp Web did not attempt, and names both causes it has', async () => {
+      // WWebJS.deletePicture resolves undefined when canDelete() is false: no picture, or no right to edit the info.
+      const notAttempted = jest.fn().mockResolvedValue(undefined);
+      const attempt = readyAdapter(groupChat({ deletePicture: notAttempted })).deleteGroupPicture('g@g.us');
+      await expect(attempt).rejects.toBeInstanceOf(EngineRefusedError);
+      await expect(attempt).rejects.toThrow(/did not attempt it, as when the group has no picture or admin rights/);
+    });
   });
 
   describe('addressbook contacts', () => {
@@ -3979,11 +3987,11 @@ describe('resolveAuthTimeoutMs (#353 — configurable first-boot init wait)', ()
   });
 
   // The outer init deadline is a setTimeout, and Node fires any delay above 2^31-1 after 1 ms: every
-  // start on either engine was then a 504. whatsapp-web.js times its own wait with Date.now, so the
-  // auth value itself is kept.
+  // start on either engine was then a 504. The auth value handed to whatsapp-web.js is held to the same limit,
+  // since the library arms a Puppeteer timer with it (see auth-timeout-timer-ceiling.spec.ts).
   it('keeps the derived init deadline within what a Node timer can hold', () => {
     process.env.WWEBJS_AUTH_TIMEOUT_MS = '3000000000';
-    expect(resolveAuthTimeoutMs()).toBe(3000000000);
+    expect(resolveAuthTimeoutMs()).toBe(2_147_483_647);
     expect(resolveEngineInitTimeoutMs()).toBe(2_147_483_647);
     process.env.WWEBJS_AUTH_TIMEOUT_MS = '600000';
     expect(resolveEngineInitTimeoutMs()).toBe(630000);

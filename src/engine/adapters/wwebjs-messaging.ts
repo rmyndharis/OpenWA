@@ -42,7 +42,7 @@ import { RecipientUnreachableError } from '../../common/errors/recipient-unreach
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
-import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
+import { type WwebjsEngineHost, requireClient, withPage, withPageWrite } from './wwebjs-host';
 import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
@@ -1006,7 +1006,7 @@ export class WwebjsMessaging {
 
   async reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void> {
     this.host.ensureReady();
-    await this.withPage('reactToMessage', async () => {
+    await withPageWrite(this.host, 'reactToMessage', async () => {
       // NOTE: do NOT resolve chatId to @lid here — whatsapp-web.js reacts using the found message's own
       // id, not this chatId, so LID-resolving the lookup gives no send benefit and would miss a message
       // stored under the pre-migration @c.us chat (#583).
@@ -1283,7 +1283,7 @@ export class WwebjsMessaging {
     // the pre-migration @c.us chat (#583).
     // The message is found by its serialized id or by the bare key id, but its row is keyed by the serialized one,
     // which is what the caller needs to clear the stored copy.
-    const deleted = await this.withPage('deleteMessage', async () => {
+    const deleted = await withPageWrite(this.host, 'deleteMessage', async () => {
       const chat = await this.client()
         .getChatById(chatId)
         .catch(error => recoverGroupChatById(this.host, 'deleteMessage', chatId, error));
@@ -1309,7 +1309,7 @@ export class WwebjsMessaging {
     // NOTE: do NOT resolve chatId to @lid here - edit operates on the found message's own key, not
     // this chatId, so LID-resolving the lookup would miss a message stored under the pre-migration
     // @c.us chat (#583).
-    const edited = await this.withPage('editMessage', async () => {
+    const edited = await withPageWrite(this.host, 'editMessage', async () => {
       const chat = await this.client()
         .getChatById(chatId)
         .catch(error => recoverGroupChatById(this.host, 'editMessage', chatId, error));
@@ -1367,7 +1367,7 @@ export class WwebjsMessaging {
     // Same 100-message window as pin/react/delete, so a poll older than that is unreachable and
     // reported as not-found rather than as a failed vote.
     try {
-      await this.withPage('votePoll', async () => {
+      await withPageWrite(this.host, 'votePoll', async () => {
         const message = await this.findInFetchWindow(chatId, pollMessageId);
         // vote() matches option TEXTS exactly and silently drops the ones that match nothing. When
         // none match it sends an empty selection, the same as `options: []`, which CLEARS the vote
@@ -1409,7 +1409,7 @@ export class WwebjsMessaging {
     // The page-side helper returns false rather than throwing for every refusal — a non-number
     // duration, a message it cannot resolve, or a send WhatsApp rejected (Injected/Utils.js:1670).
     // Surface that as a refusal instead of reporting a pin that never happened.
-    const pinned = await this.withPage('pinMessage', async () => {
+    const pinned = await withPageWrite(this.host, 'pinMessage', async () => {
       const message = await this.findInFetchWindow(chatId, messageId);
       return message.pin(durationSeconds);
     });
@@ -1426,7 +1426,7 @@ export class WwebjsMessaging {
     // Both resolve void, and the page-side helper silently does nothing when canStarMsg() refuses
     // the message (Message.js:672-712). There is no signal to map, so a star that WhatsApp declined
     // is indistinguishable from one it accepted — documented rather than faked into a refusal.
-    await this.withPage('starMessage', async () => {
+    await withPageWrite(this.host, 'starMessage', async () => {
       const message = await this.findInFetchWindow(chatId, messageId);
       await (star ? message.star() : message.unstar());
     });
@@ -1437,7 +1437,7 @@ export class WwebjsMessaging {
     this.host.ensureReady();
     // unpin() passes duration 0 itself, so the injected non-number guard cannot bite here; a false
     // return means WhatsApp refused the unpin (e.g. not an admin).
-    const unpinned = await this.withPage('unpinMessage', async () => {
+    const unpinned = await withPageWrite(this.host, 'unpinMessage', async () => {
       const message = await this.findInFetchWindow(chatId, messageId);
       return message.unpin();
     });

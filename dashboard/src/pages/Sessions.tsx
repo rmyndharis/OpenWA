@@ -55,6 +55,7 @@ import './Sessions.css';
 import { formatLastActive, formatSessionStatus } from '../utils/sessionDisplay';
 import { normalizePhoneText } from '../utils/phone';
 import { isComposingKey } from '../utils/composition';
+import { onTabListKeyDown } from '../utils/tabKeys';
 
 /**
  * The hover title for a restriction: the engine's own cause token, plus when enforcement ends if
@@ -906,10 +907,11 @@ export function Sessions() {
         >
           <div style={{ textAlign: 'center' }}>
             {!pairingCode && (
-              <div className="pairing-tabs" role="tablist">
+              <div className="pairing-tabs" role="tablist" onKeyDown={onTabListKeyDown}>
                 <button
                   role="tab"
                   aria-selected={!pairingMode}
+                  tabIndex={!pairingMode ? 0 : -1}
                   className={`pairing-tab-btn ${!pairingMode ? 'active' : ''}`}
                   onClick={() => selectPairingTab(false)}
                 >
@@ -918,6 +920,7 @@ export function Sessions() {
                 <button
                   role="tab"
                   aria-selected={pairingMode}
+                  tabIndex={pairingMode ? 0 : -1}
                   className={`pairing-tab-btn ${pairingMode ? 'active' : ''}`}
                   onClick={() => selectPairingTab(true)}
                 >
@@ -1337,7 +1340,13 @@ export function Sessions() {
           <div className="empty-state">
             <QrCode size={48} />
             <h3>{t('sessions.empty.title')}</h3>
-            <p>{t('sessions.empty.description')}</p>
+            {/* A list the search or the status filter emptied is not a gateway with no sessions, and only a key
+                that can create one is told to. */}
+            {sessions.length > 0 ? (
+              <p>{t('sessions.empty.filtered')}</p>
+            ) : (
+              canCreate && <p>{t('sessions.empty.description')}</p>
+            )}
           </div>
         ) : (
           filteredSessions.map(session => (

@@ -6,8 +6,8 @@
  * on 2026-09-17 that model carries an enumerable private `__x_id`, which lands on the plain object
  * and clobbers the id when the `Msg` model initialises: every media send fails with "Data passed
  * to getter must include an id property (it's how we memoize) but got undefined" while text keeps
- * working. Upstream carries the one-line fix in whatsapp-web.js PR #201923, unmerged, with no
- * release after 1.34.7; this applies the same line.
+ * working. Upstream carries the fix in whatsapp-web.js PR #201923, released in 1.34.8 with a
+ * differently shaped guard (`if (message.__x_id)`), so this unconditional line still applies beside it.
  *
  * The source transform is deliberately exact and self-disabling. An unknown shape fails the
  * production image build instead of silently shipping without the fix, and the patch stands down

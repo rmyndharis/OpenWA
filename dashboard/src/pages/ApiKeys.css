@@ -363,13 +363,23 @@
 .api-keys-page .modal-body > textarea {
   width: 100%;
   padding: 0.625rem 1rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   font-size: 0.875rem;
   font-family: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
   background: var(--bg-light);
   box-sizing: border-box;
   resize: vertical;
+}
+
+/* The dialog's input rule does not reach a textarea, so it states the focus the inputs beside it show. */
+.api-keys-page .modal-body > textarea:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+  background: var(--bg-white);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 .api-keys-page .modal-body > select,

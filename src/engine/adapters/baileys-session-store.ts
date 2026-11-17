@@ -12,6 +12,8 @@ interface LastMessage {
   timestamp: number;
   text: string;
   type?: MessageType;
+  /** The session dropped this message (STORE_EPHEMERAL_MESSAGES=false): no text of it is kept, an edit's included. */
+  withheld?: true;
   /** Where the message stands in the order this session observed them, which settles a tie in `timestamp`. */
   order: number;
 }
@@ -688,7 +690,7 @@ export class BaileysSessionStore {
     return ++this.messageOrder;
   }
 
-  recordMessage(msg: WAMessage, type?: MessageType, order = this.nextMessageOrder()): void {
+  recordMessage(msg: WAMessage, type?: MessageType, order = this.nextMessageOrder(), withhold = false): void {
     const chatId = msg.key?.remoteJid;
     if (!chatId || !msg.key) {
       return;
@@ -736,9 +738,10 @@ export class BaileysSessionStore {
       return; // keep the newest
     }
     // The text the message was announced with: inside a disappearing chat's or a view-once envelope, and a
-    // photo's, video's or document's caption. A deleted message previews nothing, whatever it held.
-    const text = type === 'revoked' ? '' : baileysMessageText(msg.message);
-    this.lastMessages.set(key, { key: msg.key, timestamp, text, type, order });
+    // photo's, video's or document's caption. A deleted message previews nothing, whatever it held, and neither does
+    // one the session drops: its key, time and place in the order still decide which message is newest.
+    const text = type === 'revoked' || withhold ? '' : baileysMessageText(msg.message);
+    this.lastMessages.set(key, { key: msg.key, timestamp, text, type, order, ...(withhold ? { withheld: true } : {}) });
   }
 
   /**
@@ -785,7 +788,7 @@ export class BaileysSessionStore {
         // A delete is final: an edit that reaches the preview afterwards must not bring the deleted text back.
         if (existing?.type === 'revoked' && type !== 'revoked') continue;
         if (existing?.key.id === messageId && (!accept || accept(existing.key)))
-          previews.set(key, { ...existing, text, type: type ?? existing.type });
+          previews.set(key, { ...existing, text: existing.withheld ? '' : text, type: type ?? existing.type });
       }
     }
   }
@@ -1041,6 +1044,25 @@ export class BaileysSessionStore {
     return m ? { key: m.key, timestamp: m.timestamp } : null;
   }
 
+  /**
+   * Whether a message of `received` would be the newest the chat has received once recorded: one of the chat under
+   * any spelling of it that follows the newest recorded, by timestamp and, within a second, by the order observed
+   * (the rule {@link recordMessage} applies). A repeat delivery of the newest recorded does not.
+   */
+  followsLastInbound(
+    chatId: string,
+    received: ReadonlyArray<{ chatJid: string; id: string; timestamp: number; order: number }>,
+  ): boolean {
+    const newest = this.newestAcrossTwins(this.lastInbound, chatId);
+    const chats = new Set([this.chatKey(chatId), ...this.chatTwins(chatId)]);
+    return received.some(
+      m =>
+        chats.has(this.toEngineJid(m.chatJid)) &&
+        m.id !== newest?.key.id &&
+        (!newest || m.timestamp > newest.timestamp || (m.timestamp === newest.timestamp && m.order > newest.order)),
+    );
+  }
+
   /** Whether the chat carries an unread mark set by hand, which WhatsApp syncs as a negative count. */
   isMarkedUnread(chatId: string): boolean {
     return [...new Set(this.chatTwins(chatId))].some(key => (this.chats.get(key)?.unreadCount ?? 0) < 0);
@@ -1050,15 +1072,33 @@ export class BaileysSessionStore {
    * The session read the chat: its count of unread messages goes back to zero under every record the
    * chat is filed as. Baileys raises the count with each message received and lowers it for no receipt
    * this session sends, so a chat read through the gateway stayed listed as unread. A mark set by hand
-   * (see {@link isMarkedUnread}) is not a count and is left alone unless `marks` says the write that undoes
-   * it was confirmed: Baileys then clears it on the record that write was keyed to, and a twin record that
-   * kept it would have every later read undo the mark again.
+   * (see {@link isMarkedUnread}) is not a count and is left alone; `marks` clears the marks instead, and
+   * nothing else, once the write that undoes them was confirmed: Baileys then clears the mark on the record
+   * that write was keyed to, and a twin record that kept it would have every later read undo the mark again.
+   * A message that arrived while the write was out has a count, which the write did not cover.
    */
   clearUnread(chatId: string, marks = false): void {
     for (const key of new Set(this.chatTwins(chatId))) {
       const chat = this.chats.get(key);
-      if (chat?.unreadCount && (marks || chat.unreadCount > 0)) this.chats.set(key, { ...chat, unreadCount: 0 });
+      const count = chat?.unreadCount ?? 0;
+      if (chat && (marks ? count < 0 : count > 0)) this.chats.set(key, { ...chat, unreadCount: 0 });
     }
+  }
+
+  /**
+   * List the chat unread again, after a message the read did not name had been counted. Baileys replays an
+   * own write to the app state as a chat update with a count of zero, on the record the write was keyed to,
+   * which is also the record such a message may have been counted on. Where every record of the chat reads zero,
+   * one is set on the most recently active, the record the listing takes the count from, to 1: the count
+   * Baileys reports is an increment, not a total. A record that holds a count or a mark is left as it is.
+   */
+  keepUnread(chatId: string): void {
+    const records = [...new Set(this.chatTwins(chatId))].flatMap(key => this.chats.get(key) ?? []);
+    if (records.some(chat => chat.unreadCount)) return;
+    const [latest] = records.sort(
+      (a, b) => this.toUnixSeconds(b.conversationTimestamp) - this.toUnixSeconds(a.conversationTimestamp),
+    );
+    if (latest?.id) this.chats.set(latest.id, { ...latest, unreadCount: 1 });
   }
 
   /**

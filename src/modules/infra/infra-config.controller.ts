@@ -90,6 +90,10 @@ interface SavedConfigResponse {
 // Errors of replacing the overlay by rename that the in-place write v0.25.0 used can still get past.
 const IN_PLACE_FALLBACK_CODES = ['EBUSY', 'EXDEV', 'EACCES', 'EPERM', 'EROFS'];
 
+// generatedEnvPath() relative to the working directory, as the success answer gives it. A constant, so naming it in
+// the answer to a failed save cannot itself fail (the working directory may be the fault).
+const OVERLAY_PATH = path.join('data', '.env.generated');
+
 interface RestartResult {
   message: string;
   restarting: boolean;
@@ -212,6 +216,9 @@ export class InfraConfigController {
   })
   @ApiBody({ description: 'Configuration to save', type: SaveConfigDto })
   saveConfig(@Body() config: SaveConfigDto): { message: string; saved: boolean; envPath: string; profiles: string[] } {
+    // True only while the overlay is being written: a failure before that point (reading the saved overlay, the
+    // engine list) must not claim the file could not be written.
+    let writing = false;
     try {
       const profiles: string[] = [];
 
@@ -239,7 +246,9 @@ export class InfraConfigController {
       this.assertBootValidates(existing, merged);
       this.assertStorageRootWritable(updates, merged);
       this.bootOverlay ??= existing;
+      writing = true;
       this.persistGeneratedEnv(envPath, merged);
+      writing = false;
       this.auditConfigSaved(config, profiles);
 
       return this.buildSaveResponse(envPath, profiles);
@@ -252,8 +261,17 @@ export class InfraConfigController {
       if (error instanceof HttpException) {
         throw error;
       }
+      // The text of a failed write names the file it was asked to open by absolute path, or by the target of a
+      // symlinked overlay, which is the host layout the success answer withholds. The answer carries the overlay
+      // relative to the working directory and the error code; the log keeps the whole error. A failure before the
+      // write says only that the save failed.
+      this.logger.error('Failed to save configuration', error);
+      const code = (error as { code?: unknown } | null | undefined)?.code;
       return {
-        message: `Failed to save configuration: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        message: writing
+          ? `Failed to save configuration: ${OVERLAY_PATH} could not be written${typeof code === 'string' ? ` (${code})` : ''}. ` +
+            'The server log has the cause.'
+          : 'Failed to save configuration. The server log has the cause.',
         saved: false,
         envPath: '',
         profiles: [],

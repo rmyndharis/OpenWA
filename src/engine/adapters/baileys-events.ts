@@ -58,6 +58,7 @@ import {
   coerceDeclaredSize,
   inboundMediaMaxBytes,
   inboundMediaTimeoutMs,
+  isDroppedEphemeral,
   isMediaDownloadEnabled,
   runUnderGlobalMediaGate,
   withInboundDownloadTimeout,
@@ -260,8 +261,11 @@ export interface BaileysEventsHost {
   recordKeyLidMappings(
     key: Pick<WAMessageKey, 'remoteJid' | 'remoteJidAlt' | 'participant' | 'participantAlt' | 'fromMe'>,
   ): void;
-  /** Seed the chat's last-message preview + sort time from an inbound message. */
-  recordMessage(msg: WAMessage, type?: MessageType, order?: number): void;
+  /**
+   * Seed the chat's last-message preview + sort time from an inbound message. `withhold` keeps its text out of the
+   * preview, for a message the session drops (see isDroppedEphemeral): its key, time and place in the order still count.
+   */
+  recordMessage(msg: WAMessage, type?: MessageType, order?: number, withhold?: boolean): void;
   /** Reserve a message's place in the observed order on arrival, ahead of any limiter, store or media wait. */
   nextMessageOrder?(): number;
   /** Apply a message edit to the chat preview, when `accept` (if given) accepts the key the preview holds. */
@@ -413,7 +417,7 @@ export class BaileysEvents {
    */
   private readonly inboundInFlight = new Map<
     string,
-    { key: WAMessageKey; message: WAMessage['message']; done: Promise<void> }
+    { key: WAMessageKey; message: WAMessage['message']; done: Promise<void>; timestamp: number; order: number }
   >();
 
   /**
@@ -706,6 +710,8 @@ export class BaileysEvents {
           key: msg.key,
           message: msg.message,
           done: Promise.all([this.inboundInFlight.get(id)?.done, processed]).then(() => undefined),
+          timestamp: toUnixSeconds(msg.messageTimestamp),
+          order: order ?? 0,
         };
         this.inboundInFlight.set(id, tracked);
         void tracked.done.finally(() => {
@@ -718,6 +724,27 @@ export class BaileysEvents {
         });
       }
     }
+  }
+
+  /**
+   * The messages the account received that this session is still processing (a download, the queue for a slot) and
+   * Baileys has counted as unread already, which it does when the message arrives and not once it is recorded: where
+   * each belongs, and its place in the order observed. What Baileys takes for no message (a reaction, an edit sent as
+   * a protocol message) is not listed, nor what this session drops as no message of its own (see
+   * BAILEYS_NON_CONTENT_TYPES), which would otherwise keep a chat unread until the next read.
+   */
+  receivedInFlight(): Array<{ chatJid: string; id: string; timestamp: number; order: number }> {
+    const b = this.host.getLoadedLib?.();
+    const received = [];
+    for (const [id, { key, message, timestamp, order }] of this.inboundInFlight) {
+      if (key.fromMe === true || !key.remoteJid) continue;
+      if (b) {
+        const type = b.getContentType(b.normalizeMessageContent(message ?? undefined) ?? message ?? undefined);
+        if (!b.isRealMessage({ key, message }) || (type !== undefined && BAILEYS_NON_CONTENT_TYPES.has(type))) continue;
+      }
+      received.push({ chatJid: baileysChatJid(key.remoteJid, key.participant, false), id, timestamp, order });
+    }
+    return received;
   }
 
   /** The ack Baileys' event buffer merged into the upsert of a message the account sent, as an update. */
@@ -775,6 +802,15 @@ export class BaileysEvents {
     );
   }
 
+  /** Whether the session drops `msg` under STORE_EPHEMERAL_MESSAGES=false, by the timer its content carries. */
+  private dropsAsEphemeral(msg: WAMessage, ephemeralDuration: number | undefined): boolean {
+    return isDroppedEphemeral({
+      ephemeralDuration,
+      fromMe: msg.key.fromMe === true,
+      isStatusBroadcast: msg.key.remoteJid === 'status@broadcast',
+    });
+  }
+
   /**
    * Whether processing `msg` downloads its media: the gates of {@link resolveInboundMedia}, read before
    * the processing starts. True when the module is not loaded yet, which cannot happen once a socket
@@ -787,6 +823,7 @@ export class BaileysEvents {
     return (
       isBaileysMediaType(b.getContentType(normalized)) &&
       !ownStatusPost &&
+      !this.dropsAsEphemeral(msg, extractBaileysContext(normalized ?? {}).ephemeralDuration) &&
       isMediaDownloadEnabled() &&
       coerceDeclaredSize(mediaSubMessage(normalized ?? {})?.fileLength) <= inboundMediaMaxBytes()
     );
@@ -924,17 +961,29 @@ export class BaileysEvents {
       // type drives routing here AND mapMessage. The protocol and reaction branches below read the
       // normalized content too: a client wraps an edit in `editedMessage`, and `ephemeralMessage` can hold
       // a revoke or a reaction just as well, so the raw root does not always carry them.
-      let normalizedRoot = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
-      let contentType = b.getContentType(normalizedRoot);
+      const normalizedRoot = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
+      const contentType = b.getContentType(normalizedRoot);
       // A contact's edit, and a reaction in some chats, arrive encrypted under the secret of the message
-      // they change. Read with the stored original's secret, they are handled below as the plain
-      // protocol or reaction message they stand for; one that cannot be read stays dropped as non-content.
+      // they change. Read with the stored original's secret, they are handled as the plain protocol or
+      // reaction message they stand for; one that cannot be read stays dropped as non-content. The read of
+      // the original is made in the queue of the message it changes, as every other change reads, so changes
+      // of one message are applied in the order they arrived in, whatever order the store answers the reads in.
       if (contentType === 'secretEncryptedMessage' || contentType === 'encReactionMessage') {
-        const revealed = await this.revealEncryptedModification(b, msg, normalizedRoot, contentType);
-        if (revealed) {
-          normalizedRoot = revealed.content;
-          contentType = revealed.contentType;
-        }
+        const encrypted =
+          contentType === 'secretEncryptedMessage'
+            ? normalizedRoot?.secretEncryptedMessage
+            : normalizedRoot?.encReactionMessage;
+        let handled = false;
+        await this.prepareMessageChange(encrypted?.targetMessageKey?.id, opts, async releasePreparation => {
+          const revealed = await this.revealEncryptedModification(b, msg, normalizedRoot, contentType);
+          if (!revealed) return;
+          handled = true;
+          await this.processMessageChange(b, msg, revealed.content, revealed.contentType, {
+            ...opts,
+            releasePreparation,
+          });
+        });
+        if (handled) return;
       }
 
       if (contentType === 'protocolMessage' || contentType === 'reactionMessage') {
@@ -1041,7 +1090,11 @@ export class BaileysEvents {
         if (editedBody !== incoming.body || edit?.afterOtherText) incoming.originalBody = incoming.body;
         incoming.body = editedBody;
       }
-      if (opts.generation === this.storeGeneration) {
+      // A message the session drops under STORE_EPHEMERAL_MESSAGES=false is never announced, so no copy of its content is
+      // kept here either, nor its text in the chat preview. What the account sent or typed on its phone is announced
+      // and can be changed, and a status is the status store's: they keep theirs.
+      const dropped = isDroppedEphemeral(incoming);
+      if (opts.generation === this.storeGeneration && !dropped) {
         void this.host.putStoredMessage(toStore)?.catch(err =>
           this.host.logger.warn('Failed to persist message to store', {
             error: err instanceof Error ? err.message : String(err),
@@ -1060,7 +1113,7 @@ export class BaileysEvents {
         const receipt = opts.ticket ? emit?.(incoming, opts.ticket) : emit?.(incoming);
         this.watchOutcome(msg.key, receipt);
       }
-      this.host.recordMessage(msg, deleted ? 'revoked' : incoming.type, opts.order);
+      this.host.recordMessage(msg, deleted ? 'revoked' : incoming.type, opts.order, dropped);
       if (deleted) {
         this.host.recordMessageEdit(chatJid, storedId, '', 'revoked');
       } else if (editedBody !== undefined && storedId !== null) {
@@ -2906,10 +2959,13 @@ export class BaileysEvents {
     // Body: text first, then media caption, then WhatsApp Business interactive shapes (#562).
     const body = extractBaileysBody(normalized);
     const location = extractBaileysLocation(normalized, contentType);
-    const media = await this.resolveInboundMedia(msg, contentType, content, b, opts?.skipMediaDownload === true, opts);
     // The quote, the disappearing-messages timer, the mentions and the status styling all come from
     // one region of the content — see BaileysMessageContext.
     const context = extractBaileysContext(normalized);
+    // A message the session drops under STORE_EPHEMERAL_MESSAGES=false is neither stored nor announced, so its media
+    // is not fetched: the marker stands in, as for any download that is skipped.
+    const skipMedia = opts?.skipMediaDownload === true || this.dropsAsEphemeral(msg, context.ephemeralDuration);
+    const media = await this.resolveInboundMedia(msg, contentType, content, b, skipMedia, opts);
     // Commerce ids (order token, product id): the generic path sees an empty body and drops them,
     // and they are the only handle a caller has on the order or the product.
     const commerce = extractBaileysCommerce(normalized, contentType);
@@ -3019,7 +3075,13 @@ export class BaileysEvents {
         return;
       }
 
-      if (this.readsAsForeign(original.key, msg.key, false, 'reaction')) {
+      // A poll the account sent to a broadcast list is filed under the list, which no chat can match, so
+      // readsAsForeign lets every vote through. Each recipient votes from its 1:1 chat, and only that is exempt.
+      const ownListPoll = original.key.fromMe === true && !!original.key.remoteJid?.endsWith('@broadcast');
+      if (
+        this.readsAsForeign(original.key, msg.key, false, 'reaction') ||
+        (ownListPoll && chatKind(remoteJid) !== 'individual')
+      ) {
         this.host.logger.warn('Dropping a poll vote sent in a chat other than its poll', {
           action: 'baileys_poll_vote_cross_chat',
           msgId: msg.key.id ?? 'unknown',

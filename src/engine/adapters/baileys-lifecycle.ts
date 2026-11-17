@@ -32,6 +32,7 @@ import {
 } from '../terminal-engine-failure';
 import { differentWaIds, keyChatIds, type BaileysEvents } from './baileys-events';
 import type { BaileysHistory } from './baileys-history';
+import { withoutNonContentUnread } from './baileys-message-mapper';
 import { SESSION_STORE_MAP_CAP_DEFAULT, type BaileysSessionStore } from './baileys-session-store';
 import { ownAccountIds } from './baileys-stored-chat-previews.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
@@ -683,7 +684,11 @@ export class BaileysLifecycle {
       for (const update of updates ?? []) {
         if (Object.hasOwn(update, 'ephemeralExpiration')) this.groupMetadata.invalidate(update.id);
       }
-      this.host.upsertChats(updates);
+      // The chat keeps the count it had when the one message Baileys counted is none of its own.
+      const b = this.loadedLib;
+      const typeOf = (content: BaileysLib.proto.IMessage | null | undefined): string | undefined =>
+        b && content ? b.getContentType(b.normalizeMessageContent(content) ?? content) : undefined;
+      this.host.upsertChats((updates ?? []).map(update => withoutNonContentUnread(update, typeOf)));
     });
     sock.ev.on('chats.delete', ids => {
       this.host.logger.debug('Baileys chats event', {

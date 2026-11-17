@@ -29,6 +29,7 @@ import {
 import { pluginsApi } from '../services/api';
 import type { Plugin, CatalogPlugin, PluginConfigField } from '../services/api';
 import { injectConfigUiCsp } from '../utils/pluginFrameSecurity';
+import { onTabListKeyDown } from '../utils/tabKeys';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useTheme } from '../hooks/useTheme';
 import { usePluginsQuery, useSessionsQuery, queryKeys } from '../hooks/queries';
@@ -1105,10 +1106,11 @@ export default function Plugins() {
           className="install-modal"
           closeLabel={t('common.close')}
           headerExtra={
-            <div className="install-tabs" role="tablist">
+            <div className="install-tabs" role="tablist" onKeyDown={onTabListKeyDown}>
               <button
                 role="tab"
                 aria-selected={installMode === 'upload'}
+                tabIndex={installMode === 'upload' ? 0 : -1}
                 className={`install-tab${installMode === 'upload' ? ' active' : ''}`}
                 onClick={() => setInstallMode('upload')}
               >
@@ -1117,6 +1119,7 @@ export default function Plugins() {
               <button
                 role="tab"
                 aria-selected={installMode === 'catalog'}
+                tabIndex={installMode === 'catalog' ? 0 : -1}
                 className={`install-tab${installMode === 'catalog' ? ' active' : ''}`}
                 onClick={() => setInstallMode('catalog')}
               >
@@ -1314,10 +1317,11 @@ export default function Plugins() {
               closeLabel={t('common.close')}
               subheader={
                 showTabs ? (
-                  <div className="modal-tabs" role="tablist">
+                  <div className="modal-tabs" role="tablist" onKeyDown={onTabListKeyDown}>
                     <button
                       role="tab"
                       aria-selected={configTab === 'config'}
+                      tabIndex={configTab === 'config' ? 0 : -1}
                       className={`modal-tab ${configTab === 'config' ? 'active' : ''}`}
                       onClick={() => setConfigTab('config')}
                     >
@@ -1327,6 +1331,7 @@ export default function Plugins() {
                       <button
                         role="tab"
                         aria-selected={configTab === 'sessions'}
+                        tabIndex={configTab === 'sessions' ? 0 : -1}
                         className={`modal-tab ${configTab === 'sessions' ? 'active' : ''}`}
                         onClick={() => setConfigTab('sessions')}
                       >
@@ -1337,6 +1342,7 @@ export default function Plugins() {
                       <button
                         role="tab"
                         aria-selected={configTab === 'instances'}
+                        tabIndex={configTab === 'instances' ? 0 : -1}
                         className={`modal-tab ${configTab === 'instances' ? 'active' : ''}`}
                         onClick={() => setConfigTab('instances')}
                       >

@@ -57,9 +57,6 @@
     "light": "Clair",
     "dark": "Sombre",
     "system": "Système",
-    "label": "Thème : {{value}}",
-    "appearance": "Apparence",
-    "mode": "Mode",
     "toggleTo": "Passer à {{value}}"
   },
   "nav": {
@@ -87,7 +84,6 @@
       "omitted": "Média",
       "image": "Image"
     },
-    "subtitle": "Envoyez et répondez aux messages WhatsApp en temps réel",
     "noSessionsTitle": "Aucune session connectée",
     "noSessionsDesc": "Veuillez d'abord connecter une session WhatsApp depuis le menu <1>Sessions</1> pour utiliser la fonction de discussion.",
     "sessionLabel": "Session WhatsApp",
@@ -424,9 +420,7 @@
   },
   "sessionStatus": {
     "created": "Nouveau",
-    "idle": "Inactif",
     "initializing": "Démarrage...",
-    "connecting": "Connexion...",
     "qr_ready": "Scanner le QR",
     "ready": "Connecté",
     "disconnected": "Déconnecté",
@@ -448,7 +442,8 @@
     },
     "empty": {
       "title": "Aucune session trouvée",
-      "description": "Créez une nouvelle session pour commencer"
+      "description": "Créez une nouvelle session pour commencer",
+      "filtered": "Aucune session ne correspond à la recherche ou au filtre de statut."
     },
     "create": {
       "title": "Créer une nouvelle session",
@@ -696,16 +691,16 @@
       "session.reconnect_loop": "Lorsqu'une session échoue à se reconnecter à plusieurs reprises",
       "session.restriction": "Lorsque WhatsApp restreint le compte ou lève une restriction",
       "presence.update": "Lorsqu'un chat suivi passe en ligne, écrit ou se déconnecte",
-      "event.response": "Lorsqu'un invité répond à un événement WhatsApp (participe, ne participe pas, peut-être)",
+      "event.response": "Lorsqu'un invité répond à un événement WhatsApp (participe, ne participe pas, peut-être) (Baileys uniquement)",
       "poll.vote": "Lorsqu'un participant coche ou décoche des options d'un sondage",
       "group.join": "Lorsque des participants rejoignent un groupe ou y sont ajoutés",
       "group.leave": "Lorsque des participants quittent un groupe ou en sont retirés",
       "group.update": "Lorsque le nom, la description ou les paramètres d'un groupe changent",
       "group.join_request": "Lorsque quelqu'un demande à rejoindre un groupe administré par cette session",
       "call.received": "Lorsqu'un appel entrant commence à sonner",
-      "call.accepted": "Lorsqu'un appel est décroché",
-      "call.rejected": "Lorsqu'un appel est refusé",
-      "call.missed": "Lorsqu'un appel reste sans réponse",
+      "call.accepted": "Lorsqu'un appel est décroché (Baileys uniquement)",
+      "call.rejected": "Lorsqu'un appel est refusé (Baileys uniquement)",
+      "call.missed": "Lorsqu'un appel reste sans réponse (Baileys uniquement)",
       "status.received": "Lorsqu'un contact publie un statut",
       "all": "Tous les événements sauf message.receipt, qui doit être indiqué explicitement"
     },
@@ -835,6 +830,7 @@
       "revokeTitle": "Révoquer la clé API",
       "deleteMessage": "Êtes-vous sûr de vouloir supprimer définitivement <strong>{{name}}</strong> ? Cette action est irréversible.",
       "revokeMessage": "Êtes-vous sûr de vouloir révoquer <strong>{{name}}</strong> ? Elle ne fonctionnera plus.",
+      "signedIn": "Ce tableau de bord est connecté avec cette clé. La révoquer ou la supprimer vous déconnectera.",
       "delete": "Supprimer",
       "revoke": "Révoquer"
     },

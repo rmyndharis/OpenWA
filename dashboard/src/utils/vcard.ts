@@ -3,6 +3,8 @@
  * must not paint that text as a bubble; these helpers turn it into a name + phone for the UI.
  */
 
+import { isolateNumber } from './formatPhone.ts';
+
 export interface ParsedVCard {
   name: string;
   phone: string;
@@ -29,7 +31,13 @@ export function isVCardBody(body: string | undefined | null): boolean {
  * crafted card cannot inject markup because callers render the strings as text nodes.
  */
 export function parseVCard(vcard: string): ParsedVCard {
-  const lines = vcard.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  // A line break plus one space or tab folds a long line (RFC 6350 section 3.2). One that opens a property of its own
+  // is an indented card, not a fold, and stays a line: the per-line trim below reads it.
+  const lines = vcard
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\n[ \t](?![ \t]*[A-Za-z][A-Za-z0-9.-]*[;:])/g, '')
+    .split('\n');
   let formatted = '';
   let structured = '';
   let phone = '';
@@ -84,21 +92,24 @@ export function contactCards(body: string | undefined | null): ParsedVCard[] {
 
 /**
  * One-line sidebar / quote preview. Prefers the contact name; falls back to the localised label
- * when the body is not a usable vCard.
+ * when the body is not a usable vCard. A phone is isolated left to right: next to a right-to-left name
+ * its plus sign and digit groups would be drawn in reverse.
  */
 export function contactSnippet(body: string | undefined | null, fallbackLabel: string): string {
   if (!body) return fallbackLabel;
   const cards = parseVCards(body);
   if (cards.length === 0) return isVCardBody(body) ? fallbackLabel : body;
+  const label = (c: ParsedVCard) => c.name || (c.phone ? isolateNumber(c.phone) : '');
   if (cards.length === 1) {
     const c = cards[0];
-    if (c.name && c.phone) return `${c.name} · ${c.phone}`;
-    return c.name || c.phone || fallbackLabel;
+    return c.name && c.phone ? `${c.name} · ${isolateNumber(c.phone)}` : label(c) || fallbackLabel;
   }
-  const names = cards.map(c => c.name || c.phone).filter(Boolean);
+  const names = cards.map(label).filter(Boolean);
   return names.length > 0 ? names.join(', ') : fallbackLabel;
 }
 
+// One pass, left to right (RFC 6350 section 3.4): chained replaces read the second backslash of an escaped one as the
+// start of the next escape, so a backslash and the letter n came out as a line break.
 function unescapeVCard(value: string): string {
-  return value.replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
+  return value.replace(/\\([nN,;\\])/g, (_, char: string) => (char === 'n' || char === 'N' ? '\n' : char));
 }

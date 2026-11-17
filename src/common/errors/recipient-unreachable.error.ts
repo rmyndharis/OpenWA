@@ -21,10 +21,12 @@ import { BadRequestException } from '@nestjs/common';
  * (the upstream whatsapp-web.js LID limitation, whatsapp-web.js#3834).
  */
 export class RecipientUnreachableError extends BadRequestException {
-  constructor(chatId: string) {
+  /** `reason` replaces the send-path text for a caller that knows better why the recipient cannot be resolved. */
+  constructor(chatId: string, reason?: string) {
     super(
-      `WhatsApp could not resolve the recipient ${chatId}. Either the number is not on WhatsApp, or ` +
-        'this session has no existing chat with it — message it once from the phone, then retry.',
+      reason ??
+        `WhatsApp could not resolve the recipient ${chatId}. Either the number is not on WhatsApp, or ` +
+          'this session has no existing chat with it — message it once from the phone, then retry.',
     );
   }
 }

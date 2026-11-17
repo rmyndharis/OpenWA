@@ -15,6 +15,7 @@ import {
   keyParticipant,
 } from './baileys-message-mapper';
 import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
+import { isDroppedEphemeral } from './inbound-media-cap';
 import { type createLogger } from '../../common/services/logger.service';
 
 /**
@@ -33,8 +34,11 @@ export interface BaileysHistoryHost {
   normalizedSelfJid(): string;
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
   loadLib(): Promise<typeof BaileysLib>;
-  /** Seed the chat's last-message preview + sort time from a history/live message. */
-  recordMessage(msg: WAMessage, type?: MessageType, order?: number): void;
+  /**
+   * Seed the chat's last-message preview + sort time from a history/live message. `withhold` keeps its text out of the
+   * preview, for a message the session drops (see isDroppedEphemeral).
+   */
+  recordMessage(msg: WAMessage, type?: MessageType, order?: number, withhold?: boolean): void;
   recordMessageEdit(
     chatId: string,
     messageId: string,
@@ -247,7 +251,7 @@ export class BaileysHistory {
           this.rememberLidMessage(incoming.id, incoming.chatId, incoming.fromMe);
         }
         // History has no observed order: equal-time messages keep the first one met, and give way to a live one.
-        this.host.recordMessage(original, deleted ? 'revoked' : incoming.type, 0);
+        this.host.recordMessage(original, deleted ? 'revoked' : incoming.type, 0, isDroppedEphemeral(incoming));
       }
       for (const m of revoked) {
         const kind = parseWaId(m.chatId).kind;

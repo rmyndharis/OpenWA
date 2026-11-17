@@ -55,9 +55,6 @@
     "light": "Açık",
     "dark": "Koyu",
     "system": "Sistem",
-    "label": "Tema: {{value}}",
-    "appearance": "Görünüm",
-    "mode": "Mod",
     "toggleTo": "{{value}} moduna geç"
   },
   "nav": {
@@ -85,7 +82,6 @@
       "omitted": "Medya",
       "image": "Görsel"
     },
-    "subtitle": "WhatsApp mesajlarını gerçek zamanlı gönderin ve yanıtlayın",
     "noSessionsTitle": "Bağlı oturum yok",
     "noSessionsDesc": "Sohbet özelliğini kullanmak için lütfen önce <1>Oturumlar</1> menüsünden bir WhatsApp oturumu bağlayın.",
     "sessionLabel": "WhatsApp oturumu",
@@ -419,9 +415,7 @@
   },
   "sessionStatus": {
     "created": "Yeni",
-    "idle": "Boşta",
     "initializing": "Başlatılıyor...",
-    "connecting": "Bağlanıyor...",
     "qr_ready": "QR Tara",
     "ready": "Bağlandı",
     "disconnected": "Bağlantı Kesildi",
@@ -443,7 +437,8 @@
     },
     "empty": {
       "title": "Oturum bulunamadı",
-      "description": "Başlamak için yeni bir oturum oluşturun"
+      "description": "Başlamak için yeni bir oturum oluşturun",
+      "filtered": "Aramayla veya durum filtresiyle eşleşen oturum yok."
     },
     "create": {
       "title": "Yeni Oturum Oluştur",
@@ -690,16 +685,16 @@
       "session.reconnect_loop": "Bir oturum yeniden bağlanmayı sürekli başaramadığında",
       "session.restriction": "WhatsApp hesabı kısıtladığında veya bir kısıtlamayı kaldırdığında",
       "presence.update": "Abone olunan bir sohbet çevrimiçi olduğunda, yazdığında veya çevrimdışı olduğunda",
-      "event.response": "Bir davetli bir WhatsApp etkinliğine yanıt verdiğinde (katılıyor, katılmıyor, belki)",
+      "event.response": "Bir davetli bir WhatsApp etkinliğine yanıt verdiğinde (katılıyor, katılmıyor, belki) (yalnızca Baileys)",
       "poll.vote": "Biri bir ankette seçenek işaretlediğinde veya kaldırdığında",
       "group.join": "Katılımcılar bir gruba katıldığında veya eklendiğinde",
       "group.leave": "Katılımcılar bir gruptan ayrıldığında veya çıkarıldığında",
       "group.update": "Bir grubun adı, açıklaması veya ayarları değiştiğinde",
       "group.join_request": "Birisi bu oturumun yönettiği bir gruba katılmak istediğinde",
       "call.received": "Gelen bir arama çalmaya başladığında",
-      "call.accepted": "Bir arama yanıtlandığında",
-      "call.rejected": "Bir arama reddedildiğinde",
-      "call.missed": "Bir arama yanıtsız kaldığında",
+      "call.accepted": "Bir arama yanıtlandığında (yalnızca Baileys)",
+      "call.rejected": "Bir arama reddedildiğinde (yalnızca Baileys)",
+      "call.missed": "Bir arama yanıtsız kaldığında (yalnızca Baileys)",
       "status.received": "Bir kişi durum paylaştığında",
       "all": "message.receipt hariç tüm olaylar (message.receipt açıkça belirtilmelidir)"
     },
@@ -829,6 +824,7 @@
       "revokeTitle": "API Anahtarını Geçersiz Kıl",
       "deleteMessage": "<strong>{{name}}</strong> anahtarını kalıcı olarak silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.",
       "revokeMessage": "<strong>{{name}}</strong> anahtarını geçersiz kılmak istediğinizden emin misiniz? Artık çalışmayacaktır.",
+      "signedIn": "Bu panel bu anahtarla oturum açtı. Anahtarı geçersiz kılmak veya silmek oturumunuzu kapatır.",
       "delete": "Sil",
       "revoke": "Geçersiz Kıl"
     },

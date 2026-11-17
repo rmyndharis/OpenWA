@@ -55,9 +55,6 @@
     "light": "Light",
     "dark": "Dark",
     "system": "System",
-    "label": "Theme: {{value}}",
-    "appearance": "Appearance",
-    "mode": "Mode",
     "toggleTo": "Switch to {{value}}"
   },
   "nav": {
@@ -85,7 +82,6 @@
       "omitted": "Media",
       "image": "Image"
     },
-    "subtitle": "Send and reply to WhatsApp messages in real time",
     "noSessionsTitle": "No connected sessions",
     "noSessionsDesc": "Please connect a WhatsApp session from the <1>Sessions</1> menu first to use the chat feature.",
     "sessionLabel": "WhatsApp session",
@@ -419,9 +415,7 @@
   },
   "sessionStatus": {
     "created": "New",
-    "idle": "Idle",
     "initializing": "Starting...",
-    "connecting": "Connecting...",
     "qr_ready": "Scan QR",
     "ready": "Connected",
     "disconnected": "Disconnected",
@@ -443,7 +437,8 @@
     },
     "empty": {
       "title": "No sessions found",
-      "description": "Create a new session to get started"
+      "description": "Create a new session to get started",
+      "filtered": "No session matches the search or status filter."
     },
     "create": {
       "title": "Create New Session",
@@ -690,16 +685,16 @@
       "session.reconnect_loop": "When a session keeps failing to reconnect",
       "session.restriction": "When WhatsApp restricts the account or lifts a restriction",
       "presence.update": "When a subscribed chat comes online, types or goes offline",
-      "event.response": "When a guest answers a WhatsApp event invitation (going, not going, maybe)",
+      "event.response": "When a guest answers a WhatsApp event invitation (going, not going, maybe) (Baileys only)",
       "poll.vote": "When a voter selects or clears options on a poll",
       "group.join": "When participants join or are added to a group",
       "group.leave": "When participants leave or are removed from a group",
       "group.update": "When a group's name, description or settings change",
       "group.join_request": "When someone asks to join a group this session administers",
       "call.received": "When an incoming call starts ringing",
-      "call.accepted": "When a call is answered",
-      "call.rejected": "When a call is declined",
-      "call.missed": "When a call goes unanswered",
+      "call.accepted": "When a call is answered (Baileys only)",
+      "call.rejected": "When a call is declined (Baileys only)",
+      "call.missed": "When a call goes unanswered (Baileys only)",
       "status.received": "When a contact posts a status",
       "all": "All events except message.receipt, which must be named explicitly"
     },
@@ -829,6 +824,7 @@
       "revokeTitle": "Revoke API Key",
       "deleteMessage": "Are you sure you want to permanently delete <strong>{{name}}</strong>? This action cannot be undone.",
       "revokeMessage": "Are you sure you want to revoke <strong>{{name}}</strong>? It will no longer work.",
+      "signedIn": "This dashboard is signed in with this key. Revoking or deleting it signs you out.",
       "delete": "Delete",
       "revoke": "Revoke"
     },

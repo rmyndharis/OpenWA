@@ -4,7 +4,7 @@ import { BusinessClient, WwjsChannelData, readWid } from '../types/whatsapp-web-
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
-import { type WwebjsEngineHost, withPage, reportPageDeath } from './wwebjs-host';
+import { type WwebjsEngineHost, withPage, withPageWrite, reportPageDeath } from './wwebjs-host';
 
 /**
  * Channel/Newsletter operations extracted from WhatsAppWebJsAdapter. The adapter keeps the public
@@ -141,7 +141,7 @@ export class WwebjsChannels {
   /** Delete a channel. `false` means the channel was not found or the server refused. */
   async deleteChannel(channelId: string): Promise<void> {
     this.host.ensureReady();
-    const ok = await this.withPage('deleteChannel', () =>
+    const ok = await withPageWrite(this.host, 'deleteChannel', () =>
       (this.client() as unknown as BusinessClient).deleteChannel(channelId),
     );
     if (!ok) {
@@ -162,7 +162,9 @@ export class WwebjsChannels {
     if (!channelId.endsWith('@newsletter')) {
       throw new ChannelNotFoundError(channelId);
     }
-    const chat = (await this.withPage('muteChannel', () => this.client().getChatById(channelId))) as unknown as {
+    const chat = (await withPageWrite(this.host, 'muteChannel', () =>
+      this.client().getChatById(channelId),
+    )) as unknown as {
       mute?: () => Promise<boolean>;
       unmute?: () => Promise<boolean>;
     } | null;
@@ -172,7 +174,7 @@ export class WwebjsChannels {
     }
     // The channel acts through its own client, which getClient's readiness check never sees again.
     this.host.ensureReady();
-    const ok = await this.withPage('muteChannel', () => act.call(chat));
+    const ok = await withPageWrite(this.host, 'muteChannel', () => act.call(chat));
     if (!ok) {
       throw new EngineRefusedError(`Failed to ${mute ? 'mute' : 'unmute'} channel ${channelId}`);
     }
@@ -202,7 +204,7 @@ export class WwebjsChannels {
     this.host.ensureReady();
     // Resolves false instead of throwing when the unsubscription did not complete (Client.js:2556)
     // — surface the refusal rather than reporting a false success.
-    const ok = await this.withPage('unsubscribeFromChannel', () =>
+    const ok = await withPageWrite(this.host, 'unsubscribeFromChannel', () =>
       (this.client() as unknown as BusinessClient).unsubscribeFromChannel(channelId),
     );
     if (!ok) {

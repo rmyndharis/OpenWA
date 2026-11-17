@@ -49,10 +49,17 @@ export interface BaileysContactsHost {
   lastMessage(chatId: string): { key: WAMessageKey; timestamp: number; jid: string } | null;
   /** The newest message the chat received, the one a read receipt can acknowledge, or null when none. */
   lastInboundMessage(chatId: string): { key: WAMessageKey; timestamp: number } | null;
+  /**
+   * Whether a message the chat received is still being processed (a download, the queue for a slot) and would be
+   * the newest it has received once recorded. Baileys has counted it as unread by then, so no read has named it.
+   */
+  hasUnrecordedInbound?(chatId: string): boolean;
   /** Whether the chat carries an unread mark set by hand (a negative unread count). */
   isMarkedUnread(chatId: string): boolean;
-  /** Set the chat's count of unread messages back to zero; a mark set by hand only when `marks` says it was undone. */
+  /** Set the chat's counts of unread messages back to zero, or with `marks` the marks set by hand, never both. */
   clearUnread(chatId: string, marks?: boolean): void;
+  /** List the chat unread again after a zero that a message the read did not name had been counted under. */
+  keepUnread?(chatId: string): void;
   /** The `<lid>@lid` known for a 1:1 chat or a person under any spelling of it, or null (always for a group). */
   lidOf(jid: string): string | null;
   /** Every spelling of one chat the session can connect: the id, its engine form, and its lid or phone twin. */
@@ -449,10 +456,25 @@ export class BaileysContacts {
     // message received and lowers it for no receipt of ours, so a read answered success and the unread
     // badge was back on the next reload. The count is this session's own bookkeeping and is reset here.
     // Only a mark set by hand lives in the account's app state and costs a second round trip to undo.
-    if (!this.coversNewest(chatId, keys)) return true;
-    const undone = this.host.isMarkedUnread(chatId) && (await this.undoUnreadMark(socket, chatId, stored));
-    this.host.clearUnread(chatId, undone);
+    if (this.overtaken(chatId, keys)) return true;
+    const marked = this.host.isMarkedUnread(chatId);
+    // The counts are reset in the turn that judged them: a message that arrives while the mark is being undone
+    // is not covered by this read, so only the marks wait for the write.
+    this.host.clearUnread(chatId, false);
+    if (!marked) return true;
+    if (await this.undoUnreadMark(socket, chatId, stored)) this.host.clearUnread(chatId, true);
+    // Baileys replays the write as a chat update with a count of zero, which also lands on a message that
+    // arrived meanwhile: the chat is listed unread again for it.
+    if (this.overtaken(chatId, keys)) this.host.keepUnread?.(chatId);
     return true;
+  }
+
+  /**
+   * Whether the read left out a message the chat has received: one the session recorded after the newest the
+   * receipt names, or one it is still processing, which Baileys has counted as unread already.
+   */
+  private overtaken(chatId: string, keys: WAMessageKey[]): boolean {
+    return !this.coversNewest(chatId, keys) || (this.host.hasUnrecordedInbound?.(chatId) ?? false);
   }
 
   /**

@@ -25,7 +25,7 @@
   max-width: 400px;
   padding: 0.75rem 1rem;
   background: var(--bg-white);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
 }
 
@@ -48,7 +48,9 @@
 
 .sessions-page .search-input:focus-within {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px var(--primary-soft);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px var(--primary-soft);
 }
 
 .sessions-page .filter-group {
@@ -57,7 +59,7 @@
   gap: 0.5rem;
   padding: 0 1rem;
   background: var(--bg-white);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
 }
 
@@ -377,7 +379,7 @@
 .sessions-page .modal-body input {
   width: 100%;
   padding: 0.875rem 1rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   font-size: 0.9375rem;
   background: var(--bg-light);
@@ -389,7 +391,9 @@
   outline: none;
   border-color: var(--focus-ring);
   background: var(--bg-white);
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(34, 197, 94, 0.1);
 }
 
 .sessions-page .modal-body input::placeholder {
@@ -800,7 +804,7 @@
 .sessions-page .pairing-input {
   width: 100%;
   padding: 0.875rem 1rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   font-size: 0.9375rem;
   background: var(--bg-light);
@@ -924,7 +928,7 @@
 .sessions-page .proxy-form-section input[type='text'] {
   width: 100%;
   padding: 0.625rem 0.75rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   background: var(--bg-white);
   color: var(--text-primary);
@@ -932,7 +936,11 @@
   box-sizing: border-box;
 }
 
-/* The rule above repaints the border over `.sessions-page .modal-body input:focus` at the same weight. */
+/* The rule above repaints the border over `.sessions-page .modal-body input:focus` at the same weight, and its
+   box-shadow replaces that rule's, so it restates the glow. */
 .sessions-page .proxy-form-section input[type='text']:focus {
   border-color: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(34, 197, 94, 0.1);
 }

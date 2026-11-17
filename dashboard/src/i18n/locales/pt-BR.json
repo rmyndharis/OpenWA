@@ -57,9 +57,6 @@
     "light": "Claro",
     "dark": "Escuro",
     "system": "Sistema",
-    "label": "Tema: {{value}}",
-    "appearance": "Aparência",
-    "mode": "Modo",
     "toggleTo": "Mudar para {{value}}"
   },
   "nav": {
@@ -87,7 +84,6 @@
       "omitted": "Mídia",
       "image": "Imagem"
     },
-    "subtitle": "Envie e responda mensagens do WhatsApp em tempo real",
     "noSessionsTitle": "Nenhuma sessão conectada",
     "noSessionsDesc": "Conecte primeiro uma sessão do WhatsApp no menu <1>Sessões</1> para usar o chat.",
     "sessionLabel": "Sessão do WhatsApp",
@@ -424,9 +420,7 @@
   },
   "sessionStatus": {
     "created": "Nova",
-    "idle": "Inativa",
     "initializing": "Iniciando...",
-    "connecting": "Conectando...",
     "qr_ready": "Escanear QR",
     "ready": "Conectada",
     "disconnected": "Desconectada",
@@ -448,7 +442,8 @@
     },
     "empty": {
       "title": "Nenhuma sessão encontrada",
-      "description": "Crie uma nova sessão para começar"
+      "description": "Crie uma nova sessão para começar",
+      "filtered": "Nenhuma sessão corresponde à pesquisa ou ao filtro de status."
     },
     "create": {
       "title": "Criar nova sessão",
@@ -696,16 +691,16 @@
       "session.reconnect_loop": "Quando uma sessão continua sem conseguir se reconectar",
       "session.restriction": "Quando o WhatsApp restringe a conta ou remove uma restrição",
       "presence.update": "Quando um chat inscrito fica online, digita ou fica offline",
-      "event.response": "Quando um convidado responde a um evento do WhatsApp (vai, não vai, talvez)",
+      "event.response": "Quando um convidado responde a um evento do WhatsApp (vai, não vai, talvez) (somente Baileys)",
       "poll.vote": "Quando alguém marca ou desmarca opções de uma enquete",
       "group.join": "Quando participantes entram em um grupo ou são adicionados",
       "group.leave": "Quando participantes saem de um grupo ou são removidos",
       "group.update": "Quando o nome, a descrição ou as configurações de um grupo mudam",
       "group.join_request": "Quando alguém pede para entrar em um grupo administrado por esta sessão",
       "call.received": "Quando uma chamada recebida começa a tocar",
-      "call.accepted": "Quando uma chamada é atendida",
-      "call.rejected": "Quando uma chamada é recusada",
-      "call.missed": "Quando uma chamada não é atendida",
+      "call.accepted": "Quando uma chamada é atendida (somente Baileys)",
+      "call.rejected": "Quando uma chamada é recusada (somente Baileys)",
+      "call.missed": "Quando uma chamada não é atendida (somente Baileys)",
       "status.received": "Quando um contato publica um status",
       "all": "Todos os eventos, exceto message.receipt, que precisa ser indicado explicitamente"
     },
@@ -785,6 +780,7 @@
       "revokeTitle": "Revogar chave API",
       "deleteMessage": "Tem certeza que deseja excluir permanentemente <strong>{{name}}</strong>? Esta ação não pode ser desfeita.",
       "revokeMessage": "Tem certeza que deseja revogar <strong>{{name}}</strong>? Ela deixará de funcionar.",
+      "signedIn": "Este painel está conectado com esta chave. Revogá-la ou excluí-la desconectará você.",
       "delete": "Excluir",
       "revoke": "Revogar"
     },

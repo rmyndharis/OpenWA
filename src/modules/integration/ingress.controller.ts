@@ -60,8 +60,8 @@ export class IngressController {
     status: 202,
     description:
       'Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. ' +
-      'With the queue off a route without a response contract answers after the plugin ran inline (at most ' +
-      'INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after.',
+      'With the queue off a route without a response contract answers after the plugin ran inline (at most 5 s), ' +
+      'and a route with one answers first and dispatches inline after.',
   })
   @ApiResponse({
     status: 400,

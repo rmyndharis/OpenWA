@@ -185,7 +185,7 @@ The host enforces these before/after the RPC, so the plugin doesn't have to:
 - **Session-scope re-filter.** The host re-filters the plugin's returned hits against the caller's
   `allowedSessions` (defense-in-depth — the plugin is trusted to scope, but the host verifies). A scoped
   key never sees an out-of-scope hit even if the plugin leaks one.
-- **Timeout.** The plugin's `search()` handler must answer within **10 seconds** (`SANDBOX_SEARCH_TIMEOUT_MS`).
+- **Timeout.** The plugin's `search()` handler must answer within **10 seconds** (`SANDBOX_SEARCH_TIMEOUT_MS`, fixed, not a setting).
   A slow/wedged handler resolves `ok:false` → the caller sees `503 Service Unavailable`. Fail fast.
 - **Health.** The search provider's health reuses the plugin's general `healthCheck()` (the `health`
   lifecycle method), but search-provider health is not yet exposed on any route. `healthCheck()` still

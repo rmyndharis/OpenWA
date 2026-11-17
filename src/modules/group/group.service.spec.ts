@@ -1,7 +1,11 @@
 import { BadRequestException, HttpException, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
 import { GroupService } from './group.service';
+import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
+import { SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
+import { resolveMediaBuffer } from '../../engine/adapters/baileys-messaging';
+import { toMessageMedia } from '../../engine/adapters/wwebjs-messaging';
 import { EngineRegistry } from '../../engine/engine-registry.service';
-import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { IWhatsAppEngine, MediaInput } from '../../engine/interfaces/whatsapp-engine.interface';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
@@ -187,6 +191,47 @@ describe('GroupService', () => {
         data: 'https://example.com/g.jpg',
       });
       expect(setGroupPicture).toHaveBeenNthCalledWith(2, GROUP, { mimetype: 'image/png', data: 'QUJD' });
+    });
+  });
+
+  // A media URL the SSRF guard refuses is the caller's input: a 400, as on a send, where the guard's own error was a 500.
+  // Each engine stand-in does only what its adapter does first, fetch the URL through the shared loader; an internal
+  // address is refused before any socket is opened.
+  describe('setGroupPicture with a media URL the SSRF guard refuses', () => {
+    const GROUP = '123456789-987654321@g.us';
+    const failureOf = (call: () => Promise<unknown>): Promise<unknown> =>
+      Promise.resolve()
+        .then(call)
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+
+    it.each([
+      ['Baileys', (_groupId: string, media: MediaInput) => resolveMediaBuffer(media, undefined).then(() => undefined)],
+      [
+        'whatsapp-web.js',
+        (_groupId: string, media: MediaInput) => toMessageMedia(media, undefined).then(() => undefined),
+      ],
+    ])('answers 400 with the generic text on %s and proves nothing was sent', async (_engine, setGroupPicture) => {
+      const error = await failureOf(() =>
+        makeService({ setGroupPicture }).setGroupPicture('s1', GROUP, { url: 'http://10.0.0.1/g.jpg' }),
+      );
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).message).toBe(SSRF_BLOCKED_CLIENT_MESSAGE);
+      expect(provesNothingSent(error)).toBe(true);
+    });
+
+    it('leaves another engine failure as it is', async () => {
+      const failure = new Error('socket closed');
+      const setGroupPicture = jest.fn().mockRejectedValue(failure);
+
+      const error = await failureOf(() =>
+        makeService({ setGroupPicture }).setGroupPicture('s1', GROUP, { url: 'https://example.com/g.jpg' }),
+      );
+
+      expect(error).toBe(failure);
     });
   });
 

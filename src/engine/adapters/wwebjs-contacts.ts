@@ -6,7 +6,7 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { readWid, type SerializedWid } from '../types/whatsapp-web-js.types';
-import { type WwebjsEngineHost, rethrowIfNavigation, withPage } from './wwebjs-host';
+import { type WwebjsEngineHost, rethrowIfNavigation, withPage, withPageWrite } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
 
 /** The raw whatsapp-web.js contact element type, kept local so the wwebjs `Contact` type never leaks. */
@@ -355,7 +355,7 @@ export class WwebjsContacts {
     // undefined, which would land in the page-side payload as the literal string "undefined".
     // syncToAddressbook is left at its default (false): writing to the device addressbook is a
     // heavier, separately-consented action than saving the WhatsApp contact.
-    await withPage(this.host, 'upsertContact', () =>
+    await withPageWrite(this.host, 'upsertContact', () =>
       this.client().saveOrEditAddressbookContact(userPart(contactId), firstName, lastName),
     );
     this.host.logger.debug('Saved addressbook contact', { contactId });
@@ -363,7 +363,7 @@ export class WwebjsContacts {
 
   async deleteContact(contactId: string): Promise<void> {
     this.host.ensureReady();
-    await withPage(this.host, 'deleteContact', () => this.client().deleteAddressbookContact(userPart(contactId)));
+    await withPageWrite(this.host, 'deleteContact', () => this.client().deleteAddressbookContact(userPart(contactId)));
     this.host.logger.debug('Deleted addressbook contact', { contactId });
   }
 
@@ -379,12 +379,20 @@ export class WwebjsContacts {
     const parsed = parseWaId(contactId);
     if (parsed.kind !== 'user') return;
     const [found] = await this.client().getContactLidAndPhone([`${parsed.userPart}@c.us`]);
-    if (!found?.lid) throw new RecipientUnreachableError(contactId);
+    if (!found?.lid) {
+      // WhatsApp was just asked, so a missing chat is not a cause here, and the send path's advice to message the
+      // number first would not change the answer. Two replies carry no id: no account, and an account with none.
+      throw new RecipientUnreachableError(
+        contactId,
+        `WhatsApp gave no privacy id for ${contactId}, so it cannot be blocked or unblocked. Either the number is ` +
+          'not on WhatsApp, or WhatsApp has not reported an id for it.',
+      );
+    }
   }
 
   async blockContact(contactId: string): Promise<void> {
     this.host.ensureReady();
-    await withPage(this.host, 'blockContact', async () => {
+    await withPageWrite(this.host, 'blockContact', async () => {
       await this.requirePrivacyId(contactId);
       const contact = await this.client().getContactById(contactId);
       // The contact acts through its own client, which getClient's readiness check never sees again.
@@ -409,7 +417,7 @@ export class WwebjsContacts {
 
   async unblockContact(contactId: string): Promise<void> {
     this.host.ensureReady();
-    await withPage(this.host, 'unblockContact', async () => {
+    await withPageWrite(this.host, 'unblockContact', async () => {
       await this.requirePrivacyId(contactId);
       const contact = await this.client().getContactById(contactId);
       this.host.ensureReady();

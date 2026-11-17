@@ -357,7 +357,7 @@
 .plugins-page .config-form .form-group textarea {
   width: 100%;
   padding: 0.75rem 1rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   font-size: 0.9375rem;
   background-color: var(--bg-light);
@@ -377,7 +377,9 @@
   outline: none;
   border-color: var(--focus-ring);
   background-color: var(--bg-white);
-  box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 /* Nested object — a bordered group of sub-fields. */
@@ -1054,7 +1056,7 @@
 .plugins-page .sessions-select {
   width: 100%;
   padding: 0.6rem 0.85rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   background-color: var(--bg-light);
   font-size: 0.9375rem;
@@ -1062,9 +1064,13 @@
   box-sizing: border-box;
 }
 
-/* The rule above out-weighs `select:focus` in index.css and repaints its border. */
+/* The rule above out-weighs `select:focus` in index.css and repaints its border. The box-shadow replaces that rule's,
+   so it restates its glow. */
 .plugins-page .sessions-select:focus {
   border-color: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 .plugins-page .sessions-override-actions {
@@ -1095,7 +1101,7 @@
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
   margin-bottom: 0.75rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   color: var(--text-muted);
 }
@@ -1109,9 +1115,16 @@
   color: var(--text-primary);
 }
 
+/* The box below draws the focus ring. The dialog's input rule would draw a second one around the field inside it. */
+.plugins-page .catalog-search input:focus {
+  box-shadow: none;
+}
+
 .plugins-page .catalog-search:focus-within {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px var(--primary-soft);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px var(--primary-soft);
 }
 
 .plugins-page .catalog-list {

@@ -20,12 +20,27 @@ function hashData(data: Record<string, unknown>): string {
 }
 
 /**
+ * The message part of a `msg_` or `rev_` key: the id the engine reported, or, when it could not read one
+ * (whatsapp-web.js reports the empty string), a part that belongs to this dispatch. An unreadable id names no
+ * message, so one value shared by all of them would make every such message one event to a receiver and one
+ * row in the outbox. `occurrence` is empty only for a caller that mints none, which then gets a hash of the payload.
+ */
+function messageKeyPart(data: Record<string, unknown>, occurrence: string): string {
+  for (const candidate of [data.id, data.messageId]) {
+    const id = toStr(candidate, '');
+    if (id.trim()) return id;
+  }
+  return `noid${occurrence || `_${hashData(data)}`}`;
+}
+
+/**
  * Generate an idempotency key based on event type and data.
  * Same event with same data will produce the same key (deterministic).
  *
  * @remarks
  * Stable message keys are content-based (keyed on the unique message id), so two deliveries of the
- * same logical message dedupe. Recurring events (message edits/reactions and session lifecycle
+ * same logical message dedupe. A message whose id could not be read has nothing to dedupe on and is
+ * keyed per dispatch instead. Recurring events (message edits/reactions and session lifecycle
  * transitions) can repeat with identical content, so they are salted with `occurrenceId` (minted ONCE
  * per dispatch and reused across retries): distinct occurrences get distinct keys while retries of
  * the same occurrence stay stable.
@@ -33,17 +48,17 @@ function hashData(data: Record<string, unknown>): string {
  * @param occurrenceId - Unique id minted once per dispatch; salts recurring occurrence keys.
  */
 export function generateIdempotencyKey(event: string, data: Record<string, unknown>, occurrenceId?: string): string {
-  // Only recurring occurrence keys consume this salt; stable message and QR keys ignore it.
+  // Only recurring occurrence keys and the keys of messages with no readable id consume this salt; stable message
+  // and QR keys ignore it.
   const occurrence = occurrenceId ? `_${occurrenceId}` : '';
   switch (event) {
     case 'message.received':
     case 'message.sent':
-      // Dispatched payload is an IncomingMessage, which carries `id`; fall back to a legacy `messageId`.
-      // Resolve the value before toStr() — toStr() returns a truthy 'unknown' fallback, so chaining with
-      // `||` would short-circuit before reaching the second field.
+      // Dispatched payload is an IncomingMessage, which carries `id`; fall back to a legacy `messageId`
+      // (messageKeyPart, which also keys a message whose id could not be read).
       // Scope by sessionId: waMessageIds are unique per account, not globally, so two
       // sessions could otherwise collide on the same key and wrongly dedupe each other's events.
-      return `msg_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}`;
+      return `msg_${toStr(data.sessionId)}_${messageKeyPart(data, occurrence)}`;
 
     case 'message.ack':
       // Message ID + delivery status together are unique. Key on the neutral `status`; fall back to
@@ -58,7 +73,7 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
       return `failed_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.status ?? data.ack, '0')}`;
 
     case 'message.revoked':
-      return `rev_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}`;
+      return `rev_${toStr(data.sessionId)}_${messageKeyPart(data, occurrence)}`;
 
     case 'message.edited':
       // Editing the same message multiple times should produce different idempotency keys.

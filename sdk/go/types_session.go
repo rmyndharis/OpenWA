@@ -280,9 +280,9 @@ type SessionConfig struct {
 
 // UpdateSessionConfigRequest is a partial update of a session's config, merged in any session state
 // with no restart, re-link or QR scan. AutoRejectCalls applies immediately, on Baileys only (whatsapp-web.js
-// stores the flag but cannot reject a call), and so does LinkPreview, the preview of a send-text or
-// send-template that sets neither linkPreview nor customLinkPreview; MaxReconnectAttempts and
-// ReconnectBaseDelay apply on the next start.
+// stores the flag but cannot reject a call). LinkPreview applies immediately too, on both engines: it is
+// the default preview of a send-text or send-template that sets neither linkPreview nor customLinkPreview.
+// MaxReconnectAttempts and ReconnectBaseDelay apply on the next start.
 //
 // The route needs THREE states per field, not two: a key that is absent leaves the value unchanged, a
 // key sent as explicit null clears it back to the default, and a value sets it. A `*int` with

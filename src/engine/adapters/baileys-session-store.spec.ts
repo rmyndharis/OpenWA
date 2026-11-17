@@ -997,6 +997,63 @@ describe('BaileysSessionStore', () => {
       expect(store.lastInboundMessage(PHONE)?.key.id).toBe('IN');
     });
 
+    describe('followsLastInbound: a message still being processed that would be the newest received', () => {
+      const pending = (over: Partial<{ chatJid: string; id: string; timestamp: number; order: number }> = {}) => ({
+        chatJid: PHONE,
+        id: 'NEW',
+        timestamp: 101,
+        order: 9,
+        ...over,
+      });
+      beforeEach(() => {
+        store.upsertChats([{ id: PHONE }]);
+        store.recordMessage(msg(PHONE, 'IN', 100));
+      });
+
+      it('is true for a message of a later second', () => {
+        expect(store.followsLastInbound('628111@c.us', [pending()])).toBe(true);
+      });
+
+      it('is true for a message of the same second that was observed later', () => {
+        expect(store.followsLastInbound('628111@c.us', [pending({ timestamp: 100, order: 9 })])).toBe(true);
+      });
+
+      it('is false for a message of the same second that was observed earlier', () => {
+        expect(store.followsLastInbound('628111@c.us', [pending({ timestamp: 100, order: 0 })])).toBe(false);
+      });
+
+      it('is false for a message of an earlier second', () => {
+        expect(store.followsLastInbound('628111@c.us', [pending({ timestamp: 99 })])).toBe(false);
+      });
+
+      it('is false for a repeat delivery of the newest message recorded', () => {
+        expect(store.followsLastInbound('628111@c.us', [pending({ id: 'IN', timestamp: 100, order: 9 })])).toBe(false);
+        expect(store.followsLastInbound('628111@c.us', [pending({ id: 'IN', timestamp: 101 })])).toBe(false);
+      });
+
+      it('is false for a message of another chat, and for none', () => {
+        expect(store.followsLastInbound('628111@c.us', [pending({ chatJid: '628222@s.whatsapp.net' })])).toBe(false);
+        expect(store.followsLastInbound('628111@c.us', [])).toBe(false);
+      });
+
+      it('is true when any one of several qualifies', () => {
+        const older = pending({ id: 'OLD', timestamp: 90 });
+        expect(store.followsLastInbound('628111@c.us', [older, pending()])).toBe(true);
+      });
+
+      it('is true for any message of the chat when none has been recorded', () => {
+        const fresh = new BaileysSessionStore();
+        expect(fresh.followsLastInbound('628111@c.us', [pending({ timestamp: 1, order: 0 })])).toBe(true);
+      });
+
+      it('finds the chat under any spelling of it', () => {
+        store.addLidMappings([{ lid: LID, pn: PHONE }]);
+        expect(store.followsLastInbound('628111@c.us', [pending({ chatJid: LID })])).toBe(true);
+        expect(store.followsLastInbound(LID, [pending({ chatJid: PHONE })])).toBe(true);
+        expect(store.followsLastInbound(PHONE, [pending({ chatJid: '628111@c.us' })])).toBe(true);
+      });
+    });
+
     it('keeps one entry when a chat with no record yet is addressed in both dialects', () => {
       store.recordMessage(msg('628111@c.us', 'OUT', 100, true));
       store.recordKeyLidMappings({ remoteJid: LID, remoteJidAlt: PHONE });
@@ -1039,6 +1096,9 @@ describe('BaileysSessionStore', () => {
     });
     const newStore = () => new BaileysSessionStore(undefined, SID, fake);
     const flush = () => new Promise(resolve => setImmediate(resolve));
+    /** The count each row of the list carries, by the id it is listed under (the rows come in no promised order). */
+    const countsById = (s: BaileysSessionStore): Record<string, number | undefined> =>
+      Object.fromEntries(s.listChats().map(chat => [chat.id, chat.unreadCount]));
     // A decoded proto.Conversation: the fields default to null on the prototype.
     const historyChat = (id: string) =>
       Object.assign(Object.create({ archived: null, pinned: null, muteEndTime: null }) as object, {
@@ -1370,7 +1430,51 @@ describe('BaileysSessionStore', () => {
       s.clearUnread(LID, true);
       expect(s.isMarkedUnread(LID)).toBe(false);
       expect(s.isMarkedUnread('628111@c.us')).toBe(false);
-      expect(s.listChats().map(chat => chat.unreadCount)).toEqual([0, 0]);
+      // Only the mark: the count of a message that arrived while the write was out is not covered by it.
+      expect(countsById(s)).toEqual({ '628111@c.us': 0, [LID]: 1 });
+      s.clearUnread(LID);
+      expect(countsById(s)).toEqual({ '628111@c.us': 0, [LID]: 0 });
+    });
+
+    describe('keepUnread: the chat is listed unread again after a zero a message was counted under', () => {
+      it('counts one on the most recently active record when every record reads zero', () => {
+        const s = new BaileysSessionStore();
+        s.upsertChats([
+          { id: PHONE, unreadCount: 0, conversationTimestamp: 10 },
+          { id: LID, unreadCount: 0, conversationTimestamp: 50 },
+        ]);
+        s.addLidMappings([{ lid: LID, pn: PHONE }]);
+        s.keepUnread('628111@c.us');
+        expect(countsById(s)).toEqual({ '628111@c.us': 0, [LID]: 1 });
+      });
+
+      it('counts one on a record that lists no count yet', () => {
+        const s = new BaileysSessionStore();
+        s.upsertChats([{ id: PHONE, conversationTimestamp: 10 }]);
+        s.keepUnread(PHONE);
+        expect(countsById(s)).toEqual({ '628111@c.us': 1 });
+      });
+
+      it('leaves a chat that holds a count or a mark as it is', () => {
+        const s = new BaileysSessionStore();
+        s.upsertChats([
+          { id: PHONE, unreadCount: 0, conversationTimestamp: 10 },
+          { id: LID, unreadCount: 2, conversationTimestamp: 5 },
+        ]);
+        s.addLidMappings([{ lid: LID, pn: PHONE }]);
+        s.keepUnread(PHONE);
+        expect(countsById(s)).toEqual({ '628111@c.us': 0, [LID]: 2 });
+        const marked = new BaileysSessionStore();
+        marked.upsertChats([{ id: PHONE, unreadCount: -1, conversationTimestamp: 10 }]);
+        marked.keepUnread(PHONE);
+        expect(countsById(marked)).toEqual({ '628111@c.us': -1 });
+      });
+
+      it('lists no chat for one it holds no record of', () => {
+        const s = new BaileysSessionStore();
+        s.keepUnread('628333@c.us');
+        expect(s.listChats()).toEqual([]);
+      });
     });
 
     it('shows a preview filed under the lid before the mapping on the merged row, newest first', () => {

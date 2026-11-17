@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { clientFacingSsrfError } from '../../common/media/client-facing-ssrf-error';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine, MediaInput } from '../../engine/interfaces/whatsapp-engine.interface';
 import { resolveMediaBody } from '../message/media-cap.util';
@@ -38,6 +39,10 @@ export class ProfileService {
       requireMimetypeForBase64: true,
       checkUrl: true,
     });
-    return this.getEngine(sessionId).setProfilePicture(media);
+    return this.getEngine(sessionId)
+      .setProfilePicture(media)
+      .catch((error: unknown) => {
+        throw clientFacingSsrfError(error);
+      });
   }
 }

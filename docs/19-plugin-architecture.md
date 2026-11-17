@@ -559,7 +559,7 @@ Chains for different messages run concurrently, so a handler can see one chat's 
 The gateway still stores and emits each chat's messages in arrival order: the `message:received` and
 `message:sent` chains run concurrently, but the row insert, the websocket event, `message:persisted` and
 the start of webhook dispatch wait for every earlier message of the same chat. A slow handler therefore
-delays that chat's later messages, by at most its 5 s hook timeout (`SANDBOX_HOOK_TIMEOUT_MS`) for a
+delays that chat's later messages, by at most its 5 s hook timeout (`SANDBOX_HOOK_TIMEOUT_MS`, fixed, not a setting) for a
 sandboxed plugin. On PostgreSQL a chat's `message:received` and `message:sent` chains also start in
 arrival order, for the messages the engine admitted: inbound messages, sends composed on the phone and
 every whatsapp-web.js echo. The echo of a Baileys API send is not admitted, so its `message:sent` chain
@@ -860,11 +860,11 @@ tier automatically. Key properties:
 
 - Each worker has a heap cap (`maxOldGenerationSizeMb`, default **256 MB**) — an OOM terminates the
   worker, not the host.
-- A sandboxed hook handler has a **5 s** time budget (`SANDBOX_HOOK_TIMEOUT_MS`); on timeout the host
+- A sandboxed hook handler has a **5 s** time budget (`SANDBOX_HOOK_TIMEOUT_MS`, fixed, not a setting); on timeout the host
   resolves `{ continue: true }` (fail-open), so each sandboxed subscriber delays the hook chain by at most
   5 s per event. The same fail-open value drains in-flight hooks if the worker crashes. The timeout is
   logged at most once per event per minute and shows as the last hook error in plugin health.
-- A sandboxed **webhook** handler (`ctx.registerWebhook`) has a **5 s** inline budget (`INGRESS_DISPATCH_TIMEOUT_MS`), which is the budget of every dispatch without the queue, replays included. Queued dispatch gets `SIMULATE_TYPING_MAX_MS` plus 5 s, capped at 25 s (10 s by default). The host
+- A sandboxed **webhook** handler (`ctx.registerWebhook`) has a **5 s** inline budget (`INGRESS_DISPATCH_TIMEOUT_MS`, fixed, not a setting), which is the budget of every dispatch without the queue, replays included. Queued dispatch gets `SIMULATE_TYPING_MAX_MS` plus 5 s, capped at 25 s (10 s by default). The host
   cannot cancel a handler that overruns it: the delivery is retried while the first run still lands, so a handler must key
   its side effects on `req.deliveryId` (with a hash of `req.rawBody` on a route that sets `dedupBodyMismatchAsNew`) and hand slow work to a background task (docs/25, section 25.7).
 - After a hook, webhook or search dispatch times out, the host pings the worker. A worker whose event

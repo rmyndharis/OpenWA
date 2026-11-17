@@ -57,9 +57,6 @@
     "light": "Claro",
     "dark": "Oscuro",
     "system": "Sistema",
-    "label": "Tema: {{value}}",
-    "appearance": "Apariencia",
-    "mode": "Modo",
     "toggleTo": "Cambiar a {{value}}"
   },
   "nav": {
@@ -87,7 +84,6 @@
       "omitted": "Multimedia",
       "image": "Imagen"
     },
-    "subtitle": "Envía y responde mensajes de WhatsApp en tiempo real",
     "noSessionsTitle": "Sin sesiones conectadas",
     "noSessionsDesc": "Conecta primero una sesión de WhatsApp desde el menú <1>Sesiones</1> para usar el chat.",
     "sessionLabel": "Sesión de WhatsApp",
@@ -424,9 +420,7 @@
   },
   "sessionStatus": {
     "created": "Nueva",
-    "idle": "Inactiva",
     "initializing": "Iniciando...",
-    "connecting": "Conectando...",
     "qr_ready": "Escanear QR",
     "ready": "Conectada",
     "disconnected": "Desconectada",
@@ -448,7 +442,8 @@
     },
     "empty": {
       "title": "No se encontraron sesiones",
-      "description": "Crea una nueva sesión para empezar"
+      "description": "Crea una nueva sesión para empezar",
+      "filtered": "Ninguna sesión coincide con la búsqueda o el filtro de estado."
     },
     "create": {
       "title": "Crear nueva sesión",
@@ -696,16 +691,16 @@
       "session.reconnect_loop": "Cuando una sesión sigue sin poder reconectarse",
       "session.restriction": "Cuando WhatsApp restringe la cuenta o levanta una restricción",
       "presence.update": "Cuando un chat suscrito se conecta, escribe o se desconecta",
-      "event.response": "Cuando un invitado responde a un evento de WhatsApp (asistirá, no asistirá, quizás)",
+      "event.response": "Cuando un invitado responde a un evento de WhatsApp (asistirá, no asistirá, quizás) (solo Baileys)",
       "poll.vote": "Cuando alguien marca o desmarca opciones de una encuesta",
       "group.join": "Cuando participantes se unen a un grupo o son añadidos",
       "group.leave": "Cuando participantes salen de un grupo o son eliminados",
       "group.update": "Cuando cambian el nombre, la descripción o los ajustes de un grupo",
       "group.join_request": "Cuando alguien solicita unirse a un grupo que administra esta sesión",
       "call.received": "Cuando empieza a sonar una llamada entrante",
-      "call.accepted": "Cuando se contesta una llamada",
-      "call.rejected": "Cuando se rechaza una llamada",
-      "call.missed": "Cuando una llamada no se contesta",
+      "call.accepted": "Cuando se contesta una llamada (solo Baileys)",
+      "call.rejected": "Cuando se rechaza una llamada (solo Baileys)",
+      "call.missed": "Cuando una llamada no se contesta (solo Baileys)",
       "status.received": "Cuando un contacto publica un estado",
       "all": "Todos los eventos excepto message.receipt, que debe indicarse de forma explícita"
     },
@@ -785,6 +780,7 @@
       "revokeTitle": "Revocar clave API",
       "deleteMessage": "¿Seguro que quieres eliminar permanentemente <strong>{{name}}</strong>? Esta acción no se puede deshacer.",
       "revokeMessage": "¿Seguro que quieres revocar <strong>{{name}}</strong>? Dejará de funcionar.",
+      "signedIn": "Este panel ha iniciado sesión con esta clave. Si la revocas o la eliminas, se cerrará tu sesión.",
       "delete": "Eliminar",
       "revoke": "Revocar"
     },

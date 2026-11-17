@@ -20,6 +20,7 @@ import type { Channel, Chat, ContactStatusGroup, Session } from '../../services/
 import { useRole } from '../../hooks/useRole';
 import { CHAT_LIST_FILTERS, type ChatListFilter } from '../../utils/chatFilters';
 import { chatTitle } from '../../utils/formatPhone';
+import { onTabListKeyDown } from '../../utils/tabKeys';
 import { contactSnippet, isVCardBody } from '../../utils/vcard';
 import ChatAvatar from './ChatAvatar';
 import SessionPicker from './SessionPicker';
@@ -285,13 +286,14 @@ function ChatSidebar({
 
       <div className="sidebar-header-box">
         {/* Chats / Channels / Status tabs */}
-        <div className="chats-tabs" role="tablist">
+        <div className="chats-tabs" role="tablist" onKeyDown={onTabListKeyDown}>
           {(['chats', 'channels', 'status'] as const).map(tab => (
             <button
               key={tab}
               type="button"
               role="tab"
               aria-selected={activeTab === tab}
+              tabIndex={activeTab === tab ? 0 : -1}
               className={`chats-tab ${activeTab === tab ? 'active' : ''}`}
               onClick={() => onSwitchTab(tab)}
             >

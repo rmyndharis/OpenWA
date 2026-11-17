@@ -55,9 +55,6 @@
     "light": "浅色",
     "dark": "深色",
     "system": "跟随系统",
-    "label": "主题：{{value}}",
-    "appearance": "外观",
-    "mode": "模式",
     "toggleTo": "切换到{{value}}"
   },
   "nav": {
@@ -85,7 +82,6 @@
       "omitted": "媒体",
       "image": "图片"
     },
-    "subtitle": "实时发送和回复 WhatsApp 消息",
     "noSessionsTitle": "没有已连接的会话",
     "noSessionsDesc": "请先从 <1>会话</1> 菜单连接一个 WhatsApp 会话，才能使用聊天功能。",
     "sessionLabel": "WhatsApp 会话",
@@ -419,9 +415,7 @@
   },
   "sessionStatus": {
     "created": "新建",
-    "idle": "空闲",
     "initializing": "正在启动...",
-    "connecting": "正在连接...",
     "qr_ready": "扫描 QR",
     "ready": "已连接",
     "disconnected": "已断开",
@@ -443,7 +437,8 @@
     },
     "empty": {
       "title": "未找到会话",
-      "description": "创建新会话即可开始"
+      "description": "创建新会话即可开始",
+      "filtered": "没有符合搜索或状态筛选条件的会话。"
     },
     "create": {
       "title": "创建新会话",
@@ -690,16 +685,16 @@
       "session.reconnect_loop": "会话反复重连失败时",
       "session.restriction": "WhatsApp 限制账号或解除限制时",
       "presence.update": "已订阅的聊天上线、正在输入或下线时",
-      "event.response": "嘉宾回复 WhatsApp 活动邀请时（参加、不参加、可能参加）",
+      "event.response": "嘉宾回复 WhatsApp 活动邀请时（参加、不参加、可能参加）（仅 Baileys）",
       "poll.vote": "有人在投票中选择或取消选项时",
       "group.join": "有成员加入或被添加到群组时",
       "group.leave": "有成员退出或被移出群组时",
       "group.update": "群组名称、描述或设置变化时",
       "group.join_request": "有人申请加入此会话管理的群组时",
       "call.received": "来电开始响铃时",
-      "call.accepted": "来电被接听时",
-      "call.rejected": "来电被拒接时",
-      "call.missed": "来电未接听时",
+      "call.accepted": "来电被接听时（仅 Baileys）",
+      "call.rejected": "来电被拒接时（仅 Baileys）",
+      "call.missed": "来电未接听时（仅 Baileys）",
       "status.received": "联系人发布状态时",
       "all": "除 message.receipt 外的所有事件（message.receipt 须明确指定）"
     },
@@ -829,6 +824,7 @@
       "revokeTitle": "撤销 API 密钥",
       "deleteMessage": "确定要永久删除 <strong>{{name}}</strong> 吗？此操作无法撤销。",
       "revokeMessage": "确定要撤销 <strong>{{name}}</strong> 吗？它将不再可用。",
+      "signedIn": "此仪表板正使用该密钥登录。撤销或删除该密钥会使你退出登录。",
       "delete": "删除",
       "revoke": "撤销"
     },

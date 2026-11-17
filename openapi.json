@@ -6351,7 +6351,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the request budget. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7183,7 +7183,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
+            "description": "The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the request budget. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7285,7 +7285,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request. The pin may or may not have been applied; a retry is safe, but it restarts the pin duration from the moment it succeeds.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the request budget. The pin may or may not have been applied; a retry is safe, but it restarts the pin duration from the moment it succeeds.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7387,7 +7387,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the request budget. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7591,7 +7591,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the request budget. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11992,7 +11992,7 @@
             }
           },
           "403": {
-            "description": "The engine refused the change — admin rights required. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The engine refused the change: admin rights are required. On whatsapp-web.js also a group that has no picture to remove, which WhatsApp Web does not tell apart from missing rights, so a repeat of a removal that was applied answers this. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13418,7 +13418,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "description": "The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -15141,7 +15141,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-request, so the revoke did not complete. Safe to retry: revoking an already-revoked status converges. The status POST routes deliberately do NOT answer this for whatsapp-web.js, because a replayed post would publish the status a second time. On Baileys, also when WhatsApp rate-limits the revoke (code 429) or times out a query it awaits (code 408).",
+            "description": "The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the request budget, so the revoke may not have completed. Safe to retry: revoking an already-revoked status converges. The status POST routes deliberately do NOT answer this for whatsapp-web.js, because a replayed post would publish the status a second time. On Baileys, also when WhatsApp rate-limits the revoke (code 429) or times out a query it awaits (code 408).",
             "content": {
               "application/json": {
                 "schema": {
@@ -17437,7 +17437,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most 5 s), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17504,7 +17504,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most 5 s), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17571,7 +17571,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most 5 s), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17638,7 +17638,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most 5 s), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17705,7 +17705,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most 5 s), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17772,7 +17772,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most 5 s), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17839,7 +17839,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most 5 s), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -19258,7 +19258,7 @@
             "nullable": true
           },
           "restriction": {
-            "description": "A restriction WhatsApp itself has placed on this session's account, or null when there is none. Distinct from `lastError`, which describes a fault on our side of the link. Derived from live engine state, so it is never persisted: it is re-established on the next connect.",
+            "description": "A restriction WhatsApp itself has placed on this session's account, or null when there is none. Distinct from `lastError`, which describes a fault on our side of the link. Derived from live engine state and held in the gateway's memory, never persisted: a restart drops it and the engine reports it again on the next connect when it still applies. A stop, start or logout does not drop it; a lift the engine reports, a link that reaches `ready` (for the types a linked session cannot carry), the passing of its `expiresAt` or deleting the session does.",
             "nullable": true,
             "type": "object",
             "allOf": [

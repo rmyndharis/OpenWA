@@ -8,7 +8,7 @@ import { ChatLabelsUnsupportedError } from '../../common/errors/chat-labels-unsu
 import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { type WwebjsEngineHost, rethrowIfNavigation, withPage } from './wwebjs-host';
+import { type WwebjsEngineHost, rethrowIfNavigation, withPage, withPageWrite } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
 import { isPageInvariant, readChats, recoverGroupChatById } from './wwebjs-chats';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
@@ -191,7 +191,7 @@ export class WwebjsLabels {
    */
   private async readChatLabels(chatId: string): Promise<{ id: string; labels: Label[] } | null> {
     let id = chatId;
-    const labels = await withPage(this.host, 'getChatLabels', async () => {
+    const labels = await withPageWrite(this.host, 'getChatLabels', async () => {
       const chat = await this.client()
         .getChatById(chatId)
         .catch(error => recoverGroupChatById(this.host, 'getChatLabels', chatId, error));
@@ -269,7 +269,7 @@ export class WwebjsLabels {
    * in when the page resolves no chat; the write then answers 404 as it does without this lookup.
    */
   private async resolveChatId(chatId: string): Promise<string> {
-    const chat = await withPage(this.host, 'changeChatLabel', () =>
+    const chat = await withPageWrite(this.host, 'changeChatLabel', () =>
       this.client()
         .getChatById(chatId)
         .catch(error => recoverGroupChatById(this.host, 'changeChatLabel', chatId, error)),
@@ -291,7 +291,7 @@ export class WwebjsLabels {
       ids.delete(labelId);
     }
     try {
-      await withPage(this.host, 'changeChatLabel', () => this.client().addOrRemoveLabels([...ids], [current.id]));
+      await withPageWrite(this.host, 'changeChatLabel', () => this.client().addOrRemoveLabels([...ids], [current.id]));
     } catch (error) {
       // whatsapp-web.js throws `[LT01] Only Whatsapp business` from the page context on a personal account.
       if (String(error instanceof Error ? error.message : error).includes('LT01')) {
@@ -301,8 +301,9 @@ export class WwebjsLabels {
     }
     // The page drops an id it does not know and resolves, so the write left the chat unchanged. Checked
     // after the write, not before, so a personal account (no labels at all) still gets the LT01 422.
-    if (add && !(await this.getLabels()).some(label => label.id === labelId)) {
-      throw new LabelNotFoundError(labelId);
+    if (add) {
+      const labels = await withPageWrite(this.host, 'changeChatLabel', () => this.getLabels());
+      if (!labels.some(label => label.id === labelId)) throw new LabelNotFoundError(labelId);
     }
     this.host.logger.debug(add ? 'Added label to chat' : 'Removed label from chat', { labelId, chatId });
   }

@@ -19,6 +19,20 @@ const DEFAULT_MEDIA_TIMEOUT_MS = 30_000;
 export const LINK_PREVIEW_THUMBNAIL_MAX_BYTES = 5 * 1024 * 1024;
 
 /**
+ * Whether a URL carries a user name or password: the exact condition undici refuses to build a request for,
+ * with a TypeError no mapping below recognises. An empty userinfo (`http://@host/`) is accepted by undici, and
+ * an unparsable URL is left to the SSRF guard, which names it.
+ */
+function carriesCredentials(url: string): boolean {
+  try {
+    const { username, password } = new URL(url);
+    return username !== '' || password !== '';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Fetch remote media as a Buffer for sending, with an SSRF host guard, a byte cap, and a timeout.
  * The guard runs BEFORE any network call, so an internal/reserved URL throws `SsrfBlockedError`
  * and no outbound socket is opened. It goes through `withSafeFetch`, which pins a direct or SOCKS
@@ -30,10 +44,12 @@ export const LINK_PREVIEW_THUMBNAIL_MAX_BYTES = 5 * 1024 * 1024;
  * Engine-neutral: returns raw bytes + the response content-type, so any engine adapter can use it.
  *
  * A URL that cannot be fetched is the caller's input, not an engine fault: a non-2xx answer, a
- * missing body, a timeout or a failed connection throw `BadRequestException`, and a body over the
+ * missing body, a timeout, a failed connection or a user name or password in the URL (refused before
+ * any connection, without repeating it) throw `BadRequestException`, and a body over the
  * cap throws `PayloadTooLargeException`. As plain Errors they left every send path as a 500 and
- * counted toward the send-pacing breaker. `SsrfBlockedError` is rethrown unchanged; each caller maps
- * it to its own generic message.
+ * counted toward the send-pacing breaker. `SsrfBlockedError` is rethrown unchanged (bulk results, the send pacing
+ * and the `message:failed` hook test for that class); a route that fetches a caller's URL maps it with
+ * `clientFacingSsrfError`.
  *
  * Behind a session proxy a failed connection or a timeout before any response is answered 503
  * instead: undici reports a proxy that refuses, cannot be resolved or fails its handshake with the
@@ -61,6 +77,10 @@ export async function loadRemoteMediaBuffer(
     positiveIntFromEnv('MEDIA_DOWNLOAD_MAX_BYTES', DEFAULT_MEDIA_MAX_BYTES),
   );
   const timeoutMs = positiveIntFromEnv('MEDIA_DOWNLOAD_TIMEOUT_MS', DEFAULT_MEDIA_TIMEOUT_MS);
+
+  if (carriesCredentials(url)) {
+    throw markNothingSent(new BadRequestException('Media URL must not contain credentials (userinfo)'));
+  }
 
   // Always guarded (media SSRF is independent of the webhook opt-out); withSafeFetch validates the
   // host, pins a direct or SOCKS connection to the vetted IP, and refuses redirects. The streaming cap runs inside

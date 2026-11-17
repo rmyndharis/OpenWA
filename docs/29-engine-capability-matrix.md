@@ -917,6 +917,13 @@ adapter boundary — none silently stubs.
 ✅ means works end-to-end — but these rows carry behavioral differences worth knowing:
 
 - **1:1 sends prefer a resolved LID on both engines.** A phone-number destination can be sent to the contact's `@lid` when the engine already knows it or obtains it from a lookup, including for a cold, unsaved contact on the first send. Baileys uses `getLIDForPN` (which can query WhatsApp); whatsapp-web.js uses `getNumberId`. WhatsApp can reject phone-addressed sends to LID-migrated accounts with ack `463` (missing privacy token), so a successful number check does not force phone addressing. If no LID is resolved, the existing phone-addressed fallback applies. The linked account's own phone may show a first message to an unsaved contact under an unnamed id; see [troubleshooting](./12-troubleshooting-faq.md#issue-a-first-outbound-message-appears-under-an-unnamed-id).
+- **The stored `body` of an API-sent contact card, poll, location or captionless document differs by
+  engine.** The gateway writes its own text for the row (`📇 <contact name>`, `📊 <poll name>`,
+  `📍 <description or Location>`, the file name) and each engine reports the send back with a text of
+  its own (a card's vCard with the phone, the poll question, a location's map thumbnail or nothing, no
+  file name for a document); the row keeps whichever the database received first. On Baileys that is
+  the gateway's text in practice; on whatsapp-web.js the engine's record may be stored instead.
+  `message.sent` carries the engine's form on both, and the dashboard renders either.
 - **`clickButton` (Baileys), native-flow is unverified.** Classic `buttonsMessage` /
   `templateMessage` / `listMessage` prompts go through Baileys' `buttonReply` / `listReply`
   helpers. A native-flow `interactiveMessage` prompt is answered with the same template
@@ -1067,8 +1074,11 @@ adapter boundary — none silently stubs.
   chat unread with each message received and lowers that for no receipt the session sends, so a chat read
   through the gateway stayed listed as unread. The value is what Baileys last reported for the chat, an
   increment and not a running total: a chat whose unread messages arrived one at a time is listed with
-  `1`. A receipt that names only older messages, or only the account's own (which Baileys leaves out of a
-  receipt), leaves the count, and so does one a newer message overtook; a session restarted since holds
+  `1`. Baileys also counts a contact's encrypted edit or reaction, a pin, an album header and an event RSVP as a
+  received message; one that arrives on its own does not raise the count. An unread mark set on the phone that Baileys
+  delivers in the same batch just before such a message, as after a reconnect, is folded into that message's count by
+  the library and is therefore not listed; the mark stays on the account. A receipt that names only older messages, or only the account's own (which Baileys leaves out of a
+  receipt), leaves the count, and so does one a newer message overtook, recorded or still being processed; a session restarted since holds
   no received message to compare, and takes any received id for the read. Only a chat marked unread by
   hand (listed with `unreadCount` `-1`, by `markUnread` or on the phone) takes a second write,
   `chatModify` with `markRead: true`, which undoes the mark in the account's app state.
@@ -1100,6 +1110,18 @@ adapter boundary — none silently stubs.
   delivered. A message the session sent is held the same way as one it received, and an edit the
   account makes from its own phone is applied under the account's own id, plain or encrypted.
   whatsapp-web.js receives both already decrypted from WhatsApp Web.
+- **Disappearing messages under `STORE_EPHEMERAL_MESSAGES=false` (baileys).** The flag also keeps the adapter's own
+  copy of a message received in a disappearing-messages chat out of `baileys_stored_messages`, which has no age limit
+  and is part of a backup. Without the copy, a reply to, forward of, edit of, reaction to, star of, pin or unpin of,
+  delete of, button click on or quote of such a message answers `404`, a group read receipt that names one leaves it
+  out, an encrypted edit, reaction or poll vote aimed at it is not delivered once the message has been processed, and
+  an RSVP to an event it carries is not reported. A plain edit,
+  reaction or delete of it is announced as before, and so is a message the account sent or typed on its phone in that
+  chat, which keeps its copy, and a status. A redelivery of one is handed to the session again and dropped there.
+  Rows written before the flag was turned off stay until the count cap evicts them. While such a message is a chat's
+  newest, the chat is listed with an empty `lastMessage`, and its media is not downloaded. whatsapp-web.js has no
+  store of its own to govern: WhatsApp Web holds the message until it expires, so `getChatHistory` and the chat
+  list's `lastMessage` still return it there.
 - **Inbound poll votes (`poll.vote`).** Baileys no longer reads a vote itself, so the adapter does,
   with the library's `decryptPollVote` and the secret of the poll creation message in the session's
   message store (`BAILEYS_MESSAGE_STORE_LIMIT`), and names the selected options by their SHA-256

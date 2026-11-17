@@ -197,7 +197,8 @@ export class StatusController {
   @ApiResponse({
     status: 503,
     description:
-      'The whatsapp-web.js page connection died mid-request, so the revoke did not complete. Safe ' +
+      'The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the request ' +
+      'budget, so the revoke may not have completed. Safe ' +
       'to retry: revoking an already-revoked status converges. The status POST routes deliberately ' +
       'do NOT answer this for whatsapp-web.js, because a replayed post would publish the status a second ' +
       'time. On Baileys, also when WhatsApp rate-limits the revoke (code 429) or times out a query it ' +

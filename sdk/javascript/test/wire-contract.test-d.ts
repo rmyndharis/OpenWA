@@ -3,12 +3,13 @@
  * runs ahead of vitest (`.test-d.ts` sits outside vitest's `test/**\/*.test.ts` include, so there is
  * no suite to run here; the build tsconfigs exclude `test/`, so nothing else would check it).
  *
- * The status/label/channel routes hand the engine-neutral shapes from
- * `src/engine/interfaces/whatsapp-engine.interface.ts` straight to the client — no DTO, no remap —
- * so the record types below must mirror those shapes as JSON. Nothing else enforces that: the
- * controllers declare no `@ApiResponse` type, so `openapi.json` carries no schema for these routes
- * and `openapi:check` has nothing to diff, and the resource tests mock the transport and assert
- * URLs only (#754).
+ * The status, label and channel record types below describe what those routes answer. Their
+ * response schemas (`LabelDto`, `ChannelDto`, `ChannelMessageDto`, `StatusDto` and
+ * `StatusListResponseDto`) are published in `openapi.json`, and `check:contract-shapes` compares the
+ * SDK records with them field by field. This file adds a second check: the top-level keys of these
+ * records must match the engine-neutral shapes from
+ * `src/engine/interfaces/whatsapp-engine.interface.ts` as they arrive over JSON. The resource tests
+ * mock the transport and assert URLs only (#754), so they check neither.
  *
  * The `Wire*` types are the server interfaces as they arrive over JSON — `Date` fields serialize to
  * ISO strings, everything else is verbatim. Keep them in sync with the engine interface by hand;

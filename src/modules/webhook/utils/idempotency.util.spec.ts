@@ -370,6 +370,59 @@ describe('Idempotency Utils', () => {
       const key = generateIdempotencyKey('custom.event', {});
       expect(key).toMatch(/^evt_custom_event_[a-f0-9]{12}$/);
     });
+
+    // An engine that cannot read a message's id reports the empty string, and the pipeline still announces the
+    // message. Such a message has nothing to dedupe on, so every dispatch of one is its own event: a key shared by
+    // all of them made a receiver that dedupes on it keep the first message and drop the rest, and made the outbox
+    // keep one row for them all.
+    describe('for a message whose id could not be read', () => {
+      const keyOf = (event: string, data: Record<string, unknown>, occurrenceId?: string): string =>
+        generateIdempotencyKey(event, { sessionId: 'A', ...data }, occurrenceId);
+      const events = ['message.received', 'message.sent', 'message.revoked'];
+
+      it.each(events)('%s is keyed per dispatch, stable across the retries of one', event => {
+        const first = keyOf(event, { id: '' }, 'occ-1');
+
+        expect(keyOf(event, { id: '' }, 'occ-2')).not.toBe(first);
+        expect(keyOf(event, { id: '' }, 'occ-1')).toBe(first);
+        expect(first).toMatch(/^(msg|rev)_A_noid_occ-1$/);
+      });
+
+      it.each([
+        ['empty', ''],
+        ['blank', '   '],
+        ['missing', undefined],
+        ['null', null],
+        ['an object', {}],
+        ['an array', ['x']],
+      ])('treats an id that is %s as unreadable', (_label, id) => {
+        expect(keyOf('message.received', { id }, 'occ-1')).toBe('msg_A_noid_occ-1');
+        expect(keyOf('message.revoked', { id }, 'occ-1')).toBe('rev_A_noid_occ-1');
+      });
+
+      it('reads the legacy messageId when the id is empty', () => {
+        expect(keyOf('message.received', { id: '', messageId: 'LEGACY' }, 'occ-1')).toBe('msg_A_LEGACY');
+        expect(keyOf('message.revoked', { id: ' ', messageId: 'LEGACY' }, 'occ-1')).toBe('rev_A_LEGACY');
+      });
+
+      it.each(events)('hashes the payload of %s when the caller gives no occurrence', event => {
+        const first = keyOf(event, { id: '', body: 'a' });
+
+        expect(first).toMatch(/^(msg|rev)_A_noid_[a-f0-9]{12}$/);
+        expect(keyOf(event, { id: '', body: 'a' })).toBe(first);
+        expect(keyOf(event, { id: '', body: 'b' })).not.toBe(first);
+      });
+
+      it('keeps the key of a readable id byte for byte, whatever the occurrence', () => {
+        expect(keyOf('message.received', { id: '3EB0ABC' }, 'occ-1')).toBe('msg_A_3EB0ABC');
+        expect(keyOf('message.sent', { id: '3EB0ABC' }, 'occ-2')).toBe('msg_A_3EB0ABC');
+        expect(keyOf('message.revoked', { id: 'REV1' }, 'occ-1')).toBe('rev_A_REV1');
+        expect(keyOf('message.received', { messageId: 'LEGACY' }, 'occ-1')).toBe('msg_A_LEGACY');
+        // A real id is not trimmed, and a number is a readable id.
+        expect(keyOf('message.received', { id: ' x ' }, 'occ-1')).toBe('msg_A_ x ');
+        expect(keyOf('message.received', { id: 12345 }, 'occ-1')).toBe('msg_A_12345');
+      });
+    });
   });
 
   describe('generateDeliveryId', () => {

@@ -590,7 +590,7 @@
   padding-inline: 0.875rem;
   height: 40px;
   background: var(--chat-panel);
-  border: 1px solid var(--chat-divider);
+  border: 1px solid var(--control-border);
   border-radius: 10px;
   color: var(--chat-meta);
   box-sizing: border-box;
@@ -605,7 +605,9 @@
 
 .chats-page .chat-search-input:focus-within {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
 .chats-page .chat-search-input input {
@@ -1187,7 +1189,7 @@
 .chats-page .chat-dialog-form input {
   padding-block: 0.625rem;
   padding-inline: 0.875rem;
-  border: 1px solid var(--chat-divider);
+  border: 1px solid var(--control-border);
   border-radius: 10px;
   background: var(--chat-panel-header);
   color: var(--text-primary);
@@ -1198,7 +1200,9 @@
 
 .chats-page .chat-dialog-form input:focus {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
 .chats-page .chat-dialog-form .text-muted {
@@ -1323,7 +1327,7 @@
   box-sizing: border-box;
   padding-block: 0.75rem;
   padding-inline: 1rem;
-  border: 1px solid var(--chat-divider);
+  border: 1px solid var(--control-border);
   border-radius: 10px;
   background: var(--chat-panel-header);
   color: var(--text-primary);
@@ -1348,7 +1352,9 @@
 .chats-page .group-info-field textarea:focus,
 .chats-page .group-info-add input:focus {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
 .chats-page .group-info-field input:disabled,
@@ -1590,7 +1596,7 @@
   padding-block: 0;
   padding-inline: 0.875rem;
   border: none;
-  border-bottom: 2px solid var(--chat-divider);
+  border-bottom: 2px solid var(--control-border);
   background: transparent;
   font-size: 1rem;
   color: var(--text-primary);
@@ -1599,6 +1605,7 @@
 
 .chats-page .new-group-name:focus {
   border-bottom-color: var(--focus-ring);
+  box-shadow: 0 0 0 1px var(--focus-ring);
 }
 
 .chats-page .new-group-name::placeholder {
@@ -2344,13 +2351,16 @@
   color: var(--chat-meta);
 }
 
-/* Every muted line inside an outgoing bubble: --chat-meta is 3.27:1 on the dark green, and 2.87:1 on a quote there. */
+/* Every muted line inside an outgoing bubble: --chat-meta is 3.27:1 on the dark green, 2.87:1 on a quote there and
+   2.32:1 on a contact card. */
 .chats-page .message-bubble.outgoing .message-edited,
 .chats-page .message-bubble.outgoing .message-time,
 .chats-page .message-bubble.outgoing .message-quote-box,
 .chats-page .message-bubble.outgoing.revoked-type .message-text,
 .chats-page .message-bubble.outgoing .message-masked,
-.chats-page .message-bubble.outgoing .message-media-omitted {
+.chats-page .message-bubble.outgoing .message-media-omitted,
+.chats-page .message-bubble.outgoing .message-contact-phone,
+.chats-page .message-bubble.outgoing .chat-document-meta {
   color: var(--chat-meta-out);
 }
 
@@ -2505,9 +2515,6 @@
   min-height: calc(14px - 0.25rem);
 }
 
-/* A button, not a label: the bytes are fetchable from the per-message media route, so this is the
-   viewer's handle on media the list did not inline. Styled to keep the previous inert appearance
-   apart from the affordance. */
 .chats-page .message-contact {
   display: flex;
   flex-direction: column;
@@ -2525,8 +2532,9 @@
   background: color-mix(in srgb, var(--chat-meta) 12%, transparent);
 }
 
+/* A faint tint: --chat-meta-out is 4.53:1 on it over the dark green, and 3.73:1 on a 14% one. */
 .chats-page .message-bubble.outgoing .message-contact-card {
-  background: color-mix(in srgb, #fff 14%, transparent);
+  background: color-mix(in srgb, #fff 6%, transparent);
 }
 
 .chats-page .message-contact-avatar {
@@ -2539,6 +2547,11 @@
   background: color-mix(in srgb, var(--chat-meta) 18%, transparent);
   color: var(--chat-meta);
   flex-shrink: 0;
+}
+
+.chats-page .message-bubble.outgoing .message-contact-avatar {
+  background: color-mix(in srgb, var(--chat-meta-out) 18%, transparent);
+  color: var(--chat-meta-out);
 }
 
 .chats-page .message-contact-fields {
@@ -2554,6 +2567,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .message-contact-phone {
@@ -2564,6 +2580,9 @@
   white-space: nowrap;
 }
 
+/* A button, not a label: the bytes are fetchable from the per-message media route, so this is the
+   viewer's handle on media the list did not inline. Styled to keep the previous inert appearance
+   apart from the affordance. */
 .chats-page .message-media-omitted {
   display: flex;
   align-items: center;
@@ -2674,6 +2693,12 @@
   border-color: color-mix(in srgb, var(--chat-bubble-text) 16%, transparent);
 }
 
+/* The hover tint is stronger than the resting one, which takes the muted size line under 4.5:1 on the dark and the
+   outgoing greens; under the pointer the line takes the title's colour. */
+.chats-page .chat-document-card:hover .chat-document-meta {
+  color: var(--chat-bubble-text);
+}
+
 .chats-page .chat-document-card-content {
   display: flex;
   align-items: center;
@@ -2729,12 +2754,17 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
   color: var(--chat-bubble-text);
 }
 
+/* Muted by its token, as every other muted line of a bubble: an opacity over the inherited colour was 3.03:1 in an
+   outgoing bubble. */
 .chats-page .chat-document-meta {
   font-size: 0.725rem;
-  opacity: 0.75;
+  color: var(--chat-meta);
   margin-top: 2px;
 }
 
@@ -3119,7 +3149,7 @@
   height: 46px;
   box-sizing: border-box;
   background: var(--chat-panel);
-  border: 1px solid var(--chat-divider);
+  border: 1px solid var(--control-border);
   border-radius: 24px;
   transition:
     border-color 0.15s,
@@ -3128,7 +3158,9 @@
 
 .chats-page .message-input-pill:focus-within {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
 .chats-page .message-input-pill .message-text-input {
@@ -3460,7 +3492,7 @@
   width: 100%;
   padding-block: 0.625rem;
   padding-inline: 0.75rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius, 8px);
   background-color: var(--bg-light);
   color: var(--text-primary);
@@ -3477,7 +3509,9 @@
 .chats-page .status-compose-modal select:focus {
   border-color: var(--focus-ring);
   background-color: var(--bg-white);
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(34, 197, 94, 0.1);
 }
 
 .chats-page .status-compose-modal textarea {
@@ -3498,16 +3532,20 @@
   width: 100%;
   height: 38px;
   padding: 2px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius, 8px);
   background: var(--bg-light);
   cursor: pointer;
   box-sizing: border-box;
 }
 
-/* The rule above repaints the border over `input:focus` at the same weight, so a focused color input needs its own. */
+/* The rule above repaints the border over `input:focus` at the same weight, so a focused color input needs its own,
+   with the ring and glow that rule draws. */
 .chats-page .status-compose-modal input[type='color']:focus {
   border-color: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(34, 197, 94, 0.1);
 }
 
 .chats-page .status-compose-modal input[type='file'] {

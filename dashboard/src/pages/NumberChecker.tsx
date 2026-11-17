@@ -29,6 +29,7 @@ import { escapeCsvCell } from '../utils/csv';
 import { normalizePhoneDigits, normalizePhoneText } from '../utils/phone';
 import { keepsSameKey } from '../utils/authLifecycle';
 import { isComposingKey } from '../utils/composition';
+import { onTabListKeyDown } from '../utils/tabKeys';
 import './NumberChecker.css';
 
 // Every lookup is an outbound WhatsApp query that counts against the gateway's per-IP limit on this route
@@ -342,10 +343,11 @@ export function NumberChecker() {
       )}
 
       {/* Mode Tabs */}
-      <div className="nc-tabs" role="tablist">
+      <div className="nc-tabs" role="tablist" onKeyDown={onTabListKeyDown}>
         <button
           role="tab"
           aria-selected={activeTab === 'single'}
+          tabIndex={activeTab === 'single' ? 0 : -1}
           className={`nc-tab ${activeTab === 'single' ? 'active' : ''}`}
           onClick={() => setActiveTab('single')}
         >
@@ -354,6 +356,7 @@ export function NumberChecker() {
         <button
           role="tab"
           aria-selected={activeTab === 'batch'}
+          tabIndex={activeTab === 'batch' ? 0 : -1}
           className={`nc-tab ${activeTab === 'batch' ? 'active' : ''}`}
           onClick={() => setActiveTab('batch')}
         >

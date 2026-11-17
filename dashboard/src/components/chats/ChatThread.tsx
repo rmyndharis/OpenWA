@@ -622,8 +622,14 @@ function ChatThread({
                         <User size={22} />
                       </span>
                       <span className="message-contact-fields">
-                        <span className="message-contact-name">{card.name || label}</span>
-                        {card.phone ? <span className="message-contact-phone">{card.phone}</span> : null}
+                        <span className="message-contact-name" title={card.name || label}>
+                          {card.name || label}
+                        </span>
+                        {card.phone ? (
+                          <span className="message-contact-phone">
+                            <bdi dir="ltr">{card.phone}</bdi>
+                          </span>
+                        ) : null}
                       </span>
                     </div>
                   ))}
@@ -634,7 +640,12 @@ function ChatThread({
             const isPdf =
               mediaInfo.mimetype === 'application/pdf' ||
               Boolean(mediaInfo.filename && /\.pdf$/i.test(mediaInfo.filename));
-            // What a document is called and how large it is; a click on the card downloads it.
+            // The bytes of a document the list left out are fetched when its card is pressed.
+            const fetchState = mediaInfo.omitted && msg.waMessageId ? mediaFetch[msg.waMessageId] : undefined;
+            // What a document is called and how large it is; a click on the card downloads it. The card stays whole
+            // while it fetches and after a fetch that found nothing: a spinner takes the place of the download mark,
+            // the failure the place of the size.
+            const documentName = mediaInfo.filename || t('chats.downloadDocument');
             const documentMeta = [mediaInfo.sizeBytes ? formatFileSize(mediaInfo.sizeBytes) : '', isPdf ? 'PDF' : '']
               .filter(Boolean)
               .join(' \u2022 ');
@@ -644,25 +655,32 @@ function ChatThread({
                   {isPdf ? (
                     <span className="chat-document-pdf-badge">
                       <FileText size={18} />
-                      <span className="chat-document-pdf-tag">PDF</span>
+                      <span className="chat-document-pdf-tag" aria-hidden="true">
+                        PDF
+                      </span>
                     </span>
                   ) : (
                     <FileText size={18} />
                   )}
                 </span>
                 <span className="chat-document-info">
-                  <span className="chat-document-title">{mediaInfo.filename || t('chats.downloadDocument')}</span>
-                  {documentMeta && <span className="chat-document-meta">{documentMeta}</span>}
+                  <span className="chat-document-title" title={documentName}>
+                    {documentName}
+                  </span>
+                  {fetchState === 'failed' ? (
+                    <span className="chat-document-meta">{t('chats.status.mediaUnavailable')}</span>
+                  ) : (
+                    documentMeta && <span className="chat-document-meta">{documentMeta}</span>
+                  )}
                 </span>
                 <span className="chat-document-action">
-                  <Download size={16} />
+                  {fetchState === 'loading' ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                 </span>
               </span>
             );
             if (mediaInfo.omitted) {
               // Not a plain label: the bytes exist behind the per-message media route, so this is the
               // only handle the viewer has on them.
-              const fetchState = msg.waMessageId ? mediaFetch[msg.waMessageId] : undefined;
               const downloadButton = (
                 <button
                   type="button"
@@ -670,12 +688,12 @@ function ChatThread({
                   onClick={() => void downloadMedia(msg)}
                   disabled={!sessionId || !msg.waMessageId || fetchState === 'loading'}
                 >
-                  {fetchState === 'loading' ? (
+                  {msg.type === 'document' ? (
+                    documentCard
+                  ) : fetchState === 'loading' ? (
                     <Loader2 size={14} className="animate-spin" />
                   ) : fetchState === 'failed' ? (
                     <>📎 {t('chats.status.mediaUnavailable')}</>
-                  ) : msg.type === 'document' ? (
-                    documentCard
                   ) : (
                     <>📎 {t('chats.media.omitted')}</>
                   )}
