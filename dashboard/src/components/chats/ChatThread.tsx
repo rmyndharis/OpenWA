@@ -35,7 +35,7 @@ import {
   senderKey,
   type ChatMessageView,
 } from '../../utils/chatMessages';
-import { contactSnippet, isVCardBody, parseVCards } from '../../utils/vcard';
+import { contactCards, contactSnippet, isVCardBody } from '../../utils/vcard';
 import { shouldFetchOlderMessages } from '../../utils/scrollDecision';
 import { keepsSameKey } from '../../utils/authLifecycle';
 import { retryThrottled } from '../../utils/fetchAllPages';
@@ -604,13 +604,16 @@ function ChatThread({
               );
             }
             if (msg.type === 'contact') {
-              // API stores the raw vCard in body (v0.23.2+); paint a card, never the BEGIN:VCARD text.
-              const cards = parseVCards(msg.body || '');
+              // The body is the raw vCard, or `📇 <name>` for a contact the gateway sent; paint a card either way.
+              const cards = contactCards(msg.body);
               const label = t('chats.media.contact');
               return (
                 <div className="message-contact" role="group" aria-label={label}>
                   {(cards.length > 0 ? cards : [{ name: '', phone: '', waid: '' }]).map((card, index) => (
-                    <div key={`${card.waid || card.phone || card.name || 'contact'}:${index}`} className="message-contact-card">
+                    <div
+                      key={`${card.waid || card.phone || card.name || 'contact'}:${index}`}
+                      className="message-contact-card"
+                    >
                       <span className="message-contact-avatar" aria-hidden="true">
                         <User size={22} />
                       </span>

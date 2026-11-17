@@ -10,6 +10,8 @@
  * reducers actually touch are constrained.
  */
 
+import { contactSnippet } from './vcard.ts';
+
 export interface ChatListEntry {
   id: string;
   lastMessage?: string;
@@ -46,6 +48,9 @@ export interface ChatListUpdate<T> {
  * `locationLabel` / `contactLabel` are passed in because those snippets must not be the raw body —
  * a location's body is a multi-kilobyte base64 map thumbnail, and a contact's body is the vCard text
  * the API stores — and the labels themselves are localised at the callsite.
+ *
+ * A contact's snippet is its name and phone, as the row reads after a reload; the label stands in when
+ * the card holds neither.
  */
 export function applyIncomingToChatList<T extends ChatListEntry>(
   chats: T[],
@@ -65,7 +70,11 @@ export function applyIncomingToChatList<T extends ChatListEntry>(
   const updated = [...chats];
   const target = { ...updated[index] };
   target.lastMessage =
-    msg.type === 'location' ? opts.locationLabel : msg.type === 'contact' ? opts.contactLabel : msg.body;
+    msg.type === 'location'
+      ? opts.locationLabel
+      : msg.type === 'contact'
+        ? contactSnippet(msg.body, opts.contactLabel)
+        : msg.body;
   target.lastMessageType = msg.type;
   target.timestamp = msg.timestamp;
   if (!msg.fromMe && opts.activeChatId !== target.id) {

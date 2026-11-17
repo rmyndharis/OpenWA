@@ -13,7 +13,10 @@ export interface ParsedVCard {
 export function splitVCards(body: string): string[] {
   const text = body.trim();
   if (!text) return [];
-  const parts = text.split(/(?=BEGIN:VCARD)/i).map(p => p.trim()).filter(Boolean);
+  const parts = text
+    .split(/(?=BEGIN:VCARD)/i)
+    .map(p => p.trim())
+    .filter(Boolean);
   return parts.length > 0 ? parts : [text];
 }
 
@@ -22,12 +25,13 @@ export function isVCardBody(body: string | undefined | null): boolean {
 }
 
 /**
- * Read FN/N and the first TEL (preferring a waid) from one vCard. Unknown fields are ignored; a
+ * Read the name and the first TEL (preferring a waid) from one vCard. Unknown fields are ignored; a
  * crafted card cannot inject markup because callers render the strings as text nodes.
  */
 export function parseVCard(vcard: string): ParsedVCard {
   const lines = vcard.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-  let name = '';
+  let formatted = '';
+  let structured = '';
   let phone = '';
   let waid = '';
   for (const raw of lines) {
@@ -37,13 +41,16 @@ export function parseVCard(vcard: string): ParsedVCard {
     if (colon < 0) continue;
     const left = line.slice(0, colon);
     const value = line.slice(colon + 1).trim();
-    const prop = left.split(';')[0].replace(/^item\d+\./i, '').toUpperCase();
-    if (prop === 'FN' && !name) {
-      name = unescapeVCard(value);
-    } else if (prop === 'N' && !name) {
-      // N:Last;First;Middle;Prefix;Suffix — WhatsApp often leaves Last empty and puts the given name in First.
+    const prop = left
+      .split(';')[0]
+      .replace(/^item\d+\./i, '')
+      .toUpperCase();
+    if (prop === 'FN' && !formatted) {
+      formatted = unescapeVCard(value);
+    } else if (prop === 'N' && !structured) {
+      // N:Last;First;Middle;Prefix;Suffix. WhatsApp often leaves Last empty and puts the given name in First.
       const parts = value.split(';').map(unescapeVCard);
-      name = [parts[1], parts[0], parts[2]].filter(Boolean).join(' ').trim() || parts.filter(Boolean).join(' ');
+      structured = [parts[1], parts[0], parts[2]].filter(Boolean).join(' ').trim() || parts.filter(Boolean).join(' ');
     } else if (prop === 'TEL' && !phone) {
       phone = unescapeVCard(value);
       const waidMatch = left.match(/waid=([^;:]+)/i);
@@ -51,13 +58,28 @@ export function parseVCard(vcard: string): ParsedVCard {
     }
   }
   if (!waid && phone) waid = phone.replace(/\D/g, '');
-  return { name: name.trim(), phone: phone.trim(), waid };
+  // FN is the name as the sender's phone shows it. N comes first in a WhatsApp card and holds only the
+  // parts, so a prefix or suffix would be lost if it won.
+  return { name: (formatted || structured).trim(), phone: phone.trim(), waid };
 }
 
+/** Text that does not open with BEGIN:VCARD holds no card, whatever its lines look like. */
 export function parseVCards(body: string): ParsedVCard[] {
+  if (!isVCardBody(body)) return [];
   return splitVCards(body)
     .map(parseVCard)
     .filter(c => c.name || c.phone || c.waid);
+}
+
+/**
+ * The cards of a contact message. One the gateway sent itself is stored as `📇 <name>`, not as a
+ * vCard, so its card is that name alone.
+ */
+export function contactCards(body: string | undefined | null): ParsedVCard[] {
+  if (!body) return [];
+  if (isVCardBody(body)) return parseVCards(body);
+  const name = body.replace(/^📇\s*/u, '').trim();
+  return name ? [{ name, phone: '', waid: '' }] : [];
 }
 
 /**

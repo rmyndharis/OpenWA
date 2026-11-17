@@ -140,13 +140,23 @@ test('promoteChatWithSnippet leaves an unknown chat alone rather than inventing 
   assert.equal(promoteChatWithSnippet(before, 'gone@c.us', 'x', 1), before);
 });
 
-test('a contact message uses the contact label, not the raw vCard body', () => {
+test('a contact message shows the name on its card, not the raw vCard body', () => {
   const before = [chat('a@c.us')];
   const { chats } = applyIncomingToChatList(
     before,
     { chatId: 'a@c.us', body: 'BEGIN:VCARD\nFN:Carlos\nEND:VCARD', type: 'contact', timestamp: 200 },
     { locationLabel: LOCATION, contactLabel: CONTACT },
   );
-  assert.equal(chats[0].lastMessage, CONTACT);
+  assert.equal(chats[0].lastMessage, 'Carlos');
   assert.equal(chats[0].lastMessageType, 'contact');
+});
+
+test('a contact message with no usable card falls back to the contact label', () => {
+  const opts = { locationLabel: LOCATION, contactLabel: CONTACT };
+  const incoming = (body: string | undefined) =>
+    applyIncomingToChatList([chat('a@c.us')], { chatId: 'a@c.us', body, type: 'contact', timestamp: 200 }, opts);
+  assert.equal(incoming('BEGIN:VCARD\nEND:VCARD').chats[0].lastMessage, CONTACT);
+  assert.equal(incoming(undefined).chats[0].lastMessage, CONTACT);
+  // A contact the gateway sent is stored as its name, which is already a snippet.
+  assert.equal(incoming('📇 Carol Jones').chats[0].lastMessage, '📇 Carol Jones');
 });
