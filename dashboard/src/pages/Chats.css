@@ -2508,9 +2508,6 @@
   min-height: calc(14px - 0.25rem);
 }
 
-/* A button, not a label: the bytes are fetchable from the per-message media route, so this is the
-   viewer's handle on media the list did not inline. Styled to keep the previous inert appearance
-   apart from the affordance. */
 .chats-page .message-contact {
   display: flex;
   flex-direction: column;
@@ -2576,6 +2573,9 @@
   white-space: nowrap;
 }
 
+/* A button, not a label: the bytes are fetchable from the per-message media route, so this is the
+   viewer's handle on media the list did not inline. Styled to keep the previous inert appearance
+   apart from the affordance. */
 .chats-page .message-media-omitted {
   display: flex;
   align-items: center;
