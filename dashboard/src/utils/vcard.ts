@@ -31,7 +31,13 @@ export function isVCardBody(body: string | undefined | null): boolean {
  * crafted card cannot inject markup because callers render the strings as text nodes.
  */
 export function parseVCard(vcard: string): ParsedVCard {
-  const lines = vcard.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  // A line break plus one space or tab folds a long line (RFC 6350 section 3.2). One that opens a property of its own
+  // is an indented card, not a fold, and stays a line: the per-line trim below reads it.
+  const lines = vcard
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\n[ \t](?![ \t]*[A-Za-z][A-Za-z0-9.-]*[;:])/g, '')
+    .split('\n');
   let formatted = '';
   let structured = '';
   let phone = '';
@@ -102,6 +108,8 @@ export function contactSnippet(body: string | undefined | null, fallbackLabel: s
   return names.length > 0 ? names.join(', ') : fallbackLabel;
 }
 
+// One pass, left to right (RFC 6350 section 3.4): chained replaces read the second backslash of an escaped one as the
+// start of the next escape, so a backslash and the letter n came out as a line break.
 function unescapeVCard(value: string): string {
-  return value.replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
+  return value.replace(/\\([nN,;\\])/g, (_, char: string) => (char === 'n' || char === 'N' ? '\n' : char));
 }
