@@ -199,7 +199,7 @@ export function messageTools(message: MessageService, idempotency?: SendIdempote
         'walk with after (the id of the last message of the previous page) so a message arriving mid-walk cannot ' +
         'shift the window. A message with media is listed without its payload, an { omitted, sizeBytes } marker ' +
         'in its place; pass inlineMedia true to get the payloads inline as base64, up to a per-response budget ' +
-        '(8 MiB by default), which makes a result very large.',
+        '(8 MiB by default; the newest payload is let through whatever its size), which makes a result very large.',
       tier: 'read',
       sessionScoped: true,
       inputSchema: z.object({
