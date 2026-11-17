@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MCP: every tool is advertised with a `title`, the name a client shows: the tool name split into words, or the `title` its descriptor sets (#2098). Thanks @sudipta-prodevs.
+
 ### Changed
 
 - whatsapp-web.js: block and unblock use the library's own LID handling, so an unblock no longer clears an entry the same person holds under a second id, such as a phone-keyed block from before the LID migration. The install-time block patch is retired.
