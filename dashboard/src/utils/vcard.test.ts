@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { contactCards, contactSnippet, isVCardBody, parseVCard, parseVCards } from './vcard.ts';
+import { isolateNumber } from './formatPhone.ts';
 
 const SAMPLE = `BEGIN:VCARD
 VERSION:3.0
@@ -27,7 +28,7 @@ test('parseVCards joins a multi-contact body', () => {
 });
 
 test('contactSnippet prefers name · phone over raw vCard text', () => {
-  assert.equal(contactSnippet(SAMPLE, 'Contact'), 'Carlos · +54 9 11 6186-2313');
+  assert.equal(contactSnippet(SAMPLE, 'Contact'), `Carlos · ${isolateNumber('+54 9 11 6186-2313')}`);
   assert.equal(contactSnippet('BEGIN:VCARD\nEND:VCARD', 'Contact'), 'Contact');
   assert.equal(isVCardBody(SAMPLE), true);
   assert.equal(isVCardBody('hello'), false);

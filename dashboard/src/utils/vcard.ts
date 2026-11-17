@@ -3,6 +3,8 @@
  * must not paint that text as a bubble; these helpers turn it into a name + phone for the UI.
  */
 
+import { isolateNumber } from './formatPhone.ts';
+
 export interface ParsedVCard {
   name: string;
   phone: string;
@@ -84,18 +86,19 @@ export function contactCards(body: string | undefined | null): ParsedVCard[] {
 
 /**
  * One-line sidebar / quote preview. Prefers the contact name; falls back to the localised label
- * when the body is not a usable vCard.
+ * when the body is not a usable vCard. A phone is isolated left to right: next to a right-to-left name
+ * its plus sign and digit groups would be drawn in reverse.
  */
 export function contactSnippet(body: string | undefined | null, fallbackLabel: string): string {
   if (!body) return fallbackLabel;
   const cards = parseVCards(body);
   if (cards.length === 0) return isVCardBody(body) ? fallbackLabel : body;
+  const label = (c: ParsedVCard) => c.name || (c.phone ? isolateNumber(c.phone) : '');
   if (cards.length === 1) {
     const c = cards[0];
-    if (c.name && c.phone) return `${c.name} · ${c.phone}`;
-    return c.name || c.phone || fallbackLabel;
+    return c.name && c.phone ? `${c.name} · ${isolateNumber(c.phone)}` : label(c) || fallbackLabel;
   }
-  const names = cards.map(c => c.name || c.phone).filter(Boolean);
+  const names = cards.map(label).filter(Boolean);
   return names.length > 0 ? names.join(', ') : fallbackLabel;
 }
 

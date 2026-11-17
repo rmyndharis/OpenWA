@@ -623,7 +623,11 @@ function ChatThread({
                       </span>
                       <span className="message-contact-fields">
                         <span className="message-contact-name">{card.name || label}</span>
-                        {card.phone ? <span className="message-contact-phone">{card.phone}</span> : null}
+                        {card.phone ? (
+                          <span className="message-contact-phone">
+                            <bdi dir="ltr">{card.phone}</bdi>
+                          </span>
+                        ) : null}
                       </span>
                     </div>
                   ))}
