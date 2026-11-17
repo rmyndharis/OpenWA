@@ -32,6 +32,8 @@ describe('contact operations distinguish a dead page from an ordinary failure', 
       saveOrEditAddressbookContact: jest.fn().mockRejectedValue(reject),
       deleteAddressbookContact: jest.fn().mockRejectedValue(reject),
       getContactById: jest.fn().mockResolvedValue(contact),
+      // The privacy id a block or unblock is looked up by first; WhatsApp holds one for this number.
+      getContactLidAndPhone: jest.fn().mockResolvedValue([{ lid: '100000000000001@lid', pn: '628123@c.us' }]),
     };
     const reportIfPageTransportError = jest.fn();
     const host = {

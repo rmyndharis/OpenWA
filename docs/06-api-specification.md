@@ -2957,7 +2957,7 @@ This route is annotated `@HttpCode(200)`, so it returns `200` rather than the PO
 { "success": true, "message": "Contact blocked" }
 ```
 
-**Errors:** `400` session is not started, or the id does not name an individual (group/newsletter/broadcast/free text are refused on both engines; a phone-based or privacy `@lid` id is accepted, because the blocklist read answers both shapes), or, on Baileys, an id the session cannot map between phone and privacy-id form (a `@lid` with no known phone, a phone-based id with no known `@lid`) · `401` missing/invalid API key · `403` key role below OPERATOR · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
+**Errors:** `400` session is not started, or the id does not name an individual (group/newsletter/broadcast/free text are refused on both engines; a phone-based or privacy `@lid` id is accepted, because the blocklist read answers both shapes), or, on Baileys, an id the session cannot map between phone and privacy-id form (a `@lid` with no known phone, a phone-based id with no known `@lid`), or, on whatsapp-web.js, a number WhatsApp holds no privacy id for (the engine asks WhatsApp for it first, so a number the session never talked to can be blocked) · `401` missing/invalid API key · `403` key role below OPERATOR · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
 
 #### DELETE /api/sessions/:sessionId/contacts/:contactId/block
 
@@ -2982,7 +2982,7 @@ No `@HttpCode` override is present, so this DELETE returns the NestJS default `2
 { "success": true, "message": "Contact unblocked" }
 ```
 
-**Errors:** `400` session is not started, or the id does not name an individual (group/newsletter/broadcast/free text are refused on both engines; a phone-based or privacy `@lid` id is accepted, because the blocklist read answers both shapes), or, on Baileys, a phone-based id the session cannot map to its `@lid` · `401` missing/invalid API key · `403` key role below OPERATOR · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
+**Errors:** `400` session is not started, or the id does not name an individual (group/newsletter/broadcast/free text are refused on both engines; a phone-based or privacy `@lid` id is accepted, because the blocklist read answers both shapes), or, on Baileys, a phone-based id the session cannot map to its `@lid`, or, on whatsapp-web.js, a number WhatsApp holds no privacy id for (the engine asks WhatsApp for it first) · `401` missing/invalid API key · `403` key role below OPERATOR · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
 
 ### 6.4.4 Groups
 

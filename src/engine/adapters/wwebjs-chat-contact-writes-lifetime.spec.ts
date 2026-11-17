@@ -53,7 +53,12 @@ function fixture() {
     await gate.promise;
     return target;
   };
-  const client = { getChatById: jest.fn(held), getContactById: jest.fn(held) };
+  const client = {
+    getChatById: jest.fn(held),
+    getContactById: jest.fn(held),
+    // Answered at once: the lookup these tests hold is the one of the object the write runs on.
+    getContactLidAndPhone: jest.fn().mockResolvedValue([{ lid: '100000000000001@lid' }]),
+  };
   let ready = true;
   const host = {
     ensureReady() {

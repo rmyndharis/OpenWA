@@ -760,19 +760,19 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 
 **Contacts & numbers** (11)
 
-| Library method                 | OpenWA exposure                                                  |
-| ------------------------------ | ---------------------------------------------------------------- |
-| `deleteAddressbookContact`     | ✅ `deleteContact`                                               |
-| `getBlockedContacts`           | ✅ `getBlockedContacts`                                          |
-| `getContactById`               | ✅ `getContactById`, `blockContact`, `unblockContact`            |
-| `getContactDeviceCount`        | ❌ **not exposed**                                               |
-| `getContactLidAndPhone`        | ✅ `resolveContactPhone`, `getNumberId`, `getContactLid`         |
-| `getContacts`                  | ⚙️ read via a direct page walk, not `Client.getContacts` (#1501) |
-| `getCountryCode`               | ❌ **not exposed**                                               |
-| `getFormattedNumber`           | ❌ **not exposed**                                               |
-| `getNumberId`                  | ✅ `checkNumberExists`, `getNumberId`                            |
-| `isRegisteredUser`             | ❌ **not exposed**                                               |
-| `saveOrEditAddressbookContact` | ✅ `upsertContact`                                               |
+| Library method                 | OpenWA exposure                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------ |
+| `deleteAddressbookContact`     | ✅ `deleteContact`                                                                         |
+| `getBlockedContacts`           | ✅ `getBlockedContacts`                                                                    |
+| `getContactById`               | ✅ `getContactById`, `blockContact`, `unblockContact`                                      |
+| `getContactDeviceCount`        | ❌ **not exposed**                                                                         |
+| `getContactLidAndPhone`        | ✅ `resolveContactPhone`, `getNumberId`, `getContactLid`, `blockContact`, `unblockContact` |
+| `getContacts`                  | ⚙️ read via a direct page walk, not `Client.getContacts` (#1501)                           |
+| `getCountryCode`               | ❌ **not exposed**                                                                         |
+| `getFormattedNumber`           | ❌ **not exposed**                                                                         |
+| `getNumberId`                  | ✅ `checkNumberExists`, `getNumberId`                                                      |
+| `isRegisteredUser`             | ❌ **not exposed**                                                                         |
+| `saveOrEditAddressbookContact` | ✅ `upsertContact`                                                                         |
 
 **Business** (2)
 

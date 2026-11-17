@@ -10590,7 +10590,10 @@ describe('WhatsAppWebJsAdapter per-action log lines', () => {
     ],
     [
       'blockContact',
-      () => ({ getContactById: jest.fn().mockResolvedValue({ block: jest.fn().mockResolvedValue(true) }) }),
+      () => ({
+        getContactLidAndPhone: jest.fn().mockResolvedValue([{ lid: '100000000000001@lid' }]),
+        getContactById: jest.fn().mockResolvedValue({ block: jest.fn().mockResolvedValue(true) }),
+      }),
       a => a.blockContact(CHAT),
       '628123',
       'Blocked contact',
