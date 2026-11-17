@@ -18,6 +18,7 @@ import { useToast } from '../../hooks/useToast';
 import { formatPhoneForDisplay, isolateNumber } from '../../utils/formatPhone';
 import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
 import { normalizePhoneDigits } from '../../utils/phone';
+import { onTabListKeyDown } from '../../utils/tabKeys';
 import ChatAvatar from './ChatAvatar';
 
 // The gateway's caps (CreateGroupDto / GroupDescriptionDto).
@@ -181,13 +182,14 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   const sessionName = session.name;
   const subheader = (
     <div className="group-info-toolbar">
-      <div className="chats-tabs" role="tablist">
+      <div className="chats-tabs" role="tablist" onKeyDown={onTabListKeyDown}>
         {(['info', 'participants'] as const).map(id => (
           <button
             key={id}
             type="button"
             role="tab"
             aria-selected={tab === id}
+            tabIndex={tab === id ? 0 : -1}
             className={`chats-tab ${tab === id ? 'active' : ''}`}
             onClick={() => setTab(id)}
           >

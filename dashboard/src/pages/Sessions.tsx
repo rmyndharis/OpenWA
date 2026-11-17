@@ -55,6 +55,7 @@ import './Sessions.css';
 import { formatLastActive, formatSessionStatus } from '../utils/sessionDisplay';
 import { normalizePhoneText } from '../utils/phone';
 import { isComposingKey } from '../utils/composition';
+import { onTabListKeyDown } from '../utils/tabKeys';
 
 /**
  * The hover title for a restriction: the engine's own cause token, plus when enforcement ends if
@@ -906,10 +907,11 @@ export function Sessions() {
         >
           <div style={{ textAlign: 'center' }}>
             {!pairingCode && (
-              <div className="pairing-tabs" role="tablist">
+              <div className="pairing-tabs" role="tablist" onKeyDown={onTabListKeyDown}>
                 <button
                   role="tab"
                   aria-selected={!pairingMode}
+                  tabIndex={!pairingMode ? 0 : -1}
                   className={`pairing-tab-btn ${!pairingMode ? 'active' : ''}`}
                   onClick={() => selectPairingTab(false)}
                 >
@@ -918,6 +920,7 @@ export function Sessions() {
                 <button
                   role="tab"
                   aria-selected={pairingMode}
+                  tabIndex={pairingMode ? 0 : -1}
                   className={`pairing-tab-btn ${pairingMode ? 'active' : ''}`}
                   onClick={() => selectPairingTab(true)}
                 >
