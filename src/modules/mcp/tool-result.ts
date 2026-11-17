@@ -11,20 +11,59 @@ const logger = createLogger('Mcp');
  * machine and tells the model just the path, so the model sees the data only if it has a file tool and a
  * client that forwards text alone shows none. An ordinary page of rows (a few dozen sessions, chats or
  * messages) therefore has to fit under this; only a payload past it is offloaded, to keep the context compact.
+ * An operator who serves clients that cannot take a blob can set `MCP_MAX_RESULT_BYTES`, which turns the offload
+ * off and returns every result as text, cut at that size (see {@link smartToolResult}); unset, this is all there is.
  */
 export const INLINE_RESULT_MAX_BYTES = 32 * 1024;
 
 /**
- * Format a tool result, inlining payloads up to {@link INLINE_RESULT_MAX_BYTES} as text and offloading
- * larger ones to an embedded base64 resource so the response stays compact.
+ * The opt-in cap on a result, from `MCP_MAX_RESULT_BYTES`: a positive decimal integer in UTF-8 bytes. Unset, blank,
+ * `0` or anything else reads as 0, no cap, which is the behaviour before the knob existed. Boot validation rejects
+ * a malformed value, so the lenient read only covers a process that skipped it.
  */
-export function smartToolResult(data: string | object | object[]): CallToolResult {
+export function readMaxResultBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env['MCP_MAX_RESULT_BYTES']?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return 0;
+  const bytes = Number(raw);
+  return Number.isSafeInteger(bytes) ? bytes : 0;
+}
+
+/** The end of the longest prefix of `bytes` that is at most `max` bytes and does not end inside a UTF-8 character. */
+function utf8SafeEnd(bytes: Buffer, max: number): number {
+  let end = max;
+  // A continuation byte (10xxxxxx) at the cut means the character that owns it started before the cut.
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+  return end;
+}
+
+/**
+ * Format a tool result.
+ *
+ * With `maxResultBytes` above 0 (the operator's `MCP_MAX_RESULT_BYTES`), the result is always ONE text item, for the
+ * clients that put a whole result in the model's context (claude.ai, ChatGPT) and fail past a size: a payload at or
+ * under the cap whole, a larger one as its first `maxResultBytes` bytes, cut at a character boundary, and a note
+ * with the full size. Nothing is offloaded, because the blob is the same data in base64: a third larger, so a
+ * payload under the cap could still pass the size the cap was set for, and unreadable to a client that shows the
+ * model text alone.
+ *
+ * Without a cap, a payload up to {@link INLINE_RESULT_MAX_BYTES} is inlined as text and a larger one is offloaded
+ * to an embedded base64 resource so the response stays compact.
+ */
+export function smartToolResult(data: string | object | object[], maxResultBytes = 0): CallToolResult {
   // JSON.stringify(undefined) is undefined, not a string — a handler that resolves void would turn
   // a completed write into a thrown TypeError here, reported to the agent as a failure it retries.
   const text = typeof data === 'string' ? data : (JSON.stringify(data) ?? 'null');
   const mimeType = typeof data === 'string' ? 'text/plain' : 'application/json';
   const ext = typeof data === 'string' ? 'txt' : 'json';
   const buffer = Buffer.from(text);
+  if (maxResultBytes > 0) {
+    if (buffer.byteLength <= maxResultBytes) return { content: [{ type: 'text', text }] };
+    const head = buffer.subarray(0, utf8SafeEnd(buffer, maxResultBytes)).toString('utf8');
+    const note =
+      `\n…[truncated: ${buffer.byteLength} bytes in all; ` +
+      'narrow the request, with limit and offset where the tool takes them, to see the rest]';
+    return { content: [{ type: 'text', text: head + note }] };
+  }
   if (buffer.byteLength > INLINE_RESULT_MAX_BYTES) {
     const uri = `mcp://toolResult/${randomUUID()}.${ext}`;
     return {
