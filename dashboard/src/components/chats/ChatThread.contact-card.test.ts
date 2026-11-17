@@ -1,7 +1,9 @@
-// Render tests for a shared contact in the chat thread. The number on a card and in a quote of one is the number a
-// reader copies to dial: its plus sign and the spaces between its digit groups are neutral to the bidi algorithm, so
-// left to the direction of the page, or of an Arabic or Hebrew name before it, it is drawn with the plus at the wrong
-// end and the groups in reverse order. Every other number the chat page draws is kept one left-to-right run.
+// Render tests for a shared contact in the chat thread: one card per contact with its name and phone and never the
+// vCard text, a card for a contact the gateway sent, and a quote of a contact that names it. The number on a card and in
+// a quote of one is the number a reader copies to dial: its plus sign and the spaces between its digit groups are
+// neutral to the bidi algorithm, so left to the direction of the page, or of an Arabic or Hebrew name before it, it is
+// drawn with the plus at the wrong end and the groups in reverse order. Every other number the chat page draws is kept
+// one left-to-right run.
 import '../../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -92,6 +94,94 @@ function renderThread(messages: ChatMessageView[], dir: 'ltr' | 'rtl' = 'ltr'): 
     ),
   ).container;
 }
+
+const ANA = vcard('Ana', '+54 9 11 1111-1111');
+const BUDI = vcard('Budi', '+62 812-3456-789');
+
+test('a shared contact shows as a card with its name and phone, and the vCard text is not printed', () => {
+  const container = renderThread([message({ body: ANA })]);
+  const cards = [...container.querySelectorAll('.message-contact-card')];
+  assert.equal(cards.length, 1, 'the contact drew no card');
+  assert.equal(cards[0].querySelector('.message-contact-name')?.textContent, 'Ana');
+  assert.equal(cards[0].querySelector('.message-contact-phone')?.textContent, '+54 9 11 1111-1111');
+  assert.equal(container.querySelector('.message-contact')?.getAttribute('aria-label'), 'Contact');
+  // The body of a contact is the card, not a message to read: no text bubble carries it.
+  assert.ok(container.querySelector('.message-text') === null, 'the vCard is printed as a message');
+  assert.equal(container.textContent?.includes('BEGIN:VCARD'), false);
+});
+
+test('several contacts shared together show one card each, in the order they were shared', () => {
+  const container = renderThread([message({ body: `${ANA}\n${BUDI}` })]);
+  const cards = [...container.querySelectorAll('.message-contact-card')];
+  assert.deepEqual(
+    cards.map(card => [
+      card.querySelector('.message-contact-name')?.textContent,
+      card.querySelector('.message-contact-phone')?.textContent,
+    ]),
+    [
+      ['Ana', '+54 9 11 1111-1111'],
+      ['Budi', '+62 812-3456-789'],
+    ],
+  );
+  assert.equal(container.textContent?.includes('BEGIN:VCARD'), false);
+});
+
+test('a contact the gateway sent is a card named by its stored body, with no phone', () => {
+  const container = renderThread([message({ direction: 'outgoing', body: '\u{1F4C7} Carol Jones' })]);
+  assert.equal(container.querySelectorAll('.message-contact-card').length, 1);
+  assert.equal(container.querySelector('.message-contact-name')?.textContent, 'Carol Jones');
+  assert.ok(container.querySelector('.message-contact-phone') === null, 'a contact with no phone drew a phone line');
+  assert.ok(container.querySelector('.message-text') === null, 'the stored body is printed as a message');
+});
+
+test('a contact whose card holds no name or phone still draws a card, labelled Contact', () => {
+  for (const body of ['BEGIN:VCARD\nEND:VCARD', '']) {
+    const container = renderThread([message({ body })]);
+    const names = [...container.querySelectorAll('.message-contact-name')];
+    assert.deepEqual(
+      names.map(name => name.textContent),
+      ['Contact'],
+      `a contact with the body ${JSON.stringify(body)} drew no card`,
+    );
+    assert.ok(container.querySelector('.message-contact-phone') === null, 'a contact with no phone drew a phone line');
+    rtl.cleanup();
+  }
+});
+
+test('a quote of a shared contact names the contact, a quote of anything else is shown as written', () => {
+  const quoted = (body: string) => ({ id: 'wamid.0', body });
+  const container = renderThread([
+    message({
+      id: 'q-1',
+      waMessageId: 'wamid.q1',
+      type: 'text',
+      body: 'who is this?',
+      metadata: { quotedMessage: quoted(ANA) },
+    }),
+    message({
+      id: 'q-2',
+      waMessageId: 'wamid.q2',
+      type: 'text',
+      body: 'and this?',
+      metadata: { quotedMessage: quoted('FN:Mallory TEL:+1 555 000 0000') },
+    }),
+  ]);
+  const quotes = [...container.querySelectorAll('.quote-body')].map(quote => quote.textContent);
+  assert.equal(quotes[0], `Ana \u00B7 ${isolateNumber('+54 9 11 1111-1111')}`);
+  assert.equal(quotes[1], 'FN:Mallory TEL:+1 555 000 0000');
+});
+
+// A contact named by its own number (a card from an unsaved contact, or a send-contact with a number as its name) has
+// no strong character, so in a right-to-left page it is laid out by the page unless its box takes its own direction.
+// jsdom has no layout, so the stylesheet rule that does is read as text (Chats.css.card-text-direction.test.ts pins it);
+// what the page can pin is that the name is one text node and keeps its title.
+test('a contact named by its own number draws it whole as the name, above the phone, in a right-to-left page', () => {
+  const container = renderThread([message({ body: vcard(PHONE, PHONE) })], 'rtl');
+  const name = container.querySelector('.message-contact-name');
+  assert.equal(name?.textContent, PHONE);
+  assert.equal(name?.getAttribute('title'), PHONE);
+  assert.equal(container.querySelector('.message-contact-phone bdi[dir="ltr"]')?.textContent, PHONE);
+});
 
 test('the phone on a shared contact card is one left-to-right run in a right-to-left page', () => {
   // A number typed without spaces reverses as much as one with them, and the name beside it changes nothing.
