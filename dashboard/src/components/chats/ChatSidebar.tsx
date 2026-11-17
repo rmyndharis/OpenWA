@@ -20,6 +20,7 @@ import type { Channel, Chat, ContactStatusGroup, Session } from '../../services/
 import { useRole } from '../../hooks/useRole';
 import { CHAT_LIST_FILTERS, type ChatListFilter } from '../../utils/chatFilters';
 import { chatTitle } from '../../utils/formatPhone';
+import { contactSnippet, isVCardBody } from '../../utils/vcard';
 import ChatAvatar from './ChatAvatar';
 import SessionPicker from './SessionPicker';
 import ChatRowMenu from './ChatRowMenu';
@@ -109,7 +110,11 @@ const ChatListRow = memo(
   }: ChatListRowProps) {
     const { t } = useTranslation();
     const onOpenChange = useCallback((open: boolean) => onMenuOpenChange(chat.id, open), [onMenuOpenChange, chat.id]);
-    const snippet = chat.lastMessage || '';
+    // Contact shares store the raw vCard in lastMessage; show name/phone (or a label) instead.
+    const snippet =
+      chat.lastMessageType === 'contact' || isVCardBody(chat.lastMessage)
+        ? contactSnippet(chat.lastMessage, `👤 ${t('chats.media.contact')}`)
+        : chat.lastMessage || '';
     const card = (
       <div
         role="button"
