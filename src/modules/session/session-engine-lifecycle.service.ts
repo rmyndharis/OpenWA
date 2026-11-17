@@ -337,7 +337,7 @@ export class SessionEngineLifecycle {
     private readonly sessionRepository: Repository<Session>,
     @InjectDataSource('data')
     private readonly dataSource: DataSource,
-    // messageRepository is NOT injected here (it is a dead dep in SessionService too): delete()'s
+    // messageRepository is NOT injected here (SessionService keeps its own): delete()'s
     // cascade goes through the transaction manager (manager.delete), never the repository.
     private readonly engineFactory: EngineFactory,
     private readonly engineRegistry: EngineRegistry,
@@ -803,7 +803,7 @@ export class SessionEngineLifecycle {
       return;
     }
 
-    // The 17-callback table moved to SessionEngineEventWiring (session-engine-event-wiring.ts):
+    // The callback table moved to SessionEngineEventWiring (session-engine-event-wiring.ts):
     // per-callback liveness gating (five callbacks are deliberately UNGATED), every nested call's
     // order, and the synchronous one-shot stuck-auth claim are preserved there, reaching the
     // lifecycle's live methods/state through the wiringHost built in the constructor.
