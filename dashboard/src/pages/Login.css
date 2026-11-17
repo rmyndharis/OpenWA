@@ -74,7 +74,9 @@
 
 .login-container .login-language:focus-within {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 .login-container .login-form {
@@ -113,17 +115,23 @@
 .login-container .input-wrapper input:focus {
   outline: none;
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 .login-container .input-wrapper input.error {
   border-color: var(--error);
 }
 
-/* The red border keeps showing the error while the field is focused, so the focus cue is a ring beside it. */
+/* The red border keeps showing the error while the field is focused, so the focus cue is a ring beside it, and the
+   1px ring that touches the border stays red too. */
 .login-container .input-wrapper input.error:focus {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+  box-shadow:
+    0 0 0 1px var(--error),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 .login-container .toggle-visibility {

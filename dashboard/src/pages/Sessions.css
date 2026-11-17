@@ -48,7 +48,9 @@
 
 .sessions-page .search-input:focus-within {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px var(--primary-soft);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px var(--primary-soft);
 }
 
 .sessions-page .filter-group {
@@ -389,7 +391,9 @@
   outline: none;
   border-color: var(--focus-ring);
   background: var(--bg-white);
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(34, 197, 94, 0.1);
 }
 
 .sessions-page .modal-body input::placeholder {
@@ -932,7 +936,11 @@
   box-sizing: border-box;
 }
 
-/* The rule above repaints the border over `.sessions-page .modal-body input:focus` at the same weight. */
+/* The rule above repaints the border over `.sessions-page .modal-body input:focus` at the same weight, and its
+   box-shadow replaces that rule's, so it restates the glow. */
 .sessions-page .proxy-form-section input[type='text']:focus {
   border-color: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(34, 197, 94, 0.1);
 }

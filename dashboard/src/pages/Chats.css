@@ -605,7 +605,9 @@
 
 .chats-page .chat-search-input:focus-within {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
 .chats-page .chat-search-input input {
@@ -1198,7 +1200,9 @@
 
 .chats-page .chat-dialog-form input:focus {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
 .chats-page .chat-dialog-form .text-muted {
@@ -1348,7 +1352,9 @@
 .chats-page .group-info-field textarea:focus,
 .chats-page .group-info-add input:focus {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
 .chats-page .group-info-field input:disabled,
@@ -1599,6 +1605,7 @@
 
 .chats-page .new-group-name:focus {
   border-bottom-color: var(--focus-ring);
+  box-shadow: 0 0 0 1px var(--focus-ring);
 }
 
 .chats-page .new-group-name::placeholder {
@@ -3151,7 +3158,9 @@
 
 .chats-page .message-input-pill:focus-within {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
 .chats-page .message-input-pill .message-text-input {
@@ -3500,7 +3509,9 @@
 .chats-page .status-compose-modal select:focus {
   border-color: var(--focus-ring);
   background-color: var(--bg-white);
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(34, 197, 94, 0.1);
 }
 
 .chats-page .status-compose-modal textarea {
@@ -3528,9 +3539,13 @@
   box-sizing: border-box;
 }
 
-/* The rule above repaints the border over `input:focus` at the same weight, so a focused color input needs its own. */
+/* The rule above repaints the border over `input:focus` at the same weight, so a focused color input needs its own,
+   with the ring and glow that rule draws. */
 .chats-page .status-compose-modal input[type='color']:focus {
   border-color: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(34, 197, 94, 0.1);
 }
 
 .chats-page .status-compose-modal input[type='file'] {

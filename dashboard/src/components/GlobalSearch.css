@@ -22,7 +22,9 @@
 .global-search-input:focus {
   outline: none;
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 2px var(--primary-soft);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 2px var(--primary-soft);
 }
 
 .global-search-scope {

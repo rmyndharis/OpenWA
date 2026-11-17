@@ -53,9 +53,13 @@
   width: 100%;
 }
 
-/* The border above outweighs the global select:focus one, which also switches the outline off. */
+/* The border above outweighs the global select:focus one, which also switches the outline off. The box-shadow
+   replaces the global one, so it restates that one's glow. */
 .filter-row select:focus {
   border-color: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 /* From 601px wide enough, with the padding above, for the longest field and operator label in every shipped
@@ -177,9 +181,13 @@
   font-size: 0.8125rem;
 }
 
-/* Same weight as `.modal-body input:focus`, which switches the outline off, and later, so its border would win. */
+/* Same weight as `.modal-body input:focus`, which switches the outline off, and later, so its border would win. The
+   box-shadow replaces that rule's, so it restates its glow. */
 .filter-text input[type='text']:focus {
   border-color: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 .filter-case {
@@ -280,6 +288,9 @@
 
 .chips-row .chips-text:focus {
   border-color: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 /* keep the yes/no select compact rather than filling the value column */

@@ -377,7 +377,9 @@
   outline: none;
   border-color: var(--focus-ring);
   background-color: var(--bg-white);
-  box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 /* Nested object — a bordered group of sub-fields. */
@@ -1062,9 +1064,13 @@
   box-sizing: border-box;
 }
 
-/* The rule above out-weighs `select:focus` in index.css and repaints its border. */
+/* The rule above out-weighs `select:focus` in index.css and repaints its border. The box-shadow replaces that rule's,
+   so it restates its glow. */
 .plugins-page .sessions-select:focus {
   border-color: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
 .plugins-page .sessions-override-actions {
@@ -1111,7 +1117,9 @@
 
 .plugins-page .catalog-search:focus-within {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px var(--primary-soft);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px var(--primary-soft);
 }
 
 .plugins-page .catalog-list {
