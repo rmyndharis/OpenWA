@@ -5279,7 +5279,6 @@ test('a confirmed image send leaves the media viewer on the other image it shows
   assert.equal(viewerSlideSrc(), 'http://localhost/media/a.png', 'the viewer left its image when a send was confirmed');
 });
 
-<<<<<<< HEAD
 test('a deleted or empty channel entry renders no bubble alongside visible channel posts', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   engineType = 'whatsapp-web.js';
