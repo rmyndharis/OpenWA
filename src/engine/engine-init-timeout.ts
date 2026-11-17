@@ -14,7 +14,7 @@
  * (e.g. WSL2 or low-resource containers) the default 30s `authTimeoutMs` can expire before WhatsApp
  * Web finishes loading, aborting QR generation. Set WWEBJS_AUTH_TIMEOUT_MS to a larger value in
  * milliseconds (e.g. 120000) to extend it. Unset, or a value that is not a positive safe integer,
- * keeps the whatsapp-web.js default (30000ms).
+ * keeps the whatsapp-web.js default (30000ms). A value above what a Node timer holds is capped at it.
  */
 export function resolveAuthTimeoutMs(): number | undefined {
   const raw = process.env.WWEBJS_AUTH_TIMEOUT_MS?.trim();
@@ -22,9 +22,12 @@ export function resolveAuthTimeoutMs(): number | undefined {
     return undefined;
   }
   const ms = Number(raw);
-  // Number.isSafeInteger rejects Infinity (from huge digit strings) and >2^53 unsafe integers — both
-  // pass the /^\d+$/ shape check but would make whatsapp-web.js's inject loop wait effectively forever.
-  return Number.isSafeInteger(ms) && ms > 0 ? ms : undefined;
+  // Number.isSafeInteger rejects Infinity (from huge digit strings) and integers above 2^53: both pass the
+  // /^\d+$/ shape check, but neither is a duration a timer can hold, so they keep the default like any non-number.
+  // A safe integer above the largest delay a Node timer holds is capped there: since 1.34.8 the library waits for
+  // WhatsApp Web with a Puppeteer timeout of this value, and above the cap setTimeout fires after 1 ms, failing every
+  // start at once.
+  return Number.isSafeInteger(ms) && ms > 0 ? Math.min(ms, 2_147_483_647) : undefined;
 }
 
 /**

@@ -3979,11 +3979,11 @@ describe('resolveAuthTimeoutMs (#353 — configurable first-boot init wait)', ()
   });
 
   // The outer init deadline is a setTimeout, and Node fires any delay above 2^31-1 after 1 ms: every
-  // start on either engine was then a 504. whatsapp-web.js times its own wait with Date.now, so the
-  // auth value itself is kept.
+  // start on either engine was then a 504. The auth value handed to whatsapp-web.js is held to the same limit,
+  // since the library arms a Puppeteer timer with it (see auth-timeout-timer-ceiling.spec.ts).
   it('keeps the derived init deadline within what a Node timer can hold', () => {
     process.env.WWEBJS_AUTH_TIMEOUT_MS = '3000000000';
-    expect(resolveAuthTimeoutMs()).toBe(3000000000);
+    expect(resolveAuthTimeoutMs()).toBe(2_147_483_647);
     expect(resolveEngineInitTimeoutMs()).toBe(2_147_483_647);
     process.env.WWEBJS_AUTH_TIMEOUT_MS = '600000';
     expect(resolveEngineInitTimeoutMs()).toBe(630000);
