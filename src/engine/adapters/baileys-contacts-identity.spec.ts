@@ -85,6 +85,7 @@ describe.each(['stored read', 'next key'] as const)('Read receipt identity after
       findPersistedLidPhone: () => Promise.resolve(null),
       recordLidMapping,
       toEngineJid: (jid: string) => jid.replace('@c.us', '@s.whatsapp.net'),
+      lastInboundMessage: () => null,
       isMarkedUnread: () => false,
       clearUnread: () => undefined,
     } as unknown as BaileysContactsHost;

@@ -85,8 +85,74 @@ describe('sendSeen', () => {
     const clearUnread = jest.fn();
     const host = makeHost({ getSocket: () => ({ readMessages, chatModify }) as unknown as WASocket, clearUnread });
     await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
-    expect(clearUnread).toHaveBeenCalledWith('628123@c.us');
+    expect(clearUnread).toHaveBeenCalledWith('628123@c.us', false);
     expect(chatModify).not.toHaveBeenCalled();
+  });
+
+  describe('a read that does not reach the newest message received', () => {
+    /** A host that counts the resets and the marks undone on a socket whose receipt is confirmed. */
+    const reading = (overrides: Partial<Record<keyof BaileysContactsHost, unknown>> = {}) => {
+      const readMessages = jest.fn().mockResolvedValue(undefined);
+      const chatModify = jest.fn().mockResolvedValue(undefined);
+      const clearUnread = jest.fn();
+      const host = makeHost({
+        getSocket: () => ({ readMessages, chatModify }) as unknown as WASocket,
+        isMarkedUnread: () => true,
+        clearUnread,
+        ...overrides,
+      });
+      return { host, readMessages, chatModify, clearUnread };
+    };
+
+    it('keeps the count for a message that arrived while the receipt was on its way', async () => {
+      let newest = LAST.key;
+      const { host, readMessages, chatModify, clearUnread } = reading({
+        lastInboundMessage: () => ({ key: newest, timestamp: LAST.timestamp }),
+      });
+      readMessages.mockImplementation(() => {
+        newest = { id: 'M2', remoteJid: LAST.jid };
+        return Promise.resolve();
+      });
+      await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+      expect(readMessages).toHaveBeenCalledWith([LAST.key]);
+      expect(clearUnread).not.toHaveBeenCalled();
+      expect(chatModify).not.toHaveBeenCalled();
+    });
+
+    it('keeps the count when the caller names an older message of a burst', async () => {
+      const { host, readMessages, chatModify, clearUnread } = reading();
+      await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', ['M0'])).resolves.toBe(true);
+      expect(readMessages).toHaveBeenCalledWith([{ remoteJid: LAST.jid, id: 'M0', fromMe: false }]);
+      expect(clearUnread).not.toHaveBeenCalled();
+      expect(chatModify).not.toHaveBeenCalled();
+    });
+
+    it('resets the count when the ids named include the newest', async () => {
+      const { host, clearUnread } = reading({ isMarkedUnread: () => false });
+      await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', ['M0', 'M1'])).resolves.toBe(true);
+      expect(clearUnread).toHaveBeenCalledWith('628123@c.us', false);
+    });
+
+    // Baileys leaves the account's own keys out of a receipt, so nothing was read. After a restart the
+    // newest received message is not known, and such a call must not pass for a read either.
+    it.each([
+      ['knows the newest message', () => ({ key: LAST.key, timestamp: LAST.timestamp })],
+      ['holds no received message', () => null],
+    ])("keeps the count for a read of the account's own messages when memory %s", async (_case, lastInbound) => {
+      const { host, clearUnread, chatModify } = reading({
+        lastInboundMessage: lastInbound,
+        getStoredMessages: () => Promise.resolve([stored({ id: 'O1', remoteJid: LAST.jid, fromMe: true })]),
+      });
+      await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', ['O1'])).resolves.toBe(true);
+      expect(clearUnread).not.toHaveBeenCalled();
+      expect(chatModify).not.toHaveBeenCalled();
+    });
+
+    it('takes a received id for the read while memory holds no received message', async () => {
+      const { host, clearUnread } = reading({ lastInboundMessage: () => null, isMarkedUnread: () => false });
+      await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', ['M9'])).resolves.toBe(true);
+      expect(clearUnread).toHaveBeenCalledWith('628123@c.us', false);
+    });
   });
 
   it('leaves the unread count alone when the receipt was not confirmed', async () => {
@@ -112,8 +178,11 @@ describe('sendSeen', () => {
 
     it('undoes the mark in the app state after the receipt, the half markUnread writes the other way', async () => {
       const chatModify = jest.fn().mockResolvedValue(undefined);
-      const { host, readMessages } = marked(chatModify);
+      const clearUnread = jest.fn();
+      const { host, readMessages } = marked(chatModify, { clearUnread });
       await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+      // Confirmed, so the mark goes from every record of the chat, not only the one the write was keyed to.
+      expect(clearUnread).toHaveBeenCalledWith('628123@c.us', true);
       expect(readMessages).toHaveBeenCalled();
       expect(chatModify).toHaveBeenCalledWith(
         {
@@ -130,9 +199,12 @@ describe('sendSeen', () => {
       ['WhatsApp never confirms', () => jest.fn(never)],
       ['WhatsApp refuses', () => jest.fn().mockRejectedValue(new Error('App state key not present!'))],
     ])('answers true and logs the mark that %s', async (_case, failing) => {
-      const { host, readMessages, warn } = marked(failing());
+      const clearUnread = jest.fn();
+      const { host, readMessages, warn } = marked(failing(), { clearUnread });
       await expect(new BaileysContacts(host, 15).sendSeen('628123@c.us')).resolves.toBe(true);
       expect(readMessages).toHaveBeenCalled();
+      // The count is reset, the mark is kept: the account's other devices still show it.
+      expect(clearUnread).toHaveBeenCalledWith('628123@c.us', false);
       expect(warn).toHaveBeenCalledWith(
         'Sent the read receipt of a chat but could not undo its unread mark',
         expect.objectContaining({ chatId: '628123@c.us' }),
@@ -166,6 +238,7 @@ describe('sendSeen', () => {
       const chatModify = jest.fn().mockResolvedValue(undefined);
       const { host, readMessages } = marked(chatModify, {
         lastMessage: () => null,
+        lastInboundMessage: () => null,
         listChats: () => [{ id: '628123@c.us' }],
       });
       await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', ['M9'])).resolves.toBe(true);

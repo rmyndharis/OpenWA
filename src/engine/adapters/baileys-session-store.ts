@@ -1050,12 +1050,14 @@ export class BaileysSessionStore {
    * The session read the chat: its count of unread messages goes back to zero under every record the
    * chat is filed as. Baileys raises the count with each message received and lowers it for no receipt
    * this session sends, so a chat read through the gateway stayed listed as unread. A mark set by hand
-   * (see {@link isMarkedUnread}) is not a count and is left alone: only the write that undoes it clears it.
+   * (see {@link isMarkedUnread}) is not a count and is left alone unless `marks` says the write that undoes
+   * it was confirmed: Baileys then clears it on the record that write was keyed to, and a twin record that
+   * kept it would have every later read undo the mark again.
    */
-  clearUnread(chatId: string): void {
+  clearUnread(chatId: string, marks = false): void {
     for (const key of new Set(this.chatTwins(chatId))) {
       const chat = this.chats.get(key);
-      if (chat?.unreadCount && chat.unreadCount > 0) this.chats.set(key, { ...chat, unreadCount: 0 });
+      if (chat?.unreadCount && (marks || chat.unreadCount > 0)) this.chats.set(key, { ...chat, unreadCount: 0 });
     }
   }
 
