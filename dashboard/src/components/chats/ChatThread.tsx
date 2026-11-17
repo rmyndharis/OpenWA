@@ -19,6 +19,8 @@ import {
   ChevronDown,
   Clock,
   CornerUpLeft,
+  Download,
+  FileText,
   Loader2,
   MessageSquare,
   Smile,
@@ -36,6 +38,7 @@ import {
   type ChatMessageView,
 } from '../../utils/chatMessages';
 import { contactCards, contactSnippet, isVCardBody } from '../../utils/vcard';
+import { formatFileSize } from '../../utils/bulkMedia';
 import { shouldFetchOlderMessages } from '../../utils/scrollDecision';
 import { keepsSameKey } from '../../utils/authLifecycle';
 import { retryThrottled } from '../../utils/fetchAllPages';
@@ -279,6 +282,7 @@ function ChatThread({
   const [buttonClick, setButtonClick] = useState<
     Record<string, { loadingId?: string; done?: boolean; selectedId?: string }>
   >({});
+
   const downloadMedia = useCallback(
     async (message: ChatMessageView) => {
       const messageId = message.waMessageId;
@@ -627,6 +631,34 @@ function ChatThread({
               );
             }
             if (!mediaInfo) return null;
+            const isPdf =
+              mediaInfo.mimetype === 'application/pdf' ||
+              Boolean(mediaInfo.filename && /\.pdf$/i.test(mediaInfo.filename));
+            // What a document is called and how large it is; a click on the card downloads it.
+            const documentMeta = [mediaInfo.sizeBytes ? formatFileSize(mediaInfo.sizeBytes) : '', isPdf ? 'PDF' : '']
+              .filter(Boolean)
+              .join(' \u2022 ');
+            const documentCard = (
+              <span className="chat-document-card-content">
+                <span className={`chat-document-icon-box ${isPdf ? 'pdf' : ''}`}>
+                  {isPdf ? (
+                    <span className="chat-document-pdf-badge">
+                      <FileText size={18} />
+                      <span className="chat-document-pdf-tag">PDF</span>
+                    </span>
+                  ) : (
+                    <FileText size={18} />
+                  )}
+                </span>
+                <span className="chat-document-info">
+                  <span className="chat-document-title">{mediaInfo.filename || t('chats.downloadDocument')}</span>
+                  {documentMeta && <span className="chat-document-meta">{documentMeta}</span>}
+                </span>
+                <span className="chat-document-action">
+                  <Download size={16} />
+                </span>
+              </span>
+            );
             if (mediaInfo.omitted) {
               // Not a plain label: the bytes exist behind the per-message media route, so this is the
               // only handle the viewer has on them.
@@ -634,14 +666,18 @@ function ChatThread({
               const downloadButton = (
                 <button
                   type="button"
-                  className="message-media-omitted"
+                  className={`message-media-omitted ${msg.type === 'document' ? 'chat-document-card' : ''}`}
                   onClick={() => void downloadMedia(msg)}
                   disabled={!sessionId || !msg.waMessageId || fetchState === 'loading'}
                 >
                   {fetchState === 'loading' ? (
                     <Loader2 size={14} className="animate-spin" />
+                  ) : fetchState === 'failed' ? (
+                    <>📎 {t('chats.status.mediaUnavailable')}</>
+                  ) : msg.type === 'document' ? (
+                    documentCard
                   ) : (
-                    <>📎 {t(fetchState === 'failed' ? 'chats.status.mediaUnavailable' : 'chats.media.omitted')}</>
+                    <>📎 {t('chats.media.omitted')}</>
                   )}
                 </button>
               );
@@ -734,10 +770,10 @@ function ChatThread({
                     <a
                       href={mediaSrc}
                       download={mediaInfo.filename || 'document'}
-                      className="chat-document-media"
+                      className="chat-document-media chat-document-card"
                       {...(/^https?:\/\//i.test(mediaSrc) ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                     >
-                      📎 {mediaInfo.filename || t('chats.downloadDocument')}
+                      {documentCard}
                     </a>
                   </div>
                 );

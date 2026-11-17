@@ -2623,22 +2623,128 @@
 
 .chats-page .chat-document-media {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding-block: 0.625rem;
-  padding-inline: 0.75rem;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
   margin-bottom: 0.5rem;
   background: color-mix(in srgb, var(--chat-bubble-text) 6%, transparent);
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--chat-bubble-text);
   text-decoration: none;
   font-size: 0.875rem;
   font-weight: 500;
-  word-break: break-all;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--chat-bubble-text) 8%, transparent);
+  box-sizing: border-box;
 }
 
 .chats-page .chat-document-media:hover {
   background: color-mix(in srgb, var(--chat-bubble-text) 10%, transparent);
+}
+
+/* A document's card: its icon, its name and size, and a download mark. The same card is the link of a
+   document the page holds and the button that fetches one the list left out. */
+.chats-page .message-media-omitted.chat-document-card {
+  text-decoration: none;
+  font-style: normal;
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+.chats-page .chat-document-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 220px;
+  max-width: 320px;
+  background: color-mix(in srgb, var(--chat-bubble-text) 6%, transparent);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--chat-bubble-text) 8%, transparent);
+  text-align: start;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.chats-page .chat-document-card:hover {
+  background: color-mix(in srgb, var(--chat-bubble-text) 10%, transparent);
+  border-color: color-mix(in srgb, var(--chat-bubble-text) 16%, transparent);
+}
+
+.chats-page .chat-document-card-content {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  box-sizing: border-box;
+  text-align: start;
+}
+
+.chats-page .chat-document-icon-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--chat-bubble-text) 12%, transparent);
+  color: var(--chat-bubble-text);
+}
+
+.chats-page .chat-document-icon-box.pdf {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.chats-page .chat-document-pdf-badge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.chats-page .chat-document-pdf-tag {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin-top: 1px;
+}
+
+.chats-page .chat-document-info {
+  display: inline-flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.chats-page .chat-document-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--chat-bubble-text);
+}
+
+.chats-page .chat-document-meta {
+  font-size: 0.725rem;
+  opacity: 0.75;
+  margin-top: 2px;
+}
+
+.chats-page .chat-document-action {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+  margin-inline-start: 0.5rem;
 }
 
 /* =============================================================================
