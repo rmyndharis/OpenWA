@@ -2052,10 +2052,10 @@ export function Chats() {
   }, [activeStatusGroup?.contact.id, activeStatusItemIds]);
 
   // Escape closes the open view and returns to the list. Anything that owns the key already keeps
-  // it: a modal (Modal renders role="dialog" only while open) and the language menu (role="menu")
-  // are skipped here, and so is the media viewer, whose library renders its own role="dialog"
-  // portal and closes itself on Escape. A handler that called preventDefault, or a composition
-  // still being committed by an IME, is left alone for the same reason.
+  // it: a modal (Modal renders role="dialog" only while open) is skipped here, and so is the media
+  // viewer, whose library renders its own role="dialog" portal and closes itself on Escape. A
+  // handler that called preventDefault (the sidebar language list does), or a composition still
+  // being committed by an IME, is left alone for the same reason.
   useEffect(() => {
     const closeOpenViewOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || isComposingKey(event)) return;
