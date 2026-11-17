@@ -50,7 +50,7 @@ the README and `docs/` — in particular `CORS_ORIGINS`, `ALLOW_DEV_API_KEY`,
 Never expose the dashboard/API to the public internet with the development API key
 enabled.
 
-If you created your `.env` by copying `.env.example` before this advisory, check it for
+If you created your `.env` by copying `.env.example` before 0.16.0, check it for
 `ENABLE_SWAGGER=true`. Earlier templates shipped that line uncommented alongside
 `NODE_ENV=production`, so a copied file pinned the opt-in that production otherwise
 withholds, and `/api/docs` is served outside the API-key guard. Comment the line out or
