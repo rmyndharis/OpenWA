@@ -28,6 +28,7 @@
 | **OAuth 2.1 (public exposure)**   | 🔜 Planned     | Static API key is used today (suitable for self-hosted/internal)               |
 | **Agent-action audit provenance** | 🔜 Planned     | Mark audited actions as agent-initiated                                        |
 | **Env-tunable rate limits**       | ✅ Implemented | `MCP_RATE_LIMIT_MAX` / `MCP_RATE_LIMIT_WINDOW_MS`                              |
+| **Opt-in result size cap**        | ✅ Implemented | `MCP_MAX_RESULT_BYTES` (off by default): text only, cut at the cap             |
 | **Additional tool domains**       | 🔜 Planned     | template management / channels / catalog / status (labels/automation now ship) |
 
 ---
@@ -160,6 +161,13 @@ code is a transferable join capability, so it sits at OPERATOR like the QR endpo
 | **Label**      | list, get, chats for a label, labels on a chat                     | upsert, delete, add to chat, remove from chat                                                 |
 | **Automation** | rules list, get (OPERATOR)                                         | —                                                                                             |
 
+Each tool is advertised with a `title` and the MCP annotations `readOnlyHint`, `destructiveHint` and
+`idempotentHint`. The `title` is the human name a client shows, the tool name split into words
+(`MessageSendText` is "Message send text") unless the descriptor sets `title`. `openWorldHint` is not set,
+so the protocol default applies and a client treats every tool as open-world: the writes reach other
+WhatsApp users, and the reads return text they wrote (see the
+[threat model in 24.5](#threat-model-untrusted-message-content)).
+
 > **Labels split across the engines**, and each tool's description says which way. Every label
 > _read_ needs whatsapp-web.js — Baileys exposes no label query at all. Editing a label (upsert,
 > delete) needs Baileys — whatsapp-web.js cannot change a label. Only tagging and untagging a chat
@@ -199,11 +207,35 @@ and the payload follows as an embedded base64 `resource` block. The server has n
 capability, so that URI cannot be fetched, and how a client presents the block to the model is the
 client's choice. Claude Code 2.1.321 saves it to a file on its own machine and tells the model only
 the path, so the model sees the data only if it has a file-reading tool; a client that forwards text
-alone shows it nothing. Page a tool that can return many rows (`SessionGetChats`, `GroupFindAll`,
-`MessageList`) with `limit` and `offset` to stay under the limit. `MessageList` also carries each
-message's media inline as base64, up to a per-response budget
-(`MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES`, 8 MiB by default), which is far over the limit; pass
-`inlineMedia: false` to get the rows without it.
+alone shows it nothing. Page a tool that can return many rows (`SessionGetChats`, `ContactFindAll`,
+`GroupFindAll`, `MessageList`) with `limit` and `offset` to stay under the limit.
+
+`SessionFindAll`, `SessionGetChats`, `ContactFindAll`, `GroupFindAll` and `WebhooksList` answer a bare
+array with no total, 1000 rows a call at most and also when `limit` is omitted. A full page therefore
+means there may be more rows, and the description of `limit` tells the agent to ask again with `offset`.
+
+`MessageList` leaves media out: a media message is listed with an `{ omitted, sizeBytes }` marker in
+place of its payload. A call that sets `inlineMedia: true` gets the payloads inline as base64, up to a
+per-response budget (`MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES`, 8 MiB by default; the newest payload is
+let through whatever its size), which is far over the limit. This differs from
+`GET /api/sessions/{sessionId}/messages`, which inlines unless asked not to: base64 is of no use to a
+model that reads the result as text.
+
+**Capping a result (`MCP_MAX_RESULT_BYTES`).** The offloaded blob has no upper bound, and a client that puts the
+whole result in the model's context (claude.ai, ChatGPT) fails or degrades past a size: claude.ai documents about
+150000 characters for one tool result. Set `MCP_MAX_RESULT_BYTES` to a byte count (for example `100000`) for such
+a client. Every result is then one text item and nothing is offloaded: a payload at or under the cap comes back
+whole, also past 32 KiB, and a larger one is cut to at most that many bytes, never inside a character, then
+`…[truncated: <n> bytes in all; narrow the request, with limit and offset where the tool takes them, to see the rest]`.
+The note comes after the cut, so leave about 200 bytes under the client's limit; a count in bytes is never
+smaller than the count in characters. Unset or `0`, the default, means no cap, and Claude Code keeps getting the
+blob it saves to a file. The value is read once when the server mounts; a malformed one (`100k`) fails the boot.
+
+An error answer is cut at the same cap and ends with `…[truncated: <n> bytes in all]`. That covers the refusal
+the server writes for arguments a tool's schema rejects, which names each invalid value and so grows with the
+arguments sent. Media counts as text like everything else: a payload asked for with `inlineMedia: true` that does
+not fit under the cap arrives cut and cannot be decoded, and one message cannot be narrowed further, so under a
+cap fetch media from `GET /api/sessions/{sessionId}/messages/{chatId}/{messageId}/media`.
 
 The text of a tool error is cut at 4096 characters and ends with
 `... [truncated, <n> characters in all]`. Several services name the id the caller sent in their
@@ -298,6 +330,7 @@ MCP_ENABLED=true npm run start:prod   # or set MCP_ENABLED in your .env / compos
 MCP_READONLY=false                    # expose write tools (default is read-only when unset)
 MCP_RATE_LIMIT_MAX=60                 # max tool calls per key per window (default 60)
 MCP_RATE_LIMIT_WINDOW_MS=60000        # sliding window in ms (default 60000 = 1 min)
+MCP_MAX_RESULT_BYTES=100000           # every tool result as text, cut at this many bytes (default 0 = no cap)
 MCP_IP_RATE_LIMIT_MAX=120             # pre-auth per-IP message cap per window (default 120)
 MCP_IP_RATE_LIMIT_WINDOW_MS=60000     # per-IP window in ms (default 60000 = 1 min)
 ```
@@ -349,6 +382,7 @@ Guidelines:
 - Mark writes with `tier: 'write'` and the appropriate `requiredRole`. Give a read the same
   `requiredRole` as the REST route it mirrors: the webhook and automation-rule reads,
   `GroupGetInviteCode` and `ContactCheckNumber` sit at OPERATOR because their REST routes do.
+- Leave `title` unset unless the name split into words reads badly.
 - Use `sessionScoped: true` and a non-empty `sessionId` field for any per-session tool so
   the scope check applies.
 - A snapshot test (`tool-registry.spec.ts`) locks the public tool-name set; update it

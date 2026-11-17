@@ -35,7 +35,7 @@ import {
   ingestMediaBudgetBytes,
   isMediaDownloadEnabled,
 } from './inbound-media-cap';
-import { buildIncomingMessageBase, mapContactFields } from './message-mapper';
+import { buildIncomingMessageBase, mapContactFields, wwebjsBody } from './message-mapper';
 import { buildVCard } from './vcard';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
@@ -1246,7 +1246,7 @@ export class WwebjsMessaging {
       if (msg.hasQuotedMsg) {
         try {
           const quoted = await msg.getQuotedMessage();
-          out.quotedMessage = { id: quoted.id._serialized, body: quoted.body };
+          out.quotedMessage = { id: quoted.id._serialized, body: wwebjsBody(quoted) };
         } catch (error) {
           this.host.logger.warn(`Failed to resolve quoted message for ${msg.id._serialized}: ${String(error)}`);
         }

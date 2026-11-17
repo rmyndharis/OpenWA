@@ -89,6 +89,8 @@ export interface RawMessageFields {
   type: string;
   timestamp: number;
   fromMe: boolean;
+  /** The vCards of a contact message; whatsapp-web.js attaches the list to every Message. */
+  vCards?: string[];
   /** Set on group messages: the participant WID that actually sent the message. */
   author?: string;
   /** WIDs @mentioned in the message; whatsapp-web.js attaches this to every Message. */
@@ -114,6 +116,15 @@ export interface RawMessageFields {
 }
 
 /**
+ * The body of a whatsapp-web.js message. Several contacts shared together carry none: WhatsApp Web keeps
+ * their vCards in a list, joined here into the one multi-card body Baileys delivers for the same share.
+ */
+export function wwebjsBody(msg: Pick<RawMessageFields, 'body' | 'type' | 'vCards'>): string {
+  if (msg.type !== 'multi_vcard' || msg.body) return msg.body;
+  return (msg.vCards ?? []).filter(Boolean).join('\n');
+}
+
+/**
  * Build the synchronous base of an IncomingMessage from a raw wwebjs message.
  * Async enrichment (media, quoted message, saved-contact name) is layered on by
  * the adapter; this covers the fields available without an await.
@@ -132,7 +143,7 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
     from: msg.from,
     to: msg.to,
     chatId,
-    body: msg.body,
+    body: wwebjsBody(msg),
     type: mapWwebjsMessageType(msg.type),
     timestamp: msg.timestamp,
     fromMe: msg.fromMe,

@@ -37,7 +37,17 @@ describe('liveness of a ready page after a reload', () => {
     lifecycle.attachPuppeteerLifecycleListeners();
     return { adapter, client };
   };
+  // A page that has just reloaded holds none of the helpers yet, which is what the adapter's own read at the
+  // navigation finds; the reads a test scripts for the probe start after it.
   const reload = (client: FakeClient): void => {
+    client.pupPage.evaluate.mockImplementationOnce(() => Promise.resolve(false));
+    client.pupPage.emit('framenavigated', { url: () => 'https://web.whatsapp.com/' });
+  };
+  /** The adapter's own read of the page when a navigation lands, counted apart from the reads a probe makes. */
+  const AT_NAVIGATION = 1;
+  // A navigation inside the document: the page keeps its helpers, and the adapter's read finds them.
+  const navigateWithinDocument = (client: FakeClient): void => {
+    client.pupPage.evaluate.mockImplementationOnce(() => Promise.resolve(true));
     client.pupPage.emit('framenavigated', { url: () => 'https://web.whatsapp.com/' });
   };
   const later = (ms: number): void => {
@@ -110,7 +120,7 @@ describe('liveness of a ready page after a reload', () => {
     await expect(adapter.probeLiveness()).resolves.toBe(true);
 
     // Once by the 'ready' itself and once by the probe that started before that read answered; never after.
-    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(2);
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION + 2);
   });
 
   it('never answers dead inside the reload grace while the helpers are still missing', async () => {
@@ -180,7 +190,7 @@ describe('liveness of a ready page after a reload', () => {
 
     client.pupPage.evaluate.mockResolvedValue(false);
     await expect(adapter.probeLiveness()).resolves.toBe(false);
-    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(2);
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION + 2);
   });
 
   // A loaded renderer after a reload that did re-inject: getState() answers CONNECTED after 7 s and the helpers read
@@ -214,7 +224,7 @@ describe('liveness of a ready page after a reload', () => {
     const answers = await watchdogAnswers(adapter, 6);
 
     expect(answers).toEqual([true, true, true, true, false, false]);
-    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(6);
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION + 6);
   });
 
   // A page stuck reloading that never re-injects: each late no is about a page the next reload replaces, but the
@@ -315,7 +325,7 @@ describe('liveness of a ready page after a reload', () => {
     client.getState.mockRejectedValue(new Error('Execution context was destroyed.'));
     reload(client);
     await expect(adapter.probeLiveness()).resolves.toBe(true);
-    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(1);
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(2 * AT_NAVIGATION + 1);
   });
 
   /**
@@ -460,14 +470,14 @@ describe('liveness of a ready page after a reload', () => {
 
       await adapter.probeLiveness();
       await adapter.probeLiveness();
-      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(2);
+      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION + 2);
 
       bridge(client, true);
       await expect(adapter.probeLiveness()).resolves.toBe(true);
       later(NAVIGATION_EPISODE_CAP_MS);
       client.pupPage.evaluate.mockResolvedValue(false);
       await expect(adapter.probeLiveness()).resolves.toBe(true);
-      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(3);
+      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION + 3);
     });
 
     it('closes the reload when the attach that was pending completes and the page re-emits ready', async () => {
@@ -565,6 +575,67 @@ describe('liveness of a ready page after a reload', () => {
 
       const lifecycle = (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle;
       expect(lifecycle.isPageWithoutHelpers()).toBe(false);
+    });
+  });
+
+  // Since 1.34.8 whatsapp-web.js re-injects only into a page that lost its helpers. After a navigation inside
+  // the document it runs nothing and emits no 'ready', so nothing closed the window this navigation opened.
+  describe('a navigation that leaves the page with its helpers', () => {
+    const lifecycleOf = (adapter: WhatsAppWebJsAdapter): WwebjsLifecycle =>
+      (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle;
+    const settle = (): Promise<void> => jest.advanceTimersByTimeAsync(0);
+
+    it('closes the window at once, where it stayed open for its grace', async () => {
+      const { adapter, client } = wire();
+      navigateWithinDocument(client);
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(true);
+
+      await settle();
+
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(false);
+      // Verified by that read, so a probe asks the page for nothing more.
+      await expect(adapter.probeLiveness()).resolves.toBe(true);
+      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(AT_NAVIGATION);
+    });
+
+    it('keeps the window for a page that reloaded and holds no helpers yet', async () => {
+      const { adapter, client } = wire();
+      reload(client);
+      await settle();
+
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(true);
+    });
+
+    it('keeps the window while the helpers are there but the event bridge is not attached', async () => {
+      const { adapter, client } = wire();
+      (client as FakeClient & { eventsAttached?: boolean }).eventsAttached = false;
+      navigateWithinDocument(client);
+      await settle();
+
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(true);
+    });
+
+    it('keeps the window when the page could not be read', async () => {
+      const { adapter, client } = wire();
+      client.pupPage.evaluate.mockImplementationOnce(() =>
+        Promise.reject(new Error('Execution context was destroyed.')),
+      );
+      client.pupPage.emit('framenavigated', { url: () => 'https://web.whatsapp.com/' });
+      await settle();
+
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(true);
+    });
+
+    it('does not let a read that a reload overtook close the window of that reload', async () => {
+      const { adapter, client } = wire();
+      // The first navigation kept the page whole, but its answer lands after the page has reloaded.
+      client.pupPage.evaluate.mockImplementationOnce(() => delayed(true, 2_000));
+      client.pupPage.emit('framenavigated', { url: () => 'https://web.whatsapp.com/' });
+      reload(client);
+
+      await jest.advanceTimersByTimeAsync(3_000);
+
+      expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(true);
     });
   });
 });
@@ -681,5 +752,146 @@ describe('a re-inject that throws in a reloaded page', () => {
       expect.anything(),
       expect.objectContaining({ action: 'page_reinject_failed' }),
     );
+  });
+});
+
+/**
+ * whatsapp-web.js 1.34.8 registers its framenavigated listener before the launch's own inject. A navigation that
+ * lands while that inject waits for the page to boot makes the listener start another, which aborts the first, and
+ * the aborted one resolves: initialize() resolves although the inject that took over is still running, unawaited.
+ */
+describe('a launch whose first inject a navigation handed over', () => {
+  type Launching = Client & { inject: () => Promise<void> };
+  let rmSpy: jest.SpyInstance;
+  let initSpy: jest.SpyInstance;
+  let injectSpy: jest.SpyInstance;
+  let savedWebVersion: string | undefined;
+  const unhandled = jest.fn();
+
+  beforeEach(() => {
+    savedWebVersion = process.env.WWEBJS_WEB_VERSION;
+    process.env.WWEBJS_WEB_VERSION = 'off';
+    rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    unhandled.mockClear();
+    process.on('unhandledRejection', unhandled);
+  });
+  afterEach(() => {
+    process.off('unhandledRejection', unhandled);
+    rmSpy.mockRestore();
+    initSpy.mockRestore();
+    injectSpy.mockRestore();
+    if (savedWebVersion === undefined) delete process.env.WWEBJS_WEB_VERSION;
+    else process.env.WWEBJS_WEB_VERSION = savedWebVersion;
+  });
+
+  /**
+   * A launch in which `injects` run one after another: the first is the one initialize() awaits, each later one is
+   * started by the listener with nothing awaiting it, as in the library.
+   */
+  const launchWith = (injects: Array<() => Promise<void>>): void => {
+    let call = 0;
+    injectSpy = jest
+      .spyOn(Client.prototype as unknown as { inject: () => Promise<void> }, 'inject')
+      .mockImplementation(() => injects[call++]());
+    initSpy = jest
+      .spyOn(Client.prototype as unknown as { initialize: () => Promise<void> }, 'initialize')
+      .mockImplementation(async function (this: Launching) {
+        const own = this.inject();
+        for (let later = 1; later < injects.length; later++) void this.inject();
+        await own;
+      });
+  };
+  const newAdapter = (): WhatsAppWebJsAdapter =>
+    new WhatsAppWebJsAdapter({ sessionId: 'sess-handover', sessionDataPath: './data/sessions', puppeteer: {} });
+  const aborted = (): Promise<void> => Promise.resolve();
+  // The library rejects with a bare string, which a mock can hand over where a literal Promise.reject may not.
+  const failing = (reason: string): (() => Promise<void>) => jest.fn<Promise<void>, []>().mockRejectedValue(reason);
+  const macrotask = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+  it('fails the launch with what the inject that took over failed with, and leaves no unhandled rejection', async () => {
+    launchWith([aborted, failing('auth timeout')]);
+    const adapter = newAdapter();
+    const onError = jest.fn();
+
+    await expect(adapter.initialize({ onError })).rejects.toBe('auth timeout');
+
+    expect(adapter.getStatus()).toBe(EngineStatus.FAILED);
+    expect(onError).toHaveBeenCalledWith('auth timeout');
+    await macrotask();
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('does not count the launch as finished until the inject that took over has settled', async () => {
+    let finish: () => void = () => undefined;
+    launchWith([aborted, () => new Promise<void>(resolve => (finish = resolve))]);
+    const adapter = newAdapter();
+    let launched = false;
+    const launch = adapter.initialize({}).then(() => (launched = true));
+
+    // The sweeps that run before a launch take real time, so wait for the library's initialize() to have started
+    // both injects. It has resolved by then: its own inject was the aborted one.
+    for (let turn = 0; turn < 2000 && injectSpy.mock.calls.length < 2; turn++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    expect(injectSpy).toHaveBeenCalledTimes(2);
+    for (let turn = 0; turn < 5; turn++) await macrotask();
+    expect(launched).toBe(false);
+
+    finish();
+    await launch;
+    expect(launched).toBe(true);
+  });
+
+  it('follows the newest inject when the page navigates again', async () => {
+    launchWith([aborted, aborted, failing('auth timeout')]);
+    const adapter = newAdapter();
+
+    await expect(adapter.initialize({})).rejects.toBe('auth timeout');
+    expect(injectSpy).toHaveBeenCalledTimes(3);
+    await macrotask();
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('logs a re-inject that fails once the launch is over, as before', async () => {
+    launchWith([aborted, aborted, failing('ready timeout')]);
+    initSpy.mockImplementation(async function (this: Launching) {
+      const own = this.inject();
+      void this.inject();
+      await own;
+    });
+    const adapter = newAdapter();
+    const warn = jest.spyOn((adapter as unknown as { logger: { warn: () => void } }).logger, 'warn');
+    await adapter.initialize({});
+    const client = (adapter as unknown as { client: Launching }).client;
+
+    await expect(client.inject()).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('re-inject'),
+      expect.objectContaining({ sessionId: 'sess-handover', action: 'page_reinject_failed', error: 'ready timeout' }),
+    );
+  });
+
+  // 1.34.8 waits for WhatsApp Web's socket under authTimeoutMs too, and that wait rejects with Puppeteer's error.
+  const socketWaitTimeout = (): Error =>
+    Object.assign(new Error('Waiting failed: 30000ms exceeded'), { name: 'TimeoutError' });
+
+  it.each<[string, Array<() => Promise<void>>]>([
+    ['the launch itself', [() => Promise.reject(socketWaitTimeout())]],
+    ['the inject that took over', [aborted, () => Promise.reject(socketWaitTimeout())]],
+  ])('reports the socket wait running out in %s as the auth timeout', async (_where, injects) => {
+    launchWith(injects);
+    const adapter = newAdapter();
+    const onError = jest.fn();
+
+    await expect(adapter.initialize({ onError })).rejects.toBe('auth timeout');
+    expect(onError).toHaveBeenCalledWith('auth timeout');
+  });
+
+  it('leaves any other failure of the launch as it is', async () => {
+    const failure = new Error('Failed to launch the browser process!');
+    launchWith([() => Promise.reject(failure)]);
+
+    await expect(newAdapter().initialize({})).rejects.toBe(failure);
   });
 });

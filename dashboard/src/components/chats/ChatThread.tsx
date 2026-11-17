@@ -26,6 +26,7 @@ import {
   MessageSquare,
   Smile,
   Trash2,
+  User,
 } from 'lucide-react';
 import { useRole } from '../../hooks/useRole';
 import { sessionApi, type Chat } from '../../services/api';
@@ -38,6 +39,7 @@ import {
   senderKey,
   type ChatMessageView,
 } from '../../utils/chatMessages';
+import { contactCards, contactSnippet, isVCardBody } from '../../utils/vcard';
 import { shouldFetchOlderMessages } from '../../utils/scrollDecision';
 import { keepsSameKey } from '../../utils/authLifecycle';
 import { retryThrottled } from '../../utils/fetchAllPages';
@@ -619,6 +621,29 @@ function ChatThread({
                 </div>
               );
             }
+            if (msg.type === 'contact') {
+              // The body is the raw vCard, or `📇 <name>` for a contact the gateway sent; paint a card either way.
+              const cards = contactCards(msg.body);
+              const label = t('chats.media.contact');
+              return (
+                <div className="message-contact" role="group" aria-label={label}>
+                  {(cards.length > 0 ? cards : [{ name: '', phone: '', waid: '' }]).map((card, index) => (
+                    <div
+                      key={`${card.waid || card.phone || card.name || 'contact'}:${index}`}
+                      className="message-contact-card"
+                    >
+                      <span className="message-contact-avatar" aria-hidden="true">
+                        <User size={22} />
+                      </span>
+                      <span className="message-contact-fields">
+                        <span className="message-contact-name">{card.name || label}</span>
+                        {card.phone ? <span className="message-contact-phone">{card.phone}</span> : null}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            }
             if (!mediaInfo) return null;
             const isPdf =
               mediaInfo.mimetype === 'application/pdf' ||
@@ -914,7 +939,12 @@ function ChatThread({
                     {msg.metadata?.quotedMessage && (
                       <div className="message-quote-box">
                         <MessageBody
-                          text={resolveMentions(msg.metadata.quotedMessage.body, mentionNames)}
+                          text={resolveMentions(
+                            isVCardBody(msg.metadata.quotedMessage.body)
+                              ? contactSnippet(msg.metadata.quotedMessage.body, t('chats.media.contact'))
+                              : msg.metadata.quotedMessage.body,
+                            mentionNames,
+                          )}
                           className="quote-body"
                         />
                       </div>
@@ -933,7 +963,8 @@ function ChatThread({
                         displayBody &&
                         (!mediaInfo || displayBody !== mediaInfo.filename) &&
                         msg.type !== 'location' &&
-                        msg.type !== 'call' && (
+                        msg.type !== 'call' &&
+                        msg.type !== 'contact' && (
                           <MessageBody text={resolveMentions(displayBody, mentionNames)} className="message-text" />
                         )
                       )}

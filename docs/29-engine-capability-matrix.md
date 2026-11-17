@@ -641,7 +641,7 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `appPatch`                        | 🔩 plumbing                                                                                                                                                                 |
 | `assertSessions`                  | 🔩 plumbing                                                                                                                                                                 |
-| `chatModify`                      | ✅ `markUnread`, `clearChatMessages`, `archiveChat`, `muteChat`, `pinChat`, `deleteChat`, `deleteMessage`, `starMessage`                                                    |
+| `chatModify`                      | ✅ `sendSeen` (`markRead: true`), `markUnread`, `clearChatMessages`, `archiveChat`, `muteChat`, `pinChat`, `deleteChat`, `deleteMessage`, `starMessage`                     |
 | `cleanDirtyBits`                  | 🔩 plumbing                                                                                                                                                                 |
 | `createParticipantNodes`          | 🔩 plumbing                                                                                                                                                                 |
 | `digestKeyBundle`                 | 🔩 plumbing                                                                                                                                                                 |
@@ -1062,6 +1062,23 @@ adapter boundary — none silently stubs.
   With message ids, a group id the message store never held (history backfill) takes its receipt's
   participant from the author the gateway stored for it; one with no stored author is left out of the
   receipt, and the answer is `false` when no id could be named.
+  Once a receipt that names the chat's newest received message has gone out, `sendSeen` sets the chat's
+  `unreadCount` back to `0` in the session's own chat list and sends nothing for it: Baileys reports the
+  chat unread with each message received and lowers that for no receipt the session sends, so a chat read
+  through the gateway stayed listed as unread. The value is what Baileys last reported for the chat, an
+  increment and not a running total: a chat whose unread messages arrived one at a time is listed with
+  `1`. A receipt that names only older messages, or only the account's own (which Baileys leaves out of a
+  receipt), leaves the count, and so does one a newer message overtook; a session restarted since holds
+  no received message to compare, and takes any received id for the read. Only a chat marked unread by
+  hand (listed with `unreadCount` `-1`, by `markUnread` or on the phone) takes a second write,
+  `chatModify` with `markRead: true`, which undoes the mark in the account's app state.
+  That write is keyed as the four writes are, except that the stored message standing in for a session
+  with none in memory is the newest _received_ one, and it is never sent without a range: what the
+  phone does with a read mark that names no message is not established. It does not change the answer.
+  When WhatsApp refuses it or does not confirm it within the request budget, a warning is logged,
+  `POST chats/read` still answers `{"success": true}` for the receipt, and the chat stays marked unread.
+  A session restarted since the mark was set no longer lists it (`unreadCount` reads `0`, as above), so
+  its read sends the receipt alone and the mark stays on the account.
 - **`setProfileName` / `setProfilePicture` / `deleteProfilePicture` refusals (baileys).**
   whatsapp-web.js reads a page-side verdict for all three (`setDisplayName` and `setProfilePicture`
   resolve `false`, `deleteProfilePicture` resolves an explicit `false`) and raises a `403`. The

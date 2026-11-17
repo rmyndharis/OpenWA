@@ -8265,6 +8265,50 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     ]);
   });
 
+  it('sendSeen sets the unread count the chat is listed with back to zero, with no second write', async () => {
+    // Baileys raises the count with each message received and lowers it for no receipt this session
+    // sends, so the chat stayed listed as unread after a read that answered success.
+    const adapter = await readyWithMessage();
+    fakeSock.fire('chats.update', [{ id: '628111@s.whatsapp.net', unreadCount: 1 }]);
+    expect(await adapter.getChats()).toEqual([expect.objectContaining({ unreadCount: 1 })]);
+    expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+    expect(await adapter.getChats()).toEqual([expect.objectContaining({ unreadCount: 0 })]);
+    expect(fakeSock.chatModify).not.toHaveBeenCalled();
+  });
+
+  it('sendSeen undoes an unread mark set by hand, keyed to the newest message of the chat', async () => {
+    const adapter = await readyWithMessage();
+    fakeSock.fire('chats.update', [{ id: '628111@s.whatsapp.net', unreadCount: -1 }]);
+    expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+    expect(fakeSock.chatModify).toHaveBeenCalledWith(
+      {
+        markRead: true,
+        lastMessages: [
+          { key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'M1' }, messageTimestamp: 1700000020 },
+        ],
+      },
+      '628111@s.whatsapp.net',
+    );
+    // WhatsApp confirmed the write, so the mark is gone from the list without waiting for a replayed patch.
+    expect(await adapter.getChats()).toEqual([expect.objectContaining({ unreadCount: 0 })]);
+  });
+
+  it('sendSeen keeps an unread mark listed when WhatsApp refuses the write that undoes it', async () => {
+    const adapter = await readyWithMessage();
+    fakeSock.fire('chats.update', [{ id: '628111@s.whatsapp.net', unreadCount: -1 }]);
+    fakeSock.chatModify.mockRejectedValueOnce(new Error('App state key not present!'));
+    expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+    expect(await adapter.getChats()).toEqual([expect.objectContaining({ unreadCount: -1 })]);
+  });
+
+  it('sendSeen keeps the count for a message that no receipt named', async () => {
+    const adapter = await readyWithMessage();
+    fakeSock.fire('chats.update', [{ id: '628111@s.whatsapp.net', unreadCount: 1 }]);
+    // An older message of the chat is acknowledged; M1, the newest, is not.
+    expect(await adapter.sendSeen('628111@c.us', ['M0'])).toBe(true);
+    expect(await adapter.getChats()).toEqual([expect.objectContaining({ unreadCount: 1 })]);
+  });
+
   it.each([
     ['@c.us', '628111@c.us'],
     ['@s.whatsapp.net', '628111@s.whatsapp.net'],

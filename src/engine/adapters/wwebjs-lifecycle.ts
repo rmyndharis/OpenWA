@@ -43,12 +43,27 @@ export function isExecutionContextDestroyedError(reason: string): boolean {
  * stale-profile advisory classifier: the advisory names a remedy (delete the profile) that is wrong
  * for the window.require shape (see src/config/process-error-monitor.ts) — this predicate only
  * decides whether one in-place retry is worth it, both shapes being transient when a reload caused
- * them. whatsapp-web.js registers its own re-inject handler only AFTER the first inject succeeds
- * (its framenavigated listener is added after the first inject() resolves), so a navigation landing during it is caught
- * by nothing upstream (#1081).
+ * them. Since 1.34.8 whatsapp-web.js registers its re-inject handler before the first inject, and a navigation
+ * that lands while that inject waits for the page to boot is taken over by the handler (see followInjects).
+ * One that lands on a later step still rejects the evaluate it interrupted, before the handler has started
+ * the inject that would take over, so the launch rejects with one of these shapes as it always did (#1081).
  */
 function isNavigationShapedInitRejection(reason: string): boolean {
   return isExecutionContextDestroyedError(reason) || /window\.require is not a function/i.test(reason);
+}
+
+/** What whatsapp-web.js throws, as a bare string, when its wait for WhatsApp Web to boot runs out of authTimeoutMs. */
+const INJECT_AUTH_TIMEOUT = 'auth timeout';
+
+/**
+ * A launch failure as the rest of the gateway reads it. 1.34.8 bounds its wait for WhatsApp Web's socket to
+ * leave OPENING by authTimeoutMs, as it does its wait for the page to boot (1.34.7 gave the socket wait no
+ * budget of its own). The boot wait throws the library's own 'auth timeout'; the socket wait lets Puppeteer's
+ * TimeoutError through, which nothing recognised: the start answered a bare 500 and the proxy advice was
+ * left out. Both are the auth budget running out, so the second is reported as the first.
+ */
+function launchFailure(error: unknown): unknown {
+  return error instanceof Error && /^Waiting failed: \d+ms exceeded$/.test(error.message) ? INJECT_AUTH_TIMEOUT : error;
 }
 
 /**
@@ -446,8 +461,8 @@ export class WwebjsLifecycle {
           throw attemptError;
         }
         this.host.logger.warn(
-          `"${attemptReason}" killed the first inject — a page navigation landed before ` +
-            `whatsapp-web.js installed its re-inject handler. Retrying the launch once (#1081).`,
+          `"${attemptReason}" killed the first inject: a page navigation interrupted it. ` +
+            `Retrying the launch once (#1081).`,
           { sessionId: this.host.config.sessionId, action: 'init_navigation_retry' },
         );
         const cleaned = await this.resetForInitRetry();
@@ -594,8 +609,12 @@ export class WwebjsLifecycle {
     await removeStaleSingletonFiles(this.host.config.sessionId, this.host.config.sessionDataPath, this.host.logger);
     if (this.tearingDown) return;
     this.launching = client;
+    const injects = this.followInjects(client);
     try {
       await client.initialize();
+      await injects.settled();
+    } catch (error) {
+      throw launchFailure(error);
     } finally {
       if (this.launching === client) this.launching = null;
       // A stop, delete or logout that landed mid-launch ran Client.destroy() before whatsapp-web.js
@@ -606,7 +625,7 @@ export class WwebjsLifecycle {
       }
     }
     if (this.tearingDown || this.client !== client) return;
-    this.reportFailedReinjects(client);
+    injects.launched();
     // whatsapp-web.js 1.34.x never observes the Chromium process/page it drives, so a crashed
     // browser leaves the client looking READY forever ("silent death"). Attach death listeners
     // to the puppeteer handles so a dead browser surfaces as a normal disconnect → reconnect.
@@ -614,26 +633,57 @@ export class WwebjsLifecycle {
   }
 
   /**
-   * After its first inject, whatsapp-web.js runs inject() again from its own framenavigated listener, with
-   * nothing awaiting it, so a re-inject that threw in a reloaded page surfaced only as an unhandled rejection
-   * that named no session. Report it here instead. Installed once the first inject has settled, so the launch
-   * still sees its own inject reject.
+   * Follow every inject() of a client, from before its launch. whatsapp-web.js runs inject() from two places:
+   * its launch, which awaits it, and its own framenavigated listener, with nothing awaiting it.
+   *
+   * Since 1.34.8 that listener is registered before the launch's inject. A navigation that lands while the
+   * launch's inject still waits for WhatsApp Web to boot hands the work over: the listener's inject aborts the
+   * first one, which then RESOLVES, so initialize() resolves with nothing injected. When the inject that took
+   * over fails (the reloaded page never boots) no event and no error says so. The session stayed in INITIALIZING
+   * for good, with no QR and no failure, and the only trace was an unhandled rejection that named no session.
+   *
+   * So the launch awaits `settled()` after initialize(): it resolves once no inject is left running and rejects
+   * with the failure of the newest, which then fails the launch the way the first inject's own failure does.
+   * The inject initialize() awaits goes back untouched, so the launch still sees it reject. One the listener
+   * starts is caught, never an unhandled rejection: during the launch `settled()` speaks for it, and once
+   * `launched()` was called a failed one is logged, as a re-inject into a page that reloaded later always was.
    */
-  private reportFailedReinjects(client: Client): void {
+  private followInjects(client: Client): { settled: () => Promise<void>; launched: () => void } {
     const target = client as unknown as { inject?: () => Promise<void> };
     const inject = target.inject;
-    if (typeof inject !== 'function') return;
-    target.inject = () =>
-      inject.call(client).catch((error: unknown) => {
-        // A teardown or an unlink navigates the page too, and the library re-injects into it while it closes or is
-        // replaced: that failure is the teardown at work, not a reloaded page heading for a recycle.
-        if (this.tearingDown || this.disconnectReported || this.client !== client) return;
-        this.host.logger.warn('whatsapp-web.js could not re-inject into the reloaded WhatsApp Web page', {
-          sessionId: this.host.config.sessionId,
-          error: error instanceof Error ? error.message : String(error),
-          action: 'page_reinject_failed',
-        });
-      });
+    if (typeof inject !== 'function') return { settled: () => Promise.resolve(), launched: () => undefined };
+    let launching = true;
+    let newest: Promise<void> | undefined;
+    target.inject = () => {
+      const run = inject.call(client);
+      if (!launching) return run.catch((error: unknown) => this.reportFailedReinject(client, error));
+      const ofTheLaunch = newest === undefined;
+      newest = run;
+      return ofTheLaunch ? run : run.catch(() => undefined);
+    };
+    return {
+      settled: async () => {
+        // An inject a newer one aborted resolves, so only the newest tells how the launch ended.
+        for (let seen: Promise<void> | undefined; seen !== newest;) {
+          seen = newest;
+          await seen;
+        }
+      },
+      launched: () => {
+        launching = false;
+      },
+    };
+  }
+
+  private reportFailedReinject(client: Client, error: unknown): void {
+    // A teardown or an unlink navigates the page too, and the library re-injects into it while it closes or is
+    // replaced: that failure is the teardown at work, not a reloaded page heading for a recycle.
+    if (this.tearingDown || this.disconnectReported || this.client !== client) return;
+    this.host.logger.warn('whatsapp-web.js could not re-inject into the reloaded WhatsApp Web page', {
+      sessionId: this.host.config.sessionId,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'page_reinject_failed',
+    });
   }
 
   /**
@@ -920,7 +970,29 @@ export class WwebjsLifecycle {
         action: 'page_navigation_reinject_window',
         graced: this.isInNavigationReinjectWindow(),
       });
+      if (ready) this.closeWindowOfIntactPage(this.navigationCount);
     });
+  }
+
+  /**
+   * Close the window a navigation just opened when the page came through it whole. Since 1.34.8 whatsapp-web.js
+   * re-injects only into a page that lost its helpers: after a navigation inside the document, which keeps them,
+   * it runs nothing and emits no 'ready', so the window stayed open for its whole grace, or until the watchdog's
+   * next probe, and every operation answered 409 for a page that was working. The page is asked the way the
+   * library asks it, and the window closes only for helpers with their event bridge attached. A page that
+   * reloaded has neither yet, and a read that fails, or that a newer navigation overtook, closes nothing.
+   */
+  private closeWindowOfIntactPage(navigation: number): void {
+    const client = this.client;
+    // Unlike the probe's read, a page that cannot be asked is not taken for intact: the window stays as it is.
+    const page = (client as unknown as { pupPage?: { evaluate?: unknown } } | null)?.pupPage;
+    if (!client || typeof page?.evaluate !== 'function') return;
+    void this.pageHasWwebjsHelpers(client).then(
+      intact => {
+        if (intact && !eventBridgeUnattached(client) && this.client === client) this.closeRecoveredEpisode(navigation);
+      },
+      () => undefined,
+    );
   }
 
   /**
@@ -1480,13 +1552,11 @@ export class WwebjsLifecycle {
       } catch (error) {
         lastError = error;
         const reason = error instanceof Error ? error.message : String(error);
-        // A request that lands on the reloaded document before whatsapp-web.js has re-exposed window.AuthStore dies
-        // on the missing store (the PairingCodeLinkUtils read). The navigation shapes are retried as well, so a
-        // request that lands mid-navigation, or before WhatsApp Web has booted, gets another attempt.
+        // The navigation shapes are retried, so a request that lands mid-navigation, or on a reloaded document
+        // before WhatsApp Web has booted (1.34.8 reads the linking module straight off the page), gets another attempt.
         const transient =
           error instanceof PairingCodeAttemptTimeoutError ||
           isNavigationShapedInitRejection(reason) ||
-          /reading 'PairingCodeLinkUtils'/.test(reason) ||
           isProtocolTimeout(error) ||
           /callfunctionon timed out/i.test(reason);
         if (!transient) {

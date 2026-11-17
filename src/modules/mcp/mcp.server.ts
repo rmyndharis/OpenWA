@@ -7,7 +7,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { ChatScopeService } from '../auth/chat-scope.service';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
-import type { ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import express, { type Request, type RequestHandler, type Response } from 'express';
 import { invokeTool } from '../../core/agent-tools/tool-invoker';
 import type { ToolRegistryService } from '../../core/agent-tools/tool-registry.service';
@@ -15,7 +15,8 @@ import { UnresolvedApiKeyException, type AuthService } from '../auth/auth.servic
 import { allowUnauthenticatedAuditRow } from '../audit/auth-failure-audit-limiter';
 import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
-import { handleToolError, smartToolResult } from './tool-result';
+import { capToolError, handleToolError, readMaxResultBytes, smartToolResult } from './tool-result';
+import { deriveToolTitle } from './tool-title';
 import type { KeyRateLimiter } from './mcp-rate-limit';
 import { limiterKeyForIp, parseTrustedProxies, resolveClientIp } from '../../common/utils/ip';
 import { resolveBodyLimit } from '../../config/bootstrap-security';
@@ -93,6 +94,21 @@ function resolveReqContext(req: Request): McpRequestContext {
 export const MCP_MAX_TOOL_INPUT_ELEMENTS = 10_000;
 
 /**
+ * Put the answers the SDK writes itself under the result cap. It refuses a call whose arguments its schema
+ * rejects before the tool's callback runs, in a text that names each invalid value, so one wide argument (up to
+ * {@link MCP_MAX_TOOL_INPUT_ELEMENTS} elements) makes an answer of several hundred kilobytes.
+ *
+ * `createToolError` is private to the SDK, hence the cast; `sdk-error-cap.spec.ts` runs the real class, so a
+ * release that renames the method fails there instead of leaving these answers uncut.
+ */
+export function capSdkErrors(server: McpServer, maxResultBytes: number): void {
+  const sdk = server as unknown as { createToolError?: (message: string) => CallToolResult };
+  const createToolError = sdk.createToolError;
+  if (maxResultBytes <= 0 || typeof createToolError !== 'function') return;
+  sdk.createToolError = message => capToolError(createToolError.call(server, message), maxResultBytes);
+}
+
+/**
  * Build the MCP server ONCE and register all tools from the registry.
  * The SDK's `registerTool` accepts `AnySchema` (z4.$ZodType) directly, so we
  * pass `tool.inputSchema` verbatim — no `.shape` extraction needed.
@@ -106,17 +122,21 @@ function buildServer(
   auditService: AuditService | undefined,
   reqContext: McpRequestContext,
   chatScope?: ChatScopeService,
+  maxResultBytes = 0,
 ): McpServer {
   const server = new McpServer(
     { name: serverInfo.name, version: serverInfo.version },
     { capabilities: { tools: {}, logging: {} }, maxToolInputElements: MCP_MAX_TOOL_INPUT_ELEMENTS },
   );
 
+  capSdkErrors(server, maxResultBytes);
+
   const tools = registry.list({ readOnly });
   for (const tool of tools) {
     server.registerTool(
       tool.name,
       {
+        title: tool.title ?? deriveToolTitle(tool.name),
         description: tool.description,
         // The SDK's InputArgs is inferred from this property. Widening it to the whole
         // `ZodRawShapeCompat | AnySchema` constraint would collapse the callback type it derives, so
@@ -145,9 +165,9 @@ function buildServer(
             chatScope,
             extra.signal,
           );
-          return smartToolResult(result as object);
+          return smartToolResult(result as object, maxResultBytes);
         } catch (error) {
-          return handleToolError(error);
+          return capToolError(handleToolError(error), maxResultBytes);
         }
       },
     );
@@ -160,6 +180,11 @@ export interface MountMcpServerOptions {
   basePath?: string;
   serverInfo?: { name: string; version: string };
   readOnly?: boolean;
+  /**
+   * A cap on a tool result, in UTF-8 bytes: with one set, every result is text, cut at the cap, and none is
+   * offloaded as a blob. Defaults to `MCP_MAX_RESULT_BYTES`; 0 or unset means no cap.
+   */
+  maxResultBytes?: number;
 }
 
 /**
@@ -259,6 +284,7 @@ export function mountMcpServer(
   const basePath = (options.basePath ?? '/mcp').replace(/\/$/, '') || '/mcp';
   const serverInfo = options.serverInfo ?? { name: 'openwa', version: '0.0.0' };
   const readOnly = resolveMcpReadOnly(options.readOnly);
+  const maxResultBytes = options.maxResultBytes ?? readMaxResultBytes();
 
   // Eagerly compute the tool list at mount time to validate the registry is populated
   // and to emit the log line once. The actual McpServer is re-created per request to
@@ -276,6 +302,7 @@ export function mountMcpServer(
       auditService,
       resolveReqContext(req),
       chatScope,
+      maxResultBytes,
     );
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     try {

@@ -79,6 +79,7 @@
     "edited": "Edited",
     "media": {
       "location": "Location",
+      "contact": "Contact",
       "call": "Call",
       "callMissed": "Missed call",
       "callVideo": "Video call",
