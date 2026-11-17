@@ -19258,7 +19258,7 @@
             "nullable": true
           },
           "restriction": {
-            "description": "A restriction WhatsApp itself has placed on this session's account, or null when there is none. Distinct from `lastError`, which describes a fault on our side of the link. Derived from live engine state, so it is never persisted: it is re-established on the next connect.",
+            "description": "A restriction WhatsApp itself has placed on this session's account, or null when there is none. Distinct from `lastError`, which describes a fault on our side of the link. Derived from live engine state and held in the gateway's memory, never persisted: a restart drops it and the engine reports it again on the next connect when it still applies. A stop, start or logout does not drop it; a lift the engine reports, a link that reaches `ready` (for the types a linked session cannot carry), the passing of its `expiresAt` or deleting the session does.",
             "nullable": true,
             "type": "object",
             "allOf": [
