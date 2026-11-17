@@ -128,7 +128,6 @@ function buildServer(
           readOnlyHint: tool.tier === 'read',
           destructiveHint: tool.destructive ?? false,
           idempotentHint: tool.idempotent ?? tool.tier === 'read',
-          openWorldHint: tool.openWorld ?? tool.tier === 'write',
         },
       },
       async (input: Record<string, unknown>, extra: ToolExtra) => {

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- MCP: every tool is advertised with a `title` (the tool name split into words, or a `title` the descriptor sets) and the `openWorldHint` annotation: `true` for a write and for a read that queries WhatsApp live (`ContactCheckNumber`, `ContactGetProfilePicture`, `MessageHistory`, `GroupFindOne`, `GroupGetInviteCode`), set with the new `openWorld` field of a tool descriptor.
+- MCP: every tool is advertised with a `title`, the name a client shows: the tool name split into words, or the `title` its descriptor sets (#2098). Thanks @sudipta-prodevs.
 
 ### Changed
 

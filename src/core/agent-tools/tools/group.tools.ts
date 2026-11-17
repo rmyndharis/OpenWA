@@ -43,7 +43,6 @@ export function groupTools(group: GroupService, session: Pick<SessionService, 'f
       chatScope: ['groupId'],
       description: 'Get detailed info for a specific group including participants list.',
       tier: 'read',
-      openWorld: true, // queries WhatsApp live, not the local DB
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
@@ -57,7 +56,6 @@ export function groupTools(group: GroupService, session: Pick<SessionService, 'f
         'Get the invite code and link for a group. Requires OPERATOR role: the code is a ' +
         'transferable join capability, not plain read data.',
       tier: 'read',
-      openWorld: true, // queries WhatsApp live, not the local DB
       requiredRole: ApiKeyRole.OPERATOR,
       sessionScoped: true,
       inputSchema: z.object({

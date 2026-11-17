@@ -694,7 +694,7 @@ describe('mountMcpServer (raw-Express request-handling path)', () => {
   });
 });
 
-describe('tool title and openWorldHint (what the SDK is given for each tool)', () => {
+describe('tool title (what the SDK is given for each tool)', () => {
   const drive = async (tools: AnyToolDescriptor[]): Promise<Map<string, Record<string, unknown>>> => {
     mockRegisteredTools.length = 0;
     let routeHandlers: unknown[] = [];
@@ -743,8 +743,6 @@ describe('tool title and openWorldHint (what the SDK is given for each tool)', (
       handler: jest.fn(),
       ...extra,
     }) as unknown as AnyToolDescriptor;
-  const hints = (config: Record<string, unknown>): Record<string, unknown> =>
-    config.annotations as Record<string, unknown>;
 
   it('derives the title from the name unless the tool sets one', async () => {
     const configs = await drive([
@@ -757,56 +755,25 @@ describe('tool title and openWorldHint (what the SDK is given for each tool)', (
     expect(configs.get('SessionGetQRCode')?.title).toBe('QR code for linking');
   });
 
-  it('a write tool is open-world, a plain read is not, and openWorld overrides the tier', async () => {
-    const configs = await drive([
-      stub('W', { tier: 'write' }),
-      stub('R', {}),
-      stub('RLive', { openWorld: true }),
-      stub('WClosed', { tier: 'write', openWorld: false }),
-    ]);
-    expect(hints(configs.get('W') as Record<string, unknown>).openWorldHint).toBe(true);
-    expect(hints(configs.get('R') as Record<string, unknown>).openWorldHint).toBe(false);
-    expect(hints(configs.get('RLive') as Record<string, unknown>).openWorldHint).toBe(true);
-    expect(hints(configs.get('WClosed') as Record<string, unknown>).openWorldHint).toBe(false);
-  });
-
-  it('keeps the existing hints beside the new one', async () => {
-    const configs = await drive([stub('R', {})]);
-    expect(hints(configs.get('R') as Record<string, unknown>)).toEqual({
-      readOnlyHint: true,
+  // No tool sets openWorldHint: an absent hint is the protocol default, true, and a read that returns what other
+  // WhatsApp users wrote must not tell a client that it stays inside a closed world.
+  it('leaves the annotations at the three hints it sets', async () => {
+    const configs = await drive([stub('R', {}), stub('W', { tier: 'write' })]);
+    expect(configs.get('R')?.annotations).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: true });
+    expect(configs.get('W')?.annotations).toEqual({
+      readOnlyHint: false,
       destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
+      idempotentHint: false,
     });
   });
 
-  it('every tool of the real surface gets a non-empty title and a boolean openWorldHint', async () => {
+  it('every tool of the real surface gets a non-empty title', async () => {
     const tools = allAgentTools(new Proxy({}, { get: () => ({}) }) as unknown as AgentToolDeps);
     const configs = await drive(tools);
     expect(configs.size).toBe(tools.length);
     for (const config of configs.values()) {
       expect(typeof config.title).toBe('string');
       expect((config.title as string).length).toBeGreaterThan(0);
-      expect(typeof hints(config).openWorldHint).toBe('boolean');
-    }
-  });
-
-  it('on the real surface: every write is open-world, a DB-only read is not, a live WhatsApp read is', async () => {
-    const tools = allAgentTools(new Proxy({}, { get: () => ({}) }) as unknown as AgentToolDeps);
-    const configs = await drive(tools);
-    const open = (name: string): unknown => hints(configs.get(name) as Record<string, unknown>).openWorldHint;
-    for (const t of tools.filter(t => t.tier === 'write')) expect([t.name, open(t.name)]).toEqual([t.name, true]);
-    for (const name of ['MessageList', 'SessionFindAll', 'SessionGetStats', 'WebhooksList', 'AutomationRuleFindAll']) {
-      expect([name, open(name)]).toEqual([name, false]);
-    }
-    for (const name of [
-      'ContactCheckNumber',
-      'ContactGetProfilePicture',
-      'MessageHistory',
-      'GroupFindOne',
-      'GroupGetInviteCode',
-    ]) {
-      expect([name, open(name)]).toEqual([name, true]);
     }
   });
 });

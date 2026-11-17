@@ -48,7 +48,6 @@ export function contactTools(contact: ContactService): AnyToolDescriptor[] {
       description:
         'Check whether a phone number is registered on WhatsApp. Returns exists flag and the WhatsApp JID if found. Requires OPERATOR role.',
       tier: 'read',
-      openWorld: true, // queries WhatsApp live, not the local DB
       requiredRole: ApiKeyRole.OPERATOR,
       sessionScoped: true,
       inputSchema: z.object({
@@ -81,7 +80,6 @@ export function contactTools(contact: ContactService): AnyToolDescriptor[] {
       chatScope: ['contactId'],
       description: 'Get the profile picture URL for a contact.',
       tier: 'read',
-      openWorld: true, // queries WhatsApp live, not the local DB
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,

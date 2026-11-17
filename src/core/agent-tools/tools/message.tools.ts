@@ -255,7 +255,6 @@ export function messageTools(message: MessageService, idempotency?: SendIdempote
         'Fetch live chat history from WhatsApp for a specific chat. Bypasses the local DB — useful for messages that arrived before the gateway started. ' +
         'Requires the whatsapp-web.js engine; Baileys answers 501 and a retry cannot succeed, so use MessageList for stored messages.',
       tier: 'read',
-      openWorld: true, // queries WhatsApp live, not the local DB
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
