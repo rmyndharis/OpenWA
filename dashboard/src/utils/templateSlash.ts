@@ -33,10 +33,7 @@ export function normalizeTemplateName(name: string): string {
   return name.trim().replace(/^\//, '').toLowerCase();
 }
 
-export function findTemplateBySlashName(
-  templates: readonly SlashTemplate[],
-  query: string,
-): SlashTemplate | undefined {
+export function findTemplateBySlashName(templates: readonly SlashTemplate[], query: string): SlashTemplate | undefined {
   const needle = normalizeTemplateName(query);
   if (!needle) return undefined;
   return templates.find(t => normalizeTemplateName(t.name) === needle);
