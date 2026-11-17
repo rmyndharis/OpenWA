@@ -372,6 +372,16 @@
   resize: vertical;
 }
 
+/* The dialog's input rule does not reach a textarea, so it states the focus the inputs beside it show. */
+.api-keys-page .modal-body > textarea:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+  background: var(--bg-white);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
+}
+
 .api-keys-page .modal-body > select,
 .api-keys-page .modal-body > textarea {
   margin-bottom: 0.25rem;

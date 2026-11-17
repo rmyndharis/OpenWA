@@ -155,3 +155,12 @@
   min-height: 96px;
   font-family: monospace;
 }
+
+/* The dialog's input rule does not reach a textarea, so it states the focus the inputs beside it show. */
+.plugin-instances textarea:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px rgba(37, 211, 102, 0.1);
+}

@@ -286,6 +286,34 @@ test('a native checkbox on the Message Tester takes no ring from the field rule'
   assert.equal(decl(rule.body, 'box-shadow'), 'none');
 });
 
+// A box that rings on :focus-within holds a borderless field. In a dialog the dialog's input rule reaches that field
+// too and would draw a second frame inside the first.
+test('the catalog search field draws no ring of its own inside the box that rings', () => {
+  const box = scanned.find(
+    r => r.file === 'pages/Plugins.css' && r.selectors.includes('.plugins-page .catalog-search:focus-within'),
+  );
+  assert.ok(box && ringIn(box.body, '--focus-ring'), 'the catalog search box no longer rings: drop this check');
+  const selector = '.plugins-page .catalog-search input:focus';
+  const rule = scanned.find(r => r.file === 'pages/Plugins.css' && r.selectors.includes(selector));
+  assert.ok(rule, `pages/Plugins.css has no ${selector} rule`);
+  assert.equal(decl(rule.body, 'box-shadow'), 'none');
+});
+
+// The dialog's input rule does not reach a textarea, and no rule of the page did: these kept the browser's own outline
+// beside inputs that ring. The scan above holds each rule to the ring once it paints the focus border.
+test('the textareas of the API key and plugin instance dialogs state their own focus rule', () => {
+  const rules: [string, string][] = [
+    ['pages/ApiKeys.css', '.api-keys-page .modal-body > textarea:focus'],
+    ['components/PluginInstances.css', '.plugin-instances textarea:focus'],
+  ];
+  for (const [file, selector] of rules) {
+    const rule = scanned.find(r => r.file === file && r.selectors.includes(selector));
+    assert.ok(rule, `${file} has no ${selector} rule`);
+    assert.equal(decl(rule.body, 'border-color'), 'var(--focus-ring)', `${selector} paints no focus border`);
+    assert.ok(ringIn(rule.body, '--focus-ring'), `${selector} draws no ring`);
+  }
+});
+
 test('the scan reads a field hover rule and flags a border fainter than the one at rest', () => {
   const rule = (selector: string, body: string): Scanned => ({ file: 'x.css', media: '', selectors: [selector], body });
   // The themes the scan reports for a rule: the brand fill is 1.98:1 on white, under the border at rest there, and 7.38:1 on

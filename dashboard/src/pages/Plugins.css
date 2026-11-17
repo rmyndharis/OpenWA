@@ -1115,6 +1115,11 @@
   color: var(--text-primary);
 }
 
+/* The box below draws the focus ring. The dialog's input rule would draw a second one around the field inside it. */
+.plugins-page .catalog-search input:focus {
+  box-shadow: none;
+}
+
 .plugins-page .catalog-search:focus-within {
   border-color: var(--focus-ring);
   box-shadow:
