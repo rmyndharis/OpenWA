@@ -1929,7 +1929,8 @@ export function Chats() {
       } else if (kind === 'clear') {
         expectSuccess(await sessionApi.clearChatMessages(sessionId, chat.id));
         showSuccessToast(t('chats.rowActions.cleared', { name }));
-        patchChat(sessionId, chat.id, { lastMessage: '', unreadCount: 0 });
+        // The row draws a placeholder from the type of the message it last held (a contact), so the type goes too.
+        patchChat(sessionId, chat.id, { lastMessage: '', lastMessageType: undefined, unreadCount: 0 });
         // The thread cache holds the messages just deleted; the next open reads the empty chat.
         await queryClient.invalidateQueries({ queryKey: messagesQueryKey(sessionId, chat.id) });
       } else {
