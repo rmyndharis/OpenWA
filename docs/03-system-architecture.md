@@ -215,6 +215,8 @@ stateDiagram-v2
     Authenticating --> Failed: Credentials rejected
     Ready --> Disconnected: disconnect() / dropped link
     Ready --> Failed: Fatal error
+    Ready --> ActionRequired: Onboarding modal needs a person (whatsapp-web.js)
+    ActionRequired --> Disconnected: disconnect() / dropped link
     Disconnected --> [*]
     Failed --> [*]
 ```
