@@ -207,11 +207,15 @@ and the payload follows as an embedded base64 `resource` block. The server has n
 capability, so that URI cannot be fetched, and how a client presents the block to the model is the
 client's choice. Claude Code 2.1.321 saves it to a file on its own machine and tells the model only
 the path, so the model sees the data only if it has a file-reading tool; a client that forwards text
-alone shows it nothing. Page a tool that can return many rows (`SessionGetChats`, `GroupFindAll`,
-`MessageList`) with `limit` and `offset` to stay under the limit. `MessageList` also carries each
-message's media inline as base64, up to a per-response budget
-(`MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES`, 8 MiB by default), which is far over the limit; pass
-`inlineMedia: false` to get the rows without it.
+alone shows it nothing. Page a tool that can return many rows (`SessionGetChats`, `ContactFindAll`,
+`GroupFindAll`, `MessageList`) with `limit` and `offset` to stay under the limit.
+
+`MessageList` leaves media out: a media message is listed with an `{ omitted, sizeBytes }` marker in
+place of its payload. A call that sets `inlineMedia: true` gets the payloads inline as base64, up to a
+per-response budget (`MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES`, 8 MiB by default; the newest payload is
+let through whatever its size), which is far over the limit. This differs from
+`GET /api/sessions/{sessionId}/messages`, which inlines unless asked not to: base64 is of no use to a
+model that reads the result as text.
 
 **Capping a result (`MCP_MAX_RESULT_BYTES`).** The offloaded blob has no upper bound, and a client that puts the
 whole result in the model's context (claude.ai, ChatGPT) fails or degrades past a size: claude.ai documents about

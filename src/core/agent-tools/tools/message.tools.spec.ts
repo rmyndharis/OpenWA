@@ -37,13 +37,14 @@ describe('messageTools', () => {
       from: undefined,
       limit: 10,
       offset: 5,
+      inlineMedia: false,
     });
     expect(out).toEqual([{ id: 'm1' }]);
   });
 
-  // Media rows carry their base64 inline up to a per-response budget (8 MiB by default), and over MCP the list is
-  // the only way to the bytes, so the default stays "inline"; an agent that wants the rows alone opts out, as the
-  // REST list's inlineMedia=false does.
+  // The base64 of a media row is of no use to a model that reads the result as text, and one photo makes the page
+  // larger than an MCP client takes, so the tool leaves the payloads out unless the call asks for them. Over MCP the
+  // list is the only way to the bytes, so inlineMedia: true still reaches the service; REST inlines by default.
   it.each([true, false])('MessageList forwards inlineMedia: %s to getMessages', async inlineMedia => {
     const getMessages = jest.fn().mockResolvedValue({ messages: [], total: 0 });
     const tools = makeTools({ getMessages } as unknown as MessageService);
@@ -51,12 +52,12 @@ describe('messageTools', () => {
     expect(getMessages).toHaveBeenCalledWith('s1', expect.objectContaining({ chatId: '628111@c.us', inlineMedia }));
   });
 
-  it('MessageList leaves inlineMedia out of the call when it is unset, so the service default applies', async () => {
+  it('MessageList asks for no inline media when inlineMedia is unset, where the service default is to inline', async () => {
     const getMessages = jest.fn().mockResolvedValue({ messages: [], total: 0 });
     const tools = makeTools({ getMessages } as unknown as MessageService);
     await run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us' });
     const options = (getMessages.mock.calls[0] as [string, Record<string, unknown>])[1];
-    expect(Object.keys(options)).not.toContain('inlineMedia');
+    expect(options.inlineMedia).toBe(false);
   });
 
   it('MessageList refuses a sender filter longer than a chat id, as the chat filter beside it is', async () => {
@@ -95,7 +96,7 @@ describe('messageTools', () => {
       messageId: 'true_628111@c.us_3EB0ABC',
     };
     await run(tools.get('MessageList')!, { sessionId: 's1', chatId: '628111@c.us', ...filters });
-    expect(getMessages).toHaveBeenCalledWith('s1', { chatId: '628111@c.us', ...filters });
+    expect(getMessages).toHaveBeenCalledWith('s1', { chatId: '628111@c.us', ...filters, inlineMedia: false });
   });
 
   it.each(['', '   '])('MessageList reads the blank cursor %p as absent, as REST does', async after => {
