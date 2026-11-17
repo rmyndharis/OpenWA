@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - whatsapp-web.js: block and unblock use the library's own LID handling, so an unblock no longer clears an entry the same person holds under a second id, such as a phone-keyed block from before the LID migration. The install-time block patch is retired.
 - The MCP `MessageList` tool lists a media message without its payload unless the call sets `inlineMedia: true`, where it carried the base64 inline up to the 8 MiB budget, so one photo made the result larger than an MCP client takes.
 
+### Fixed
+
+- Dashboard: starting an audio or video message pauses the one already playing, where both kept playing at once (#2106). Thanks @mbdali.
+
 ### Documentation
 
 - Say in the `limit` description of the MCP tools that answer a bare list (`SessionFindAll`, `SessionGetChats`, `ContactFindAll`, `GroupFindAll`, `WebhooksList`) that a call returns at most 1000 rows, also when `limit` is omitted, so a full page may not be the whole list.
