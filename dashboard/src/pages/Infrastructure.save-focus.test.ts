@@ -175,7 +175,9 @@ test('Escape from the restart dialog returns focus to Save Configuration', async
   const dialog = await rtl.screen.findByRole('dialog');
   rtl.fireEvent.keyDown(dialog, { key: 'Escape' });
   await rtl.waitFor(() => assert.equal(rtl.screen.queryByRole('dialog') === null, true), { timeout: SLOW_WAIT_MS });
-  assert.equal(focusedName(), 'Save Configuration');
+  // The page hands focus back once the save has ended as well as the dialog has gone, and the save ends a moment
+  // after the dialog opens, so the dialog can be gone while the button is still busy.
+  await rtl.waitFor(() => assert.equal(focusedName(), 'Save Configuration'), { timeout: SLOW_WAIT_MS });
 });
 
 test('a refused save leaves focus on a field selected while the request ran', async () => {
