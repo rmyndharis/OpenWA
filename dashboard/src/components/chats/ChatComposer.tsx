@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type SetStateAction } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type SetStateAction,
+} from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Loader2, Plus, Send, Smile, X } from 'lucide-react';
@@ -256,7 +264,7 @@ function ChatComposer({
     textInputRef.current?.focus();
   };
 
-  const handleComposerKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+  const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (!slashOpen || slashMatches.length === 0 || isComposingKey(event.nativeEvent)) return;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
