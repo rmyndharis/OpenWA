@@ -61,6 +61,11 @@ backed by `localStorage` — there is no Zustand store.
    originals, which are 6:1 or better on the dark surfaces, and lightens error to `#f77b7b`, which
    clears 4.65:1 on the 20 percent error tint over Slate 800, because the original measures 3.89:1
    on Slate 800 (`#1e293b`), the dark card surface.
+   Text fields, selects and textareas draw their border at rest in `--control-border`, not in the card
+   hairline `--border` (1.23:1 on white): it is 3:1 or better (SC 1.4.11) on every surface a field is
+   drawn on or filled with, in the light theme and in both dark paths, and the box around a search
+   field or a custom select takes it too. `dashboard/src/field-border-contrast.test.ts` fails the build
+   when a field rule goes back to the hairline. Focus, hover and error keep their own borders.
    Known gap: the exclusive button groups report `aria-pressed` without arrow-key roving focus. Every
    page has a render test, but only Infrastructure's resolves the caption references
    against a real DOM; elsewhere they are checked structurally. Treat the claim as directional, not
