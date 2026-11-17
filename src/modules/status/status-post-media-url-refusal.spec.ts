@@ -6,6 +6,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { StatusController } from './status.controller';
 import { StatusService } from './status.service';
+import { SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { applyGlobalValidation } from '../../config/app-validation';
 import { resolveMediaBuffer } from '../../engine/adapters/baileys-messaging';
 import type { MediaInput } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -35,8 +36,12 @@ describe('a status post whose media URL the gateway does not fetch', () => {
   let pacing: { assertSendAllowed: jest.Mock; recordSendSuccess: jest.Mock; recordSendFailure: jest.Mock };
 
   beforeAll(async () => {
-    server = createServer((_req, res) => {
+    server = createServer((req, res) => {
       requests++;
+      if (req.url?.startsWith('/moved')) {
+        res.writeHead(302, { location: 'https://example.invalid/final.png' }).end();
+        return;
+      }
       res.writeHead(200, { 'content-type': 'image/png' }).end(Buffer.from([1, 2, 3]));
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -109,5 +114,30 @@ describe('a status post whose media URL the gateway does not fetch', () => {
       expect(res.status).toBe(201);
       expect(requests).toBe(1);
     });
+  });
+
+  describe('that the SSRF guard refuses', () => {
+    it.each(kinds)('answers 400 on POST status/%s for an internal address, without naming it', async (route, field) => {
+      const res = await post(route, field, 'http://10.0.0.1/x.png');
+
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ message: SSRF_BLOCKED_CLIENT_MESSAGE });
+      expect(JSON.stringify(res.body)).not.toContain('10.0.0.1');
+      expect(requests).toBe(0);
+      expect(pacing.recordSendFailure).not.toHaveBeenCalled();
+    });
+
+    it.each(kinds)(
+      'answers 400 on POST status/%s for a URL that redirects, and does not follow it',
+      async (route, field) => {
+        const res = await post(route, field, `${base}/moved.png`);
+
+        expect(res.status).toBe(400);
+        expect(res.body).toMatchObject({ message: SSRF_BLOCKED_CLIENT_MESSAGE });
+        // The redirect itself was requested; its target never was.
+        expect(requests).toBe(1);
+        expect(pacing.recordSendFailure).not.toHaveBeenCalled();
+      },
+    );
   });
 });

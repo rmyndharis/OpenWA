@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, HttpException, HttpStatus, NotFoundExc
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { GroupMemberAddMode, IWhatsAppEngine, MediaInput } from '../../engine/interfaces/whatsapp-engine.interface';
 import { resolveMediaBody } from '../message/media-cap.util';
+import { clientFacingSsrfError } from '../../common/media/client-facing-ssrf-error';
 import { chatKind, toNeutralJid } from '../../engine/identity/wa-id';
 import { isAddressableParticipant } from '../../engine/identity/wa-id';
 import { SetGroupPictureDto } from './dto/group.dto';
@@ -265,7 +266,11 @@ export class GroupService {
       requireMimetypeForBase64: true,
       checkUrl: true,
     });
-    return this.getEngine(sessionId).setGroupPicture(toNeutralJid(groupId), media);
+    return this.getEngine(sessionId)
+      .setGroupPicture(toNeutralJid(groupId), media)
+      .catch((error: unknown) => {
+        throw clientFacingSsrfError(error);
+      });
   }
 
   deleteGroupPicture(sessionId: string, groupId: string): Promise<void> {

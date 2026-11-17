@@ -1,7 +1,6 @@
 import { Injectable, BadRequestException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { markEngineSendFailure } from '../../common/errors/engine-send-failure';
-import { markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { mergeSentMetadata, updateMessageMetadata } from './message-metadata';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, QueryDeepPartialEntity } from 'typeorm';
@@ -11,6 +10,7 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
 import { assertBase64WithinMediaCap, resolveMediaBody, stripBase64DataUri } from './media-cap.util';
+import { clientFacingSsrfError } from '../../common/media/client-facing-ssrf-error';
 import { LINK_PREVIEW_THUMBNAIL_MAX_BYTES } from '../../common/media/load-remote-media';
 import { isMediaUrl, MEDIA_URL_MESSAGE } from '../../common/media/media-url';
 import {
@@ -296,7 +296,7 @@ export class MessageSendService {
       await this.saveFailedMessage(message);
       // Sanitize the hook payload: an SSRF block's raw .message names the resolved internal address
       // (a recon/DNS-rebind oracle); the client-facing throw below already maps it to a generic
-      // message via toClientFacingError, and the message:failed hook must not expose more than the
+      // message via clientFacingSsrfError, and the message:failed hook must not expose more than the
       // client sees. Now that every media/extended sender routes here, this is the chokepoint that
       // keeps SSRF detail out of plugin hands (bulk does the same via sanitizeBatchError).
       const hookError =
@@ -310,7 +310,7 @@ export class MessageSendService {
         { sessionId, error: hookError, input, type },
         { sessionId, source: 'MessageService' },
       );
-      throw this.toClientFacingError(error);
+      throw clientFacingSsrfError(error);
     } catch (failure) {
       // HTTP status alone cannot prove whether an engine accepted the message before failing.
       throw markEngineSendFailure(failure);
@@ -1133,21 +1133,6 @@ export class MessageSendService {
     } catch (error) {
       this.logger.warn(`simulateTyping skipped: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }
-
-  /**
-   * Map a blocked outbound media fetch (SSRF guard) to an HTTP 400 so a
-   * caller-supplied internal/unsafe URL returns a client error instead of a 500.
-   * The raw guard message names the resolved internal IP (a recon/DNS-rebind oracle), so return a
-   * generic message to the client and keep the detail in the server log only. Others pass through.
-   * The guard refuses before any fetch, so the replacement keeps the proof that nothing was sent.
-   */
-  private toClientFacingError(error: unknown): unknown {
-    if (error instanceof SsrfBlockedError) {
-      this.logger.warn(`Outbound media fetch blocked by SSRF guard: ${error.message}`);
-      return markNothingSent(new BadRequestException(SSRF_BLOCKED_CLIENT_MESSAGE));
-    }
-    return error;
   }
 
   private buildMediaInput(dto: SendMediaMessageDto): MediaInput {

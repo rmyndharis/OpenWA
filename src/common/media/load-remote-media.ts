@@ -47,8 +47,9 @@ function carriesCredentials(url: string): boolean {
  * missing body, a timeout, a failed connection or a user name or password in the URL (refused before
  * any connection, without repeating it) throw `BadRequestException`, and a body over the
  * cap throws `PayloadTooLargeException`. As plain Errors they left every send path as a 500 and
- * counted toward the send-pacing breaker. `SsrfBlockedError` is rethrown unchanged; each caller maps
- * it to its own generic message.
+ * counted toward the send-pacing breaker. `SsrfBlockedError` is rethrown unchanged (bulk results, the send pacing
+ * and the `message:failed` hook test for that class); a route that fetches a caller's URL maps it with
+ * `clientFacingSsrfError`.
  *
  * Behind a session proxy a failed connection or a timeout before any response is answered 503
  * instead: undici reports a proxy that refuses, cannot be resolved or fails its handshake with the
