@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade notes (behavior changes)
 
 - An MCP `MessageList` call that does not set `inlineMedia` returns each media message with an `{ omitted, sizeBytes }` marker in place of its payload, where it returned the base64 inline; pass `inlineMedia: true` to get the bytes. `GET /api/sessions/{sessionId}/messages` still inlines by default.
+- A source install that runs the Chrome Puppeteer downloads (no `PUPPETEER_EXECUTABLE_PATH`) moves from Chrome 156 to 157 with Puppeteer 25.17.0, so a rollback to 0.30.3 or earlier crosses a browser major and deletes the stored whatsapp-web.js logins unless `sessions/` is restored from a backup taken before the first start on this release (see `docs/11-operational-runbooks.md`); the images pin their own browser and do not change, and Baileys sessions are unaffected.
 
 ## [0.30.3] - 2026-11-16
 
