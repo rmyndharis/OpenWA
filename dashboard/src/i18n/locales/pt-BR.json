@@ -786,6 +786,7 @@
       "revokeTitle": "Revogar chave API",
       "deleteMessage": "Tem certeza que deseja excluir permanentemente <strong>{{name}}</strong>? Esta ação não pode ser desfeita.",
       "revokeMessage": "Tem certeza que deseja revogar <strong>{{name}}</strong>? Ela deixará de funcionar.",
+      "signedIn": "Este painel está conectado com esta chave. Revogá-la ou excluí-la desconectará você.",
       "delete": "Excluir",
       "revoke": "Revogar"
     },

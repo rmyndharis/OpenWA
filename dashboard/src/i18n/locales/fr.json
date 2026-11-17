@@ -836,6 +836,7 @@
       "revokeTitle": "Révoquer la clé API",
       "deleteMessage": "Êtes-vous sûr de vouloir supprimer définitivement <strong>{{name}}</strong> ? Cette action est irréversible.",
       "revokeMessage": "Êtes-vous sûr de vouloir révoquer <strong>{{name}}</strong> ? Elle ne fonctionnera plus.",
+      "signedIn": "Ce tableau de bord est connecté avec cette clé. La révoquer ou la supprimer vous déconnectera.",
       "delete": "Supprimer",
       "revoke": "Révoquer"
     },

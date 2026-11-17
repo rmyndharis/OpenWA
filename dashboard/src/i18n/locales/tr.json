@@ -830,6 +830,7 @@
       "revokeTitle": "API Anahtarını Geçersiz Kıl",
       "deleteMessage": "<strong>{{name}}</strong> anahtarını kalıcı olarak silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.",
       "revokeMessage": "<strong>{{name}}</strong> anahtarını geçersiz kılmak istediğinizden emin misiniz? Artık çalışmayacaktır.",
+      "signedIn": "Bu panel bu anahtarla oturum açtı. Anahtarı geçersiz kılmak veya silmek oturumunuzu kapatır.",
       "delete": "Sil",
       "revoke": "Geçersiz Kıl"
     },

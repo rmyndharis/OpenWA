@@ -258,6 +258,8 @@ export function ApiKeys() {
     null,
   );
 
+  const confirmKey = confirmAction ? apiKeys.find(key => key.id === confirmAction.id) : undefined;
+
   const windowWidth = useWindowSize();
   const isMobile = windowWidth <= 768;
   const isSmall = windowWidth < 640;
@@ -844,6 +846,13 @@ export function ApiKeys() {
               tOptions={{ interpolation: { escapeValue: true } }}
             />
           </p>
+          {/* Revoking or deleting the key this dashboard is signed in with ends the session at its next request. */}
+          {confirmKey && isSignedInKey(confirmKey, apiKeys) && (
+            <p className="key-signed-in-warning" role="note">
+              <AlertTriangle size={16} />
+              {t('apiKeys.confirm.signedIn')}
+            </p>
+          )}
         </Modal>
       )}
     </div>

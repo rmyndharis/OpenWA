@@ -830,6 +830,7 @@
       "revokeTitle": "Cabut Kunci API",
       "deleteMessage": "Yakin ingin menghapus permanen <strong>{{name}}</strong>? Tindakan ini tidak dapat dibatalkan.",
       "revokeMessage": "Yakin ingin mencabut <strong>{{name}}</strong>? Kunci ini tidak akan berfungsi lagi.",
+      "signedIn": "Anda masuk ke dasbor ini menggunakan kunci ini. Mencabut atau menghapusnya akan membuat Anda keluar.",
       "delete": "Hapus",
       "revoke": "Cabut"
     },

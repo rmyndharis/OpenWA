@@ -843,6 +843,7 @@
       "revokeTitle": "שלילת מפתח API",
       "deleteMessage": "האם למחוק לצמיתות את <strong>{{name}}</strong>? לא ניתן לשחזר פעולה זו.",
       "revokeMessage": "האם לשלול את <strong>{{name}}</strong>? המפתח יפסיק לפעול.",
+      "signedIn": "לוח הבקרה הזה מחובר עם המפתח הזה. שלילה או מחיקה שלו ינתקו אתכם.",
       "delete": "מחיקה",
       "revoke": "שלילה"
     },

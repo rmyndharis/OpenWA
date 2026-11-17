@@ -836,6 +836,7 @@
       "revokeTitle": "Revoca Chiave API",
       "deleteMessage": "Sei sicuro di voler eliminare permanentemente <strong>{{name}}</strong>? Questa azione non può essere annullata.",
       "revokeMessage": "Sei sicuro di voler revocare <strong>{{name}}</strong>? Smetterà di funzionare.",
+      "signedIn": "Questa dashboard ha effettuato l'accesso con questa chiave. Revocarla o eliminarla ti disconnetterà.",
       "delete": "Elimina",
       "revoke": "Revoca"
     },

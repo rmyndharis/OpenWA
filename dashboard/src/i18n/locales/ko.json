@@ -830,6 +830,7 @@
       "revokeTitle": "API 키 폐기",
       "deleteMessage": "<strong>{{name}}</strong>을(를) 영구히 삭제할까요? 이 작업은 되돌릴 수 없습니다.",
       "revokeMessage": "<strong>{{name}}</strong>을(를) 폐기할까요? 더 이상 사용할 수 없게 됩니다.",
+      "signedIn": "이 대시보드는 이 키로 로그인되어 있습니다. 키를 폐기하거나 삭제하면 로그아웃됩니다.",
       "delete": "삭제",
       "revoke": "폐기"
     },

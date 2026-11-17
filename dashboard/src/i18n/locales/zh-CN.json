@@ -830,6 +830,7 @@
       "revokeTitle": "撤销 API 密钥",
       "deleteMessage": "确定要永久删除 <strong>{{name}}</strong> 吗？此操作无法撤销。",
       "revokeMessage": "确定要撤销 <strong>{{name}}</strong> 吗？它将不再可用。",
+      "signedIn": "此仪表板正使用该密钥登录。撤销或删除该密钥会使你退出登录。",
       "delete": "删除",
       "revoke": "撤销"
     },
