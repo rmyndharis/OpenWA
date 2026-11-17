@@ -104,7 +104,6 @@ function ChatComposer({
   const attachmentReadSeq = useRef(0);
   const tempSeqRef = useRef(0);
 
-
   // Escape dismisses the emoji picker instead of closing the conversation behind it.
   //
   // On `document`, and in the capture phase, because neither alternative works: the picker is a div
