@@ -608,7 +608,8 @@ previously linked session starts at a QR code instead of reconnecting, the log n
 0.23.4 log only a generic `relink_required` warning), and upgrading again does not bring the pairing back. On
 amd64 this follows a rollback from 0.29.0 or later (Chrome for Testing 157) to 0.28.0 or earlier,
 from 0.26.0 or later (156) to 0.25.0 or earlier, and from 0.23.5 or later to 0.23.4 or earlier (146); on arm64, a rollback to an image built with an older Debian
-chromium major. Restoring `sessions/` from a backup taken before the first start on the newer image keeps the
+chromium major; on a source install without `PUPPETEER_EXECUTABLE_PATH`, a rollback across the Puppeteer
+25.17.0 update, which moved the Chrome it downloads from 156 to 157. Restoring `sessions/` from a backup taken before the first start on the newer image keeps the
 pairing (see the upgrade runbook's rollback in docs/11); without one, scan a new QR.
 
 **Fix:** delete the affected session's profile dir and start the session again to scan a new QR. The
