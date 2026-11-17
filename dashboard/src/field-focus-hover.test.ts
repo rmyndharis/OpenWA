@@ -8,7 +8,7 @@ import { decl, readRules, type Rule } from './test-helpers/css-rules.ts';
 // A field's border at rest is --control-border (field-border-contrast.test.ts), 1.5:1 from the focus border in the light
 // theme and 2.3:1 in the dark one, so a field that shows focus by its border colour alone changes little between the two.
 // Such a field also draws a 1px ring in the focus colour, in front of the glow it has: a box-shadow takes no room, so
-// the border and the layout stay as they are.
+// the border and the layout stay as they are. A hover never draws a border fainter than the one at rest.
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 
@@ -124,6 +124,91 @@ const errorOffenders = (rules: Scanned[]): string[] => [
   ),
 ];
 
+// WCAG contrast of two hex colours.
+const rgb = (hex: string): number[] => {
+  const full = hex.length === 4 ? `#${[...hex.slice(1)].map(c => c + c).join('')}` : hex;
+  return [1, 3, 5].map(i => parseInt(full.slice(i, i + 2), 16));
+};
+const luminance = (c: number[]): number => {
+  const [r, g, b] = c.map(v => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a: number[], b: number[]): number => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+// The custom-property blocks a theme applies, first match wins: a dark block lists only what it changes.
+const MEDIA_DARK = '@media (prefers-color-scheme: dark)';
+const SYSTEM_DARK = ":root:not([data-theme='light'])";
+const blockBody = (file: string, selector: string, media = ''): string => {
+  const rule = scanned.find(r => r.file === file && r.media === media && r.selectors.includes(selector));
+  assert.ok(rule, `${file} has no ${selector} rule${media ? ` under ${media}` : ''}`);
+  return rule.body;
+};
+const APP = {
+  light: blockBody('App.css', ':root'),
+  dark: blockBody('App.css', "[data-theme='dark']"),
+  systemDark: blockBody('App.css', SYSTEM_DARK, MEDIA_DARK),
+};
+const CHATS = {
+  light: blockBody('pages/Chats.css', '.chats-page'),
+  dark: blockBody('pages/Chats.css', "[data-theme='dark'] .chats-page"),
+  systemDark: blockBody('pages/Chats.css', `${SYSTEM_DARK} .chats-page`, MEDIA_DARK),
+};
+const THEMES: Record<string, string[]> = {
+  light: [CHATS.light, APP.light],
+  'dark theme': [CHATS.dark, CHATS.light, APP.dark, APP.light],
+  'system dark': [CHATS.systemDark, CHATS.light, APP.systemDark, APP.light],
+};
+// Every surface a field is drawn on or filled with: the dialog and the card, the page, and on the chat page the panel and
+// the header strip.
+const SURFACES = ['--bg-white', '--bg-light', '--chat-panel', '--chat-panel-header'];
+
+// A colour as written (`var(--x, #fff)` or a hex) resolved to a hex string in one theme.
+function hexOf(value: string, blocks: string[]): string {
+  const alias = /^var\(\s*(--[\w-]+)\s*(?:,\s*(.+))?\)$/.exec(value.trim());
+  if (!alias) {
+    assert.match(value.trim(), /^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i, `${value} is not a hex colour`);
+    return value.trim();
+  }
+  const own = blocks.map(css => decl(css, alias[1])).find(v => v !== undefined) ?? alias[2];
+  assert.ok(own, `${alias[1]} is defined nowhere`);
+  return hexOf(own, blocks);
+}
+
+const isHover = (selector: string): boolean => /:hover\b/.test(selector.replace(/:not\([^)]*\)/g, ''));
+// The border colours a field hover rule paints that are fainter, on some surface of some theme, than the border at rest.
+const hoverOffenders = (rules: Scanned[]): string[] => [
+  ...new Set(
+    rules.flatMap(rule =>
+      rule.selectors
+        .filter(selector => isHover(selector) && isField(selector))
+        .flatMap(selector =>
+          borders(rule.body)
+            .filter(value => !/^(?:none|0)\b/.test(value))
+            .flatMap(value => {
+              const colour = /var\([^)]*\)|#[0-9a-f]{3,6}\b/i.exec(value)?.[0];
+              if (!colour) return [`${rule.file}: ${selector} => ${value} is neither a token nor a hex colour`];
+              return Object.entries(THEMES).flatMap(([theme, blocks]) =>
+                SURFACES.flatMap(surface => {
+                  const on = rgb(hexOf(`var(${surface})`, blocks));
+                  const hover = contrast(rgb(hexOf(colour, blocks)), on);
+                  const rest = contrast(rgb(hexOf('var(--control-border)', blocks)), on);
+                  return hover >= rest
+                    ? []
+                    : [
+                        `${rule.file}: ${selector} => ${colour}: ${theme}, ${hover.toFixed(2)}:1 on ${surface}, ` +
+                          `the border at rest is ${rest.toFixed(2)}:1`,
+                      ];
+                }),
+              );
+            }),
+        ),
+    ),
+  ),
+];
+
 test('the scan reads a field state rule and tells a ring from a border colour alone', () => {
   assert.deepEqual(subject(".a .b > input[type='text']:focus"), ['input']);
   assert.deepEqual(subject('.a input.error:focus'), ['input', '.error']);
@@ -199,4 +284,43 @@ test('a native checkbox on the Message Tester takes no ring from the field rule'
   const rule = scanned.find(r => r.file === 'pages/MessageTester.css' && r.selectors.includes(selector));
   assert.ok(rule, `pages/MessageTester.css has no ${selector} rule`);
   assert.equal(decl(rule.body, 'box-shadow'), 'none');
+});
+
+test('the scan reads a field hover rule and flags a border fainter than the one at rest', () => {
+  const rule = (selector: string, body: string): Scanned => ({ file: 'x.css', media: '', selectors: [selector], body });
+  // The themes the scan reports for a rule: the brand fill is 1.98:1 on white, under the border at rest there, and 7.38:1 on
+  // the dark card, over it.
+  const themes = (selector: string, body: string): string[] => [
+    ...new Set(
+      hoverOffenders([rule(selector, body)]).map(
+        line => /: (light|dark theme|system dark),/.exec(line)?.[1] ?? 'unreadable',
+      ),
+    ),
+  ];
+  const everyTheme = ['light', 'dark theme', 'system dark'];
+  assert.deepEqual(themes('select:hover', 'border-color: var(--primary, #25d366)'), ['light']);
+  assert.deepEqual(themes('select:hover', 'border-color: var(--focus-ring)'), []);
+  assert.deepEqual(themes('select:hover', 'border-color: var(--control-border)'), []);
+  assert.deepEqual(themes('select:hover', 'border-color: var(--border)'), everyTheme);
+  assert.deepEqual(
+    themes('.a .search-input:hover', 'border: 1px solid var(--primary)'),
+    ['light'],
+    'a box, a shorthand',
+  );
+  assert.deepEqual(themes('.a input[type="text"]:hover', 'border-color: #94a3b8'), ['light'], 'a hex colour');
+  assert.deepEqual(themes('select:hover', 'color: var(--primary)'), [], 'no border');
+  assert.deepEqual(themes('select:hover', 'border-color: rgba(0, 0, 0, 0.5)'), ['unreadable']);
+  assert.deepEqual(themes('.a .btn-secondary:hover', 'border-color: var(--text-muted)'), [], 'not a field');
+  assert.deepEqual(themes('.a .filter-badge-interactive:hover', 'border-color: var(--primary)'), [], 'not a field');
+});
+
+test('a field hover never draws a border fainter than the border at rest, in every theme', () => {
+  const hovers = scanned.filter(
+    rule => rule.selectors.some(selector => isHover(selector) && isField(selector)) && borders(rule.body).length > 0,
+  );
+  assert.ok(
+    hovers.some(rule => rule.selectors.includes('select:hover')),
+    'the hover rule of a select is not seen',
+  );
+  assert.deepEqual(hoverOffenders(scanned), []);
 });

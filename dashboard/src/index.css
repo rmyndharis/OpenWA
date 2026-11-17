@@ -136,8 +136,9 @@ select {
   transition: all 0.2s;
 }
 
+/* The brand fill is 1.98:1 on white, fainter than the border at rest; the focus colour is stronger on every surface. */
 select:hover {
-  border-color: var(--primary, #25d366);
+  border-color: var(--focus-ring);
 }
 
 select:focus {
