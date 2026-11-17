@@ -2508,6 +2508,62 @@
 /* A button, not a label: the bytes are fetchable from the per-message media route, so this is the
    viewer's handle on media the list did not inline. Styled to keep the previous inert appearance
    apart from the affordance. */
+.chats-page .message-contact {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-bottom: 0.35rem;
+  min-width: 12rem;
+}
+
+.chats-page .message-contact-card {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--chat-meta) 12%, transparent);
+}
+
+.chats-page .message-bubble.outgoing .message-contact-card {
+  background: color-mix(in srgb, #fff 14%, transparent);
+}
+
+.chats-page .message-contact-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chat-meta) 18%, transparent);
+  color: var(--chat-meta);
+  flex-shrink: 0;
+}
+
+.chats-page .message-contact-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.chats-page .message-contact-name {
+  font-weight: 600;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chats-page .message-contact-phone {
+  color: var(--chat-meta);
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chats-page .message-media-omitted {
   display: flex;
   align-items: center;

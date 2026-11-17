@@ -77,6 +77,7 @@
     "edited": "수정됨",
     "media": {
       "location": "위치",
+      "contact": "연락처",
       "call": "통화",
       "callMissed": "부재중 전화",
       "callVideo": "영상 통화",
