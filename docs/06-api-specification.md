@@ -7689,11 +7689,11 @@ Every delivery includes:
 
 **Idempotency key derivation.** The key is content-derived so duplicates of the same logical event collapse to one value. Every key below is then suffixed with `_{webhookId}`, so two webhooks subscribed to the same event never share a key:
 
-- `message.received` / `message.sent`: `msg_{sessionId}_{messageId}`
+- `message.received` / `message.sent`: `msg_{sessionId}_{messageId}`, or `msg_{sessionId}_noid_{occurrenceId}` when the engine could not read the message id (whatsapp-web.js then reports it empty): such a message has nothing to dedupe on, so each dispatch of one is its own event
 - `message.ack`: `ack_{sessionId}_{messageId}_{status}`
 - `message.receipt`: `receipt_{sessionId}_{messageId}_{participant}_{status}`
 - `message.failed`: `failed_{sessionId}_{messageId}_{status}`
-- `message.revoked`: `rev_{sessionId}_{messageId}`
+- `message.revoked`: `rev_{sessionId}_{messageId}`, or `rev_{sessionId}_noid_{occurrenceId}` when the notification's id could not be read
 - `message.edited`: `edit_{sessionId}_{messageId}_{occurrenceId}`
 - `message.reaction`: `react_{sessionId}_{messageId}_{senderId}_{occurrenceId}`
 - `session.qr`: `qr_{sessionId}_{hash(qr)}`
