@@ -4093,7 +4093,7 @@ Bare array, no envelope. Only the whatsapp-web.js engine serves this route, and 
 fills only `id`, `name` and `description`: `inviteCode`, `subscriberCount`, `verified`, `picture` and
 `createdAt` never appear here even though the channel schema declares them.
 
-**Errors:** `400` `Session is not started` · `401` missing/invalid API key · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine
+**Errors:** `400` `Session is not started` · `401` missing/invalid API key · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` on whatsapp-web.js, the page died mid-read or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### GET /api/sessions/:sessionId/channels/:channelId
 
@@ -4165,7 +4165,7 @@ Get recent messages from a channel/newsletter.
 
 Bare array. `timestamp` is an epoch number (seconds). Neither engine populates `mediaUrl` on channel messages today; use `hasMedia` to tell a media post apart. An update with neither text nor media is not listed, which is how WhatsApp Web keeps an update that was deleted.
 
-**Errors:** `400` `Session is not started` · `401` missing/invalid API key · `404` `Channel <channelId> not found` (on whatsapp-web.js, the id is not among the channels the account follows) · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine
+**Errors:** `400` `Session is not started` · `401` missing/invalid API key · `404` `Channel <channelId> not found` (on whatsapp-web.js, the id is not among the channels the account follows) · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` on whatsapp-web.js, the page died mid-read or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### POST /api/sessions/:sessionId/channels
 

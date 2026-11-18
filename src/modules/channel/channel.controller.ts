@@ -40,6 +40,12 @@ export class ChannelController {
     status: 501,
     description: 'Not supported by the active engine: the Baileys adapter cannot list subscribed channels.',
   })
+  @ApiResponse({
+    status: 503,
+    description:
+      'On whatsapp-web.js, answered when the page died mid-read or WhatsApp Web did not answer within the protocol timeout, ' +
+      'so nothing could be read. Retry shortly.',
+  })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async findAll(@Param('sessionId') sessionId: string) {
     return this.channelService.getSubscribedChannels(sessionId);
@@ -87,6 +93,12 @@ export class ChannelController {
   @ApiResponse({
     status: 501,
     description: 'Not supported by the active engine: the Baileys adapter cannot read channel messages.',
+  })
+  @ApiResponse({
+    status: 503,
+    description:
+      'On whatsapp-web.js, answered when the page died mid-read or WhatsApp Web did not answer within the protocol timeout, ' +
+      'so nothing could be read. Retry shortly.',
   })
   @ApiResponse({ status: 400, description: 'Session not started' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })

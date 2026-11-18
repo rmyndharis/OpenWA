@@ -6635,7 +6635,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "description": "The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6758,7 +6758,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "description": "The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6878,7 +6878,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "description": "The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12898,7 +12898,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "description": "The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13009,7 +13009,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "description": "The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13779,6 +13779,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "On whatsapp-web.js, answered when the page died mid-read or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Get all subscribed channels/newsletters",
@@ -14176,6 +14186,16 @@
           },
           "501": {
             "description": "Not supported by the active engine: the Baileys adapter cannot read channel messages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "On whatsapp-web.js, answered when the page died mid-read or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
