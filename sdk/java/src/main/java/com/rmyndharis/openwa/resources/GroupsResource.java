@@ -207,7 +207,7 @@ public final class GroupsResource {
             GroupPictureResponse.class);
     }
 
-    /** Set the group's picture. Requires admin rights on the group. */
+    /** Set the group's picture. Requires the right to edit the group info: an admin, or any member of a group whose info is not restricted to admins. */
     public SuccessResult setPicture(String sessionId, String groupId, SetGroupPictureRequest body) {
         return client.request(
             HttpMethod.PUT,
@@ -217,7 +217,7 @@ public final class GroupsResource {
             SuccessResult.class);
     }
 
-    /** Remove the group's picture. Requires admin rights on the group. */
+    /** Remove the group's picture. Requires the right to edit the group info: an admin, or any member of a group whose info is not restricted to admins. */
     public SuccessResult deletePicture(String sessionId, String groupId) {
         return client.request(
             HttpMethod.DELETE,

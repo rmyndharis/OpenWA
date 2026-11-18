@@ -176,7 +176,7 @@ class GroupsResource
     }
 
     /**
-     * Set the group's picture. Requires admin rights on the group.
+     * Set the group's picture. Requires the right to edit the group info: an admin, or any member of a group whose info is not restricted to admins.
      *
      * @param array<string,mixed> $body url OR base64 (base64 wins), plus mimetype with base64.
      * @return array<string,mixed>
@@ -187,7 +187,7 @@ class GroupsResource
     }
 
     /**
-     * Remove the group's picture. Requires admin rights on the group.
+     * Remove the group's picture. Requires the right to edit the group info: an admin, or any member of a group whose info is not restricted to admins.
      *
      * @return array<string,mixed>
      */

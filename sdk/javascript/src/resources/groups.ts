@@ -188,7 +188,7 @@ export class GroupsResource {
     });
   }
 
-  /** Set the group's picture. Requires admin rights on the group. */
+  /** Set the group's picture. Requires the right to edit the group info: an admin, or any member of a group whose info is not restricted to admins. */
   setPicture(sessionId: string, groupId: string, body: SetGroupPictureRequest): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'PUT',
@@ -197,7 +197,7 @@ export class GroupsResource {
     });
   }
 
-  /** Remove the group's picture. Requires admin rights on the group. */
+  /** Remove the group's picture. Requires the right to edit the group info: an admin, or any member of a group whose info is not restricted to admins. */
   deletePicture(sessionId: string, groupId: string): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'DELETE',
