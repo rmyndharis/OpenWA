@@ -132,6 +132,8 @@
   font-size: 0.8125rem;
   color: var(--text-muted);
   white-space: nowrap;
+  width: fit-content;
+  unicode-bidi: plaintext;
 }
 
 .logs-page .action {

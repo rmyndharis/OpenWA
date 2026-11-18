@@ -32,6 +32,7 @@ const SHOWN: readonly Entry[] = [
   ['pages/Logs.css', '.logs-page .action .log-message', 'the message of an audit entry', FIT],
   ['pages/Logs.css', '.logs-page .session', 'the session an audit entry names', FIT],
   ['pages/Logs.css', '.logs-page .api-key', 'the key an audit entry names', FIT],
+  ['pages/Logs.css', '.logs-page .timestamp', 'the time of an audit entry', { width: 'fit-content' }],
   ['pages/Plugins.css', '.plugins-page .plugin-name', 'the name of a plugin'],
   ['pages/Plugins.css', '.plugins-page .plugin-description', 'the description of a plugin', FIT],
   [
@@ -54,6 +55,13 @@ const FIELDS: readonly Entry[] = [
   ['pages/Sessions.css', '.sessions-page .search-input input', 'the session search box'],
   ['pages/Logs.css', '.logs-page .search-input input', 'the audit log search box'],
   ['components/GlobalSearch.css', '.global-search-input', 'the message search box'],
+  ['pages/MessageTester.css', '.message-tester .form-group textarea', 'the body of a message in the Message Tester'],
+  ['pages/Chats.css', '.chats-page .chat-search-input input', 'the chat list and New chat search boxes'],
+  [
+    'components/chats/RoomSearch.css',
+    '.chats-page .room-search-input-wrap .room-search-input',
+    'the in-chat search box',
+  ],
 ];
 
 const sheet = (file: string) => readRules(new URL(`./${file}`, import.meta.url));

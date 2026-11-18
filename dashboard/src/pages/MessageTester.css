@@ -81,6 +81,7 @@
 .message-tester .form-group textarea {
   resize: vertical;
   min-height: 100px;
+  unicode-bidi: plaintext;
 }
 
 .message-tester .form-group .hint {

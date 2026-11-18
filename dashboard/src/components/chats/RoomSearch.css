@@ -80,6 +80,7 @@
   font-family: inherit;
   font-size: 0.875rem;
   outline: none;
+  unicode-bidi: plaintext;
 }
 
 /* The day is the browser's own date field, in the same shell as the text field and as wide as its content: it is

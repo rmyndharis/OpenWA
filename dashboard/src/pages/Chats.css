@@ -618,6 +618,7 @@
   font-size: 0.9375rem;
   color: var(--text-primary);
   outline: none;
+  unicode-bidi: plaintext;
 }
 
 .chats-page .chat-search-input input::placeholder {
