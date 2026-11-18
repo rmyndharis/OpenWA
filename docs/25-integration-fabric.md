@@ -367,10 +367,13 @@ the completed job left Redis (`removeOnComplete` keeps one for an hour or the la
 sweep saw it, and a job removed in the queue dashboard is added again until the replay budget is
 spent. A Redis you run yourself should keep its keys: `maxmemory-policy noeviction`, and persistence
 (`appendonly yes`), so a restart does not begin with an empty queue; the bundled container and
-`docker-compose.yml` set both. A redrive marks its dead letter redriven as soon as the replay job is
-queued, so a replay job that Redis then loses is not found by the reconciler: the dead-letter row
-keeps its payload until `INGRESS_RETENTION_DAYS` prunes it, so reset `redriven` on the row or send
-the delivery again.
+`docker-compose.yml` set both. With the queue off, the reconciler cannot ask Redis about a job, so it replays a
+`pending` row inline whatever Redis still holds, and a job left in `ingress-queue` runs again when the queue is
+turned back on: a second delivery of the same event. Before turning the queue off, wait until `ingress-queue` has
+no waiting, delayed or active jobs (the commands are in [14](./14-migration-guide.md), BullMQ Migration). A
+redrive marks its dead letter redriven as soon as the replay job is queued, so a replay job that Redis then loses
+is not found by the reconciler: the dead-letter row keeps its payload until `INGRESS_RETENTION_DAYS` prunes it,
+so reset `redriven` on the row or send the delivery again.
 
 **Plugin restore window.** The gateway opens its port before a slow plugin restore has finished (see
 [19](./19-plugin-architecture.md), Restore on boot), so a delivery can arrive for a plugin that has no
