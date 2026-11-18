@@ -1,4 +1,4 @@
-import { WorkerToHostMessage, HostToWorkerMessage } from './protocol';
+import { WorkerToHostMessage, HostToWorkerMessage, SANDBOX_MAX_PENDING_CAPS } from './protocol';
 import { hookConfigStore } from './worker-hooks';
 import { ConversationSendEnvelope } from '../plugin.interfaces';
 import { HandoverState } from '../../../modules/integration/entities/conversation-mapping.entity';
@@ -14,6 +14,13 @@ export class WorkerCapabilityClient {
   constructor(private readonly post: (message: WorkerToHostMessage) => void) {}
 
   call(verb: string, args: unknown[]): Promise<unknown> {
+    // The host refuses past its own in-flight bound, but each refused call is still a message it reads and answers on
+    // its one thread: a loop that does not await its calls would flood it, so the worker refuses first.
+    if (this.pending.size >= SANDBOX_MAX_PENDING_CAPS) {
+      return Promise.reject(
+        new Error(`capability call rejected: too many unanswered capability calls (limit ${SANDBOX_MAX_PENDING_CAPS})`),
+      );
+    }
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const inFlight = hookConfigStore.getStore()?.inFlight;

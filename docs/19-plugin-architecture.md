@@ -870,6 +870,12 @@ tier automatically. Key properties:
 - After a hook, webhook or search dispatch times out, the host pings the worker. A worker whose event
   loop is blocked (a synchronous loop) cannot answer within 5 s, so it is terminated and the plugin is
   set to `ERROR`, as on a crash; a slow async handler answers and is left running.
+- The worker bounds what it posts to the host, so a loop that never yields cannot flood the host's one thread:
+  `ctx.logger.*` lines are limited to **200 per 10 s** (the rest are dropped inside the worker, with a note at the
+  first drop and a count with the first line after the window ends; the host's log relay applies the same limit),
+  and a capability call is refused with a thrown `Error` while **64** calls are unanswered (twice the 32
+  concurrent calls the host runs). A plugin that awaits its calls and logs at an ordinary rate never reaches
+  either limit.
 - Lifecycle methods (`load`/`onLoad`/`onEnable`/`onDisable`) and `healthCheck` are bounded by a **30 s**
   / **5 s** timeout respectively, so a wedged plugin can't hang an ADMIN enable/disable or the health endpoint.
 - The worker gets a **minimal allowlisted env** (`NODE_ENV`, `NODE_EXTRA_CA_CERTS`, `TZ`) — host secrets

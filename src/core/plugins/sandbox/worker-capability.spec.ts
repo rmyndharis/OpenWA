@@ -1,5 +1,5 @@
 import { WorkerCapabilityClient, buildSandboxContext } from './worker-capability';
-import { WorkerToHostMessage } from './protocol';
+import { SANDBOX_MAX_INFLIGHT_CAPS, SANDBOX_MAX_PENDING_CAPS, WorkerToHostMessage } from './protocol';
 import { WorkerHookRegistry } from './worker-hooks';
 
 describe('WorkerCapabilityClient', () => {
@@ -51,6 +51,62 @@ describe('WorkerCapabilityClient', () => {
     client.handleResult({ kind: 'cap-result', id: reqA.id, ok: true, result: 'A' });
     await expect(a).resolves.toBe('A');
     await expect(b).resolves.toBe('B');
+  });
+
+  describe('a loop that does not await its calls', () => {
+    type CapMessage = Extract<WorkerToHostMessage, { kind: 'cap' }>;
+
+    it('keeps the worker bound above the bound the host enforces, so no call the host would run is refused', () => {
+      expect(SANDBOX_MAX_PENDING_CAPS).toBeGreaterThan(SANDBOX_MAX_INFLIGHT_CAPS);
+    });
+
+    it('refuses the call past the bound without posting it, and accepts calls once one is answered', async () => {
+      const sent: WorkerToHostMessage[] = [];
+      const client = new WorkerCapabilityClient(m => sent.push(m));
+
+      const calls = Array.from({ length: SANDBOX_MAX_PENDING_CAPS }, (_, i) => client.call('storage.get', [`k${i}`]));
+      expect(sent).toHaveLength(SANDBOX_MAX_PENDING_CAPS);
+
+      const refused = client.call('storage.get', ['one too many']);
+      await expect(refused).rejects.toThrow(`too many unanswered capability calls (limit ${SANDBOX_MAX_PENDING_CAPS})`);
+      expect(sent).toHaveLength(SANDBOX_MAX_PENDING_CAPS);
+
+      client.handleResult({ kind: 'cap-result', id: (sent[0] as CapMessage).id, ok: true, result: 'v0' });
+      await expect(calls[0]).resolves.toBe('v0');
+      const accepted = client.call('storage.get', ['after an answer']);
+      expect(sent).toHaveLength(SANDBOX_MAX_PENDING_CAPS + 1);
+      expect(sent[SANDBOX_MAX_PENDING_CAPS]).toMatchObject({ kind: 'cap', args: ['after an answer'] });
+
+      // An error answer frees a slot as well, and nothing is left pending.
+      for (const message of sent.slice(1) as CapMessage[]) {
+        client.handleResult({ kind: 'cap-result', id: message.id, ok: false, error: 'done' });
+      }
+      await expect(
+        Promise.all([...calls.slice(1), accepted].map(p => p.catch((e: Error) => e.message))),
+      ).resolves.toEqual(Array.from({ length: SANDBOX_MAX_PENDING_CAPS }, () => 'done'));
+      expect((client as unknown as { pending: Map<number, unknown> }).pending.size).toBe(0);
+    });
+
+    it('rejects a refused call instead of throwing, so a plugin that chains a catch handles it', async () => {
+      const client = new WorkerCapabilityClient(() => undefined);
+      for (let i = 0; i < SANDBOX_MAX_PENDING_CAPS; i++) void client.call('storage.get', [i]).catch(() => undefined);
+
+      let refused: Promise<unknown> | undefined;
+      expect(() => (refused = client.call('storage.get', ['x']))).not.toThrow();
+      await expect(refused).rejects.toBeInstanceOf(Error);
+    });
+
+    it('does not refuse calls that are answered as they go', async () => {
+      const sent: WorkerToHostMessage[] = [];
+      const client = new WorkerCapabilityClient(m => sent.push(m));
+
+      for (let i = 0; i < SANDBOX_MAX_PENDING_CAPS * 8; i++) {
+        const call = client.call('storage.get', ['k']);
+        client.handleResult({ kind: 'cap-result', id: (sent[i] as CapMessage).id, ok: true, result: i });
+        await expect(call).resolves.toBe(i);
+      }
+      expect(sent).toHaveLength(SANDBOX_MAX_PENDING_CAPS * 8);
+    });
   });
 
   it('tags a call made inside a hook handler with that dispatch chain, and only that call', async () => {

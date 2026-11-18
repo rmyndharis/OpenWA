@@ -4,6 +4,7 @@ import { WorkerCapabilityClient, buildSandboxContext } from './worker-capability
 import { WorkerHookRegistry, WorkerHookHandler, hookConfigStore } from './worker-hooks';
 import { WebhookRegistry, WebhookHandler } from './worker-webhooks';
 import { WorkerSearchRegistry, WorkerSearchHandler } from './worker-search-registry';
+import { WorkerLogLimiter } from './worker-log-limiter';
 
 /**
  * Worker entry for a plugin. Loads the plugin module and drives its lifecycle in response to host
@@ -42,10 +43,15 @@ const hookRegistry = new WorkerHookRegistry(send);
 const webhookRegistry = new WebhookRegistry(send);
 const searchRegistry = new WorkerSearchRegistry(send);
 
+// The lines past the window's bound are dropped here, before the clone, so a loop that logs without yielding
+// costs the host nothing (see WorkerLogLimiter).
+const logLimiter = new WorkerLogLimiter(message => send({ kind: 'log', level: 'warn', message }));
+
 // A meta the structured clone cannot copy (a function, a fetch Response) makes postMessage throw. From
 // a timer that throw is uncaught and kills the worker, so the line goes out again without its meta,
 // keeping only logger.error's reason, which is always a string.
 const sendLog = (level: PluginLogLevel, message: string, meta?: Record<string, unknown>): void => {
+  if (!logLimiter.admit()) return;
   try {
     send({ kind: 'log', level, message, meta });
   } catch {

@@ -25,7 +25,7 @@ import { PluginLifecycle } from './plugin-lifecycle';
 import { PluginUninstaller } from './plugin-uninstaller';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
-import { PluginLogLevel } from './sandbox/protocol';
+import { PluginLogLevel, SANDBOX_MAX_INFLIGHT_CAPS } from './sandbox/protocol';
 import { resolvePluginMainPath } from './plugin-paths';
 import type { IngressJobData } from '../../modules/queue/processors/ingress.processor';
 
@@ -40,12 +40,6 @@ export {
 
 /** Default per-plugin heap cap for the sandbox worker; an OOM terminates the worker, not the host. */
 const SANDBOX_MAX_OLD_GEN_MB = 256;
-
-/**
- * Max concurrent worker-initiated capability calls per sandboxed plugin. A burst beyond this is rejected
- * (the plugin sees a thrown Error) rather than amplified into unbounded host-side sends/fetches/writes.
- */
-const SANDBOX_MAX_INFLIGHT_CAPS = 32;
 
 /**
  * Host-side budget for ONE worker-initiated capability call. A plugin whose calls hang would otherwise
