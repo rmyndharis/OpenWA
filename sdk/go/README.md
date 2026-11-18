@@ -270,6 +270,7 @@ a key you have already handled is the same event arriving again.
 
 ```bash
 cd sdk/go
+test -z "$(gofmt -l .)"
 go test -race -cover ./...
 go vet ./...
 ```
