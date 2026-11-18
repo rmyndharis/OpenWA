@@ -1098,8 +1098,9 @@ adapter boundary — none silently stubs.
   after that budget is replayed by Baileys as a count of `0`, which also clears the count of a message received
   in the meantime. A write confirmed in time is replayed before the read returns, or while Baileys' event buffer
   still holds it, and the session then keeps the count of a message received after the read reset the counts; a read
-  made on the phone in the same fraction of a second reaches the session together with that replay, is taken for it,
-  and leaves the count of the message it read listed until the next read.
+  made on the phone while the buffer still holds that replay (a tenth of a second, longer while other work keeps the
+  buffer open) reaches the session together with it, is taken for it, and leaves the count of the message it read
+  listed until the next read.
   A session restarted since the mark was set no longer lists it (`unreadCount` reads `0`, as above), so
   its read sends the receipt alone and the mark stays on the account.
 - **`setProfileName` / `setProfilePicture` / `deleteProfilePicture` refusals (baileys).**

@@ -1168,6 +1168,14 @@ export class BaileysSessionStore {
     this.readEchoes.set(jid, Date.now() + READ_ECHO_WINDOW_MS);
   }
 
+  /**
+   * The chat reported a count that never reaches {@link upsertChats}: the filter for a message that is none of its own
+   * took it out, and the library had summed the held replay into it. That count is the replay, so the wait is over.
+   */
+  endReadEcho(jid: string): void {
+    this.readEchoes.delete(jid);
+  }
+
   /** Forget every note: the socket that held the replays is gone, and its event buffer with them. */
   dropReadEchoes(): void {
     this.readEchoes.clear();

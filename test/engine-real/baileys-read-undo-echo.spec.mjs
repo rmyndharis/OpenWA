@@ -229,6 +229,64 @@ test('a read made on the phone inside the hold that carries the echo is taken fo
   assert.equal(await unread(adapter), 1);
 });
 
+// A message that is none of its own, received while the echo is held, is counted by the library as a received message: it
+// sums that count into the held zero, and the adapter takes the count (and with it, the update) out. That update still
+// is the echo, delivered, so the zero a phone read brings later is a read and applies, however soon after it comes.
+const pin = {
+  pinInChatMessage: { key: { id: 'M1', remoteJid: PEER, fromMe: true }, type: 1, senderTimestampMs: 1_700_000_000_000 },
+};
+
+/** The read of a chat marked unread by hand returns with M2 unread and its echo held; a pin then arrives in the hold. */
+async function pinnedWhileEchoHeld(t, { withPin = true, unarchiveChats = false } = {}) {
+  const session = await startSession(t, {
+    unarchiveChats,
+    socket: writing({ beforeWrite: sock => deliver(sock, message('M2', 1_700_000_011)) }),
+  });
+  const { adapter, sock } = session;
+  await markedUnread(session);
+  assert.equal(await adapter.sendSeen(CHAT), true);
+  assert.equal(sock.replayWasBuffered, true, 'the echo is held by the open event buffer');
+  assert.equal(await unread(adapter), 1, 'M2 is listed unread when the read returns');
+  if (withPin) await deliver(sock, wireMessage({ id: 'P1', at: 1_700_000_012, message: pin })); // the flush delivers both
+  await echoDelivered(sock);
+  assert.equal(await unread(adapter), 1, 'M2 was never read, and the echo must not list the chat read');
+  return session;
+}
+
+/** The account reads M2 on its phone `laterMs` after the echo; Baileys reports a plain zero. */
+async function phoneRead(t, { adapter, sock }, laterMs = 0) {
+  const realNow = Date.now;
+  if (laterMs) Date.now = () => realNow() + laterMs;
+  t.after(() => (Date.now = realNow));
+  sock.ev.emit('chats.update', [{ id: PEER, unreadCount: 0 }]);
+  return unread(adapter);
+}
+
+for (const withPin of [false, true]) {
+  for (const [after, laterMs] of [
+    ['at once', 0],
+    ['20 s later', 20_000],
+    ['after the note would have lapsed', 36_000],
+  ]) {
+    test(`a read made on the phone ${after} lists the chat read ${withPin ? 'though a pin was held with the echo' : 'with no pin held with the echo'}`, async t => {
+      const session = await pinnedWhileEchoHeld(t, { withPin });
+      assert.equal(await phoneRead(t, session, laterMs), 0);
+    });
+  }
+}
+
+test('a read made on the phone lists the chat read though a pin was held with the echo, with the unarchive setting on', async t => {
+  const session = await pinnedWhileEchoHeld(t, { unarchiveChats: true });
+  assert.equal(await phoneRead(t, session), 0);
+});
+
+test('a pin received after the echo was delivered leaves the count and the phone read alone', async t => {
+  const session = await pinnedWhileEchoHeld(t, { withPin: false });
+  await deliver(session.sock, wireMessage({ id: 'P1', at: 1_700_000_012, message: pin }));
+  assert.equal(await unread(session.adapter), 1);
+  assert.equal(await phoneRead(t, session), 0);
+});
+
 test('a write WhatsApp refuses leaves no note: the zero a phone read brings later applies', async t => {
   const session = await startSession(t, { socket: writing({ refuse: true }) });
   const { adapter, sock } = session;

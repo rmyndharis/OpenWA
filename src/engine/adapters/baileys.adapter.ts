@@ -233,6 +233,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       clearUnread: (chatId, marks) => this.sessionStore.clearUnread(chatId, marks),
       keepUnread: chatId => this.sessionStore.keepUnread(chatId),
       expectReadEcho: jid => this.sessionStore.expectReadEcho(jid),
+      endReadEcho: jid => this.sessionStore.endReadEcho(jid),
       dropReadEchoes: () => this.sessionStore.dropReadEchoes(),
       lidOf: jid => this.sessionStore.lidOf(jid),
       chatTwins: jid => this.sessionStore.chatTwins(jid),

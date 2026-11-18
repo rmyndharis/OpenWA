@@ -188,6 +188,8 @@ export interface BaileysLifecycleHost {
   upsertChats: BaileysSessionStore['upsertChats'];
   /** Drop chats the socket reports deleted (chats.delete). */
   removeChats: BaileysSessionStore['removeChats'];
+  /** End the wait for the replay of a chat's mark-read write: a count the filter took out was that replay. */
+  endReadEcho?: BaileysSessionStore['endReadEcho'];
   /** Forget the replays the session awaits of its own mark-read writes: the socket that held them is replaced. */
   dropReadEchoes?: BaileysSessionStore['dropReadEchoes'];
   /** List the chats the gateway stored messages of (once, before the first socket opens). */
@@ -689,8 +691,17 @@ export class BaileysLifecycle {
         if (Object.hasOwn(update, 'ephemeralExpiration')) this.groupMetadata.invalidate(update.id);
       }
       // A message that is none of its own leaves the chat as it was: its count stays out, and so does its time, which
-      // would bring back a chat WhatsApp deleted.
-      this.host.upsertChats((updates ?? []).flatMap(update => withoutNonContentMessage(update, this.loadedLib) ?? []));
+      // would bring back a chat WhatsApp deleted. A count taken out may be the one the library summed the replay of the
+      // session's own read into, and upsertChats never sees it, so it ends the wait for that replay here.
+      this.host.upsertChats(
+        (updates ?? []).flatMap(update => {
+          const kept = withoutNonContentMessage(update, this.loadedLib);
+          if (update.id && Object.hasOwn(update, 'unreadCount') && !(kept && Object.hasOwn(kept, 'unreadCount'))) {
+            this.host.endReadEcho?.(update.id);
+          }
+          return kept ?? [];
+        }),
+      );
     });
     sock.ev.on('chats.delete', ids => {
       this.host.logger.debug('Baileys chats event', {

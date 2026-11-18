@@ -8706,6 +8706,50 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
 
         expect(await unread(adapter)).toBe(0);
       });
+
+      // The library sums a contact's pin into the held replay and hands over one update, of the pin, with a count of one.
+      // The filter for a message that is none of its own takes the count out, but that update is the replay, delivered.
+      describe('when a pin was summed into the replay', () => {
+        const summed = (extra: Record<string, unknown> = {}) => [
+          {
+            id: JID,
+            unreadCount: 1,
+            conversationTimestamp: 1700000060,
+            messages: [
+              { message: { key: { remoteJid: JID, fromMe: false, id: 'P1' }, message: { pinInChatMessage: {} } } },
+            ],
+            ...extra,
+          },
+        ];
+        const getContentType = () =>
+          jest.requireMock<Record<string, jest.Mock>>('@whiskeysockets/baileys').getContentType;
+        beforeEach(() => getContentType().mockImplementation(realGetContentType));
+        afterEach(() => getContentType().mockImplementation(() => 'conversation'));
+
+        it.each([
+          ['carries nothing else', {}],
+          ['also carries the unarchive of the account', { archived: false }],
+        ])('lists a read made on the phone later as read when the update %s', async (_what, extra) => {
+          const adapter = await markedThenMessaged();
+          await readWithMessagesArriving(adapter, true);
+
+          fakeSock.fire('chats.update', summed(extra));
+          expect(await unread(adapter)).toBe(3);
+          fakeSock.fire('chats.update', [{ id: JID, unreadCount: 0 }]); // the account reads them on its phone
+
+          expect(await unread(adapter)).toBe(0);
+        });
+
+        it('leaves the wait for the replay in place when the update names no chat', async () => {
+          const adapter = await markedThenMessaged();
+          await readWithMessagesArriving(adapter, true);
+
+          fakeSock.fire('chats.update', [{ ...summed()[0], id: undefined }]);
+          fakeSock.fire('chats.update', [{ id: JID, unreadCount: 0 }]); // the replay
+
+          expect(await unread(adapter)).toBe(3);
+        });
+      });
     });
 
     it('is kept by a second message', async () => {
