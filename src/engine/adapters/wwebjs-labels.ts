@@ -8,7 +8,7 @@ import { ChatLabelsUnsupportedError } from '../../common/errors/chat-labels-unsu
 import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { type WwebjsEngineHost, rethrowIfNavigation, withPage, withPageWrite } from './wwebjs-host';
+import { type WwebjsEngineHost, rethrowIfNavigation, withPageWrite } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
 import { isPageInvariant, readChats, recoverGroupChatById } from './wwebjs-chats';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
@@ -58,7 +58,7 @@ export class WwebjsLabels {
 
   async getLabels(): Promise<Label[]> {
     this.host.ensureReady();
-    const labels = await withPage(this.host, 'getLabels', () =>
+    const labels = await withPageWrite(this.host, 'getLabels', () =>
       (this.client() as unknown as BusinessClient).getLabels(),
     );
     if (!labels) {
@@ -159,7 +159,7 @@ export class WwebjsLabels {
     // Client.getLabelById never resolves null: its page code serializes the looked-up label without
     // checking it exists, so an unknown id (every id on a personal account) throws a TypeError that
     // surfaced as a 500. Picking from the full list makes a missing label the documented 404.
-    const labels = await withPage(this.host, 'getLabelById', () =>
+    const labels = await withPageWrite(this.host, 'getLabelById', () =>
       (this.client() as unknown as BusinessClient).getLabels(),
     );
     const label = labels?.find(candidate => String(candidate.id) === labelId);

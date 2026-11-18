@@ -11,7 +11,7 @@ import { SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { toMessageMedia } from './wwebjs-messaging';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
-import { type WwebjsEngineHost, requireClient, withPage, withPageWrite, reportPageDeath } from './wwebjs-host';
+import { type WwebjsEngineHost, requireClient, withPageWrite, reportPageDeath } from './wwebjs-host';
 import { noteVideoLoadTimeout } from './wwebjs-video-load-timeout';
 
 /**
@@ -61,9 +61,9 @@ export class WwebjsStatus {
     return requireClient(this.host);
   }
 
-  /** See {@link withPage} for what a dead page answers here. */
+  /** The reads of this delegate: {@link withPageWrite} says what a dead page and an expired timeout answer. */
   private withPage<T>(context: string, op: () => Promise<T>): Promise<T> {
-    return withPage(this.host, context, op);
+    return withPageWrite(this.host, context, op);
   }
 
   async getContactStatuses(): Promise<Status[]> {

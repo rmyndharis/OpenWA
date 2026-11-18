@@ -1512,7 +1512,7 @@ Each item may also include `isStatusBroadcast`, `mentionedIds`, `isLidSender`, `
 
 Entries WhatsApp Web keeps in a chat that nobody sent are left out: its security, business and group notices, the header of an album (its photos and videos are entries of their own), and anything of a kind whatsapp-web.js does not list that carries neither text nor media. A message deleted for everyone is returned as `revoked` under the id the message had, so it matches the stored row and the `message.revoked` event. The delete notice that names the original can write a person's chat, or in a group the author, by phone number where the stored row has the lid, so the id is returned in the form its stored row has (a row stored while the chat was still known by phone number keeps that form). It is returned as the notice names it when no row is stored, or when the gateway holds no reported pairing between the form the notice uses and the form the row has (a message the account sent and deleted in a group is also tried under the account's own id): that a lid and a phone number are one person is learned from the engine, never guessed. WhatsApp Web itself lists the entry under the id of the delete notice, and that id is returned only when the notice does not name the original.
 
-**Errors:** `400` session not active · `401` missing/invalid API key · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
+**Errors:** `400` session not active · `401` missing/invalid API key · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read, or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### GET /api/sessions/:sessionId/messages/:chatId/:messageId/reactions
 
@@ -1541,7 +1541,7 @@ Returns a bare array of `MessageReaction`:
 ]
 ```
 
-**Errors:** `400` session not active · `401` missing/invalid API key · `404` message not found in the chat (whatsapp-web.js) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
+**Errors:** `400` session not active · `401` missing/invalid API key · `404` message not found in the chat (whatsapp-web.js) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read, or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### GET /api/sessions/:sessionId/messages/:chatId/:messageId/receipts
 
@@ -1586,7 +1586,7 @@ Returns a `MessageReceipts` object; this illustrative group-message response lis
 }
 ```
 
-**Errors:** `400` session not active · `401` missing/invalid API key · `403` the message was received rather than sent by this account, or the key's `allowedChats` excludes the chat · `404` message not found in the chat · `409` conflict or engine not ready (retryable) · `500` engine error · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
+**Errors:** `400` session not active · `401` missing/invalid API key · `403` the message was received rather than sent by this account, or the key's `allowedChats` excludes the chat · `404` message not found in the chat · `409` conflict or engine not ready (retryable) · `500` engine error · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read, or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### POST /api/sessions/:sessionId/messages/vote-poll
 
@@ -4385,7 +4385,7 @@ List all labels defined for the session. Labels exist only on a WhatsApp Busines
 
 Bare array — raw return of `engine.getLabels()`; no envelope.
 
-**Errors:** `400` session is not started (no live engine) · `401` missing/invalid API key · `501` the Baileys engine does not implement label reads (whatsapp-web.js only) · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died mid-read (retryable)
+**Errors:** `400` session is not started (no live engine) · `401` missing/invalid API key · `501` the Baileys engine does not implement label reads (whatsapp-web.js only) · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died mid-read, or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### GET /api/sessions/:sessionId/labels/:labelId
 
@@ -4408,7 +4408,7 @@ Get a single label by its ID.
 
 The engine resolves `Label | null`; a `null` is mapped to `404` in the service, so a `200` always carries a label.
 
-**Errors:** `400` session is not started · `401` missing/invalid API key · `404` `Label <labelId> not found` · `501` the Baileys engine does not implement label reads (whatsapp-web.js only) · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died mid-read (retryable)
+**Errors:** `400` session is not started · `401` missing/invalid API key · `404` `Label <labelId> not found` · `501` the Baileys engine does not implement label reads (whatsapp-web.js only) · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died mid-read, or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### GET /api/sessions/:sessionId/labels/:labelId/chats
 

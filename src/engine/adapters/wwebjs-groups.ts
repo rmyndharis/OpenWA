@@ -19,7 +19,7 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { toMessageMedia } from './wwebjs-messaging';
-import { type WwebjsEngineHost, rethrowIfNavigation, withPage, withPageWrite, reportPageDeath } from './wwebjs-host';
+import { type WwebjsEngineHost, rethrowIfNavigation, withPageWrite, reportPageDeath } from './wwebjs-host';
 import { isNavigationError, isProtocolTimeout } from './wwebjs-lifecycle';
 import { listChats, recoverGroupChatById } from './wwebjs-chats';
 
@@ -720,7 +720,7 @@ export class WwebjsGroups {
     const chat = await this.requireGroupChat(groupId, 'getGroupMembershipRequests');
     // The library reads the page's own request store, which answers a non-admin without asking WhatsApp.
     this.refuseNonAdmin(chat, 'getGroupMembershipRequests', groupId);
-    return withPage(this.host, 'getGroupMembershipRequests', async () => {
+    return withPageWrite(this.host, 'getGroupMembershipRequests', async () => {
       const raw = await this.client().getGroupMembershipRequests(groupId);
       // Raw page-context store objects: wids can arrive as {_serialized} OR {$1} (the #747
       // minifier rename), so every id goes through readWid; a requester whose wid is unreadable

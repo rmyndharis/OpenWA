@@ -644,4 +644,110 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
       ).toBe(true);
     });
   });
+
+  // A read that outran the budget read nothing: the same retryable 503, and no death. These reads sat on `withPage`,
+  // which maps a navigation and a dead page but not a timeout, so each answered the raw timeout as a bare 500 while the
+  // chat-label, group, contact and chat reads beside them answered 503.
+  describe('the reads of the other delegates', () => {
+    const GROUP = '120363@g.us';
+    const CHANNEL = '120363@newsletter';
+    const MESSAGE = 'true_628@c.us_ABC';
+    const failing = (error: Error): jest.Mock => jest.fn().mockRejectedValue(error);
+    const resolved = (value: unknown): jest.Mock => jest.fn().mockResolvedValue(value);
+    const messaging = (host: WwebjsEngineHost): WwebjsMessaging => new WwebjsMessaging(host);
+
+    let timeoutMessage = '';
+    beforeAll(async () => {
+      timeoutMessage = await puppeteerProtocolTimeoutMessage();
+    });
+
+    type Read = [string, (host: WwebjsEngineHost) => Promise<unknown>, (error: Error) => Record<string, jest.Mock>];
+    const READS: Read[] = [
+      ['label list', h => new WwebjsLabels(h).getLabels(), e => ({ getLabels: failing(e) })],
+      ['one label', h => new WwebjsLabels(h).getLabelById('7'), e => ({ getLabels: failing(e) })],
+      [
+        'chat labels, which already answered 503',
+        h => new WwebjsLabels(h).getChatLabels(CHAT),
+        e => ({ getChatById: resolved({ id: { _serialized: CHAT }, getLabels: failing(e) }) }),
+      ],
+      ['channel list', h => new WwebjsChannels(h).getSubscribedChannels(), e => ({ getChannels: failing(e) })],
+      ['one channel', h => new WwebjsChannels(h).getChannelById(CHANNEL), e => ({ getChannels: failing(e) })],
+      [
+        'channel messages, the channel list',
+        h => new WwebjsChannels(h).getChannelMessages(CHANNEL, 5),
+        e => ({ getChannels: failing(e) }),
+      ],
+      [
+        'channel messages, the fetch',
+        h => new WwebjsChannels(h).getChannelMessages(CHANNEL, 5),
+        e => ({ getChannels: resolved([{ id: { _serialized: CHANNEL }, fetchMessages: failing(e) }]) }),
+      ],
+      [
+        'group membership requests',
+        h => new WwebjsGroups(h).getGroupMembershipRequests(GROUP),
+        e => ({
+          getChatById: resolved({ isGroup: true, id: { _serialized: GROUP }, participants: [] }),
+          getGroupMembershipRequests: failing(e),
+        }),
+      ],
+      ['contact statuses', h => new WwebjsStatus(h).getContactStatuses(), e => ({ getBroadcasts: failing(e) })],
+      [
+        'statuses of a contact',
+        h => new WwebjsStatus(h).getContactStatus(CHAT),
+        e => ({ getBroadcastById: failing(e) }),
+      ],
+      [
+        'reactions of a message',
+        h => messaging(h).getMessageReactions(CHAT, MESSAGE),
+        e => ({ getChatById: failing(e) }),
+      ],
+      [
+        'receipts of a message',
+        h => messaging(h).getMessageReceipts(CHAT, MESSAGE),
+        e => ({ getMessageById: failing(e) }),
+      ],
+      ['history of a chat', h => messaging(h).getChatHistory(CHAT, 10), e => ({ getChatById: failing(e) })],
+    ];
+
+    it.each(READS)(
+      '%s answers an expired protocolTimeout with a 503 and reports no death',
+      async (_name, run, client) => {
+        const { host, reportIfPageTransportError } = makeHost(client(new Error(timeoutMessage)));
+
+        const error = await run(host).catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(EngineTransportError);
+        expect(reportIfPageTransportError).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(READS)('%s still reports a dead page, once, and answers 503', async (_name, run, client) => {
+      const dead = new Error('Protocol error (Runtime.callFunctionOn): Target closed');
+      const { host, reportIfPageTransportError } = makeHost(client(dead));
+
+      await expect(run(host)).rejects.toBeInstanceOf(EngineTransportError);
+      expect(reportIfPageTransportError).toHaveBeenCalledTimes(1);
+      expect(reportIfPageTransportError).toHaveBeenCalledWith(dead, expect.any(String));
+    });
+
+    it.each(READS)('%s passes an ordinary failure through unchanged', async (_name, run, client) => {
+      const failure = new Error('Evaluation failed: something else');
+      const { host, reportIfPageTransportError } = makeHost(client(failure));
+
+      expect((await run(host).catch((e: unknown) => e)) === failure).toBe(true);
+      expect(reportIfPageTransportError).not.toHaveBeenCalled();
+    });
+
+    // getNumberId is the one read that folds a failure into an answer: the phone read of a migrated number answers the
+    // typed number when it fails, since the lookup before it already settled that the number exists. It keeps withPage,
+    // so a timeout of that second read stays the typed number and is not turned into a 503.
+    it('leaves the phone read of a migrated number answering the typed number when it times out', async () => {
+      const { host } = makeHost({
+        getNumberId: resolved({ _serialized: '159442138038327@lid' }),
+        getContactLidAndPhone: failing(new Error(timeoutMessage)),
+      });
+
+      await expect(new WwebjsContacts(host).getNumberId('628123456789')).resolves.toBe('628123456789@c.us');
+    });
+  });
 });

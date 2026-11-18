@@ -4,7 +4,7 @@ import { BusinessClient, WwjsChannelData, readWid } from '../types/whatsapp-web-
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
-import { type WwebjsEngineHost, withPage, withPageWrite, reportPageDeath } from './wwebjs-host';
+import { type WwebjsEngineHost, withPageWrite, reportPageDeath } from './wwebjs-host';
 
 /**
  * Channel/Newsletter operations extracted from WhatsAppWebJsAdapter. The adapter keeps the public
@@ -19,9 +19,9 @@ export class WwebjsChannels {
     return this.host.getClient();
   }
 
-  /** See {@link withPage} for what a dead page answers here. */
+  /** The reads of this delegate: {@link withPageWrite} says what a dead page and an expired timeout answer. */
   private withPage<T>(context: string, op: () => Promise<T>): Promise<T> {
-    return withPage(this.host, context, op);
+    return withPageWrite(this.host, context, op);
   }
 
   async getSubscribedChannels(): Promise<Channel[]> {
