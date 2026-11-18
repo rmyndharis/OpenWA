@@ -359,12 +359,14 @@
     },
     "slash": {
       "title": "Respuestas rápidas",
-      "hint": "Enter inserta el template resaltado. Enviá cuando esté listo.",
-      "placeholder": "Mensaje o /template…",
-      "empty": "Ningún template coincide",
-      "needsVars": "Este template tiene variables — completalas y enviá",
-      "loading": "Cargando templates…",
-      "loadError": "No se pudieron cargar los templates"
+      "hint": "Enter inserta la plantilla resaltada. Envíala cuando esté lista.",
+      "placeholder": "Mensaje o /plantilla…",
+      "empty": "Ninguna plantilla coincide",
+      "needsVars": "Completa las variables de la plantilla antes de enviar.",
+      "loading": "Cargando plantillas… Enter espera a que se carguen.",
+      "loadError": "No se pudieron cargar las plantillas",
+      "close": "Cerrar la lista de plantillas",
+      "more": "Hay más plantillas que coinciden. Sigue escribiendo para acotar la lista."
     },
     "roomSearch": {
       "title": "Buscar mensajes",

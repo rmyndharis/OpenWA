@@ -77,6 +77,7 @@ test('text cut with an ellipsis takes its direction from its own characters', ()
     '.chats-page .replying-to-body',
     '.chats-page .group-info-member .name',
     '.chats-page .session-name',
+    '.chats-page .slash-template-preview',
   ];
   for (const selector of cut) {
     const rule = body('pages/Chats.css', selector);
@@ -114,6 +115,16 @@ test('cut text that a flex column stretches hugs the start edge, where its sibli
   assert.match(quote, /width:\s*fit-content/);
   // A long nowrap quote is as wide as its text, so the cap has to follow the room in the box, not only a fixed width.
   assert.match(quote, /max-width:\s*min\(\d+px,\s*100%\)/);
+});
+
+test('a template in the picker is named and previewed in the direction of its own characters', () => {
+  // Under the page direction an Arabic page drew the name "/aviso" as "aviso/", and a Latin preview with its full
+  // stop first. The row puts both at its start edge, so text read the other way round stays under its neighbours.
+  assert.match(body('pages/Chats.css', '.chats-page .slash-template-name'), /unicode-bidi:\s*plaintext/);
+  assert.match(body('pages/Chats.css', '.chats-page .slash-template-preview'), /max-width:\s*100%/);
+  const row = body('pages/Chats.css', '.chats-page .slash-template-item');
+  assert.match(row, /flex-direction:\s*column/);
+  assert.match(row, /align-items:\s*flex-start/);
 });
 
 test('a draft in the chat list stays next to its label, and only the draft is cut', () => {

@@ -193,6 +193,8 @@ export function useChatScrollPosition(
   // before a write that then moved nothing. A browser raises one event per frame however many writes the
   // frame held, so a flag cleared by a write that moved nothing handed the frame's one event to the reader.
   const programmaticTopRef = useRef<number | null>(null);
+  // The container and its size when it was last looked at (see followBox).
+  const boxRef = useRef<{ el: HTMLDivElement; width: number; height: number } | null>(null);
   // A live message the thread is to follow, until the commit that adds its row applies it (see the layout effect
   // after the older-page landing). `duringPage`: announced while an older page was out.
   const pendingFollowRef = useRef<{
@@ -251,6 +253,31 @@ export function useChatScrollPosition(
     },
     [writeScrollTop],
   );
+
+  // The container changes size under a thread that does not: the composer below it grows a line with its draft, a
+  // banner opens above the composer, the room gets narrower and its text wraps anew. scrollTop stays where it was,
+  // so the newest message of a thread at its bottom would end under the composer. A thread pinned there is put back
+  // at its bottom when its box is not the one last seen; the first look at a container only records it. A reader
+  // further back keeps their offset from the top, and an older page is held by a row's place in the content, which
+  // a write of scrollTop does not move.
+  const followBox = useCallback(
+    (el: HTMLDivElement) => {
+      const box = boxRef.current;
+      const resized = box?.el === el && (box.width !== el.clientWidth || box.height !== el.clientHeight);
+      boxRef.current = { el, width: el.clientWidth, height: el.clientHeight };
+      if (resized && pinnedRef.current && loadedRef.current) pinToBottom(el);
+    },
+    [pinToBottom],
+  );
+
+  // jsdom and old browsers have no ResizeObserver: there the scroll listener below is the only caller.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(() => followBox(el));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [activeChatId, followBox]);
 
   // A pin that follows the thread (a live message, a decoded image) forgets the chat's remembered offset too: the
   // reader is at the bottom again, and the offset from before the thread grew would bring them back above it. For
@@ -318,6 +345,10 @@ export function useChatScrollPosition(
     const el = containerRef.current;
     if (!el) return undefined;
     const onScroll = () => {
+      // A container that grew clamps a thread at its bottom, and a layout later in the same commit can make it
+      // shorter again: the event of that clamp comes before the observer's report, and reads as the reader having
+      // left the bottom. The box is looked at first, so the thread is back at its bottom and the event is ours.
+      followBox(el);
       // Any event ends the marker's use: a reader who lands on the same offset later is the reader.
       const ours = el.scrollTop === programmaticTopRef.current;
       programmaticTopRef.current = null;

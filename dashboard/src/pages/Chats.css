@@ -2979,58 +2979,6 @@
 /* =============================================================================
    COMPOSER: attachment, emoji and reply panels, and the input bar
    ============================================================================= */
-.chats-page .slash-template-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  max-height: 14rem;
-  overflow: auto;
-  padding: 0.55rem 0.65rem;
-}
-
-.chats-page .slash-template-hint,
-.chats-page .slash-template-empty {
-  color: var(--chat-meta);
-  font-size: 0.8rem;
-  padding: 0.15rem 0.25rem 0.35rem;
-}
-
-.chats-page .slash-template-item {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.15rem;
-  width: 100%;
-  margin: 0;
-  padding: 0.45rem 0.55rem;
-  border: none;
-  border-radius: 0.55rem;
-  background: transparent;
-  color: inherit;
-  text-align: start;
-  cursor: pointer;
-}
-
-.chats-page .slash-template-item:hover,
-.chats-page .slash-template-item.active {
-  background: color-mix(in srgb, var(--chat-meta) 14%, transparent);
-}
-
-.chats-page .slash-template-name {
-  font-weight: 650;
-  font-size: 0.9rem;
-}
-
-.chats-page .slash-template-preview {
-  color: var(--chat-meta);
-  font-size: 0.8rem;
-  line-height: 1.3;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chats-page .composer-banner {
   background: var(--chat-panel-header);
   padding-block: 0.625rem;
@@ -3043,16 +2991,73 @@
   flex-shrink: 0;
 }
 
+/* The `/name` template picker: a line saying what Enter does, or why nothing is listed, with the close button, then
+   the list. The list scrolls on its own, so the line and the button stay in place. */
 .chats-page .composer-banner.slash-template-picker {
   align-items: stretch;
   flex-direction: column;
+  gap: 0.25rem;
 }
 
+.chats-page .slash-template-head {
+  display: flex;
+  align-items: center;
+}
+
+.chats-page .slash-template-head .btn-banner-close {
+  margin-inline-start: auto;
+}
+
+.chats-page .slash-template-hint,
+.chats-page .slash-template-empty,
+.chats-page .slash-template-more {
+  color: var(--chat-meta);
+  font-size: 0.8rem;
+}
+
+/* Three rows and part of a fourth: where a scrollbar shows only while scrolling, the cut row is what says that the
+   list goes on. Less on a short screen, such as a phone with its keyboard up. */
 .chats-page .slash-template-list {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
-  width: 100%;
+  max-height: min(12.75rem, 30dvh);
+  overflow-y: auto;
+}
+
+.chats-page .slash-template-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 0.55rem;
+  cursor: pointer;
+}
+
+/* One highlight, which the pointer and the arrow keys both move: a hover style of its own would mark a second row
+   when the keys scroll the list under a pointer at rest. */
+.chats-page .slash-template-item.active {
+  background: color-mix(in srgb, var(--chat-meta) 14%, transparent);
+}
+
+/* A name and a preview are text of their own: under the page direction an Arabic page drew "/aviso" as "aviso/" and
+   a Latin preview with its full stop first. The row hugs the start edge, so neither moves to the other side. */
+.chats-page .slash-template-name {
+  font-weight: 650;
+  font-size: 0.9rem;
+  unicode-bidi: plaintext;
+}
+
+.chats-page .slash-template-preview {
+  color: var(--chat-meta);
+  font-size: 0.8rem;
+  line-height: 1.3;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  unicode-bidi: plaintext;
 }
 
 .chats-page .preview-thumbnail,
@@ -3185,10 +3190,11 @@
   flex-shrink: 0;
 }
 
+/* The field grows upwards with its draft, and the buttons stay beside its last line. */
 .chats-page .input-form {
   display: flex;
   gap: 0.5rem;
-  align-items: center;
+  align-items: flex-end;
 }
 
 .chats-page .btn-input-accessory {
@@ -3204,6 +3210,8 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  /* Half of what the 46px pill of a one-line field is higher than the button, which centres the two. */
+  margin-block-end: 2px;
   transition: background 0.15s;
 }
 
@@ -3224,6 +3232,8 @@
 .chats-page .btn-input-accessory.inside {
   width: 36px;
   height: 36px;
+  /* The same inside the pill, whose border leaves 44px. */
+  margin-block-end: 4px;
 }
 
 .chats-page .message-input-pill {
@@ -3254,11 +3264,13 @@
 
 .chats-page .message-input-pill .message-text-input {
   flex: 1;
-  /* An input keeps its intrinsic width as its automatic minimum, which pinned the whole composer wider than
+  /* A text field keeps its intrinsic width as its automatic minimum, which pinned the whole composer wider than
      a narrow pane and pushed the send button outside the layout's clip. The floor replaces that with one small
      enough to let the composer fit and large enough to keep a caret and a few characters visible. */
   min-width: 64px;
-  padding: 0.65rem 0;
+  /* One line fills the 44px inside the pill, so its text sits on the pill's middle. */
+  padding-block: calc((44px - 1.35em) / 2);
+  padding-inline: 0;
   border: none;
   background: none;
   font: inherit;
@@ -3267,12 +3279,18 @@
   color: var(--text-primary);
   outline: none;
   resize: none;
-  max-height: 7.5rem;
+  /* Five whole lines, then the field scrolls. */
+  max-height: calc(44px + 4 * 1.35em);
   overflow-y: auto;
 }
 
+/* A textarea wraps its placeholder, and a wrapped one is counted in the height the field is given: where the
+   placeholder does not fit, the empty field would be two lines high. */
 .chats-page .message-text-input::placeholder {
   color: var(--chat-meta);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chats-page .btn-send-message {

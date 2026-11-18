@@ -139,6 +139,67 @@ test('the room is never narrower than its composer, so the emoji button cannot s
   assert.notEqual(value('.chats-page .chats-sidebar', 'flex-shrink'), '0');
 });
 
+// The last value a selector's own rules give a property.
+const declared = (selector: string, property: string): string => {
+  const found = rulesFor(selector)
+    .map(body => new RegExp(`(?:^|;)\\s*${property}:\\s*([^;]+)`).exec(body)?.[1].trim())
+    .filter((v): v is string => Boolean(v))
+    .pop();
+  assert.ok(found, `${selector} sets no ${property}`);
+  return found;
+};
+
+test('a one-line message field is centred on the buttons beside it, and a longer one grows away from them', () => {
+  const pill = '.chats-page .message-input-pill';
+  const field = `${pill} .message-text-input`;
+  // The field grows upwards: the form and the pill keep their buttons at its last line.
+  assert.equal(declared('.chats-page .input-form', 'align-items'), 'flex-end');
+  assert.equal(declared(pill, 'align-items'), 'flex-end');
+  const pillHeight = parseFloat(declared(pill, 'min-height'));
+  const inside = pillHeight - 2 * parseFloat(declared(pill, 'border'));
+  const lineHeight = declared(field, 'line-height');
+  // One line of text and its padding fill the inside of the pill exactly, so the text sits on the pill's middle.
+  assert.equal(declared(field, 'padding-block'), `calc((${inside}px - ${lineHeight}em) / 2)`);
+  // Each button is lifted by half of what the pill is higher than it is: centred on one line, and the same
+  // distance from the bottom edge beside several.
+  const lift = (selector: string, room: number) =>
+    assert.equal(
+      parseFloat(declared(selector, 'margin-block-end')),
+      (room - parseFloat(declared(selector, 'height'))) / 2,
+      selector,
+    );
+  lift('.chats-page .btn-input-accessory', pillHeight);
+  lift('.chats-page .btn-input-accessory.inside', inside);
+  assert.equal(parseFloat(declared('.chats-page .btn-send-message', 'height')), pillHeight);
+  // The field stops at whole lines, five of them, and scrolls from there.
+  assert.equal(declared(field, 'max-height'), `calc(${inside}px + 4 * ${lineHeight}em)`);
+  assert.equal(declared(field, 'overflow-y'), 'auto');
+});
+
+test('the placeholder of the message field stays on one line', () => {
+  // A textarea wraps its placeholder, and the wrapped lines count in the height the field is given: where the
+  // placeholder did not fit (a phone, the room beside the contact panel) the empty field was two lines high.
+  const placeholder = rulesFor('.chats-page .message-text-input::placeholder').join(';');
+  assert.match(placeholder, /white-space:\s*nowrap/);
+  assert.match(placeholder, /overflow:\s*hidden/);
+  assert.match(placeholder, /text-overflow:\s*ellipsis/);
+});
+
+test('the template list scrolls inside its picker, and has one highlight', () => {
+  // The picker's first line and its close button stay in place while the arrow keys walk a long list.
+  const composer = readFileSync(join(here, '..', 'components', 'chats', 'ChatComposer.tsx'), 'utf8');
+  assert.match(composer, /className="slash-template-head"/);
+  assert.match(composer, /className="btn-banner-close btn-close-slash"/);
+  assert.match(composer, /className="slash-template-list"/);
+  assert.equal(declared('.chats-page .slash-template-list', 'overflow-y'), 'auto');
+  assert.ok(declared('.chats-page .slash-template-list', 'max-height'));
+  const picker = rulesFor('.chats-page .composer-banner.slash-template-picker').join(';');
+  assert.doesNotMatch(picker, /overflow|max-height/);
+  // The pointer moves the same highlight the arrow keys do. A hover style of its own marks a second row.
+  assert.ok(rulesFor('.chats-page .slash-template-item.active').length > 0);
+  assert.equal(rulesFor('.chats-page .slash-template-item:hover').length, 0);
+});
+
 test('the band that swaps the panes beside the expanded navigation has no lower edge a zoomed width falls through', () => {
   // With a 768px maximum below it, a 769px minimum left 768.5px, a zoomed width, matched by neither.
   const band = /@media ([^{]+)\{\s*\.main-content:not\(\.expanded\) \.chats-page \.chats-sidebar\s*\{/.exec(css);

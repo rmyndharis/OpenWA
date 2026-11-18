@@ -1,4 +1,4 @@
-import { extractPlaceholders } from './templatePlaceholders.ts';
+import { PLACEHOLDER_PATTERN } from './templatePlaceholders.ts';
 
 /**
  * Slash shortcuts in the chat composer map `/name` onto a session Template.
@@ -11,13 +11,6 @@ export interface SlashTemplate {
   body: string;
   header?: string | null;
   footer?: string | null;
-}
-
-/** `/hola` or `/hola ` → `hola`. Anything else is not a slash shortcut. */
-export function slashQuery(input: string): string | null {
-  const trimmed = input.trim();
-  const match = /^\/([^\s/]+)$/u.exec(trimmed);
-  return match ? match[1] : null;
 }
 
 /** True while the operator is typing a slash command (`/`, `/ho`, …). */
@@ -33,12 +26,6 @@ export function slashDraftFilter(input: string): string {
 
 export function normalizeTemplateName(name: string): string {
   return name.trim().replace(/^\//, '').toLowerCase();
-}
-
-export function findTemplateBySlashName(templates: readonly SlashTemplate[], query: string): SlashTemplate | undefined {
-  const needle = normalizeTemplateName(query);
-  if (!needle) return undefined;
-  return templates.find(t => normalizeTemplateName(t.name) === needle);
 }
 
 export function filterTemplatesBySlash(
@@ -67,10 +54,13 @@ export function renderTemplateText(template: SlashTemplate): string {
     .join('\n\n');
 }
 
-export function templateVariables(template: SlashTemplate): string[] {
-  return extractPlaceholders(template).map(item => item.key);
+/** The placeholders a template send fills, as `text` writes them. */
+export function placeholderTokens(text: string): string[] {
+  return Array.from(text.matchAll(PLACEHOLDER_PATTERN), match => match[0]);
 }
 
-export function templateNeedsVariables(template: SlashTemplate): boolean {
-  return templateVariables(template).length > 0;
+/** Where the first placeholder a template send fills sits in `text`, or null when it holds none. */
+export function firstPlaceholder(text: string): { start: number; end: number } | null {
+  const match = text.matchAll(PLACEHOLDER_PATTERN).next().value;
+  return match ? { start: match.index, end: match.index + match[0].length } : null;
 }

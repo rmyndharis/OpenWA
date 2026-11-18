@@ -26,11 +26,12 @@ import { BULK_CAPTION_MAX_LENGTH, captionLength } from '../../utils/bulkMedia';
 import { isComposingKey } from '../../utils/composition';
 import {
   filterTemplatesBySlash,
+  firstPlaceholder,
+  placeholderTokens,
   isSlashDraft,
   normalizeTemplateName,
   renderTemplateText,
   slashDraftFilter,
-  templateNeedsVariables,
   type SlashTemplate,
 } from '../../utils/templateSlash';
 
@@ -38,6 +39,25 @@ import {
 // src/modules/message/dto/send-message.dto.ts. A caption is bounded at BULK_CAPTION_MAX_LENGTH, as SendMediaMessageDto
 // bounds it.
 const MESSAGE_TEXT_MAX_LENGTH = 4096;
+
+// Rows the `/name` picker lists; past it, a line says that more templates match.
+const SLASH_ROWS = 8;
+
+// A template's text as the field holds it: a textarea reads every line break as a line feed.
+const insertedText = (template: SlashTemplate): string => renderTemplateText(template).replace(/\r\n?/g, '\n');
+
+// The message field is as tall as its draft (a template joins header, body and footer with blank lines) and stops
+// at the CSS max-height, where it scrolls. To be measured it is one line high for a moment. The pill around it keeps
+// its height meanwhile: a composer that shrank with the field would lend its room to the thread above, and a thread
+// at its bottom is clamped off it by that layout, on every key typed in a draft of several lines.
+function fitToDraft(field: HTMLTextAreaElement): void {
+  const pill = field.parentElement;
+  if (pill) pill.style.minHeight = `${pill.offsetHeight}px`;
+  field.style.height = 'auto';
+  const next = field.scrollHeight;
+  if (next > 0) field.style.height = `${next}px`;
+  if (pill) pill.style.minHeight = '';
+}
 
 // Map an attachment MIME type to the neutral MessageType for the optimistic outgoing bubble, so the
 // placeholder matches what the backend will persist (e.g. a PDF is `document`, not `application`).
@@ -120,8 +140,14 @@ function ChatComposer({
   const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
   // Highlight in the `/name` template picker (ArrowUp/Down). Reset whenever the draft changes.
   const [slashHighlight, setSlashHighlight] = useState(0);
-  // Escape closes the picker and leaves the draft. Cleared on the next edit so typing `/` opens it again.
-  const [slashDismissed, setSlashDismissed] = useState(false);
+  // The draft the picker is closed for: the one Escape or its close button dismissed it on, or the text an insert
+  // left in the field. The draft itself rather than a flag, so that a template whose text is one slash word
+  // (`/start`) does not open the picker again and can be sent; any other draft opens it.
+  const [slashClosedFor, setSlashClosedFor] = useState<string | null>(null);
+  // Where the first placeholder of the template just inserted is, to be selected once the field holds the text.
+  const [unfilled, setUnfilled] = useState<{ start: number; end: number } | null>(null);
+  // The picker belongs to the field: its keys are handled there, so it is offered only while the field has focus.
+  const [fieldFocused, setFieldFocused] = useState(false);
   const slashListId = useId();
   // Monotonic token invalidating an in-flight attachment FileReader: picking a second file (or
   // removing the attachment) before `onload` fires must win over the late-arriving bytes —
@@ -134,19 +160,40 @@ function ChatComposer({
   const templates = useMemo(() => templatesQuery.data ?? [], [templatesQuery.data]);
   const templatesLoading = templatesQuery.isLoading && templates.length === 0;
   const templatesFailed = templatesQuery.isError && templates.length === 0;
-  const slashOpen = canWrite && !attachment && isSlashDraft(messageInput) && !slashDismissed;
-  const slashMatches = useMemo(
+  // A slash draft the picker was not closed for. Send acts on it wherever focus is, as a press on the Send button
+  // takes focus from the field first; the picker itself is drawn only while the field has focus.
+  const slashActive = canWrite && !attachment && isSlashDraft(messageInput) && messageInput !== slashClosedFor;
+  const slashOpen = slashActive && fieldFocused;
+  const slashFound = useMemo(
     () =>
-      slashOpen && !templatesLoading && !templatesFailed
-        ? filterTemplatesBySlash(templates, slashDraftFilter(messageInput))
+      slashActive && !templatesLoading && !templatesFailed
+        ? filterTemplatesBySlash(templates, slashDraftFilter(messageInput), SLASH_ROWS + 1)
         : [],
-    [slashOpen, templatesLoading, templatesFailed, templates, messageInput],
+    [slashActive, templatesLoading, templatesFailed, templates, messageInput],
   );
+  const slashMatches = slashFound.slice(0, SLASH_ROWS);
   const slashIndex = slashMatches.length === 0 ? -1 : Math.min(slashHighlight, slashMatches.length - 1);
+  // The list is offered: only then is the field a combobox, as a textarea takes no role but its own otherwise.
+  const slashListed = slashOpen && slashMatches.length > 0;
+  const slashOptionId = (index: number) => `${slashListId}-opt-${index}`;
   useEffect(() => {
     setSlashHighlight(0);
-    setSlashDismissed(false);
+    // The picker was closed for one draft: any other drops that, so the same word typed again later is offered.
+    setSlashClosedFor(closed => (closed === messageInput ? closed : null));
   }, [messageInput]);
+  // The session's templates as the field holds them, and every placeholder they write.
+  const templateTexts = useMemo(() => templates.map(insertedText), [templates]);
+  const templateTokens = useMemo(() => new Set(templateTexts.flatMap(placeholderTokens)), [templateTexts]);
+  // A template's placeholder is still in the text that would go out, and the composer says so. Audio carries no
+  // text. Read from the draft, not remembered from the insert, so the draft of a room closed and opened again, or
+  // of a chat come back to, is treated the same.
+  const placeholderLeft = useMemo(
+    () => !attachmentIsAudio && placeholderTokens(messageInput).some(token => templateTokens.has(token)),
+    [attachmentIsAudio, templateTokens, messageInput],
+  );
+  // A template exactly as it was inserted is not sent: the Enter that follows an insert is a slip, not a decision.
+  // Once the operator has edited it the text is theirs to send, with the notice still up while a placeholder is.
+  const templateUnfilled = placeholderLeft && templateTexts.includes(messageInput);
 
   // Escape dismisses the emoji picker instead of closing the conversation behind it.
   //
@@ -189,15 +236,35 @@ function ChatComposer({
     };
   }, [selectedSessionId, activeChat.id]);
 
-  // A one-line field grows with the draft (a template joins header, body and footer with blank lines) and stops
-  // at the CSS max-height, where it scrolls.
+  useLayoutEffect(() => {
+    if (textInputRef.current) fitToDraft(textInputRef.current);
+  }, [messageInput]);
+
+  // The same draft wraps onto more or fewer lines when the field changes width (the window, the contact panel).
+  useEffect(() => {
+    const field = textInputRef.current;
+    if (!field || typeof ResizeObserver === 'undefined') return undefined;
+    let width = field.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (field.clientWidth === width) return;
+      width = field.clientWidth;
+      fitToDraft(field);
+    });
+    observer.observe(field);
+    return () => observer.disconnect();
+  }, []);
+
+  // A room reopened on a kept draft mounts the field with its caret before the text; typing continues after it.
+  // Setting the selection moves no focus.
   useLayoutEffect(() => {
     const field = textInputRef.current;
-    if (!field) return;
-    field.style.height = 'auto';
-    const next = field.scrollHeight;
-    if (next > 0) field.style.height = `${next}px`;
-  }, [messageInput]);
+    field?.setSelectionRange(field.value.length, field.value.length);
+  }, []);
+
+  // Typing replaces the first placeholder of the template that was just inserted.
+  useLayoutEffect(() => {
+    if (unfilled) textInputRef.current?.setSelectionRange(unfilled.start, unfilled.end);
+  }, [unfilled]);
 
   // Popular emojis
   const popularEmojis = [
@@ -279,23 +346,37 @@ function ChatComposer({
   };
 
   const insertSlashTemplate = (template: SlashTemplate) => {
-    setMessageInput(renderTemplateText(template));
-    if (templateNeedsVariables(template)) showErrorToast(t('chats.slash.needsVars'));
+    // The placeholder is selected by its offset in the text as the field holds it.
+    const text = insertedText(template);
+    setMessageInput(text);
+    setSlashClosedFor(text);
+    setUnfilled(firstPlaceholder(text));
     textInputRef.current?.focus();
   };
 
   // 7. Handle sending a message / media
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!selectedSessionId || !activeChat || sending || textTooLong) return;
+    if (!selectedSessionId || !activeChat) return;
 
-    // The highlighted row is the template, including after ArrowDown moved off a name that also matches the
-    // draft. Insert it; the operator sends with the next Enter or the Send button. A draft the picker does
-    // not resolve (`/start`, a list still loading or one that failed) is sent as typed.
-    if (slashOpen && slashIndex >= 0) {
-      insertSlashTemplate(slashMatches[slashIndex]);
-      return;
+    // Ahead of the in-flight guard: a slash draft is resolved while an earlier message is still on its way.
+    if (slashActive) {
+      // Until the list has loaded nobody knows whether the draft names a template, so it is neither sent nor
+      // resolved. The field takes focus, where the picker says so, when the Send button was what was pressed.
+      if (templatesLoading) {
+        textInputRef.current?.focus();
+        return;
+      }
+      // The highlighted row is the template, including after ArrowDown moved off a name that also matches the
+      // draft. Insert it; the operator sends with the next Enter or the Send button. A draft the picker does
+      // not resolve (`/start`, or a list that failed to load) is sent as typed.
+      if (slashIndex >= 0) {
+        insertSlashTemplate(slashMatches[slashIndex]);
+        return;
+      }
     }
+
+    if (sending || textTooLong || templateUnfilled) return;
 
     const textToSend = messageInput.trim();
     if (!textToSend && !attachment) return;
@@ -418,29 +499,28 @@ function ChatComposer({
   };
 
   // Enter sends. Shift+Enter breaks the line. While the template picker is open, Escape only dismisses it.
-  // Arrow keys move the highlight; Tab does not select, so it can leave the field.
+  // Arrow keys move the highlight; Tab does not select, so it can leave the field. A key something else took (the
+  // Escape that closed the emoji panel) is left alone.
   const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (isComposingKey(event.nativeEvent)) return;
+    if (isComposingKey(event.nativeEvent) || event.defaultPrevented) return;
     if (slashOpen && event.key === 'Escape') {
       event.preventDefault();
-      setSlashDismissed(true);
+      setSlashClosedFor(messageInput);
       return;
     }
-    if (slashOpen && slashMatches.length > 0) {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        setSlashHighlight(i => (i + 1) % slashMatches.length);
-        return;
-      }
-      if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        setSlashHighlight(i => (i - 1 + slashMatches.length) % slashMatches.length);
-        return;
-      }
+    if (slashListed && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      const next = (slashIndex + step + slashMatches.length) % slashMatches.length;
+      setSlashHighlight(next);
+      // The list is taller than its box: the row the keys moved to is brought into it.
+      document.getElementById(slashOptionId(next))?.scrollIntoView({ block: 'nearest' });
+      return;
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      void handleSend();
+      // A key held down repeats: its first press may have inserted a template, which the repeat would send.
+      if (!event.repeat) void handleSend();
     }
   };
 
@@ -450,7 +530,7 @@ function ChatComposer({
       ? t('chats.slash.loadError')
       : slashMatches.length === 0
         ? t('chats.slash.empty')
-        : null;
+        : '';
 
   return (
     <>
@@ -513,30 +593,50 @@ function ChatComposer({
         </div>
       )}
 
-      {/* `/name` shortcuts: the highlighted template is inserted, then sent like any other message. */}
+      {/* `/name` shortcuts: the highlighted template is inserted, then sent like any other message. A press in the
+          panel leaves focus in the field, which the panel closes without. */}
       {slashOpen && (
-        <div className="composer-banner slash-template-picker">
-          <div className="slash-template-hint">{t('chats.slash.hint')}</div>
-          {slashStatus && <div className="slash-template-empty">{slashStatus}</div>}
-          <div className="slash-template-list" id={slashListId} role="listbox" aria-label={t('chats.slash.title')}>
-            {slashMatches.map((template, index) => (
-              <div
-                key={template.id}
-                id={`${slashListId}-opt-${index}`}
-                role="option"
-                aria-selected={index === slashIndex}
-                className={`slash-template-item${index === slashIndex ? ' active' : ''}`}
-                onMouseEnter={() => setSlashHighlight(index)}
-                onMouseDown={event => {
-                  event.preventDefault();
-                  insertSlashTemplate(template);
-                }}
-              >
-                <span className="slash-template-name">/{normalizeTemplateName(template.name)}</span>
-                <span className="slash-template-preview">{renderTemplateText(template)}</span>
-              </div>
-            ))}
+        <div className="composer-banner slash-template-picker" onMouseDown={event => event.preventDefault()}>
+          <div className="slash-template-head">
+            {slashListed && (
+              <span className="slash-template-hint" id={`${slashListId}-hint`}>
+                {t('chats.slash.hint')}
+              </span>
+            )}
+            <span className={slashStatus ? 'slash-template-empty' : undefined} role="status">
+              {slashStatus}
+            </span>
+            <button
+              type="button"
+              className="btn-banner-close btn-close-slash"
+              onClick={() => setSlashClosedFor(messageInput)}
+              aria-label={t('chats.slash.close')}
+            >
+              <X size={18} />
+            </button>
           </div>
+          {slashListed && (
+            <div className="slash-template-list" id={slashListId} role="listbox" aria-label={t('chats.slash.title')}>
+              {slashMatches.map((template, index) => (
+                <div
+                  key={template.id}
+                  id={slashOptionId(index)}
+                  role="option"
+                  aria-selected={index === slashIndex}
+                  className={`slash-template-item${index === slashIndex ? ' active' : ''}`}
+                  // Not on entering the row: a list the arrow keys scroll puts another row under a pointer at rest.
+                  onMouseMove={() => setSlashHighlight(index)}
+                  onMouseDown={event => {
+                    if (event.button === 0) insertSlashTemplate(template);
+                  }}
+                >
+                  <span className="slash-template-name">/{normalizeTemplateName(template.name)}</span>
+                  <span className="slash-template-preview">{renderTemplateText(template)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {slashFound.length > SLASH_ROWS && <div className="slash-template-more">{t('chats.slash.more')}</div>}
         </div>
       )}
 
@@ -560,16 +660,17 @@ function ChatComposer({
           <div className="message-input-pill">
             <textarea
               rows={1}
-              role="combobox"
-              aria-expanded={slashOpen}
-              aria-controls={slashOpen ? slashListId : undefined}
-              aria-activedescendant={slashIndex >= 0 ? `${slashListId}-opt-${slashIndex}` : undefined}
-              aria-autocomplete="list"
+              role={slashListed ? 'combobox' : undefined}
+              aria-expanded={slashListed ? true : undefined}
+              aria-controls={slashListed ? slashListId : undefined}
+              aria-activedescendant={slashListed ? slashOptionId(slashIndex) : undefined}
+              aria-autocomplete={slashListed ? 'list' : undefined}
+              aria-describedby={slashListed ? `${slashListId}-hint` : undefined}
               placeholder={
                 canWrite
                   ? attachment && !attachmentIsAudio
                     ? t('chats.captionPlaceholder')
-                    : templates.length > 0
+                    : !attachment && templates.length > 0
                       ? t('chats.slash.placeholder')
                       : t('chats.messagePlaceholder')
                   : t('chats.noPermission')
@@ -577,6 +678,8 @@ function ChatComposer({
               value={messageInput}
               onChange={e => setMessageInput(e.target.value)}
               onKeyDown={handleComposerKeyDown}
+              onFocus={() => setFieldFocused(true)}
+              onBlur={() => setFieldFocused(false)}
               // Never disabled by a send: it holds focus through it, and handleSend refuses a second send meanwhile.
               disabled={!canWrite}
               ref={textInputRef}
@@ -597,7 +700,7 @@ function ChatComposer({
 
           <button
             type="submit"
-            disabled={!canWrite || (!messageInput.trim() && !attachment) || sending || textTooLong}
+            disabled={!canWrite || (!messageInput.trim() && !attachment) || sending || textTooLong || templateUnfilled}
             onPointerDown={e => {
               sendPressRef.current = e.pointerType;
             }}
@@ -612,8 +715,12 @@ function ChatComposer({
           </button>
         </form>
         {/* Kept mounted, unstyled while empty: a live region inserted with its text is often not announced. */}
-        <span className={textTooLong ? 'input-hint' : undefined} role="status">
-          {textTooLong ? t('common.fieldTooLong', { max: textMax, count: textLength }) : ''}
+        <span className={textTooLong || placeholderLeft ? 'input-hint' : undefined} role="status">
+          {textTooLong
+            ? t('common.fieldTooLong', { max: textMax, count: textLength })
+            : placeholderLeft
+              ? t('chats.slash.needsVars')
+              : ''}
         </span>
       </footer>
     </>

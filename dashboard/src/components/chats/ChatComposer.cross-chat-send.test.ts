@@ -46,8 +46,8 @@ before(async () => {
   await installJsdomGlobals();
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const path = new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost').pathname;
-    // Templates (and any non-send) must resolve at once — a hanging list query stalls the suite.
-    if (!path.includes('/messages/')) {
+    // The composer loads the session's templates as well: that list is answered at once and is no send.
+    if (path.includes('/templates')) {
       return Promise.resolve(new Response('[]', { headers: { 'Content-Type': 'application/json' } }));
     }
     const parsed = init?.body ? (JSON.parse(String(init.body)) as { chatId?: string; text?: string }) : {};

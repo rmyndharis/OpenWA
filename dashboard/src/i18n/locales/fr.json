@@ -359,12 +359,14 @@
     },
     "slash": {
       "title": "Réponses rapides",
-      "hint": "Entrée insère le modèle surligné. Envoyez-le quand il est prêt.",
-      "placeholder": "Message ou /modèle…",
-      "empty": "Aucun modèle ne correspond",
-      "needsVars": "Ce modèle a des variables — remplissez-les, puis envoyez",
-      "loading": "Chargement des modèles…",
-      "loadError": "Impossible de charger les modèles"
+      "hint": "Entrée insère le template surligné. Envoyez-le quand il est prêt.",
+      "placeholder": "Message ou /template…",
+      "empty": "Aucun template ne correspond",
+      "needsVars": "Remplissez les variables du template avant d'envoyer.",
+      "loading": "Chargement des templates… Entrée attend la fin du chargement.",
+      "loadError": "Impossible de charger les templates",
+      "close": "Fermer la liste des templates",
+      "more": "D'autres templates correspondent. Continuez à écrire pour réduire la liste."
     },
     "roomSearch": {
       "title": "Rechercher des messages",
