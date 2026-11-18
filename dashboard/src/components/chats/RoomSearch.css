@@ -150,6 +150,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Message text somebody else wrote: cut by its own direction, so a Latin snippet in an Arabic page keeps its start. */
+  unicode-bidi: plaintext;
 }
 
 .chats-page .room-search-hit-snippet mark {
