@@ -338,6 +338,15 @@
   text-overflow: ellipsis;
 }
 
+/* A label may use the room up to the edge of its row, which is where the row clips it. With an end padding the
+   ellipsis began a padding sooner and shortened labels that the row holds whole. Nothing follows a label, a short
+   one stays where it was, and the collapsed rail sets its own padding. It follows the shorthands that set the padding. */
+.nav-item,
+.theme-toggle-btn,
+.logout-btn {
+  padding-inline-end: 0;
+}
+
 /* ==================== Main Content ==================== */
 .main-content {
   flex: 1;

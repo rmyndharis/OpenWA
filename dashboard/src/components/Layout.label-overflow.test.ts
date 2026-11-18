@@ -27,6 +27,19 @@ test('a sidebar label too long for its row ends in an ellipsis instead of being 
   assert.equal(decl(brand, 'text-overflow'), 'ellipsis');
 });
 
+// The ellipsis has to begin where the row would have cut the label, not an end padding sooner: a label that the row
+// holds whole is not shortened. Nothing follows a label in these rows, so the end padding is taken off, after the rule
+// that sets the padding (the collapsed rail has no label and sets its own).
+test('a label has the room up to the edge of its row, so one the row holds whole stays whole', () => {
+  for (const row of ['.nav-item', '.theme-toggle-btn', '.logout-btn']) {
+    const own = rules.filter(r => r.media === '' && r.selectors.includes(row));
+    const shorthand = own.findIndex(r => decl(r.body, 'padding') !== undefined);
+    const noEnd = own.findIndex(r => decl(r.body, 'padding-inline-end') === '0');
+    assert.ok(shorthand >= 0, `${row} no longer sets its padding: drop this check`);
+    assert.ok(noEnd > shorthand, `${row} keeps an end padding that its label cannot use`);
+  }
+});
+
 let rtl: typeof import('@testing-library/react');
 let Layout: (typeof import('./Layout.tsx'))['Layout'];
 let MemoryRouter: (typeof import('react-router-dom'))['MemoryRouter'];
