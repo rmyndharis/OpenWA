@@ -3038,7 +3038,7 @@
 /* One highlight, which the pointer and the arrow keys both move: a hover style of its own would mark a second row
    when the keys scroll the list under a pointer at rest. */
 .chats-page .slash-template-item.active {
-  background: color-mix(in srgb, var(--chat-meta) 14%, transparent);
+  background: color-mix(in srgb, var(--chat-meta) 12%, transparent);
 }
 
 /* A name and a preview are text of their own: under the page direction an Arabic page drew "/aviso" as "aviso/" and
