@@ -365,6 +365,15 @@
       "needsVars": "Este modelo tem variáveis — preencha e envie",
       "loading": "Carregando modelos…",
       "loadError": "Não foi possível carregar os modelos"
+    },
+    "roomSearch": {
+      "title": "Pesquisar mensagens",
+      "placeholder": "Pesquisar",
+      "date": "Ir para a data",
+      "clearDate": "Limpar data",
+      "noDateHits": "Nenhuma mensagem carregada nesse dia",
+      "notLoaded": "É anterior às mensagens carregadas neste chat. Role para cima no chat para carregar mensagens anteriores.",
+      "open": "Pesquisar no chat"
     }
   },
   "errorBoundary": {

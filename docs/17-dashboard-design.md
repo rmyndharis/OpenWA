@@ -407,8 +407,8 @@ most with a colocated CSS file. Seven top-level components ship none: `ErrorBoun
 via `style={{...}}`, `GithubIcon` carries no styling beyond `fill="currentColor"`, `Modal` reuses the
 global `.modal-*` rules from `index.css`, `GroupPicker` and `SessionScopePicker` are styled by the
 one page that uses each (`pages/MessageTester.css`, `pages/ApiKeys.css`), and `RoleProvider` and
-`NumberCheckProvider` render no DOM. Nothing under `chats/` ships its own stylesheet either: those
-components take their classes from `pages/Chats.css`, and `MediaLightbox` adds the
+`NumberCheckProvider` render no DOM. Under `chats/` only `RoomSearch` ships its own stylesheet: the
+other components take their classes from `pages/Chats.css`, and `MediaLightbox` adds the
 `yet-another-react-lightbox` vendor CSS. There is no design-system package to pull from.
 
 | Component                    | File                                 | Responsibility                                                                                                                         |
@@ -441,8 +441,15 @@ description and participants), `ChatDialogs` (mute and save-contact dialogs), `C
 `message.received` as top-level `buttons` and are also stored in message `metadata.buttons` so a
 reload can re-render them. Clicking still requires the prompt to be in the engine store; an evicted
 prompt 404s. A read-only key sees the choices disabled and gets no reply, react or delete actions,
-the same as the disabled composer, no message search, no New chat button, and of a chat's actions
-only its contact or group info.
+the same as the disabled composer, no message search in the sidebar or in a chat, no New chat
+button, and of a chat's actions only its contact or group info.
+
+`RoomSearch` is the search inside the open chat. A button in the room header puts a search bar in
+the header's place: text asks `GET /search` for that chat's stored messages, optionally within one
+day, and a day with no text jumps to the first message the thread draws for it. It scrolls only to
+messages the thread has loaded. For a hit or a day older than those the bar stays open with its
+results and says that scrolling up in the chat loads older messages; nothing is paged
+automatically. Escape or the bar's Back button closes it, and so does opening another chat.
 
 The message thread is paged. `useChatMessages` is a `useInfiniteQuery` whose cursor is the number
 of DB rows fetched so far, not the length of the rendered list — the thread also carries engine

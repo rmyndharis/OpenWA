@@ -10,6 +10,16 @@ import { PLUGIN_SEARCH_REGISTRY_PORT } from './plugin-host-ports';
 import { SearchProviderRegistry } from '../../modules/search/search-provider.registry';
 import { redactSecrets } from '../../common/services/logger.service';
 
+/**
+ * CPU time this process has used since `since`, in milliseconds. A bound on work is asserted on it and not on the
+ * wall clock: a busy runner can hold the worker off the CPU for longer than the whole bound, while code that is slow
+ * burns the CPU on every run.
+ */
+const cpuMsSince = (since: NodeJS.CpuUsage): number => {
+  const { user, system } = process.cpuUsage(since);
+  return (user + system) / 1000;
+};
+
 type FakeHost = {
   load: jest.Mock;
   runLifecycle: jest.Mock;
@@ -744,10 +754,10 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       await loader.enablePlugin('p1');
       const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
 
-      const started = Date.now();
+      const started = process.cpuUsage();
       loader.capturedOnLog!('log', sharedArray(7) as unknown as string);
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       expect(logSpy).toHaveBeenCalledWith('[p1] [non-string log message]', {}, { pluginId: 'p1' });
     });
   });
@@ -835,10 +845,10 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       await loader.enablePlugin('p1');
       const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
 
-      const started = Date.now();
+      const started = process.cpuUsage();
       loader.capturedOnLog!('log', 'fan-out', fanOut(8));
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       expect(logSpy).toHaveBeenCalledWith('[p1] fan-out', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
@@ -850,10 +860,10 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
         .spyOn((loader as unknown as { logger: { error: jest.Mock } }).logger, 'error')
         .mockImplementation(() => undefined);
 
-      const started = Date.now();
+      const started = process.cpuUsage();
       loader.capturedOnLog!('error', 'fan-out', { error: 'boom', fan: fanOut(8) });
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       expect(errorSpy).toHaveBeenCalledWith(
         '[p1] fan-out',
         undefined,
@@ -888,10 +898,10 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       await loader.enablePlugin('p1');
       const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
 
-      const started = Date.now();
+      const started = process.cpuUsage();
       loader.capturedOnLog!('log', 'buffer', { b: new Uint8Array(20_000_000) });
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       expect(logSpy).toHaveBeenCalledWith('[p1] buffer', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
@@ -901,11 +911,11 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       await loader.enablePlugin('p1');
       const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
 
-      const started = Date.now();
+      const started = process.cpuUsage();
       const boxed = structuredClone(new String('x'.repeat(10_000_000)));
       loader.capturedOnLog!('log', 'boxed', boxed as unknown as Record<string, unknown>);
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       expect(logSpy).toHaveBeenCalledWith('[p1] boxed', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
@@ -916,10 +926,10 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
       const holder = { s: 'x'.repeat(500_000) };
 
-      const started = Date.now();
+      const started = process.cpuUsage();
       loader.capturedOnLog!('log', 'shared-string', { list: Array.from({ length: 2000 }, () => holder) });
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       expect(logSpy).toHaveBeenCalledWith('[p1] shared-string', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
@@ -930,10 +940,10 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
       const holder = { ['k'.repeat(100_000)]: 1 };
 
-      const started = Date.now();
+      const started = process.cpuUsage();
       loader.capturedOnLog!('log', 'shared-name', { list: Array.from({ length: 4000 }, () => holder) });
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       expect(logSpy).toHaveBeenCalledWith('[p1] shared-name', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
@@ -984,11 +994,11 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       const float = -Math.PI * 1e-300;
       const pairs = Array.from({ length: 2000 }, (_, key): [number, number] => [float * (key + 1), float]);
 
-      const started = Date.now();
+      const started = process.cpuUsage();
       loader.capturedOnLog!('log', 'floats', { m: new Map(pairs) });
       loader.capturedOnLog!('log', 'bigints', { s: new Set([10n ** 100_000n, 10n ** 100_000n + 1n]) });
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       const [floats, bigints] = logSpy.mock.calls.map(call => call[1] as Record<string, unknown>);
       expect(floats).toMatchObject({ metaTruncated: true });
       expect(floats.metaLength).toBeGreaterThan(8192);

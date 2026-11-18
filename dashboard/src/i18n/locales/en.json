@@ -360,6 +360,15 @@
       "needsVars": "This template has placeholders — fill them in, then send",
       "loading": "Loading templates…",
       "loadError": "Templates could not be loaded"
+    },
+    "roomSearch": {
+      "title": "Search messages",
+      "placeholder": "Search",
+      "date": "Jump to date",
+      "clearDate": "Clear date",
+      "noDateHits": "No loaded messages on that day",
+      "notLoaded": "Older than the messages loaded in this chat. Scroll up in the chat to load older messages.",
+      "open": "Search in chat"
     }
   },
   "errorBoundary": {

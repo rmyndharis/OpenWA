@@ -365,6 +365,15 @@
       "needsVars": "Este template tiene variables — completalas y enviá",
       "loading": "Cargando templates…",
       "loadError": "No se pudieron cargar los templates"
+    },
+    "roomSearch": {
+      "title": "Buscar mensajes",
+      "placeholder": "Buscar",
+      "date": "Ir a la fecha",
+      "clearDate": "Borrar fecha",
+      "noDateHits": "No hay mensajes cargados ese día",
+      "notLoaded": "Es anterior a los mensajes cargados en este chat. Desplázate hacia arriba en el chat para cargar mensajes anteriores.",
+      "open": "Buscar en el chat"
     }
   },
   "errorBoundary": {

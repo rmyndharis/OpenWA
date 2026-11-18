@@ -1857,6 +1857,15 @@
   flex-shrink: 0;
 }
 
+.chats-page .room-header.room-header-searching {
+  align-items: stretch;
+  flex-direction: column;
+  height: auto;
+  min-height: 64px;
+  padding-block: 0.5rem;
+  gap: 0;
+}
+
 /* The chat layout clips what runs past its bottom edge, so the menu is placed against the room rather than its button:
    6px under the button, which the 64px header centres (40px tall, 12px from the top), and at the button's end edge,
    which the header's end padding, the contact panel button and the gap between them keep from the room's. Capped by

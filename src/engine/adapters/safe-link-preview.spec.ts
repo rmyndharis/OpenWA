@@ -5,6 +5,16 @@ import { generateSafeLinkPreview } from './safe-link-preview';
 import * as ssrfGuard from '../../common/security/ssrf-guard';
 
 /**
+ * CPU time this process has used since `since`, in milliseconds. A bound on work is asserted on it and not on the
+ * wall clock: a busy runner can hold the worker off the CPU for longer than the whole bound, while code that is slow
+ * burns the CPU on every run.
+ */
+const cpuMsSince = (since: NodeJS.CpuUsage): number => {
+  const { user, system } = process.cpuUsage(since);
+  return (user + system) / 1000;
+};
+
+/**
  * This generator exists because the library's own delegates to a package with an unfixed SSRF
  * advisory, and its input is attacker-influenced — a URL pasted into a message makes this server
  * fetch it. So the tests that matter most are not about parsing: they are that nothing is fetched
@@ -317,10 +327,10 @@ describe('generateSafeLinkPreview', () => {
     ])('scans a body of %s in linear time', async (_label, unit) => {
       respondWith(unit.repeat((128 * 1024) / unit.length));
 
-      const started = Date.now();
+      const started = process.cpuUsage();
       await expect(generateSafeLinkPreview('https://example.com')).resolves.toBeUndefined();
 
-      expect(Date.now() - started).toBeLessThan(500);
+      expect(cpuMsSince(started)).toBeLessThan(500);
     });
   });
 

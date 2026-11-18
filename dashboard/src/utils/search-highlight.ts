@@ -17,18 +17,38 @@ export function renderHighlightedSnippet(snippet: string): { text: string; marke
     .filter(seg => seg.text.length > 0);
 }
 
+/** Inclusive epoch-ms bounds for one local calendar day (`YYYY-MM-DD`). */
+export function dayBoundsMs(day: string): { dateFrom: number; dateTo: number } | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const [y, m, d] = day.split('-').map(Number);
+  const start = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+  const end = new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return { dateFrom: start, dateTo: end };
+}
+
 /** Build the SearchParams for a debounced query (trims, drops empty). */
 export function buildSearchParams(
   q: string,
-  scope?: { sessionId?: string; chatId?: string },
+  scope?: { sessionId?: string; chatId?: string; dateFrom?: number; dateTo?: number },
   paging?: { limit?: number; offset?: number },
-): { q: string; sessionId?: string; chatId?: string; limit?: number; offset?: number } | null {
+): {
+  q: string;
+  sessionId?: string;
+  chatId?: string;
+  dateFrom?: number;
+  dateTo?: number;
+  limit?: number;
+  offset?: number;
+} | null {
   const trimmed = q.trim();
   if (!trimmed) return null;
   return {
     q: trimmed,
     sessionId: scope?.sessionId,
     chatId: scope?.chatId,
+    dateFrom: scope?.dateFrom,
+    dateTo: scope?.dateTo,
     limit: paging?.limit,
     offset: paging?.offset,
   };

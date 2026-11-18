@@ -365,6 +365,15 @@
       "needsVars": "Questo modello ha variabili — compilale, poi invia",
       "loading": "Caricamento dei modelli…",
       "loadError": "Impossibile caricare i modelli"
+    },
+    "roomSearch": {
+      "title": "Cerca messaggi",
+      "placeholder": "Cerca",
+      "date": "Vai alla data",
+      "clearDate": "Cancella data",
+      "noDateHits": "Nessun messaggio caricato in quel giorno",
+      "notLoaded": "Precedente ai messaggi caricati in questa chat. Scorri verso l’alto nella chat per caricare i messaggi precedenti.",
+      "open": "Cerca nella chat"
     }
   },
   "errorBoundary": {

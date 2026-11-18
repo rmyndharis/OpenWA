@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderHighlightedSnippet } from './search-highlight.ts';
+import { buildSearchParams, dayBoundsMs, renderHighlightedSnippet } from './search-highlight.ts';
 
 test('splits a <mark>-carrying snippet into text + marked segments', () => {
   const segs = renderHighlightedSnippet('hello <mark>world</mark>!');
@@ -23,4 +23,26 @@ test('XSS-guard: a payload between markers is returned as inert text, never exec
 
 test('no markers → single unmarked segment', () => {
   assert.deepEqual(renderHighlightedSnippet('plain text'), [{ text: 'plain text', marked: false }]);
+});
+
+test('dayBoundsMs covers one local calendar day in epoch-ms', () => {
+  const b = dayBoundsMs('2023-11-14');
+  assert.ok(b);
+  assert.equal(new Date(b.dateFrom).getHours(), 0);
+  assert.equal(new Date(b.dateTo).getHours(), 23);
+  assert.equal(dayBoundsMs('nope'), null);
+});
+
+test('buildSearchParams carries chat and day bounds', () => {
+  const b = dayBoundsMs('2023-11-14')!;
+  assert.deepEqual(buildSearchParams('  hi  ', { sessionId: 's', chatId: 'c', ...b }, { limit: 10 }), {
+    q: 'hi',
+    sessionId: 's',
+    chatId: 'c',
+    dateFrom: b.dateFrom,
+    dateTo: b.dateTo,
+    limit: 10,
+    offset: undefined,
+  });
+  assert.equal(buildSearchParams('   '), null);
 });

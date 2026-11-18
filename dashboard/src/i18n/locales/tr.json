@@ -360,6 +360,15 @@
       "needsVars": "Bu şablonda değişkenler var — doldurup gönderin",
       "loading": "Şablonlar yükleniyor…",
       "loadError": "Şablonlar yüklenemedi"
+    },
+    "roomSearch": {
+      "title": "Mesajlarda ara",
+      "placeholder": "Ara",
+      "date": "Tarihe git",
+      "clearDate": "Tarihi temizle",
+      "noDateHits": "O gün yüklenmiş mesaj yok",
+      "notLoaded": "Bu sohbette yüklenmiş mesajlardan daha eski. Daha eski mesajları yüklemek için sohbette yukarı kaydırın.",
+      "open": "Sohbette ara"
     }
   },
   "errorBoundary": {
