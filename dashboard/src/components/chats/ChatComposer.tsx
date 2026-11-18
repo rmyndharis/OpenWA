@@ -724,6 +724,7 @@ function ChatComposer({
               className={`btn-input-accessory inside ${showEmojiPicker ? 'active' : ''}`}
               title={t('chats.emojiTitle')}
               aria-label={t('chats.emojiTitle')}
+              aria-expanded={showEmojiPicker}
             >
               <Smile size={22} />
             </button>
