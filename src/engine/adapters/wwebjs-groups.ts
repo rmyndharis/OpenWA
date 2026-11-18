@@ -746,15 +746,15 @@ export class WwebjsGroups {
     );
   }
 
-  // whatsapp-web.js 1.34.7 exposes no disappearing-messages setter (no Client/GroupChat symbol in
-  // index.d.ts; only a create-time messageTimer option, Client.js:2371) — an honest 501, not a no-op.
+  // whatsapp-web.js 1.34.8 exposes no disappearing-messages setter (no Client/GroupChat symbol in
+  // index.d.ts; only a create-time messageTimer option, Client.js createGroup) — an honest 501, not a no-op.
   // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars
   async setGroupEphemeral(_groupId: string, _durationSec: number): Promise<void> {
     this.host.ensureReady();
     throw new EngineNotSupportedError('setGroupEphemeral');
   }
 
-  // whatsapp-web.js 1.34.7 has no member-label setter (no memberLabel or member tag symbol in index.d.ts
+  // whatsapp-web.js 1.34.8 has no member-label setter (no memberLabel or member tag symbol in index.d.ts
   // or src/), so this is an honest 501 rather than a no-op.
   // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars
   async setGroupMemberLabel(_groupId: string, _label: string): Promise<void> {

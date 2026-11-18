@@ -510,7 +510,7 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
   }
 
   /**
-   * whatsapp-web.js 1.34.7 can read labels and assign them, but cannot create, rename, recolour or
+   * whatsapp-web.js 1.34.8 can read labels and assign them, but cannot create, rename, recolour or
    * delete one — `index.d.ts` exposes getLabels / getLabelById / getChatLabels / getChatsByLabelId /
    * addOrRemoveLabels and nothing that edits the label itself.
    */

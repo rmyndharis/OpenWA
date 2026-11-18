@@ -8256,7 +8256,7 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
     });
   });
 
-  describe('setGroupEphemeral (no wwjs 1.34.7 API → honest 501)', () => {
+  describe('setGroupEphemeral (no wwjs 1.34.8 API → honest 501)', () => {
     it('rejects with EngineNotSupportedError (501)', async () => {
       const err = await readyAdapter({})
         .setGroupEphemeral('g@g.us', 86400)
@@ -8266,7 +8266,7 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
     });
   });
 
-  describe('setGroupMemberLabel (no wwjs 1.34.7 API → honest 501)', () => {
+  describe('setGroupMemberLabel (no wwjs 1.34.8 API → honest 501)', () => {
     it('rejects with EngineNotSupportedError (501)', async () => {
       const err = await readyAdapter({})
         .setGroupMemberLabel('g@g.us', 'Site A')
