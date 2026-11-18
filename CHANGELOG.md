@@ -114,6 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `chatName` to the `topChats` entries of the two statistics examples in the API reference.
 - Correct the API reference and the API collection on a plugin's config UI, which the dashboard shows alone in place of the generated form, with an error when its bridge does not start within 5 s, and show the secret mask as `***`, as the gateway returns it.
 - Say in the API reference and `.env.example` that a send by `url` holds the whole body in memory, about twice its size at the peak, and that only the per-key rate limit bounds how many run at once.
+- List the local media store in the at-rest table of the security design: plaintext files, `0644` in `0755` directories under the usual umask.
 
 ### Dependencies
 
