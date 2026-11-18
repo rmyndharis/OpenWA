@@ -39,7 +39,7 @@ class CallsResource
      * event-linked call and has no notion of "no start time". A WhatsApp-side failure answers `403`
      * rather than a success carrying an empty link.
      *
-     * @param array{type:string,startTime:int|float} $body
+     * @param array{type:string,startTime:int} $body
      * @return array<string,mixed>
      */
     public function createLink(string $sessionId, array $body): array
