@@ -19,7 +19,13 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { toMessageMedia } from './wwebjs-messaging';
-import { type WwebjsEngineHost, rethrowIfNavigation, withPageWrite, reportPageDeath } from './wwebjs-host';
+import {
+  type WwebjsEngineHost,
+  navigationsSeen,
+  rethrowIfNavigation,
+  withPageWrite,
+  reportPageDeath,
+} from './wwebjs-host';
 import { isNavigationError, isProtocolTimeout } from './wwebjs-lifecycle';
 import { listChats, recoverGroupChatById } from './wwebjs-chats';
 import { type EvaluatePage, type PageWrite, runWriteInPage, settleWriteStatus } from './wwebjs-page-writes';
@@ -200,6 +206,7 @@ export class WwebjsGroups {
 
   async getGroupInfo(groupId: string): Promise<GroupInfo | null> {
     this.host.ensureReady();
+    const since = navigationsSeen(this.host);
     try {
       // A group whose refresh fails one of WhatsApp Web's own invariants is read from the metadata the
       // page already holds, as the group list reads it (readChatModels): as last loaded, not refreshed,
@@ -257,7 +264,7 @@ export class WwebjsGroups {
       // A dead page and a genuinely-missing group both land in this catch; only the second may
       // become null (→ service 404). A transport death surfaced as "group not found" sends
       // operators debugging the wrong layer — report it and answer 503 instead.
-      rethrowIfNavigation(this.host, error);
+      rethrowIfNavigation(this.host, error, since);
       if (this.host.isPageTransportError(error)) {
         this.host.reportIfPageTransportError(error, 'getGroupInfo');
         throw new EngineTransportError(`Transport died while reading group ${groupId}`);
@@ -556,12 +563,13 @@ export class WwebjsGroups {
     // the endpoint's most common error input, which the route documents (and Baileys answers) as
     // 404. The sibling joinGroupViaInviteCode maps the same cause; this is the read half.
     let raw: RawInviteInfo;
+    const since = navigationsSeen(this.host);
     try {
       raw = await this.client().getInviteInfo(inviteCode);
     } catch (error) {
       // A dead page and a refused invite both land here; only the second is a 404. Folding a
       // transport death into "no such invite" sends operators debugging the wrong layer.
-      rethrowIfNavigation(this.host, error);
+      rethrowIfNavigation(this.host, error, since);
       if (this.host.isPageTransportError(error)) {
         this.host.reportIfPageTransportError(error, 'getGroupJoinInfo');
         throw new EngineTransportError(`Transport died while previewing invite ${inviteCode}`);

@@ -102,13 +102,22 @@ export const PAGE_RELOADING_MESSAGE =
  * hidden by this answer: it is not reported here, but the liveness probe fails outside the re-inject window
  * and the watchdog reconnects. Left unread, the same message became a false 404 or 400 at the catches that
  * fold a failed lookup into "not found", or a bare 500.
+ *
+ * `navigatedDuringCall` says a navigation was stamped after the call began, which no text can say. Chrome clears the
+ * old page context before puppeteer delivers `framenavigated`, and a call made in between is held until the new
+ * context exists, which comes after that event: it runs on a document WhatsApp Web has not booted, so a page function
+ * that starts from `window.WWebJS` dies on `Cannot read properties of undefined`, the text of any ordinary page error.
+ * With it, any other failure of the call is the reload too. The protocol timeout keeps its own answer.
  */
-export function isNavigationError(error: unknown): boolean {
+export function isNavigationError(error: unknown, navigatedDuringCall = false): boolean {
   if (error instanceof HttpException) {
     return false;
   }
   const message = error instanceof Error ? error.message : String(error);
-  return !message.startsWith(CAPTURED_PAGE_ERROR_PREFIX) && isNavigationShapedInitRejection(message);
+  if (message.startsWith(CAPTURED_PAGE_ERROR_PREFIX)) {
+    return false;
+  }
+  return isNavigationShapedInitRejection(message) || (navigatedDuringCall && !isProtocolTimeout(error));
 }
 
 /**
@@ -1386,6 +1395,11 @@ export class WwebjsLifecycle {
   /** Whether a probe found the page now loaded without whatsapp-web.js's helpers (see pageWithoutHelpers). */
   isPageWithoutHelpers(): boolean {
     return this.pageWithoutHelpers;
+  }
+
+  /** The navigations stamped so far. A call that reads it before it starts can tell that one landed while it ran. */
+  stampedNavigations(): number {
+    return this.navigationCount;
   }
 
   private clearNavigationReinjectWindow(): void {
