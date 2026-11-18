@@ -460,7 +460,10 @@ like any other message; Escape or the picker's close button leaves the draft to 
 A template with placeholders such as `{{name}}` is not sent exactly as inserted, and the composer
 says the placeholders are to be filled in for as long as one of them is left in the draft. A thread
 at its bottom stays there when the composer under it changes height, and a thread the page scrolled
-to a search hit stays on that message.
+to a search hit stays on that message. A button that closes with the focus on it (an emoji of the
+panel, the remove button of a staged file, the close button of the reply banner) hands the focus to
+the message field, except after a tap, which would raise a phone's keyboard; Escape on an emoji does
+the same.
 
 The message thread is paged. `useChatMessages` is a `useInfiniteQuery` whose cursor is the number
 of DB rows fetched so far, not the length of the rendered list — the thread also carries engine
