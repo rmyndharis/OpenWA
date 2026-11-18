@@ -275,14 +275,20 @@ describeQueueOn('Queued dispatch paths (e2e, QUEUE_ENABLED=true)', () => {
     // The job id is the delivery id hashed with its plugin/instance namespace, as the enqueue mints it.
     const job = await ingressQueue.getJob(sanitizeIngressJobId(deliveryId, 'chatwoot\u0000acct1'));
     expect(job).toBeDefined();
-    // The enqueue outcome was recorded on the event row (queued counts as reached-the-dispatch-tier).
+    // The event row keeps its payload while the job is queued and is settled by the worker, so whether the worker
+    // has finished by now depends on timing; ingress-queued-redis-loss.e2e-spec.ts holds the queue to pin the state.
     const event = await eventRepo.findOneByOrFail({ providerDeliveryId: deliveryId });
-    expect(event.dispatchState).toBe('dispatched');
+    expect(['pending', 'dispatched']).toContain(event.dispatchState);
 
     // The IngressProcessor worker (not the request path — that only enqueued) performs the dispatch.
     await waitFor(() => dispatchWebhookForInstance.mock.calls.length >= 1);
     const dispatchedArgs = dispatchWebhookForInstance.mock.calls as IngressJobData[][];
     expect(dispatchedArgs[0][0].deliveryId).toBe(deliveryId);
+    // Once the dispatch succeeded the worker retires the row's payload and marks it dispatched.
+    await waitFor(
+      async () => (await eventRepo.findOneByOrFail({ providerDeliveryId: deliveryId })).dispatchState === 'dispatched',
+    );
+    expect((await eventRepo.findOneByOrFail({ providerDeliveryId: deliveryId })).payload).toBeNull();
   }, 30000);
 
   it('accepts a delivery for a plugin that is still restoring, holds its job without spending an attempt, then dispatches it', async () => {

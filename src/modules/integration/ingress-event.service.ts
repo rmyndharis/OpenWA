@@ -47,14 +47,16 @@ export class IngressEventService {
   }
 
   /**
-   * Record the enqueue outcome on the persisted event. 'queued'/'dispatched' mean the event reached
-   * the dispatch tier → 'dispatched' (a later in-tier failure dead-letters via the processor/DLQ, not
-   * this row) — and the full payload is retired to NULL: the dispatch tier now owns it (the BullMQ job
-   * data, or the DLQ row on failure), so the dedup row slims down to its hash + metadata. 'failed'
-   * (the swallowed inline-dispatch failure) bumps the attempt counter and leaves the row 'pending'
-   * WITH its payload so the reconciler can still replay from it — the live path's own retry signal.
+   * Record the enqueue outcome on the persisted event. 'dispatched' (the inline dispatch ran) means the plugin has
+   * the delivery: the row becomes 'dispatched' and its full payload is retired to NULL, so the dedup row slims down
+   * to its hash + metadata. 'queued' writes nothing: the BullMQ job is only how the delivery reaches the plugin, and
+   * the row keeps 'pending' and its payload until the worker settles it (IngressProcessor), so a job that Redis
+   * loses is replayed from the row by the reconciler instead of being the delivery's only copy. 'failed' (the
+   * swallowed inline-dispatch failure) bumps the attempt counter and leaves the row 'pending' WITH its payload so
+   * the reconciler can still replay from it, the live path's own retry signal.
    */
   async markDispatchOutcome(key: IngressEventKey, outcome: EnqueueOutcome['outcome']): Promise<void> {
+    if (outcome === 'queued') return;
     if (outcome === 'failed') {
       await this.repo.increment(key, 'dispatchAttempts', 1);
       await this.repo.update(key, { lastDispatchAt: new Date() });

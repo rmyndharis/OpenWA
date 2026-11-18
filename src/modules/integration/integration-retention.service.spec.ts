@@ -368,6 +368,21 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
     });
   });
 
+  // Past the dedup window a row is not held back for a queue that cannot be asked: it gets its dead letter, with
+  // the payload kept there, as a row with no job does. (The sweep, by contrast, replays nothing while the queue
+  // cannot be asked, since the job may be alive.)
+  it('dead-letters an aged pending event whose queue cannot be asked, like one with no job', async () => {
+    await insertEvent('stranded', {});
+    existingJobState.mockResolvedValue('unreachable');
+
+    await service.pruneOlderThan(7, 90);
+
+    expect(await events.findOneByOrFail({ id: 'stranded' })).toMatchObject({ dispatchState: 'failed', payload: null });
+    const [dlq] = await failures.find();
+    expect(dlq).toMatchObject({ deliveryId: 'd-stranded', redriven: false });
+    expect(dlq.payload).toMatchObject({ route: 'chatwoot', ingress: { rawBody: '{"msg":"hello"}' } });
+  });
+
   it('hands off the healthy rows behind one whose stored payload is not JSON', async () => {
     // Only an imported or hand-edited row can hold such text. Read with the batch it failed the whole
     // read, so nothing behind it was ever dead-lettered and every run failed the same way.

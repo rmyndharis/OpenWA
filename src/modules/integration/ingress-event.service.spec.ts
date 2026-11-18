@@ -67,31 +67,43 @@ describe('IngressEventService.recordOrSkip', () => {
     expect(event.payloadHash).toBe('hash-of-{}');
   });
 
-  it.each(['queued', 'dispatched'] as const)(
-    'marks outcome %s as dispatched with a dispatch timestamp',
-    async outcome => {
-      await service.recordOrSkip(row());
-      await service.markDispatchOutcome(key, outcome);
-      const event = await stored();
-      expect(event.dispatchState).toBe('dispatched');
-      expect(event.lastDispatchAt).toBeInstanceOf(Date);
-      expect(event.dispatchAttempts).toBe(0);
-    },
-  );
+  it('marks outcome dispatched as dispatched with a dispatch timestamp', async () => {
+    await service.recordOrSkip(row());
+    await service.markDispatchOutcome(key, 'dispatched');
+    const event = await stored();
+    expect(event.dispatchState).toBe('dispatched');
+    expect(event.lastDispatchAt).toBeInstanceOf(Date);
+    expect(event.dispatchAttempts).toBe(0);
+  });
 
-  it.each(['queued', 'dispatched'] as const)(
-    'retires the full payload on outcome %s but keeps the hash and the dedup oracle',
-    async outcome => {
-      await service.recordOrSkip(row());
-      await service.markDispatchOutcome(key, outcome);
-      const event = await stored();
-      // The dispatch tier owns the payload now — the dedup row slims to its marker + fingerprint.
-      expect(event.payload).toBeNull();
-      expect(event.payloadHash).toBe('hash-of-{}');
-      // Dedup is keyed on (pluginId, instanceId, providerDeliveryId), never on the payload.
-      expect(await service.recordOrSkip(row())).toBe(false);
-    },
-  );
+  it('retires the full payload on outcome dispatched but keeps the hash and the dedup oracle', async () => {
+    await service.recordOrSkip(row());
+    await service.markDispatchOutcome(key, 'dispatched');
+    const event = await stored();
+    // The plugin has the delivery now, so the dedup row slims to its marker + fingerprint.
+    expect(event.payload).toBeNull();
+    expect(event.payloadHash).toBe('hash-of-{}');
+    // Dedup is keyed on (pluginId, instanceId, providerDeliveryId), never on the payload.
+    expect(await service.recordOrSkip(row())).toBe(false);
+  });
+
+  // The job in Redis is only how the delivery reaches the plugin. If Redis loses it, the row is what the reconciler
+  // replays from, so it keeps its payload (and stays pending) until the worker settles the delivery.
+  it('writes nothing for outcome queued: the row stays pending with its payload for the reconciler', async () => {
+    await service.recordOrSkip(row());
+    const before = await stored();
+
+    await service.markDispatchOutcome(key, 'queued');
+
+    const event = await stored();
+    expect(event).toEqual(before);
+    expect(event.dispatchState).toBe('pending');
+    expect(event.payload).toEqual({ headers: {}, query: {}, body: '{}', rawBody: '{}' });
+    expect(event.dispatchAttempts).toBe(0);
+    expect(event.lastDispatchAt).toBeNull();
+    // Still the dedup oracle: a provider retry of the same delivery is a duplicate.
+    expect(await service.recordOrSkip(row())).toBe(false);
+  });
 
   it('marks outcome failed as still-pending with the attempt counted AND the payload kept (reconciler replays from it)', async () => {
     await service.recordOrSkip(row());

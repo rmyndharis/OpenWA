@@ -47,13 +47,17 @@ export function resolveIngressReconcilerOptions(env: NodeJS.ProcessEnv = process
 }
 
 /**
- * How long a row whose stored payload could not be read stays out of the sweep's batch, and how many such
- * rows are remembered. A full batch of them, oldest first, would otherwise head every sweep and no healthy
- * row behind them would ever be replayed. Held in memory, not in the attempt budget: the row is not
- * touched, so nothing of its budget is spent, and it is looked at again after the hour or a restart.
+ * How long a row stays out of the sweep's batch, and how many such rows are remembered, after the sweep found no
+ * use in reading it again soon. A full batch of them, oldest first, would otherwise head every sweep and no
+ * healthy row behind them would ever be replayed. Two reasons: its stored payload could not be read, which is
+ * looked at again after an hour; and its queue job is still live (waiting behind a backlog, running, delayed),
+ * which the worker settles on its own and which only needs another look after a quarter of an hour, well inside
+ * the hour a completed job is kept. Held in memory, not in the attempt budget: the row is not touched, so nothing
+ * of its budget is spent, and it is looked at again after the wait or a restart.
  */
 const UNREADABLE_RETRY_MS = 60 * 60 * 1000;
-const UNREADABLE_REMEMBERED_MAX = 1000;
+const LIVE_JOB_RETRY_MS = 15 * 60 * 1000;
+const SET_ASIDE_MAX = 1000;
 
 export interface IngressReconcileStats {
   scanned: number;
@@ -65,8 +69,9 @@ export interface IngressReconcileStats {
 /**
  * Closes the last silent-loss window of the fast-ack ingress pipeline. persist-before-ack makes the
  * ingress_events row durable, but durability alone is not delivery: a crash between the persist and
- * the enqueue, or a fire-and-forget enqueue whose outcome never gets recorded, strands the row
- * 'pending' forever: a provider retry only hits the dedup oracle and is answered with the route's ack.
+ * the enqueue, a fire-and-forget enqueue whose outcome never gets recorded, or a queued job that Redis loses
+ * strands the row 'pending' forever: a provider retry only hits the dedup oracle and is answered with the
+ * route's ack.
  *
  * The reconciler sweeps small batches of stale 'pending' rows and re-dispatches them through the
  * exact same IngressEnqueueService the live path uses (same deliveryId as BullMQ jobId, so a replay
@@ -75,8 +80,13 @@ export interface IngressReconcileStats {
  * the delivery, which then counts as that job). Re-dispatch from the row is sound because a 'pending'
  * row IS the full verified request: payload carries headers/query/body/rawBody,
  * providerDeliveryId is the delivery id, and the manifest route re-derives the conversation lane.
- * (The payload is retired to NULL the moment an outcome is recorded — 'dispatched' rows and DLQ'd
- * 'failed' rows no longer need it — so only 'pending' rows, which always carry it, are replayable.)
+ * The row keeps its payload until the delivery has settled: the inline dispatch succeeded, the worker finished
+ * the queue job, or the dead letter is written. So a 'pending' row always carries it, and a job that Redis loses
+ * (a restart without its data, a failover to a replica that was behind, an eviction, a job removed in the queue
+ * dashboard) is found by the sweep and replayed from the row, counted against the replay budget. A job that
+ * is still live (waiting behind a backlog, running, delayed) is left alone, and one that already completed
+ * settles the row without a second delivery. The sweep never replays inline while the queue cannot be asked,
+ * since the job may be alive.
  * 'failed'/'dispatched' rows are never re-queued: a terminal failure lives in the DLQ
  * (RedriveService), a dispatched event is the dispatch tier's concern.
  *
@@ -91,8 +101,8 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
   // The pass in flight, settled when it ends; doubles as the overlap guard.
   private inFlight?: Promise<void>;
   private readonly stop = new AbortController();
-  // Row id to the time it may be read again, for rows whose payload could not be read (see above).
-  private readonly unreadableUntil = new Map<string, number>();
+  // Row id to the time it may be looked at again, for rows the sweep set aside (see above).
+  private readonly setAsideUntil = new Map<string, number>();
 
   constructor(
     @InjectRepository(IngressEvent, 'data') private readonly events: Repository<IngressEvent>,
@@ -165,7 +175,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       // whole batch, so no row behind it would ever be replayed. Each row is read on its own below, and one
       // that cannot be read is kept out of the next batches for a while, so a batch full of them cannot starve
       // the rows behind.
-      const unreadable = this.unreadableRows(now);
+      const unreadable = this.setAsideRows(now);
       // A plugin the boot restore has not reached has no worker to take a replay, and the loop below skips its
       // rows, so they are left out here too: a batch's worth of them would otherwise be handed back by every
       // pass until the restore ends, with no other plugin's stranded delivery replayed in the meantime.
@@ -200,7 +210,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
           // A payload that does not parse is told by its error class: the message of a SyntaxError quotes
           // the start of the text, which may read like a connection error.
           if ((err instanceof Error && err.name === 'SyntaxError') || !isTransientDbError(err)) {
-            this.rememberUnreadable(id, now);
+            this.setAside(id, now, UNREADABLE_RETRY_MS);
           }
           stats.skipped++;
           continue;
@@ -254,6 +264,12 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
           if (outcome === 'replayed') stats.replayed++;
           else if (outcome === 'failed') stats.failed++;
           else stats.skipped++;
+          if (outcome === 'unreachable') {
+            this.logger.warn('Ingress queue unreachable; the rest of the reconcile pass waits for the next one', {
+              action: 'ingress_reconcile_queue_unreachable',
+            });
+            break;
+          }
         } catch (err) {
           // A bookkeeping failure (repo update/DLQ write) must not abort the batch; the row stays
           // 'pending' and is retried next sweep.
@@ -273,22 +289,22 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Ids of the rows still to be left out of a batch; forgets those whose time to be read again came. */
-  private unreadableRows(now: Date): string[] {
-    for (const [id, until] of this.unreadableUntil) {
-      if (until <= now.getTime()) this.unreadableUntil.delete(id);
+  /** Ids of the rows still to be left out of a batch; forgets those whose time to be looked at again came. */
+  private setAsideRows(now: Date): string[] {
+    for (const [id, until] of this.setAsideUntil) {
+      if (until <= now.getTime()) this.setAsideUntil.delete(id);
     }
-    return [...this.unreadableUntil.keys()];
+    return [...this.setAsideUntil.keys()];
   }
 
-  private rememberUnreadable(id: string, now: Date): void {
-    this.unreadableUntil.delete(id);
-    this.unreadableUntil.set(id, now.getTime() + UNREADABLE_RETRY_MS);
+  private setAside(id: string, now: Date, retryMs: number): void {
+    this.setAsideUntil.delete(id);
+    this.setAsideUntil.set(id, now.getTime() + retryMs);
     // Oldest first, as the map keeps insertion order; a store with more of them than this is not a store
     // an operator can leave alone, and the oldest are looked at again.
-    while (this.unreadableUntil.size > UNREADABLE_REMEMBERED_MAX) {
-      const oldest = this.unreadableUntil.keys().next().value as string;
-      this.unreadableUntil.delete(oldest);
+    while (this.setAsideUntil.size > SET_ASIDE_MAX) {
+      const oldest = this.setAsideUntil.keys().next().value as string;
+      this.setAsideUntil.delete(oldest);
     }
   }
 
@@ -372,7 +388,10 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
             const jobData = this.jobDataFor(row);
             // A job still in the queue (or completed) owns the delivery, as in reconcileRow: no dead
             // letter while a copy can still deliver. A failed one falls through to its existing DLQ row.
-            const existing = await this.ingressEnqueue.existingJobState(jobData, row.providerDeliveryId);
+            const looked = await this.ingressEnqueue.existingJobState(jobData, row.providerDeliveryId);
+            // Past the dedup window a row is not held back for a queue that cannot be asked: it is handed a dead
+            // letter, with the payload kept there, as a row with no job is.
+            const existing = looked === 'unreachable' ? undefined : looked;
             // Shutdown began while the lookup was out (destroy may have stopped waiting for it).
             if (this.stop.signal.aborted) return retired;
             if (existing && existing !== 'failed') {
@@ -488,7 +507,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     row: IngressEvent & { payload: NonNullable<IngressEvent['payload']> },
     maxAttempts: number,
     now: Date,
-  ): Promise<'replayed' | 'failed' | 'interrupted'> {
+  ): Promise<'replayed' | 'failed' | 'interrupted' | 'unreachable'> {
     const jobData = this.jobDataFor(row);
     // jobId = the ORIGINAL deliveryId, so the replay lands on any job the live path did enqueue before
     // its outcome mark was lost. BullMQ resolves a duplicate add() whatever that job's state, so look
@@ -497,6 +516,10 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     // Shutdown began while the lookup was out, and destroy may have stopped waiting for it: a dispatch
     // now could land after plugin teardown and spend an attempt. Leave the row for the next start.
     if (this.stop.signal.aborted) return 'interrupted';
+    // The queue could not be asked, so the job may well exist: a replay would dispatch inline beside it, and
+    // again once Redis answers. The row is left as it is, and the sweep stops here, since no other row of
+    // the pass can be looked up either.
+    if (existing === 'unreachable') return 'unreachable';
     if (existing === 'failed') {
       // Every queue attempt already ran and IngressProcessor dead-lettered the delivery, or re-queued it
       // and every copy failed too: a live or completed copy answers for the job (see existingJobState).
@@ -525,23 +548,66 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       });
       return 'failed';
     }
+    if (existing === 'completed') {
+      // The worker delivered it and the write that retires the row did not land. Settle the row and deliver
+      // nothing: a replay would hand the plugin the same event again. Only while still 'pending', so a row
+      // another writer failed or settled meanwhile is left as it is. Any dead letter the live path wrote for
+      // it (the inline-failure case) closes too, so a manual redrive does not deliver it a second time.
+      await this.events.update(
+        { id: row.id, dispatchState: 'pending' },
+        { dispatchState: 'dispatched', lastDispatchAt: now, payload: null },
+      );
+      await this.retireOpenDeadLetters(row);
+      this.logger.log('Settled stranded ingress event whose queue job already completed', {
+        pluginId: row.pluginId,
+        instanceId: row.instanceId,
+        deliveryId: row.providerDeliveryId,
+        action: 'ingress_event_reconcile_job_completed',
+      });
+      return 'replayed';
+    }
+    if (existing) {
+      // The job is waiting behind a backlog, running or delayed, and the worker settles the row when it
+      // finishes: the row keeps its payload until then and is looked at again after a while. Any dead
+      // letter the live path wrote for it (the inline-failure case) closes, since the job delivers it.
+      await this.retireOpenDeadLetters(row);
+      this.setAside(row.id, now, LIVE_JOB_RETRY_MS);
+      return 'interrupted';
+    }
+    // No job: Redis lost it (a restart without its data, a failover to a replica that was behind, an
+    // eviction, a job removed in the queue dashboard), or it was never added (a crash before the add). A
+    // delivery whose replayed job keeps vanishing has spent its budget: it is dead-lettered for redrive. Only
+    // with the queue on: without it there is no job to vanish, and a row with a budget left of one replay
+    // gets that replay, as before, before its failure goes terminal below.
+    if (this.ingressEnqueue.isQueueActive() && (row.dispatchAttempts ?? 0) >= maxAttempts) {
+      return this.deadLetterExhausted(row, jobData, row.dispatchAttempts, 'ingress queue job lost', now);
+    }
     // The add can also outlast destroy's wait (see onModuleDestroy). Given the stop signal, enqueue()
     // throws instead of dispatching inline once it has aborted, and the row is left as above.
-    const result: EnqueueOutcome | undefined = existing
-      ? { outcome: 'queued' }
-      : await this.ingressEnqueue.enqueue(jobData, row.providerDeliveryId, this.stop.signal).catch(err => {
-          if (this.stop.signal.aborted) return undefined;
-          throw err;
-        });
+    const result: EnqueueOutcome | undefined = await this.ingressEnqueue
+      .enqueue(jobData, row.providerDeliveryId, this.stop.signal)
+      .catch(err => {
+        if (this.stop.signal.aborted) return undefined;
+        throw err;
+      });
     if (!result) return 'interrupted';
     const { outcome, error } = result;
     if (outcome !== 'failed') {
-      // Retire the payload with the outcome: the dispatch tier owns the delivery from here (the
-      // BullMQ job data, or a DLQ row on an in-tier failure), so the dedup row slims to its marker.
-      await this.events.update({ id: row.id }, { dispatchState: 'dispatched', lastDispatchAt: now, payload: null });
+      if (outcome === 'queued') {
+        // The new job is how the delivery reaches the plugin again: the row keeps its payload until the worker
+        // settles it, and the replay counts against the budget, so a job that keeps vanishing ends in a dead
+        // letter. Only while 'pending': the worker may already have finished it.
+        await this.events.update(
+          { id: row.id, dispatchState: 'pending' },
+          { lastDispatchAt: now, dispatchAttempts: (row.dispatchAttempts ?? 0) + 1 },
+        );
+      } else {
+        // The inline dispatch ran and succeeded: the plugin has the delivery, so the row retires its payload and
+        // slims to its marker.
+        await this.events.update({ id: row.id }, { dispatchState: 'dispatched', lastDispatchAt: now, payload: null });
+      }
       // Retire any dead-letter row the live path already wrote for this delivery (the inline-failure
-      // case): the replay, or the job or re-queued copy still live in the queue, delivers it, so a later
-      // manual redrive must not deliver it again.
+      // case): the replay delivers it, so a later manual redrive must not deliver it again.
       await this.retireOpenDeadLetters(row);
       this.logger.log('Replayed stranded ingress event', {
         pluginId: row.pluginId,
@@ -559,30 +625,37 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
 
     const attempts = (row.dispatchAttempts ?? 0) + 1;
     const terminal = attempts >= maxAttempts;
-    if (terminal) {
-      // DLQ BEFORE the terminal mark + payload retirement: the dead-letter row is the payload's new
-      // home, so it must exist first. ensureDeadLetterRow is idempotent (count-guarded), so a crash
-      // between the two writes just makes the next sweep re-take this path and finish the mark. A
-      // redrive of the live-path row during this replay closes the event and that row, so, as in the
-      // failed-job branch, the mark only lands on a still-'pending' event and the row this sweep wrote
-      // is settled as in the hand-off.
-      const written = await this.ensureDeadLetterRow(jobData, attempts, error);
-      const marked = await this.events.update(
-        { id: row.id, dispatchState: 'pending' },
-        { dispatchAttempts: attempts, lastDispatchAt: now, dispatchState: 'failed', payload: null },
-      );
-      if (await this.settledElsewhere(row, written, marked)) return 'replayed';
-      this.logger.warn('Ingress event replay budget exhausted; event is dead-lettered', {
-        pluginId: row.pluginId,
-        instanceId: row.instanceId,
-        deliveryId: row.providerDeliveryId,
-        attempts,
-        action: 'ingress_event_reconcile_exhausted',
-      });
-      return 'failed';
-    }
+    if (terminal) return this.deadLetterExhausted(row, jobData, attempts, error, now);
     // Non-terminal: keep the payload — the next sweep replays from it.
     await this.events.update({ id: row.id }, { dispatchAttempts: attempts, lastDispatchAt: now });
+    return 'failed';
+  }
+
+  // The replay budget is spent: DLQ BEFORE the terminal mark + payload retirement, since the dead-letter row is
+  // the payload's new home and must exist first. ensureDeadLetterRow is idempotent (count-guarded), so a crash
+  // between the two writes just makes the next sweep re-take this path and finish the mark. A redrive of the
+  // live-path row during this replay closes the event and that row, so, as in the failed-job branch, the mark
+  // only lands on a still-'pending' event and the row this sweep wrote is settled as in the hand-off.
+  private async deadLetterExhausted(
+    row: IngressEvent,
+    jobData: IngressJobData,
+    attempts: number,
+    error: string | undefined,
+    now: Date,
+  ): Promise<'replayed' | 'failed'> {
+    const written = await this.ensureDeadLetterRow(jobData, attempts, error);
+    const marked = await this.events.update(
+      { id: row.id, dispatchState: 'pending' },
+      { dispatchAttempts: attempts, lastDispatchAt: now, dispatchState: 'failed', payload: null },
+    );
+    if (await this.settledElsewhere(row, written, marked)) return 'replayed';
+    this.logger.warn('Ingress event replay budget exhausted; event is dead-lettered', {
+      pluginId: row.pluginId,
+      instanceId: row.instanceId,
+      deliveryId: row.providerDeliveryId,
+      attempts,
+      action: 'ingress_event_reconcile_exhausted',
+    });
     return 'failed';
   }
 

@@ -5,9 +5,9 @@ import { DateTransformer } from '../../../common/transformers/date.transformer';
 // The enqueue-outcome lifecycle of a persisted event, recorded AFTER the fast ack (persist-before-ack
 // means the row always exists before dispatch is attempted):
 //  - 'pending'    — written by recordOrSkip; dispatch not (yet) confirmed. The reconciler sweeps these.
-//  - 'dispatched' — the event reached the dispatch tier (handed to BullMQ or delivered inline). A
-//                   failure INSIDE the tier (BullMQ attempts exhausted) dead-letters separately, so a
-//                   'dispatched' row is never the reconciler's concern.
+//  - 'dispatched': the delivery settled: delivered inline, finished by its BullMQ job, or its
+//                   dead letter written once the job's attempts were exhausted. A row whose job
+//                   is queued stays 'pending' until then, so a job Redis loses is replayed from it.
 //  - 'failed'     — terminal: the reconciler exhausted its replay budget or found the queue job failed,
 //                   or the row aged past INGRESS_DEDUP_RETENTION_DAYS undispatched; recovery continues
 //                   via the integration_delivery_failures row + RedriveService (none is written when the
@@ -22,10 +22,11 @@ export type IngressDispatchState = 'pending' | 'dispatched' | 'failed';
 // instanceId string would drop each other's deliveries as false duplicates.
 //
 // Storage shape: the FULL payload is carried only while the row is the sole durability handle — from
-// recordOrSkip until the dispatch outcome is recorded ('dispatched') or the reconciler dead-letters it
-// ('failed'). At that point the dispatch tier owns the payload (the BullMQ job, or the DLQ row on
-// failure) and the row's payload is retired to NULL, leaving a slim dedup marker (~hundreds of bytes
-// instead of up to 2× maxBodyBytes). payloadHash is kept permanently as the content fingerprint.
+// recordOrSkip until the delivery settles ('dispatched': delivered inline, finished by its BullMQ job, or
+// dead-lettered by the worker) or the reconciler dead-letters it ('failed'). While a job is queued the row
+// still carries it, so a job that Redis loses is replayed from the row. Once the plugin has the payload or
+// the DLQ row holds it, the row's payload is retired to NULL, leaving a slim dedup marker (~hundreds of
+// bytes instead of up to 2× maxBodyBytes). payloadHash is kept permanently as the content fingerprint.
 @Entity('ingress_events')
 @Index('UQ_ingress_events_instance_delivery', ['pluginId', 'instanceId', 'providerDeliveryId'], { unique: true })
 @Index('IDX_ingress_events_createdAt', ['createdAt'])
@@ -48,7 +49,7 @@ export class IngressEvent {
   @Column()
   route!: string;
 
-  // NULL once the dispatch outcome is recorded (see the storage-shape comment above). The reconciler
+  // NULL once the delivery has settled (see the storage-shape comment above). The reconciler
   // only replays 'pending' rows, which always still carry the payload. NULL on a 'pending' row is
   // unreadable history (e.g. imported without one); the reconciler's sweep query excludes it silently,
   // and it stays pending until INGRESS_DEDUP_RETENTION_DAYS prunes it.
@@ -86,7 +87,8 @@ export class IngressEvent {
   dispatchState!: IngressDispatchState | null;
 
   // Dispatch-attempt counter the reconciler caps its replay budget against; the live path bumps it
-  // on a swallowed inline-dispatch failure so those retries count too.
+  // on a swallowed inline-dispatch failure so those retries count too, and the sweep bumps it for each
+  // replay of a queue job that was lost.
   @Column({ type: 'int', default: 0 })
   dispatchAttempts!: number;
 
