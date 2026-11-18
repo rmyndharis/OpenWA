@@ -1173,7 +1173,12 @@ adapter boundary — none silently stubs.
   message when WhatsApp allows one and the adapter reports `success: true` with a message saying the invite was
   sent once it went out (otherwise `success: false, status: 403`), while Baileys sends nothing and reports
   `success: false, status: 403`, so a batch made only of such participants answers `200` on wwjs when every
-  invite went out and `403` on Baileys.
+  invite went out and `403` on Baileys. The invite is sent through `sendGroupInviteMessage` of
+  `WAWebChatSendMessages`, which the WhatsApp Web build the gateway selects today no longer exports (the function
+  moved and takes one options object, where the library passes positional arguments). The adapter asks the page
+  whether the export exists and, where it does not, adds the participants without sending invitations: a
+  participant who needs one is reported as `success: false, status: 403` and every other participant keeps their
+  own outcome. Without that, the library's call failed inside its loop and the whole batch answered `500`.
 - **`revokeGroupInviteCode` (wwjs) needs a WhatsApp Web build that has the reset job.** The adapter runs the
   job in the page: `resetGroupInviteCode` of `WAWebGroupInviteJob`, where the build keeps it, or of
   `WAWebGroupQueryJob` on a build that still does (the library's own `revokeInvite` reads only the second). Both

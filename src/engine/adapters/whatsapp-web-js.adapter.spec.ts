@@ -8403,7 +8403,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         },
         '628333@c.us': { code: 409, message: 'The participant is already a group member', isInviteV4Sent: false },
       });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const adapter = readyAdapter({
+        getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })),
+        // The page still has the library's invitation sender, so the add is the library's own.
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      });
 
       const results = await adapter.addParticipants(GROUP, ['628111', '628222@c.us', '628333']);
 
@@ -8435,7 +8439,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
           isInviteV4Sent: true,
         },
       });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const adapter = readyAdapter({
+        getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })),
+        // The page still has the library's invitation sender, so the add is the library's own.
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      });
 
       const results = await adapter.addParticipants(GROUP, ['628111', '628222']);
 
@@ -8463,7 +8471,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
           isInviteV4Sent: false,
         },
       });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const adapter = readyAdapter({
+        getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })),
+        // The page still has the library's invitation sender, so the add is the library's own.
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      });
       const err = await adapter.addParticipants(GROUP, ['628111']).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(EngineRefusedError);
       expect((err as Error).message).toMatch(/failed for all 1 participant/);
@@ -8473,7 +8485,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       const addParticipants = jest
         .fn()
         .mockResolvedValue('AddParticipantsError: You have no admin rights to add a participant to a group');
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const adapter = readyAdapter({
+        getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })),
+        // The page still has the library's invitation sender, so the add is the library's own.
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      });
       const err = await adapter.addParticipants(GROUP, ['628111']).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(EngineRefusedError);
       expect((err as Error).message).toMatch(/no admin rights/);
@@ -8484,7 +8500,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         '628111@c.us': { code: 404, message: 'The phone number is not registered on WhatsApp', isInviteV4Sent: false },
         '628222@c.us': { code: 404, message: 'The phone number is not registered on WhatsApp', isInviteV4Sent: false },
       });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const adapter = readyAdapter({
+        getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })),
+        // The page still has the library's invitation sender, so the add is the library's own.
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      });
       const err = await adapter.addParticipants(GROUP, ['628111', '628222']).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(EngineRefusedError);
       expect((err as Error).message).toMatch(/failed for all 2 participant/);

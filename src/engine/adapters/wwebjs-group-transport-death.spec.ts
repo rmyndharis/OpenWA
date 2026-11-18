@@ -83,6 +83,8 @@ describe('group writes classify a dead page', () => {
       info: {},
       getChatById:
         chat instanceof Promise ? jest.fn(() => chat) : jest.fn().mockResolvedValue({ isGroup: true, ...chat }),
+      // The page still has the library's invitation sender; a row that needs another answer overrides it.
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
       ...clientMethods,
     };
     const reportIfPageTransportError = jest.fn();
@@ -165,6 +167,29 @@ describe('group writes classify a dead page', () => {
     await expect(run(groups)).rejects.toBe(transportError);
     expect(reportIfPageTransportError).toHaveBeenCalledTimes(1);
     expect(reportIfPageTransportError).toHaveBeenCalledWith(transportError, op);
+  });
+
+  // The page is asked whether the library's invitation sender exists before the add, inside the same guard: a dead page
+  // there is reported and keeps its error, as one in the add does, and the add is never attempted.
+  it('addParticipants reports a dead page in the question about the invitation sender but keeps the raw error', async () => {
+    const addParticipants = jest.fn();
+    const { groups, reportIfPageTransportError } = makeGroups(
+      { addParticipants },
+      { pupPage: { evaluate: jest.fn().mockRejectedValue(transportError) } },
+    );
+
+    await expect(groups.addParticipants(GROUP, ['628111@c.us'])).rejects.toBe(transportError);
+    expect(reportIfPageTransportError).toHaveBeenCalledWith(transportError, 'addParticipants');
+    expect(addParticipants).not.toHaveBeenCalled();
+  });
+
+  it('addParticipants leaves an ordinary failure of the question about the invitation sender untouched', async () => {
+    const failure = new Error('Evaluation failed: x');
+    const addParticipants = jest.fn();
+    const { groups } = makeGroups({ addParticipants }, { pupPage: { evaluate: jest.fn().mockRejectedValue(failure) } });
+
+    await expect(groups.addParticipants(GROUP, ['628111@c.us'])).rejects.toBe(failure);
+    expect(addParticipants).not.toHaveBeenCalled();
   });
 
   it('revokeGroupInviteCode reports a dead page in its write but keeps the raw error', async () => {

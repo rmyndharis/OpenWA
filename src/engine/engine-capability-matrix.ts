@@ -99,7 +99,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      "wwjs GroupChat.addParticipants → per-participant {code,message} object, or a reason STRING on batch refusal (index.d.ts; GroupChat.js) — both mapped at the adapter; baileys groupParticipantsUpdate(jid,pids,'add') → per-jid [{status:'200'|error}] (Socket/groups.js); per-participant results surface on the HTTP `results` field, a total refusal throws",
+      "wwjs GroupChat.addParticipants → per-participant {code,message} object, or a reason STRING on batch refusal (index.d.ts; GroupChat.js) — both mapped at the adapter, and where the page's WAWebChatSendMessages has no sendGroupInviteMessage (the library's invitation sender, gone on current WhatsApp Web builds) the adapter adds with autoSendInviteV4 false, so an invite-only participant is a 403 and no invite is sent; baileys groupParticipantsUpdate(jid,pids,'add') → per-jid [{status:'200'|error}] (Socket/groups.js); per-participant results surface on the HTTP `results` field, a total refusal throws",
   },
   approveGroupMembershipRequests: {
     wwjs: { status: 'supported' },

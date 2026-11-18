@@ -80,6 +80,25 @@ export async function revokeInviteInPage(chatId: string): Promise<{ code?: strin
 }
 
 /**
+ * Whether the page still exports the invitation sender that `GroupChat.addParticipants` calls for a participant whose
+ * privacy settings allow only an invitation: `sendGroupInviteMessage` of `WAWebChatSendMessages`. The build the gateway
+ * selects today exports it from `WAWebChatSendGroupInviteMessage` instead, taking one options object where the library
+ * passes positional arguments, so the library's call is a TypeError in its loop. A module a build does not define throws
+ * from `require`. A document with no `require` at all is a page that is reloading, not a build without the sender, and
+ * that failure is let through (spelled as the library spells it, which is how the reload is read).
+ */
+export function readInviteSenderInPage(): boolean {
+  type Messages = { sendGroupInviteMessage?: unknown } | undefined;
+  let messages: Messages;
+  try {
+    messages = (window as unknown as { require: (m: string) => Messages }).require('WAWebChatSendMessages');
+  } catch (err) {
+    if (typeof (window as unknown as { require?: unknown }).require !== 'function') throw err;
+  }
+  return typeof messages?.sendGroupInviteMessage === 'function';
+}
+
+/**
  * Ask WhatsApp, IN-PAGE, to remove a group's picture, and answer the status it gave: 200, or the code it refused
  * with. `GroupChat.deletePicture` sends the same request but only when the page's own copy of the picture allows
  * it, and reads every refusal as `false`: a picture the page never loaded is then not deleted, a repeat of a
@@ -275,7 +294,13 @@ export class WwebjsGroups {
   async addParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
     const chat = await this.requireGroupChat(groupId, 'addParticipants');
     const participantIds = participants.map(toParticipantWid);
-    const raw = await reportPageDeath(this.host, 'addParticipants', () => chat.addParticipants(participantIds));
+    const page = (this.client() as unknown as { pupPage: { evaluate: <T>(fn: () => T) => Promise<T> } }).pupPage;
+    const raw = await reportPageDeath(this.host, 'addParticipants', async () => {
+      // Where the library's invitation sender is gone, its call would end the whole batch: add without the invitation,
+      // which leaves the participant that needs one a 403 of its own.
+      if (await page.evaluate(readInviteSenderInPage)) return chat.addParticipants(participantIds);
+      return chat.addParticipants(participantIds, { autoSendInviteV4: false });
+    });
     // whatsapp-web.js reports a batch-level refusal (no admin rights, empty group) by RESOLVING a
     // plain reason string (GroupChat.js:106-107,128-130) instead of throwing — surface it as a
     // refusal, not a success.
