@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard: the message field of a chat is multi-line and grows with its draft: Enter sends, Shift+Enter breaks the line (#2123). Thanks @juanbracamonte.
 - The amd64 image's Chrome for Testing 157.0.8103.78 to 158.0.8127.36, picking up the browser security fixes released since; the arm64 image keeps the chromium package Debian ships.
 - The SSRF guard also refuses the documentation and benchmarking address ranges and the 6a44 relay anycast address `192.88.99.2` in webhook, media, plugin download and plugin request urls (see Upgrade notes).
+- The local media store (`STORAGE_LOCAL_PATH`, `./data/media` by default) is owner-only: its root is set `0700` at every boot and new directories and files are written `0700` and `0600`, as the databases and the engine auth directories already are (see Upgrade notes).
 
 ### Fixed
 
@@ -121,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `chatName` to the `topChats` entries of the two statistics examples in the API reference.
 - Correct the API reference and the API collection on a plugin's config UI, which the dashboard shows alone in place of the generated form, with an error when its bridge does not start within 5 s, and show the secret mask as `***`, as the gateway returns it.
 - Say in the API reference and `.env.example` that a send by `url` holds the whole body in memory, about twice its size at the peak, and that only the per-key rate limit bounds how many run at once.
-- List the local media store in the at-rest table of the security design: plaintext files, `0644` in `0755` directories under the usual umask.
+- List the local media store in the at-rest table of the security design: plaintext files, owner-only (`0600` in `0700` directories).
 
 ### Dependencies
 
@@ -147,6 +148,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With the queue on, an ingress event row stays `pending`, with its payload, until the worker settles it, where it was marked `dispatched` with its payload cleared as soon as its job was queued; while Redis cannot be asked, the reconciler replays nothing inline, where it used to; with the queue off, a pending ingress row, like a stranded webhook outbox row, is replayed inline whatever Redis still holds, so a job left in the ingress or webhook queue runs again when the queue is turned back on: let both queues drain before turning it off (see `docs/25-integration-fabric.md`).
 - In a plugin config list with a secret column, a save of the same length in which a row matched by its other fields changes position, such as removing a row ahead of a kept one and adding another, or reordering rows, saves a row renamed in place, with its mask untouched, without its secret; enter that secret again (see `docs/19-plugin-architecture.md`).
 - A `ctx.storage` key that holds a lone UTF-16 surrogate is refused: `set` and `delete` reject it as an unsafe key and `get` answers `null`; a record an earlier version wrote under one stays reachable through the key spelled with `U+FFFD`.
+- A process that reads the local media directory as a user other than the one the gateway runs as, such as a static file server or a backup job under another uid, loses access: the root becomes `0700` at the next boot and new files are `0600`. Files written earlier keep their mode but sit under the `0700` root. Run such a reader as the gateway's user (the image runs as `openwa`); `STORAGE_TYPE=s3` is not affected.
 
 ## [0.30.3] - 2026-11-16
 

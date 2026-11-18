@@ -16,6 +16,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { createLogger } from '../services/logger.service';
 import { positiveIntFromEnv } from '../utils/env-int';
+import { ensurePrivateDir } from '../utils/private-dir.util';
 import { isSafeStorageKey } from '../utils/path-safety';
 import { DEFAULT_S3_KEY_PREFIX, normalizeS3KeyPrefix } from './s3-key-prefix';
 import {
@@ -209,10 +210,13 @@ export class StorageService implements OnModuleDestroy {
       }
     }
 
-    // Ensure local directory exists
+    // Ensure the local directory exists and is owner-only: it holds message content as plain files, like the
+    // databases and the engine auth directories, which are already 0600 and 0700. Files written earlier keep
+    // their mode but sit under the 0700 root.
     if (!fs.existsSync(this.localPath)) {
-      fs.mkdirSync(this.localPath, { recursive: true });
+      fs.mkdirSync(this.localPath, { recursive: true, mode: 0o700 });
     }
+    ensurePrivateDir(this.localPath);
   }
 
   onModuleDestroy(): void {
