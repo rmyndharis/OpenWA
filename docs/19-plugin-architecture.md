@@ -174,6 +174,8 @@ row), and the SDK major by the check applied to a manifest that declares `ingres
 | `provides` / `requires` | —        | Features this plugin provides / depends on                                                                                                                                                                                                                                                           |
 | `i18n`                  | —        | Localized dashboard text per locale (dashboard-only; a `configUi` editor receives it through the localized `schema`)                                                                                                                                                                                 |
 
+A manifest's `ingress` declaration is checked wherever a package is read. An install or an update answers `400` for one the host would refuse at load (a route that skips the signature while `ALLOW_UNSIGNED_INGRESS` is off, an unsupported `sdkVersion` major, a missing `webhook:ingress` permission) before anything is written and before an update stops the running plugin.
+
 Schema defaults are seeded into stored config when a plugin is loaded. A stored value remains unchanged across updates and restarts, even if a later version changes that field's default. Plugin authors should document required value changes for existing installations; operators must save those values explicitly. The current default applies only when the field has no stored value.
 
 **The `configUi` bridge.** The editor is injected as `srcdoc` into a `sandbox="allow-scripts"` iframe, so

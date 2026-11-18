@@ -23,7 +23,7 @@ import { PluginDto } from './dto/plugin.dto';
 import { redactSecretConfig, restoreSecretConfig } from './redact-config';
 import { restorableConfig } from '../../core/plugins/plugin-activation';
 import { PluginUninstallingError } from '../../core/plugins/plugin-uninstaller';
-import { parsePluginPackage } from './plugin-installer';
+import { DEFAULT_PACKAGE_LIMITS, parsePluginPackage, type ParsedPackage } from './plugin-installer';
 import { assertDownloadSha256, assertPluginInstallUrl, fetchSafeBuffer } from './plugin-download';
 import { annotateCatalog, CatalogEntry, CatalogPlugin, isCatalogEntry } from './catalog';
 import { redactSsrfError } from '../../common/security/ssrf-guard';
@@ -363,13 +363,24 @@ export class PluginsService {
     return fs.readFileSync(real, 'utf-8');
   }
 
+  /**
+   * parsePluginPackage under this host's ingress policy: install, the id peek of installPackage and an update all
+   * refuse at parse time what the loader would refuse at load, so a package it would refuse is never written and
+   * never replaces a running plugin.
+   */
+  private parsePackage(buffer: Buffer): ParsedPackage {
+    return parsePluginPackage(buffer, DEFAULT_PACKAGE_LIMITS, {
+      allowUnsignedIngress: this.configService.get<boolean>('ingress.allowUnsigned', false),
+    });
+  }
+
   /** Install a plugin from an uploaded .zip: validate the package, write it to the plugins dir, and load it. */
   install(file?: { buffer?: Buffer }): PluginDto {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No plugin file uploaded');
     }
 
-    const { manifest, entries } = parsePluginPackage(file.buffer);
+    const { manifest, entries } = this.parsePackage(file.buffer);
 
     if (this.pluginLoader.getPlugin(manifest.id)) {
       throw new ConflictException(`Plugin "${manifest.id}" is already installed`);
@@ -455,7 +466,7 @@ export class PluginsService {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No plugin file uploaded');
     }
-    const { manifest } = parsePluginPackage(file.buffer);
+    const { manifest } = this.parsePackage(file.buffer);
     return this.serialize(manifest.id, () => Promise.resolve(this.install(file)));
   }
 
@@ -555,7 +566,7 @@ export class PluginsService {
     }
 
     // Validate the new package BEFORE touching the running plugin. An update must be the same plugin.
-    const { manifest, entries } = parsePluginPackage(buffer);
+    const { manifest, entries } = this.parsePackage(buffer);
     if (manifest.id !== id) {
       throw new BadRequestException(`Package id "${manifest.id}" does not match the plugin being updated ("${id}")`);
     }
