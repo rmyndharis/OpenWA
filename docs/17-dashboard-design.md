@@ -70,6 +70,8 @@ backed by `localStorage` — there is no Zustand store.
    in `--error`), and a hover is never fainter than the border at rest.
    `dashboard/src/field-focus-hover.test.ts` fails the build when a field focus rule paints the focus
    border without the ring, or a field hover rule paints a border fainter than the one at rest.
+   Both read the focus rules that exist, so `dashboard/src/field-focus-cues.test.ts` lists every rule
+   that draws a focus cue and fails the build when one is deleted or a new one is not listed.
    Forced colors (a Windows contrast theme) drop fills and shadows and replace colors, which would
    leave a focus ring, a selected state, a filled button's shape and a switch undrawn. Each is
    restated as an outline or a border in a `@media (forced-colors: active)` block at the end of the
