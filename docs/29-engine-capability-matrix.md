@@ -1081,7 +1081,9 @@ adapter boundary — none silently stubs.
   receipt), leaves the count, and so does one a newer message overtook, recorded or still being processed; a session restarted since holds
   no received message to compare, and takes any received id for the read. Only a chat marked unread by
   hand (listed with `unreadCount` `-1`, by `markUnread` or on the phone) takes a second write,
-  `chatModify` with `markRead: true`, which undoes the mark in the account's app state.
+  `chatModify` with `markRead: true`, which undoes the mark in the account's app state. A message received after
+  the mark puts its count in place of the `-1`; the session remembers the mark, and the read that covers the
+  message undoes it as well.
   That write is keyed as the four writes are, except that the stored message standing in for a session
   with none in memory is the newest _received_ one, and it is never sent without a range: what the
   phone does with a read mark that names no message is not established. It does not change the answer.
