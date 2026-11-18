@@ -37,9 +37,6 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
   const dateRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestId = useRef(0);
-  // Parent may recreate the jump callback each render; keep the latest without re-running the effect.
-  const jumpRef = useRef(onJumpToDate);
-  jumpRef.current = onJumpToDate;
 
   const dayFrom = day ? dayBoundsMs(day)?.dateFrom : undefined;
   const dayTo = day ? dayBoundsMs(day)?.dateTo : undefined;
@@ -108,8 +105,8 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
       setNextOffset(0);
       setError(null);
       setLoading(false);
-      if (dayFrom != null && dayTo != null && jumpRef.current) {
-        const found = jumpRef.current({ dateFrom: dayFrom, dateTo: dayTo });
+      if (dayFrom != null && dayTo != null && onJumpToDate) {
+        const found = onJumpToDate({ dateFrom: dayFrom, dateTo: dayTo });
         setDateHint(found ? null : t('chats.roomSearch.noDateHits'));
       } else {
         setDateHint(null);
@@ -124,7 +121,7 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
       if (timer.current) clearTimeout(timer.current);
       timer.current = null;
     };
-  }, [q, dayFrom, dayTo, run, t]);
+  }, [q, dayFrom, dayTo, run, onJumpToDate, t]);
 
   return (
     <div
