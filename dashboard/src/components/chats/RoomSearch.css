@@ -14,6 +14,11 @@
   min-width: 0;
 }
 
+/* room-back is hidden on desktop (list stays visible); search still needs a close control. */
+.chats-page .room-search .room-back {
+  display: inline-flex;
+}
+
 .chats-page .room-search-title {
   font-size: 1rem;
   font-weight: 500;
