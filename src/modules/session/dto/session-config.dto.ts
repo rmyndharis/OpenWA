@@ -46,7 +46,7 @@ export class UpdateSessionConfigDto {
     nullable: true,
     // Without an explicit type the union publishes as `type: object`, and JSON Schema ignores
     // minimum/maximum on a non-numeric type — so the range above would be inert as well as wrong.
-    type: Number,
+    type: 'integer',
   })
   @ToStrictNumber()
   @IsOptional()
@@ -64,7 +64,7 @@ export class UpdateSessionConfigDto {
     maximum: 300000,
     example: 5000,
     nullable: true,
-    type: Number,
+    type: 'integer',
   })
   @ToStrictNumber()
   @IsOptional()

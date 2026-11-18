@@ -190,6 +190,7 @@ export class GroupSettingsDto {
   @ApiPropertyOptional({
     description:
       'Disappearing-messages timer in seconds; 0 disables. Known values: 86400 (24h), 604800 (7d), 7776000 (90d)',
+    type: 'integer',
     minimum: 0,
   })
   @ToStrictNumber()

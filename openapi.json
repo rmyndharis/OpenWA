@@ -19333,7 +19333,7 @@
             "nullable": true
           },
           "maxReconnectAttempts": {
-            "type": "number",
+            "type": "integer",
             "description": "Cap on consecutive reconnect attempts (`0` disables reconnect entirely). Send `null` for unlimited, which is the default. Applies on the next session start, not to a reconnect sequence already in flight. Bounds the gateway's own reconnect, which is every reconnect on whatsapp-web.js and, on Baileys, only the one after a logged-out close: the Baileys engine retries a transient drop itself, with a fixed 1s to 60s backoff and no cap.",
             "minimum": 0,
             "maximum": 20,
@@ -19341,7 +19341,7 @@
             "nullable": true
           },
           "reconnectBaseDelay": {
-            "type": "number",
+            "type": "integer",
             "description": "Base delay of the reconnect backoff in milliseconds. Applies on the next session start, not to a reconnect sequence already in flight. Same engine scope as `maxReconnectAttempts`: the Baileys engine's internal retry uses its own fixed backoff instead.",
             "minimum": 1000,
             "maximum": 300000,
@@ -20068,7 +20068,7 @@
             ]
           },
           "retryCount": {
-            "type": "number",
+            "type": "integer",
             "description": "Total delivery attempts per event, including the first (0 and 1 both mean a single attempt with no retry). An event that exhausts them is recorded in GET /api/webhooks/delivery-failures; the webhook stays active.",
             "example": 3,
             "minimum": 0,
@@ -20272,7 +20272,7 @@
             "description": "Enable/disable webhook"
           },
           "retryCount": {
-            "type": "number",
+            "type": "integer",
             "description": "Total delivery attempts per event, including the first (0 and 1 both mean a single attempt). Same range the create route enforces.",
             "example": 3,
             "minimum": 0,
@@ -20399,7 +20399,7 @@
             "type": "array"
           },
           "limit": {
-            "type": "number",
+            "type": "integer",
             "description": "Max rows replayed by this call (1-500, default 100).",
             "example": 100,
             "minimum": 1,
@@ -20470,7 +20470,7 @@
             "description": "Match conditions in the webhook filter format (message family: sender, recipient, chatId, body, type, isGroup, kind, fromMe, hasMedia, mentions). All conditions must match (AND). Omitted or empty means the rule matches every inbound message except channel, broadcast-list and status messages, which a rule answers only when it has a `kind` condition that matches them. On Baileys a message received through a contact's broadcast list is filed under the sender's chat (`kind` individual), so it matches."
           },
           "cooldownSeconds": {
-            "type": "number",
+            "type": "integer",
             "description": "Quiet period per chat, in seconds: after the rule replies in a chat it stays silent there for this long (default 60, 0 disables). This is the guard against two auto-repliers answering each other forever, so disable it knowingly.",
             "default": 60,
             "minimum": 0,
@@ -20551,7 +20551,7 @@
             "description": "Match conditions in the webhook filter format (message family: sender, recipient, chatId, body, type, isGroup, kind, fromMe, hasMedia, mentions). All conditions must match (AND). Omitted or empty means the rule matches every inbound message except channel, broadcast-list and status messages, which a rule answers only when it has a `kind` condition that matches them. On Baileys a message received through a contact's broadcast list is filed under the sender's chat (`kind` individual), so it matches."
           },
           "cooldownSeconds": {
-            "type": "number",
+            "type": "integer",
             "description": "Quiet period per chat, in seconds: after the rule replies in a chat it stays silent there for this long (default 60, 0 disables). This is the guard against two auto-repliers answering each other forever, so disable it knowingly.",
             "minimum": 0,
             "maximum": 86400
@@ -24315,7 +24315,7 @@
             "description": "Only admins can edit group info (locked group)"
           },
           "ephemeralSeconds": {
-            "type": "number",
+            "type": "integer",
             "description": "Disappearing-messages timer in seconds; 0 disables. Known values: 86400 (24h), 604800 (7d), 7776000 (90d)",
             "minimum": 0
           },
@@ -24791,7 +24791,7 @@
             "maxLength": 100
           },
           "color": {
-            "type": "number",
+            "type": "integer",
             "description": "WhatsApp's colour INDEX (0-19), not a hex value — the read path's `hexColor` cannot be translated back, because neither engine exposes the mapping. An omitted colour is not preserved.",
             "example": 3,
             "minimum": 0,

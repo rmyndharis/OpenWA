@@ -54,6 +54,7 @@ export class CreateAutomationRuleDto {
   @ApiPropertyOptional({
     description: COOLDOWN_DESCRIPTION,
     default: 60,
+    type: 'integer',
     minimum: 0,
     maximum: AUTOMATION_COOLDOWN_MAX_SECONDS,
   })
@@ -99,7 +100,12 @@ export class UpdateAutomationRuleDto {
   @IsValidWebhookFilters()
   conditions?: WebhookFilters | null;
 
-  @ApiPropertyOptional({ description: COOLDOWN_DESCRIPTION, minimum: 0, maximum: AUTOMATION_COOLDOWN_MAX_SECONDS })
+  @ApiPropertyOptional({
+    description: COOLDOWN_DESCRIPTION,
+    type: 'integer',
+    minimum: 0,
+    maximum: AUTOMATION_COOLDOWN_MAX_SECONDS,
+  })
   @ValidateIf((o: UpdateAutomationRuleDto) => o.cooldownSeconds !== undefined)
   @ToStrictNumber()
   @IsInt()
