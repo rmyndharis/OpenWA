@@ -310,7 +310,7 @@ describe('LidMappingStoreService — LRU cap', () => {
     expect(repo.rows.find(r => r.lid === 'lid-a')?.phone).toBe('620009');
   });
 
-  it('forgets a failed write along with the evicted entry', async () => {
+  it('keeps a failed write past the evicted entry, until a report of the lid lands', async () => {
     process.env.LID_MAPPING_CACHE_MAX = '1';
     const repo = makeFakeRepo([{ lid: 'lid-a', phone: '620001' }]);
     const store = await newStore(repo);
@@ -321,8 +321,13 @@ describe('LidMappingStoreService — LRU cap', () => {
     store.getCached('lid-a'); // warms lid-a back from its row
     for (let i = 0; i < 20 && store.getCached('lid-a') === undefined; i++) await new Promise(r => setImmediate(r));
     expect(store.getCached('lid-a')).toBe('620001');
+    // The row is the phone this node was told the lid no longer has: no lookup answers it.
+    expect(await store.findPhoneForLid('lid-a@lid')).toBeNull();
 
-    repo.rows[0].phone = '620009'; // another node re-maps it
+    repo.rows[0].phone = '620009'; // another node re-maps it: refused as while the entry is resident
+    expect(await store.findPhoneForLid('lid-a@lid')).toBeNull();
+
+    await store.remember('lid-a', '620009'); // the next report of the lid lands and ends the refusal
     expect(await store.findPhoneForLid('lid-a@lid')).toBe('620009');
   });
 
@@ -4021,6 +4026,125 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       await peerRemaps('628333');
 
       await refused(['628222', '628333']);
+    });
+  });
+
+  // The table still names the phone a failed write was to replace. The cap's eviction and a reload are no reason to answer it.
+  describe('when its write failed and the mirror entry then left', () => {
+    const failReport = async (): Promise<void> => {
+      jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(store.remember('333', '628222', OWNER)).resolves.toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockClear();
+    };
+    const evicted = (): number => (store as unknown as { failedPhones: Map<string, string> }).failedPhones.size;
+
+    it('answers no phone after later lids pushed the entry out, and the lid for neither phone', async () => {
+      await failReport();
+      await pushOut();
+      expect(evicted()).toBe(1);
+
+      await refused(['628111', '628222']);
+    });
+
+    it('answers no phone after the entry was pushed out and warmed back from the row it distrusts', async () => {
+      await failReport();
+      await pushOut();
+      store.getCached('333');
+      for (let turn = 0; turn < 50 && store.getCached('333') === undefined; turn++)
+        await new Promise(r => setImmediate(r));
+      expect(store.getCached('333')).toBe('628111');
+
+      await refused(['628111', '628222']);
+    });
+
+    it('answers no phone when the entry left while the write was under way and the write then failed', async () => {
+      let reject!: (err: Error) => void;
+      jest.spyOn(repo, 'upsert').mockImplementationOnce(
+        () =>
+          new Promise((_, fail) => {
+            reject = fail;
+          }),
+      );
+      const report = store.remember('333', '628222', OWNER);
+      await pushOut();
+      reject(new Error('connection lost'));
+      await expect(report).resolves.toBe(false);
+      warn.mockClear();
+
+      await refused(['628111', '628222']);
+    });
+
+    it('answers no phone after a revocation by a display lookup failed and the entry was pushed out', async () => {
+      jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(store.rememberIfUnknown('333', '628222', OTHER)).resolves.toBe(false);
+      warn.mockClear();
+      await pushOut();
+
+      await refused(['628111', '628222']);
+    });
+
+    it('keeps refusing the lid when another node re-maps it, as it did while the entry was resident', async () => {
+      await failReport();
+      await pushOut();
+      await peerRemaps('628333');
+
+      await refused(['628111', '628222', '628333']);
+    });
+
+    it('answers the table again once a report of the lid has landed', async () => {
+      await failReport();
+      await pushOut();
+
+      await expect(store.remember('333', '628222', OWNER)).resolves.toBe(true);
+
+      expect(evicted()).toBe(0);
+      await answers('628222');
+    });
+
+    it('answers the table again once a report of the lid begins and its write fails the same way', async () => {
+      await failReport();
+      await pushOut();
+      await peerRemaps('628333');
+      jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(store.remember('333', '628333', OWNER)).resolves.toBe(false);
+      warn.mockClear();
+      await pushOut();
+      expect(evicted()).toBe(1);
+
+      await answers('628333'); // the report of the phone the table holds replaced the mark of the one before it
+    });
+
+    it('answers the table again once a negative has cleared the row', async () => {
+      await failReport();
+      await pushOut();
+
+      await expect(store.remember('333', null, OWNER)).resolves.toBe(true);
+      await peerRemaps('628333');
+
+      expect(evicted()).toBe(0);
+      await answers('628333');
+    });
+
+    it('answers the table after a reload, which replaces it', async () => {
+      await failReport();
+      await pushOut();
+
+      await store.reload();
+
+      expect(evicted()).toBe(0);
+      await answers('628111');
+    });
+
+    it('keeps no more marks than the mirror holds entries, the oldest dropped first', async () => {
+      for (const lid of ['601', '602', '603', '604']) {
+        jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+        await expect(store.remember(lid, `62${lid}`, OWNER)).resolves.toBe(false);
+        warn.mockClear();
+      }
+      await pushOut();
+
+      expect(evicted()).toBe(2); // the cap of this mirror
     });
   });
 });

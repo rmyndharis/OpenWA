@@ -195,6 +195,14 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
    */
   private readonly failedWrites = new Set<string>();
   /**
+   * The phone a write failed to store, by lid: that of a report that did not land, or of the display lookup whose
+   * revocation of the stored phone did not persist. The table still names the phone it was to replace, so the entry
+   * {@link failedWrites} marks going out with the mirror entry (the cap, a reload) must not make the lid answer it again.
+   * It outranks an entry warmed back from that row. Ended by a report of the lid that begins or lands, a negative that
+   * clears the row and a reload, which replaces the table; bounded like the mirror, oldest first.
+   */
+  private readonly failedPhones = new Map<string, string>();
+  /**
    * The table statements of each lid with a write under way, as one chain. A pool hands the statements of two writes
    * to two connections, which can apply them in either order, and on any database a write of two statements (a
    * negative, a display lookup) lets the statement of a call made in the same turn in between them. So the table could
@@ -284,6 +292,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       this.phoneToLids.clear();
       this.seenBy.clear();
       this.failedWrites.clear();
+      this.failedPhones.clear();
       for (const writing of this.unsettledWrites.values()) {
         delete writing.latestReport;
         delete writing.latestOperation;
@@ -394,7 +403,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
 
   /** This process has a phone write for the lid that the table does not have: in flight, or failed. */
   private unstored(lid: string): boolean {
-    return this.unsettledWrites.has(lid) || this.failedWrites.has(lid);
+    return this.unsettledWrites.has(lid) || this.failedWrites.has(lid) || this.failedPhones.has(lid);
   }
 
   /**
@@ -408,7 +417,8 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     if (!isReported || (this.unreported.has(lid) && this.unstored(lid))) return null;
     const writing = this.unsettledWrites.get(lid);
     if (writing?.revoking) return null;
-    const cached = this.lidToPhone.has(lid) ? this.lidToPhone.get(lid) : writing?.reportPhone;
+    const cached =
+      this.failedPhones.get(lid) ?? (this.lidToPhone.has(lid) ? this.lidToPhone.get(lid) : writing?.reportPhone);
     return this.unstored(lid) && cached !== undefined && cached !== phone ? null : phone;
   }
 
@@ -474,8 +484,10 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       return true;
     } catch (err) {
       writing.failed = true;
-      if (writing.latestOperation === lookup && this.seenBy.get(lid) === reporters && this.unreported.has(lid))
+      if (writing.latestOperation === lookup && this.seenBy.get(lid) === reporters && this.unreported.has(lid)) {
         this.failedWrites.add(lid);
+        setNewest(this.failedPhones, lid, phone, this.maxCachedLids || Infinity);
+      }
       this.warnWriteFailed(`Could not store lid mapping: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     } finally {
@@ -502,7 +514,10 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     const owed = gaining ? { phone, sessionId: sessionId ?? null, queued: false } : earlier;
     // A negative is not cached until the table has taken it: see clear().
     if (!seen && phone !== null) this.index(lid, phone, null);
-    if (phone !== null) this.failedWrites.add(lid);
+    if (phone !== null) {
+      this.failedWrites.add(lid);
+      this.failedPhones.delete(lid); // this report takes the place of the one that failed
+    }
     const reporters = this.seenBy.get(lid);
     const report = { phone };
     const writing = this.beginWrite(lid, report, true);
@@ -541,6 +556,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
           );
         }
       });
+      if (phone !== null) this.failedPhones.delete(lid);
       // Count only a stored report in this phone's current cache epoch. A late completion after
       // P -> Q -> P must not count the first P as a report of the replacement P.
       if (phone !== null && reporters && this.seenBy.get(lid) === reporters) {
@@ -573,6 +589,14 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       return true;
     } catch (err) {
       writing.failed = true;
+      // The latest report of the lid, still marked or already without a mirror entry (a report that landed clears its mark).
+      if (
+        phone !== null &&
+        writing.reportPhone === phone &&
+        (this.failedWrites.has(lid) || !this.lidToPhone.has(lid))
+      ) {
+        setNewest(this.failedPhones, lid, phone, this.maxCachedLids || Infinity);
+      }
       this.warnWriteFailed(
         `Failed to persist lid->phone mapping for ${lid}: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -694,6 +718,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     this.unreported.delete(lid);
     this.seenBy.delete(lid);
     this.failedWrites.delete(lid);
+    this.failedPhones.delete(lid);
     if (cached) this.unindex(lid, cached);
     this.absentFromTable.delete(lid);
   }
