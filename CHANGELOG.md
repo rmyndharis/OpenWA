@@ -79,7 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Show the dashboard's empty Sessions Overview message on one centred line instead of wrapping it inside the first table column.
 - Mark `event.response` and the `call.accepted`, `call.rejected` and `call.missed` webhook events as Baileys only in the dashboard's event list, as they never fire on whatsapp-web.js.
 - Warn in the dashboard's Revoke and Delete confirmations of an API key that the dashboard is signed in with that key and the action signs the operator out.
-- Dashboard: picking an emoji, pressing Escape on one, removing a staged file, closing the reply banner and starting a reply from a message menu put focus back in the message field, where it fell to the page and what was typed next went nowhere.
+- Dashboard: picking an emoji, pressing Escape on one, removing a staged file, closing the reply banner and starting a reply from a message menu put focus back in the message field (not after a tap, which would raise a phone's keyboard), where it fell to the page and what was typed next went nowhere.
 - Dashboard: the emoji button of the message field tells screen readers whether its panel is open.
 - Dashboard: Show more in the sidebar message search keeps the hits already listed and adds the next page under them, where it replaced the list with a loading line and took the reader back to the first hit.
 - Dashboard: in forced-colors mode (a Windows contrast theme) the focused search box and composer, the selected tab, row and toggle, the custom switches and the filled buttons stay visible, where they were drawn like their peers or not at all.
