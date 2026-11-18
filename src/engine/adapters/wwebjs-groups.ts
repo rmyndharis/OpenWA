@@ -101,8 +101,9 @@ export async function revokeInviteInPage(chatId: string): Promise<{ status: numb
  * which only means the same request may pass later, was a 403, and a refusal of the Mex class
  * (`MexServerStatusCodeError`, which carries a status too) was a bare 500. This answers the status WhatsApp gave, with
  * the code on a 2xx. A build with no job to read the code answers `'missing'` before anything was asked, and the caller
- * runs the library's own call as it always did. A document with no `require` at all is a page that is reloading, not a
- * build without the job, and that failure is let through. Any other rejection is rethrown.
+ * runs the library's own call as it always did (see {@link NO_INVITE_JOB_ERRORS}). A document with no `require` at all
+ * is a page that is reloading, not a build without the job, and that failure is let through. Any other rejection is
+ * rethrown.
  */
 export async function readInviteCodeInPage(chatId: string): Promise<{ status: number; code?: string } | 'missing'> {
   type CodeJob = { fetchMexGroupInviteCode: (id: string) => Promise<{ code?: string } | string | undefined> };
@@ -125,6 +126,19 @@ export async function readInviteCodeInPage(chatId: string): Promise<{ status: nu
     throw err;
   }
 }
+
+/**
+ * How the library's own `getInviteCode` fails on a build with no job to read the code with. It reads the job's module
+ * without asking, so a module that answers `undefined` is a TypeError, a module without the call is another, and
+ * Meta's `require` throws for a module the build does not define. Puppeteer hands the page's error over as a plain
+ * Error, so the message is what is matched, and only where it names the job: any other failure is not this one.
+ * `queryGroupInviteCode` is the call an older library reads.
+ */
+const NO_INVITE_JOB_ERRORS = [
+  /Cannot read properties of undefined \(reading '(?:fetchMexGroupInviteCode|queryGroupInviteCode)'\)/,
+  /\.(?:fetchMexGroupInviteCode|queryGroupInviteCode) is not a function/,
+  /Requiring unknown module "WAWebMexFetchGroupInviteCodeJob"/,
+];
 
 /**
  * Whether the page still exports the invitation sender that `GroupChat.addParticipants` calls for a participant whose
@@ -544,6 +558,7 @@ export class WwebjsGroups {
 
   async getGroupInviteCode(groupId: string): Promise<string> {
     const chat = await this.requireGroupChat(groupId, 'getGroupInviteCode');
+    const since = navigationsSeen(this.host);
     // Read in the page, so that WhatsApp's own status decides the answer: a rate limit or a server error is a 503, a
     // refusal a 403. A page with no job to read it with is the library's own call, as it always was.
     const answer = await withPageWrite(this.host, 'getGroupInviteCode', () =>
@@ -551,7 +566,18 @@ export class WwebjsGroups {
     );
     let inviteCode: string | undefined;
     if (answer === 'missing') {
-      inviteCode = await withPageWrite(this.host, 'getGroupInviteCode', () => chat.getInviteCode());
+      inviteCode = await withPageWrite(this.host, 'getGroupInviteCode', () => chat.getInviteCode()).catch(
+        (error: unknown) => {
+          // Read after withPageWrite, so a navigation, a dead page and a timeout are answered by now. The library dying
+          // for want of the job asked nothing of WhatsApp and this build has no other way to read the code: the 501 the
+          // revoke answers, not a bare 500. Every other failure keeps its answer.
+          const message = error instanceof Error ? error.message : String(error);
+          if (!NO_INVITE_JOB_ERRORS.some(pattern => pattern.test(message))) throw error;
+          // A page that reloaded during the read has not booted its modules yet either: that is the 409.
+          rethrowIfNavigation(this.host, error, since);
+          throw new EngineNotSupportedError('getGroupInviteCode(no invite code job on this build)');
+        },
+      );
     } else {
       settleWriteStatus(answer.status, {
         request: `the invite code read for group ${groupId}`,

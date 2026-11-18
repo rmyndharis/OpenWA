@@ -84,7 +84,7 @@ Key adapter facts:
   construction fails the gate outside the one `unsupported()` helper body, as does a literal that
   names no interface method), and a refusal
   that fires only under a runtime condition - `sendTextMessage` with `customPreview` on whatsapp-web.js, or
-  `revokeGroupInviteCode` and `setProfileStatus` on a WhatsApp Web build that lacks the call each one makes - is
+  `revokeGroupInviteCode`, `getGroupInviteCode` and `setProfileStatus` on a WhatsApp Web build that lacks the call each one makes - is
   pinned in the gate's conditional list instead of flipping the cell, because 'supported with a refused option'
   is not 'not-available'.
 - **Inbound events** flow the other way: each adapter normalizes library events into the neutral
@@ -1201,6 +1201,11 @@ adapter boundary — none silently stubs.
   `WAWebGroupQueryJob` on a build that still does (the library's own `revokeInvite` reads only the second). Both
   take the same group id and resolve the same `{code}`, and a refusal is the `403` as before. A build with neither
   answers `501` before anything is asked of WhatsApp, so the current code stays valid.
+- **`getGroupInviteCode` (wwjs) needs a WhatsApp Web build that has the invite code job.** The adapter reads
+  `fetchMexGroupInviteCode` of `WAWebMexFetchGroupInviteCodeJob` in the page and answers by the status WhatsApp gives. A
+  page with no such job runs the library's own `getInviteCode`, which reads the same module, so where that call fails
+  for want of the job (the module answers `undefined`, lacks the call, or is not defined) the answer is `501`, before
+  anything is asked of WhatsApp, where it was a bare `500`. A reload during the read is the retryable `409`.
 - **Group owner and group event ids (wwjs).** whatsapp-web.js folds a group's participant list to the phone
   dialect, but the group `owner` (`getGroupInfo`, `getGroupJoinInfo`) and the actor and participant ids of group
   events reach the adapter as WhatsApp Web holds them, which on a LID-addressed group is `<lid>@lid` even when the

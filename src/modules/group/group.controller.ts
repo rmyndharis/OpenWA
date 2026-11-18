@@ -737,6 +737,12 @@ export class GroupController {
   @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
+  @ApiResponse({
+    status: 501,
+    description:
+      'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to read an invite code ' +
+      'with. Nothing was asked of WhatsApp.',
+  })
   async getInviteCode(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     const inviteCode = await this.groupService.getGroupInviteCode(sessionId, groupId);
     return {

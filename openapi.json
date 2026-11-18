@@ -12123,6 +12123,16 @@
               }
             }
           },
+          "501": {
+            "description": "On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to read an invite code with. Nothing was asked of WhatsApp.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
             "description": "WhatsApp did not answer the invite-code query — retry shortly. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the read with a rate limit or a server error (423, 429 or 5xx): no code was returned, so retry after a pause.",
             "content": {
