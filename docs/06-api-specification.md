@@ -6320,7 +6320,7 @@ List all loaded plugins (built-in + installed), with secret config values redact
     "description": "Visual reply flows",
     "author": "openwa-plugins",
     "status": "enabled",
-    "config": { "apiKey": "********" },
+    "config": { "apiKey": "***" },
     "builtIn": false,
     "provides": ["message-hook"],
     "ingressCapable": false,
@@ -6392,7 +6392,7 @@ Get a single plugin by id.
 #### GET /api/plugins/:id/config-ui
 
 Serve a plugin's sandboxed config-UI entry HTML (for an opaque-origin iframe `srcdoc`; the dashboard
-applies its document-specific CSP nonce to inline scripts and keeps any declared schema form available as fallback).
+applies its document-specific CSP nonce to inline scripts, shows this editor alone in place of the generated schema form, and shows an error when the editor's bridge does not initialize within 5 s).
 
 **Auth:** API key (ADMIN)
 
