@@ -67,11 +67,15 @@ jobs:
         run: cd dashboard && npm ci
 
       - name: Security audit (dashboard)
-        run: cd dashboard && npm audit --audit-level=high
+        env:
+          CHECK_AUDIT_REQUIRED: '1'
+        run: cd dashboard && node ../scripts/check-audit.mjs
 
       # Audited from its lockfile alone; same rationale as the ci.yml audit job.
       - name: Security audit (JavaScript SDK)
-        run: cd sdk/javascript && npm audit --audit-level=high
+        env:
+          CHECK_AUDIT_REQUIRED: '1'
+        run: cd sdk/javascript && node ../../scripts/check-audit.mjs
 
   # Dependabot proposes refreshed node:22-slim digests, yet the pin has trailed the tag for weeks
   # (a refresh that is late or left unmerged), and a stale base ages silently: Node patch releases

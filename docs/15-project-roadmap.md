@@ -721,7 +721,7 @@ npm run check:versions && npm run openapi:check && npm run lint && npm run forma
 npx tsc --noEmit -p tsconfig.json && npm run check:dockerignore
 npm run check:sdk-routes && npm run check:sdk-coverage && npm run check:sdk-events && npm run check:sdk-docs
 npm run check:contract-shapes
-CHECK_AUDIT_REQUIRED=1 npm run check:audit && (cd dashboard && npm audit --audit-level=high)
+CHECK_AUDIT_REQUIRED=1 npm run check:audit && (cd dashboard && CHECK_AUDIT_REQUIRED=1 node ../scripts/check-audit.mjs)
 npm run test:cov && npm run test:scripts && npm run test:docs && npm run test:e2e && npm run build && npm run test:engine-real
 cd dashboard && npm run lint && npm run format:check && npm run typecheck && npm run i18n:check && npm run build && npm run test:unit
 ```
@@ -813,9 +813,8 @@ after confirming it carries no release tag.
 Two failure classes are worth anticipating because they depend on the outside world rather than on
 the change being released:
 
-- **The dependency audit** in the release gate (`npm run check:audit` for the root,
-  `npm audit --audit-level=high` for the dashboard) is time-dependent: a tree that was clean last week
-  can fail on a newly published advisory.
+- **The dependency audit** in the release gate (`scripts/check-audit.mjs`, run for the root and for the
+  dashboard) is time-dependent: a tree that was clean last week can fail on a newly published advisory.
 - **The image scan reads the base image**, including the dependency tree bundled inside its npm CLI,
   which `npm audit` never sees. Accepted findings live in `.trivyignore`, each with a written
   justification and the condition for removing it.

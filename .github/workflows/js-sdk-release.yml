@@ -75,10 +75,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: sdk/javascript/package-lock.json
 
-      # The audit ci.yml runs over this tree, so a tag cannot publish what main would refuse. `npm audit`
+      # The audit ci.yml runs over this tree, with the same allowlist, so a tag can neither publish what
+      # main would refuse nor fail on an advisory main has excused by id. `npm audit`, which the gate runs,
       # reads the lockfile alone, so it runs before the install executes any of the toolchain. It has no
       # skip path: an npm audit outage fails the publish, and a re-run clears it.
-      - run: npm audit --audit-level=high
+      - env:
+          CHECK_AUDIT_REQUIRED: '1'
+        run: node ../../scripts/check-audit.mjs
 
       # --engine-strict: the tests below must not run on a Node the locked toolchain does not support.
       - run: npm ci --engine-strict
