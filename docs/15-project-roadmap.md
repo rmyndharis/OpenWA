@@ -667,6 +667,10 @@ PR, and pushing the tag from `main` hands everything else to `.github/workflows/
   with the Candidate that
   `docker run --rm --platform linux/arm64 docker.io/node:22-slim sh -c 'apt-get update -qq >/dev/null; apt-cache policy chromium'`
   prints, and when they differ give the release the same browser-major Upgrade note as an amd64 pin bump.
+- The Node base image pin (one digest shared by both `FROM` lines of the `Dockerfile`) equals what
+  `docker buildx imagetools inspect docker.io/node:22-slim` serves, or the newer image carries no Node
+  security release. The scheduled `base-image-drift` job tolerates a newer image for up to a week, so a
+  green run does not show that the pin is current.
 - Name the version wherever the text was written before it was known, in a docs commit on `main` ahead of
   the release commit: every `next` in the Release column of the Known Upgrade Hazards table in
   `docs/14-migration-guide.md`, one for each hazard the release added, and every clause that says
