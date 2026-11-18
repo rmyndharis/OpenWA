@@ -27,8 +27,10 @@
 .sidebar-header {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 1.5rem;
+  /* The logo and the collapse control are fixed in px: a gap and padding that grow with the text size would leave the
+     brand 51px at 200%, too narrow for a letter and its ellipsis. */
+  gap: 12px;
+  padding: 0.5rem 24px;
   min-height: 72px;
 }
 

@@ -45,6 +45,14 @@ test('the brand and the row labels are cut by their own direction, not the page'
   }
 });
 
+// The logo and the collapse control are fixed in px, so a gap and padding in rem that grow with the text size left the
+// brand 51px at 200%: too narrow for a letter and its ellipsis. At 100% the two are the same.
+test('the header row keeps its gap and inline padding in px, so the brand keeps its room', () => {
+  const header = bodyOf('.sidebar-header');
+  assert.equal(decl(header, 'gap'), '12px');
+  assert.equal(decl(header, 'padding'), '0.5rem 24px');
+});
+
 // The ellipsis has to begin where the row would have cut the label, not an end padding sooner: a label that the row
 // holds whole is not shortened. Nothing follows a label in these rows, so the end padding is taken off, after the rule
 // that sets the padding (the collapsed rail has no label and sets its own).
