@@ -878,8 +878,9 @@ tier automatically. Key properties:
   loop is blocked (a synchronous loop) cannot answer within 5 s, so it is terminated and the plugin is
   set to `ERROR`, as on a crash; a slow async handler answers and is left running.
 - The worker bounds what it posts to the host, so a loop that never yields cannot flood the host's one thread:
-  `ctx.logger.*` lines are limited to **200 per 10 s** (the rest are dropped inside the worker, with a note at the
-  first drop and a count with the first line after the window ends; the host's log relay applies the same limit),
+  `ctx.logger.*` lines are limited to **198 per 10 s** (the rest are dropped inside the worker, with a note at the
+  first drop and a count with the first line after the window ends; the two notes bring a window to the **200**
+  messages per 10 s that the host's log relay admits as a backstop, so neither is refused there),
   and a capability call is refused with a thrown `Error` while **64** calls are unanswered (twice the 32
   concurrent calls the host runs). A plugin that awaits its calls and logs at an ordinary rate never reaches
   either limit.

@@ -2,6 +2,7 @@ import * as path from 'path';
 import { WorkerThreadChannel } from './worker-thread-channel';
 import { PluginWorkerHost } from './plugin-worker-host';
 import { SANDBOX_LOG_MAX_PER_WINDOW, SANDBOX_MAX_PENDING_CAPS } from './protocol';
+import { SANDBOX_LOG_MAX_LINES_PER_WINDOW } from './worker-log-limiter';
 
 const ROOT = path.resolve(__dirname, '../../../..');
 const BOOTSTRAP = path.resolve(__dirname, 'worker-bootstrap.ts');
@@ -66,10 +67,10 @@ describe('a worker whose plugin loops without yielding', () => {
         },
       );
 
-      expect(attempts.length).toBeGreaterThanOrEqual(SANDBOX_LOG_MAX_PER_WINDOW);
+      expect(attempts.length).toBeGreaterThanOrEqual(SANDBOX_LOG_MAX_LINES_PER_WINDOW);
       expect(lines.length).toBeLessThan(1000);
-      expect(attempts.slice(0, SANDBOX_LOG_MAX_PER_WINDOW)).toEqual(
-        Array.from({ length: SANDBOX_LOG_MAX_PER_WINDOW }, (_, i) => i),
+      expect(attempts.slice(0, SANDBOX_LOG_MAX_LINES_PER_WINDOW)).toEqual(
+        Array.from({ length: SANDBOX_LOG_MAX_LINES_PER_WINDOW }, (_, i) => i),
       );
     });
 
@@ -77,18 +78,21 @@ describe('a worker whose plugin loops without yielding', () => {
       const lines: string[] = [];
       await run(LOG_FLOOD_FIXTURE, { lines: 50_000 }, { onLog: (_level, message) => lines.push(message) });
 
-      expect(lines.filter(message => /log rate limit reached/i.test(message)).length).toBeGreaterThanOrEqual(1);
+      const noteAt = lines.findIndex(message => /log rate limit reached/i.test(message));
+      expect(noteAt).toBeGreaterThanOrEqual(0);
+      // The host's relay counts the note as a message of its window, so the note has to come within the bound.
+      expect(noteAt + 1).toBeLessThanOrEqual(SANDBOX_LOG_MAX_PER_WINDOW);
     });
 
     it('relays every line of a plugin that stays within the bound', async () => {
       const lines: string[] = [];
       await run(
         LOG_FLOOD_FIXTURE,
-        { lines: SANDBOX_LOG_MAX_PER_WINDOW },
+        { lines: SANDBOX_LOG_MAX_LINES_PER_WINDOW },
         { onLog: (_level, message) => lines.push(message) },
       );
 
-      expect(lines).toEqual(Array.from({ length: SANDBOX_LOG_MAX_PER_WINDOW }, () => 'retrying'));
+      expect(lines).toEqual(Array.from({ length: SANDBOX_LOG_MAX_LINES_PER_WINDOW }, () => 'retrying'));
     });
   });
 
