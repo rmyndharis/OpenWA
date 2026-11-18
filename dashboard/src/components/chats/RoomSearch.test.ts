@@ -71,7 +71,7 @@ test('typing a query searches this chat and picking a hit reports it', async () 
 });
 
 test('a date alone asks the parent to jump when no text is typed', async () => {
-  const onJumpToDate = mock.fn(() => true);
+  const onJumpToDate = mock.fn((_bounds: { dateFrom: number; dateTo: number }) => true);
   globalThis.fetch = (() => {
     throw new Error('search must not run without text');
   }) as typeof fetch;
@@ -92,7 +92,7 @@ test('a date alone asks the parent to jump when no text is typed', async () => {
   const date = container.querySelector('input[type="date"]') as HTMLInputElement;
   fireEvent.change(date, { target: { value: '2023-11-14' } });
   assert.equal(onJumpToDate.mock.callCount(), 1);
-  const bounds = onJumpToDate.mock.calls[0].arguments[0] as { dateFrom: number; dateTo: number };
-  assert.ok(bounds.dateFrom < bounds.dateTo);
+  const bounds = onJumpToDate.mock.calls[0]?.arguments[0];
+  assert.ok(bounds && bounds.dateFrom < bounds.dateTo);
   assert.equal(screen.queryByRole('option'), null);
 });
