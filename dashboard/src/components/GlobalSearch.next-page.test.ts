@@ -100,8 +100,37 @@ test('a new search shows the loading line alone, not the hits of the text before
   fireEvent.change(screen.getByLabelText('Search messages…'), { target: { value: 'messages' } });
   await screen.findByText('Searching…', {}, DEADLINE);
   assert.equal(screen.queryAllByRole('option').length, 0, 'the hits of the text before were offered for the new one');
+  await waitFor(() => assert.ok(release, 'the search for the new text was not made'), DEADLINE);
   await rtl.act(async () => release?.());
   await waitFor(() => assert.ok(screen.getByText('No messages found.')));
+});
+
+test('typing while a next page is coming shows the loading line of the new search alone', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const held: Array<() => void> = [];
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    if (queryOf(input) === 'message' && offsetOf(input) === 0) {
+      return Promise.resolve(json({ hits: page(1, 20), total: 45 }));
+    }
+    return new Promise<Response>(resolve => {
+      held.push(() => resolve(json({ hits: page(21, 20), total: 45 })));
+    });
+  }) as typeof fetch;
+  await listFirstPage();
+  fireEvent.click(screen.getByRole('button', { name: /Show more/ }));
+  await waitFor(() => assert.equal(held.length, 1, 'the next page was not asked for'));
+  fireEvent.change(screen.getByLabelText('Search messages…'), { target: { value: 'messages' } });
+  // Before the box's debounce has sent the new search: the old hits, and a Show more for them, are not its own.
+  assert.equal(screen.queryAllByRole('option').length, 0, 'the hits of the text before were offered for the new one');
+  assert.ok(screen.queryByRole('button', { name: /Show more/ }) === null, 'Show more of the old list is still offered');
+  assert.equal(screen.getByRole('listbox').children.length, 1, 'something besides the loading line is listed');
+  await waitFor(() => assert.equal(held.length, 2, 'the search for the new text was not made'), DEADLINE);
+  // The page of the old text lands first and the answer of the new text after it: only the new one is listed.
+  await rtl.act(async () => held[0]());
+  assert.equal(screen.queryAllByRole('option').length, 0, 'the page of the old text was listed under the new text');
+  await rtl.act(async () => held[1]());
+  await waitFor(() => assert.equal(screen.queryAllByRole('option').length, 20));
+  assert.ok(screen.queryByText('Searching…') === null);
 });
 
 test('clearing the text while a next page is coming leaves no loading line behind', async () => {
@@ -122,7 +151,8 @@ test('clearing the text while a next page is coming leaves no loading line behin
   const box = screen.getByLabelText('Search messages…');
   fireEvent.change(box, { target: { value: '' } });
   fireEvent.change(box, { target: { value: 'other' } });
-  assert.ok(screen.queryByText('Searching…') === null, 'the loading line of the page that was dropped is still up');
+  // The line that is up is the new search's own: nothing of the page that was dropped is listed with it.
+  assert.equal(screen.getByRole('listbox').children.length, 1, 'something besides the loading line is listed');
   await waitFor(() => assert.equal(screen.queryAllByRole('option').length, 2), DEADLINE);
   await rtl.act(async () => held.forEach(answer => answer()));
   assert.equal(screen.queryAllByRole('option').length, 2, 'the page that was dropped was listed under the new text');

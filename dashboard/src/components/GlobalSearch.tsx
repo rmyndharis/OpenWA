@@ -107,6 +107,13 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
       setPaging(false);
       return;
     }
+    // From the keystroke on, the hits listed and any answer still on its way are for the text before this one: that
+    // answer is dropped, the list no longer stands for any text (reopen searches again), and the loading line is
+    // alone until the search for this text answers.
+    requestId.current += 1;
+    searchedKey.current = '';
+    setLoading(true);
+    setPaging(false);
     // timer.current is non-null exactly while a search is pending, which the Escape handler reads.
     timer.current = setTimeout(() => {
       timer.current = null;

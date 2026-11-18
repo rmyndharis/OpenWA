@@ -155,6 +155,25 @@ test("refocusing after Escape cancelled a search does not show the previous quer
   await rtl.screen.findByText('refunds batch');
 });
 
+test('the text typed back after Escape cancelled a search is answered, not left on a loading line', async () => {
+  const { screen, fireEvent, act } = rtl;
+  rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
+  const input = screen.getByRole('textbox');
+
+  await typeAndWaitForRequest(input, 'refund');
+  // A keystroke drops the answer that is still on its way, and Escape cancels the search the keystroke started.
+  fireEvent.change(input, { target: { value: 'refunds' } });
+  fireEvent.keyDown(input, { key: 'Escape' });
+  fireEvent.change(input, { target: { value: 'refund' } });
+  fireEvent.keyDown(input, { key: 'Escape' });
+  await act(async () => pending.get('refund')!(['refund issued']));
+  fireEvent.click(input);
+  // The first answer was dropped, so the text is searched again; this one is the answer that lists.
+  await act(async () => pending.get('refund')!(['refund issued']));
+  await screen.findByText('refund issued');
+  assert.ok(screen.queryByText('Searching…') === null, 'a cancelled search is still said to be running');
+});
+
 const page = (from: number): string[] => Array.from({ length: 20 }, (_, i) => `refund ${from + i}`);
 
 test('a mouse click on "more" keeps the results open and appends the next page', async () => {
