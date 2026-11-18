@@ -29,3 +29,22 @@ test('the Hebrew catalogue spells the term Session one way: in Latin script', ()
     .map(([key]) => key);
   assert.deepEqual(hebrewWord, []);
 });
+
+// The noun session can also be written הפעלה, which is otherwise the start, the restart, the enabling or the activation
+// of something, so the word alone proves nothing. A value whose English source names a session and that has the word
+// still writes the term in Latin script when the word is a start ("הפעלת Session", "בהפעלה הבאה של ה-Session"); with no
+// Latin Session in it, the word is the noun, spelled in Hebrew script.
+test('a Hebrew value for a session does not spell the noun session as הפעלה', () => {
+  const en = flatten(JSON.parse(readFileSync(`${dir}en.json`, 'utf8')));
+  const he = flatten(JSON.parse(readFileSync(`${dir}he.json`, 'utf8')));
+  const mentionsSession = (key: string): boolean => /\bsessions?\b/i.test(String(en.get(key) ?? ''));
+  const withWord = [...he].filter(
+    ([key, value]) => typeof value === 'string' && /הפעל[הת]|הפעלות/.test(value) && mentionsSession(key),
+  );
+  const starts = withWord.filter(([, value]) => /\bSessions?\b/.test(String(value)));
+  assert.ok(starts.length >= 4, 'no value starts a Latin Session any more: drop this check');
+  assert.deepEqual(
+    withWord.filter(([, value]) => !/\bSessions?\b/.test(String(value))).map(([key]) => key),
+    [],
+  );
+});
