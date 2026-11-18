@@ -148,8 +148,11 @@ const BLOCKED_V4_RANGES: ReadonlyArray<readonly [string, number]> = [
   ['169.254.0.0', 16], // link-local (incl. 169.254.169.254 cloud metadata)
   ['172.16.0.0', 12], // RFC1918 private
   ['192.0.0.0', 24], // IETF protocol assignments
+  ['192.0.2.0', 24], // documentation, TEST-NET-1 (RFC 5737)
   ['192.168.0.0', 16], // RFC1918 private
   ['198.18.0.0', 15], // benchmarking
+  ['198.51.100.0', 24], // documentation, TEST-NET-2 (RFC 5737)
+  ['203.0.113.0', 24], // documentation, TEST-NET-3 (RFC 5737)
   ['224.0.0.0', 4], // multicast
   ['240.0.0.0', 4], // reserved
 ];
@@ -167,6 +170,11 @@ const BLOCKED_V6_RANGES: ReadonlyArray<readonly [string, number]> = [
   ['fc00::', 7], // ULA (RFC 4193)
   ['fe80::', 10], // link-local
   ['fec0::', 10], // deprecated site-local (RFC 3879)
+  // Not globally reachable per the IANA IPv6 special-purpose registry. 2001::/23 is not blocked whole: the registry
+  // marks several allocations inside it (AMT, AS112, ORCHIDv2, the 2001:1::/32 anycast addresses) globally reachable.
+  ['2001:2::', 48], // benchmarking (RFC 5180)
+  ['2001:db8::', 32], // documentation (RFC 3849)
+  ['3fff::', 20], // documentation (RFC 9637)
 ];
 
 const BLOCKED_V4 = new BlockList();
@@ -217,7 +225,8 @@ function expandIPv6(lower: string): number[] | null {
 /**
  * Whether an IP literal points at an internal/reserved range that an outbound
  * webhook must not be allowed to reach (loopback, RFC1918, link-local/metadata,
- * CGNAT, multicast, IPv6 loopback/ULA/link-local, IPv4-mapped variants).
+ * CGNAT, multicast, documentation and benchmarking blocks, IPv6 loopback/ULA/link-local,
+ * IPv4-mapped variants).
  * Anything that isn't a recognizable public IP is treated as blocked (fail-closed).
  */
 export function isBlockedAddress(ip: string): boolean {

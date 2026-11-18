@@ -12,9 +12,9 @@ import { startSocks4Proxy, startSocks5Proxy, type SocksProxyServer } from '../..
  * redirect chain, and the guard switched off entirely.
  *
  * Real servers throughout: a real SOCKS5 proxy that relays every tunnel to a local origin whatever
- * destination is named, and requests aimed at TEST-NET-3 addresses, which are unroutable. A request
- * that went direct therefore fails instead of passing quietly, and one that went through the proxy
- * is answered by the origin.
+ * destination is named, and requests aimed at public addresses the guard allows (the documentation
+ * blocks are refused by the guard itself). A request that went direct is therefore never answered
+ * by the origin, and one that went through the proxy is.
  */
 describe('withSafeFetch through a session proxy', () => {
   let origin: http.Server;
@@ -29,7 +29,7 @@ describe('withSafeFetch through a session proxy', () => {
     origin = http.createServer((req, res) => {
       requests.push(req.url ?? '');
       if (req.url === '/moved') {
-        res.writeHead(302, { location: 'http://203.0.113.9/final' });
+        res.writeHead(302, { location: 'http://93.184.216.35/final' });
         res.end();
         return;
       }
@@ -88,44 +88,44 @@ describe('withSafeFetch through a session proxy', () => {
   // An IP literal leaves the guard with nothing to pin, which used to mean "no dispatcher": exactly
   // the branch where a proxied session's fetch would have gone direct.
   it('proxies an IP-literal URL, which has no resolved target to pin', async () => {
-    const text = await withSafeFetch('http://203.0.113.7/literal', {}, body, { proxyUrl: proxy.url });
+    const text = await withSafeFetch('http://93.184.216.34/literal', {}, body, { proxyUrl: proxy.url });
 
     expect(text).toBe('origin saw /literal');
-    expect(proxy.destinations).toEqual(['203.0.113.7:80']);
+    expect(proxy.destinations).toEqual(['93.184.216.34:80']);
   });
 
   // Turning the SSRF guard off says nothing about which address the request may leave from.
   it('proxies an unguarded fetch', async () => {
-    const text = await withSafeFetch('http://203.0.113.7/unguarded', {}, body, {
+    const text = await withSafeFetch('http://93.184.216.34/unguarded', {}, body, {
       proxyUrl: proxy.url,
       guard: false,
     });
 
     expect(text).toBe('origin saw /unguarded');
-    expect(proxy.destinations).toEqual(['203.0.113.7:80']);
+    expect(proxy.destinations).toEqual(['93.184.216.34:80']);
   });
 
   it('proxies every hop of a followed redirect chain', async () => {
-    const text = await withSafeFetch('http://203.0.113.7/moved', {}, body, {
+    const text = await withSafeFetch('http://93.184.216.34/moved', {}, body, {
       proxyUrl: proxy.url,
       followRedirects: true,
     });
 
     expect(text).toBe('origin saw /final');
-    expect(proxy.destinations).toEqual(['203.0.113.7:80', '203.0.113.9:80']);
+    expect(proxy.destinations).toEqual(['93.184.216.34:80', '93.184.216.35:80']);
   });
 
   // The media loader is the path a send-by-URL and POST /media/convert both take.
   it('fetches caller-supplied media through the proxy', async () => {
-    const media = await loadRemoteMediaBuffer('http://203.0.113.7/photo.png', proxy.url);
+    const media = await loadRemoteMediaBuffer('http://93.184.216.34/photo.png', proxy.url);
 
     expect(media.data.toString()).toBe('origin saw /photo.png');
-    expect(proxy.destinations).toEqual(['203.0.113.7:80']);
+    expect(proxy.destinations).toEqual(['93.184.216.34:80']);
   });
 
   it('fails the fetch rather than going direct when the proxy value is unusable', async () => {
     await expect(
-      withSafeFetch('http://203.0.113.7/literal', {}, body, { proxyUrl: 'ftp://proxy.example:21' }),
+      withSafeFetch('http://93.184.216.34/literal', {}, body, { proxyUrl: 'ftp://proxy.example:21' }),
     ).rejects.toThrow(/unsupported proxy/i);
     expect(requests).toEqual([]);
   });
