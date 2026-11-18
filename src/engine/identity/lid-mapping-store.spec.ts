@@ -4051,8 +4051,9 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       await failReport();
       await pushOut();
       store.getCached('333');
-      for (let turn = 0; turn < 50 && store.getCached('333') === undefined; turn++)
-        await new Promise(r => setImmediate(r));
+      // The warm is one table read: wait for it with a deadline, not for a count of event loop turns.
+      const deadline = Date.now() + 5000;
+      while (store.getCached('333') === undefined && Date.now() < deadline) await new Promise(r => setTimeout(r, 5));
       expect(store.getCached('333')).toBe('628111');
 
       await refused(['628111', '628222']);
