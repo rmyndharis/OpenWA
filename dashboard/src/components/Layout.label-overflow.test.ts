@@ -27,6 +27,24 @@ test('a sidebar label too long for its row ends in an ellipsis instead of being 
   assert.equal(decl(brand, 'text-overflow'), 'ellipsis');
 });
 
+// The name and the version are Latin text. In an Arabic or Hebrew page the line runs right to left, so an ellipsis at its
+// end stood in front of the tail ("...nWA") and the head was what got cut. They are cut by their own direction, with a
+// box as wide as the text so that what fits stays at the edge the page puts it; a label of a row that is written in
+// Latin script (Sessions, Webhooks in Hebrew) is cut the same way.
+test('the brand and the row labels are cut by their own direction, not the page', () => {
+  for (const selector of ['.brand-name', '.brand-version']) {
+    const body = bodyOf(selector);
+    assert.equal(decl(body, 'unicode-bidi'), 'plaintext', `${selector} takes the page direction`);
+    assert.equal(decl(body, 'overflow'), 'hidden', `${selector} does not clip`);
+    assert.equal(decl(body, 'text-overflow'), 'ellipsis', `${selector} does not end in an ellipsis`);
+    assert.equal(decl(body, 'width'), 'fit-content', `${selector} is not as wide as its text`);
+    assert.equal(decl(body, 'max-width'), '100%', `${selector} can outgrow the brand`);
+  }
+  for (const selector of ['.nav-item > span', '.theme-toggle-btn > span', '.logout-btn > span']) {
+    assert.equal(decl(bodyOf(selector), 'unicode-bidi'), 'plaintext', `${selector} takes the page direction`);
+  }
+});
+
 // The ellipsis has to begin where the row would have cut the label, not an end padding sooner: a label that the row
 // holds whole is not shortened. Nothing follows a label in these rows, so the end padding is taken off, after the rule
 // that sets the padding (the collapsed rail has no label and sets its own).

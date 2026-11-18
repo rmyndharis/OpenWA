@@ -70,6 +70,12 @@
   letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* The name is Latin text in every language, so under an Arabic or Hebrew page it kept its end and put the ellipsis in
+     front of it. It is cut by its own direction instead, and its box is as wide as the name, so the name stays at the
+     start edge the page puts it, over the version (see .chat-item-name in Chats.css). */
+  unicode-bidi: plaintext;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .brand-version {
@@ -78,6 +84,12 @@
   letter-spacing: 0.02em;
   color: var(--text-muted);
   margin-top: 1px;
+  /* A version too long for the brand ends in an ellipsis at its own end, as the name does. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  width: fit-content;
+  max-width: 100%;
 }
 
 /* Beside the collapse button the brand has about 123px: a longer notice (the Telugu one is about 138px) ends in an
@@ -336,6 +348,9 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* A label written in Latin script in an Arabic or Hebrew page (Sessions, Webhooks) is cut by its own direction, or the
+     ellipsis would stand in front of its end. */
+  unicode-bidi: plaintext;
 }
 
 /* A label may use the room up to the edge of its row, which is where the row clips it. With an end padding the
