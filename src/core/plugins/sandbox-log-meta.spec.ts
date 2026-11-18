@@ -1,6 +1,16 @@
 import { redactSecrets } from '../../common/services/logger.service';
 import { countMetaValues, metaText } from './sandbox-log-meta';
 
+/**
+ * CPU time this process has used since `since`, in milliseconds. A bound on work is asserted on it and not on the
+ * wall clock: a busy runner can hold the worker off the CPU for longer than the whole bound, while code that is slow
+ * burns the CPU on every run.
+ */
+const cpuMsSince = (since: NodeJS.CpuUsage): number => {
+  const { user, system } = process.cpuUsage(since);
+  return (user + system) / 1000;
+};
+
 describe('countMetaValues', () => {
   const NO_LIMIT = Number.MAX_SAFE_INTEGER;
   const fanOut = (levels: number): Record<string, unknown> => {
@@ -30,10 +40,10 @@ describe('countMetaValues', () => {
     expect(countMetaValues({ list: [small, small] }, NO_LIMIT)).toBe(1 + 4 + 1 + 2 * (1 + 1 + 1 + 10));
 
     const holder = { s: 'x'.repeat(500_000) };
-    const started = Date.now();
+    const started = process.cpuUsage();
     const count = countMetaValues({ list: Array.from({ length: 2000 }, () => holder) }, 8192);
 
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(cpuMsSince(started)).toBeLessThan(1000);
     expect(count).toBeGreaterThan(8192);
   });
 
@@ -83,10 +93,10 @@ describe('countMetaValues', () => {
   // JSON.stringify writes a boxed primitive as the primitive it holds; its own properties are the characters of a
   // String wrapper, one per index, which are not values of their own.
   it('counts a String wrapper by its length without listing its characters', () => {
-    const started = Date.now();
+    const started = process.cpuUsage();
     const count = countMetaValues({ boxed: new String('x'.repeat(10_000_000)) }, 8192);
 
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(cpuMsSince(started)).toBeLessThan(1000);
     expect(count).toBe(1 + 5 + 1 + 10_000_000);
     expect(countMetaValues(new String('abc'), NO_LIMIT)).toBe(1 + 3);
     // What structuredClone hands back may come from another realm, where instanceof String is false.
@@ -108,13 +118,13 @@ describe('countMetaValues', () => {
     expect(countMetaValues([{ abc: 1 }, { abc: 1 }], NO_LIMIT)).toBe(1 + 2 * (1 + 3 + 1));
 
     const holder = { ['k'.repeat(100_000)]: 1 };
-    const started = Date.now();
+    const started = process.cpuUsage();
     const count = countMetaValues(
       Array.from({ length: 4000 }, () => holder),
       8192,
     );
 
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(cpuMsSince(started)).toBeLessThan(1000);
     expect(count).toBeGreaterThan(8192);
   });
 
@@ -131,10 +141,10 @@ describe('countMetaValues', () => {
   });
 
   it('stops once the count passes the limit, however large the text would be', () => {
-    const started = Date.now();
+    const started = process.cpuUsage();
     const count = countMetaValues(fanOut(9), 8192);
 
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(cpuMsSince(started)).toBeLessThan(1000);
     expect(count).toBeGreaterThan(8192);
     expect(count).toBeLessThanOrEqual(8192 + 3);
   });
@@ -147,10 +157,10 @@ describe('countMetaValues', () => {
   });
 
   it('counts a typed array without visiting its elements', () => {
-    const started = Date.now();
+    const started = process.cpuUsage();
     const count = countMetaValues({ b: new Uint8Array(20_000_000) }, 8192);
 
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(cpuMsSince(started)).toBeLessThan(1000);
     expect(count).toBe(1 + 1 + 1 + 20_000_000);
   });
 
