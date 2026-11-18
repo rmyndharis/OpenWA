@@ -79,6 +79,11 @@
     0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
+/* The box rings on :focus-within, so the select's own outline would be a second frame around one control. */
+.login-container .login-language .custom-select-trigger:focus-visible {
+  outline: none;
+}
+
 .login-container .login-form {
   text-align: start;
 }

@@ -53,9 +53,23 @@ const all = cssFiles().flatMap(rules);
 // :not(:focus-visible) is the opposite state: a mouse click may drop the outline there.
 const focusVisible = (s: string): boolean => /:focus-visible/.test(s.replace(/:not\([^)]*\)/g, ''));
 
+// A control inside a box that rings on :focus-within gives up its own outline, which would be a second frame around one
+// control: the sign-in language box rings, and the select trigger inside it is the whole control.
+const RINGED_BY_ITS_BOX = ['.login-container .login-language .custom-select-trigger:focus-visible'];
+
 test('no :focus-visible rule switches the outline off', () => {
+  for (const selector of RINGED_BY_ITS_BOX) {
+    assert.ok(
+      all.some(r => r.selectors.includes(selector)),
+      `no rule for ${selector}: drop this entry`,
+    );
+  }
   const offenders = all
-    .filter(r => r.selectors.some(focusVisible) && /outline:\s*(?:none|0)\b/.test(r.body))
+    .filter(
+      r =>
+        r.selectors.some(s => focusVisible(s) && !RINGED_BY_ITS_BOX.includes(s)) &&
+        /outline:\s*(?:none|0)\b/.test(r.body),
+    )
     .map(r => `${r.file}: ${r.selectors.join(', ')}`);
   assert.deepEqual(offenders, []);
 });
