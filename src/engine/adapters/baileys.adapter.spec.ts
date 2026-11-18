@@ -8520,7 +8520,9 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
       expect(fakeSock.chatModify).toHaveBeenCalledTimes(1);
     });
 
-    it('keeps the count of messages that arrived while the mark was being undone', async () => {
+    // Baileys replays its own write as a count of zero, and a replay still held in its event buffer reaches the
+    // session after the write has resolved: until then the record holds the count of what arrived meanwhile.
+    it('keeps the count of messages that arrived during the write while its replay has not reached the session', async () => {
       const adapter = await markedThenMessaged();
       let confirm!: () => void;
       fakeSock.chatModify.mockImplementationOnce(() => new Promise<void>(resolve => (confirm = resolve)));
@@ -8554,6 +8556,59 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
       } finally {
         fakeSock.chatModify.mockReset().mockResolvedValue(undefined);
       }
+    });
+
+    it('is kept by a second message', async () => {
+      const adapter = await markedThenMessaged();
+      fakeSock.fire('chats.update', [{ id: JID, unreadCount: 1, conversationTimestamp: 1700000040 }]);
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { remoteJid: JID, fromMe: false, id: 'M3' },
+            message: { conversation: 'another' },
+            messageTimestamp: 1700000040,
+          },
+        ],
+      });
+      await new Promise(r => setImmediate(r));
+
+      expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+
+      expect(fakeSock.chatModify).toHaveBeenCalledTimes(1);
+      expect(await unread(adapter)).toBe(0);
+    });
+
+    // A chat decoded from a history sync is a protobuf object: where the wire held no count it has no
+    // `unreadCount` of its own and answers null from its prototype. It says nothing about the count or the mark.
+    it.each(['chats.upsert', 'messaging-history.set'])(
+      'is kept when %s delivers the chat with no count of its own',
+      async event => {
+        const adapter = await markedThenMessaged();
+        const decoded = Object.assign(Object.create({ unreadCount: null }) as Record<string, unknown>, {
+          id: JID,
+          name: 'From history',
+        });
+        fakeSock.fire(event, event === 'chats.upsert' ? [decoded] : { chats: [decoded], contacts: [], messages: [] });
+        await new Promise(r => setImmediate(r));
+        expect(await unread(adapter)).toBe(1);
+
+        expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+
+        expect(fakeSock.chatModify).toHaveBeenCalledTimes(1);
+        expect(await unread(adapter)).toBe(0);
+      },
+    );
+
+    // Baileys writes an own `unreadCount: undefined` where a sync cancelled a mark inside one batch.
+    it('is forgotten when an update carries a count of undefined', async () => {
+      const adapter = await markedThenMessaged();
+      fakeSock.fire('chats.update', [{ id: JID, unreadCount: undefined }]);
+
+      expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
+      expect(await unread(adapter)).toBe(0);
     });
   });
 
