@@ -584,9 +584,13 @@ export class WwebjsGroups {
       groupChat.deletePicture(),
     );
     // WhatsApp Web answers nothing, not false, when it does not attempt the delete: the group has no picture, or the
-    // account may not edit the group's info. The two cannot be told apart here, and a success could be a picture left
-    // in place, so it stays a refusal whose text names both.
+    // account may not edit the group's info. For an account that may edit it, that leaves the first: on a live
+    // session a repeat delete by an admin answers nothing. The page judges that from its own copy of the picture,
+    // which can be out of date, so WhatsApp is asked as well: with no picture there, nothing to delete is done and
+    // the repeat converges. Where the account may not edit the info, the participant list does not say, or WhatsApp
+    // still holds a picture, a success could be a picture left in place, so it stays a refusal whose text names both.
     if (ok === undefined) {
+      if (this.mayEditInfo(groupChat) && !(await this.holdsPicture(groupId))) return;
       throw new EngineRefusedError(
         `Failed to delete the picture for group ${groupId}: WhatsApp Web did not attempt it, as when the group has ` +
           'no picture or admin rights are required',
@@ -595,6 +599,24 @@ export class WwebjsGroups {
     if (!ok) {
       throw new EngineRefusedError(`Failed to delete the picture for group ${groupId} — admin rights required`);
     }
+  }
+
+  /**
+   * Whether the account may change the group's info (subject, description, picture): an admin, or a member of a
+   * group whose info is open to every member. False where the participant list does not name the account or the
+   * group does not say whether its info is locked, so an unknown never excuses anything.
+   */
+  private mayEditInfo(chat: GroupChat): boolean {
+    const self = readWid(this.client().info?.wid);
+    const me = self === undefined ? undefined : chat.participants?.find(p => readWid(p.id) === self);
+    if (!me) return false;
+    return Boolean(me.isAdmin || me.isSuperAdmin) || chat.groupMetadata?.restrict === false;
+  }
+
+  /** Whether WhatsApp holds a picture for the group, asked of WhatsApp and not read from the page's copy. */
+  private async holdsPicture(groupId: string): Promise<boolean> {
+    const url = await withPageWrite(this.host, 'deleteGroupPicture', () => this.client().getProfilePicUrl(groupId));
+    return Boolean(url);
   }
 
   // Set who may add participants. NOT a groupSettingUpdate option on either engine — wwjs has its

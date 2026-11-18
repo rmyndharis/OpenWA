@@ -68,7 +68,7 @@
     "migration:show:main:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source-main.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1168.0",
+    "@aws-sdk/client-s3": "^3.1169.0",
     "@bull-board/api": "^9.13.1",
     "@bull-board/express": "^9.13.1",
     "@bull-board/nestjs": "^9.13.1",
@@ -88,7 +88,7 @@
     "@whiskeysockets/baileys": "7.0.0-rc14",
     "adm-zip": "^0.6.1",
     "audio-decode": "^2.2.3",
-    "better-sqlite3": "^13.1.1",
+    "better-sqlite3": "^13.2.0",
     "bullmq": "^6.7.6",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
@@ -128,7 +128,7 @@
     "@types/supertest": "^7.2.1",
     "@types/tar-stream": "^3.1.4",
     "concurrently": "^10.0.7",
-    "eslint": "^10.14.0",
+    "eslint": "^10.15.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.5.7",
     "globals": "^17.14.0",

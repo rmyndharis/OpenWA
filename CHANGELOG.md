@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard: a shared contact shows as a card with its name and phone, in the thread, the chat list and a quoted reply, where the raw `BEGIN:VCARD` text was printed (#2110). Thanks @juanbracamonte.
 - whatsapp-web.js: a message that shares several contacts had an empty `body`; it now holds their vCards, newline-joined as on Baileys. The chat list preview and a quote of such a message carry them too.
 - whatsapp-web.js: block asks WhatsApp for a number's privacy id when the page holds none, so a number the session never talked to can be blocked.
+- Baileys: a read also undoes an unread mark set by hand when a message received after it had put its count in place of the mark, where the chat stayed marked unread on the account.
 - Baileys: a contact's encrypted edit or reaction, a pin, an album header or an event RSVP no longer lists the chat as unread on its own; the engine counts each as a received message.
 - Baileys: encrypted edits and reactions of one message are applied in the order they arrived, where the older one could end as the final text or emoji after an offline replay on PostgreSQL.
 - Baileys: a poll vote on the account's own broadcast-list poll is reported only when it arrives in a 1:1 chat, as documented; a vote from a group, the list or the status chat was reported too.
@@ -34,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The in-memory privacy id mapping reloaded after a data import skips an id whose write is still under way, where it could keep answering the phone that write cleared or replaced.
 - whatsapp-web.js: the writes that are safe to repeat (contact, profile, channel, group setting, label and message reaction, edit, delete, star, pin and vote, status delete), and the reads of a group's invite code and a chat's labels, answer `503` when WhatsApp Web does not answer within the protocol timeout, where they answered `500`; sends, status posts and the other writes keep their answer, except for a timeout in the group lookup made before a group write, which answers `503` as nothing has been applied.
 - whatsapp-web.js: `message.ack` is no longer announced for an entry the account sent of a kind the gateway does not list, with no text or media; it has no `message.sent`.
-- whatsapp-web.js: the `403` of `DELETE /api/sessions/{sessionId}/groups/{groupId}/picture` says it also covers a group with no picture to remove, where it named missing admin rights alone.
+- whatsapp-web.js: `DELETE /api/sessions/{sessionId}/groups/{groupId}/picture` answers `200` for a group with no picture left when the account may edit the group's info, so a repeat converges; it answered `403` naming missing admin rights.
 - A media `url` that carries a user name or password is refused with `400` on every route that fetches one, where it answered `500`, counted toward the send breaker and held the `Idempotency-Key`.
 - The status posts and the profile and group picture routes answer `400`, not `500`, for a media `url` that resolves to an internal address, does not resolve or redirects.
 - Webhook events for messages whose id the engine could not read (an empty id on whatsapp-web.js) each get their own `X-OpenWA-Idempotency-Key` and outbox record, where they shared one, so a receiver that deduplicates on the key kept only the first.
@@ -71,10 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Dependencies
 
 - Update `whatsapp-web.js` to 1.34.8, which carries the message-id fix OpenWA backported, the media-id fix and a LID-aware block and unblock, and ends its wait for the page's connection to WhatsApp after `WWEBJS_AUTH_TIMEOUT_MS` (see Upgrade notes); the ready-sync patch now keeps only the `eventsAttached` marker.
-- Update `@aws-sdk/client-s3` to 3.1168.0, `bullmq` to 6.7.6, `@bull-board/api`, `@bull-board/express` and `@bull-board/nestjs` to 9.13.1, `typeorm` to 1.1.3, `puppeteer` to 25.17.0, `dotenv` to 18.0.10 and the `@nestjs` packages to 11.2.10 in the gateway.
-- Update `better-sqlite3` to 13.1.1 in the gateway, which bundles SQLite 3.54.1.
-- Update `i18next` to 27.1.1, `react-i18next` to 18.0.1 and `lucide-react` to 1.72.0 in the dashboard bundle. react-i18next 18 ignores `shouldUnescape`, so the API key confirmation no longer passes it.
-- Update `vite` to 8.3.8, `@vitejs/plugin-react` to 6.3.0 and `jsdom` to 31.0.1 in the dashboard, `prettier` to 3.10.1 and `typescript-eslint` to 8.72.2 in the gateway and the dashboard, and `concurrently` to 10.0.7 and `supertest` to 7.3.2 in the gateway; these are build, lint and test tooling only.
+- Update `@aws-sdk/client-s3` to 3.1169.0, `bullmq` to 6.7.6, `@bull-board/api`, `@bull-board/express` and `@bull-board/nestjs` to 9.13.1, `typeorm` to 1.1.3, `puppeteer` to 25.17.0, `dotenv` to 18.0.10 and the `@nestjs` packages to 11.2.10 in the gateway.
+- Update `better-sqlite3` to 13.2.0 in the gateway, which bundles SQLite 3.54.1.
+- Update `i18next` to 27.1.1, `react-i18next` to 18.0.1 and `lucide-react` to 1.73.0 in the dashboard bundle. react-i18next 18 ignores `shouldUnescape`, so the API key confirmation no longer passes it.
+- Update `vite` to 8.3.8, `@vitejs/plugin-react` to 6.3.0 and `jsdom` to 31.0.1 in the dashboard, `prettier` to 3.10.1, `typescript-eslint` to 8.72.2 and `eslint` to 10.15.0 in the gateway and the dashboard, and `concurrently` to 10.0.7 and `supertest` to 7.3.2 in the gateway; these are build, lint and test tooling only.
 - Update `guzzlehttp/guzzle` to 8.5.0 in the PHP SDK lockfile; this touches development and test setups only.
 - The dependency audit excuses the `picomatch` advisory GHSA-fc5q-39xc-vjpf by id in the gateway, dashboard and JavaScript SDK trees: every published version is affected, and no glob pattern reaches it from outside the repository. The dashboard and SDK audits now run the same per-advisory gate as the gateway's.
 
