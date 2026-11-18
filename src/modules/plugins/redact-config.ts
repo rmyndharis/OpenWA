@@ -181,6 +181,8 @@ function restoreValue(
           // withheld from a row with no match of its own once a row that matches by content has moved: the
           // stored secret at that position then belongs to a row removed or moved, and the payload cannot say
           // which. A row renamed in place in the same save loses its secret with it; the operator enters it again.
+          // Rows that share this signature and are all still in the save bind in order, the k-th to the k-th: the
+          // stored row at their position may be one that another row moved away from.
           const twin = existingArr[i];
           const match =
             storedCount === 1
@@ -188,7 +190,9 @@ function restoreValue(
               : sameLength
                 ? storedCount === 0 && shifted
                   ? undefined
-                  : twin
+                  : storedCount > 1 && inCount.get(s) === storedCount
+                    ? group[k]
+                    : twin
                 : inCount.get(s) === storedCount
                   ? group[k]
                   : twin !== undefined && elementSignature(twin, itemField) === s
