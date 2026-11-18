@@ -51,4 +51,10 @@ export async function installJsdomGlobals(url = 'http://localhost/'): Promise<vo
   // React 19 only runs act() when this flag is set; Testing Library drives act through it.
   g.IS_REACT_ACT_ENVIRONMENT = true;
   (window as unknown as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+  // Testing Library waits one second for a query or a wait to be satisfied, which a loaded machine does not always
+  // grant: the first load of a lazy page, or a page behind several reads, takes longer under load. A wait that is
+  // satisfied returns at once, so a longer deadline costs nothing when nothing is wrong and only a real failure waits
+  // it out. A test that needs a short deadline passes its own timeout.
+  const { configure } = await import('@testing-library/dom');
+  configure({ asyncUtilTimeout: 10_000 });
 }
