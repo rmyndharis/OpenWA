@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Dashboard: search inside an open chat from the room header (text via `/search` scoped to that chat, and a calendar day that jumps to a loaded message on that date).
+- Dashboard: an open chat's header has a search button for that chat's stored messages, by text and optionally by day; a day alone jumps to its first loaded message. A hit older than the loaded messages is not scrolled to: the bar asks you to scroll up first (#2129). Thanks @juanbracamonte.
 - MCP: every tool is advertised with a `title`, the name a client shows: the tool name split into words, or the `title` its descriptor sets (#2098). Thanks @sudipta-prodevs.
 - MCP: `MCP_MAX_RESULT_BYTES`, an opt-in cap for clients that put a whole tool result in the model's context. When set, every result, an error answer included, is one text item, cut at that many bytes with a note of its full size, and none is offloaded as a base64 resource; unset or `0`, the default, changes nothing (#2100). Thanks @sudipta-prodevs.
 

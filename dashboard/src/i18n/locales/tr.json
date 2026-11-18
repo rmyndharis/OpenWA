@@ -355,18 +355,11 @@
       "title": "Mesajlarda ara",
       "placeholder": "Ara",
       "date": "Tarihe git",
+      "clearDate": "Tarihi temizle",
       "noDateHits": "O gün yüklenmiş mesaj yok",
+      "notLoaded": "Bu sohbette yüklenmiş mesajlardan daha eski. Daha eski mesajları yüklemek için sohbette yukarı kaydırın.",
       "open": "Sohbette ara"
-    },
-    "slash": {
-      "title": "Hazır yanıtlar",
-      "hint": "Templates sayfasındaki bir şablonu göndermek için /ad yazıp Enter",
-      "placeholder": "Mesaj veya /şablon…",
-      "empty": "Eşleşen şablon yok",
-      "needsVars": "Bu şablonda {{variables}} var — doldurup gönderin",
-      "unknown": "\"{{name}}\" adlı şablon yok"
-    },
-    "draftLabel": "Taslak:"
+    }
   },
   "errorBoundary": {
     "title": "Bir şeyler ters gitti",

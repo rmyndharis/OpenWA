@@ -355,18 +355,11 @@
       "title": "메시지 검색",
       "placeholder": "검색",
       "date": "날짜로 이동",
+      "clearDate": "날짜 지우기",
       "noDateHits": "그날 불러온 메시지 없음",
+      "notLoaded": "이 채팅에 불러온 메시지보다 이전입니다. 채팅에서 위로 스크롤하면 이전 메시지를 불러옵니다.",
       "open": "채팅에서 검색"
-    },
-    "slash": {
-      "title": "빠른 답장",
-      "hint": "Templates 페이지의 템플릿을 보내려면 /이름 입력 후 Enter",
-      "placeholder": "메시지 또는 /템플릿…",
-      "empty": "일치하는 템플릿 없음",
-      "needsVars": "이 템플릿에 {{variables}}가 있습니다 — 채운 뒤 보내세요",
-      "unknown": "\"{{name}}\" 템플릿이 없습니다"
-    },
-    "draftLabel": "임시 저장:"
+    }
   },
   "errorBoundary": {
     "title": "문제가 발생했습니다",

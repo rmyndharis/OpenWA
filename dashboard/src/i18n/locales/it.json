@@ -360,18 +360,11 @@
       "title": "Cerca messaggi",
       "placeholder": "Cerca",
       "date": "Vai alla data",
+      "clearDate": "Cancella data",
       "noDateHits": "Nessun messaggio caricato in quel giorno",
+      "notLoaded": "Precedente ai messaggi caricati in questa chat. Scorri verso l’alto nella chat per caricare i messaggi precedenti.",
       "open": "Cerca nella chat"
-    },
-    "slash": {
-      "title": "Risposte rapide",
-      "hint": "Scrivi /nome e Invio per inviare un template dalla pagina Templates",
-      "placeholder": "Messaggio o /template…",
-      "empty": "Nessun template corrisponde",
-      "needsVars": "Questo template ha {{variables}} — compilale e invia",
-      "unknown": "Nessun template chiamato \"{{name}}\""
-    },
-    "draftLabel": "Bozza:"
+    }
   },
   "errorBoundary": {
     "title": "Qualcosa è andato storto",

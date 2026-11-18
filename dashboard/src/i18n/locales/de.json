@@ -355,18 +355,11 @@
       "title": "Nachrichten suchen",
       "placeholder": "Suchen",
       "date": "Zu Datum springen",
+      "clearDate": "Datum leeren",
       "noDateHits": "Keine geladenen Nachrichten an diesem Tag",
+      "notLoaded": "Älter als die in diesem Chat geladenen Nachrichten. Im Chat nach oben scrollen, um ältere Nachrichten zu laden.",
       "open": "Im Chat suchen"
-    },
-    "slash": {
-      "title": "Schnellantworten",
-      "hint": "/name und Enter sendet eine Vorlage aus Templates",
-      "placeholder": "Nachricht oder /vorlage…",
-      "empty": "Keine passende Vorlage",
-      "needsVars": "Diese Vorlage hat {{variables}} — bitte ausfüllen und senden",
-      "unknown": "Keine Vorlage namens „{{name}}“"
-    },
-    "draftLabel": "Entwurf:"
+    }
   },
   "errorBoundary": {
     "title": "Etwas ist schiefgelaufen",

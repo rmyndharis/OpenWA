@@ -54,6 +54,7 @@ import {
   isRenderableMessage,
   liveMessageMetadata,
   stripMentionDelimiters,
+  timestampOf,
   unacknowledgedIncomingIds,
   type ChatMessageView,
   type MessageMedia,
@@ -64,7 +65,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
 import { GlobalSearch } from '../components/GlobalSearch';
-import { RoomSearch } from '../components/chats/RoomSearch';
+import { RoomSearch, type DayJump } from '../components/chats/RoomSearch';
 import {
   useChatMessages,
   useChatMessagesActions,
@@ -238,6 +239,7 @@ export function Chats() {
   const [showNewChat, setShowNewChat] = useState<boolean>(false);
   const [roomMenuOpen, setRoomMenuOpen] = useState<boolean>(false);
   const [roomSearchOpen, setRoomSearchOpen] = useState(false);
+  const roomSearchButtonRef = useRef<HTMLButtonElement | null>(null);
   const roomMenuRef = useRef<HTMLDivElement | null>(null);
   const roomMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   // The group whose info dialog is open, from its row's menu or from the open room's.
@@ -284,7 +286,8 @@ export function Chats() {
   const contactToggleRef = useRef<HTMLButtonElement | null>(null);
   const closeContactInfo = () => {
     setContactInfoFor('');
-    contactToggleRef.current?.focus();
+    // The in-chat search takes the header's place, toggle included: its field is then the room's nearest control.
+    (contactToggleRef.current ?? chatPageRef.current?.querySelector<HTMLElement>('.room-search-fields input'))?.focus();
   };
 
   // Chats/Channels/Status tab selection. Switching tabs closes whatever conversation is open so a
@@ -355,6 +358,18 @@ export function Chats() {
     roomSearchChatRef.current = activeChat?.id ?? null;
     if (roomSearchOpen) setRoomSearchOpen(false);
   }
+  // Closing the search unmounts the field that held focus, and the button that opened it is drawn again only then.
+  // Focus goes back to that button once it is there, unless something else on the page holds it: the composer the
+  // key was pressed in, the row of the chat opened instead, a dialog.
+  const roomSearchWasOpen = useRef(false);
+  useLayoutEffect(() => {
+    const closed = roomSearchWasOpen.current && !roomSearchOpen;
+    roomSearchWasOpen.current = roomSearchOpen;
+    if (!closed) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    roomSearchButtonRef.current?.focus();
+  }, [roomSearchOpen]);
 
   const {
     data: messages = [],
@@ -1512,27 +1527,29 @@ export function Chats() {
     [switchTab, showWarningToast, t],
   );
 
-  // Date-only room search: scroll to the first loaded message that day (API needs `q` for text search).
-  const handleRoomJumpToDate = useCallback(
-    (bounds: { dateFrom: number; dateTo: number }) => {
-      if (!activeChat) return false;
-      const msg = messages.find(m => {
-        if (typeof m.timestamp !== 'number') return false;
-        const ms = m.timestamp * 1000;
-        return ms >= bounds.dateFrom && ms <= bounds.dateTo;
-      });
-      if (!msg?.waMessageId) return false;
-      pendingHitRef.current = {
-        sessionId: selectedSessionId,
-        chatId: activeChat.id,
-        waMessageId: msg.waMessageId,
-        opened: true,
-      };
-      setHitSeq(n => n + 1);
-      return true;
-    },
-    [activeChat, messages, selectedSessionId],
-  );
+  // The in-chat search scrolls the open thread itself. Its chat is the one on screen, so a hit needs none of the list
+  // lookup a sidebar hit goes through, and only a row the thread has drawn can be scrolled to: false says none matched.
+  const scrollToRow = (matches: (row: HTMLElement) => boolean): boolean => {
+    const rows = messagesContainerRef.current?.querySelectorAll<HTMLElement>('[data-scroll-anchor]');
+    const row = Array.from(rows ?? []).find(matches);
+    row?.scrollIntoView({ block: 'center' });
+    return row !== undefined;
+  };
+
+  // The day jump of the in-chat search (the API needs text to search, so a day alone is answered from the thread).
+  // It reads the rows the thread draws, dated as the thread dates them, so it lands on the row under that day's
+  // separator. A day with no such row is either further back than what is loaded, which scrolling up fetches, or one
+  // the chat has no message of.
+  const handleRoomJumpToDate = (bounds: { dateFrom: number; dateTo: number }): DayJump => {
+    const drawn = messages.filter(isRenderableMessage);
+    const first = drawn.find(m => {
+      const ms = timestampOf(m) * 1000;
+      return ms >= bounds.dateFrom && ms <= bounds.dateTo;
+    });
+    if (first && scrollToRow(row => row.dataset.scrollAnchor === first.id)) return 'shown';
+    const beforeLoaded = drawn.length === 0 || bounds.dateTo < timestampOf(drawn[0]) * 1000;
+    return hasMoreMessages && beforeLoaded ? 'older' : 'none';
+  };
 
   const handleSearchHit = useCallback(
     async (hit: SearchHit) => {
@@ -2096,6 +2113,9 @@ export function Chats() {
       if (document.querySelector('[role="dialog"], [role="menu"]')) return;
       if (activeStatusContactId !== null) setActiveStatusContactId(null);
       else if (activeChannel) setActiveChannel(null);
+      // The in-chat search is the last thing opened in the room, so it goes first. Its own handler takes the key
+      // only while focus is inside the bar.
+      else if (activeChat && roomSearchOpen) setRoomSearchOpen(false);
       else if (activeChat && showContactInfo) {
         setContactInfoFor('');
         contactToggleRef.current?.focus();
@@ -2106,7 +2126,7 @@ export function Chats() {
     };
     document.addEventListener('keydown', closeOpenViewOnEscape);
     return () => document.removeEventListener('keydown', closeOpenViewOnEscape);
-  }, [activeStatusContactId, activeChannel, activeChat, showContactInfo, showNewChat]);
+  }, [activeStatusContactId, activeChannel, activeChat, roomSearchOpen, showContactInfo, showNewChat]);
 
   // Image and sticker media items for the lightbox, in render order (an archived sticker opens in its own viewer
   // too, see ArchivedMediaPreview). `getMediaSrc` reconstructs a usable src
@@ -2275,10 +2295,7 @@ export function Chats() {
                       sessionId={selectedSessionId}
                       chatId={activeChat.id}
                       onClose={() => setRoomSearchOpen(false)}
-                      onHit={hit => {
-                        setRoomSearchOpen(false);
-                        void handleSearchHit(hit);
-                      }}
+                      onHit={hit => scrollToRow(row => row.dataset.waMessageId === hit.waMessageId)}
                       onJumpToDate={handleRoomJumpToDate}
                     />
                   ) : (
@@ -2317,18 +2334,23 @@ export function Chats() {
                       </button>
 
                       <div className="room-header-actions">
-                        <button
-                          type="button"
-                          className="icon-btn"
-                          onClick={() => {
-                            setRoomMenuOpen(false);
-                            setRoomSearchOpen(true);
-                          }}
-                          title={t('chats.roomSearch.open')}
-                          aria-label={t('chats.roomSearch.open')}
-                        >
-                          <Search size={22} />
-                        </button>
+                        {/* GET /search needs the operator role, so a read-only key is not offered it, as with the
+                            sidebar's message search. */}
+                        {canWrite && (
+                          <button
+                            ref={roomSearchButtonRef}
+                            type="button"
+                            className="icon-btn"
+                            onClick={() => {
+                              setRoomMenuOpen(false);
+                              setRoomSearchOpen(true);
+                            }}
+                            title={t('chats.roomSearch.open')}
+                            aria-label={t('chats.roomSearch.open')}
+                          >
+                            <Search size={22} />
+                          </button>
+                        )}
                         <div className="room-menu" ref={roomMenuRef}>
                           <button
                             ref={roomMenuTriggerRef}

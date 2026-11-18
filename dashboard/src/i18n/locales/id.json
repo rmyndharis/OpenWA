@@ -355,18 +355,11 @@
       "title": "Cari pesan",
       "placeholder": "Cari",
       "date": "Lompat ke tanggal",
+      "clearDate": "Hapus tanggal",
       "noDateHits": "Tidak ada pesan termuat pada hari itu",
+      "notLoaded": "Lebih lama dari pesan yang termuat di chat ini. Gulir ke atas di chat untuk memuat pesan lama.",
       "open": "Cari di chat"
-    },
-    "slash": {
-      "title": "Balasan cepat",
-      "hint": "Ketik /nama lalu Enter untuk mengirim template dari halaman Templates",
-      "placeholder": "Pesan atau /template…",
-      "empty": "Tidak ada template yang cocok",
-      "needsVars": "Template ini punya {{variables}} — isi lalu kirim",
-      "unknown": "Tidak ada template bernama \"{{name}}\""
-    },
-    "draftLabel": "Draf:"
+    }
   },
   "errorBoundary": {
     "title": "Terjadi kesalahan",

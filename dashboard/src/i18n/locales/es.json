@@ -358,20 +358,13 @@
     },
     "roomSearch": {
       "title": "Buscar mensajes",
-      "placeholder": "Busca",
+      "placeholder": "Buscar",
       "date": "Ir a la fecha",
+      "clearDate": "Borrar fecha",
       "noDateHits": "No hay mensajes cargados ese día",
+      "notLoaded": "Es anterior a los mensajes cargados en este chat. Desplázate hacia arriba en el chat para cargar mensajes anteriores.",
       "open": "Buscar en el chat"
-    },
-    "slash": {
-      "title": "Respuestas rápidas",
-      "hint": "Escribí /nombre y Enter para enviar un template de la página Templates",
-      "placeholder": "Mensaje o /template…",
-      "empty": "Ningún template coincide",
-      "needsVars": "Este template tiene {{variables}} — completalas y enviá",
-      "unknown": "No hay template llamado \"{{name}}\""
-    },
-    "draftLabel": "Borrador:"
+    }
   },
   "errorBoundary": {
     "title": "Algo salió mal",

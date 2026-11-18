@@ -360,18 +360,11 @@
       "title": "Rechercher des messages",
       "placeholder": "Rechercher",
       "date": "Aller à la date",
+      "clearDate": "Effacer la date",
       "noDateHits": "Aucun message chargé ce jour-là",
+      "notLoaded": "Plus ancien que les messages chargés dans cette discussion. Faites défiler la discussion vers le haut pour charger des messages plus anciens.",
       "open": "Rechercher dans la discussion"
-    },
-    "slash": {
-      "title": "Réponses rapides",
-      "hint": "Tapez /nom puis Entrée pour envoyer un modèle de la page Templates",
-      "placeholder": "Message ou /modèle…",
-      "empty": "Aucun modèle ne correspond",
-      "needsVars": "Ce modèle a des {{variables}} — complétez-les puis envoyez",
-      "unknown": "Aucun modèle nommé « {{name}} »"
-    },
-    "draftLabel": "Brouillon :"
+    }
   },
   "errorBoundary": {
     "title": "Une erreur est survenue",

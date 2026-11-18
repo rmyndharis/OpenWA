@@ -14,15 +14,21 @@
   min-width: 0;
 }
 
-/* room-back is hidden on desktop (list stays visible); search still needs a close control. */
-.chats-page .room-search .room-back {
-  display: inline-flex;
+/* The bar takes the place of the room header, so this is the one control that brings the header back. It has a class
+   of its own, not the room's Back button class: that one is hidden in the two-pane layout. Sized and inset as that
+   button is, over the shared icon button's 40px whichever stylesheet loads last. */
+.chats-page .room-search .room-search-close {
+  width: 36px;
+  height: 36px;
+  margin-inline-start: -0.5rem;
 }
 
 .chats-page .room-search-title {
+  flex: 1;
+  min-width: 0;
   font-size: 1rem;
   font-weight: 500;
-  color: var(--chat-text);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -35,43 +41,7 @@
   min-width: 0;
 }
 
-.chats-page .room-search-date-btn {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.25rem;
-  height: 2.25rem;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--chat-meta);
-  cursor: pointer;
-  outline: none;
-}
-
-.chats-page .room-search-date-btn:hover,
-.chats-page .room-search-date-btn.has-day {
-  color: var(--chat-accent-text);
-  background: color-mix(in srgb, var(--chat-accent) 12%, transparent);
-}
-
-.chats-page .room-search-date-btn:focus-visible {
-  color: var(--chat-accent-text);
-  background: color-mix(in srgb, var(--chat-accent) 12%, transparent);
-  box-shadow:
-    0 0 0 1px var(--focus-ring),
-    0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
-}
-
-.chats-page .room-search-date-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
+/* Bordered and ringed as the sidebar's search field is (.chat-search-input in Chats.css). */
 .chats-page .room-search-input-wrap {
   flex: 1;
   min-width: 0;
@@ -80,9 +50,10 @@
   gap: 0.375rem;
   height: 2.25rem;
   padding-inline: 0.75rem;
+  box-sizing: border-box;
   border-radius: 999px;
-  background: var(--chat-composer-bg, var(--chat-panel-2, var(--chat-panel)));
-  border: 1px solid var(--chat-divider);
+  background: var(--chat-panel);
+  border: 1px solid var(--control-border);
   transition:
     border-color 0.15s,
     box-shadow 0.15s;
@@ -105,23 +76,17 @@
   min-width: 0;
   border: none;
   background: transparent;
-  color: var(--chat-text);
+  color: var(--text-primary);
+  font-family: inherit;
   font-size: 0.875rem;
   outline: none;
 }
 
-.chats-page .room-search-clear {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.5rem;
-  height: 1.5rem;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--chat-meta);
-  cursor: pointer;
+/* The day is the browser's own date field, in the same shell as the text field and as wide as its content: it is
+   drawn, takes Tab, and shows the day it holds. */
+.chats-page .room-search-day,
+.chats-page .room-search-day .room-search-input {
+  flex: none;
 }
 
 .chats-page .room-search-results {
@@ -135,6 +100,18 @@
   border: 1px solid var(--chat-divider);
   border-radius: 12px;
   box-shadow: var(--shadow-lg);
+}
+
+/* Why the thread did not move. It stays in view at the foot of the list while the hits above it scroll; the line
+   over it is a shadow, so it falls on the last hit's own border instead of doubling it. */
+.chats-page .room-search-notice {
+  position: sticky;
+  bottom: 0;
+  padding: 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  background: var(--chat-panel);
+  box-shadow: 0 -1px 0 var(--chat-divider);
 }
 
 .chats-page .room-search-state {
@@ -155,7 +132,7 @@
   text-align: start;
   cursor: pointer;
   font: inherit;
-  color: var(--chat-text);
+  color: var(--text-primary);
 }
 
 .chats-page .room-search-hit:hover,

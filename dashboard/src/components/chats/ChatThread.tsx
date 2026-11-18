@@ -35,6 +35,7 @@ import {
   isRenderableMessage,
   resolveMentions,
   senderKey,
+  timestampOf,
   type ChatMessageView,
 } from '../../utils/chatMessages';
 import { contactCards, contactSnippet, isVCardBody } from '../../utils/vcard';
@@ -55,10 +56,6 @@ const senderColor = (name: string): string => {
   for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
   return `var(--chat-sender-${(Math.abs(hash) % SENDER_COLORS) + 1})`;
 };
-
-/** A message's time in epoch seconds: the WhatsApp timestamp, else when the gateway stored it. */
-const timestampOf = (msg: ChatMessageView): number =>
-  msg.timestamp || Math.floor(new Date(msg.createdAt).getTime() / 1000);
 
 const sameDay = (a: number, b: number): boolean =>
   new Date(a * 1000).toDateString() === new Date(b * 1000).toDateString();
