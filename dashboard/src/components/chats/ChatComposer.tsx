@@ -143,7 +143,8 @@ function ChatComposer({
   const [slashHighlight, setSlashHighlight] = useState(0);
   // The draft the picker is closed for: the one Escape or its close button dismissed it on, or the text an insert
   // left in the field. The draft itself rather than a flag, so that a template whose text is one slash word
-  // (`/start`) does not open the picker again and can be sent; any other draft opens it.
+  // (`/start`) does not open the picker again and can be sent; any other draft opens it. A refused send gives the draft
+  // back as it went out: closed, if it had been.
   const [slashClosedFor, setSlashClosedFor] = useState<string | null>(null);
   // Where the first placeholder of the template just inserted is, to be selected once the field holds the text.
   const [unfilled, setUnfilled] = useState<{ start: number; end: number } | null>(null);
@@ -397,6 +398,8 @@ function ChatComposer({
 
     const textToSend = messageInput.trim();
     if (!textToSend && !attachment) return;
+    // The text the picker was closed for, if it goes out in this send: a refusal gives it back as it was.
+    const closedAtSend = slashClosedFor === messageInput;
 
     // With focus in the composer form, the field takes it before the Send button disables (it does once the text is
     // cleared): the browser drops focus from a disabled control to the page, and the next message would be typed
@@ -503,7 +506,10 @@ function ChatComposer({
       showErrorToast(t('chats.errors.send'), err instanceof Error ? err.message : undefined);
       updateMessage(selectedSessionId, activeChat.id, tempId, { status: 'failed' });
       // The field was emptied as Send was pressed (text next to audio was left in it).
-      if (textToSend && !attachmentIsAudio) onSendFailed?.(selectedSessionId, activeChat.id, messageInput);
+      if (textToSend && !attachmentIsAudio) {
+        if (closedAtSend) setSlashClosedFor(messageInput);
+        onSendFailed?.(selectedSessionId, activeChat.id, messageInput);
+      }
     } finally {
       setSendingByThread(prev => {
         const nextCount = (prev[threadKey] ?? 0) - 1;

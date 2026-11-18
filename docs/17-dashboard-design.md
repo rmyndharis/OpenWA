@@ -458,7 +458,8 @@ multi-line and grows with its draft up to five lines: Enter sends, Shift+Enter b
 draft that is one word starting with `/` opens a picker of the session's templates whose name
 matches it (`utils/templateSlash.ts`), for a key that can write and with no file staged. Enter, the
 Send button or a click puts the highlighted template's text in the field, to be edited and sent
-like any other message; Escape or the picker's close button leaves the draft to be sent as typed.
+like any other message; Escape or the picker's close button leaves the draft to be sent as typed,
+and a send the gateway refuses gives the draft back with the picker still closed for it.
 A template with placeholders such as `{{name}}` is not sent exactly as inserted, and the composer
 says the placeholders are to be filled in for as long as one of them is left in the draft. A thread
 at its bottom stays there when the composer under it changes height, and a thread the page scrolled
