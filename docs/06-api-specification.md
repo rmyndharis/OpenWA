@@ -5603,7 +5603,7 @@ Get message statistics over a period: time series, counts by type, by session, a
   ],
   "byType": { "chat": 180, "image": 24, "unknown": 3 },
   "bySession": [{ "sessionId": "9f1c…", "name": "support-line", "sent": 200, "received": 140 }],
-  "topChats": [{ "chatId": "6281234567890@c.us", "messageCount": 320 }]
+  "topChats": [{ "chatId": "6281234567890@c.us", "chatName": "Customer A", "messageCount": 320 }]
 }
 ```
 
@@ -5629,7 +5629,9 @@ Get statistics for a single session: identity, message counts, top chats, and 24
 {
   "session": { "id": "9f1c…", "name": "support-line", "status": "ready" },
   "messages": { "sent": 200, "received": 140, "today": 18, "failed": 1 },
-  "topChats": [{ "chatId": "6281234567890@c.us", "count": 64, "lastActive": "2026-06-25 11:42:07" }],
+  "topChats": [
+    { "chatId": "6281234567890@c.us", "chatName": "Customer A", "count": 64, "lastActive": "2026-06-25 11:42:07" }
+  ],
   "hourlyActivity": [
     { "hour": 0, "sent": 0, "received": 0 },
     { "hour": 1, "sent": 3, "received": 2 }
