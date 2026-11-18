@@ -94,6 +94,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard: a sidebar label that the browser's text size makes too long ends in an ellipsis and carries its text in a title, where it was cut mid-letter from 125% text size in some languages and from 150% in English.
 - PHP SDK: an empty request body is sent as `{}` instead of `[]`, which the gateway refused with `400` on config, proxy, webhook and template updates.
 - Java SDK: an API error with a JSON body can be Java-serialized, where it threw `NotSerializableException` for the Gson body.
+- PHP SDK: the `mentions`, poll `options`, status `recipients`, webhook `events` and `filters`, redrive `ids` and `messageIds` lists are sent as JSON arrays when their keys have gaps (`array_filter`, `array_unique`), which the gateway refused with `400`.
+- Python SDK: the call link `startTime` is typed `int`, as the gateway refuses a fraction with `400`; the PHP docblock and the Go and Java field comments say a whole number.
+- Python SDK: the source distribution ships `tests/conftest.py`, so the tests run from the unpacked archive.
 
 ### Documentation
 
