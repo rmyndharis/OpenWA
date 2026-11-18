@@ -96,6 +96,37 @@ export async function revokeInviteInPage(chatId: string): Promise<{ status: numb
 }
 
 /**
+ * GroupChat.getInviteCode, run IN-PAGE with the status mapping the revoke has. The library reads every rejection named
+ * `ServerStatusCodeError` as "no code", which the adapter read as missing admin rights: a rate limit or a server error,
+ * which only means the same request may pass later, was a 403, and a refusal of the Mex class
+ * (`MexServerStatusCodeError`, which carries a status too) was a bare 500. This answers the status WhatsApp gave, with
+ * the code on a 2xx. A build with no job to read the code answers `'missing'` before anything was asked, and the caller
+ * runs the library's own call as it always did. A document with no `require` at all is a page that is reloading, not a
+ * build without the job, and that failure is let through. Any other rejection is rethrown.
+ */
+export async function readInviteCodeInPage(chatId: string): Promise<{ status: number; code?: string } | 'missing'> {
+  type CodeJob = { fetchMexGroupInviteCode: (id: string) => Promise<{ code?: string } | string | undefined> };
+  const w = window as unknown as { require: (m: string) => unknown };
+  let job: Partial<CodeJob> | undefined;
+  try {
+    job = w.require('WAWebMexFetchGroupInviteCodeJob') as Partial<CodeJob> | undefined;
+  } catch (err) {
+    if (typeof w.require !== 'function') throw err;
+  }
+  if (typeof job?.fetchMexGroupInviteCode !== 'function') return 'missing';
+  try {
+    const res = await job.fetchMexGroupInviteCode(chatId);
+    return { status: 200, code: typeof res === 'string' ? res : res?.code };
+  } catch (err) {
+    const refusal = err as { name?: unknown; status?: unknown } | undefined;
+    if (typeof refusal?.name === 'string' && refusal.name.endsWith('ServerStatusCodeError')) {
+      return { status: typeof refusal.status === 'number' ? refusal.status : 403 };
+    }
+    throw err;
+  }
+}
+
+/**
  * Whether the page still exports the invitation sender that `GroupChat.addParticipants` calls for a participant whose
  * privacy settings allow only an invitation: `sendGroupInviteMessage` of `WAWebChatSendMessages`. The build the gateway
  * selects today exports it from `WAWebChatSendGroupInviteMessage` instead, taking one options object where the library
@@ -513,10 +544,27 @@ export class WwebjsGroups {
 
   async getGroupInviteCode(groupId: string): Promise<string> {
     const chat = await this.requireGroupChat(groupId, 'getGroupInviteCode');
+    // Read in the page, so that WhatsApp's own status decides the answer: a rate limit or a server error is a 503, a
+    // refusal a 403. A page with no job to read it with is the library's own call, as it always was.
+    const answer = await withPageWrite(this.host, 'getGroupInviteCode', () =>
+      this.page().evaluate(readInviteCodeInPage, groupId),
+    );
+    let inviteCode: string | undefined;
+    if (answer === 'missing') {
+      inviteCode = await withPageWrite(this.host, 'getGroupInviteCode', () => chat.getInviteCode());
+    } else {
+      settleWriteStatus(answer.status, {
+        request: `the invite code read for group ${groupId}`,
+        nothing: 'gave no code',
+        refused: refusedWith =>
+          `Failed to get the invite code for group ${groupId}: WhatsApp refused it (${refusedWith}), as when admin ` +
+          'rights are required',
+      });
+      inviteCode = answer.code;
+    }
     // Typed Promise<string>, but WA Web yields nothing when the account is not an admin of the
     // group — and String(undefined) is the literal 'undefined', which the caller renders as the
     // link "https://chat.whatsapp.com/undefined". Same refusal contract as setDescription.
-    const inviteCode = await withPageWrite(this.host, 'getGroupInviteCode', () => chat.getInviteCode());
     if (!inviteCode) {
       throw new EngineRefusedError(`Failed to get the invite code for group ${groupId} — admin rights required`);
     }

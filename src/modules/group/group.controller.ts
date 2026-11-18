@@ -62,6 +62,11 @@ const WWJS_STATUS_503 =
   ' On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): ' +
   'nothing was changed, so retry after a pause.';
 
+// The invite code read is sent in the page the same way, so its status decides the answer too.
+const WWJS_INVITE_READ_503 =
+  ' On whatsapp-web.js, also when WhatsApp answers the read with a rate limit or a server error (423, 429 or 5xx): ' +
+  'no code was returned, so retry after a pause.';
+
 // The subject, description and picture are the group's info: WhatsApp lets an admin edit them and, unless the group
 // restricts its info to admins, any member too. The settings and the invite routes below stay admin-only.
 const INFO_EDIT_403 =
@@ -728,7 +733,7 @@ export class GroupController {
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiResponse({ status: 200, description: 'Group invite code', type: GroupInviteCodeResponseDto })
   @ApiResponse({ status: 403, description: INVITE_CODE_403 })
-  @ApiResponse({ status: 503, description: INVITE_CODE_503 })
+  @ApiResponse({ status: 503, description: INVITE_CODE_503 + WWJS_INVITE_READ_503 })
   @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })

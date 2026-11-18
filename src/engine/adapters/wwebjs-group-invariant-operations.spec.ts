@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import * as wwebjs from 'whatsapp-web.js';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
 import { readChatModels } from './wwebjs-chats';
+import { readInviteCodeInPage } from './wwebjs-groups';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
@@ -58,7 +59,8 @@ describe('WhatsAppWebJsAdapter group operations when groupMetadata.update hits i
         expect(arg).toEqual([GROUP]);
         return Promise.resolve([localGroupModel]);
       }
-      return Promise.resolve(undefined);
+      // The page has no job to read the invite code with, so the library's own call (spied above) answers.
+      return Promise.resolve(fn === readInviteCodeInPage ? 'missing' : undefined);
     });
 
     const adapter = readyAdapter({ getChatById, pupPage: { evaluate } });

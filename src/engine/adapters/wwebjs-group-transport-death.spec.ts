@@ -1,5 +1,5 @@
 import type { Client } from 'whatsapp-web.js';
-import { WwebjsGroups, readInviteSenderInPage } from './wwebjs-groups';
+import { WwebjsGroups, readInviteCodeInPage, readInviteSenderInPage } from './wwebjs-groups';
 import { runWriteInPage } from './wwebjs-page-writes';
 import { createLogger } from '../../common/services/logger.service';
 import { type WwebjsEngineHost } from './wwebjs-host';
@@ -84,11 +84,17 @@ describe('group writes classify a dead page', () => {
       info: {},
       getChatById:
         chat instanceof Promise ? jest.fn(() => chat) : jest.fn().mockResolvedValue({ isGroup: true, ...chat }),
-      // The page still has the library's invitation sender and no job for the group writes, so a write tried through
-      // the chat is the library's own call. A row about the page call overrides it.
+      // The page still has the library's invitation sender and no job for the group writes or the invite code, so a
+      // call tried through the chat is the library's own. A row about the page call overrides it.
       pupPage: {
         evaluate: jest.fn((fn: unknown) =>
-          Promise.resolve(fn === readInviteSenderInPage ? true : fn === runWriteInPage ? 'missing' : undefined),
+          Promise.resolve(
+            fn === readInviteSenderInPage
+              ? true
+              : fn === runWriteInPage || fn === readInviteCodeInPage
+                ? 'missing'
+                : undefined,
+          ),
         ),
       },
       ...clientMethods,
@@ -135,6 +141,8 @@ describe('group writes classify a dead page', () => {
     ['setGroupInfoAdminsOnly', g => g.setGroupInfoAdminsOnly(GROUP, true)],
     ['setGroupMemberAddMode', g => g.setGroupMemberAddMode(GROUP, 'admins')],
     ['setGroupPicture', g => g.setGroupPicture(GROUP, IMAGE)],
+    // The invite code is read in-page too.
+    ['getGroupInviteCode', g => g.getGroupInviteCode(GROUP)],
   ];
 
   // revokeGroupInviteCode runs its write in-page through pupPage.evaluate, not a chat method.

@@ -3141,7 +3141,7 @@ Get the group invite code and full invite link. The code is a transferable join 
 }
 ```
 
-**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the read with a rate limit or a server error (423, 429 or 5xx): no code was returned, retry after a pause
 
 #### POST /api/sessions/:sessionId/groups
 

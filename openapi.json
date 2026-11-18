@@ -12124,7 +12124,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer the invite-code query — retry shortly. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer the invite-code query — retry shortly. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the read with a rate limit or a server error (423, 429 or 5xx): no code was returned, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {

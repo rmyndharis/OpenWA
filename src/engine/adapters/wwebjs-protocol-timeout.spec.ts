@@ -576,7 +576,12 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
       [
         'group invite code',
         h => groups(h).getGroupInviteCode(GROUP),
-        e => ({ getChatById: resolved(groupChat({ getInviteCode: failing(e) })) }),
+        e => ({ getChatById: resolved(groupChat({ getInviteCode: failing(e) })), ...noPageJob() }),
+      ],
+      [
+        'group invite code, the page call',
+        h => groups(h).getGroupInviteCode(GROUP),
+        e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
       ['group lookup of a write', h => groups(h).setGroupSubject(GROUP, 'Subject'), e => ({ getChatById: failing(e) })],
       [

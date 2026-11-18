@@ -1729,8 +1729,10 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
   });
 
   describe('group invite code', () => {
+    // The page has no job to read the invite code with, so the library's own call answers.
     const groupChat = (over: Record<string, unknown> = {}) => ({
       getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...over }),
+      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
     });
 
     it('returns the code when WA Web supplies one', async () => {
@@ -10674,6 +10676,7 @@ describe('WhatsAppWebJsAdapter per-action log lines', () => {
       'getGroupInviteCode',
       () => ({
         getChatById: jest.fn().mockResolvedValue({ isGroup: true, getInviteCode: jest.fn().mockResolvedValue('C0DE') }),
+        pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
       }),
       a => a.getGroupInviteCode(GROUP),
       '120363777000',
