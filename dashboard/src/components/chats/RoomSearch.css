@@ -151,7 +151,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* Message text somebody else wrote: cut by its own direction, so a Latin snippet in an Arabic page keeps its start. */
+  /* Message text somebody else wrote: cut by its own direction, so a Latin snippet in an Arabic page keeps its start.
+     Its box is as wide as the text, so the text stays at the start edge the page puts it, under the date, and not at
+     the other edge of the stretched row (see .global-search-hit-snippet). */
+  width: fit-content;
+  max-width: 100%;
   unicode-bidi: plaintext;
 }
 

@@ -17,6 +17,12 @@ const FIT = { width: 'fit-content', 'max-width': '100%' };
 
 const SHOWN: readonly Entry[] = [
   ['components/GlobalSearch.css', '.global-search-hit-snippet', 'the excerpt of a found message', FIT],
+  [
+    'components/chats/RoomSearch.css',
+    '.chats-page .room-search-hit-snippet',
+    'the excerpt of a message found in a chat',
+    FIT,
+  ],
   ['pages/Dashboard.css', '.dashboard .session-name', 'a session name in the sessions table', { width: 'fit-content' }],
   ['pages/Sessions.css', '.sessions-page .card-header h3', 'a session name on its card'],
   [
