@@ -52,7 +52,23 @@ export function isExecutionContextDestroyedError(reason: string): boolean {
  * the inject that would take over, so the launch rejects with one of these shapes as it always did (#1081).
  */
 function isNavigationShapedInitRejection(reason: string): boolean {
-  return isExecutionContextDestroyedError(reason) || /\b(?:window|w)\.require is not a function/i.test(reason);
+  return isExecutionContextDestroyedError(reason) || MISSING_REQUIRE_PATTERN.test(reason);
+}
+
+/** What V8 says when a page function reads `require` on a document WhatsApp Web has not booted, under either spelling. */
+const MISSING_REQUIRE_PATTERN = /\b(?:window|w)\.require is not a function/i;
+
+/**
+ * Whether a page function failed on its first statement, a `require` of a document that has none yet. Nothing was
+ * asked of WhatsApp before that, which is what a write that does not converge needs to know to answer the retryable
+ * 409: any other shape of a navigation, a context destroyed while the call ran, leaves the outcome unknown.
+ */
+export function isMissingRequireError(error: unknown): boolean {
+  if (error instanceof HttpException) {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return !message.startsWith(CAPTURED_PAGE_ERROR_PREFIX) && MISSING_REQUIRE_PATTERN.test(message);
 }
 
 /** What whatsapp-web.js throws, as a bare string, when its wait for WhatsApp Web to boot runs out of authTimeoutMs. */

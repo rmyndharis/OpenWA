@@ -315,6 +315,15 @@ describe('a call that a page navigation lands on', () => {
       },
       reloads,
     ],
+    [
+      'revokeInviteInPage, which asks nothing of WhatsApp before its first require',
+      w => {
+        w.client.getChatById = jest.fn().mockResolvedValue(group());
+        w.runOnPage(revokeInviteInPage);
+        return w.adapter.revokeGroupInviteCode(GROUP);
+      },
+      reloads,
+    ],
     ...(
       [
         ['a subject', w => w.adapter.setGroupSubject(GROUP, 'name')],
@@ -368,13 +377,13 @@ describe('a call that a page navigation lands on', () => {
         /^Cannot read properties of undefined/,
       ],
       [
-        'revokeGroupInviteCode (the revoke)',
+        'revokeGroupInviteCode (a failure after the call began)',
         w => {
           w.client.getChatById = jest.fn().mockResolvedValue(group());
-          w.runOnPage(revokeInviteInPage);
+          w.pupPage.evaluate.mockImplementation(w.fail('resetGroupInviteCode'));
           return w.adapter.revokeGroupInviteCode(GROUP);
         },
-        /^w\.require is not a function$/,
+        /^Cannot read properties of undefined/,
       ],
       [
         'leaveGroup',

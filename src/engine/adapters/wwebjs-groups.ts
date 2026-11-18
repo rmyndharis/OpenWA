@@ -26,7 +26,12 @@ import {
   withPageWrite,
   reportPageDeath,
 } from './wwebjs-host';
-import { isNavigationError, isProtocolTimeout } from './wwebjs-lifecycle';
+import {
+  PAGE_RELOADING_MESSAGE,
+  isMissingRequireError,
+  isNavigationError,
+  isProtocolTimeout,
+} from './wwebjs-lifecycle';
 import { listChats, recoverGroupChatById } from './wwebjs-chats';
 import { type EvaluatePage, type PageWrite, runWriteInPage, settleWriteStatus } from './wwebjs-page-writes';
 
@@ -523,7 +528,13 @@ export class WwebjsGroups {
     await this.requireGroupChat(groupId, 'revokeGroupInviteCode');
     const answer = await reportPageDeath(this.host, 'revokeGroupInviteCode', () =>
       this.page().evaluate(revokeInviteInPage, groupId),
-    );
+    ).catch((error: unknown) => {
+      // The page function reads `require` first, so a document that has none ends it before anything was asked of
+      // WhatsApp: the one failure here that proves the code was not rotated, and so the retryable 409. Every other
+      // failure, a navigation that cut the call included, leaves the outcome unknown and keeps the raw error.
+      if (isMissingRequireError(error)) throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
+      throw error;
+    });
     // A build with no job to reset a code: nothing was asked of WhatsApp, so this is no refusal and no failure.
     if (answer === 'missing') {
       throw new EngineNotSupportedError('revokeGroupInviteCode(no reset job on this build)');
