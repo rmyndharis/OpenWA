@@ -778,7 +778,19 @@ describe('BaileysSessionStore', () => {
       store.upsertChats([{ id: '111@lid' }]); // titleless, lid-keyed
       store.addLidMappings([{ lid: '111@lid', pn: '628999@s.whatsapp.net' }]);
       store.upsertContacts([{ id: '628999@s.whatsapp.net', name: 'Carol' }]);
-      expect(store.listChats()[0].name).toBe('Carol');
+      expect(store.listChats()[0]).toMatchObject({ name: 'Carol', phone: '628999' });
+    });
+
+    it('does not list a privacy id as the name when the phone is known', () => {
+      store.addLidMappings([{ lid: '111@lid', pn: '628999@s.whatsapp.net' }]);
+      store.upsertChats([{ id: '111@lid', name: '111' }]);
+      expect(store.listChats()[0]).toMatchObject({ name: '', phone: '628999' });
+    });
+
+    it('leaves a privacy id with no mapping unnamed and without a phone', () => {
+      store.upsertChats([{ id: '111@lid' }]);
+      expect(store.listChats()[0].name).toBe('');
+      expect(store.listChats()[0].phone).toBeUndefined();
     });
 
     it('uses pushName (notify) when no saved/verified name exists', () => {

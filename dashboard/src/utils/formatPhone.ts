@@ -74,13 +74,36 @@ export function isolateNumber(number: string): string {
   return `${String.fromCodePoint(0x2066)}${number}${String.fromCodePoint(0x2069)}`;
 }
 
+export interface ChatLabel {
+  id: string;
+  name?: string;
+  /** Phone digits of a privacy-id chat, when the session can map it. */
+  phone?: string | null;
+}
+
 /**
- * What a chat is called on its row, in its menu and in a sentence: its name, else the formatted number of a phone id,
- * isolated left to right, else the digits of its id. A privacy id (@lid) is no phone number, so its digits are never
- * formatted as one.
+ * A saved name or a push name. The privacy id's own digits are not one: WhatsApp shows the phone number there.
+ * A label that is only those digits, or only the mapped phone, is not a name either.
  */
-export function chatTitle(chat: { id: string; name?: string }): string {
-  if (chat.name) return chat.name;
-  const phone = formatPhoneForDisplay(chat.id);
+export function savedChatName(chat: ChatLabel): string | undefined {
+  const name = chat.name?.trim();
+  if (!name) return undefined;
+  const [user, host] = chat.id.split('@');
+  const bare = user.split(':')[0];
+  if (host?.split(':')[0] === 'lid' && (name === bare || name === `${bare}@lid`)) return undefined;
+  const phone = chat.phone?.replace(/\D/g, '');
+  if (phone && name.replace(/\D/g, '') === phone) return undefined;
+  return name;
+}
+
+/**
+ * What a chat is called on its row, in its menu and in a sentence: its name, else the formatted number of a phone id
+ * or of the phone a privacy id maps to, isolated left to right, else the digits of its id. A privacy id (@lid) is no
+ * phone number, so its own digits are never formatted as one.
+ */
+export function chatTitle(chat: ChatLabel): string {
+  const name = savedChatName(chat);
+  if (name) return name;
+  const phone = (chat.phone && formatPhoneForDisplay(chat.phone)) || formatPhoneForDisplay(chat.id);
   return phone ? isolateNumber(phone) : chat.id.split('@')[0];
 }

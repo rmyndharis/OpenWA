@@ -100,4 +100,10 @@ test('chatTitle is the name, else the isolated number of a phone id, else the di
   // A privacy id and a group id are digits too, and no phone number.
   assert.equal(chatTitle({ id: '262813461250071@lid', name: '' }), '262813461250071');
   assert.equal(chatTitle({ id: '120363000000000001@g.us', name: '' }), '120363000000000001');
+  // The privacy id's own digits are not a name. The mapped phone is the title, formatted like any other number.
+  assert.equal(
+    chatTitle({ id: '262813461250071@lid', name: '262813461250071', phone: '15550006666' }),
+    isolateNumber('+1 555 000 6666'),
+  );
+  assert.equal(chatTitle({ id: '262813461250071@lid', name: 'Lia', phone: '15550006666' }), 'Lia');
 });

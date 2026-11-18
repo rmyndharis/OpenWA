@@ -1278,9 +1278,13 @@ export class BaileysSessionStore {
     const active = () =>
       Math.max(last?.timestamp ?? 0, ...records.map(r => this.toUnixSeconds(r.conversationTimestamp)));
     if (deletedAt && active() * 1000 <= deletedAt) return null;
+    const phone = parseWaId(id).kind === 'lid' ? (this.resolvePhone(id) ?? undefined) : undefined;
     return {
       id,
-      name: c.name ?? others.find(o => o.name)?.name ?? this.resolveContactName(rawId),
+      // A title that is only the privacy id's own digits is not a name. The phone, when known, is
+      // `phone` so the client can format it the way WhatsApp does, instead of listing the @lid.
+      name: this.chatDisplayName(rawId, [c, ...others]),
+      ...(phone ? { phone } : {}),
       isGroup: rawId.endsWith('@g.us'),
       kind: chatKind(id),
       // From the most recently active record that has one: new messages to a lid-migrated contact
@@ -1461,11 +1465,12 @@ export class BaileysSessionStore {
   /**
    * Best-known display name for a chat id when Baileys gave the chat no title (#369). Prefers the saved
    * contact name, then verifiedName, then pushName (`notify`); for a @lid chat it also tries the contact
-   * behind the resolved phone. Falls back to the raw user-part so a number/lid is never shown as a JID.
+   * behind the resolved phone. A phone-keyed chat with no name falls back to its digits. A privacy id
+   * does not: those digits are not a phone number, and the listing carries the mapped number separately.
    */
   private resolveContactName(id: string): string {
     const direct = this.contactDisplayName(id);
-    if (direct) {
+    if (direct && !this.isLidIdentityLabel(id, direct)) {
       return direct;
     }
     const parsed = parseWaId(id);
@@ -1480,12 +1485,30 @@ export class BaileysSessionStore {
           this.contactDisplayName(pn) ??
           this.contactDisplayName(`${userPart(pn)}@s.whatsapp.net`) ??
           this.contactDisplayName(`${userPart(pn)}@c.us`);
-        if (viaPhone) {
+        if (viaPhone && !this.isLidIdentityLabel(id, viaPhone)) {
           return viaPhone;
         }
       }
+      return '';
     }
     return userPart(id);
+  }
+
+  /** The chat title to list: a real name, else the contact's, else nothing for a privacy id. */
+  private chatDisplayName(id: string, records: Array<{ name?: string | null }>): string {
+    for (const record of records) {
+      const name = record.name?.trim();
+      if (name && !this.isLidIdentityLabel(id, name)) return name;
+    }
+    return this.resolveContactName(id);
+  }
+
+  /** True when the label is only the privacy id itself (`2714…` or `2714…@lid`), which is no name. */
+  private isLidIdentityLabel(id: string, name: string): boolean {
+    const parsed = parseWaId(id);
+    if (parsed.kind !== 'lid') return false;
+    const trimmed = name.trim();
+    return trimmed === parsed.userPart || trimmed === `${parsed.userPart}@lid`;
   }
 
   private contactDisplayName(id: string): string | undefined {

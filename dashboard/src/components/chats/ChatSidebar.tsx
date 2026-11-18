@@ -151,7 +151,7 @@ const ChatListRow = memo(
 
         <div className="chat-item-info">
           <div className="chat-item-top">
-            <span className="chat-item-name" title={chat.name || chat.id}>
+            <span className="chat-item-name" title={chatTitle(chat)}>
               {chatTitle(chat)}
             </span>
             {chat.kind !== 'individual' && chat.kind !== 'unknown' && (
