@@ -87,6 +87,11 @@
   outline: none;
 }
 
+.chats-page .room-search-input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .chats-page .room-search-clear {
   flex-shrink: 0;
   display: inline-flex;
