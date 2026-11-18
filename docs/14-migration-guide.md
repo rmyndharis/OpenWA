@@ -312,7 +312,8 @@ curl -X POST 'http://localhost:2785/api/infra/storage/import' \
 
 The built-in storage (the compose `minio` profile and the dashboard's built-in option) runs
 `pgsty/silo`, a maintained MinIO fork, on the same `openwa_minio-data` volume. An `openwa-minio`
-container created from the older `minio/minio` image keeps running it until it is recreated: on the
+container keeps the image it was created from (the older `minio/minio`, or an earlier `pgsty/silo`
+release) until it is recreated: on the
 compose route run `docker compose --profile minio pull minio && docker compose --profile minio up -d minio`;
 for the dashboard built-in run `docker rm -f openwa-minio`, then restart OpenWA or re-save the
 built-in storage. The recreated dashboard built-in container publishes no host ports: the older one
