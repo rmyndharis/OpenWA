@@ -3085,7 +3085,7 @@ it is hidden by privacy settings.
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/picture
 
-Set the group's picture. The account must be a group admin.
+Set the group's picture. The account must be allowed to edit the group's info: a group admin, or any member where the group leaves its info open to every member.
 
 **Auth:** API key (OPERATOR)
 
@@ -3103,15 +3103,15 @@ Set the group's picture. The account must be a group admin.
 
 #### DELETE /api/sessions/:sessionId/groups/:groupId/picture
 
-Remove the group's picture. The account must be a group admin.
+Remove the group's picture. The account must be allowed to edit the group's info: a group admin, or any member where the group leaves its info open to every member.
 
 **Auth:** API key (OPERATOR)
 
 **Response** `200` — `{ "success": true, "message": "Group picture removed" }`
 
-On whatsapp-web.js, removing a picture that is already absent also answers `200` when the account may edit the group's info (an admin, or a member of a group whose info is open to every member) and WhatsApp reports no picture for the group, so a repeat is safe there.
+Removing a picture that is already absent answers `200` as well: WhatsApp accepts the delete either way, so a repeat is safe on both engines. On whatsapp-web.js the gateway sends the request itself and answers by WhatsApp's status, whatever WhatsApp Web holds for the picture.
 
-**Errors:** `400` the id does not name a group, or the session is not active · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (admin rights required; on whatsapp-web.js also a group with no picture when the account may not edit the group's info or the participant list does not name it, since WhatsApp Web does not tell the two apart) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or the session is not active · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `503` on whatsapp-web.js WhatsApp answered the delete with a rate limit or a server error (nothing was deleted: retry after a pause), or WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### GET /api/sessions/:sessionId/groups/:groupId/invite-code
 
