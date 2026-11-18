@@ -9859,6 +9859,91 @@ describe('BaileysAdapter chat writes keyed to a message (#1891)', () => {
       expect(await adapter.getChats()).toEqual([]);
     });
 
+    // Baileys counts these as received messages, so the chat update carries the message's time, which a chat WhatsApp
+    // deleted reads as a message that brings it back.
+    describe('when a message that is none of its own arrives', () => {
+      const raised = (content: Record<string, unknown>, fromMe = false) => [
+        {
+          id: PHONE,
+          ...(fromMe ? {} : { unreadCount: 1 }),
+          conversationTimestamp: now() + 60,
+          messages: [{ message: { key: { remoteJid: PHONE, fromMe, id: 'X1' }, message: content } }],
+        },
+      ];
+      const persistedDeletion = async (): Promise<number | null | undefined> => {
+        const store = newStore();
+        await store.reload();
+        return store.get('sess-1', PHONE)?.deletedAt;
+      };
+      const getContentType = () =>
+        jest.requireMock<Record<string, jest.Mock>>('@whiskeysockets/baileys').getContentType;
+      beforeEach(() => getContentType().mockImplementation(realGetContentType));
+      afterEach(() => getContentType().mockImplementation(() => 'conversation'));
+
+      const KINDS: Array<[string, Record<string, unknown>]> = [
+        ['an encrypted edit', { secretEncryptedMessage: {} }],
+        ['an encrypted reaction', { encReactionMessage: {} }],
+        ['a pin', { pinInChatMessage: {} }],
+        ['a keep-in-chat toggle', { keepInChatMessage: {} }],
+        ['an album header', { albumMessage: {} }],
+        ['an event RSVP', { encEventResponseMessage: {} }],
+        ['an encrypted comment', { encCommentMessage: {} }],
+      ];
+
+      it.each(KINDS)(
+        'keeps the chat out of the list, with its deletion mark, when %s arrives from a contact',
+        async (_what, content) => {
+          const adapter = await deletedOnPhone();
+          const deletedAt = await persistedDeletion();
+          expect(deletedAt).toEqual(expect.any(Number));
+          fakeSock.fire('chats.update', raised(content));
+          await settle();
+          expect(await adapter.getChats()).toEqual([]);
+          expect(await persistedDeletion()).toBe(deletedAt);
+        },
+      );
+
+      it.each(KINDS)(
+        'keeps the chat out of the list when %s arrives from another device of the account',
+        async (_what, content) => {
+          const adapter = await deletedOnPhone();
+          fakeSock.fire('chats.update', raised(content, true));
+          await settle();
+          expect(await adapter.getChats()).toEqual([]);
+        },
+      );
+
+      it('still applies what else the update carries, a disappearing-messages timer', async () => {
+        const adapter = await deletedOnPhone();
+        fakeSock.fire('chats.update', [{ ...raised({ pinInChatMessage: {} })[0], ephemeralExpiration: 604800 }]);
+        await settle();
+        expect(await adapter.getChats()).toEqual([]);
+        const store = (adapter as unknown as { sessionStore: { getEphemeralExpiration: (id: string) => unknown } })
+          .sessionStore;
+        expect(store.getEphemeralExpiration('628111@c.us')).toBe(604800);
+      });
+
+      it.each([
+        ['a text', { conversation: 'back again' }],
+        [
+          'a text and a fast-ratchet distribution that merged with it',
+          { conversation: 'back', fastRatchetKeySenderKeyDistributionMessage: {} },
+        ],
+      ])('lists the chat again for %s', async (_what, content) => {
+        const adapter = await deletedOnPhone();
+        fakeSock.fire('chats.update', raised(content));
+        await settle();
+        expect(await adapter.getChats()).toEqual([expect.objectContaining({ id: '628111@c.us', unreadCount: 1 })]);
+      });
+
+      it('lists no chat the session never knew for a message that is none of its own', async () => {
+        const adapter = await started(newStore());
+        fakeSock.fire('chats.update', raised({ pinInChatMessage: {} }));
+        await settle();
+        expect(await adapter.getChats()).toEqual([]);
+      });
+    });
+
     it('lets a chat deleted through the API come back with its next message', async () => {
       const adapter = await started(newStore());
       await upsert({ remoteJid: PHONE, fromMe: false, id: 'M1' }, now() - 60);

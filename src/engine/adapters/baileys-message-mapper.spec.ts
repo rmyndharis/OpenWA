@@ -25,7 +25,7 @@ import {
   mapBaileysStatus,
   setBaileysText,
   storedKeyInChatPersisted,
-  withoutNonContentUnread,
+  withoutNonContentMessage,
 } from './baileys-message-mapper';
 import type { Chat, proto } from '@whiskeysockets/baileys';
 
@@ -1456,61 +1456,104 @@ describe('what is no message of its own', () => {
     });
   });
 
-  describe('withoutNonContentUnread', () => {
+  describe('withoutNonContentMessage', () => {
     const lib = { getContentType: libraryContentType, normalizeMessageContent: (content: unknown) => content } as never;
-    const counting = (
+    const CHAT_ID = '628111@s.whatsapp.net';
+    /** The update Baileys raises for one message: its count (a received one), its time and the message. */
+    const raised = (
       content: Record<string, unknown>,
-      over: { unreadCount?: number; fromMe?: boolean; stub?: number } = {},
+      over: { unreadCount?: number | null; fromMe?: boolean; stub?: number } = {},
     ): Partial<Chat> => ({
-      id: '628111@s.whatsapp.net',
-      unreadCount: over.unreadCount ?? 1,
+      id: CHAT_ID,
+      ...(over.fromMe === true ? {} : { unreadCount: over.unreadCount ?? 1 }),
       conversationTimestamp: 1700000040,
       messages: [
         {
           message: {
-            key: { remoteJid: '628111@s.whatsapp.net', fromMe: over.fromMe === true, id: 'X1' },
+            key: { remoteJid: CHAT_ID, fromMe: over.fromMe === true, id: 'X1' },
             message: content,
             ...(over.stub ? { messageStubType: over.stub } : {}),
           },
         },
       ],
     });
+    const PIN = { pinInChatMessage: {} };
 
     it.each<[string, Record<string, unknown>]>([
-      ['a pin', { pinInChatMessage: {} }],
+      ['an encrypted edit', { secretEncryptedMessage: {} }],
+      ['an encrypted reaction', { encReactionMessage: {} }],
+      ['a pin', PIN],
+      ['a keep-in-chat toggle', { keepInChatMessage: {} }],
+      ['an album header', { albumMessage: {} }],
+      ['an event RSVP', { encEventResponseMessage: {} }],
+      ['an encrypted comment', { encCommentMessage: {} }],
       ['a fast-ratchet distribution alone', { [FAST_RATCHET]: {} }],
       ['a pin that merged after a fast-ratchet distribution', { [FAST_RATCHET]: {}, pinInChatMessage: {} }],
-    ])('takes the count out for %s', (_what, content) => {
-      const stripped = withoutNonContentUnread(counting(content), lib);
-      expect(stripped).not.toHaveProperty('unreadCount');
-      expect(stripped).toMatchObject({ id: '628111@s.whatsapp.net', conversationTimestamp: 1700000040 });
+    ])('leaves nothing of the update of %s received from a contact but its id', (_what, content) => {
+      expect(withoutNonContentMessage(raised(content), lib)).toBeUndefined();
+    });
+
+    it("leaves nothing of the update of a message of the account's own but its id", () => {
+      expect(withoutNonContentMessage(raised(PIN, { fromMe: true }), lib)).toBeUndefined();
+    });
+
+    it('takes out the count, the time and the message, and keeps what else the update carries', () => {
+      const others = {
+        ephemeralExpiration: 86_400,
+        ephemeralSettingTimestamp: 1700000000,
+        name: 'Rina',
+        muteEndTime: 5,
+        pinned: 3,
+        archived: false,
+        readOnly: false,
+      };
+      for (const update of [
+        { ...raised(PIN), ...others },
+        { ...raised(PIN, { fromMe: true }), ...others },
+      ]) {
+        const before = { ...update };
+        expect(withoutNonContentMessage(update, lib)).toEqual({ id: CHAT_ID, ...others });
+        expect(update).toEqual(before);
+      }
+    });
+
+    it('treats a condition Baileys put on the update as nothing', () => {
+      const update = Object.assign(raised(PIN), { conditional: () => true });
+      expect(withoutNonContentMessage(update, lib)).toBeUndefined();
     });
 
     it.each<[string, Record<string, unknown>]>([
       ['a text', { conversation: 'hi' }],
       ['a text that merged after a fast-ratchet distribution', { [FAST_RATCHET]: {}, conversation: 'hi' }],
       ['a text that merged before a fast-ratchet distribution', { conversation: 'hi', [FAST_RATCHET]: {} }],
-    ])('keeps the count of %s', (_what, content) => {
-      const update = counting(content);
-      expect(withoutNonContentUnread(update, lib)).toBe(update);
-    });
-
-    it("leaves a count that is not exactly one, a stub type, the account's own message and a missing message alone", () => {
-      const pin = { pinInChatMessage: {} };
-      for (const update of [
-        counting(pin, { unreadCount: 2 }),
-        counting(pin, { stub: 2 }),
-        counting(pin, { fromMe: true }),
-        { ...counting(pin), messages: [] },
-        { id: '628111@s.whatsapp.net', unreadCount: 1 },
-      ]) {
-        expect(withoutNonContentUnread(update, lib)).toBe(update);
+    ])('leaves the update of %s whole', (_what, content) => {
+      for (const update of [raised(content), raised(content, { fromMe: true })]) {
+        expect(withoutNonContentMessage(update, lib)).toBe(update);
       }
     });
 
+    it.each<[string, Partial<Chat>]>([
+      ['a count above one, which may hold a message of its own', raised(PIN, { unreadCount: 2 })],
+      ['a mark set by hand in place of the count', raised(PIN, { unreadCount: -1 })],
+      ['a stub type', raised(PIN, { stub: 2 })],
+      [
+        "a count beside the account's own message, which is not the message's",
+        { ...raised(PIN, { fromMe: true }), unreadCount: 1 },
+      ],
+      [
+        "a cancelled mark beside the account's own message",
+        { ...raised(PIN, { fromMe: true }), unreadCount: undefined },
+      ],
+      ['no message', { ...raised(PIN), messages: [] }],
+      ['a message with no content', { ...raised(PIN), messages: [{ message: { key: { id: 'X1' } } }] }],
+      ['nothing but its id, which Baileys sent', { id: CHAT_ID }],
+    ])('leaves the update whole for %s', (_what, update) => {
+      expect(withoutNonContentMessage(update, lib)).toBe(update);
+    });
+
     it('leaves an update alone before the library is loaded', () => {
-      const update = counting({ pinInChatMessage: {} });
-      expect(withoutNonContentUnread(update, undefined)).toBe(update);
+      const update = raised(PIN);
+      expect(withoutNonContentMessage(update, undefined)).toBe(update);
     });
   });
 });

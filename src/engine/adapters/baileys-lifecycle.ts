@@ -32,7 +32,7 @@ import {
 } from '../terminal-engine-failure';
 import { differentWaIds, keyChatIds, type BaileysEvents } from './baileys-events';
 import type { BaileysHistory } from './baileys-history';
-import { withoutNonContentUnread } from './baileys-message-mapper';
+import { withoutNonContentMessage } from './baileys-message-mapper';
 import { SESSION_STORE_MAP_CAP_DEFAULT, type BaileysSessionStore } from './baileys-session-store';
 import { ownAccountIds } from './baileys-stored-chat-previews.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
@@ -684,8 +684,9 @@ export class BaileysLifecycle {
       for (const update of updates ?? []) {
         if (Object.hasOwn(update, 'ephemeralExpiration')) this.groupMetadata.invalidate(update.id);
       }
-      // The chat keeps the count it had when the one message Baileys counted is none of its own.
-      this.host.upsertChats((updates ?? []).map(update => withoutNonContentUnread(update, this.loadedLib)));
+      // A message that is none of its own leaves the chat as it was: its count stays out, and so does its time, which
+      // would bring back a chat WhatsApp deleted.
+      this.host.upsertChats((updates ?? []).flatMap(update => withoutNonContentMessage(update, this.loadedLib) ?? []));
     });
     sock.ev.on('chats.delete', ids => {
       this.host.logger.debug('Baileys chats event', {

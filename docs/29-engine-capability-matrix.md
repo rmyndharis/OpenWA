@@ -1075,7 +1075,8 @@ adapter boundary — none silently stubs.
   through the gateway stayed listed as unread. The value is what Baileys last reported for the chat, an
   increment and not a running total: a chat whose unread messages arrived one at a time is listed with
   `1`. Baileys also counts a contact's encrypted edit or reaction, a pin, an album header and an event RSVP as a
-  received message; one that arrives on its own does not raise the count. An unread mark set on the phone that Baileys
+  received message; one that arrives on its own does not raise the count, and is no message that brings back a chat
+  WhatsApp deleted, as a message of its own does. An unread mark set on the phone that Baileys
   delivers in the same batch just before such a message, as after a reconnect, is folded into that message's count by
   the library and is therefore not listed; the mark stays on the account. A receipt that names only older messages, or only the account's own (which Baileys leaves out of a
   receipt), leaves the count, and so does one a newer message overtook, recorded or still being processed; a session restarted since holds

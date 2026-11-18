@@ -88,27 +88,37 @@ export function isNonContent(
 }
 
 /**
- * A live chat update without the unread count Baileys raised for a message that is none of its own. Baileys counts
- * whatever is not a plain reaction, edit, delete or poll vote as a received message, so a contact's encrypted edit or
- * reaction, a pin, a keep-in-chat toggle, an album header, an event RSVP, an encrypted comment or a lone fast-ratchet
- * sender-key distribution listed the chat as unread with nothing new to read. Only an update that counts exactly that
- * one message is recognised: Baileys' event buffer adds the counts of one flush and keeps the last message alone, so a
- * larger count may hold a message of its own and is left as it is. For the same reason the message has to be one Baileys
- * counts, received and with no stub type: after a contact's text, the account's own pin or edit in the same flush
- * leaves the text's count of one beside a message that was never counted.
+ * A live chat update without what a message that is none of its own put in it: its unread count, its time and the
+ * message itself. Baileys counts whatever is not a plain reaction, edit, delete or poll vote as a received message, so
+ * a contact's encrypted edit or reaction, a pin, a keep-in-chat toggle, an album header, an event RSVP, an encrypted
+ * comment or a lone fast-ratchet sender-key distribution listed the chat unread with nothing new to read, and, by its
+ * time, brought back a chat WhatsApp had deleted, which only a message of its own may do. Only an update that counts
+ * exactly that one message is recognised: Baileys' event buffer adds the counts of one flush and keeps the last message
+ * alone, so a larger count may hold a message of its own and is left as it is. For the same reason the message has to
+ * be one Baileys counts, received and with no stub type: after a contact's text, the account's own pin or edit in the
+ * same flush leaves the text's count of one beside a message that was never counted. The account's own message carries
+ * no count at all, so an own count in the update belongs to something else and leaves it whole.
+ *
+ * Whatever else the update carries (a timer, a name, a mute, a pin, `archived`) is still the chat's. `undefined` says
+ * nothing is left of it but its id, which a store that has never seen the chat would take for a chat of its own.
  *
  * One case cannot be told apart: an unread mark set on the phone that Baileys delivers in the same flush just before
  * such a message, as after a reconnect. The buffer folds the mark into the message's count and emits exactly what the
  * message alone produces, so the mark is not listed. It stays on the account, and the phone still shows it.
  */
-export function withoutNonContentUnread(update: Partial<Chat>, lib: ContentTypeLib | undefined): Partial<Chat> {
-  if (update.unreadCount !== 1) return update;
-  const counted = update.messages?.[0]?.message;
-  if (!lib || !counted?.message || counted.key?.fromMe === true || counted.messageStubType) return update;
-  if (!isNonContent(lib.normalizeMessageContent(counted.message) ?? counted.message, lib.getContentType)) return update;
-  const uncounted = { ...update };
-  delete uncounted.unreadCount;
-  return uncounted;
+export function withoutNonContentMessage(
+  update: Partial<Chat>,
+  lib: ContentTypeLib | undefined,
+): Partial<Chat> | undefined {
+  const last = update.messages?.[0]?.message;
+  if (!lib || !last?.message || last.messageStubType) return update;
+  if (last.key?.fromMe === true ? Object.hasOwn(update, 'unreadCount') : update.unreadCount !== 1) return update;
+  if (!isNonContent(lib.normalizeMessageContent(last.message) ?? last.message, lib.getContentType)) return update;
+  const rest = { ...update };
+  delete rest.unreadCount;
+  delete rest.conversationTimestamp;
+  delete rest.messages;
+  return Object.keys(rest).every(key => key === 'id' || key === 'conditional') ? undefined : rest;
 }
 
 /**

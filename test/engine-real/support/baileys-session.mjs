@@ -36,10 +36,10 @@ export const quiet = {
   error() {},
 };
 
-/** Waits for `condition` and fails at the deadline instead of hanging; it never decides anything by elapsed time. */
+/** Waits for `condition` (which may be async) and fails at the deadline instead of hanging; it decides nothing by elapsed time. */
 export async function until(condition, what, ms = 3000) {
   const deadline = Date.now() + ms;
-  while (!condition()) {
+  while (!(await condition())) {
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
     await new Promise(resolve => setTimeout(resolve, 2));
   }
@@ -160,6 +160,18 @@ export async function deliver(sock, wm, { gate } = {}) {
     await processMessage(message, contextOf(sock));
     await gate;
   })(wm);
+  sock.ev.flush();
+}
+
+/** Several messages that reach the socket in one flush: the buffer folds their updates before anything hears of them. */
+export async function deliverTogether(sock, messages) {
+  sock.ev.buffer();
+  for (const wm of messages) {
+    await sock.ev.createBufferedFunction(async message => {
+      sock.ev.emit('messages.upsert', { messages: [message], type: 'notify' });
+      await processMessage(message, contextOf(sock));
+    })(wm);
+  }
   sock.ev.flush();
 }
 
