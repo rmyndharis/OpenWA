@@ -71,7 +71,10 @@ test('typing a query searches this chat and picking a hit reports it', async () 
 });
 
 test('a date alone asks the parent to jump when no text is typed', async () => {
-  const onJumpToDate = mock.fn((_bounds: { dateFrom: number; dateTo: number }) => true);
+  const onJumpToDate = mock.fn((bounds: { dateFrom: number; dateTo: number }) => {
+    void bounds;
+    return true;
+  });
   globalThis.fetch = (() => {
     throw new Error('search must not run without text');
   }) as typeof fetch;
