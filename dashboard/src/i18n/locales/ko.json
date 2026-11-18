@@ -90,6 +90,7 @@
     "loadingChats": "채팅 불러오는 중...",
     "empty": "채팅 없음",
     "noMessageYet": "아직 메시지 없음",
+    "draftLabel": "임시 저장:",
     "unreadBadge": "읽지 않은 메시지 {{count}}개",
     "unreadBadge_other": "읽지 않은 메시지 {{count}}개",
     "markedUnread": "읽지 않음으로 표시됨",

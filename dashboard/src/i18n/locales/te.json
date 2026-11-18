@@ -90,6 +90,7 @@
     "loadingChats": "చాట్‌లను లోడ్ చేస్తోంది...",
     "empty": "చాట్‌లు లేవు",
     "noMessageYet": "ఇంకా సందేశాలు లేవు",
+    "draftLabel": "డ్రాఫ్ట్:",
     "unreadBadge": "{{count}} చదవని సందేశం",
     "unreadBadge_other": "{{count}} చదవని సందేశాలు",
     "markedUnread": "చదవనిదిగా గుర్తించబడింది",

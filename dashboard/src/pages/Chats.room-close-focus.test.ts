@@ -31,6 +31,8 @@ const ALICE: Chat = {
   muted: false,
 };
 const CAROL: Chat = { ...ALICE, id: '15550002222@c.us', name: 'Carol', lastMessage: 'hello from carol' };
+// Carol as the address book lists her, which is what the New chat panel offers.
+const CAROL_CONTACT = { id: CAROL.id, name: 'Carol', number: '15550002222', isMyContact: true, isBlocked: false };
 const SECOND_SESSION: Session = { ...SESSION, id: 'session-2', name: 'Second', phone: '15550003333' };
 let deleted = false;
 const MESSAGE: ChatMessage = {
@@ -95,7 +97,7 @@ before(async () => {
     if (path.includes('/contacts/profile-pictures')) return Promise.resolve(json({ pictures: {} }));
     if (/\/profile-picture$/.test(path)) return Promise.resolve(json({ url: null }));
     if (path.includes('/contacts/blocked')) return Promise.resolve(json([]));
-    if (path.includes('/contacts?')) return Promise.resolve(json([]));
+    if (path.includes('/contacts?')) return Promise.resolve(json([CAROL_CONTACT]));
     if (path.includes('/messages?')) {
       const chatId = new URL(input.toString(), 'http://localhost').searchParams.get('chatId');
       const message = chatId === CAROL.id ? { ...MESSAGE, chatId: CAROL.id, body: 'hello from carol' } : MESSAGE;
@@ -127,14 +129,15 @@ afterEach(async () => {
   queries.clear();
   client = undefined;
   deleted = false;
+  window.sessionStorage.setItem('openwa_user_role', 'admin');
 });
 
 after(() => {
   window.sessionStorage.clear();
 });
 
-async function openAlice(): Promise<HTMLElement> {
-  const { screen, fireEvent, within } = rtl;
+/** The page with its chat list loaded and no chat open. */
+async function renderChats(): Promise<HTMLElement> {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   client.getQueryCache().subscribe(event => {
     if (event.type === 'added') queries.add(event.query);
@@ -146,6 +149,13 @@ async function openAlice(): Promise<HTMLElement> {
       createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Chats))),
     ),
   );
+  await rtl.screen.findByText('Alice', { selector: '.chat-item-name' });
+  return container;
+}
+
+async function openAlice(): Promise<HTMLElement> {
+  const { screen, fireEvent, within } = rtl;
+  const container = await renderChats();
   const row = (await screen.findByText('Alice', { selector: '.chat-item-name' })).closest('[role="button"]');
   fireEvent.click(row as HTMLElement);
   await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
@@ -164,6 +174,46 @@ function focusedRow(): string | undefined {
   return active?.classList.contains('chat-item-card')
     ? (active.querySelector('.chat-item-name')?.textContent ?? undefined)
     : undefined;
+}
+
+/** Where focus is once a chat has opened: the message field, a list row by its chat, or what `focused` calls it. */
+function focusNow(): string {
+  if (document.activeElement?.classList.contains('message-text-input')) return 'the message field';
+  const row = focusedRow();
+  return row ? `the ${row} row` : focused();
+}
+
+/** One frame on, so a focus that is scheduled instead of made in the click itself has landed too. */
+const nextFrame = () => rtl.act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+
+/**
+ * Click a list row as a pointer of that type does: its pointerdown, the focus a press gives the row unless the page
+ * refuses it, then the click with its count (2 for the second click of a double click), which a click made by a key or
+ * by assistive technology does not carry.
+ */
+function pressRow(name: string, pointerType: 'mouse' | 'pen' | 'touch', count = 1): void {
+  const row = rtl.screen.getByText(name, { selector: '.chat-item-name' }).closest<HTMLElement>('[role="button"]')!;
+  rtl.fireEvent.pointerDown(row, { pointerType });
+  if (rtl.fireEvent.mouseDown(row, { detail: count })) row.focus();
+  rtl.fireEvent.click(row, { detail: count });
+}
+
+/**
+ * Tap the New chat panel open, as on a phone, then pick Carol in it with a pointer of that type or with Enter, which
+ * a native button turns into a click with no count.
+ */
+async function pickCarol(press: 'mouse' | 'touch' | 'key'): Promise<void> {
+  const { screen, fireEvent, within } = rtl;
+  const container = await renderChats();
+  const newChat = screen.getByRole('button', { name: 'New chat' });
+  fireEvent.pointerDown(newChat, { pointerType: 'touch' });
+  fireEvent.click(newChat, { detail: 1 });
+  const panel = container.querySelector('.new-chat-panel') as HTMLElement;
+  const contact = await within(panel).findByRole('button', { name: /^Carol/ });
+  if (press === 'key') fireEvent.keyDown(contact, { key: 'Enter' });
+  else fireEvent.pointerDown(contact, { pointerType: press });
+  fireEvent.click(contact, { detail: press === 'key' ? 0 : 1 });
+  await screen.findByRole('heading', { name: 'Carol' });
 }
 
 test('closing the open chat with its Back button keeps keyboard focus on the page content', async () => {
@@ -244,13 +294,92 @@ test('switching sessions while a room is open preserves focus on the picker', as
   assert.match(picker.textContent ?? '', /Second/);
 });
 
-test('opening another row preserves focus on that row', async () => {
+// The click assistive technology and scripts send: no pointer press before it, and a count of 0.
+test('opening another row by a click with no press behind it preserves focus on that row', async () => {
   await openAlice();
   const row = rtl.screen.getByText('Carol', { selector: '.chat-item-name' }).closest<HTMLElement>('[role="button"]')!;
   row.focus();
   rtl.fireEvent.click(row);
   await rtl.screen.findByRole('heading', { name: 'Carol' });
   assert.equal(focusedRow(), 'Carol');
+});
+
+// Opening a chat is the other half. A click on a row with a mouse or a pen, or a pick in the New chat panel, goes on
+// to typing, so the message field takes focus. A tap does not, because a focused field raises a phone's keyboard over
+// the thread it opened. Nor does Enter on a row, a click on the row already open, or a click made with a read-only
+// key, whose field is disabled.
+test('the first chat opened with a mouse click takes focus in the message field', async () => {
+  await renderChats();
+  pressRow('Alice', 'mouse');
+  await rtl.screen.findByRole('heading', { name: 'Alice' });
+  await rtl.waitFor(() => assert.equal(focusNow(), 'the message field'));
+});
+
+for (const pointerType of ['mouse', 'pen'] as const) {
+  test(`a ${pointerType} click on another row focuses the message field`, async () => {
+    await openAlice();
+    pressRow('Carol', pointerType);
+    await rtl.screen.findByRole('heading', { name: 'Carol' });
+    await rtl.waitFor(() => assert.equal(focusNow(), 'the message field'));
+  });
+}
+
+test('a tap on a row opens its chat and leaves focus on the row', async () => {
+  await openAlice();
+  pressRow('Carol', 'touch');
+  await rtl.screen.findByRole('heading', { name: 'Carol' });
+  await nextFrame();
+  assert.equal(focusNow(), 'the Carol row');
+});
+
+test('Enter on a row opens its chat and keeps focus on the row, even after a mouse press', async () => {
+  await renderChats();
+  const row = rtl.screen.getByText('Alice', { selector: '.chat-item-name' }).closest<HTMLElement>('[role="button"]')!;
+  rtl.fireEvent.pointerDown(row, { pointerType: 'mouse' });
+  row.focus();
+  rtl.fireEvent.keyDown(row, { key: 'Enter' });
+  await rtl.screen.findByRole('heading', { name: 'Alice' });
+  await nextFrame();
+  assert.equal(focusNow(), 'the Alice row');
+});
+
+test('a mouse click on the row of the chat already open leaves focus on that row', async () => {
+  await openAlice();
+  pressRow('Alice', 'mouse');
+  await nextFrame();
+  assert.equal(focusNow(), 'the Alice row');
+});
+
+test('a double click that opens a chat leaves focus in the message field', async () => {
+  await renderChats();
+  pressRow('Alice', 'mouse');
+  pressRow('Alice', 'mouse', 2);
+  await rtl.screen.findByRole('heading', { name: 'Alice' });
+  await nextFrame();
+  assert.equal(focusNow(), 'the message field');
+});
+
+test('a read-only key, whose message field is disabled, keeps focus on the row it clicked', async () => {
+  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  const container = await renderChats();
+  pressRow('Alice', 'mouse');
+  await rtl.screen.findByRole('heading', { name: 'Alice' });
+  assert.equal(container.querySelector<HTMLInputElement>('.message-text-input')?.disabled, true);
+  await nextFrame();
+  assert.equal(focusNow(), 'the Alice row');
+});
+
+for (const press of ['mouse', 'key'] as const) {
+  test(`a chat picked in the New chat panel with ${press === 'key' ? 'Enter' : 'a mouse'} takes focus in the message field`, async () => {
+    await pickCarol(press);
+    await rtl.waitFor(() => assert.equal(focusNow(), 'the message field'));
+  });
+}
+
+test('a chat picked in the New chat panel with a tap leaves the message field unfocused', async () => {
+  await pickCarol('touch');
+  await nextFrame();
+  assert.notEqual(focusNow(), 'the message field');
 });
 
 for (const visible of [true, false]) {

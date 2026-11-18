@@ -92,6 +92,7 @@
     "loadingChats": "Caricamento chat...",
     "empty": "Nessuna chat",
     "noMessageYet": "Ancora nessun messaggio",
+    "draftLabel": "Bozza:",
     "unreadBadge": "{{count}} messaggio non letto",
     "unreadBadge_other": "{{count}} messaggi non letti",
     "unreadBadge_many": "{{count}} messaggi non letti",

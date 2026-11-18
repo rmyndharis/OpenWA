@@ -90,6 +90,7 @@
     "loadingChats": "Loading chats...",
     "empty": "No chats",
     "noMessageYet": "No messages yet",
+    "draftLabel": "Draft:",
     "unreadBadge": "{{count}} unread message",
     "unreadBadge_other": "{{count}} unread messages",
     "markedUnread": "Marked as unread",

@@ -90,6 +90,7 @@
     "loadingChats": "正在加载聊天...",
     "empty": "没有聊天",
     "noMessageYet": "暂无消息",
+    "draftLabel": "草稿：",
     "unreadBadge": "{{count}} 条未读消息",
     "unreadBadge_other": "{{count}} 条未读消息",
     "markedUnread": "已标记为未读",

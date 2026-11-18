@@ -57,7 +57,10 @@ interface ChatSidebarProps {
     onFilterChange: (filter: ChatListFilter) => void;
     activeChatId?: string;
     pictures?: Record<string, string | null>;
-    onSelectChat: (chat: Chat) => void;
+    /** Parked composer text by chat id (current session). Shown on rows that are not open. */
+    drafts?: Record<string, string>;
+    /** `byPointer` says the row was clicked with a mouse, a pen or a finger, where a key leaves it unset. */
+    onSelectChat: (chat: Chat, byPointer?: boolean) => void;
     /** The actions behind the chevron on a group or 1:1 row. */
     rowActions?: ChatRowActions;
     /** The archive: how many chats it holds, whether the list shows it, and the switch between the two. */
@@ -87,7 +90,9 @@ interface ChatListRowProps {
   formatChatTime: (timestamp?: number) => string;
   /** The day the list was drawn on (Date.toDateString), which decides Today and Yesterday in the time. */
   today: string;
-  onSelectChat: (chat: Chat) => void;
+  /** Unsent composer text parked for this chat. The row of the open chat does not show it. */
+  draft?: string;
+  onSelectChat: (chat: Chat, byPointer?: boolean) => void;
   rowActions?: ChatRowActions;
   menuOpen: boolean;
   onMenuOpenChange: (chatId: string, open: boolean) => void;
@@ -104,6 +109,7 @@ const ChatListRow = memo(
     active,
     pictureUrl,
     formatChatTime,
+    draft,
     onSelectChat,
     rowActions,
     menuOpen,
@@ -112,10 +118,13 @@ const ChatListRow = memo(
     const { t } = useTranslation();
     const onOpenChange = useCallback((open: boolean) => onMenuOpenChange(chat.id, open), [onMenuOpenChange, chat.id]);
     // Contact shares store the raw vCard in lastMessage; show name/phone (or a label) instead.
-    const snippet =
+    const lastSnippet =
       chat.lastMessageType === 'contact' || isVCardBody(chat.lastMessage)
         ? contactSnippet(chat.lastMessage, `👤 ${t('chats.media.contact')}`)
         : chat.lastMessage || '';
+    // Text that is only whitespace is nothing to send, so it is no draft to show either.
+    const showDraft = Boolean(draft?.trim()) && !active;
+    const snippetTitle = showDraft ? draft : lastSnippet;
     const card = (
       <div
         role="button"
@@ -123,7 +132,14 @@ const ChatListRow = memo(
         data-chat-id={chat.id}
         aria-current={active ? 'true' : undefined}
         className={`chat-item-card ${active ? 'active' : ''} ${chat.unreadCount !== 0 ? 'unread' : ''}`}
-        onClick={() => onSelectChat(chat)}
+        // A double click's second press would move focus from the message field back to the row, and its click opens
+        // nothing, so nothing would return it: that press is refused.
+        onMouseDown={e => {
+          if (e.detail > 1) e.preventDefault();
+        }}
+        // A click made with a pointer has a count. One with no press behind it (assistive technology, a script) has
+        // none and, like Enter and Space below, leaves focus on the row.
+        onClick={e => onSelectChat(chat, e.detail > 0)}
         onKeyDown={e => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
@@ -148,9 +164,15 @@ const ChatListRow = memo(
           </div>
           <div className="chat-item-bottom">
             {/* An empty snippet with a timestamp is a message with no text (a voice note, a sticker,
-                an uncaptioned photo), not an empty chat. */}
-            <span className="chat-item-snippet" title={snippet}>
-              {snippet || (!chat.timestamp && <span className="no-message">{t('chats.noMessageYet')}</span>)}
+                an uncaptioned photo), not an empty chat. A parked draft replaces the last-message
+                preview until the room is open again. Its label stands beside the snippet, not in it:
+                inside, the label's first letter would set the direction of the whole line, and a draft
+                written the other way round would lose its start to the ellipsis. */}
+            {showDraft && <span className="chat-item-draft-label">{t('chats.draftLabel')}</span>}
+            <span className="chat-item-snippet" title={snippetTitle || undefined}>
+              {showDraft
+                ? draft
+                : lastSnippet || (!chat.timestamp && <span className="no-message">{t('chats.noMessageYet')}</span>)}
             </span>
             {(chat.muted || chat.pinned) && (
               <span className="chat-item-flags">
@@ -195,6 +217,7 @@ const ChatListRow = memo(
     a.pictureUrl === b.pictureUrl &&
     a.formatChatTime === b.formatChatTime &&
     a.today === b.today &&
+    a.draft === b.draft &&
     a.onSelectChat === b.onSelectChat &&
     a.menuOpen === b.menuOpen &&
     a.onMenuOpenChange === b.onMenuOpenChange &&
@@ -410,6 +433,7 @@ function ChatSidebar({
                 pictureUrl={chatsTab.pictures?.[chat.id]}
                 formatChatTime={formatChatTime}
                 today={today}
+                draft={chatsTab.drafts?.[chat.id]}
                 onSelectChat={chatsTab.onSelectChat}
                 rowActions={chatsTab.rowActions}
                 menuOpen={menuChatId === chat.id}
