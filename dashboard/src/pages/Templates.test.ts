@@ -524,6 +524,27 @@ test('other templates stay openable while a save is in flight', async () => {
   await screen.findByText('Template created successfully');
 });
 
+// The template open in the editor is told apart from the others by a class alone: a screen reader hears the names
+// with no hint of which one the editor beside the list is showing.
+test('the template open in the editor is marked as the current one', async () => {
+  const { screen, fireEvent } = rtl;
+  templates = [
+    { id: 'tpl-1', name: 'welcome', body: 'Hello' },
+    { id: 'tpl-2', name: 'invoice', body: 'Due soon' },
+  ];
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderTemplates();
+
+  await screen.findByText('welcome');
+  const [first, second] = document.querySelectorAll<HTMLButtonElement>('.template-list-item');
+  const current = (): Array<string | null> => [first, second].map(row => row.getAttribute('aria-current'));
+  assert.deepEqual(current(), [null, null], 'a template is marked before one is opened');
+  fireEvent.click(second);
+  assert.deepEqual(current(), [null, 'true']);
+  fireEvent.click(first);
+  assert.deepEqual(current(), ['true', null]);
+});
+
 // The rows come back as soon as the update resolves, before the list refetch lands, and a failed refetch keeps
 // the cached rows. Either way the row must already carry the saved values, or reopening it and saving again
 // would write the old ones back.

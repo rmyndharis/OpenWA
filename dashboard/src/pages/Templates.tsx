@@ -349,6 +349,7 @@ export function Templates() {
                     >
                       <button
                         className={`template-list-item ${isSelected ? 'selected' : ''}`}
+                        aria-current={isSelected ? 'true' : undefined}
                         onClick={() => openEdit(template)}
                         disabled={template.id === updatingId}
                         type="button"

@@ -246,7 +246,12 @@ export function Logs() {
           </button>
           <span className="page-numbers">
             {pageWindow(page, totalPages).map(p => (
-              <button key={p} className={p === page ? 'active' : ''} onClick={() => setPage(p)}>
+              <button
+                key={p}
+                className={p === page ? 'active' : ''}
+                aria-current={p === page ? 'page' : undefined}
+                onClick={() => setPage(p)}
+              >
                 {p}
               </button>
             ))}

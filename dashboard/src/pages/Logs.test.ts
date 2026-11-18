@@ -344,6 +344,25 @@ test('typing a search on a later page keeps the search box mounted while page on
   }
 });
 
+// The pager's numbers are plain buttons, and the page shown is told only by a class: a screen reader hears 1, 2 and 3 with
+// no hint of which one is current.
+test('the pager marks the current page for assistive technology', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listTotal = 60;
+  try {
+    renderLogs();
+    await screen.findByText('infra.restart');
+    const current = (): Array<string | null> =>
+      ['1', '2', '3'].map(name => screen.getByRole('button', { name }).getAttribute('aria-current'));
+    assert.deepEqual(current(), ['page', null, null]);
+    fireEvent.click(screen.getByRole('button', { name: '3' }));
+    await waitFor(() => assert.deepEqual(current(), [null, null, 'page']));
+    await screen.findByText('infra.restart');
+  } finally {
+    listTotal = null;
+  }
+});
+
 test('a severity filter that matches nothing says no logs exist, not that this page has none', async () => {
   const { screen, fireEvent } = rtl;
   renderLogs();
