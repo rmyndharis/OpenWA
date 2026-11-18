@@ -4620,6 +4620,39 @@ describe('BaileysAdapter inbound fan-out', () => {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       expect(onMessage.mock.calls[0][0]).toMatchObject({ type: 'text', body: 'hello group' });
     });
+
+    // Baileys merges the decrypted parts of one stanza in the order the stanza lists them, and its content type is the
+    // first key that contains `Message`: the fast-ratchet distribution does, so it can stand for a real message.
+    it.each<[string, Record<string, unknown>]>([
+      [
+        'before',
+        { fastRatchetKeySenderKeyDistributionMessage: { groupId: '120363@g.us' }, conversation: 'hello group' },
+      ],
+      [
+        'after',
+        { conversation: 'hello group', fastRatchetKeySenderKeyDistributionMessage: { groupId: '120363@g.us' } },
+      ],
+    ])(
+      'emits a real message that merged with a fast-ratchet distribution %s it as the text it is',
+      async (_where, message) => {
+        const { onMessage } = await fireLive('FR_TEXT', message);
+        expect(onMessage).toHaveBeenCalledTimes(1);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        expect(onMessage.mock.calls[0][0]).toMatchObject({ type: 'text', body: 'hello group' });
+      },
+    );
+
+    it('drops a pin that merged after a fast-ratchet distribution as it drops a pin', async () => {
+      const { onMessage, debug } = await fireLive('FR_PIN', {
+        fastRatchetKeySenderKeyDistributionMessage: { groupId: '120363@g.us' },
+        pinInChatMessage: { key: { id: 'X' } },
+      });
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(debug).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ action: 'baileys_drop_non_content', contentType: 'pinInChatMessage' }),
+      );
+    });
   });
 
   it('learns the lid pair carried on a dropped sender-key distribution before dropping it (#1568)', async () => {
@@ -8299,6 +8332,8 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     ];
     const unread = async (adapter: BaileysAdapter): Promise<number | undefined> =>
       (await adapter.getChats()).find(chat => chat.id === '628111@c.us')?.unreadCount;
+    // Baileys merges the decrypted parts of one stanza in the order the stanza lists them.
+    const pinAfterDistribution = { fastRatchetKeySenderKeyDistributionMessage: {}, pinInChatMessage: {} };
 
     beforeEach(() => {
       jest
@@ -8312,6 +8347,9 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
       ['a pin', { pinInChatMessage: {} }],
       ['an album header', { albumMessage: {} }],
       ['an event RSVP', { encEventResponseMessage: {} }],
+      // The plain sender-key distribution is skipped by Baileys' own content type; this one is not.
+      ['a fast-ratchet sender-key distribution', { fastRatchetKeySenderKeyDistributionMessage: {} }],
+      ['a pin that merged after a fast-ratchet sender-key distribution', pinAfterDistribution],
     ])('does not list the chat as unread for %s', async (_what, content) => {
       const adapter = await readyWithMessage();
 
@@ -8327,6 +8365,20 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
 
       expect(await unread(adapter)).toBe(1);
     });
+
+    it.each([
+      ['before', { fastRatchetKeySenderKeyDistributionMessage: {}, conversation: 'new' }],
+      ['after', { conversation: 'new', fastRatchetKeySenderKeyDistributionMessage: {} }],
+    ])(
+      'lists the chat as unread for a text that merged with a fast-ratchet distribution %s it',
+      async (_where, content) => {
+        const adapter = await readyWithMessage();
+
+        fakeSock.fire('chats.update', counting(content));
+
+        expect(await unread(adapter)).toBe(1);
+      },
+    );
 
     it.each([
       ['a count', 1],

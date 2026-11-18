@@ -156,9 +156,28 @@ describe('the messages received that the session is still processing', () => {
       incoming('ENC-EDIT', { secretEncryptedMessage: { targetMessageKey: { id: 'X' } } }),
       incoming('ENC-REACT', { encReactionMessage: { targetMessageKey: { id: 'X' } } }),
       incoming('NOISE', { senderKeyDistributionMessage: { groupId: 'g' } }),
+      // Baileys counts this one, and the session drops it as protocol noise.
+      incoming('FAST-RATCHET', { fastRatchetKeySenderKeyDistributionMessage: { groupId: 'g' } }),
+      incoming('FAST-RATCHET-PIN', {
+        fastRatchetKeySenderKeyDistributionMessage: { groupId: 'g' },
+        pinInChatMessage: { key: { id: 'X' } },
+      }),
     );
 
     expect(events.receivedInFlight().map(m => m.id)).toEqual(['HELD']);
+    await drain();
+  });
+
+  it('lists a text that merged with a fast-ratchet sender-key distribution, whichever came first', async () => {
+    const { events, upsert, hold, drain } = setup();
+    await hold();
+
+    upsert(
+      incoming('FIRST', { fastRatchetKeySenderKeyDistributionMessage: { groupId: 'g' }, conversation: 'hello' }),
+      incoming('LAST', { conversation: 'hello', fastRatchetKeySenderKeyDistributionMessage: { groupId: 'g' } }),
+    );
+
+    expect(events.receivedInFlight().map(m => m.id)).toEqual(['HELD', 'FIRST', 'LAST']);
     await drain();
   });
 

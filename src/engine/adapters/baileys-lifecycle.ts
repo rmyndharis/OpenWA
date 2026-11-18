@@ -685,10 +685,7 @@ export class BaileysLifecycle {
         if (Object.hasOwn(update, 'ephemeralExpiration')) this.groupMetadata.invalidate(update.id);
       }
       // The chat keeps the count it had when the one message Baileys counted is none of its own.
-      const b = this.loadedLib;
-      const typeOf = (content: BaileysLib.proto.IMessage | null | undefined): string | undefined =>
-        b && content ? b.getContentType(b.normalizeMessageContent(content) ?? content) : undefined;
-      this.host.upsertChats((updates ?? []).map(update => withoutNonContentUnread(update, typeOf)));
+      this.host.upsertChats((updates ?? []).map(update => withoutNonContentUnread(update, this.loadedLib)));
     });
     sock.ev.on('chats.delete', ids => {
       this.host.logger.debug('Baileys chats event', {
