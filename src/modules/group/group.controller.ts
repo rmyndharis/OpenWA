@@ -683,16 +683,17 @@ export class GroupController {
   @ApiResponse({
     status: 403,
     description:
-      'The engine refused the change: admin rights are required. On whatsapp-web.js also a group that has no ' +
-      'picture to remove, which WhatsApp Web does not tell apart from missing rights, so a repeat of a removal ' +
-      'that was applied answers this.',
+      'The engine refused the change: admin rights are required. A group with no picture is not refused: ' +
+      'WhatsApp accepts the delete and the route answers 200.',
   })
   @ApiResponse({
     status: 503,
     description:
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
       'the gateway stopped waiting for a confirmation that never came.' +
-      THROTTLED_503,
+      THROTTLED_503 +
+      ' On whatsapp-web.js, also when WhatsApp answers the delete with a rate limit or a server error: ' +
+      'nothing was deleted.',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })

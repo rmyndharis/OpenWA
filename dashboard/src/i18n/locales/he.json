@@ -94,6 +94,7 @@
     "loadingChats": "טוען שיחות...",
     "empty": "אין שיחות",
     "noMessageYet": "אין הודעות עדיין",
+    "draftLabel": "טיוטה:",
     "unreadBadge": "{{count}} הודעה שלא נקראה",
     "unreadBadge_many": "{{count}} הודעות שלא נקראו",
     "unreadBadge_other": "{{count}} הודעות שלא נקראו",

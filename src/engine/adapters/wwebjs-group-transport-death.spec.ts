@@ -105,7 +105,6 @@ describe('group writes classify a dead page', () => {
     ['setGroupMessagesAdminsOnly', 'setMessagesAdminsOnly', g => g.setGroupMessagesAdminsOnly(GROUP, true)],
     ['setGroupInfoAdminsOnly', 'setInfoAdminsOnly', g => g.setGroupInfoAdminsOnly(GROUP, true)],
     ['setGroupMemberAddMode', 'setAddMembersAdminsOnly', g => g.setGroupMemberAddMode(GROUP, 'admins')],
-    ['deleteGroupPicture', 'deletePicture', g => g.deleteGroupPicture(GROUP)],
     ['setGroupPicture', 'setPicture', g => g.setGroupPicture(GROUP, IMAGE)],
   ];
   const NON_CONVERGING_CHAT: [string, string, (g: WwebjsGroups) => Promise<unknown>][] = [
@@ -127,7 +126,14 @@ describe('group writes classify a dead page', () => {
     g => g.revokeGroupInviteCode(GROUP),
   ];
 
-  it.each([...CONVERGING, ...NON_CONVERGING_CHAT, REVOKE])(
+  // deleteGroupPicture sends its request in-page as well, and converges when repeated.
+  const DELETE_PICTURE: [string, string, (g: WwebjsGroups) => Promise<unknown>] = [
+    'deleteGroupPicture',
+    'pupPage.evaluate',
+    g => g.deleteGroupPicture(GROUP),
+  ];
+
+  it.each([...CONVERGING, ...NON_CONVERGING_CHAT, REVOKE, DELETE_PICTURE])(
     '%s answers a dead page during the group lookup with 503 before calling %s',
     async (op, _method, run) => {
       const lookup = Promise.reject(transportError);
@@ -169,6 +175,28 @@ describe('group writes classify a dead page', () => {
 
     await expect(groups.revokeGroupInviteCode(GROUP)).rejects.toBe(transportError);
     expect(reportIfPageTransportError).toHaveBeenCalledWith(transportError, 'revokeGroupInviteCode');
+  });
+
+  it('deleteGroupPicture answers a dead page in its request with 503 and reports it', async () => {
+    const { groups, reportIfPageTransportError } = makeGroups(
+      {},
+      { pupPage: { evaluate: jest.fn().mockRejectedValue(transportError) } },
+    );
+
+    await expect(groups.deleteGroupPicture(GROUP)).rejects.toThrow(EngineTransportError);
+    expect(reportIfPageTransportError).toHaveBeenCalledTimes(1);
+    expect(reportIfPageTransportError).toHaveBeenCalledWith(transportError, 'deleteGroupPicture');
+  });
+
+  it('deleteGroupPicture leaves an ordinary failure of its request untouched and unreported', async () => {
+    const failure = new Error('Evaluation failed: x');
+    const { groups, reportIfPageTransportError } = makeGroups(
+      {},
+      { pupPage: { evaluate: jest.fn().mockRejectedValue(failure) } },
+    );
+
+    await expect(groups.deleteGroupPicture(GROUP)).rejects.toBe(failure);
+    expect(reportIfPageTransportError).not.toHaveBeenCalled();
   });
 
   it('revokeGroupInviteCode leaves an ordinary failure untouched', async () => {

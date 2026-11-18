@@ -1687,23 +1687,21 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
       ).rejects.toBeInstanceOf(EngineRefusedError);
     });
 
-    it('deletes via GroupChat.deletePicture and maps false to a refusal', async () => {
-      const deletePicture = jest.fn().mockResolvedValue(true);
-      await readyAdapter(groupChat({ deletePicture })).deleteGroupPicture('g@g.us');
-      expect(deletePicture).toHaveBeenCalled();
+    // The request goes out in the page and WhatsApp's status decides: wwebjs-group-picture-delete.spec.ts.
+    it('deletes with a request of its own and maps a refusal status to a refusal', async () => {
+      const deletePicture = jest.fn();
+      const accepted = jest.fn().mockResolvedValue(200);
+      await readyAdapter({ ...groupChat({ deletePicture }), pupPage: { evaluate: accepted } }).deleteGroupPicture(
+        'g@g.us',
+      );
+      expect(accepted).toHaveBeenCalledWith(expect.any(Function), 'g@g.us');
+      // GroupChat.deletePicture answers nothing for a picture the page never loaded, so it is not asked.
+      expect(deletePicture).not.toHaveBeenCalled();
 
-      const refused = jest.fn().mockResolvedValue(false);
+      const refused = jest.fn().mockResolvedValue(403);
       await expect(
-        readyAdapter(groupChat({ deletePicture: refused })).deleteGroupPicture('g@g.us'),
+        readyAdapter({ ...groupChat({}), pupPage: { evaluate: refused } }).deleteGroupPicture('g@g.us'),
       ).rejects.toBeInstanceOf(EngineRefusedError);
-    });
-
-    it('refuses a delete WhatsApp Web did not attempt, and names both causes it has', async () => {
-      // WWebJS.deletePicture resolves undefined when canDelete() is false: no picture, or no right to edit the info.
-      const notAttempted = jest.fn().mockResolvedValue(undefined);
-      const attempt = readyAdapter(groupChat({ deletePicture: notAttempted })).deleteGroupPicture('g@g.us');
-      await expect(attempt).rejects.toBeInstanceOf(EngineRefusedError);
-      await expect(attempt).rejects.toThrow(/did not attempt it, as when the group has no picture or admin rights/);
     });
   });
 

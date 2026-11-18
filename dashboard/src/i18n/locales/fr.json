@@ -92,6 +92,7 @@
     "loadingChats": "Chargement des discussions...",
     "empty": "Aucune discussion",
     "noMessageYet": "Aucun message pour le moment",
+    "draftLabel": "Brouillon :",
     "unreadBadge": "{{count}} message non lu",
     "unreadBadge_other": "{{count}} messages non lus",
     "unreadBadge_many": "{{count}} messages non lus",

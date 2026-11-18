@@ -904,6 +904,21 @@
   font-style: italic;
 }
 
+/* The label of a parked draft is a box of its own before the snippet, which keeps its own direction and its
+   ellipsis at the end of its text. The row spreads its children apart, so the snippet takes the free space after
+   it and stays next to the label. */
+.chats-page .chat-item-draft-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--chat-accent-text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chats-page .chat-item-draft-label + .chat-item-snippet {
+  margin-inline-end: auto;
+}
+
 .chats-page .chat-unread-badge {
   display: inline-flex;
   align-items: center;

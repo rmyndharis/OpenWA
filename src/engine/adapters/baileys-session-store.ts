@@ -210,9 +210,16 @@ function mergeContactTwins(a: ContactTwin, b: ContactTwin): ContactTwin {
  * the raw and neutral JID (two entries per chat), so its cap is doubled to cover the same number of
  * chats.
  */
+/**
+ * A chat record as this store keeps it. `markCovered` says the record carried an unread mark set by hand when a
+ * message's count replaced it: Baileys reports the mark as a negative count and a new message as a positive one, on
+ * the same field, while the account still holds the mark.
+ */
+type StoredChat = Chat & { markCovered?: boolean };
+
 export class BaileysSessionStore {
   private readonly contacts: LruMap<string, BaileysContact>;
-  private readonly chats: LruMap<string, Chat>;
+  private readonly chats: LruMap<string, StoredChat>;
   private readonly lastMessages: LruMap<string, LastMessage>;
   /**
    * The newest stored message of each chat, under the same keys as {@link lastMessages}, seeded once
@@ -403,8 +410,16 @@ export class BaileysSessionStore {
         }
         continue;
       }
-      const existing = this.chats.get(r.id) ?? { id: r.id };
-      this.chats.set(r.id, { ...existing, ...r });
+      const existing: StoredChat = this.chats.get(r.id) ?? { id: r.id };
+      // A count that replaces a mark set by hand leaves the mark on the account: the record remembers it, so the
+      // read that covers the message undoes the mark as well. Any other count the update carries (a read or a mark
+      // synced from the phone, or the `undefined` Baileys writes where a sync cancelled a mark) says how the chat
+      // stands now. Only a count the update carries itself is one: a chat decoded from a history sync answers
+      // `null` from its prototype when the wire held none, and the merge below copies own keys alone.
+      const markCovered = Object.hasOwn(r, 'unreadCount')
+        ? (r.unreadCount ?? 0) > 0 && ((existing.unreadCount ?? 0) < 0 || existing.markCovered === true)
+        : existing.markCovered;
+      this.chats.set(r.id, { ...existing, ...r, ...(markCovered === undefined ? {} : { markCovered }) });
       this.persistChatState(r.id, r);
       this.applyChatTimer(r.id, r, lidIndex);
     }
@@ -1063,9 +1078,15 @@ export class BaileysSessionStore {
     );
   }
 
-  /** Whether the chat carries an unread mark set by hand, which WhatsApp syncs as a negative count. */
+  /**
+   * Whether the chat carries an unread mark set by hand, which WhatsApp syncs as a negative count, also when the
+   * count of a message received since has taken its place in the record.
+   */
   isMarkedUnread(chatId: string): boolean {
-    return [...new Set(this.chatTwins(chatId))].some(key => (this.chats.get(key)?.unreadCount ?? 0) < 0);
+    return [...new Set(this.chatTwins(chatId))].some(key => {
+      const chat = this.chats.get(key);
+      return (chat?.unreadCount ?? 0) < 0 || chat?.markCovered === true;
+    });
   }
 
   /**
@@ -1075,13 +1096,21 @@ export class BaileysSessionStore {
    * (see {@link isMarkedUnread}) is not a count and is left alone; `marks` clears the marks instead, and
    * nothing else, once the write that undoes them was confirmed: Baileys then clears the mark on the record
    * that write was keyed to, and a twin record that kept it would have every later read undo the mark again.
-   * A message that arrived while the write was out has a count, which the write did not cover.
+   * A message that arrived while the write was out has a count, which the write did not cover. A count that had
+   * replaced a mark gives the mark back when it is reset: the chat is marked unread until the write undoes it.
    */
   clearUnread(chatId: string, marks = false): void {
     for (const key of new Set(this.chatTwins(chatId))) {
       const chat = this.chats.get(key);
-      const count = chat?.unreadCount ?? 0;
-      if (chat && (marks ? count < 0 : count > 0)) this.chats.set(key, { ...chat, unreadCount: 0 });
+      if (!chat) continue;
+      const count = chat.unreadCount ?? 0;
+      if (marks) {
+        if (count < 0 || chat.markCovered) {
+          this.chats.set(key, { ...chat, unreadCount: Math.max(count, 0), markCovered: false });
+        }
+      } else if (count > 0) {
+        this.chats.set(key, { ...chat, unreadCount: chat.markCovered ? -1 : 0, markCovered: false });
+      }
     }
   }
 
