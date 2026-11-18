@@ -1713,6 +1713,26 @@ export function Chats() {
     ? shownChats
     : [...shownChats.filter(c => c.pinned), ...shownChats.filter(c => !c.pinned)];
 
+  // A chat opened to write in it takes focus in its message field, so typing can start at once: a click on its row
+  // with a mouse or a pen, or a pick in the New chat panel, which closes and would leave focus on the page. Bumped
+  // when the chat is chosen, so that the focus is made once the room has rendered: a room opened from the placeholder
+  // has no field until then. Never after a tap, where a focused field raises a phone's keyboard over the thread that
+  // was just opened. A read-only key keeps its focus as well, its field being disabled.
+  const [composerFocusSeq, setComposerFocusSeq] = useState(0);
+  // How the page was last pressed: the pointerdown's pointerType ('touch' for a tap), '' after a key.
+  const pagePressRef = useRef('');
+  useLayoutEffect(() => {
+    if (composerFocusSeq === 0 || pagePressRef.current === 'touch') return;
+    chatPageRef.current
+      ?.querySelector<HTMLInputElement>('input.message-text-input:not(:disabled)')
+      ?.focus({ preventScroll: true });
+  }, [composerFocusSeq]);
+  // A key on a row keeps focus on it, and so does a click on the row of the chat already open, where nothing opens.
+  const handleSelectChat = useCallback((chat: Chat, byPointer?: boolean) => {
+    if (byPointer && chat.id !== activeChatIdRef.current) setComposerFocusSeq(n => n + 1);
+    setActiveChat(chat);
+  }, []);
+
   // Open a chat picked in the new-chat panel. A chat with no history is not in the engine's list, so
   // it is added to the sidebar locally until the first message, or the next list load, settles it.
   // The filter and search are cleared so the opened chat is visible in the list. A chat the panel found
@@ -1730,6 +1750,8 @@ export function Chats() {
     setActiveChannel(null);
     setActiveStatusContactId(null);
     setActiveChat(existing ?? chat);
+    // Whatever opened it, a key included: the panel closes with the control that held focus.
+    setComposerFocusSeq(n => n + 1);
     setShowNewChat(false);
     setChatFilter('all');
     setSearchQuery('');
@@ -2111,7 +2133,16 @@ export function Chats() {
   }, [lightbox, lightboxIndex, imageMessages]);
 
   return (
-    <div className="chats-page" ref={chatPageRef}>
+    <div
+      className="chats-page"
+      ref={chatPageRef}
+      onPointerDownCapture={e => {
+        pagePressRef.current = e.pointerType;
+      }}
+      onKeyDownCapture={() => {
+        pagePressRef.current = '';
+      }}
+    >
       {/* The page header gave way to the full-height layout; its title stays for screen readers. */}
       <h1 className="visually-hidden">{t('nav.chats')}</h1>
       {/* Real-time connection permanently dropped — let the user re-establish it instead of
@@ -2211,7 +2242,7 @@ export function Chats() {
               archive: { count: archivedCount, showing: showArchived, onToggle: () => setShowArchived(v => !v) },
               activeChatId: activeChat?.id,
               pictures: listPics.data,
-              onSelectChat: setActiveChat,
+              onSelectChat: handleSelectChat,
             }}
             channelsTab={{
               engineLoading: engineType === null,

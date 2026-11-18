@@ -57,7 +57,8 @@ interface ChatSidebarProps {
     onFilterChange: (filter: ChatListFilter) => void;
     activeChatId?: string;
     pictures?: Record<string, string | null>;
-    onSelectChat: (chat: Chat) => void;
+    /** `byPointer` says the row was clicked with a mouse, a pen or a finger, where a key leaves it unset. */
+    onSelectChat: (chat: Chat, byPointer?: boolean) => void;
     /** The actions behind the chevron on a group or 1:1 row. */
     rowActions?: ChatRowActions;
     /** The archive: how many chats it holds, whether the list shows it, and the switch between the two. */
@@ -87,7 +88,7 @@ interface ChatListRowProps {
   formatChatTime: (timestamp?: number) => string;
   /** The day the list was drawn on (Date.toDateString), which decides Today and Yesterday in the time. */
   today: string;
-  onSelectChat: (chat: Chat) => void;
+  onSelectChat: (chat: Chat, byPointer?: boolean) => void;
   rowActions?: ChatRowActions;
   menuOpen: boolean;
   onMenuOpenChange: (chatId: string, open: boolean) => void;
@@ -123,18 +124,14 @@ const ChatListRow = memo(
         data-chat-id={chat.id}
         aria-current={active ? 'true' : undefined}
         className={`chat-item-card ${active ? 'active' : ''} ${chat.unreadCount !== 0 ? 'unread' : ''}`}
-        onClick={e => {
-          onSelectChat(chat);
-          // Pointer clicks (detail ≥ 1) move the caret to the composer so typing can start at once.
-          // Keyboard activation keeps focus on the row (Enter/Space use onKeyDown; a synthesized
-          // click has detail 0). See Chats.room-close-focus "opening another row preserves focus".
-          if (e.detail < 1) return;
-          requestAnimationFrame(() => {
-            document
-              .querySelector<HTMLInputElement>('input.message-text-input:not(:disabled)')
-              ?.focus({ preventScroll: true });
-          });
+        // A double click's second press would move focus from the message field back to the row, and its click opens
+        // nothing, so nothing would return it: that press is refused.
+        onMouseDown={e => {
+          if (e.detail > 1) e.preventDefault();
         }}
+        // A click made with a pointer has a count. One with no press behind it (assistive technology, a script) has
+        // none and, like Enter and Space below, leaves focus on the row.
+        onClick={e => onSelectChat(chat, e.detail > 0)}
         onKeyDown={e => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
