@@ -75,6 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update `i18next` to 27.1.1, `react-i18next` to 18.0.1 and `lucide-react` to 1.72.0 in the dashboard bundle. react-i18next 18 ignores `shouldUnescape`, so the API key confirmation no longer passes it.
 - Update `vite` to 8.3.8, `@vitejs/plugin-react` to 6.3.0 and `jsdom` to 31.0.1 in the dashboard, `prettier` to 3.10.1 and `typescript-eslint` to 8.72.2 in the gateway and the dashboard, and `concurrently` to 10.0.7 and `supertest` to 7.3.2 in the gateway; these are build, lint and test tooling only.
 - Update `guzzlehttp/guzzle` to 8.5.0 in the PHP SDK lockfile; this touches development and test setups only.
+- The dependency audit excuses the `picomatch` advisory GHSA-fc5q-39xc-vjpf by id in the gateway, dashboard and JavaScript SDK trees: every published version is affected, and no glob pattern reaches it from outside the repository. The dashboard and SDK audits now run the same per-advisory gate as the gateway's.
 
 ### Upgrade notes (behavior changes)
 

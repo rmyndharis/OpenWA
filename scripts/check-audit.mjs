@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Dependency-audit gate for the ROOT tree, with a per-advisory allowlist.
+ * Dependency-audit gate for one npm tree, with a per-advisory allowlist.
  *
  * `npm audit --audit-level=high` is all-or-nothing: it fails on any high, and the only lever it
  * offers is lowering the threshold for EVERYTHING. That lever is the wrong one — the audit job
@@ -16,14 +16,16 @@
  *   2. An allowlist entry whose advisory no longer appears ALSO FAILS. A carve-out that outlives
  *      its cause is how a gate quietly narrows, so removing it is not left to anyone remembering.
  *
- * Scope: the root tree only. `dashboard/` and `sdk/javascript/` keep a plain
- * `npm audit --audit-level=high`, because they have nothing to excuse and should stay stricter
- * than the root.
+ * Scope: the tree it is started in. The root runs `npm run check:audit`; `dashboard/` and
+ * `sdk/javascript/` run this file from their own directory (`node ../scripts/check-audit.mjs`). An
+ * allowlist entry names the trees it excuses and both rules are applied tree by tree, so an entry
+ * neither excuses a tree it does not name nor stays in one that no longer reports the advisory.
  *
  * Run locally: `npm run check:audit`.
  */
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
+import { dirname, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -31,8 +33,37 @@ import { fileURLToPath } from 'node:url';
  *
  * Keep this list empty whenever possible. An entry belongs here only when there is no patched
  * version to move to, the reachable path is understood, and the fix is upstream rather than ours.
+ * `trees` lists the directories it applies to, as repository paths with `.` for the root.
  */
-const ALLOWLIST = [];
+export const ALLOWLIST = [
+  {
+    id: 'GHSA-fc5q-39xc-vjpf',
+    package: 'picomatch',
+    trees: ['.', 'dashboard', 'sdk/javascript'],
+    reason:
+      'ReDoS for a caller that compiles a glob an attacker supplies. It covers every published ' +
+      'version (<= 4.0.7), so there is nothing to move to. No glob here comes from outside the ' +
+      'repository: at runtime the root tree reaches picomatch only through typeorm > tinyglobby, ' +
+      'which expands the entity and migration globs written in src/app.module.ts and src/database; ' +
+      'every other path, and all of dashboard/ and sdk/javascript/, is build and test tooling ' +
+      '(jest, the Nest CLI, typescript-eslint, vite, vitest).',
+    removeWhen:
+      'picomatch publishes a version outside the advisory range and a tree resolves to it. That ' +
+      'tree then fails as stale: take it off `trees`, and remove the entry with the last one.',
+  },
+];
+
+const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+
+/** The tree a run audits: its working directory as a repository path, `.` for the root. */
+export function treeOf(cwd = process.cwd()) {
+  return relative(REPO_ROOT, realpathSync(cwd)).split(sep).join('/') || '.';
+}
+
+/** The entries that excuse an advisory in this tree. */
+export function allowlistFor(tree, allowlist = ALLOWLIST) {
+  return allowlist.filter(entry => entry.trees.includes(tree));
+}
 
 const BLOCKING = new Set(['high', 'critical']);
 
@@ -117,12 +148,12 @@ export function collectAdvisories(report) {
 }
 
 /**
- * What to do when npm audit could not answer at all. On PR and push CI only this root-tree check
+ * What to do when npm audit could not answer at all. On PR and push CI only the root-tree step
  * skips, and the skip is raised as a warning annotation on GitHub Actions rather than a log line
- * inside a green step. It does not keep the audit job green: the dashboard's plain `npm audit` step
- * in ci.yml fails closed on the same outage. A path that sets CHECK_AUDIT_REQUIRED=1 (the release
- * gate and the weekly scan) fails instead: publishing, or reporting a week clean, with no advisory
- * checked is not a skip those paths may take. A re-run clears a transient outage.
+ * inside a green step. It does not keep the audit job green: the dashboard and SDK steps of ci.yml
+ * set CHECK_AUDIT_REQUIRED=1 and fail on the same outage. So does every other path that sets it
+ * (the release gate, the SDK publish and the weekly scan): publishing, or reporting a week clean,
+ * with no advisory checked is not a skip those paths may take. A re-run clears a transient outage.
  */
 export function unavailableOutcome(summary, env = process.env) {
   const required = env.CHECK_AUDIT_REQUIRED === '1';
@@ -146,7 +177,7 @@ export function unavailableOutcome(summary, env = process.env) {
 }
 
 /** The gate's verdict, split out so a spec can drive it without shelling out to npm. */
-export function evaluate(report, allowlist = ALLOWLIST) {
+export function evaluate(report, allowlist) {
   const advisories = collectAdvisories(report);
   const allowed = new Set(allowlist.map(a => a.id));
   const errors = [];
@@ -158,7 +189,7 @@ export function evaluate(report, allowlist = ALLOWLIST) {
       `${advisory.severity.toUpperCase()} ${advisory.id} in ${advisory.package}: ${advisory.title}\n` +
         `  ${advisory.url}\n` +
         '  Fix it, or — only if there is no patched version and the path is understood — add it to\n' +
-        '  ALLOWLIST in scripts/check-audit.mjs with a reason and a removeWhen.',
+        '  ALLOWLIST in scripts/check-audit.mjs with its trees, a reason and a removeWhen.',
     );
   }
 
@@ -166,7 +197,7 @@ export function evaluate(report, allowlist = ALLOWLIST) {
     if (advisories.has(entry.id)) continue;
     errors.push(
       `Stale allowlist entry ${entry.id} (${entry.package}): the advisory no longer appears in npm audit.\n` +
-        '  Remove it from ALLOWLIST in scripts/check-audit.mjs — an exception that outlives its cause\n' +
+        '  Take this tree off the entry in scripts/check-audit.mjs: an exception that outlives its cause\n' +
         '  narrows this gate for everything that comes after it.',
     );
   }
@@ -187,15 +218,17 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
 
   // A registry that cannot answer the audit request must not be read as a clean tree. On a merge
   // path this step skips loudly rather than failing while npm's audit endpoint is down (or being
-  // retired). That keeps the root step from failing, not the audit job green: the dashboard audit
-  // step fails closed on the same outage. A required path fails. See unavailableOutcome.
+  // retired). That keeps the root step from failing, not the audit job green: the dashboard and SDK
+  // steps require the audit and fail on the same outage. See unavailableOutcome.
   if (auditUnavailable(report)) {
     const outcome = unavailableOutcome(report?.error?.summary ?? 'no report');
     for (const line of outcome.lines) console.log(line);
     process.exit(outcome.exitCode);
   }
 
-  const errors = evaluate(report);
+  const tree = treeOf();
+  const excused = allowlistFor(tree);
+  const errors = evaluate(report, excused);
 
   if (errors.length > 0) {
     console.error('check:audit failed:\n');
@@ -203,9 +236,8 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     process.exit(1);
   }
 
-  const excused = ALLOWLIST.length;
   console.log(
-    `check:audit passed — no unexcused high/critical advisories in the root tree` +
-      (excused > 0 ? ` (${excused} allowlisted: ${ALLOWLIST.map(a => a.id).join(', ')})` : ''),
+    `check:audit passed: no unexcused high/critical advisories in ${tree === '.' ? 'the root tree' : `${tree}/`}` +
+      (excused.length > 0 ? ` (${excused.length} allowlisted: ${excused.map(a => a.id).join(', ')})` : ''),
   );
 }

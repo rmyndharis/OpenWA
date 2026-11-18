@@ -88,7 +88,9 @@ jobs:
         run: cd dashboard && npm ci
 
       - name: Security audit (dashboard)
-        run: cd dashboard && npm audit --audit-level=high
+        env:
+          CHECK_AUDIT_REQUIRED: '1'
+        run: cd dashboard && node ../scripts/check-audit.mjs
 
       - name: Run ESLint
         run: npm run lint

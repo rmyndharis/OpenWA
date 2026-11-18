@@ -5,7 +5,15 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { auditUnavailable, collectAdvisories, evaluate, unavailableOutcome } from './check-audit.mjs';
+import {
+  ALLOWLIST,
+  allowlistFor,
+  auditUnavailable,
+  collectAdvisories,
+  evaluate,
+  treeOf,
+  unavailableOutcome,
+} from './check-audit.mjs';
 
 /**
  * The report shape is taken from a real `npm audit --json` run, not invented: one advisory
@@ -135,6 +143,45 @@ test('an { error } payload reads as audit-unavailable, not clean', () => {
 test('a clean or vulnerable report is not audit-unavailable', () => {
   assert.equal(auditUnavailable({ vulnerabilities: {}, metadata: {} }), false);
   assert.equal(auditUnavailable({ ...puppeteerReport, metadata: {} }), false);
+});
+
+// One list serves three lockfiles. An entry is read only by the trees it names, so excusing an advisory
+// in the root does not excuse it in the dashboard, and the stale rule fires in the tree that lost it.
+test('an entry excuses only the trees it names', () => {
+  const entry = { ...ALLOW[0], trees: ['.', 'dashboard'] };
+  assert.deepEqual(allowlistFor('dashboard', [entry]), [entry]);
+  assert.deepEqual(evaluate(puppeteerReport, allowlistFor('dashboard', [entry])), []);
+  assert.deepEqual(allowlistFor('sdk/javascript', [entry]), []);
+  assert.match(evaluate(puppeteerReport, allowlistFor('sdk/javascript', [entry]))[0], /GHSA-jmr9-qjv8-65gv/);
+  assert.match(evaluate({ vulnerabilities: {} }, allowlistFor('.', [entry]))[0], /Stale allowlist entry/);
+  assert.deepEqual(evaluate({ vulnerabilities: {} }, allowlistFor('sdk/javascript', [entry])), []);
+});
+
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+
+test('the tree is the working directory as a repository path', () => {
+  assert.equal(treeOf(repoRoot), '.');
+  assert.equal(treeOf(join(repoRoot, 'dashboard')), 'dashboard');
+  assert.equal(treeOf(join(repoRoot, 'sdk', 'javascript')), 'sdk/javascript');
+});
+
+// An entry with a tree no lockfile sits in excuses nothing and is never reported stale.
+test('every entry names its advisory, trees that hold a lockfile, a reason and what removes it', () => {
+  const trees = spawnSync('git', ['ls-files', '--', '*package-lock.json'], { cwd: repoRoot, encoding: 'utf8' })
+    .stdout.split('\n')
+    .filter(Boolean)
+    .map(file => file.replace(/\/?package-lock\.json$/, '') || '.');
+  assert.ok(trees.includes('.') && trees.includes('dashboard') && trees.includes('sdk/javascript'), trees.join());
+  for (const entry of ALLOWLIST) {
+    assert.match(entry.id, /^GHSA(-[0-9a-z]{4}){3}$/);
+    assert.ok(entry.package && entry.reason && entry.removeWhen, entry.id);
+    assert.ok(entry.trees.length > 0, entry.id);
+    assert.deepEqual(
+      entry.trees.filter(tree => !trees.includes(tree)),
+      [],
+      entry.id,
+    );
+  }
 });
 
 // PR CI keeps the skip so an npm outage does not block every merge, but it must show on the run as a
