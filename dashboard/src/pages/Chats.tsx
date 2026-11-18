@@ -23,6 +23,7 @@ import {
   CircleEllipsis,
   Copy,
   PanelRight,
+  Search,
   X,
 } from 'lucide-react';
 import { useProfilePicture } from '../hooks/useProfilePicture';
@@ -53,6 +54,7 @@ import {
   isRenderableMessage,
   liveMessageMetadata,
   stripMentionDelimiters,
+  timestampOf,
   unacknowledgedIncomingIds,
   type ChatMessageView,
   type MessageMedia,
@@ -63,6 +65,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
 import { GlobalSearch } from '../components/GlobalSearch';
+import { RoomSearch, type DayJump } from '../components/chats/RoomSearch';
 import {
   useChatMessages,
   useChatMessagesActions,
@@ -244,6 +247,8 @@ export function Chats() {
   // beside the room, and the room's overflow menu drops from its header.
   const [showNewChat, setShowNewChat] = useState<boolean>(false);
   const [roomMenuOpen, setRoomMenuOpen] = useState<boolean>(false);
+  const [roomSearchOpen, setRoomSearchOpen] = useState(false);
+  const roomSearchButtonRef = useRef<HTMLButtonElement | null>(null);
   const roomMenuRef = useRef<HTMLDivElement | null>(null);
   const roomMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   // The group whose info dialog is open, from its row's menu or from the open room's.
@@ -290,7 +295,8 @@ export function Chats() {
   const contactToggleRef = useRef<HTMLButtonElement | null>(null);
   const closeContactInfo = () => {
     setContactInfoFor('');
-    contactToggleRef.current?.focus();
+    // The in-chat search takes the header's place, toggle included: its field is then the room's nearest control.
+    (contactToggleRef.current ?? chatPageRef.current?.querySelector<HTMLElement>('.room-search-fields input'))?.focus();
   };
 
   // Chats/Channels/Status tab selection. Switching tabs closes whatever conversation is open so a
@@ -352,7 +358,27 @@ export function Chats() {
     setComposeOpen(false);
     setGroupDialogChat(null);
     setShowNewChat(false);
+    setRoomSearchOpen(false);
   }
+
+  // Leaving a conversation closes its in-chat search; a new room starts without the previous query.
+  const roomSearchChatRef = useRef<string | null>(null);
+  if (roomSearchChatRef.current !== (activeChat?.id ?? null)) {
+    roomSearchChatRef.current = activeChat?.id ?? null;
+    if (roomSearchOpen) setRoomSearchOpen(false);
+  }
+  // Closing the search unmounts the field that held focus, and the button that opened it is drawn again only then.
+  // Focus goes back to that button once it is there, unless something else on the page holds it: the composer the
+  // key was pressed in, the row of the chat opened instead, a dialog.
+  const roomSearchWasOpen = useRef(false);
+  useLayoutEffect(() => {
+    const closed = roomSearchWasOpen.current && !roomSearchOpen;
+    roomSearchWasOpen.current = roomSearchOpen;
+    if (!closed) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    roomSearchButtonRef.current?.focus();
+  }, [roomSearchOpen]);
 
   const {
     data: messages = [],
@@ -1538,6 +1564,30 @@ export function Chats() {
     [switchTab, showWarningToast, t],
   );
 
+  // The in-chat search scrolls the open thread itself. Its chat is the one on screen, so a hit needs none of the list
+  // lookup a sidebar hit goes through, and only a row the thread has drawn can be scrolled to: false says none matched.
+  const scrollToRow = (matches: (row: HTMLElement) => boolean): boolean => {
+    const rows = messagesContainerRef.current?.querySelectorAll<HTMLElement>('[data-scroll-anchor]');
+    const row = Array.from(rows ?? []).find(matches);
+    row?.scrollIntoView({ block: 'center' });
+    return row !== undefined;
+  };
+
+  // The day jump of the in-chat search (the API needs text to search, so a day alone is answered from the thread).
+  // It reads the rows the thread draws, dated as the thread dates them, so it lands on the row under that day's
+  // separator. A day with no such row is either further back than what is loaded, which scrolling up fetches, or one
+  // the chat has no message of.
+  const handleRoomJumpToDate = (bounds: { dateFrom: number; dateTo: number }): DayJump => {
+    const drawn = messages.filter(isRenderableMessage);
+    const first = drawn.find(m => {
+      const ms = timestampOf(m) * 1000;
+      return ms >= bounds.dateFrom && ms <= bounds.dateTo;
+    });
+    if (first && scrollToRow(row => row.dataset.scrollAnchor === first.id)) return 'shown';
+    const beforeLoaded = drawn.length === 0 || bounds.dateTo < timestampOf(drawn[0]) * 1000;
+    return hasMoreMessages && beforeLoaded ? 'older' : 'none';
+  };
+
   const handleSearchHit = useCallback(
     async (hit: SearchHit) => {
       // A newer hit, another session or another chat chosen while the session list is read takes over from this click.
@@ -2122,6 +2172,9 @@ export function Chats() {
       if (document.querySelector('[role="dialog"], [role="menu"]')) return;
       if (activeStatusContactId !== null) setActiveStatusContactId(null);
       else if (activeChannel) setActiveChannel(null);
+      // The in-chat search is the last thing opened in the room, so it goes first. Its own handler takes the key
+      // only while focus is inside the bar.
+      else if (activeChat && roomSearchOpen) setRoomSearchOpen(false);
       else if (activeChat && showContactInfo) {
         setContactInfoFor('');
         contactToggleRef.current?.focus();
@@ -2132,7 +2185,7 @@ export function Chats() {
     };
     document.addEventListener('keydown', closeOpenViewOnEscape);
     return () => document.removeEventListener('keydown', closeOpenViewOnEscape);
-  }, [activeStatusContactId, activeChannel, activeChat, showContactInfo, showNewChat]);
+  }, [activeStatusContactId, activeChannel, activeChat, roomSearchOpen, showContactInfo, showNewChat]);
 
   // Image and sticker media items for the lightbox, in render order (an archived sticker opens in its own viewer
   // too, see ArchivedMediaPreview). `getMediaSrc` reconstructs a usable src
@@ -2305,98 +2358,127 @@ export function Chats() {
               <div className="room-container">
                 <h2 className="visually-hidden">{activeChatTitle}</h2>
                 {/* Room header */}
-                <header className="room-header">
-                  <button className="room-back" onClick={() => setActiveChat(null)} aria-label={t('common.back')}>
-                    <ArrowLeft size={20} />
-                  </button>
-                  {/* The contact itself opens the info panel, as in WhatsApp. */}
-                  <button
-                    type="button"
-                    className="room-contact"
-                    onClick={() => setContactInfoFor(showContactInfo ? '' : openRoomKey)}
-                    title={contactInfoLabel}
-                    aria-expanded={showContactInfo}
-                  >
-                    <ChatAvatar
+                <header className={`room-header${roomSearchOpen ? ' room-header-searching' : ''}`}>
+                  {roomSearchOpen ? (
+                    <RoomSearch
+                      sessionId={selectedSessionId}
                       chatId={activeChat.id}
-                      pictureUrl={activePp.data}
-                      kind={activeChat.kind}
-                      size="sm"
-                      // Signed CDN URLs rotate every few hours; refetch the slice on a stale load.
-                      onImageError={() => activePp.refetch()}
+                      onClose={() => setRoomSearchOpen(false)}
+                      onHit={hit => scrollToRow(row => row.dataset.waMessageId === hit.waMessageId)}
+                      onJumpToDate={handleRoomJumpToDate}
                     />
-                    <span className="room-contact-info">
-                      <span className="room-contact-name">{activeChatTitleText}</span>
-                      {/* Personal chats show the prettified phone number — local formatting for
-                          @c.us ids, engine-resolved for @lid privacy ids (which are NOT phones and
-                          must never be formatted as one). Only under a saved name: an unnamed chat's
-                          title already is the number. The raw JID is in the contact panel. */}
-                      {activePhoneText && activeChat.name && (
-                        <span className="room-contact-phone" title={activePhoneText}>
-                          <bdi dir="ltr">{activePhoneText}</bdi>
-                        </span>
-                      )}
-                    </span>
-                  </button>
-
-                  <div className="room-header-actions">
-                    <div className="room-menu" ref={roomMenuRef}>
-                      <button
-                        ref={roomMenuTriggerRef}
-                        type="button"
-                        className={`icon-btn room-menu-trigger ${roomMenuOpen ? 'active' : ''}`}
-                        onClick={() => {
-                          if (activeChat.kind === 'individual') rowActions.onMenuOpen?.();
-                          setRoomMenuOpen(open => !open);
-                        }}
-                        title={t('chats.moreActions')}
-                        aria-label={t('chats.moreActions')}
-                        aria-expanded={roomMenuOpen}
-                      >
-                        <CircleEllipsis size={22} />
+                  ) : (
+                    <>
+                      <button className="room-back" onClick={() => setActiveChat(null)} aria-label={t('common.back')}>
+                        <ArrowLeft size={20} />
                       </button>
-                      {/* A disclosure of plain buttons, not role="menu": it keeps no roving focus or arrow
-                          keys, and the role would promise them. */}
-                      {roomMenuOpen && (
-                        <div className="room-menu-popover">
-                          {/* The row's actions, then what only an open room needs. The chat comes from the list,
-                              which opening it, a reload and the page's own actions keep current, not from the
-                              snapshot taken when its row was clicked. */}
-                          <ChatActions
-                            chat={chats.find(c => c.id === activeChat.id) ?? activeChat}
-                            actions={rowActions}
-                            onPicked={closeRoomMenu}
-                          />
-                          <hr />
+                      {/* The contact itself opens the info panel, as in WhatsApp. */}
+                      <button
+                        type="button"
+                        className="room-contact"
+                        onClick={() => setContactInfoFor(showContactInfo ? '' : openRoomKey)}
+                        title={contactInfoLabel}
+                        aria-expanded={showContactInfo}
+                      >
+                        <ChatAvatar
+                          chatId={activeChat.id}
+                          pictureUrl={activePp.data}
+                          kind={activeChat.kind}
+                          size="sm"
+                          // Signed CDN URLs rotate every few hours; refetch the slice on a stale load.
+                          onImageError={() => activePp.refetch()}
+                        />
+                        <span className="room-contact-info">
+                          <span className="room-contact-name">{activeChatTitleText}</span>
+                          {/* Personal chats show the prettified phone number — local formatting for
+                              @c.us ids, engine-resolved for @lid privacy ids (which are NOT phones and
+                              must never be formatted as one). Only under a saved name: an unnamed chat's
+                              title already is the number. The raw JID is in the contact panel. */}
+                          {activePhoneText && activeChat.name && (
+                            <span className="room-contact-phone" title={activePhoneText}>
+                              <bdi dir="ltr">{activePhoneText}</bdi>
+                            </span>
+                          )}
+                        </span>
+                      </button>
+
+                      <div className="room-header-actions">
+                        {/* GET /search needs the operator role, so a read-only key is not offered it, as with the
+                            sidebar's message search. */}
+                        {canWrite && (
                           <button
+                            ref={roomSearchButtonRef}
                             type="button"
+                            className="icon-btn"
                             onClick={() => {
-                              closeRoomMenu();
-                              void handleCopyChatId();
+                              setRoomMenuOpen(false);
+                              setRoomSearchOpen(true);
                             }}
+                            title={t('chats.roomSearch.open')}
+                            aria-label={t('chats.roomSearch.open')}
                           >
-                            <Copy size={16} />
-                            {t('chats.copyChatId')}
+                            <Search size={22} />
                           </button>
-                          <button type="button" onClick={() => setActiveChat(null)}>
-                            <X size={16} />
-                            {t('chats.closeChat')}
+                        )}
+                        <div className="room-menu" ref={roomMenuRef}>
+                          <button
+                            ref={roomMenuTriggerRef}
+                            type="button"
+                            className={`icon-btn room-menu-trigger ${roomMenuOpen ? 'active' : ''}`}
+                            onClick={() => {
+                              if (activeChat.kind === 'individual') rowActions.onMenuOpen?.();
+                              setRoomMenuOpen(open => !open);
+                            }}
+                            title={t('chats.moreActions')}
+                            aria-label={t('chats.moreActions')}
+                            aria-expanded={roomMenuOpen}
+                          >
+                            <CircleEllipsis size={22} />
                           </button>
+                          {/* A disclosure of plain buttons, not role="menu": it keeps no roving focus or arrow
+                              keys, and the role would promise them. */}
+                          {roomMenuOpen && (
+                            <div className="room-menu-popover">
+                              {/* The row's actions, then what only an open room needs. The chat comes from the list,
+                                  which opening it, a reload and the page's own actions keep current, not from the
+                                  snapshot taken when its row was clicked. */}
+                              <ChatActions
+                                chat={chats.find(c => c.id === activeChat.id) ?? activeChat}
+                                actions={rowActions}
+                                onPicked={closeRoomMenu}
+                              />
+                              <hr />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  closeRoomMenu();
+                                  void handleCopyChatId();
+                                }}
+                              >
+                                <Copy size={16} />
+                                {t('chats.copyChatId')}
+                              </button>
+                              <button type="button" onClick={() => setActiveChat(null)}>
+                                <X size={16} />
+                                {t('chats.closeChat')}
+                              </button>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                    <button
-                      ref={contactToggleRef}
-                      type="button"
-                      className={`icon-btn ${showContactInfo ? 'active' : ''}`}
-                      onClick={() => setContactInfoFor(showContactInfo ? '' : openRoomKey)}
-                      title={contactInfoLabel}
-                      aria-label={contactInfoLabel}
-                      aria-pressed={showContactInfo}
-                    >
-                      <PanelRight size={22} />
-                    </button>
-                  </div>
+                        <button
+                          ref={contactToggleRef}
+                          type="button"
+                          className={`icon-btn ${showContactInfo ? 'active' : ''}`}
+                          onClick={() => setContactInfoFor(showContactInfo ? '' : openRoomKey)}
+                          title={contactInfoLabel}
+                          aria-label={contactInfoLabel}
+                          aria-pressed={showContactInfo}
+                        >
+                          <PanelRight size={22} />
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </header>
 
                 {/* Messages body (list, media, reactions, scroll-to-bottom) — components/chats/ChatThread. */}

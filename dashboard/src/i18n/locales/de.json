@@ -351,6 +351,15 @@
         "always": "Immer"
       },
       "saveContactUnavailable": "Braucht eine bekannte Telefonnummer: Dieser Chat hat nur eine Datenschutz-ID (@lid)."
+    },
+    "roomSearch": {
+      "title": "Nachrichten suchen",
+      "placeholder": "Suchen",
+      "date": "Zu Datum springen",
+      "clearDate": "Datum leeren",
+      "noDateHits": "Keine geladenen Nachrichten an diesem Tag",
+      "notLoaded": "Älter als die in diesem Chat geladenen Nachrichten. Im Chat nach oben scrollen, um ältere Nachrichten zu laden.",
+      "open": "Im Chat suchen"
     }
   },
   "errorBoundary": {

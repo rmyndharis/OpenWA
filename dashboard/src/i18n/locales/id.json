@@ -351,6 +351,15 @@
         "always": "Selalu"
       },
       "saveContactUnavailable": "Memerlukan nomor telepon yang diketahui: obrolan ini hanya memiliki ID privasi (@lid)."
+    },
+    "roomSearch": {
+      "title": "Cari pesan",
+      "placeholder": "Cari",
+      "date": "Lompat ke tanggal",
+      "clearDate": "Hapus tanggal",
+      "noDateHits": "Tidak ada pesan termuat pada hari itu",
+      "notLoaded": "Lebih lama dari pesan yang termuat di chat ini. Gulir ke atas di chat untuk memuat pesan lama.",
+      "open": "Cari di chat"
     }
   },
   "errorBoundary": {

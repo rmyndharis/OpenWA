@@ -356,6 +356,15 @@
         "always": "Sempre"
       },
       "saveContactUnavailable": "Serve un numero di telefono noto: questa chat ha solo un ID privacy (@lid)."
+    },
+    "roomSearch": {
+      "title": "Cerca messaggi",
+      "placeholder": "Cerca",
+      "date": "Vai alla data",
+      "clearDate": "Cancella data",
+      "noDateHits": "Nessun messaggio caricato in quel giorno",
+      "notLoaded": "Precedente ai messaggi caricati in questa chat. Scorri verso l’alto nella chat per caricare i messaggi precedenti.",
+      "open": "Cerca nella chat"
     }
   },
   "errorBoundary": {

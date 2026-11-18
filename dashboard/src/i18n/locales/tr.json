@@ -351,6 +351,15 @@
         "always": "Her zaman"
       },
       "saveContactUnavailable": "Bilinen bir telefon numarası gerekir: bu sohbetin yalnızca bir gizlilik kimliği (@lid) var."
+    },
+    "roomSearch": {
+      "title": "Mesajlarda ara",
+      "placeholder": "Ara",
+      "date": "Tarihe git",
+      "clearDate": "Tarihi temizle",
+      "noDateHits": "O gün yüklenmiş mesaj yok",
+      "notLoaded": "Bu sohbette yüklenmiş mesajlardan daha eski. Daha eski mesajları yüklemek için sohbette yukarı kaydırın.",
+      "open": "Sohbette ara"
     }
   },
   "errorBoundary": {

@@ -310,6 +310,13 @@ export const getMediaSrc = (media?: MessageMedia): string => {
 };
 
 /**
+ * A message's time in epoch seconds as the thread dates it, for its clock and its day separators: the WhatsApp
+ * timestamp, else when the gateway stored it.
+ */
+export const timestampOf = (msg: ChatMessageView): number =>
+  msg.timestamp || Math.floor(new Date(msg.createdAt).getTime() / 1000);
+
+/**
  * Whether the thread has anything to draw for a row. An `unknown` row with no text, media, quote or
  * prompt buttons would be a bubble holding a sender and a time and nothing else, so it is left out of
  * the thread and of everything that asks which row is last.

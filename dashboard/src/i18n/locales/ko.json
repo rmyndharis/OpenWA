@@ -351,6 +351,15 @@
         "always": "항상"
       },
       "saveContactUnavailable": "알려진 전화번호가 필요합니다. 이 채팅에는 개인정보 보호 ID(@lid)만 있습니다."
+    },
+    "roomSearch": {
+      "title": "메시지 검색",
+      "placeholder": "검색",
+      "date": "날짜로 이동",
+      "clearDate": "날짜 지우기",
+      "noDateHits": "그날 불러온 메시지 없음",
+      "notLoaded": "이 채팅에 불러온 메시지보다 이전입니다. 채팅에서 위로 스크롤하면 이전 메시지를 불러옵니다.",
+      "open": "채팅에서 검색"
     }
   },
   "errorBoundary": {

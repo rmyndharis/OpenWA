@@ -351,6 +351,15 @@
         "always": "Always"
       },
       "saveContactUnavailable": "Needs a known phone number: this chat has only a privacy id (@lid)."
+    },
+    "roomSearch": {
+      "title": "Search messages",
+      "placeholder": "Search",
+      "date": "Jump to date",
+      "clearDate": "Clear date",
+      "noDateHits": "No loaded messages on that day",
+      "notLoaded": "Older than the messages loaded in this chat. Scroll up in the chat to load older messages.",
+      "open": "Search in chat"
     }
   },
   "errorBoundary": {
