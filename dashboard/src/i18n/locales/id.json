@@ -90,6 +90,7 @@
     "loadingChats": "Memuat obrolan...",
     "empty": "Tidak ada obrolan",
     "noMessageYet": "Belum ada pesan",
+    "draftLabel": "Draf:",
     "unreadBadge": "{{count}} pesan belum dibaca",
     "unreadBadge_other": "{{count}} pesan belum dibaca",
     "markedUnread": "Ditandai belum dibaca",

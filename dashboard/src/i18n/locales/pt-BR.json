@@ -92,6 +92,7 @@
     "loadingChats": "Carregando chats...",
     "empty": "Sem chats",
     "noMessageYet": "Ainda sem mensagens",
+    "draftLabel": "Rascunho:",
     "unreadBadge": "{{count}} mensagem não lida",
     "unreadBadge_other": "{{count}} mensagens não lidas",
     "unreadBadge_many": "{{count}} mensagens não lidas",

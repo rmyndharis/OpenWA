@@ -90,6 +90,7 @@
     "loadingChats": "चैट लोड हो रहे हैं...",
     "empty": "कोई चैट नहीं",
     "noMessageYet": "अभी तक कोई संदेश नहीं",
+    "draftLabel": "ड्राफ़्ट:",
     "unreadBadge": "{{count}} अपठित संदेश",
     "unreadBadge_other": "{{count}} अपठित संदेश",
     "markedUnread": "अपठित के रूप में चिह्नित",

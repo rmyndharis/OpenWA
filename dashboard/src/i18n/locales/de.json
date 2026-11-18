@@ -90,6 +90,7 @@
     "loadingChats": "Chats werden geladen...",
     "empty": "Keine Chats",
     "noMessageYet": "Noch keine Nachrichten",
+    "draftLabel": "Entwurf:",
     "unreadBadge": "{{count}} ungelesene Nachricht",
     "unreadBadge_other": "{{count}} ungelesene Nachrichten",
     "markedUnread": "Als ungelesen markiert",

@@ -98,6 +98,7 @@
     "loadingChats": "جارٍ تحميل المحادثات...",
     "empty": "لا توجد محادثات",
     "noMessageYet": "لا توجد رسائل بعد",
+    "draftLabel": "مسودة:",
     "unreadBadge": "{{count}} رسالة غير مقروءة",
     "unreadBadge_other": "{{count}} رسالة غير مقروءة",
     "unreadBadge_two": "{{count}} رسالتان غير مقروءتان",
