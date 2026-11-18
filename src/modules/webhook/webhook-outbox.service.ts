@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { And, In, IsNull, LessThan, Not, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
 import { WebhookOutboxEvent, WebhookOutboxState } from './entities/webhook-outbox-event.entity';
 import { createLogger } from '../../common/services/logger.service';
+import { pruneInBatches } from '../../common/utils/batched-prune';
 import { isUniqueViolation } from '../../common/utils/db-errors';
 
 const DEFAULT_OUTBOX_RETENTION_DAYS = 7;
@@ -31,6 +32,7 @@ export interface ReplayableDelivery {
 export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookOutboxService');
   private pruneTimer?: ReturnType<typeof setInterval>;
+  private stopped = false;
 
   constructor(
     @InjectRepository(WebhookOutboxEvent, 'data')
@@ -72,15 +74,19 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleDestroy(): void {
+    this.stopped = true;
     if (this.pruneTimer) clearInterval(this.pruneTimer);
   }
 
-  /** Delete settled rows older than the window. Returns the number removed. */
+  /** Delete settled rows older than the window, a batch at a time. Returns the number removed. */
   async pruneSettled(olderThanDays: number): Promise<number> {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - olderThanDays);
-    const result = await this.outbox.delete({ state: Not(In(['pending', 'queued'])), createdAt: LessThan(cutoff) });
-    return result.affected || 0;
+    return pruneInBatches({
+      repository: this.outbox,
+      where: { state: Not(In(['pending', 'queued'])), createdAt: LessThan(cutoff) },
+      stopped: () => this.stopped,
+    });
   }
 
   /**

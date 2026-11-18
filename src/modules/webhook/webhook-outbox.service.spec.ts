@@ -103,11 +103,16 @@ describe('WebhookOutboxService', () => {
 });
 
 describe('WebhookOutboxService retention', () => {
-  let repo: { delete: jest.Mock };
+  let repo: { find: jest.Mock; delete: jest.Mock; manager: unknown };
   let service: WebhookOutboxService;
 
   beforeEach(() => {
-    repo = { delete: jest.fn().mockResolvedValue({ affected: 3 }) };
+    repo = {
+      find: jest.fn().mockResolvedValue([{ id: 'a' }, { id: 'b' }, { id: 'c' }]),
+      delete: jest.fn().mockResolvedValue({ affected: 3 }),
+      // The dialect the batched prune asks for.
+      manager: { connection: { options: { type: 'better-sqlite3' } } },
+    };
     service = new WebhookOutboxService(repo as never);
   });
 
@@ -115,20 +120,23 @@ describe('WebhookOutboxService retention', () => {
     const removed = await service.pruneSettled(7);
 
     expect(removed).toBe(3);
-    const [[where]] = repo.delete.mock.calls as unknown as [
-      [{ state: { type: string; value: unknown }; createdAt: { type: string } }],
+    // The ids are read with the condition and removed by id.
+    const [[{ where }]] = repo.find.mock.calls as unknown as [
+      [{ where: { state: { type: string; value: unknown }; createdAt: { type: string } } }],
     ];
     // Deleting a 'pending' row on age would discard the delivery this table exists to protect.
     expect(where.state.type).toBe('not');
     expect(where.state.value).toEqual(['pending', 'queued']);
     expect(where.createdAt.type).toBe('lessThan');
+    expect(repo.delete).toHaveBeenCalledWith(['a', 'b', 'c']);
   });
 
-  it('refuses a retention window that would let the table grow without bound', () => {
+  it('refuses a retention window that would let the table grow without bound', async () => {
     const prev = process.env.WEBHOOK_OUTBOX_RETENTION_DAYS;
     process.env.WEBHOOK_OUTBOX_RETENTION_DAYS = '0';
     try {
       service.onModuleInit();
+      await new Promise(resolve => setImmediate(resolve));
       // A settled row carries no payload and no audit value, so opting into unbounded growth buys
       // nothing: the value falls back rather than disabling the prune.
       expect(repo.delete).toHaveBeenCalled();

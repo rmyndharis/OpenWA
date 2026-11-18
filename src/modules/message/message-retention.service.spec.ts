@@ -132,6 +132,47 @@ describe('MessageRetentionService against a real database', () => {
     expect(del).toHaveBeenCalledTimes(3); // 500 + 500 + 203
   });
 
+  // SQLite resolves every statement of a pass within the same turn and the awaits between them are microtasks, so a
+  // run that does not give the event loop up holds the process, requests and sockets included, from its first
+  // statement to its last (7.4 s for 100,000 expired messages with the full-text trigger).
+  it('gives up the event loop between statements, so a timer fires between any two of them', async () => {
+    process.env.MESSAGE_RETENTION_DAYS = '30';
+    await addMessages(1203, daysAgo(60));
+    const log: Array<'statement' | 'tick'> = [];
+    const remove = messages.delete.bind(messages) as (ids: string[]) => Promise<unknown>;
+    jest.spyOn(messages, 'delete').mockImplementation(((ids: string[]) => {
+      log.push('statement');
+      return remove(ids);
+    }) as never);
+    const timer = setInterval(() => log.push('tick'), 1);
+
+    try {
+      await service.prune(NOW);
+    } finally {
+      clearInterval(timer);
+    }
+
+    const statements = log.flatMap((entry, index) => (entry === 'statement' ? [index] : []));
+    expect(statements).toHaveLength(3);
+    for (let i = 1; i < statements.length; i++) {
+      expect(log.slice(statements[i - 1], statements[i])).toContain('tick');
+    }
+  });
+
+  it('ends a run between statements once the service is destroyed', async () => {
+    process.env.MESSAGE_RETENTION_DAYS = '30';
+    await addMessages(1203, daysAgo(60));
+    const remove = messages.delete.bind(messages) as (ids: string[]) => Promise<unknown>;
+    jest.spyOn(messages, 'delete').mockImplementationOnce(((ids: string[]) => {
+      service.onModuleDestroy();
+      return remove(ids);
+    }) as never);
+
+    expect((await service.prune(NOW)).messages).toBe(500);
+
+    expect(await messages.count()).toBe(703);
+  });
+
   it('prunes finished batches past the window but never a pending or processing one', async () => {
     process.env.MESSAGE_RETENTION_DAYS = '30';
     await addBatch('done-old', BatchStatus.COMPLETED, daysAgo(40));

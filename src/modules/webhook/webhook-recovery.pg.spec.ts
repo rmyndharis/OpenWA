@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'crypto';
 import { ConfigService } from '@nestjs/config';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, IsNull, Repository } from 'typeorm';
 import { Session } from '../session/entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { Webhook } from './entities/webhook.entity';
@@ -14,6 +14,7 @@ import { DeduplicateTerminalWebhookFailures1787200000000 } from '../../database/
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import type { StorageService } from '../../common/storage/storage.service';
 import { mergeSentMetadata, updateMessageMetadata } from '../message/message-metadata';
+import { PRUNE_BATCH_SIZE, PRUNE_READ_AHEAD_POSTGRES, pruneInBatches } from '../../common/utils/batched-prune';
 
 const describePostgres = process.env.DATABASE_TYPE === 'postgres' ? describe : describe.skip;
 
@@ -321,6 +322,89 @@ describePostgres('webhook and media recovery on PostgreSQL', () => {
     expect(await repository.findOneByOrFail({ id: raced.id })).toMatchObject({
       mediaPath: null,
       metadata: { ...metadata, reactions: ['kept'] },
+    });
+  });
+  // A retention backlog is removed in statements of one batch, fed by a read that looks ahead: a read after every
+  // statement goes back over the entries of rows already deleted that a vacuum has not removed yet.
+  describe('retention prunes of a backlog', () => {
+    const seedOutbox = (count: number, state: string, prefix: string): Promise<unknown> =>
+      ds.query(
+        `INSERT INTO webhook_outbox_events (id, "webhookId", "sessionId", event, "idempotencyKey", "deliveryId", payload, state, attempts, "createdAt")
+         SELECT gen_random_uuid(), 'wh-1', 'sess-1', 'message.ack', '${prefix}-' || i, 'dlv-${prefix}-' || i, NULL, '${state}', 0, now() - interval '30 days'
+         FROM generate_series(1, $1) AS i`,
+        [count],
+      );
+    const seedFailures = (count: number, prefix: string, age: string): Promise<unknown> =>
+      ds.query(
+        `INSERT INTO webhook_delivery_failures (id, "webhookId", "sessionId", event, url, "idempotencyKey", "deliveryId", attempts, "lastStatusCode", "lastError", payload, "createdAt")
+         SELECT gen_random_uuid(), 'wh-1', 'sess-1', 'message.received', 'https://receiver.example/hook', '${prefix}-' || i, 'dlv-${prefix}-' || i, 3, 503, 'HTTP 503: unavailable', '{"event":"message.received"}'::jsonb, now() - interval '${age}'
+         FROM generate_series(1, $1) AS i`,
+        [count],
+      );
+    const sizes = (spy: jest.SpyInstance): number[] =>
+      (spy.mock.calls as unknown[][]).map(([ids]) => (ids as string[]).length);
+
+    it('removes settled outbox rows with one read per twenty statements, and keeps the rows a replay needs', async () => {
+      const outbox = ds.getRepository(WebhookOutboxEvent);
+      const backlog = PRUNE_BATCH_SIZE * PRUNE_READ_AHEAD_POSTGRES + 700;
+      await seedOutbox(backlog, 'dispatched', 'old');
+      await seedOutbox(3, 'pending', 'held');
+      await seedOutbox(2, 'queued', 'queued');
+      const find = jest.spyOn(outbox, 'find');
+      const remove = jest.spyOn(outbox, 'delete');
+
+      await expect(new WebhookOutboxService(outbox).pruneSettled(7)).resolves.toBe(backlog);
+
+      expect(find.mock.calls.map(([options]) => options?.take)).toEqual([
+        PRUNE_BATCH_SIZE * PRUNE_READ_AHEAD_POSTGRES,
+        PRUNE_BATCH_SIZE * PRUNE_READ_AHEAD_POSTGRES,
+      ]);
+      expect(sizes(remove)).toHaveLength(Math.ceil(backlog / PRUNE_BATCH_SIZE));
+      expect(Math.max(...sizes(remove))).toBe(PRUNE_BATCH_SIZE);
+      expect(await outbox.count()).toBe(5);
+    });
+
+    it('clears the payloads of a backlog of failure rows, then expires the rows, in bounded statements', async () => {
+      const backlog = 2 * PRUNE_BATCH_SIZE + 300;
+      await seedFailures(backlog, 'old', '200 days');
+      await seedFailures(4, 'recent', '1 minute');
+      const service = new WebhookService(null as never, failures, null as never, null as never, null as never);
+      const update = jest.spyOn(failures, 'update');
+      const remove = jest.spyOn(failures, 'delete');
+
+      await expect(service.pruneDeliveryFailurePayloads(72)).resolves.toBe(backlog);
+
+      expect(sizes(update)).toEqual([PRUNE_BATCH_SIZE, PRUNE_BATCH_SIZE, 300]);
+      expect(await failures.count()).toBe(backlog + 4);
+      const held = await ds.query<Array<{ held: string }>>(
+        `SELECT count(*) AS held FROM webhook_delivery_failures WHERE payload IS NOT NULL`,
+      );
+      expect(Number(held[0].held)).toBe(4);
+
+      await expect(service.pruneDeliveryFailures(90)).resolves.toBe(backlog);
+
+      expect(sizes(remove)).toEqual([PRUNE_BATCH_SIZE, PRUNE_BATCH_SIZE, 300]);
+      expect(await failures.count()).toBe(4);
+    });
+
+    it('reads an OR of conditions in the order it is given, up to its cap', async () => {
+      await seedOutbox(5, 'failed', 'failed');
+      await ds.query(
+        `UPDATE webhook_outbox_events SET state = NULL WHERE "idempotencyKey" IN ('failed-1', 'failed-2')`,
+      );
+      await seedOutbox(3, 'pending', 'held');
+      const outbox = ds.getRepository(WebhookOutboxEvent);
+
+      const removed = await pruneInBatches({
+        repository: outbox,
+        where: [{ state: 'failed' }, { state: IsNull() }],
+        order: { idempotencyKey: 'ASC' },
+        maxRows: 3,
+      });
+
+      expect(removed).toBe(3);
+      const left = (await outbox.find({ order: { idempotencyKey: 'ASC' } })).map(row => row.idempotencyKey);
+      expect(left).toEqual(['failed-4', 'failed-5', 'held-1', 'held-2', 'held-3']);
     });
   });
 });

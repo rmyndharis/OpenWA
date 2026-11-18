@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { LessThan, Repository } from 'typeorm';
 import { SendIdempotencyKey } from '../entities/send-idempotency-key.entity';
+import { pruneInBatches } from '../../../common/utils/batched-prune';
 import { isUniqueViolation } from '../../../common/utils/db-errors';
 import { createLogger } from '../../../common/services/logger.service';
 
@@ -71,6 +72,7 @@ export type SendIdempotencyClaim =
 export class SendIdempotencyService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('SendIdempotency');
   private pruneTimer: NodeJS.Timeout | null = null;
+  private stopped = false;
 
   constructor(
     @InjectRepository(SendIdempotencyKey, 'data')
@@ -83,6 +85,7 @@ export class SendIdempotencyService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleDestroy(): void {
+    this.stopped = true;
     if (this.pruneTimer) clearInterval(this.pruneTimer);
     this.pruneTimer = null;
   }
@@ -160,16 +163,20 @@ export class SendIdempotencyService implements OnModuleInit, OnModuleDestroy {
     await this.keys.update({ id }, { state: 'failed' });
   }
 
-  /** Delete keys past their window. Runs hourly; a claim also clears an expired row it collides with. */
+  /** Delete keys past their window, a batch at a time. Runs hourly; a claim also clears an expired row it collides with. */
   async pruneExpired(now = new Date()): Promise<number> {
     try {
-      const { affected } = await this.keys.delete({ expiresAt: LessThan(now) });
-      if (affected) {
-        this.logger.debug(`Pruned ${affected} expired send idempotency key(s)`, {
+      const removed = await pruneInBatches({
+        repository: this.keys,
+        where: { expiresAt: LessThan(now) },
+        stopped: () => this.stopped,
+      });
+      if (removed) {
+        this.logger.debug(`Pruned ${removed} expired send idempotency key(s)`, {
           action: 'send_idempotency_prune',
         });
       }
-      return affected ?? 0;
+      return removed;
     } catch (error) {
       this.logger.warn('Send idempotency key prune failed', {
         error: error instanceof Error ? error.message : String(error),

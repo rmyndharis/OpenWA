@@ -179,14 +179,26 @@ describe('IntegrationRetentionService.onModuleInit (retention scheduling)', () =
   const original = process.env.INGRESS_RETENTION_DAYS;
   const originalDedup = process.env.INGRESS_DEDUP_RETENTION_DAYS;
 
+  // Repositories the batched prune can drive: the dialect it asks for, and one expired event to find and delete.
   const mockRepos = () => {
-    const eventsDelete = jest.fn().mockResolvedValue({ affected: 0 });
+    const manager = { connection: { options: { type: 'better-sqlite3' } } };
+    const eventsDelete = jest.fn().mockResolvedValue({ affected: 1 });
     const failuresDelete = jest.fn().mockResolvedValue({ affected: 0 });
+    const failuresFind = jest.fn().mockResolvedValue([]);
     return {
       eventsDelete,
       failuresDelete,
-      events: { delete: eventsDelete } as unknown as Repository<IngressEvent>,
-      failures: { delete: failuresDelete } as unknown as Repository<IntegrationDeliveryFailure>,
+      failuresFind,
+      events: {
+        manager,
+        find: jest.fn().mockResolvedValue([{ id: 'expired' }]),
+        delete: eventsDelete,
+      } as unknown as Repository<IngressEvent>,
+      failures: {
+        manager,
+        find: failuresFind,
+        delete: failuresDelete,
+      } as unknown as Repository<IntegrationDeliveryFailure>,
       reconciler: { deadLetterAgedPending: jest.fn().mockResolvedValue(0) } as unknown as IngressReconcilerService,
     };
   };
@@ -208,7 +220,8 @@ describe('IntegrationRetentionService.onModuleInit (retention scheduling)', () =
     // Let the startup prune promise settle (the method runs before the log .then()).
     await new Promise(resolve => setImmediate(resolve));
     // Dedup rows are never an audit log — their prune cannot be disabled to infinity.
-    expect(repos.eventsDelete).toHaveBeenCalled();
+    expect(repos.eventsDelete).toHaveBeenCalledWith(['expired']);
+    expect(repos.failuresFind).not.toHaveBeenCalled();
     expect(repos.failuresDelete).not.toHaveBeenCalled();
     svc.onModuleDestroy();
   });
@@ -616,12 +629,14 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
 
   it('still prunes aged events when the dead-letter prune fails', async () => {
     await insertEvent('dispatched', { dispatchState: 'dispatched', payload: null });
+    await insertAgedFailure();
     jest.spyOn(failures, 'delete').mockRejectedValueOnce(new Error('locked'));
 
     const result = await service.pruneOlderThan(7, 90);
 
     expect(result).toEqual({ events: 1, failures: 0 });
     expect(await events.count()).toBe(0);
+    expect(await failures.count()).toBe(1);
   });
 
   // A dead letter older than the 90-day window, so the first step of a run has something to remove.
@@ -642,6 +657,7 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
 
   it('still hands off an aged pending event when the dedup delete fails', async () => {
     await insertEvent('stranded', {});
+    await insertEvent('dispatched', { dispatchState: 'dispatched', payload: null });
     await insertAgedFailure();
     jest.spyOn(events, 'delete').mockRejectedValueOnce(new Error('locked'));
 

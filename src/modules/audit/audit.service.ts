@@ -6,6 +6,7 @@ import { ApiKey } from '../auth/entities/api-key.entity';
 import { createLogger } from '../../common/services/logger.service';
 import { getRequestId, getRequestActor } from '../../common/services/request-context';
 import { resolveSessionScope } from '../../common/security/session-scope';
+import { pruneInBatches } from '../../common/utils/batched-prune';
 
 /** Upper bound on a single audit-log page, so a large `limit` can't load the whole table at once. */
 export const MAX_AUDIT_PAGE_SIZE = 200;
@@ -48,6 +49,7 @@ export interface AuditQueryOptions {
 export class AuditService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('AuditService');
   private cleanupTimer?: ReturnType<typeof setInterval>;
+  private stopped = false;
 
   constructor(
     @InjectRepository(AuditLog, 'main')
@@ -79,6 +81,7 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleDestroy(): void {
+    this.stopped = true;
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
     }
@@ -181,14 +184,15 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
     return { data, total };
   }
 
+  /** Delete rows older than the window, a batch at a time. Returns the number removed. */
   async cleanup(olderThanDays = 30): Promise<number> {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - olderThanDays);
 
-    const result = await this.auditRepository.delete({
-      createdAt: LessThan(cutoffDate),
+    return pruneInBatches({
+      repository: this.auditRepository,
+      where: { createdAt: LessThan(cutoffDate) },
+      stopped: () => this.stopped,
     });
-
-    return result.affected || 0;
   }
 }
