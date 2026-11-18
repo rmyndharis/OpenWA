@@ -84,6 +84,7 @@
                 "send_pacing_blocked",
                 "send_breaker_tripped",
                 "webhook_created",
+                "webhook_updated",
                 "webhook_deleted",
                 "webhook_triggered",
                 "webhook_failed",
