@@ -352,6 +352,17 @@
       },
       "saveContactUnavailable": "Braucht eine bekannte Telefonnummer: Dieser Chat hat nur eine Datenschutz-ID (@lid)."
     },
+    "slash": {
+      "title": "Schnellantworten",
+      "hint": "Enter fügt die markierte Vorlage ein. Senden, wenn sie fertig ist.",
+      "placeholder": "Nachricht oder /vorlage…",
+      "empty": "Keine passende Vorlage",
+      "needsVars": "Fülle die Platzhalter der Vorlage aus, bevor du sendest.",
+      "loading": "Vorlagen werden geladen… Enter wartet, bis sie da sind.",
+      "loadError": "Vorlagen konnten nicht geladen werden",
+      "close": "Vorlagenliste schließen",
+      "more": "Weitere Vorlagen passen. Tippe weiter, um die Liste einzugrenzen."
+    },
     "roomSearch": {
       "title": "Nachrichten suchen",
       "placeholder": "Suchen",

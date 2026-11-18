@@ -13,12 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP: every tool is advertised with a `title`, the name a client shows: the tool name split into words, or the `title` its descriptor sets (#2098). Thanks @sudipta-prodevs.
 - MCP: `MCP_MAX_RESULT_BYTES`, an opt-in cap for clients that put a whole tool result in the model's context. When set, every result, an error answer included, is one text item, cut at that many bytes with a note of its full size, and none is offloaded as a base64 resource; unset or `0`, the default, changes nothing (#2100). Thanks @sudipta-prodevs.
 - Dashboard: a message typed in a chat but not sent is listed on that chat's row, after a `Draft:` label, in place of the last message until the chat is opened again (#2125). Thanks @juanbracamonte.
+- Dashboard: `/name` typed in the chat composer offers the session's templates by name, and Enter or a click puts the chosen one in the message field, to be sent like any other message (#2123). Thanks @juanbracamonte.
 
 ### Changed
 
 - whatsapp-web.js: block and unblock use the library's own LID handling, so an unblock no longer also removes an entry the same person holds under a second id, such as a phone-keyed block from before the LID migration (see Upgrade notes), and a number WhatsApp holds no privacy id for answers `400`. The install-time block patch is retired.
 - The MCP `MessageList` tool lists a media message without its payload unless the call sets `inlineMedia: true`, where it carried the base64 inline up to the 8 MiB budget, so one photo made the result larger than an MCP client takes.
 - Dashboard: a document in a chat shows as a card with its file name, its size where known and a PDF mark, and a click still downloads it; one left out of the message list showed only `Media` (#2105). Thanks @mbdali.
+- Dashboard: the message field of a chat is multi-line and grows with its draft: Enter sends, Shift+Enter breaks the line (#2123). Thanks @juanbracamonte.
 
 ### Fixed
 

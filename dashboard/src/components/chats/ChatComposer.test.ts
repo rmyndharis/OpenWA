@@ -11,6 +11,7 @@ import type { StagedAttachment } from './ChatComposer.tsx';
 let rtl: typeof import('@testing-library/react');
 let ChatComposer: (typeof import('./ChatComposer.tsx'))['default'];
 let wrap: (children: ReactNode) => ReactNode;
+let queryClient: import('@tanstack/react-query').QueryClient;
 
 // Reads held until the test finishes them, so a send can land while one is still in flight.
 const heldReads: Array<() => void> = [];
@@ -41,7 +42,12 @@ before(async () => {
   await installJsdomGlobals();
   (globalThis as Record<string, unknown>).FileReader = HeldFileReader;
   globalThis.fetch = ((input: RequestInfo | URL) => {
-    sentPaths.push(new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost').pathname);
+    const path = new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost').pathname;
+    // Composer also loads session templates for `/name` shortcuts; keep that off the send path log.
+    if (path.includes('/templates')) {
+      return Promise.resolve(new Response('[]', { headers: { 'Content-Type': 'application/json' } }));
+    }
+    sentPaths.push(path);
     return Promise.resolve(
       new Response(JSON.stringify({ messageId: 'sent-1' }), { headers: { 'Content-Type': 'application/json' } }),
     );
@@ -52,7 +58,8 @@ before(async () => {
   const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
   const { ToastProvider } = await import('../Toast.tsx');
   const { RoleContext } = await import('../../hooks/useRole.tsx');
-  const queryClient = new QueryClient();
+  // Short GC so the templates query from `/name` does not keep the suite alive past --test-timeout.
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   const role = {
     role: 'admin' as const,
     setRole: () => undefined,
@@ -76,11 +83,15 @@ before(async () => {
 
 afterEach(() => {
   rtl.cleanup();
+  queryClient.clear();
   heldReads.length = 0;
   sentPaths.length = 0;
 });
 
-after(() => rtl.cleanup());
+after(() => {
+  rtl.cleanup();
+  queryClient.clear();
+});
 
 function Harness({ reply = null }: { reply?: ChatMessageView | null }) {
   const [messageInput, setMessageInput] = useState('');
@@ -147,6 +158,17 @@ test('sending while a replacement pick is still being read sends neither file an
     'new.pdf',
     'the replacement pick was dropped',
   );
+});
+
+test('Enter sends the draft and Shift+Enter does not', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  rtl.render(wrap(createElement(Harness)));
+  const field = screen.getByPlaceholderText('Type a message...');
+  fireEvent.change(field, { target: { value: 'hello' } });
+  fireEvent.keyDown(field, { key: 'Enter', shiftKey: true });
+  assert.equal(sentPaths.length, 0, 'Shift+Enter sent the draft');
+  fireEvent.keyDown(field, { key: 'Enter' });
+  await waitFor(() => assert.deepEqual(sentPaths, ['/api/sessions/sess-1/messages/send-text']));
 });
 
 test('the attachment and reply banners name the buttons that close them', async () => {

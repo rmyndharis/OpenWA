@@ -11,6 +11,7 @@ import type { StagedAttachment } from './ChatComposer.tsx';
 let rtl: typeof import('@testing-library/react');
 let ChatComposer: (typeof import('./ChatComposer.tsx'))['default'];
 let wrap: (children: ReactNode) => ReactNode;
+let queryClient: import('@tanstack/react-query').QueryClient;
 
 const aliceChat: Chat = {
   id: 'alice@c.us',
@@ -43,7 +44,12 @@ const onSentCalls: Array<{ sessionId: string; chatId: string; snippet: string }>
 before(async () => {
   const { installJsdomGlobals } = await import('../../test-helpers/jsdom.ts');
   await installJsdomGlobals();
-  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost').pathname;
+    // The composer loads the session's templates as well: that list is answered at once and is no send.
+    if (path.includes('/templates')) {
+      return Promise.resolve(new Response('[]', { headers: { 'Content-Type': 'application/json' } }));
+    }
     const parsed = init?.body ? (JSON.parse(String(init.body)) as { chatId?: string; text?: string }) : {};
     sentBodies.push(parsed);
     const idx = sentBodies.length;
@@ -63,7 +69,9 @@ before(async () => {
   const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
   const { ToastProvider } = await import('../Toast.tsx');
   const { RoleContext } = await import('../../hooks/useRole.tsx');
-  const queryClient = new QueryClient();
+  // retry/gcTime match the page suites: a default client keeps query GC timers alive and the file
+  // never exits (node --test then kills it at --test-timeout with the suite still "running").
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   const role = {
     role: 'admin' as const,
     setRole: () => undefined,
@@ -88,11 +96,15 @@ before(async () => {
 afterEach(() => {
   while (pendingResolvers.length > 0) pendingResolvers.shift()?.();
   rtl.cleanup();
+  queryClient.clear();
   sentBodies.length = 0;
   onSentCalls.length = 0;
 });
 
-after(() => rtl.cleanup());
+after(() => {
+  rtl.cleanup();
+  queryClient.clear();
+});
 
 function Harness({ activeChat }: { activeChat: Chat }) {
   const [messageInput, setMessageInput] = useState('');

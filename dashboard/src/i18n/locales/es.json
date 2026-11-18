@@ -357,6 +357,17 @@
       },
       "saveContactUnavailable": "Necesita un número de teléfono conocido: este chat solo tiene un ID de privacidad (@lid)."
     },
+    "slash": {
+      "title": "Respuestas rápidas",
+      "hint": "Enter inserta la plantilla resaltada. Envíala cuando esté lista.",
+      "placeholder": "Mensaje o /plantilla…",
+      "empty": "Ninguna plantilla coincide",
+      "needsVars": "Completa las variables de la plantilla antes de enviar.",
+      "loading": "Cargando plantillas… Enter espera a que se carguen.",
+      "loadError": "No se pudieron cargar las plantillas",
+      "close": "Cerrar la lista de plantillas",
+      "more": "Hay más plantillas que coinciden. Sigue escribiendo para acotar la lista."
+    },
     "roomSearch": {
       "title": "Buscar mensajes",
       "placeholder": "Buscar",

@@ -352,6 +352,17 @@
       },
       "saveContactUnavailable": "需要已知的電話號碼：此聊天只有私隱 ID（@lid）。"
     },
+    "slash": {
+      "title": "快速回覆",
+      "hint": "Enter 插入反白的範本。準備好再傳送。",
+      "placeholder": "訊息或 /範本…",
+      "empty": "沒有相符範本",
+      "needsVars": "傳送前請先填寫範本中的佔位符。",
+      "loading": "正在載入範本… 載入完成前，Enter 暫不生效。",
+      "loadError": "無法載入範本",
+      "close": "關閉範本清單",
+      "more": "還有更多相符的範本。繼續輸入以縮小範圍。"
+    },
     "roomSearch": {
       "title": "搜尋訊息",
       "placeholder": "搜尋",

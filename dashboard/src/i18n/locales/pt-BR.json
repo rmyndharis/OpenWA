@@ -357,6 +357,17 @@
       },
       "saveContactUnavailable": "Precisa de um número de telefone conhecido: esta conversa tem só um ID de privacidade (@lid)."
     },
+    "slash": {
+      "title": "Respostas rápidas",
+      "hint": "Enter insere o modelo destacado. Envie quando estiver pronto.",
+      "placeholder": "Mensagem ou /modelo…",
+      "empty": "Nenhum modelo corresponde",
+      "needsVars": "Preencha as variáveis do modelo antes de enviar.",
+      "loading": "Carregando modelos… Enter aguarda o carregamento.",
+      "loadError": "Não foi possível carregar os modelos",
+      "close": "Fechar a lista de modelos",
+      "more": "Há mais modelos que correspondem. Continue digitando para reduzir a lista."
+    },
     "roomSearch": {
       "title": "Pesquisar mensagens",
       "placeholder": "Pesquisar",

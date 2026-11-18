@@ -451,6 +451,16 @@ messages the thread has loaded. For a hit or a day older than those the bar stay
 results and says that scrolling up in the chat loads older messages; nothing is paged
 automatically. Escape or the bar's Back button closes it, and so does opening another chat.
 
+`ChatComposer` is the message field with its attachment, emoji and reply panels. The field is
+multi-line and grows with its draft up to five lines: Enter sends, Shift+Enter breaks the line. A
+draft that is one word starting with `/` opens a picker of the session's templates whose name
+matches it (`utils/templateSlash.ts`), for a key that can write and with no file staged. Enter, the
+Send button or a click puts the highlighted template's text in the field, to be edited and sent
+like any other message; Escape or the picker's close button leaves the draft to be sent as typed.
+A template with placeholders such as `{{name}}` is not sent exactly as inserted, and the composer
+says the placeholders are to be filled in for as long as one of them is left in the draft. A thread
+at its bottom stays there when the composer under it changes height.
+
 The message thread is paged. `useChatMessages` is a `useInfiniteQuery` whose cursor is the number
 of DB rows fetched so far, not the length of the rendered list — the thread also carries engine
 history and drops the duplicates between the two, so its length is not an offset the gateway would

@@ -352,6 +352,17 @@
       },
       "saveContactUnavailable": "알려진 전화번호가 필요합니다. 이 채팅에는 개인정보 보호 ID(@lid)만 있습니다."
     },
+    "slash": {
+      "title": "빠른 답장",
+      "hint": "Enter는 강조된 템플릿을 넣습니다. 준비되면 보내세요.",
+      "placeholder": "메시지 또는 /템플릿…",
+      "empty": "일치하는 템플릿 없음",
+      "needsVars": "보내기 전에 템플릿의 변수를 채우세요.",
+      "loading": "템플릿 불러오는 중… 다 불러올 때까지 Enter는 기다립니다.",
+      "loadError": "템플릿을 불러오지 못했습니다",
+      "close": "템플릿 목록 닫기",
+      "more": "일치하는 템플릿이 더 있습니다. 계속 입력해 목록을 좁히세요."
+    },
     "roomSearch": {
       "title": "메시지 검색",
       "placeholder": "검색",

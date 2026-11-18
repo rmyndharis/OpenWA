@@ -72,6 +72,112 @@ test('switching to a chat that is still loading does not save the clamped top as
   }
 });
 
+// The composer under the thread grows a line with its draft, and a banner opens above it: the container gets
+// shorter with scrollTop where it was, so the newest message of a thread at its bottom ends up under the composer.
+// jsdom has no ResizeObserver; the one below hands the test the callback a browser calls.
+test('a thread at its bottom stays there when its box changes size, and a reader further back is not moved', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  let client = CLIENT_HEIGHT;
+  let top = 0;
+  let writes = 0;
+  const maxTop = () => Math.max(0, LOADED_HEIGHT - client);
+  const proto = window.HTMLDivElement.prototype;
+  const saved = Object.getOwnPropertyDescriptors(proto);
+  Object.defineProperties(proto, {
+    scrollHeight: { configurable: true, get: () => LOADED_HEIGHT },
+    clientHeight: { configurable: true, get: () => client },
+    scrollTop: {
+      configurable: true,
+      get: () => Math.min(top, maxTop()),
+      set: (v: number) => {
+        writes += 1;
+        top = Math.max(0, Math.min(v, maxTop()));
+      },
+    },
+  });
+  const observers: Array<{ report: () => void; targets: Element[]; live: boolean }> = [];
+  class Observer {
+    private readonly entry: (typeof observers)[number];
+    constructor(callback: () => void) {
+      this.entry = { report: callback, targets: [], live: true };
+      observers.push(this.entry);
+    }
+    observe(target: Element): void {
+      this.entry.targets.push(target);
+    }
+    disconnect(): void {
+      this.entry.live = false;
+    }
+  }
+  (globalThis as Record<string, unknown>).ResizeObserver = Observer;
+  try {
+    const { rerender } = render(createElement(Thread, { chatId: 'A', isLoaded: true }));
+    const el = screen.getByTestId('thread');
+    const watching = () => observers.filter(observer => observer.live && observer.targets.includes(el));
+    assert.equal(watching().length, 1, 'nothing watches the size of the thread');
+    assert.equal(el.scrollTop, maxTop());
+    fireEvent.scroll(el);
+
+    // An observer first reports the box as it is: nothing changed, so nothing is written.
+    const before = writes;
+    watching()[0].report();
+    assert.equal(writes, before, 'the first report of the observer moved the thread');
+
+    // The draft takes two more lines: 40px less for the thread, which is that far from its bottom now.
+    client -= 40;
+    assert.equal(LOADED_HEIGHT - client - el.scrollTop, 40);
+    watching()[0].report();
+    assert.equal(el.scrollTop, maxTop(), 'the newest message went under the composer');
+    fireEvent.scroll(el); // the event of that write, which is not the reader leaving the bottom
+
+    client -= 60;
+    watching()[0].report();
+    assert.equal(el.scrollTop, maxTop(), 'the thread followed its box once only');
+    fireEvent.scroll(el);
+
+    // A banner closes as the draft takes three more lines, in one commit. The layout the composer forces while it
+    // measures its field clamps the thread to the taller box, and the event of that clamp is handled before the
+    // observer reports: it is not the reader leaving the bottom.
+    client += 170;
+    top = maxTop();
+    client -= 66;
+    fireEvent.scroll(el);
+    assert.equal(el.scrollTop, maxTop(), 'the clamp of a box that grew and shrank left the thread above its bottom');
+    watching()[0].report();
+    client -= 20;
+    watching()[0].report();
+    assert.equal(el.scrollTop, maxTop(), 'that clamp was taken for the reader leaving the bottom');
+    fireEvent.scroll(el);
+
+    // The reader goes back in the thread: their offset from the top is theirs, whatever the box does.
+    el.scrollTop = 3000;
+    fireEvent.scroll(el);
+    client += 100;
+    watching()[0].report();
+    assert.equal(el.scrollTop, 3000, 'a reader further back was taken to the bottom');
+
+    // A chat that is still loading shows a spinner: there is no bottom to keep.
+    el.scrollTop = maxTop();
+    fireEvent.scroll(el);
+    rerender(createElement(Thread, { chatId: 'B', isLoaded: false }));
+    assert.equal(watching().length, 1, 'the observer of the chat that was left is still reporting');
+    const loading = writes;
+    client -= 40;
+    watching()[0].report();
+    assert.equal(writes, loading, 'a thread that has not rendered was scrolled');
+
+    cleanup();
+    assert.equal(observers.filter(observer => observer.live).length, 0, 'an observer outlived the thread');
+  } finally {
+    Reflect.deleteProperty(globalThis, 'ResizeObserver');
+    for (const key of ['scrollHeight', 'clientHeight', 'scrollTop'] as const) {
+      if (saved[key]) Object.defineProperty(proto, key, saved[key]);
+      else delete (proto as unknown as Record<string, unknown>)[key];
+    }
+  }
+});
+
 // An older page lands above the reader. Previews that swap in BELOW the reader while it is in flight grow
 // the thread but move nothing on screen, so holding the reader by the thread's height delta dragged them
 // down the thread by those pixels. The reader is held by the message they were on.

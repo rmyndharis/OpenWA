@@ -41,7 +41,7 @@ const RENDERER = new URL('../../../src/common/utils/template-render.ts', import.
 
 let rtl: typeof import('@testing-library/react');
 let Templates: (typeof import('./Templates.tsx'))['Templates'];
-let PLACEHOLDER_PATTERN: (typeof import('./Templates.tsx'))['PLACEHOLDER_PATTERN'];
+let PLACEHOLDER_PATTERN: (typeof import('../utils/templatePlaceholders.ts'))['PLACEHOLDER_PATTERN'];
 let RoleProvider: (typeof import('../components/RoleProvider.tsx'))['RoleProvider'];
 let ToastProvider: (typeof import('../components/Toast.tsx'))['ToastProvider'];
 let renderer: typeof import('../../../src/common/utils/template-render.ts');
@@ -58,7 +58,8 @@ before(async () => {
   rtl = await import('@testing-library/react');
   ({ RoleProvider } = await import('../components/RoleProvider.tsx'));
   ({ ToastProvider } = await import('../components/Toast.tsx'));
-  ({ Templates, PLACEHOLDER_PATTERN } = await import('./Templates.tsx'));
+  ({ Templates } = await import('./Templates.tsx'));
+  ({ PLACEHOLDER_PATTERN } = await import('../utils/templatePlaceholders.ts'));
   renderer = await import('../../../src/common/utils/template-render.ts');
 });
 
@@ -92,6 +93,8 @@ test('the page reads placeholders with the pattern the gateway renders with', ()
   assert.ok(literal, 'the renderer pattern was not found');
   assert.equal(PLACEHOLDER_PATTERN.source, literal[1]);
   assert.equal(PLACEHOLDER_PATTERN.flags, literal[2]);
+  const page = readFileSync(new URL('./Templates.tsx', import.meta.url), 'utf8');
+  assert.equal(page.includes('PLACEHOLDER_PATTERN ='), false, 'the page keeps its own placeholder pattern');
   const body = 'Hi {{ name }}, {greeting}! {{order-id}} { spaced } {{a}{b}}';
   const read = [...body.matchAll(PLACEHOLDER_PATTERN)].map(match => match[1] ?? match[2]);
   assert.deepEqual(read, renderer.templateVariableNames(body));

@@ -352,6 +352,17 @@
       },
       "saveContactUnavailable": "Memerlukan nomor telepon yang diketahui: obrolan ini hanya memiliki ID privasi (@lid)."
     },
+    "slash": {
+      "title": "Balasan cepat",
+      "hint": "Enter menyisipkan templat yang disorot. Kirim saat sudah siap.",
+      "placeholder": "Pesan atau /templat…",
+      "empty": "Tidak ada templat yang cocok",
+      "needsVars": "Isi variabel templat sebelum mengirim.",
+      "loading": "Memuat templat… Enter menunggu sampai selesai dimuat.",
+      "loadError": "Templat tidak dapat dimuat",
+      "close": "Tutup daftar templat",
+      "more": "Masih ada templat lain yang cocok. Ketik lagi untuk mempersempit daftar."
+    },
     "roomSearch": {
       "title": "Cari pesan",
       "placeholder": "Cari",

@@ -352,6 +352,17 @@
       },
       "saveContactUnavailable": "需要已知的电话号码：此聊天只有隐私 ID（@lid）。"
     },
+    "slash": {
+      "title": "快捷回复",
+      "hint": "Enter 插入高亮的模板。准备好后再发送。",
+      "placeholder": "消息或 /模板…",
+      "empty": "没有匹配的模板",
+      "needsVars": "发送前请填写模板中的占位符。",
+      "loading": "正在加载模板… 加载完成前，Enter 暂不生效。",
+      "loadError": "无法加载模板",
+      "close": "关闭模板列表",
+      "more": "还有更多匹配的模板。继续输入以缩小范围。"
+    },
     "roomSearch": {
       "title": "搜索消息",
       "placeholder": "搜索",

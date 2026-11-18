@@ -357,6 +357,17 @@
       },
       "saveContactUnavailable": "Serve un numero di telefono noto: questa chat ha solo un ID privacy (@lid)."
     },
+    "slash": {
+      "title": "Risposte rapide",
+      "hint": "Invio inserisce il modello evidenziato. Invia quando è pronto.",
+      "placeholder": "Messaggio o /modello…",
+      "empty": "Nessun modello corrisponde",
+      "needsVars": "Compila le variabili del modello prima di inviare.",
+      "loading": "Caricamento dei modelli… Invio attende che siano caricati.",
+      "loadError": "Impossibile caricare i modelli",
+      "close": "Chiudi l'elenco dei modelli",
+      "more": "Altri modelli corrispondono. Continua a scrivere per restringere l'elenco."
+    },
     "roomSearch": {
       "title": "Cerca messaggi",
       "placeholder": "Cerca",

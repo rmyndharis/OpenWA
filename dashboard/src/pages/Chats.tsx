@@ -1811,7 +1811,7 @@ export function Chats() {
   useLayoutEffect(() => {
     if (composerFocusSeq === 0 || pagePressRef.current === 'touch') return;
     chatPageRef.current
-      ?.querySelector<HTMLInputElement>('input.message-text-input:not(:disabled)')
+      ?.querySelector<HTMLTextAreaElement>('.message-text-input:not(:disabled)')
       ?.focus({ preventScroll: true });
   }, [composerFocusSeq]);
   // A key on a row keeps focus on it, and so does a click on the row of the chat already open, where nothing opens.

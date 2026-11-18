@@ -352,6 +352,17 @@
       },
       "saveContactUnavailable": "Needs a known phone number: this chat has only a privacy id (@lid)."
     },
+    "slash": {
+      "title": "Canned replies",
+      "hint": "Enter inserts the highlighted template. Send it when it is ready.",
+      "placeholder": "Message or /template…",
+      "empty": "No template matches",
+      "needsVars": "Fill in the template's placeholders before sending.",
+      "loading": "Loading templates… Enter waits for them.",
+      "loadError": "Templates could not be loaded",
+      "close": "Close the template list",
+      "more": "More templates match. Keep typing to narrow the list."
+    },
     "roomSearch": {
       "title": "Search messages",
       "placeholder": "Search",

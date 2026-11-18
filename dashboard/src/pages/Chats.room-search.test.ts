@@ -241,7 +241,7 @@ test('Escape from the composer closes the search first, and the room only on the
   assert.ok(container.querySelector('.room-search') === null, 'the search stayed open');
   assert.ok(container.querySelector('.room-container'), 'the whole conversation closed, not the search');
   // The composer is still there and held focus, so focus is not taken from it.
-  assert.equal(focused(), 'input "Type a message..."');
+  assert.equal(focused(), 'textarea "Type a message..."');
 
   fireEvent.keyDown(composer, { key: 'Escape' });
   await rtl.waitFor(() => assert.ok(container.querySelector('.room-container') === null));
