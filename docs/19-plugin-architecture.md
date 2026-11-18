@@ -408,7 +408,7 @@ export interface PluginStorage {
 }
 ```
 
-Writes accept keys of at most 184 UTF-8 bytes, keeping their encoded filenames within the 255-byte filesystem limit. A longer key is rejected with a validation error before any file is written.
+Writes accept keys of at most 184 UTF-8 bytes, keeping their encoded filenames within the 255-byte filesystem limit. A longer key is rejected with a validation error before any file is written. A key that holds a lone UTF-16 surrogate (half of an emoji, left by cutting text with `slice`) is refused as an unsafe key: `set` and `delete` reject it and `get` answers `null`, because UTF-8 has no form for it and every such key at one place would name the same file.
 
 A key that is spelled like another key's encoded filename (`key-Zm9v` for `foo`) is not read as a legacy key, so it neither returns nor deletes that other key's value. `list()` returns only keys that `get` and `delete` accept.
 
