@@ -208,9 +208,13 @@ A `configSchema` field may set `secret: true` (e.g. an API key): the value is ma
 preserved on an unchanged write. A write keeps the stored value for the mask and for an empty string, and
 removes it for an explicit `null`. In a list of rows with a secret column, a masked row is matched to its
 stored row by its other fields, so rows can be reordered, added and removed. A row whose other fields were
-edited, with its mask untouched, keeps its secret only in a save of the same length that moves no row that kept
-its content (removing a row ahead of a kept row and adding another moves it). Otherwise the payload cannot say
-which stored secret the edited row replaces, so it is saved without one and the secret is entered again.
+edited, with its mask untouched, keeps the secret of the stored row at its position only in a save of the same
+length in which no row has moved. A row counts as moved when its other fields equal those of exactly one stored
+row and that row sits at another position. Removing a row ahead of a kept row and adding another moves the kept
+row, and so does reordering rows. In such a save, and in any save of another length, the payload cannot say
+which stored secret the edited row replaces, so it is saved without one and the secret is entered again. The
+generated form in the dashboard has no control to reorder rows, so only an API client, or a plugin's own config
+editor that reorders rows, sends the reordering form of this save.
 A per-session override and an integration instance's own config are
 overlaid on the base config, secret fields included, so a stored secret reaches every override that does
 not replace it. The exception is an override or instance that points a `net.allowConfigHosts` key at
