@@ -2654,9 +2654,12 @@ describe('A session deleted on one node while a peer shares the database', () =>
         run: (manager: import('typeorm').EntityManager) => Promise<void>,
       ) =>
         transaction(async manager => {
-          const builder = manager.createQueryBuilder.bind(manager);
-          jest.spyOn(manager, 'createQueryBuilder').mockImplementation((() => {
-            const query = builder();
+          const original = manager.createQueryBuilder.bind(manager);
+          const builder = original as unknown as (...args: unknown[]) => ReturnType<typeof original>;
+          jest.spyOn(manager, 'createQueryBuilder').mockImplementation(((...args: unknown[]) => {
+            const query = builder(...args);
+            // Only the write is held: a read of an entity, such as whether the row still exists, passes through.
+            if (args.length > 0) return query;
             const update = query.update.bind(query);
             jest.spyOn(query, 'update').mockImplementation((() => {
               const updated = update(Session);
@@ -3683,6 +3686,8 @@ const until = async (condition: () => boolean, deadlineMs = 15_000): Promise<voi
 };
 
 interface StackOptions {
+  /** The transactional adoption handler BulkMessageService registers in a running gateway. */
+  adoptionHandler?: boolean;
   /** Hold the credential purge of a delete until the returned gate opens. */
   holdPurge?: boolean;
   /** Hold the session:deleted hook of every delete until the test releases or fails it. */
@@ -3756,6 +3761,7 @@ describe('requests for one session that overlap on a single node', () => {
     const errors = new SessionErrorStore();
     const restrictions = new SessionRestrictionStore();
     const ownership = new SessionOwnershipService(sessions, config as never);
+    if (options.adoptionHandler) ownership.onAdoption(() => Promise.resolve(), true);
     const heldHooks: Array<{ release: () => void; fail: (error: Error) => void }> = [];
     const hooks = {
       execute: jest.fn((event: string) =>
@@ -3820,6 +3826,15 @@ describe('requests for one session that overlap on a single node', () => {
     jest.spyOn((ownership as unknown as { logger: { warn(message: string): void } }).logger, 'warn');
   const stopMarkOf = (lifecycle: SessionEngineLifecycle, id: string): boolean =>
     (lifecycle as unknown as { stoppingSessions: { has(id: string): boolean } }).stoppingSessions.has(id);
+  /** What a delete that has answered must not leave behind for a session that is gone. */
+  const leftoversOf = (
+    service: SessionService,
+    lifecycle: SessionEngineLifecycle,
+    id: string,
+  ): { stopMark: boolean; stopRequest: boolean } => ({
+    stopMark: stopMarkOf(lifecycle, id),
+    stopRequest: (service as unknown as { stopRequests: Map<string, unknown> }).stopRequests.has(id),
+  });
 
   afterEach(() => {
     jest.restoreAllMocks();
@@ -3879,6 +3894,77 @@ describe('requests for one session that overlap on a single node', () => {
       expect(ownership.ownedIds()).toEqual([]);
       expect((await sessions.findOneByOrFail({ id: row.id })).nodeId).toBeNull();
       expect(stopOrphans).not.toHaveBeenCalled();
+    });
+  });
+
+  // The delete that loses the race for the row finds its claim and its row gone. Nothing changed owner on one node: the
+  // same request a moment later answers 404, and so does this one.
+  describe('two deletes of one session that overlap', () => {
+    const outcome = (deleting: Promise<void>): Promise<string | Error> =>
+      deleting.then(
+        () => 'deleted',
+        (error: Error) => error,
+      );
+
+    it('answers the one that finishes second with 404, not with a claim by another node', async () => {
+      const { service, lifecycle, heldHooks } = stack({ adoptionHandler: true, holdDeleteHook: true });
+      const row = await seed();
+
+      // The first is past its reads and its claim, held in its hook with the row still there. The second then starts
+      // apart from it, so no two claims overlap and every read of the second passes.
+      const first = outcome(service.delete(row.id));
+      await until(() => heldHooks.length === 1);
+      const second = outcome(service.delete(row.id));
+      await until(() => heldHooks.length === 2);
+      heldHooks[0].release();
+      expect(await first).toBe('deleted');
+      heldHooks[1].release();
+      const answer = await second;
+
+      expect(await sessions.countBy({ id: row.id })).toBe(0);
+      expect(answer).toBeInstanceOf(NotFoundException);
+      expect(leftoversOf(service, lifecycle, row.id)).toEqual({ stopMark: false, stopRequest: false });
+    });
+
+    it('answers 404 too when the first removes the row before the second records its delete', async () => {
+      const { service, lifecycle, ownership, heldHooks } = stack({ holdDeleteHook: true });
+      const row = await seed();
+      const claim = ownership.claim.bind(ownership);
+      const parked = deferred();
+      const resume = deferred();
+      jest.spyOn(ownership, 'claim').mockImplementation(async (...args) => {
+        const claimed = await claim(...args);
+        if (heldHooks.length === 1) {
+          parked.resolve();
+          await resume.promise;
+        }
+        return claimed;
+      });
+
+      const first = outcome(service.delete(row.id));
+      await until(() => heldHooks.length === 1);
+      const second = outcome(service.delete(row.id));
+      await parked.promise;
+      heldHooks[0].release();
+      expect(await first).toBe('deleted');
+      resume.resolve();
+      const answer = await second;
+
+      expect(await sessions.countBy({ id: row.id })).toBe(0);
+      expect(answer).toBeInstanceOf(NotFoundException);
+      expect(leftoversOf(service, lifecycle, row.id)).toEqual({ stopMark: false, stopRequest: false });
+    });
+
+    it('still answers 409 for a row that exists but is held by a peer', async () => {
+      const { service } = stack();
+      const row = await seed();
+      await sessions.update(
+        { id: row.id },
+        { nodeId: 'node-b', claimedAt: new Date(), leaseExpiresAt: new Date(Date.now() + 60_000) },
+      );
+
+      await expect(service.delete(row.id)).rejects.toBeInstanceOf(ConflictException);
+      expect(await sessions.countBy({ id: row.id })).toBe(1);
     });
   });
 
