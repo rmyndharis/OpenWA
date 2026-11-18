@@ -504,3 +504,11 @@
     box-shadow: -2px 0 20px rgba(0, 0, 0, 0.1);
   }
 }
+
+/* Forced colours drop fills, so the current page and the language in use draw a heavy frame. */
+@media (forced-colors: active) {
+  .language-menu-item.active,
+  .nav-item.active {
+    border: 3px solid CanvasText;
+  }
+}

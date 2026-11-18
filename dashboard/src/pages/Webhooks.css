@@ -696,3 +696,27 @@
 .webhooks-page .toggle-status.inactive {
   color: var(--text-muted);
 }
+
+/* Forced colours drop fills and shadows: the filter badge draws an outline on focus, a switch its track and knob. */
+@media (forced-colors: active) {
+  .webhooks-page .filter-badge-interactive:focus-visible {
+    outline: 2px solid var(--focus-ring);
+  }
+
+  .webhooks-page .toggle-slider {
+    border: 1px solid CanvasText;
+  }
+
+  .webhooks-page .toggle-slider::before {
+    background: CanvasText;
+  }
+
+  .webhooks-page .toggle-switch input:checked + .toggle-slider {
+    background: Highlight;
+    border-color: Highlight;
+  }
+
+  .webhooks-page .toggle-switch input:checked + .toggle-slider::before {
+    background: HighlightText;
+  }
+}

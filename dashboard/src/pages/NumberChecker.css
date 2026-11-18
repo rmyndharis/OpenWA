@@ -622,3 +622,15 @@
   font-weight: 600;
   color: var(--error-text);
 }
+
+/* Forced colours drop fills: the tab and the filter that are on draw a heavy frame, the alert action a frame. */
+@media (forced-colors: active) {
+  .number-checker .nc-tab.active,
+  .number-checker .nc-filter-btn.active {
+    border: 3px solid CanvasText;
+  }
+
+  .number-checker .nc-alert-action {
+    border: 1px solid ButtonText;
+  }
+}

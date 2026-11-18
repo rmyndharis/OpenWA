@@ -136,3 +136,10 @@
   background: var(--primary-soft);
   color: var(--primary-text);
 }
+
+/* Forced colours drop fills, so the load-more button draws a frame. */
+@media (forced-colors: active) {
+  .global-search-more {
+    border: 1px solid ButtonText;
+  }
+}

@@ -1189,3 +1189,37 @@
   color: var(--text-secondary);
   font-size: 0.85rem;
 }
+
+/* Forced colours drop fills and shadows: the catalog search box draws an outline on focus, a tab that is on a heavy
+   frame, the update button a frame, and a switch its track, knob and state. */
+@media (forced-colors: active) {
+  .plugins-page .catalog-search:focus-within {
+    outline: 2px solid var(--focus-ring);
+  }
+
+  .plugins-page .btn-update {
+    border: 1px solid ButtonText;
+  }
+
+  .plugins-page .install-tab.active,
+  .plugins-page .config-modal .modal-tab.active {
+    border: 3px solid CanvasText;
+  }
+
+  .plugins-page .toggle-slider {
+    border: 1px solid CanvasText;
+  }
+
+  .plugins-page .toggle-slider:before {
+    background: CanvasText;
+  }
+
+  .plugins-page .toggle-switch input:checked + .toggle-slider {
+    background: Highlight;
+    border-color: Highlight;
+  }
+
+  .plugins-page .toggle-switch input:checked + .toggle-slider:before {
+    background: HighlightText;
+  }
+}

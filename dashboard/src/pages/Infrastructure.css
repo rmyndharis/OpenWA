@@ -792,3 +792,27 @@
   color: var(--error-text);
   margin-bottom: 1rem;
 }
+
+/* Forced colours drop fills and shadows: the chosen card draws a heavy frame, a switch its track, knob and state. */
+@media (forced-colors: active) {
+  .infrastructure-page .radio-option.selected {
+    border: 4px solid CanvasText;
+  }
+
+  .infrastructure-page .toggle-slider {
+    border: 1px solid CanvasText;
+  }
+
+  .infrastructure-page .toggle-slider::before {
+    background: CanvasText;
+  }
+
+  .infrastructure-page .toggle-switch input:checked + .toggle-slider {
+    background: Highlight;
+    border-color: Highlight;
+  }
+
+  .infrastructure-page .toggle-switch input:checked + .toggle-slider::before {
+    background: HighlightText;
+  }
+}

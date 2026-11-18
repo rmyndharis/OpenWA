@@ -525,3 +525,14 @@
     padding: 1rem;
   }
 }
+
+/* Forced colours drop fills and shadows: the search box draws an outline on focus, the open template a heavy frame. */
+@media (forced-colors: active) {
+  .templates-page .templates-search:focus-within {
+    outline: 2px solid var(--focus-ring);
+  }
+
+  .templates-page .template-list-item.selected {
+    border: 3px solid CanvasText;
+  }
+}

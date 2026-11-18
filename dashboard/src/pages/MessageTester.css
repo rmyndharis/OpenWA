@@ -643,3 +643,15 @@
   margin: 0;
   min-width: 0;
 }
+
+/* Forced colours drop fills: a toggle that is on draws a heavy frame and the send button a frame. */
+@media (forced-colors: active) {
+  .message-tester .toggle-group button.active,
+  .message-tester .toggle-group.toggle-group-wrap button.active {
+    border: 3px solid CanvasText;
+  }
+
+  .message-tester .send-btn {
+    border: 1px solid ButtonText;
+  }
+}

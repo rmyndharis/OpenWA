@@ -14,6 +14,8 @@ interface Rule {
   file: string;
   selectors: string[];
   body: string;
+  /** Inside @media (forced-colors: active): a cue for that mode only, not one the rule draws in every mode. */
+  forced: boolean;
 }
 
 function cssFiles(dir = SRC): string[] {
@@ -24,12 +26,26 @@ function cssFiles(dir = SRC): string[] {
   });
 }
 
+function forcedRanges(css: string): Array<[number, number]> {
+  return [...css.matchAll(/@media \(forced-colors: active\)\s*\{/g)].map(m => {
+    let depth = 1;
+    let end = m.index + m[0].length;
+    for (; end < css.length && depth > 0; end++) {
+      if (css[end] === '{') depth++;
+      else if (css[end] === '}') depth--;
+    }
+    return [m.index, end];
+  });
+}
+
 function rules(file: string): Rule[] {
   const css = readFileSync(join(SRC, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const forced = forcedRanges(css);
   return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({
     file,
     selectors: m[1].split(',').map(s => s.trim()),
     body: m[2],
+    forced: forced.some(([from, to]) => m.index >= from && m.index < to),
   }));
 }
 
@@ -116,7 +132,9 @@ const element = (s: string): string =>
 // `outline: none` takes away the indicator the browser would draw, so something has to draw one in its place: the
 // same element in a focus state, or the box around it in :focus-within (a search box around its input).
 test('every outline switched off leaves a keyboard focus cue in the --focus-ring token', () => {
-  const cues = all.filter(r => /\bvar\(--focus-ring\)/.test(r.body)).flatMap(r => r.selectors.filter(focusState));
+  const cues = all
+    .filter(r => !r.forced && /\bvar\(--focus-ring\)/.test(r.body))
+    .flatMap(r => r.selectors.filter(focusState));
   const offenders = all
     .filter(r => /(?:^|;)\s*outline\s*:\s*(?:none|0)\b/.test(r.body))
     .flatMap(r =>

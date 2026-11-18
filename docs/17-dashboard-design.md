@@ -70,6 +70,12 @@ backed by `localStorage` — there is no Zustand store.
    in `--error`), and a hover is never fainter than the border at rest.
    `dashboard/src/field-focus-hover.test.ts` fails the build when a field focus rule paints the focus
    border without the ring, or a field hover rule paints a border fainter than the one at rest.
+   Forced colors (a Windows contrast theme) drop fills and shadows and replace colors, which would
+   leave a focus ring, a selected state, a filled button's shape and a switch undrawn. Each is
+   restated as an outline or a border in a `@media (forced-colors: active)` block at the end of the
+   stylesheet that holds it, in system colors, so the user's palette stays in charge.
+   `dashboard/src/forced-colors.test.ts` fails the build when a stylesheet gains a ring box, a
+   selected state, a filled button or a switch without its block.
    Known gap: the exclusive button groups report `aria-pressed` without arrow-key roving focus. Every
    page has a render test, but only Infrastructure's resolves the caption references
    against a real DOM; elsewhere they are checked structurally. Treat the claim as directional, not

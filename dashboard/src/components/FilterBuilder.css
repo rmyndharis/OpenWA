@@ -352,3 +352,10 @@
   font-weight: 600;
   color: var(--error-text);
 }
+
+/* Forced colours drop fills, so a value that is picked draws a heavy frame. */
+@media (forced-colors: active) {
+  .enum-tag.selected {
+    border: 3px solid CanvasText;
+  }
+}

@@ -944,3 +944,36 @@
     0 0 0 1px var(--focus-ring),
     0 0 0 3px rgba(34, 197, 94, 0.1);
 }
+
+/* Forced colours drop fills and shadows: the search box draws an outline on focus, the pairing tab that is on a heavy
+   frame, the small buttons a frame, and a switch its track, knob and state. */
+@media (forced-colors: active) {
+  .sessions-page .search-input:focus-within {
+    outline: 2px solid var(--focus-ring);
+  }
+
+  .sessions-page .btn-sm {
+    border: 1px solid ButtonText;
+  }
+
+  .sessions-page .pairing-tab-btn.active {
+    border: 3px solid CanvasText;
+  }
+
+  .sessions-page .toggle-slider {
+    border: 1px solid CanvasText;
+  }
+
+  .sessions-page .toggle-slider::before {
+    background: CanvasText;
+  }
+
+  .sessions-page .toggle-switch input:checked + .toggle-slider {
+    background: Highlight;
+    border-color: Highlight;
+  }
+
+  .sessions-page .toggle-switch input:checked + .toggle-slider::before {
+    background: HighlightText;
+  }
+}

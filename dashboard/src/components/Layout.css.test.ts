@@ -50,12 +50,15 @@ const find = (selector: string): Rule[] => all.filter(r => r.selectors.includes(
 const mobileQuery = /const MOBILE_QUERY = '([^']+)'/.exec(tsx)?.[1];
 
 // A width test in script rounds: at 110% zoom innerWidth reads 767 for a 767.3px window, which (max-width: 767px)
-// does not match, and the desktop sidebar was drawn inert. One query for both leaves no width where they disagree.
+// does not match, and the desktop sidebar was drawn inert. One query for both leaves no width where they disagree. The
+// forced-colors block is not a width: it draws the current page and the language in use as an edge.
 test('every media query in Layout.css is the one Layout.tsx switches to the phone layout on', () => {
   assert.ok(mobileQuery, 'Layout.tsx no longer names its phone query');
   assert.match(tsx, /matchMedia\(MOBILE_QUERY\)/);
   assert.doesNotMatch(tsx, /innerWidth/, 'Layout.tsx tests the window width in script again');
-  const queries = [...css.matchAll(/@media\s*([^{]+?)\s*\{/g)].map(m => m[1]);
+  const queries = [...css.matchAll(/@media\s*([^{]+?)\s*\{/g)]
+    .map(m => m[1])
+    .filter(q => q !== '(forced-colors: active)');
   assert.ok(queries.length > 0);
   for (const query of queries) assert.equal(query, mobileQuery);
 });

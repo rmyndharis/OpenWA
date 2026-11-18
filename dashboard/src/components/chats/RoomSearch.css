@@ -170,3 +170,10 @@
   cursor: pointer;
   text-align: start;
 }
+
+/* Forced colours drop the ring's shadow and colour, so the in-chat search box draws an outline on focus. */
+@media (forced-colors: active) {
+  .chats-page .room-search-input-wrap:focus-within {
+    outline: 2px solid var(--focus-ring);
+  }
+}

@@ -364,3 +364,14 @@
     padding: 0.75rem;
   }
 }
+
+/* Forced colours drop fills and shadows: the search box draws an outline on focus, the current page a heavy frame. */
+@media (forced-colors: active) {
+  .logs-page .search-input:focus-within {
+    outline: 2px solid var(--focus-ring);
+  }
+
+  .logs-page .page-numbers button.active {
+    border: 3px solid CanvasText;
+  }
+}

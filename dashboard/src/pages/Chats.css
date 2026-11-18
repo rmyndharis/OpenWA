@@ -3813,3 +3813,27 @@
     width: 100%;
   }
 }
+
+/* Forced colours drop fills and shadows: the search boxes and the composer draw an outline on focus, the open chat, the
+   highlighted template and a toggle that is on draw a heavy frame, and the send, scroll and create buttons a frame. */
+@media (forced-colors: active) {
+  .chats-page .chat-search-input:focus-within,
+  .chats-page .session-picker-search:focus-within,
+  .chats-page .message-input-pill:focus-within {
+    outline: 2px solid var(--focus-ring);
+  }
+
+  .chats-page .slash-template-item.active,
+  .chats-page .chat-item-card.active,
+  .chats-page .icon-btn.active,
+  .chats-page .btn-input-accessory.active,
+  .chats-page .status-compose-modal .compose-type-toggle button.active {
+    border: 3px solid CanvasText;
+  }
+
+  .chats-page .btn-send-message,
+  .chats-page .scroll-to-bottom-btn,
+  .chats-page .new-group-create {
+    border: 1px solid ButtonText;
+  }
+}
