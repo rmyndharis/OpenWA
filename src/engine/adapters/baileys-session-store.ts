@@ -413,12 +413,12 @@ export class BaileysSessionStore {
       const existing: StoredChat = this.chats.get(r.id) ?? { id: r.id };
       // A count that replaces a mark set by hand leaves the mark on the account: the record remembers it, so the
       // read that covers the message undoes the mark as well. Any other count the update carries (a read or a mark
-      // synced from the phone) says how the chat stands now.
-      const count = r.unreadCount;
-      const markCovered =
-        count === undefined
-          ? existing.markCovered
-          : (count ?? 0) > 0 && ((existing.unreadCount ?? 0) < 0 || existing.markCovered === true);
+      // synced from the phone, or the `undefined` Baileys writes where a sync cancelled a mark) says how the chat
+      // stands now. Only a count the update carries itself is one: a chat decoded from a history sync answers
+      // `null` from its prototype when the wire held none, and the merge below copies own keys alone.
+      const markCovered = Object.hasOwn(r, 'unreadCount')
+        ? (r.unreadCount ?? 0) > 0 && ((existing.unreadCount ?? 0) < 0 || existing.markCovered === true)
+        : existing.markCovered;
       this.chats.set(r.id, { ...existing, ...r, ...(markCovered === undefined ? {} : { markCovered }) });
       this.persistChatState(r.id, r);
       this.applyChatTimer(r.id, r, lidIndex);

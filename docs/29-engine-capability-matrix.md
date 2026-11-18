@@ -1082,13 +1082,19 @@ adapter boundary — none silently stubs.
   no received message to compare, and takes any received id for the read. Only a chat marked unread by
   hand (listed with `unreadCount` `-1`, by `markUnread` or on the phone) takes a second write,
   `chatModify` with `markRead: true`, which undoes the mark in the account's app state. A message received after
-  the mark puts its count in place of the `-1`; the session remembers the mark, and the read that covers the
-  message undoes it as well.
+  the mark puts its count in place of the `-1`; the session remembers a mark it has listed, and the read that
+  covers the message undoes it as well. A mark the session never listed is not remembered: one that Baileys
+  delivers in one batch with a message, as after a reconnect, arrives as that message's count alone, so the read
+  sends the receipt and the mark stays on the account. A read on the phone delivered in one batch with a newer
+  message is not seen either, and the next read then sends the write once more than needed.
   That write is keyed as the four writes are, except that the stored message standing in for a session
   with none in memory is the newest _received_ one, and it is never sent without a range: what the
   phone does with a read mark that names no message is not established. It does not change the answer.
   When WhatsApp refuses it or does not confirm it within the request budget, a warning is logged,
-  `POST chats/read` still answers `{"success": true}` for the receipt, and the chat stays marked unread.
+  `POST chats/read` still answers `{"success": true}` for the receipt, and the chat stays marked unread: it is
+  listed with `-1`, also where a message's count stood in place of the mark. A write WhatsApp confirms only
+  after that budget is replayed by Baileys as a count of `0`, which also clears the count of a message received
+  in the meantime.
   A session restarted since the mark was set no longer lists it (`unreadCount` reads `0`, as above), so
   its read sends the receipt alone and the mark stays on the account.
 - **`setProfileName` / `setProfilePicture` / `deleteProfilePicture` refusals (baileys).**
