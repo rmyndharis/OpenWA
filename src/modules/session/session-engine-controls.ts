@@ -264,6 +264,8 @@ export interface SessionEngineControlsHost {
   /** Same contract as SessionEngineWiringHost.bindingEpoch. */
   bindingEpoch(id: string): number;
   forgetBindingEpoch?(id: string): void;
+  /** delete(), once the row is removed: the claim guards nothing from there on (SessionOwnershipService.forget). */
+  forgetClaim?(id: string, ownsClaim?: () => boolean): void;
   /**
    * `read`, once the phone writes this process issued (an unlink's clear, the number and push name a READY links, the
    * clear of a logout) have been answered: a row read that overlaps one can return the binding it replaces.
@@ -1129,6 +1131,9 @@ export class SessionEngineControls {
         await manager.remove(session);
       });
       parentDeleted = true;
+      // The row is gone, so the claim on it guards nothing: a heartbeat tick during the credential purge would read
+      // the missing row as a claim a peer took, and tear down a session this delete already removed.
+      this.host.forgetClaim?.(id, hooks.ownsClaim);
       this.logger.log(`Session deleted: ${session.name}`, {
         sessionId: id,
         action: 'delete',

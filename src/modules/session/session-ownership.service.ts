@@ -325,6 +325,17 @@ export class SessionOwnershipService {
   }
 
   /**
+   * End this process's claim on a session whose row has just been removed, without touching the database. Left in
+   * place, the next renew() reads the missing row as a claim a peer took and reports a loss that never happened.
+   * Only the claim `ownsClaim` captured is ended: one a later claim of the same id replaced stays.
+   */
+  forget(sessionId: string, ownsClaim?: () => boolean): void {
+    if (ownsClaim && !ownsClaim()) return;
+    this.owned.delete(sessionId);
+    this.claimGen.delete(sessionId);
+  }
+
+  /**
    * Release everything this process holds, on the way down, except `keep`: claims whose engine may
    * still be alive. Those are left to lapse, since the heartbeat has stopped.
    */

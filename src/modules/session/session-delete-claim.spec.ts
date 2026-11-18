@@ -3674,3 +3674,229 @@ describe('A session deleted on one node while a peer shares the database', () =>
     },
   );
 });
+
+/** Wait for a condition with a wall-clock deadline: a loaded machine slows the loop, it never changes the answer. */
+const until = async (condition: () => boolean, deadlineMs = 15_000): Promise<void> => {
+  const end = Date.now() + deadlineMs;
+  while (!condition() && Date.now() < end) await new Promise(resolve => setImmediate(resolve));
+  expect(condition()).toBe(true);
+};
+
+interface StackOptions {
+  /** Hold the credential purge of a delete until the returned gate opens. */
+  holdPurge?: boolean;
+  /** Hold the session:deleted hook of every delete until the test releases or fails it. */
+  holdDeleteHook?: boolean;
+}
+
+/**
+ * The real SessionService, lifecycle and ownership service over a real database with fake engines, wired the way the
+ * bootstrap hook wires the lease-loss handler and the liveness probe. A single node: nothing else holds any session, so
+ * no answer here may say that another node does.
+ */
+describe('requests for one session that overlap on a single node', () => {
+  const NODE = 'node-a';
+  const pg = process.env.DATABASE_TYPE === 'postgres';
+  const schema = `single_node_overlaps_${randomUUID().replace(/-/g, '')}`;
+  let db: DataSource;
+  let sessions: Repository<Session>;
+
+  beforeAll(async () => {
+    if (pg) {
+      const options = {
+        type: 'postgres' as const,
+        host: process.env.DATABASE_HOST || 'localhost',
+        port: Number(process.env.DATABASE_PORT || 5432),
+        username: process.env.DATABASE_USERNAME || 'openwa',
+        password: process.env.DATABASE_PASSWORD || 'openwa',
+        database: process.env.DATABASE_NAME || 'openwa',
+        schema,
+        entities,
+        extra: postgresUtcExtra(),
+      };
+      const setup = await new DataSource(options).initialize();
+      await setup.query(`CREATE SCHEMA "${schema}"`);
+      await setup.synchronize();
+      await setup.destroy();
+      db = await new DataSource(options).initialize();
+    } else {
+      db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities, synchronize: true });
+      await db.initialize();
+    }
+    sessions = db.getRepository(Session);
+  });
+
+  afterAll(async () => {
+    if (pg) await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await db.destroy();
+  });
+
+  function stack(options: StackOptions = {}) {
+    const engines: Array<Record<'initialize' | 'destroy' | 'forceDestroy' | 'disconnect' | 'logout', jest.Mock>> = [];
+    const purge = deferred();
+    const factory = {
+      create: jest.fn(() => {
+        const engine = {
+          initialize: jest.fn().mockResolvedValue(undefined),
+          destroy: jest.fn().mockResolvedValue(undefined),
+          forceDestroy: jest.fn().mockResolvedValue(undefined),
+          disconnect: jest.fn().mockResolvedValue(undefined),
+          logout: jest.fn().mockResolvedValue(undefined),
+        };
+        engines.push(engine);
+        return engine;
+      }),
+      purgeSessionData: jest.fn(() => (options.holdPurge ? purge.promise : Promise.resolve())),
+    };
+    const config = {
+      get: (key: string, fallback?: unknown) =>
+        ({ 'session.nodeId': NODE, 'session.leaseTtlMs': 60_000, 'session.leaseHeartbeatMs': 20_000 })[key] ?? fallback,
+    };
+    const registry = new EngineRegistry();
+    const errors = new SessionErrorStore();
+    const restrictions = new SessionRestrictionStore();
+    const ownership = new SessionOwnershipService(sessions, config as never);
+    const heldHooks: Array<{ release: () => void; fail: (error: Error) => void }> = [];
+    const hooks = {
+      execute: jest.fn((event: string) =>
+        event === 'session:deleted' && options.holdDeleteHook
+          ? new Promise((resolve, reject) =>
+              heldHooks.push({ release: () => resolve({ continue: true }), fail: reject }),
+            )
+          : Promise.resolve({ continue: true }),
+      ),
+    };
+    const watchdog = { clear: jest.fn(), start: jest.fn(), stop: jest.fn() };
+    const presence = { clear: jest.fn(), getOwnIntent: jest.fn() };
+    const lifecycle = new SessionEngineLifecycle(
+      sessions,
+      db,
+      factory as never,
+      registry,
+      watchdog as never,
+      { holdsInbound: false } as never,
+      errors,
+      restrictions,
+      presence as never,
+      { emitSessionStatus: jest.fn() } as never,
+      { dispatch: jest.fn().mockResolvedValue(undefined) } as never,
+      hooks as never,
+      {} as never,
+      config as never,
+      undefined,
+      undefined,
+      ownership,
+    );
+    const service = new SessionService(
+      sessions,
+      {} as never,
+      db,
+      registry,
+      watchdog as never,
+      errors,
+      restrictions,
+      presence as never,
+      hooks as never,
+      lifecycle,
+      {} as never,
+      config as never,
+      ownership,
+    );
+    // What SessionService.onApplicationBootstrap wires: the loss handler and the probe renew() asks.
+    const stopOrphans = jest.spyOn(lifecycle, 'stopOrphanEngines');
+    ownership.onLeaseLoss(ids => void lifecycle.stopOrphanEngines(ids));
+    ownership.setEngineLiveness(id => lifecycle.isEngineActive(id));
+    return { service, lifecycle, ownership, factory, engines, purge, heldHooks, stopOrphans };
+  }
+
+  const seed = async (): Promise<Session> => {
+    await sessions.createQueryBuilder().delete().from(Session).execute();
+    return sessions.save(
+      sessions.create({ name: 'single-node', status: SessionStatus.DISCONNECTED, phone: '628111', config: {} }),
+    );
+  };
+  /** The warnings the ownership service logs, for the one that names a claim another node took. */
+  const warningsOf = (ownership: SessionOwnershipService): jest.SpyInstance =>
+    jest.spyOn((ownership as unknown as { logger: { warn(message: string): void } }).logger, 'warn');
+  const stopMarkOf = (lifecycle: SessionEngineLifecycle, id: string): boolean =>
+    (lifecycle as unknown as { stoppingSessions: { has(id: string): boolean } }).stoppingSessions.has(id);
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // The heartbeat reads a row it cannot find as a claim a peer took, and tears the session down for the peer. A delete
+  // removes the row before it hands its claim back (the credential directories of a browser profile take seconds to
+  // remove), so a tick in between is reported as a loss of a session that was deleted here.
+  describe('a heartbeat tick that follows the removal of the row by a delete', () => {
+    it('is not reported as a claim another node took while the credential purge runs', async () => {
+      const { service, ownership, factory, purge, stopOrphans } = stack({ holdPurge: true });
+      const row = await seed();
+      const warn = warningsOf(ownership);
+
+      const deleting = service.delete(row.id);
+      await until(() => factory.purgeSessionData.mock.calls.length === 1);
+      expect(await sessions.countBy({ id: row.id })).toBe(0);
+      await ownership.renew();
+      purge.resolve();
+      await deleting;
+
+      expect(stopOrphans).not.toHaveBeenCalled();
+      expect(ownership.ownedIds()).toEqual([]);
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('Lost the claim');
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('leaves no stop mark behind for the deleted session when it lands as the claim is handed back', async () => {
+      const { service, lifecycle, ownership, factory } = stack();
+      const row = await seed();
+      // The hand-back of the claim is where the delete ends; hold it so the tick lands after the delete's own cleanup.
+      const handBack = deferred();
+      const release = jest.spyOn(ownership, 'release').mockImplementation(() => handBack.promise);
+
+      const deleting = service.delete(row.id);
+      await until(() => release.mock.calls.length === 1);
+      expect(factory.purgeSessionData).toHaveBeenCalledTimes(1);
+      await ownership.renew();
+      handBack.resolve();
+      await deleting;
+
+      expect(stopMarkOf(lifecycle, row.id)).toBe(false);
+    });
+
+    it('does not end the claim of a delete that fails before it removes the row', async () => {
+      const { service, ownership, heldHooks, stopOrphans } = stack({ holdDeleteHook: true });
+      const row = await seed();
+
+      const deleting = service.delete(row.id).catch((error: unknown) => error);
+      await until(() => heldHooks.length === 1);
+      await ownership.renew();
+      expect(ownership.ownedIds()).toEqual([row.id]);
+      heldHooks[0].fail(new Error('hook failed'));
+      expect(await deleting).toEqual(new Error('hook failed'));
+
+      expect(await sessions.countBy({ id: row.id })).toBe(1);
+      expect(ownership.ownedIds()).toEqual([]);
+      expect((await sessions.findOneByOrFail({ id: row.id })).nodeId).toBeNull();
+      expect(stopOrphans).not.toHaveBeenCalled();
+    });
+  });
+
+  // The other side of the same read: a row removed by someone else (an operator, an import that left the engines
+  // running) while its engine runs here is a claim that really ended, and the heartbeat must still stop that engine.
+  describe('a row removed by someone else while its engine runs here', () => {
+    it('still has its engine torn down by the next heartbeat tick', async () => {
+      const { service, ownership, engines, stopOrphans } = stack();
+      const row = await seed();
+      await service.start(row.id);
+      expect(service.getEngine(row.id)).toBe(engines[0]);
+
+      await sessions.delete({ id: row.id });
+      await ownership.renew();
+
+      expect(stopOrphans).toHaveBeenCalledWith([row.id]);
+      await until(() => engines[0].destroy.mock.calls.length > 0);
+      expect(ownership.ownedIds()).toEqual([]);
+    });
+  });
+});

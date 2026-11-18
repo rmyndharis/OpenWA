@@ -480,6 +480,7 @@ export class SessionEngineLifecycle {
         this.bindingEpochs.delete(id);
         this.phoneWrites.forget(id);
       },
+      forgetClaim: (id, ownsClaim) => this.ownership?.forget(id, ownsClaim),
       readAfterPhoneWrites: (id, read) => this.phoneWrites.readSettled(id, read),
       writePhone: (id, write) => this.phoneWrites.run(id, write),
       prepareStart: (id, desiredState) => this.prepareStart(id, desiredState),
