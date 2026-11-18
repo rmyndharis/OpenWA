@@ -8285,7 +8285,9 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
 
     it('setProfileStatus delegates to client.setStatus', async () => {
       const setStatus = jest.fn().mockResolvedValue(undefined);
-      await readyAdapter({ setStatus }).setProfileStatus('busy');
+      // The page says the build still has the setter the library calls.
+      const pupPage = { evaluate: jest.fn().mockResolvedValue(true) };
+      await readyAdapter({ setStatus, pupPage }).setProfileStatus('busy');
       expect(setStatus).toHaveBeenCalledWith('busy');
     });
   });
@@ -8705,6 +8707,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       const adapter = readyAdapter({
         setDisplayName: jest.fn().mockRejectedValue(transportError()),
         setStatus: jest.fn().mockRejectedValue(transportError()),
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
         setProfilePicture: jest.fn().mockRejectedValue(transportError()),
         deleteProfilePicture: jest.fn().mockRejectedValue(transportError()),
         getBroadcasts: jest.fn().mockRejectedValue(transportError()),

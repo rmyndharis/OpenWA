@@ -84,9 +84,9 @@ Key adapter facts:
   construction fails the gate outside the one `unsupported()` helper body, as does a literal that
   names no interface method), and a refusal
   that fires only under a runtime condition - `sendTextMessage` with `customPreview` on whatsapp-web.js, or
-  `revokeGroupInviteCode` on a WhatsApp Web build that has no job to reset an invite code - is pinned in the
-  gate's conditional list instead of flipping the cell, because 'supported with a refused option' is not
-  'not-available'.
+  `revokeGroupInviteCode` and `setProfileStatus` on a WhatsApp Web build that lacks the call each one makes - is
+  pinned in the gate's conditional list instead of flipping the cell, because 'supported with a refused option'
+  is not 'not-available'.
 - **Inbound events** flow the other way: each adapter normalizes library events into the neutral
   `EngineEventCallbacks` (`onMessage`, `onMessageAck`, `onGroupEvent`, `onCall`, …), which the
   session module turns into OpenWA webhook events. Which library events are consumed — and which
@@ -1107,6 +1107,12 @@ adapter boundary — none silently stubs.
   resolve `false`, `deleteProfilePicture` resolves an explicit `false`) and raises a `403`. The
   Baileys calls resolve with no acceptance signal, so a change WhatsApp declined answers `200`. Only
   `setProfileStatus` is symmetric: neither engine surfaces a refusal for it.
+- **`setProfileStatus` (wwjs) needs a WhatsApp Web build that still has `setMyStatus`.** `Client.setStatus` calls
+  `setMyStatus` of `WAWebContactStatusBridge`, which WhatsApp Web builds from about mid November 2026 no longer
+  export: the About text became a text status that expires (a day by default), set through modules the library
+  does not call. The adapter asks the page whether the call exists and answers `501` where it does not, without
+  asking WhatsApp. On an earlier build the text is set as before. The gateway does not set the new text status:
+  its expiry and its gating by account cannot be settled without a linked account to check against.
 - **`editMessage` / `pinMessage` / `unpinMessage` refusals (baileys).** Both engines refuse what they
   can judge locally: the target must be addressable inside the given chat, and the Baileys adapter
   additionally refuses an edit of a message the account did not send or of one with no text or caption

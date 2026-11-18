@@ -6896,6 +6896,8 @@ Set the account display name (max 25 chars).
 
 Set the account about/status text (max 139 chars; empty string clears it).
 
+On whatsapp-web.js the library sets the text through a call that WhatsApp Web builds from about mid November 2026 no longer have: the About text became a status that expires, which the library does not set. On such a build the route answers `501` and changes nothing; on an earlier build it works as before. Baileys is not affected.
+
 **Auth:** API key (OPERATOR)
 
 ```json
@@ -6904,7 +6906,7 @@ Set the account about/status text (max 139 chars; empty string clears it).
 
 **Response** `200` — `{ "success": true, "message": "Profile status updated" }`
 
-**Errors:** `400` session is not started / status too long · `401` · `403` · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
+**Errors:** `400` session is not started / status too long · `401` · `403` · `409` conflict or engine not ready (retryable) · `501` on whatsapp-web.js, the WhatsApp Web build the session runs no longer has the call the library uses to set the About text, so nothing was asked of WhatsApp · `503` session not ready or dependency unavailable (retryable)
 
 #### PUT /api/sessions/:sessionId/profile/picture
 

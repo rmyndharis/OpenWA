@@ -1,8 +1,28 @@
 import { type Client } from 'whatsapp-web.js';
 import { CallLinkType, MediaInput } from '../interfaces/whatsapp-engine.interface';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
+import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { toMessageMedia } from './wwebjs-messaging';
 import { type WwebjsEngineHost, withPageWrite, reportPageDeath } from './wwebjs-host';
+
+/**
+ * Whether the page's `WAWebContactStatusBridge` still exports `setMyStatus`, which `Client.setStatus` calls. The build
+ * the gateway selects today exports only `queryStatusAll` and `sendReadStatus`: the About text is an expiring text
+ * status there, set through modules the library does not call, so the call was a TypeError in the page. A module a
+ * build does not define throws from `require`. A document with no `require` at all is a page that is reloading, not
+ * a build without the setter, and that failure is let through (spelled as the library spells it, which is how the
+ * reload is read).
+ */
+export function readStatusSetterInPage(): boolean {
+  type Bridge = { setMyStatus?: unknown } | undefined;
+  let bridge: Bridge;
+  try {
+    bridge = (window as unknown as { require: (m: string) => Bridge }).require('WAWebContactStatusBridge');
+  } catch (err) {
+    if (typeof (window as unknown as { require?: unknown }).require !== 'function') throw err;
+  }
+  return typeof bridge?.setMyStatus === 'function';
+}
 
 /**
  * Own-account profile operations extracted from WhatsAppWebJsAdapter. The adapter keeps the public
@@ -62,7 +82,15 @@ export class WwebjsProfile {
 
   async setProfileStatus(status: string): Promise<void> {
     this.host.ensureReady();
-    await withPageWrite(this.host, 'setProfileStatus', () => this.client().setStatus(status));
+    const client = this.client();
+    const page = (client as unknown as { pupPage: { evaluate: <T>(fn: () => T) => Promise<T> } }).pupPage;
+    await withPageWrite(this.host, 'setProfileStatus', async () => {
+      // A build with no setter: nothing is asked of WhatsApp, so this is neither a refusal nor a failure to retry.
+      if (!(await page.evaluate(readStatusSetterInPage))) {
+        throw new EngineNotSupportedError('setProfileStatus(no status setter on this build)');
+      }
+      await client.setStatus(status);
+    });
     this.host.logger.log('Updated profile status');
   }
 

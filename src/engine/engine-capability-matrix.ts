@@ -430,7 +430,8 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
   setProfileStatus: {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
-    evidence: 'wwjs Client.setStatus(status) (index.d.ts); baileys updateProfileStatus(status) (Socket/chats.d.ts)',
+    evidence:
+      'wwjs Client.setStatus(status) (index.d.ts) calls setMyStatus of WAWebContactStatusBridge in the page, which WhatsApp Web builds from about mid November 2026 no longer export (the About text became an expiring text status, set through modules the library does not call): the adapter asks the page for it and answers 501 on such a build; baileys updateProfileStatus(status) (Socket/chats.d.ts)',
   },
   subscribeToChannel: {
     wwjs: { status: 'not-available', rootCause: 'adapter-gap' },

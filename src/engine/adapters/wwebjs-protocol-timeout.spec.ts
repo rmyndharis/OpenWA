@@ -455,7 +455,16 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
     type Write = [string, (host: WwebjsEngineHost) => Promise<unknown>, (error: Error) => Record<string, jest.Mock>];
     const WRITES: Write[] = [
       ['profile name', h => new WwebjsProfile(h).setProfileName('Ada'), e => ({ setDisplayName: failing(e) })],
-      ['profile status', h => new WwebjsProfile(h).setProfileStatus('Busy'), e => ({ setStatus: failing(e) })],
+      [
+        'profile status, the check for the setter',
+        h => new WwebjsProfile(h).setProfileStatus('Busy'),
+        e => ({ pupPage: { evaluate: failing(e) } }) as unknown as Record<string, jest.Mock>,
+      ],
+      [
+        'profile status',
+        h => new WwebjsProfile(h).setProfileStatus('Busy'),
+        e => ({ pupPage: { evaluate: resolved(true) }, setStatus: failing(e) }) as unknown as Record<string, jest.Mock>,
+      ],
       [
         'profile picture',
         h => new WwebjsProfile(h).setProfilePicture(PICTURE),
