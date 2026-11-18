@@ -173,6 +173,11 @@ export function useChatScrollPosition(
   measureMedia: (el: Element | null) => void;
   /** Call when an older page is requested; the reading position is held once it lands. */
   onOlderMessagesRequested: () => void;
+  /**
+   * Scrolls a row of the thread to its middle, as a search hit does. Whether the reader is at the bottom is then read
+   * from where the jump left them.
+   */
+  showRow: (row: Element) => void;
 } {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Each chat's saved offset, with the anchor key of the row that was first in its thread then (see savedSpotTop).
@@ -250,6 +255,9 @@ export function useChatScrollPosition(
     (el: HTMLDivElement) => {
       writeScrollTop(el, el.scrollHeight);
       pinnedRef.current = true;
+      // A pin is a look at the box it was made for: a container that changes size before its first report (the draft
+      // of a reopened chat lands in the commit after the room mounted) is still followed.
+      boxRef.current = { el, width: el.clientWidth, height: el.clientHeight };
     },
     [writeScrollTop],
   );
@@ -585,5 +593,15 @@ export function useChatScrollPosition(
     [activeChatId, applyMediaGrowth, followBottom, onOlderMessagesRequested, writeScrollTop, scheduleMediaFrame],
   );
 
-  return { containerRef, onMessageAppended, onMediaLoad, measureMedia, onOlderMessagesRequested };
+  // A row the page scrolls to on purpose (a search hit). The reader is where the page sent them, which is the bottom
+  // only if the row is there. Until the scroll event of this jump is handled the pin the restore made in the same
+  // commit still says otherwise, and followBox, which looks at the box first, would put the thread back at its bottom.
+  // The pin is read after the jump, so a hit on the newest message still follows its box.
+  const showRow = useCallback((row: Element) => {
+    row.scrollIntoView({ block: 'center' });
+    const el = containerRef.current;
+    if (el) pinnedRef.current = isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
+  }, []);
+
+  return { containerRef, onMessageAppended, onMediaLoad, measureMedia, onOlderMessagesRequested, showRow };
 }

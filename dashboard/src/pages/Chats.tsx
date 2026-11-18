@@ -507,6 +507,7 @@ export function Chats() {
     onMediaLoad,
     measureMedia,
     onOlderMessagesRequested,
+    showRow,
   } = useChatScrollPosition(
     activeChat ? `${selectedSessionId}:${activeChat.id}` : null,
     hasRenderableMessages,
@@ -1569,7 +1570,7 @@ export function Chats() {
   const scrollToRow = (matches: (row: HTMLElement) => boolean): boolean => {
     const rows = messagesContainerRef.current?.querySelectorAll<HTMLElement>('[data-scroll-anchor]');
     const row = Array.from(rows ?? []).find(matches);
-    row?.scrollIntoView({ block: 'center' });
+    if (row) showRow(row);
     return row !== undefined;
   };
 
@@ -1723,13 +1724,14 @@ export function Chats() {
     if (container) {
       try {
         const el = container.querySelector(`[data-wa-message-id="${pending.waMessageId}"]`);
-        if (el instanceof HTMLElement) el.scrollIntoView({ block: 'center' });
+        // Through the hook, so that the pin the restore just made is not kept for a thread that has left its bottom.
+        if (el instanceof HTMLElement) showRow(el);
       } catch {
         // Unexpected chars in the id made the selector invalid — ignore.
       }
     }
     pendingHitRef.current = null;
-  }, [activeChat, loadingMessages, messages, messagesContainerRef, hitSeq]);
+  }, [activeChat, loadingMessages, messages, messagesContainerRef, showRow, hitSeq]);
 
   // Helper formats. The list time follows WhatsApp's ladder, so the list scans the way operators
   // expect: the clock for today, "Yesterday", the weekday within the last week, else a short date.

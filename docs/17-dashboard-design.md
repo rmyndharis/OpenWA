@@ -459,7 +459,8 @@ Send button or a click puts the highlighted template's text in the field, to be 
 like any other message; Escape or the picker's close button leaves the draft to be sent as typed.
 A template with placeholders such as `{{name}}` is not sent exactly as inserted, and the composer
 says the placeholders are to be filled in for as long as one of them is left in the draft. A thread
-at its bottom stays there when the composer under it changes height.
+at its bottom stays there when the composer under it changes height, and a thread the page scrolled
+to a search hit stays on that message.
 
 The message thread is paged. `useChatMessages` is a `useInfiniteQuery` whose cursor is the number
 of DB rows fetched so far, not the length of the rendered list — the thread also carries engine
