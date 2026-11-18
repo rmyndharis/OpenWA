@@ -62,6 +62,12 @@ const WWJS_STATUS_503 =
   ' On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): ' +
   'nothing was changed, so retry after a pause.';
 
+// The subject, description and picture are the group's info: WhatsApp lets an admin edit them and, unless the group
+// restricts its info to admins, any member too. The settings and the invite routes below stay admin-only.
+const INFO_EDIT_403 =
+  'The engine refused the change: editing the group info takes an admin, or any member of a group whose info is ' +
+  'not restricted to admins.';
+
 // Reading an invite code is admin-only, but the groups list returns every group the account
 // belongs to whatever its role — so these two statuses apply to ids the caller was just given.
 const INVITE_CODE_403 = 'The engine refused the request — admin rights required for this group';
@@ -493,7 +499,7 @@ export class GroupController {
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: GroupSubjectDto })
   @ApiResponse({ status: 200, description: 'Subject updated', type: GroupAckResponseDto })
-  @ApiResponse({ status: 403, description: 'The engine refused the change — admin rights are required' })
+  @ApiResponse({ status: 403, description: INFO_EDIT_403 })
   @ApiResponse({
     status: 503,
     description:
@@ -522,7 +528,7 @@ export class GroupController {
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: GroupDescriptionDto })
   @ApiResponse({ status: 200, description: 'Description updated', type: GroupAckResponseDto })
-  @ApiResponse({ status: 403, description: 'The engine refused the change — admin rights are required' })
+  @ApiResponse({ status: 403, description: INFO_EDIT_403 })
   @ApiResponse({
     status: 503,
     description:
@@ -660,7 +666,7 @@ export class GroupController {
       'the url answers non-2xx, times out or cannot be reached, or the image cannot be read (Baileys ' +
       'refuses an SVG)',
   })
-  @ApiResponse({ status: 403, description: 'The engine refused the change — admin rights required' })
+  @ApiResponse({ status: 403, description: INFO_EDIT_403 })
   @ApiResponse({
     status: 503,
     description:
@@ -695,8 +701,7 @@ export class GroupController {
   @ApiResponse({
     status: 403,
     description:
-      'The engine refused the change: admin rights are required. A group with no picture is not refused: ' +
-      'WhatsApp accepts the delete and the route answers 200.',
+      INFO_EDIT_403 + ' A group with no picture is not refused: WhatsApp accepts the delete and the route answers 200.',
   })
   @ApiResponse({
     status: 503,

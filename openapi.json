@@ -11349,7 +11349,7 @@
             }
           },
           "403": {
-            "description": "The engine refused the change — admin rights are required. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The engine refused the change: editing the group info takes an admin, or any member of a group whose info is not restricted to admins. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11460,7 +11460,7 @@
             }
           },
           "403": {
-            "description": "The engine refused the change — admin rights are required. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The engine refused the change: editing the group info takes an admin, or any member of a group whose info is not restricted to admins. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11883,7 +11883,7 @@
             }
           },
           "403": {
-            "description": "The engine refused the change — admin rights required. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The engine refused the change: editing the group info takes an admin, or any member of a group whose info is not restricted to admins. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11992,7 +11992,7 @@
             }
           },
           "403": {
-            "description": "The engine refused the change: admin rights are required. A group with no picture is not refused: WhatsApp accepts the delete and the route answers 200. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The engine refused the change: editing the group info takes an admin, or any member of a group whose info is not restricted to admins. A group with no picture is not refused: WhatsApp accepts the delete and the route answers 200. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
