@@ -45,21 +45,36 @@ export function extractLinkedParentJID(groupMetadata?: GroupMetadataRaw): string
  * refusal) and resolve nothing; revokeInvite alone lets it reject, so a refusal reached the caller as
  * an opaque 500. Outside the page the error's name is no longer reliable (Puppeteer rebuilds it from
  * the page's constructor name), so the check has to happen here.
+ *
+ * The job that resets the code has moved between WhatsApp Web builds: `WAWebGroupInviteJob` exports it on the build
+ * the gateway selects today and `WAWebGroupQueryJob` did before, and both take the same wid and resolve the same
+ * `{code}`. A module a build does not define throws from `require`, so each lookup is guarded; a document with no
+ * `require` at all is a page that is reloading, not a build without the job, and that failure is let through. A
+ * build with neither answers `'missing'` before anything was asked of WhatsApp.
  */
-export async function revokeInviteInPage(chatId: string): Promise<string | undefined> {
-  const w = window as unknown as {
-    require: (m: string) => {
-      createWid: (id: string) => unknown;
-      resetGroupInviteCode: (wid: unknown) => Promise<{ code?: string } | undefined>;
-    };
-  };
+export async function revokeInviteInPage(chatId: string): Promise<{ code?: string } | 'missing'> {
+  type ResetJob = { resetGroupInviteCode: (wid: unknown) => Promise<{ code?: string } | undefined> };
+  const w = window as unknown as { require: (m: string) => unknown };
+  let job: ResetJob | undefined;
+  for (const name of ['WAWebGroupInviteJob', 'WAWebGroupQueryJob']) {
+    let found: Partial<ResetJob> | undefined;
+    try {
+      found = w.require(name) as Partial<ResetJob> | undefined;
+    } catch (err) {
+      if (typeof w.require !== 'function') throw err;
+    }
+    if (typeof found?.resetGroupInviteCode === 'function') {
+      job = found as ResetJob;
+      break;
+    }
+  }
+  if (!job) return 'missing';
   try {
-    const res = await w
-      .require('WAWebGroupQueryJob')
-      .resetGroupInviteCode(w.require('WAWebWidFactory').createWid(chatId));
-    return res?.code;
+    const wids = w.require('WAWebWidFactory') as { createWid: (id: string) => unknown };
+    const res = await job.resetGroupInviteCode(wids.createWid(chatId));
+    return { code: res?.code };
   } catch (err) {
-    if ((err as Error | undefined)?.name === 'ServerStatusCodeError') return undefined;
+    if ((err as Error | undefined)?.name === 'ServerStatusCodeError') return {};
     throw err;
   }
 }
@@ -426,14 +441,18 @@ export class WwebjsGroups {
     const page = (
       this.client() as unknown as { pupPage: { evaluate: <T, A>(fn: (arg: A) => Promise<T>, arg: A) => Promise<T> } }
     ).pupPage;
-    const newCode = await reportPageDeath(this.host, 'revokeGroupInviteCode', () =>
+    const answer = await reportPageDeath(this.host, 'revokeGroupInviteCode', () =>
       page.evaluate(revokeInviteInPage, groupId),
     );
-    if (!newCode) {
+    // A build with no job to reset a code: nothing was asked of WhatsApp, so this is no refusal and no failure.
+    if (answer === 'missing') {
+      throw new EngineNotSupportedError('revokeGroupInviteCode(no reset job on this build)');
+    }
+    if (!answer.code) {
       throw new EngineRefusedError(`Failed to revoke the invite code for group ${groupId} — admin rights required`);
     }
     this.host.logger.debug('Revoked group invite code, new code generated', { groupId });
-    return newCode;
+    return answer.code;
   }
 
   /**

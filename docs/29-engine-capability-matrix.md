@@ -83,9 +83,10 @@ Key adapter facts:
   plain single-quoted string naming the refused method (a template-literal or variable-argument
   construction fails the gate outside the one `unsupported()` helper body, as does a literal that
   names no interface method), and a refusal
-  that fires only under a runtime condition - `sendTextMessage` with `customPreview` on whatsapp-web.js -
-  is pinned in the gate's conditional list instead of flipping the cell, because 'supported with a
-  refused option' is not 'not-available'.
+  that fires only under a runtime condition - `sendTextMessage` with `customPreview` on whatsapp-web.js, or
+  `revokeGroupInviteCode` on a WhatsApp Web build that has no job to reset an invite code - is pinned in the
+  gate's conditional list instead of flipping the cell, because 'supported with a refused option' is not
+  'not-available'.
 - **Inbound events** flow the other way: each adapter normalizes library events into the neutral
   `EngineEventCallbacks` (`onMessage`, `onMessageAck`, `onGroupEvent`, `onCall`, …), which the
   session module turns into OpenWA webhook events. Which library events are consumed — and which
@@ -1167,6 +1168,11 @@ adapter boundary — none silently stubs.
   sent once it went out (otherwise `success: false, status: 403`), while Baileys sends nothing and reports
   `success: false, status: 403`, so a batch made only of such participants answers `200` on wwjs when every
   invite went out and `403` on Baileys.
+- **`revokeGroupInviteCode` (wwjs) needs a WhatsApp Web build that has the reset job.** The adapter runs the
+  job in the page: `resetGroupInviteCode` of `WAWebGroupInviteJob`, where the build keeps it, or of
+  `WAWebGroupQueryJob` on a build that still does (the library's own `revokeInvite` reads only the second). Both
+  take the same group id and resolve the same `{code}`, and a refusal is the `403` as before. A build with neither
+  answers `501` before anything is asked of WhatsApp, so the current code stays valid.
 - **Group owner and group event ids (wwjs).** whatsapp-web.js folds a group's participant list to the phone
   dialect, but the group `owner` (`getGroupInfo`, `getGroupJoinInfo`) and the actor and participant ids of group
   events reach the adapter as WhatsApp Web holds them, which on a LID-addressed group is `<lid>@lid` even when the

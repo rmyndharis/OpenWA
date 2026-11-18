@@ -12223,6 +12223,16 @@
               }
             }
           },
+          "501": {
+            "description": "On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to reset an invite code. Nothing was asked of WhatsApp: the current code is unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
             "description": "WhatsApp did not answer the invite-code query — retry shortly. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
             "content": {
