@@ -85,6 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard: picking an emoji, pressing Escape on one, removing a staged file, closing the reply banner and starting a reply from a message menu put focus back in the message field (not after a tap, which would raise a phone's keyboard), where it fell to the page and what was typed next went nowhere.
 - Dashboard: the emoji button of the message field tells screen readers whether its panel is open.
 - Dashboard: Show more in the sidebar message search keeps the hits already listed and adds the next page under them, where it replaced the list with a loading line and took the reader back to the first hit.
+- Dashboard: typing in the sidebar message search shows the loading line at once, where the hits of the text before stayed listed and clickable until the new search started.
 - Dashboard: in forced-colors mode (a Windows contrast theme) the focused search box and composer, the selected tab, row and toggle, the custom switches and the filled buttons stay visible, where they were drawn like their peers or not at all.
 - Dashboard: the box that shows a new API key and the one in the webhook delete dialog draw their fill, where a style read an undefined property and left them bare.
 - Dashboard: the sign-in language select draws one focus frame under keyboard focus, where its box and the select each drew one.
@@ -93,8 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard: the current page of the Logs pager and the open template of the Templates list are marked for screen readers, where only a style told them apart.
 - Dashboard: in Arabic and Hebrew, text a person or a plugin author wrote (names, template bodies and previews, found messages, plugin descriptions) and the message, template and search fields read in their own direction, where a Latin sentence showed its full stop on the wrong end and an Arabic preview read its clauses in the wrong order.
 - Dashboard: the audit log table fits a window from about 1100px, where its Severity column was cut off below about 1340px, and a long session, key or address ends in an ellipsis instead of overprinting the next column.
-- Dashboard: the API keys table keeps its row actions in view at any width, pinned to the end of the table, where they were out of view on windows narrower than about 1440px (about 1600px for a key with limits in German).
-- Dashboard: a sidebar label that the browser's text size makes too long ends in an ellipsis and carries its text in a title, where it was cut mid-letter from 125% text size in some languages and from 150% in English.
+- Dashboard: the API keys table keeps its row actions in view at any width, where they were cut off on windows up to about 1480px wide (about 1540px for a key with limits in German); its cells take less padding so it fits from about 1440px, and below that the columns beside the actions scroll into view.
+- Dashboard: a sidebar label that the browser's text size makes too long ends in an ellipsis and carries its text in a title, where the row cut it mid-letter from about 120% text size in Spanish, French and Portuguese and from about 150% in English.
 - PHP SDK: an empty request body is sent as `{}` instead of `[]`, which the gateway refused with `400` on config, proxy, webhook and template updates.
 - Java SDK: an API error with a JSON body can be Java-serialized, where it threw `NotSerializableException` for the Gson body.
 - PHP SDK: the `mentions`, poll `options`, status `recipients`, webhook `events` and `filters`, redrive `ids` and `messageIds` lists are sent as JSON arrays when their keys have gaps (`array_filter`, `array_unique`), which the gateway refused with `400`.
