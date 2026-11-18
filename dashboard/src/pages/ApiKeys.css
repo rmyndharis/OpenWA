@@ -430,7 +430,7 @@
 .api-keys-page .key-signed-in-warning svg {
   flex: none;
   margin-top: 0.125rem;
-  color: var(--warning, #f59e0b);
+  color: var(--warning-text);
 }
 
 .api-keys-page .restrictions-cell {
