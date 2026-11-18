@@ -86,9 +86,9 @@
       "omitted": "מדיה",
       "image": "תמונה"
     },
-    "noSessionsTitle": "אין סשנים מחוברים",
-    "noSessionsDesc": "יש לחבר סשן WhatsApp מתפריט <1>Sessions</1> תחילה כדי להשתמש בתכונת הצ'אט.",
-    "sessionLabel": "סשן WhatsApp",
+    "noSessionsTitle": "אין Sessions מחוברים",
+    "noSessionsDesc": "יש לחבר Session WhatsApp מתפריט <1>Sessions</1> תחילה כדי להשתמש בתכונת הצ'אט.",
+    "sessionLabel": "Session WhatsApp",
     "noPhone": "אין מספר טלפון",
     "searchPlaceholder": "חיפוש שיחות...",
     "loadingChats": "טוען שיחות...",
@@ -199,14 +199,14 @@
     "channels": {
       "notSupported": "ערוצים אינם נתמכים במנוע Baileys.",
       "empty": "עדיין אינך רשום/ה לאף ערוץ.",
-      "notReady": "הסשן עדיין אינו מוכן.",
+      "notReady": "ה-Session עדיין אינו מוכן.",
       "subscribers": "{{count}} מנוי",
       "subscribers_many": "{{count}} מנויים",
       "subscribers_other": "{{count}} מנויים",
       "subscribers_two": "שני מנויים"
     },
     "errors": {
-      "loadSessions": "טעינת הסשנים נכשלה",
+      "loadSessions": "טעינת ה-Sessions נכשלה",
       "loadChats": "טעינת השיחות נכשלה",
       "markRead": "סימון השיחה כנקראה נכשל",
       "send": "שליחת ההודעה נכשלה",
@@ -214,7 +214,7 @@
       "delete": "מחיקת ההודעה נכשלה",
       "clickButton": "לחיצה על הכפתור נכשלה",
       "fileTooLarge": "הקובץ גדול מדי (מקסימום 18 MB)",
-      "searchHitSessionNotReady": "הסשן של הודעה זו אינו מחובר",
+      "searchHitSessionNotReady": "ה-Session של הודעה זו אינו מחובר",
       "searchHitChatNotListed": "לא ניתן למצוא את השיחה של הודעה זו ברשימה"
     },
     "loadMessagesError": "לא ניתן לטעון את ההודעות. בדקו את יומני השרת.",
@@ -226,7 +226,7 @@
       "failed": "נכשל"
     },
     "today": "היום",
-    "switchSession": "החלפת סשן",
+    "switchSession": "החלפת Session",
     "searchMessages": "חיפוש הודעות",
     "clearSearch": "ניקוי החיפוש",
     "filters": {
@@ -271,10 +271,10 @@
       "removeParticipant": "הסרת {{name}}"
     },
     "sessionPicker": {
-      "searchPlaceholder": "חיפוש סשנים...",
-      "noMatch": "אין סשן תואם",
+      "searchPlaceholder": "חיפוש Sessions...",
+      "noMatch": "אין Session תואם",
       "addTitle": "קישור מספר נוסף",
-      "addHint": "יצירת סשן וקישורו באמצעות קוד QR"
+      "addHint": "יצירת Session וקישורו באמצעות קוד QR"
     },
     "group": {
       "info": "פרטי הקבוצה",
@@ -406,7 +406,7 @@
     "title": "דאשבורד",
     "subtitle": "סקירה כללית של ה-Sessions והפעילות שלך ב-WhatsApp",
     "stats": {
-      "activeSessions": "סשנים מחוברים",
+      "activeSessions": "Sessions מחוברים",
       "sessionsDetail": "{{running}} רצים · {{total}} בסך הכול",
       "messagesToday": "הודעות היום",
       "webhooksConfigured": "Webhooks מוגדרים",
@@ -530,11 +530,11 @@
       "configured": "{{host}} ({{type}})",
       "noProxy": "לא הוגדר proxy",
       "hasCredentials": "פרטי הגישה שמורים אך אינם מוצגים. כדי לשנות אותם יש להזין כתובת URL מלאה.",
-      "hint": "השינויים חלים בהפעלה הבאה של הסשן, ולא על חיבור פעיל. ה-proxy חייב להיות אמיתי ונגיש: ערך שאינו נגיש חוסם את קבלת ה-QR. ב-whatsapp-web.js ההפעלה מחזירה 504, וב-Baileys ההפעלה מצליחה והסשן ממשיך לנסות שוב.",
+      "hint": "השינויים חלים בהפעלה הבאה של ה-Session, ולא על חיבור פעיל. ה-proxy חייב להיות אמיתי ונגיש: ערך שאינו נגיש חוסם את קבלת ה-QR. ב-whatsapp-web.js ההפעלה מחזירה 504, וב-Baileys ההפעלה מצליחה וה-Session ממשיך לנסות שוב.",
       "createHint": "נדרש רק כשהרשת שלכם לא מצליחה להגיע ישירות ל-WhatsApp. חייב להיות proxy אמיתי ונגיש.",
       "invalidUrl": "יש להזין כתובת URL תקינה של proxy מסוג http, https, socks4 או socks5.",
       "saveSuccessTitle": "ה-proxy נשמר",
-      "saveSuccess": "הגדרות ה-proxy נשמרו. הן יחולו בהפעלה הבאה של הסשן.",
+      "saveSuccess": "הגדרות ה-proxy נשמרו. הן יחולו בהפעלה הבאה של ה-Session.",
       "saveError": "שמירת הגדרות ה-proxy נכשלה"
     },
     "actions": {
@@ -566,26 +566,26 @@
       "restriction": "הגבלה"
     },
     "forceKill": {
-      "title": "סגירת סשן תקוע",
-      "message": "האם אתם בטוחים שברצונכם לסגור בכוח את הסשן \"{{name}}\"?",
-      "warning": "פעולה זו תסיים בכוח את תהליך הדפדפן של WhatsApp. ייתכן שיהיה צורך לסרוק מחדש את הסשן לאחר ההפעלה מחדש.",
-      "confirm": "סגור סשן",
-      "successTitle": "הסשן נסגר",
-      "success": "הסשן נסגר בכוח. ניתן להפעיל אותו מחדש כעת.",
+      "title": "סגירת Session תקוע",
+      "message": "האם אתם בטוחים שברצונכם לסגור בכוח את ה-Session \"{{name}}\"?",
+      "warning": "פעולה זו תסיים בכוח את תהליך הדפדפן של WhatsApp. ייתכן שיהיה צורך לסרוק מחדש את ה-Session לאחר ההפעלה מחדש.",
+      "confirm": "סגור Session",
+      "successTitle": "ה-Session נסגר",
+      "success": "ה-Session נסגר בכוח. ניתן להפעיל אותו מחדש כעת.",
       "failedTitle": "הסגירה בכוח נכשלה",
-      "failed": "סגירת הסשן בכוח נכשלה."
+      "failed": "סגירת ה-Session בכוח נכשלה."
     },
     "unlink": {
       "title": "ביטול קישור המכשיר",
-      "message": "לבטל את קישור הסשן <strong>\"{{name}}\"</strong> מחשבון הוואטסאפ?",
-      "warning": "וואטסאפ תסיר מכשיר זה מרשימת המכשירים המקושרים של החשבון והסשן ייעצר. ההתחברות מחדש דורשת סריקת QR חדשה או קוד התאמה. כדי למחוק גם את כל הנתונים המקומיים, מחק את הסשן לאחר מכן.",
+      "message": "לבטל את קישור ה-Session <strong>\"{{name}}\"</strong> מחשבון הוואטסאפ?",
+      "warning": "וואטסאפ תסיר מכשיר זה מרשימת המכשירים המקושרים של החשבון וה-Session ייעצר. ההתחברות מחדש דורשת סריקת QR חדשה או קוד התאמה. כדי למחוק גם את כל הנתונים המקומיים, מחק את ה-Session לאחר מכן.",
       "confirm": "ביטול קישור",
       "successTitle": "המכשיר נותק",
-      "success": "ביטול הקישור הושלם: המכשיר נותק ואישורי הסשן המקומיים נמחקו. חיבור מחדש דורש סריקת QR חדשה או קוד הוראה.",
+      "success": "ביטול הקישור הושלם: המכשיר נותק ואישורי ה-Session המקומיים נמחקו. חיבור מחדש דורש סריקת QR חדשה או קוד הוראה.",
       "failedTitle": "ביטול הקישור נכשל",
-      "failed": "לא ניתן לבטל את קישור הסשן.",
+      "failed": "לא ניתן לבטל את קישור ה-Session.",
       "incompleteTitle": "ביטול קישור חלקי",
-      "incomplete": "הסשן נעצר מקומית, אך פעולת ההתנתקות אינה מושלמת — ייתכן שהמכשיר עדיין מקושר. הפעל את הסשן ונסה שוב את ביטול הקישור."
+      "incomplete": "ה-Session נעצר מקומית, אך פעולת ההתנתקות אינה מושלמת — ייתכן שהמכשיר עדיין מקושר. הפעל את ה-Session ונסה שוב את ביטול הקישור."
     },
     "pairing": {
       "tabQr": "קוד QR",
@@ -593,7 +593,7 @@
       "phoneLabel": "מספר טלפון",
       "phonePlaceholder": "לדוגמה: 919876543210",
       "phoneHint": "ספרות בלבד (ללא +, רווחים או מקפים) בפורמט בין-לאומי (קידומת מדינה + מספר).",
-      "relinkWarning": "במנוע whatsapp-web.js, בקשת קוד עבור מספר שכבר יש לו סשן מקושר עלולה לגרום לוואטסאפ לנתק את המכשיר הזה. השתמשו בלשונית ה-QR אם הסשן הזה חייב להישאר פעיל.",
+      "relinkWarning": "במנוע whatsapp-web.js, בקשת קוד עבור מספר שכבר יש לו Session מקושר עלולה לגרום לוואטסאפ לנתק את המכשיר הזה. השתמשו בלשונית ה-QR אם ה-Session הזה חייב להישאר פעיל.",
       "invalidPhone": "יש להזין מספר טלפון תקין: 6–15 ספרות, קידומת המדינה תחילה, ללא סימנים.",
       "generateButton": "יצירת קוד קישור",
       "generating": "יוצר קוד קישור...",
@@ -607,8 +607,8 @@
       "waitingConnection": "ממתין לקישור המכשיר שלך…"
     },
     "start": {
-      "teardownPendingTitle": "הפעלת סשן",
-      "teardownPending": "פירוק אישורים לסשן זה עדיין מתבצע. המתן רגע ונסה שוב.",
+      "teardownPendingTitle": "הפעלת Session",
+      "teardownPending": "פירוק אישורים ל-Session זה עדיין מתבצע. המתן רגע ונסה שוב.",
       "errorTitle": "ההפעלה נכשלה"
     },
     "restriction": {
@@ -762,14 +762,14 @@
   },
   "templates": {
     "title": "תבניות",
-    "subtitle": "צרו תבניות הודעה לשימוש חוזר עבור כל סשן WhatsApp",
+    "subtitle": "צרו תבניות הודעה לשימוש חוזר עבור כל Session WhatsApp",
     "createTitle": "יצירת תבנית",
     "editTitle": "עריכת תבנית",
     "newTemplate": "תבנית חדשה",
     "createTemplate": "צור תבנית",
     "saveChanges": "שמירת שינויים",
     "viewOnly": "צפייה בלבד",
-    "noSessions": "אין סשנים",
+    "noSessions": "אין Sessions",
     "sessionHint": "נשמר תחת {{name}}",
     "namePlaceholder": "לדוגמה, order-confirmation",
     "header": "כותרת",
@@ -793,8 +793,8 @@
       "title": "אין תבניות שמורות",
       "noMatch": "אין תבניות שתואמות לחיפוש.",
       "description": "צרו תבנית לשימוש חוזר כדי לזרז תשובות והתראות נפוצות.",
-      "noSessionsTitle": "אין סשנים זמינים",
-      "noSessionsDesc": "צרו סשן WhatsApp לפני הוספת תבניות.",
+      "noSessionsTitle": "אין Sessions זמינים",
+      "noSessionsDesc": "צרו Session WhatsApp לפני הוספת תבניות.",
       "loadErrorTitle": "לא ניתן לטעון את התבניות",
       "forbiddenTitle": "אין גישה לתבניות",
       "forbiddenDesc": "תבניות דורשות מפתח API עם תפקיד מפעיל או מנהל."
@@ -838,7 +838,7 @@
       "status": "סטטוס",
       "lastUsed": "שימוש אחרון",
       "actions": "פעולות",
-      "sessions": "סשנים",
+      "sessions": "Sessions",
       "restrictions": "הגבלות"
     },
     "statuses": {
@@ -851,7 +851,7 @@
       "description": "יש ליצור מפתח API לאימות הבקשות",
       "loadErrorTitle": "לא ניתן לטעון את מפתחות ה-API",
       "forbiddenTitle": "אין גישה למפתחות ה-API",
-      "forbiddenDesc": "ניהול מפתחות API דורש מפתח מנהל שאינו מוגבל לסשנים מסוימים."
+      "forbiddenDesc": "ניהול מפתחות API דורש מפתח מנהל שאינו מוגבל ל-Sessions מסוימים."
     },
     "confirm": {
       "deleteTitle": "מחיקת מפתח API",
@@ -868,14 +868,14 @@
       "edit": "עריכת גישה"
     },
     "sessions": {
-      "label": "גישה לסשנים",
-      "hint": "בחרו את הסשנים שהמפתח הזה יוכל להשתמש בהם.",
-      "all": "כל הסשנים",
-      "empty": "עדיין אין סשנים. המפתח הזה יוכל לגשת לכולם ברגע שיהיו.",
+      "label": "גישה ל-Sessions",
+      "hint": "בחרו את ה-Sessions שהמפתח הזה יוכל להשתמש בהם.",
+      "all": "כל ה-Sessions",
+      "empty": "עדיין אין Sessions. המפתח הזה יוכל לגשת לכולם ברגע שיהיו.",
       "restricted": "{{count}} נבחרו",
       "save": "שמירה",
-      "choose": "בחירת סשנים",
-      "leaveAll": "להשאיר לכל הסשנים"
+      "choose": "בחירת Sessions",
+      "leaveAll": "להשאיר לכל ה-Sessions"
     },
     "edit": {
       "title": "עריכת הגישה של המפתח",
