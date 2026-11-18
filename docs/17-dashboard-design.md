@@ -466,7 +466,7 @@ at its bottom stays there when the composer under it changes height, and a threa
 to a search hit stays on that message. A button that closes with the focus on it (an emoji of the
 panel, the remove button of a staged file, the close button of the reply banner) hands the focus to
 the message field, except after a tap, which would raise a phone's keyboard; Escape on an emoji does
-the same.
+the same, and so does starting a reply from the menu of a message.
 
 The message thread is paged. `useChatMessages` is a `useInfiniteQuery` whose cursor is the number
 of DB rows fetched so far, not the length of the rendered list — the thread also carries engine
