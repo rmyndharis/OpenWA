@@ -711,28 +711,157 @@ test('a typed draft survives closing and reopening the room', async () => {
   assert.equal(input.value, 'draft survives');
 });
 
+// What the chat list shows of a draft: the row of the chat named `name`, and whether it carries the draft label.
+function listRow(container: HTMLElement, name: string): HTMLElement {
+  const sidebar = container.querySelector('.chats-sidebar') as HTMLElement;
+  return rtl.within(sidebar).getByText(name).closest('[role="button"]') as HTMLElement;
+}
+
+const showsDraft = (container: HTMLElement, name: string): boolean =>
+  listRow(container, name).querySelector('.chat-item-draft-label') !== null;
+
+/** Open the chat named `name` from the list, once the list holds it. */
+async function openListed(container: HTMLElement, name: string): Promise<void> {
+  const { fireEvent, within } = rtl;
+  fireEvent.click(await within(container.querySelector('.chats-sidebar') as HTMLElement).findByText(name));
+  await within(container.querySelector('.room-header') as HTMLElement).findByText(name);
+}
+
+/** Select another session and wait for its chat list, which closes the room of the one left. */
+async function switchSession(container: HTMLElement, id: string): Promise<void> {
+  const { within, waitFor } = rtl;
+  selectSession(container, id);
+  await waitFor(() => assert.equal(selectedSessionId(container), id));
+  await within(container.querySelector('.chats-sidebar') as HTMLElement).findByText('Alice');
+}
+
+const typeDraft = (text: string): void => {
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText('Type a message...'), { target: { value: text } });
+};
+
 test('a parked draft shows on its list row and clears while that chat is open', async () => {
-  const { screen, fireEvent, within, waitFor } = rtl;
+  const { screen, fireEvent, waitFor } = rtl;
   const { container } = renderChats();
-  const aliceRow = () =>
-    within(container.querySelector('.chats-sidebar') as HTMLElement)
-      .getByText('Alice')
-      .closest('[role="button"]') as HTMLElement;
 
   await screen.findByText(SESSION.name);
-  fireEvent.click(await screen.findByText('Alice'));
-  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
-  fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'unsent for alice' } });
+  await openListed(container, 'Alice');
+  typeDraft('unsent for alice');
 
   fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-  await waitFor(() => assert.ok(aliceRow().querySelector('.chat-item-draft-label'), 'draft label missing on Alice'));
-  assert.match(aliceRow().querySelector('.chat-item-snippet')?.textContent ?? '', /unsent for alice/);
+  await waitFor(() => assert.ok(showsDraft(container, 'Alice'), 'draft label missing on Alice'));
+  assert.match(listRow(container, 'Alice').textContent ?? '', /unsent for alice/);
 
-  fireEvent.click(within(container.querySelector('.chats-sidebar') as HTMLElement).getByText('Alice'));
-  await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
-  await waitFor(() => assert.equal(aliceRow().querySelector('.chat-item-draft-label'), null));
-  const input = screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
-  assert.equal(input.selectionStart, input.value.length, 'caret was not at the end of the restored draft');
+  await openListed(container, 'Alice');
+  await waitFor(() => assert.equal(showsDraft(container, 'Alice'), false));
+});
+
+test('a draft shows on its row while another chat is open', async () => {
+  const { screen } = rtl;
+  const { container } = renderChats();
+
+  await screen.findByText(SESSION.name);
+  await openListed(container, 'Alice');
+  typeDraft('unsent for alice');
+
+  await openListed(container, 'Carol');
+  assert.ok(showsDraft(container, 'Alice'), 'draft label missing on Alice');
+  assert.match(listRow(container, 'Alice').textContent ?? '', /unsent for alice/);
+  assert.equal(showsDraft(container, 'Carol'), false, 'the open chat is labelled as a draft');
+});
+
+// The label is not part of the snippet: read together, the label's first letter would set the direction of the whole
+// line, and a draft written the other way round would lose its start to the ellipsis.
+test('the draft label stands beside its snippet, which holds the draft alone, in full in its title', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderChats();
+
+  await screen.findByText(SESSION.name);
+  await openListed(container, 'Alice');
+  typeDraft('unsent for alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+  await waitFor(() => assert.ok(showsDraft(container, 'Alice'), 'draft label missing on Alice'));
+
+  const label = listRow(container, 'Alice').querySelector('.chat-item-draft-label') as HTMLElement;
+  const snippet = listRow(container, 'Alice').querySelector('.chat-item-snippet') as HTMLElement;
+  assert.equal(label.textContent, 'Draft:');
+  assert.ok(label.nextElementSibling === snippet, 'the label is not the element before the snippet');
+  assert.equal(snippet.textContent, 'unsent for alice');
+  assert.equal(snippet.getAttribute('title'), 'unsent for alice');
+});
+
+// Spaces are nothing the composer would send, and a label with no text after it says nothing.
+test('a draft of only whitespace shows no label, and the row keeps its last message', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderChats();
+  const snippet = () => listRow(container, 'Alice').querySelector('.chat-item-snippet')?.textContent;
+
+  await screen.findByText(SESSION.name);
+  await openListed(container, 'Alice');
+  typeDraft('unsent for alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+  await waitFor(() => assert.ok(showsDraft(container, 'Alice'), 'draft label missing on Alice'));
+
+  await openListed(container, 'Alice');
+  typeDraft('   ');
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+  await waitFor(() => assert.equal(snippet(), 'hello from alice'));
+  assert.equal(showsDraft(container, 'Alice'), false, 'a draft of spaces is labelled');
+});
+
+// One chat id can be a thread in two sessions (a contact or a group both accounts have), so a draft is listed for its
+// own session only, and it is listed again whenever that session is.
+test('a parked draft is on its row again after another session was visited, and never on a row there', async () => {
+  const { screen } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await screen.findByText(SESSION.name);
+    await openListed(container, 'Alice');
+    typeDraft('from session one');
+    await openListed(container, 'Carol');
+    assert.ok(showsDraft(container, 'Alice'), 'draft label missing on Alice');
+
+    // Session 2 lists a chat with Alice's id.
+    await switchSession(container, SESSION_2.id);
+    assert.equal(showsDraft(container, 'Alice'), false, "the other session's row shows this session's draft");
+
+    await switchSession(container, SESSION.id);
+    assert.ok(showsDraft(container, 'Alice'), 'the draft label did not come back with its session');
+    assert.match(listRow(container, 'Alice').textContent ?? '', /from session one/);
+  } finally {
+    twoSessions = false;
+  }
+});
+
+test('the drafts of two chats are both back on their rows after another session was used in between', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    const drafts = () => ['Alice', 'Carol'].map(name => showsDraft(container, name));
+
+    await screen.findByText(SESSION.name);
+    await openListed(container, 'Alice');
+    typeDraft('for alice');
+    await openListed(container, 'Carol');
+    typeDraft('for carol');
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await waitFor(() => assert.deepEqual(drafts(), [true, true]));
+
+    // Opening a chat there puts the text still in the field away under its own thread, in the session left.
+    await switchSession(container, SESSION_2.id);
+    assert.deepEqual(drafts(), [false, false], "the other session's rows show this session's drafts");
+    await openListed(container, 'Alice');
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    assert.deepEqual(drafts(), [false, false], "the other session's rows show this session's drafts");
+
+    await switchSession(container, SESSION.id);
+    assert.deepEqual(drafts(), [true, true], 'a draft label did not come back with its session');
+    assert.match(listRow(container, 'Alice').textContent ?? '', /for alice/);
+    assert.match(listRow(container, 'Carol').textContent ?? '', /for carol/);
+  } finally {
+    twoSessions = false;
+  }
 });
 
 // A draft is the chat's, like a staged file or reply: carried into another chat, the next Enter would deliver it to
@@ -888,6 +1017,70 @@ test('a refused send gives its text back to its own chat only, and not over text
     },
     gate,
   );
+});
+
+/** Run `body` with two sessions and every text send refused only once `answer()` is called. */
+async function withGatedRefusalInTwoSessions(body: (answer: () => void) => Promise<void>): Promise<void> {
+  let release = () => {};
+  const gate = () =>
+    new Promise<void>(resolve => {
+      release = resolve;
+    });
+  twoSessions = true;
+  try {
+    await withSendsRefused('send-text', () => body(() => release()), gate);
+  } finally {
+    twoSessions = false;
+  }
+}
+
+// The gateway can refuse a send after its session was left. The text is the draft of the thread it was typed in, so it
+// is listed on that session's row, not on the row the session selected by then has for the same chat id.
+test('a send refused after its session was left shows its text on the row of its own session only', async () => {
+  const { screen, fireEvent } = rtl;
+  await withGatedRefusalInTwoSessions(async answer => {
+    const { container } = renderChats();
+    await screen.findByText(SESSION.name);
+    await openListed(container, 'Alice');
+    typeDraft('price is 40');
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await switchSession(container, SESSION_2.id);
+    await openListed(container, 'Carol');
+    answer();
+    await screen.findByText('Failed to send message');
+    assert.equal(showsDraft(container, 'Alice'), false, "the other session's row shows the refused text");
+
+    await switchSession(container, SESSION.id);
+    assert.ok(showsDraft(container, 'Alice'), 'the refused text is not on the row of its own chat');
+    assert.match(listRow(container, 'Alice').textContent ?? '', /price is 40/);
+  });
+});
+
+// The same refusal, landing once its own session is selected again: the row is labelled there, and the label must not
+// follow a later switch into the session whose chat was opened in between.
+test('a draft given back by a refused send stays off the rows of a session entered later', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  await withGatedRefusalInTwoSessions(async answer => {
+    const { container } = renderChats();
+    await screen.findByText(SESSION.name);
+    await openListed(container, 'Alice');
+    typeDraft('price is 40');
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await switchSession(container, SESSION_2.id);
+    await openListed(container, 'Carol');
+    await switchSession(container, SESSION.id);
+    answer();
+    await waitFor(() =>
+      assert.ok(showsDraft(container, 'Alice'), 'the refused text is not on the row of its own chat'),
+    );
+
+    await switchSession(container, SESSION_2.id);
+    assert.equal(showsDraft(container, 'Alice'), false, "the other session's row shows the refused text");
+    await switchSession(container, SESSION.id);
+    assert.ok(showsDraft(container, 'Alice'), 'the draft label did not come back with its session');
+  });
 });
 
 test('a refused file send puts its caption back in the field', async () => {

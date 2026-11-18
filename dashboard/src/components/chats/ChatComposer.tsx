@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Loader2, Plus, Send, Smile, X } from 'lucide-react';
@@ -103,10 +103,6 @@ function ChatComposer({
   // otherwise the slower read overwrites the newer pick. Same pattern as composeImageReadSeq.
   const attachmentReadSeq = useRef(0);
   const tempSeqRef = useRef(0);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const textInputRef = useRef<HTMLInputElement | null>(null);
-  // How the Send button was last pressed: the pointerdown's pointerType ('touch' for a tap), '' after a key on it.
-  const sendPressRef = useRef('');
 
   // Leaving this conversation — switching to another chat, or unmounting when the room closes —
   // invalidates an in-flight read, so its late `onload` drops the bytes instead of staging them
@@ -117,16 +113,6 @@ function ChatComposer({
       attachmentReadSeq.current += 1;
     };
   }, [selectedSessionId, activeChat.id]);
-
-  // A restored draft must land the caret at the end: setting the controlled value alone can leave it
-  // at 0, so the next keystroke inserts at the start of the parked text.
-  useLayoutEffect(() => {
-    const field = textInputRef.current;
-    if (!field || !canWrite) return;
-    const len = field.value.length;
-    if (len === 0) return;
-    field.setSelectionRange(len, len);
-  }, [selectedSessionId, activeChat.id, canWrite]);
 
   // Escape dismisses the emoji picker instead of closing the conversation behind it.
   //
@@ -152,6 +138,12 @@ function ChatComposer({
     document.addEventListener('keydown', dismissOnEscape, true);
     return () => document.removeEventListener('keydown', dismissOnEscape, true);
   }, [showEmojiPicker]);
+
+  // References
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textInputRef = useRef<HTMLInputElement | null>(null);
+  // How the Send button was last pressed: the pointerdown's pointerType ('touch' for a tap), '' after a key on it.
+  const sendPressRef = useRef('');
 
   // Popular emojis
   const popularEmojis = [

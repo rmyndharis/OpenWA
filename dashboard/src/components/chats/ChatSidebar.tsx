@@ -89,7 +89,7 @@ interface ChatListRowProps {
   formatChatTime: (timestamp?: number) => string;
   /** The day the list was drawn on (Date.toDateString), which decides Today and Yesterday in the time. */
   today: string;
-  /** Unsent composer text parked for this chat; omitted while the room is open. */
+  /** Unsent composer text parked for this chat. The row of the open chat does not show it. */
   draft?: string;
   onSelectChat: (chat: Chat) => void;
   rowActions?: ChatRowActions;
@@ -121,7 +121,8 @@ const ChatListRow = memo(
       chat.lastMessageType === 'contact' || isVCardBody(chat.lastMessage)
         ? contactSnippet(chat.lastMessage, `👤 ${t('chats.media.contact')}`)
         : chat.lastMessage || '';
-    const showDraft = Boolean(draft) && !active;
+    // Text that is only whitespace is nothing to send, so it is no draft to show either.
+    const showDraft = Boolean(draft?.trim()) && !active;
     const snippetTitle = showDraft ? draft : lastSnippet;
     const card = (
       <div
@@ -156,16 +157,14 @@ const ChatListRow = memo(
           <div className="chat-item-bottom">
             {/* An empty snippet with a timestamp is a message with no text (a voice note, a sticker,
                 an uncaptioned photo), not an empty chat. A parked draft replaces the last-message
-                preview until the room is open again. */}
+                preview until the room is open again. Its label stands beside the snippet, not in it:
+                inside, the label's first letter would set the direction of the whole line, and a draft
+                written the other way round would lose its start to the ellipsis. */}
+            {showDraft && <span className="chat-item-draft-label">{t('chats.draftLabel')}</span>}
             <span className="chat-item-snippet" title={snippetTitle || undefined}>
-              {showDraft ? (
-                <>
-                  <span className="chat-item-draft-label">{t('chats.draftLabel')}</span>
-                  {` ${draft}`}
-                </>
-              ) : (
-                lastSnippet || (!chat.timestamp && <span className="no-message">{t('chats.noMessageYet')}</span>)
-              )}
+              {showDraft
+                ? draft
+                : lastSnippet || (!chat.timestamp && <span className="no-message">{t('chats.noMessageYet')}</span>)}
             </span>
             {(chat.muted || chat.pinned) && (
               <span className="chat-item-flags">
