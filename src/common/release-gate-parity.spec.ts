@@ -411,6 +411,119 @@ describe('the release and weekly audits fail when the audit cannot run', () => {
 });
 
 /**
+ * An audit that a condition skips, or that may fail without failing its job, checks nothing while the job reads as
+ * passed. So no job that has a step running the audit, and no such step, carries a condition or continue-on-error,
+ * and the release workflows, which read the step line by line, hold nothing else in it: an export that undoes
+ * CHECK_AUDIT_REQUIRED, `set +e`, `|| true` or an `exit 0` changes how the step ends without touching the audit line.
+ * The edits are applied to a copy of each real step and job, so every one of them has to turn the check red.
+ */
+describe('an audit step cannot be skipped, softened or surrounded by lines that change how it ends', () => {
+  type SoftStep = { run?: string; if?: unknown; 'continue-on-error'?: unknown };
+  type SoftJob = { if?: unknown; 'continue-on-error'?: unknown; steps?: SoftStep[] };
+  type SoftWorkflow = { jobs?: Record<string, SoftJob> };
+  const FILES = ['ci.yml', 'security-scan.yml', 'js-sdk-release.yml', 'release.yml'];
+  const READ_LINE_BY_LINE = ['release.yml', 'js-sdk-release.yml'];
+  // A step may run the audit as the exact reading sees it, as auditSteps does for the requirement above.
+  const RUNS_THE_AUDIT = /npm run check:audit|scripts\/check-audit\.mjs/;
+  const AUDIT_LINE = /^(?:cd \S+ && )?(?:npm run check:audit|node (?:\.\.\/)+scripts\/check-audit\.mjs)$/;
+
+  const workflowOf = (file: string): SoftWorkflow =>
+    yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as SoftWorkflow;
+  const copyOf = (file: string): SoftWorkflow => JSON.parse(JSON.stringify(workflowOf(file))) as SoftWorkflow;
+  const holders = (workflow: SoftWorkflow) =>
+    Object.entries(workflow.jobs ?? {}).flatMap(([name, job]) => {
+      const steps = (job.steps ?? []).filter(step => RUNS_THE_AUDIT.test(executableLines(step.run ?? '')));
+      return steps.length === 0 ? [] : [{ name, job, steps }];
+    });
+
+  /** What lets an audit be skipped, or fail without failing its job. */
+  const softened = (workflow: SoftWorkflow): string[] =>
+    holders(workflow).flatMap(({ name, job, steps }) => [
+      ...(job['continue-on-error'] !== undefined ? [`job ${name}: continue-on-error`] : []),
+      ...(job.if !== undefined ? [`job ${name}: a condition of its own`] : []),
+      ...steps.flatMap(step => [
+        ...(step.if !== undefined ? [`job ${name}: a step that runs the audit has a condition`] : []),
+        ...(step['continue-on-error'] !== undefined ? [`job ${name}: a step that runs the audit may fail`] : []),
+      ]),
+    ]);
+  /** The lines of a step that runs the audit other than the audit command itself. */
+  const otherLines = (workflow: SoftWorkflow): string[] =>
+    holders(workflow).flatMap(({ steps }) =>
+      steps.flatMap(step =>
+        executableLines(step.run ?? '')
+          .split('\n')
+          .map(stripBlanks)
+          .filter(line => line !== '' && !AUDIT_LINE.test(line)),
+      ),
+    );
+
+  it.each(FILES)('%s: no job or step that runs the audit is conditional or allowed to fail', file => {
+    expect(holders(workflowOf(file)).length).toBeGreaterThan(0);
+    expect(softened(workflowOf(file))).toEqual([]);
+  });
+
+  it.each(READ_LINE_BY_LINE)('%s: a step that runs the audit runs nothing else', file => {
+    expect(holders(workflowOf(file)).length).toBeGreaterThan(0);
+    expect(otherLines(workflowOf(file))).toEqual([]);
+  });
+
+  type Edit = (job: SoftJob, step: SoftStep) => void;
+  const stepEdits: Array<[string, Edit]> = [
+    ['continue-on-error on the step', (_job, step) => void (step['continue-on-error'] = true)],
+    ['a false condition on the step', (_job, step) => void (step.if = false)],
+  ];
+  const jobEdits: Array<[string, Edit]> = [
+    ['continue-on-error on the job', job => void (job['continue-on-error'] = true)],
+    ['a false condition on the job', job => void (job.if = false)],
+  ];
+  // [description, file, job, which of the job's audit steps, edit]: one case per audit step and per audit job.
+  const softCases = FILES.flatMap(file =>
+    holders(workflowOf(file)).flatMap(({ name, steps }) => [
+      ...steps.flatMap((_step, at) =>
+        stepEdits.map(
+          ([edit, apply]) => [`${file} job ${name} audit step ${at + 1}: ${edit}`, file, name, at, apply] as const,
+        ),
+      ),
+      ...jobEdits.map(([edit, apply]) => [`${file} job ${name}: ${edit}`, file, name, 0, apply] as const),
+    ]),
+  );
+
+  it.each(softCases)('refuses %s', (_description, file, jobName, at, edit) => {
+    const workflow = copyOf(file);
+    expect(softened(workflow)).toEqual([]);
+    const holder = holders(workflow).find(({ name }) => name === jobName);
+    edit(holder!.job, holder!.steps[at]);
+
+    expect(softened(workflow)).not.toEqual([]);
+  });
+
+  const runEdits: Array<[string, (run: string) => string]> = [
+    ['an export of CHECK_AUDIT_REQUIRED=0 before the audit', run => `export CHECK_AUDIT_REQUIRED=0\n${run}`],
+    ['set +e before the audit and a command that succeeds after', run => `set +e\n${run}\ntrue`],
+    ['|| true on the audit line', run => run.replace(/(check:audit|check-audit\.mjs)/, '$1 || true')],
+    ['an exit 0 after the audit', run => `${run}\nexit 0`],
+  ];
+  const lineCases = READ_LINE_BY_LINE.flatMap(file =>
+    holders(workflowOf(file)).flatMap(({ name, steps }) =>
+      steps.flatMap((_step, at) =>
+        runEdits.map(
+          ([edit, apply]) => [`${file} job ${name} audit step ${at + 1}: ${edit}`, file, name, at, apply] as const,
+        ),
+      ),
+    ),
+  );
+
+  it.each(lineCases)('refuses %s', (_description, file, jobName, at, edit) => {
+    const workflow = copyOf(file);
+    expect(otherLines(workflow)).toEqual([]);
+    const step = holders(workflow).find(({ name }) => name === jobName)!.steps[at];
+    step.run = edit(step.run ?? '');
+
+    expect(otherLines(workflow)).not.toEqual([]);
+  });
+});
+
+/**
  * Each npm tree has its own lockfile, and `npm audit` in one directory never sees another's. A tree
  * the merge and weekly audits skip, or that Dependabot does not watch, collects advisories unseen.
  */
