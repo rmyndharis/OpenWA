@@ -421,7 +421,8 @@ export function Chats() {
     setChatDrafts(prev => {
       if (text === '') {
         if (!(chatId in prev)) return prev;
-        const { [chatId]: _removed, ...rest } = prev;
+        const rest = { ...prev };
+        delete rest[chatId];
         return rest;
       }
       if (prev[chatId] === text) return prev;
@@ -431,7 +432,8 @@ export function Chats() {
   const clearDraftFromList = (chatId: string) => {
     setChatDrafts(prev => {
       if (!(chatId in prev)) return prev;
-      const { [chatId]: _removed, ...rest } = prev;
+      const rest = { ...prev };
+      delete rest[chatId];
       return rest;
     });
   };
