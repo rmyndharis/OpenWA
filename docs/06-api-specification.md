@@ -3101,7 +3101,7 @@ Set the group's picture. The account must be allowed to edit the group's info: a
 
 **Response** `200` — `{ "success": true, "message": "Group picture updated" }`
 
-**Errors:** `400` the id does not name a group, the session is not active, neither `url` nor `base64` was supplied, the `url` answers non-2xx (a redirect is not followed), times out or cannot be reached, or the image cannot be read (Baileys refuses an SVG) · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `413` base64 or downloaded media over the media cap (see §6.3) · `503` a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable), or WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, the session is not active, neither `url` nor `base64` was supplied, the `url` answers non-2xx (a redirect is not followed), times out or cannot be reached, or the image cannot be read (Baileys refuses an SVG) · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `413` base64 or downloaded media over the media cap (see §6.3) · `503` a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable), or WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, retry after a pause
 
 #### DELETE /api/sessions/:sessionId/groups/:groupId/picture
 
@@ -3365,7 +3365,7 @@ No `@HttpCode`; PUT default is `200`.
 { "success": true, "message": "Group subject updated" }
 ```
 
-**Errors:** `400` validation (empty `subject`) / session not started, or the id does not name a group · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation (empty `subject`) / session not started, or the id does not name a group · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, retry after a pause
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/description
 
@@ -3398,7 +3398,7 @@ No `@HttpCode`; PUT default is `200`.
 { "success": true, "message": "Group description updated" }
 ```
 
-**Errors:** `400` validation (`description` missing / not a string) / session not started, or the id does not name a group · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation (`description` missing / not a string) / session not started, or the id does not name a group · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, retry after a pause
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/member-label
 
@@ -3491,7 +3491,7 @@ Revoke the current invite code and generate a new one.
 }
 ```
 
-**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `501` on whatsapp-web.js, the WhatsApp Web build the session runs has no job to reset an invite code, so nothing was asked of WhatsApp and the current code is unchanged · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `501` on whatsapp-web.js, the WhatsApp Web build the session runs has no job to reset an invite code, so nothing was asked of WhatsApp and the current code is unchanged · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the revoke with a rate limit or a server error (423, 429 or 5xx): the current code is unchanged, retry after a pause
 
 #### GET /api/sessions/:sessionId/groups/join-info
 
@@ -3630,7 +3630,7 @@ Update group settings. Each present field maps to one engine call; absent fields
 { "success": true, "message": "Group settings updated" }
 ```
 
-**Errors:** `400` session is not started / the id does not name a group / empty patch / unknown body field / a value outside its constraints in the table above, or `null` · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, the account is not a group admin (`memberAddMode` on whatsapp-web.js), or a key restricted to selected chats names a group outside its allowlist · `404` group not found · `501` `ephemeralSeconds` on the whatsapp-web.js engine (library limitation) · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` session is not started / the id does not name a group / empty patch / unknown body field / a value outside its constraints in the table above, or `null` · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, the account is not a group admin (`memberAddMode` on whatsapp-web.js), or a key restricted to selected chats names a group outside its allowlist · `404` group not found · `501` `ephemeralSeconds` on the whatsapp-web.js engine (library limitation) · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers a setting with a rate limit or a server error (423, 429 or 5xx): that setting was not applied, or, for a member add mode change, may have been applied in part, and the message names any setting of the same request that was already applied
 
 #### GET /api/sessions/:sessionId/groups/:groupId/membership-requests
 
@@ -6926,7 +6926,7 @@ or
 
 **Response** `200` — `{ "success": true, "message": "Profile picture updated" }`
 
-**Errors:** `400` neither `url` nor `base64` provided / base64 without `mimetype` / a `url` that answers non-2xx (a redirect is not followed), times out or cannot be reached / an image that cannot be read (Baileys refuses an SVG) · `401` · `403` the whatsapp-web.js engine refused the change (the Baileys engine has no acceptance signal and answers `200`) · `409` conflict or engine not ready (retryable) · `413` base64 or downloaded image over the media cap (see §6.3) · `503` session not ready, dependency unavailable, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable)
+**Errors:** `400` neither `url` nor `base64` provided / base64 without `mimetype` / a `url` that answers non-2xx (a redirect is not followed), times out or cannot be reached / an image that cannot be read (Baileys refuses an SVG) · `401` · `403` the whatsapp-web.js engine refused the change (the Baileys engine has no acceptance signal and answers `200`) · `409` conflict or engine not ready (retryable) · `413` base64 or downloaded image over the media cap (see §6.3) · `503` session not ready, dependency unavailable, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable); on whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, retry after a pause
 
 #### DELETE /api/sessions/:sessionId/profile/picture
 

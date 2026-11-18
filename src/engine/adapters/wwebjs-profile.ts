@@ -3,6 +3,7 @@ import { CallLinkType, MediaInput } from '../interfaces/whatsapp-engine.interfac
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { toMessageMedia } from './wwebjs-messaging';
+import { type EvaluatePage, runWriteInPage, settleWriteStatus } from './wwebjs-page-writes';
 import { type WwebjsEngineHost, withPageWrite, reportPageDeath } from './wwebjs-host';
 
 /**
@@ -97,10 +98,32 @@ export class WwebjsProfile {
   async setProfilePicture(media: MediaInput): Promise<void> {
     this.host.ensureReady();
     const messageMedia = await toMessageMedia(media, this.host.config.proxy?.url);
-    // setProfilePicture resolves false (rather than throwing) when the upload is refused.
-    const ok = await withPageWrite(this.host, 'setProfilePicture', () => this.client().setProfilePicture(messageMedia));
-    if (!ok) {
-      throw new EngineRefusedError('the engine rejected the profile picture change');
+    const client = this.client();
+    // The picture is sent in-page, so that WhatsApp's own status decides the answer: setProfilePicture resolves false
+    // for every status, and a rate limit or a server error, which changed nothing and may pass later, read as a refusal.
+    // An account with no id of its own, or a page that has no job to send it with, is the library's own call.
+    const chatId = client.info?.wid?._serialized;
+    const answer = chatId
+      ? await withPageWrite(this.host, 'setProfilePicture', () =>
+          (client as unknown as { pupPage: EvaluatePage }).pupPage.evaluate(runWriteInPage, {
+            kind: 'picture',
+            chatId,
+            picture: messageMedia,
+          }),
+        )
+      : 'missing';
+    const refusal = 'the engine rejected the profile picture change';
+    if (answer === 'missing') {
+      // setProfilePicture resolves false (rather than throwing) when the upload is refused.
+      if (!(await withPageWrite(this.host, 'setProfilePicture', () => client.setProfilePicture(messageMedia)))) {
+        throw new EngineRefusedError(refusal);
+      }
+    } else {
+      settleWriteStatus(answer.status, {
+        request: 'the profile picture change',
+        nothing: 'changed nothing',
+        refused: status => `${refusal} (WhatsApp answered ${status})`,
+      });
     }
     this.host.logger.log('Updated profile picture');
   }

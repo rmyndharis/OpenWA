@@ -1,5 +1,6 @@
 import type { Client } from 'whatsapp-web.js';
-import { WwebjsGroups } from './wwebjs-groups';
+import { WwebjsGroups, readInviteSenderInPage } from './wwebjs-groups';
+import { runWriteInPage } from './wwebjs-page-writes';
 import { createLogger } from '../../common/services/logger.service';
 import { type WwebjsEngineHost } from './wwebjs-host';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
@@ -83,8 +84,13 @@ describe('group writes classify a dead page', () => {
       info: {},
       getChatById:
         chat instanceof Promise ? jest.fn(() => chat) : jest.fn().mockResolvedValue({ isGroup: true, ...chat }),
-      // The page still has the library's invitation sender; a row that needs another answer overrides it.
-      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      // The page still has the library's invitation sender and no job for the group writes, so a write tried through
+      // the chat is the library's own call. A row about the page call overrides it.
+      pupPage: {
+        evaluate: jest.fn((fn: unknown) =>
+          Promise.resolve(fn === readInviteSenderInPage ? true : fn === runWriteInPage ? 'missing' : undefined),
+        ),
+      },
       ...clientMethods,
     };
     const reportIfPageTransportError = jest.fn();
@@ -119,6 +125,16 @@ describe('group writes classify a dead page', () => {
   const MEMBERSHIP: [string, (g: WwebjsGroups) => Promise<unknown>][] = [
     ['approveGroupMembershipRequests', g => g.approveGroupMembershipRequests(GROUP, ['628111@c.us'])],
     ['rejectGroupMembershipRequests', g => g.rejectGroupMembershipRequests(GROUP, ['628111@c.us'])],
+  ];
+
+  // The group writes are sent in-page, where the page has the job, and converge when repeated.
+  const PAGE_WRITES: [string, (g: WwebjsGroups) => Promise<unknown>][] = [
+    ['setGroupSubject', g => g.setGroupSubject(GROUP, 's')],
+    ['setGroupDescription', g => g.setGroupDescription(GROUP, 'd')],
+    ['setGroupMessagesAdminsOnly', g => g.setGroupMessagesAdminsOnly(GROUP, true)],
+    ['setGroupInfoAdminsOnly', g => g.setGroupInfoAdminsOnly(GROUP, true)],
+    ['setGroupMemberAddMode', g => g.setGroupMemberAddMode(GROUP, 'admins')],
+    ['setGroupPicture', g => g.setGroupPicture(GROUP, IMAGE)],
   ];
 
   // revokeGroupInviteCode runs its write in-page through pupPage.evaluate, not a chat method.
@@ -157,6 +173,24 @@ describe('group writes classify a dead page', () => {
     await expect(run(groups)).rejects.toThrow(EngineTransportError);
     expect(reportIfPageTransportError).toHaveBeenCalledTimes(1);
     expect(reportIfPageTransportError).toHaveBeenCalledWith(transportError, op);
+  });
+
+  it.each(PAGE_WRITES)('%s answers a dead page in the page call with 503 and reports it', async (op, run) => {
+    const { groups, reportIfPageTransportError } = makeGroups(
+      {},
+      { pupPage: { evaluate: jest.fn().mockRejectedValue(transportError) } },
+    );
+
+    await expect(run(groups)).rejects.toThrow(EngineTransportError);
+    expect(reportIfPageTransportError).toHaveBeenCalledTimes(1);
+    expect(reportIfPageTransportError).toHaveBeenCalledWith(transportError, op);
+  });
+
+  it.each(PAGE_WRITES)('%s leaves an ordinary failure in the page call untouched', async (_op, run) => {
+    const failure = new Error('Evaluation failed: x');
+    const { groups } = makeGroups({}, { pupPage: { evaluate: jest.fn().mockRejectedValue(failure) } });
+
+    await expect(run(groups)).rejects.toBe(failure);
   });
 
   it.each(NON_CONVERGING_CHAT)('%s reports a dead page in %s but keeps the raw error', async (op, method, run) => {

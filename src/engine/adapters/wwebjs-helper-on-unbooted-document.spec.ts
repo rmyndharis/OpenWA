@@ -5,6 +5,7 @@ import { readChatModels } from './wwebjs-chats';
 import { readLabelChatIds } from './wwebjs-labels';
 import { downloadMediaInPage } from './wwebjs-messaging';
 import { readStatusSetterInPage } from './wwebjs-profile';
+import { runWriteInPage } from './wwebjs-page-writes';
 import { isNavigationError } from './wwebjs-lifecycle';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -57,6 +58,10 @@ describe('a page helper that lands on a document WhatsApp Web has not booted yet
     ['readChatModels', readChatModels, undefined],
     ['readLabelChatIds', readLabelChatIds, '7'],
     ['downloadMediaInPage', downloadMediaInPage, { msgId: 'm', maxBytes: 1 }],
+    ['runWriteInPage, a subject', runWriteInPage, { kind: 'subject', chatId: GROUP, subject: 's' }],
+    ['runWriteInPage, a description', runWriteInPage, { kind: 'description', chatId: GROUP, description: 'd' }],
+    ['runWriteInPage, a picture', runWriteInPage, { kind: 'picture', chatId: GROUP, picture: {} }],
+    ['runWriteInPage, a property', runWriteInPage, { kind: 'property', chatId: GROUP, property: 'restrict', value: 1 }],
   ] as Array<[string, (arg?: unknown) => unknown, unknown]>;
 
   it.each(HELPERS)(

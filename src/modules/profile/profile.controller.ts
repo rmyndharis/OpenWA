@@ -89,7 +89,9 @@ export class ProfileController {
     status: 503,
     description:
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
-      'the gateway stopped waiting for a confirmation that never came. ' +
+      'the gateway stopped waiting for a confirmation that never came. On whatsapp-web.js, also when WhatsApp answers ' +
+      'the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a ' +
+      'pause. ' +
       MEDIA_URL_PROXY_503,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })

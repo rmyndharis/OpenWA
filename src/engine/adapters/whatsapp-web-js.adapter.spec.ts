@@ -1665,8 +1665,11 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
   });
 
   describe('group picture', () => {
+    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
+    // covered in wwebjs-group-write-status.spec.ts.
     const groupChat = (over: Record<string, unknown> = {}) => ({
       getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...over }),
+      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
     });
 
     it('uses GroupChat.setPicture, not the own-account Client.setProfilePicture', async () => {
@@ -1784,8 +1787,11 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
   });
 
   describe('setGroupMemberAddMode', () => {
+    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
+    // covered in wwebjs-group-write-status.spec.ts.
     const groupChat = (over: Record<string, unknown> = {}) => ({
       getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...over }),
+      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
     });
 
     it("maps 'admins' to adminsOnly=true — the wwjs setter is inverted relative to our vocabulary", async () => {
@@ -8172,8 +8178,11 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
   });
 
   describe('setGroupMessagesAdminsOnly / setGroupInfoAdminsOnly', () => {
+    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
+    // covered in wwebjs-group-write-status.spec.ts.
     const groupClient = (impl: Record<string, jest.Mock>) => ({
       getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...impl }),
+      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
     });
 
     it('resolves the group chat and calls setMessagesAdminsOnly', async () => {
@@ -8631,12 +8640,19 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
   );
 
   describe('setGroupSubject / setGroupDescription (library boolean is honored)', () => {
+    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
+    // covered in wwebjs-group-write-status.spec.ts.
+    const withoutPageJob = (chat: unknown) => ({
+      getChatById: jest.fn().mockResolvedValue(chat),
+      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
+    });
+
     it.each([
       ['setGroupSubject', 'setSubject'],
       ['setGroupDescription', 'setDescription'],
     ] as const)('%s throws EngineRefusedError when wwebjs resolves false', async (method, libMethod) => {
       const chat = groupChat({ [libMethod]: jest.fn().mockResolvedValue(false) });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
+      const adapter = readyAdapter(withoutPageJob(chat));
       await expect(
         (adapter as unknown as Record<string, (g: string, v: string) => Promise<void>>)[method](GROUP, 'New'),
       ).rejects.toBeInstanceOf(EngineRefusedError);
@@ -8647,7 +8663,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       ['setGroupDescription', 'setDescription'],
     ] as const)('%s resolves on true', async (method, libMethod) => {
       const chat = groupChat({ [libMethod]: jest.fn().mockResolvedValue(true) });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
+      const adapter = readyAdapter(withoutPageJob(chat));
       await expect(
         (adapter as unknown as Record<string, (g: string, v: string) => Promise<void>>)[method](GROUP, 'New'),
       ).resolves.toBeUndefined();

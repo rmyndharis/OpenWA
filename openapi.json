@@ -10497,7 +10497,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers a setting with a rate limit or a server error (423, 429 or 5xx): that setting was not applied, or, for a member add mode change, may have been applied in part, and the message names any setting of the same request that was already applied.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11379,7 +11379,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11490,7 +11490,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11923,7 +11923,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a pause. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12234,7 +12234,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer the invite-code query — retry shortly. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer the invite-code query — retry shortly. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, the revoke is also answered 503 when WhatsApp answers it with a rate limit or a server error (423, 429 or 5xx): the current code is unchanged, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12530,7 +12530,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a pause. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
             "content": {
               "application/json": {
                 "schema": {

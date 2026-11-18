@@ -27,15 +27,14 @@ function harness() {
   const commands: unknown[] = [];
   const state = { ready: true };
   const client = {
-    getChatById: () =>
-      Promise.resolve({
-        id: { _serialized: GROUP },
-        isGroup: true,
-        setPicture(picture: unknown) {
-          commands.push(picture);
-          return Promise.resolve(true);
-        },
-      }),
+    getChatById: () => Promise.resolve({ id: { _serialized: GROUP }, isGroup: true }),
+    // The picture is sent in the page: a request that reaches it is the write.
+    pupPage: {
+      evaluate(_write: unknown, request: { picture: unknown }) {
+        commands.push(request.picture);
+        return Promise.resolve({ status: 200 });
+      },
+    },
   } as unknown as Client;
   jest.mocked(toMessageMedia).mockImplementation(() => {
     mediaEntered.resolve();
