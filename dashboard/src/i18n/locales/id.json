@@ -353,11 +353,12 @@
     },
     "slash": {
       "title": "Balasan cepat",
-      "hint": "Ketik /nama lalu Enter untuk mengirim template dari halaman Templates",
+      "hint": "Enter menyisipkan templat yang disorot. Kirim saat sudah siap.",
       "placeholder": "Pesan atau /template…",
       "empty": "Tidak ada template yang cocok",
-      "needsVars": "Template ini punya {{variables}} — isi lalu kirim",
-      "unknown": "Tidak ada template bernama \"{{name}}\""
+      "needsVars": "Templat ini punya variabel — isi, lalu kirim",
+      "loading": "Memuat templat…",
+      "loadError": "Templat tidak dapat dimuat"
     }
   },
   "errorBoundary": {

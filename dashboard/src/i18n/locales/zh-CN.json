@@ -353,11 +353,12 @@
     },
     "slash": {
       "title": "快捷回复",
-      "hint": "输入 /名称 并回车，发送 Templates 页中的模板",
+      "hint": "Enter 插入高亮的模板。准备好后再发送。",
       "placeholder": "消息或 /模板…",
       "empty": "没有匹配的模板",
-      "needsVars": "该模板含 {{variables}} — 填写后再发送",
-      "unknown": "没有名为“{{name}}”的模板"
+      "needsVars": "此模板含有占位符 — 填写后再发送",
+      "loading": "正在加载模板…",
+      "loadError": "无法加载模板"
     }
   },
   "errorBoundary": {

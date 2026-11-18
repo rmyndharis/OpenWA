@@ -3019,6 +3019,18 @@
   flex-shrink: 0;
 }
 
+.chats-page .composer-banner.slash-template-picker {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.chats-page .slash-template-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+}
+
 .chats-page .preview-thumbnail,
 .chats-page .preview-file-icon {
   width: 48px;
@@ -3194,11 +3206,12 @@
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 0.25rem;
   padding-block: 0;
   padding-inline: 1rem 0.25rem;
-  height: 46px;
+  height: auto;
+  min-height: 46px;
   box-sizing: border-box;
   background: var(--chat-panel);
   border: 1px solid var(--control-border);
@@ -3221,12 +3234,17 @@
      a narrow pane and pushed the send button outside the layout's clip. The floor replaces that with one small
      enough to let the composer fit and large enough to keep a caret and a few characters visible. */
   min-width: 64px;
-  padding: 0;
+  padding: 0.65rem 0;
   border: none;
   background: none;
+  font: inherit;
   font-size: 0.9375rem;
+  line-height: 1.35;
   color: var(--text-primary);
   outline: none;
+  resize: none;
+  max-height: 7.5rem;
+  overflow-y: auto;
 }
 
 .chats-page .message-text-input::placeholder {

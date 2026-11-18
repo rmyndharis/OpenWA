@@ -1,3 +1,5 @@
+import { extractPlaceholders } from './templatePlaceholders.ts';
+
 /**
  * Slash shortcuts in the chat composer map `/name` onto a session Template.
  * Templates already hold the canned copy; this is only the composer UX.
@@ -57,7 +59,7 @@ export function filterTemplatesBySlash(
   return ranked.slice(0, limit).map(r => r.t);
 }
 
-/** Join header / body / footer the way send-template delivers them. */
+/** Join header / body / footer the way a sent template reads, blank line between parts. */
 export function renderTemplateText(template: SlashTemplate): string {
   return [template.header, template.body, template.footer]
     .map(part => (part ?? '').trim())
@@ -65,13 +67,8 @@ export function renderTemplateText(template: SlashTemplate): string {
     .join('\n\n');
 }
 
-const VAR_RE = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
-
 export function templateVariables(template: SlashTemplate): string[] {
-  const text = renderTemplateText(template);
-  const names = new Set<string>();
-  for (const match of text.matchAll(VAR_RE)) names.add(match[1]);
-  return [...names];
+  return extractPlaceholders(template).map(item => item.key);
 }
 
 export function templateNeedsVariables(template: SlashTemplate): boolean {

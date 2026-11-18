@@ -353,11 +353,12 @@
     },
     "slash": {
       "title": "快速回覆",
-      "hint": "輸入 /名稱 並按 Enter，傳送 Templates 頁的範本",
+      "hint": "Enter 插入反白的範本。準備好再傳送。",
       "placeholder": "訊息或 /範本…",
       "empty": "沒有相符範本",
-      "needsVars": "此範本含 {{variables}} — 填妥後再傳送",
-      "unknown": "沒有名為「{{name}}」的範本"
+      "needsVars": "此範本含有佔位符 — 填好再傳送",
+      "loading": "正在載入範本…",
+      "loadError": "無法載入範本"
     }
   },
   "errorBoundary": {

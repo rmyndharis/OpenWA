@@ -1,5 +1,7 @@
 import {
   useEffect,
+  useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -24,13 +26,12 @@ import { BULK_CAPTION_MAX_LENGTH, captionLength } from '../../utils/bulkMedia';
 import { isComposingKey } from '../../utils/composition';
 import {
   filterTemplatesBySlash,
-  findTemplateBySlashName,
   isSlashDraft,
   normalizeTemplateName,
   renderTemplateText,
   slashDraftFilter,
-  slashQuery,
   templateNeedsVariables,
+  type SlashTemplate,
 } from '../../utils/templateSlash';
 
 // The gateway's bound on the text of a send and of a reply, MESSAGE_TEXT_MAX_LENGTH in
@@ -119,6 +120,9 @@ function ChatComposer({
   const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
   // Highlight in the `/name` template picker (ArrowUp/Down). Reset whenever the draft changes.
   const [slashHighlight, setSlashHighlight] = useState(0);
+  // Escape closes the picker and leaves the draft. Cleared on the next edit so typing `/` opens it again.
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const slashListId = useId();
   // Monotonic token invalidating an in-flight attachment FileReader: picking a second file (or
   // removing the attachment) before `onload` fires must win over the late-arriving bytes —
   // otherwise the slower read overwrites the newer pick. Same pattern as composeImageReadSeq.
@@ -127,15 +131,22 @@ function ChatComposer({
 
   // Session templates power `/hola`-style shortcuts in the composer (Templates page is the editor).
   const templatesQuery = useTemplatesQuery(selectedSessionId, canWrite && !!selectedSessionId);
-  const templates = templatesQuery.data ?? [];
-  const slashOpen = canWrite && !attachment && isSlashDraft(messageInput);
+  const templates = useMemo(() => templatesQuery.data ?? [], [templatesQuery.data]);
+  const templatesLoading = templatesQuery.isLoading && templates.length === 0;
+  const templatesFailed = templatesQuery.isError && templates.length === 0;
+  const slashOpen = canWrite && !attachment && isSlashDraft(messageInput) && !slashDismissed;
   const slashMatches = useMemo(
-    () => (slashOpen ? filterTemplatesBySlash(templates, slashDraftFilter(messageInput)) : []),
-    [slashOpen, templates, messageInput],
+    () =>
+      slashOpen && !templatesLoading && !templatesFailed
+        ? filterTemplatesBySlash(templates, slashDraftFilter(messageInput))
+        : [],
+    [slashOpen, templatesLoading, templatesFailed, templates, messageInput],
   );
+  const slashIndex = slashMatches.length === 0 ? -1 : Math.min(slashHighlight, slashMatches.length - 1);
   useEffect(() => {
     setSlashHighlight(0);
-  }, [messageInput, slashOpen]);
+    setSlashDismissed(false);
+  }, [messageInput]);
 
   // Escape dismisses the emoji picker instead of closing the conversation behind it.
   //
@@ -164,7 +175,7 @@ function ChatComposer({
 
   // References
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const textInputRef = useRef<HTMLInputElement | null>(null);
+  const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   // How the Send button was last pressed: the pointerdown's pointerType ('touch' for a tap), '' after a key on it.
   const sendPressRef = useRef('');
 
@@ -177,6 +188,16 @@ function ChatComposer({
       attachmentReadSeq.current += 1;
     };
   }, [selectedSessionId, activeChat.id]);
+
+  // A one-line field grows with the draft (a template joins header, body and footer with blank lines) and stops
+  // at the CSS max-height, where it scrolls.
+  useLayoutEffect(() => {
+    const field = textInputRef.current;
+    if (!field) return;
+    field.style.height = 'auto';
+    const next = field.scrollHeight;
+    if (next > 0) field.style.height = `${next}px`;
+  }, [messageInput]);
 
   // Popular emojis
   const popularEmojis = [
@@ -257,51 +278,10 @@ function ChatComposer({
     setShowEmojiPicker(false);
   };
 
-  const pickSlashTemplate = (name: string) => {
-    const rendered = applySlashTemplate(name);
-    if (rendered === null) return;
-    setMessageInput(rendered);
+  const insertSlashTemplate = (template: SlashTemplate) => {
+    setMessageInput(renderTemplateText(template));
+    if (templateNeedsVariables(template)) showErrorToast(t('chats.slash.needsVars'));
     textInputRef.current?.focus();
-  };
-
-  const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (!slashOpen || slashMatches.length === 0 || isComposingKey(event.nativeEvent)) return;
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      setSlashHighlight(i => (i + 1) % slashMatches.length);
-      return;
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      setSlashHighlight(i => (i - 1 + slashMatches.length) % slashMatches.length);
-      return;
-    }
-    if (event.key === 'Tab') {
-      event.preventDefault();
-      const picked = slashMatches[slashHighlight] ?? slashMatches[0];
-      if (picked) pickSlashTemplate(picked.name);
-      return;
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      setMessageInput('');
-    }
-  };
-
-  const applySlashTemplate = (name: string): string | null => {
-    const template = findTemplateBySlashName(templates, name);
-    if (!template) {
-      showErrorToast(t('chats.slash.unknown', { name }));
-      return null;
-    }
-    const rendered = renderTemplateText(template);
-    if (templateNeedsVariables(template)) {
-      // Leave the copy in the field so the operator can replace {{vars}} before sending.
-      setMessageInput(rendered);
-      showErrorToast(t('chats.slash.needsVars'));
-      return null;
-    }
-    return rendered;
   };
 
   // 7. Handle sending a message / media
@@ -309,18 +289,16 @@ function ChatComposer({
     if (e) e.preventDefault();
     if (!selectedSessionId || !activeChat || sending || textTooLong) return;
 
-    let textToSend = messageInput.trim();
-    if (!textToSend && !attachment) return;
-
-    // `/hola` → send the session template named `hola` (create/edit them on the Templates page).
-    const slashName = !attachment ? slashQuery(textToSend) : null;
-    if (slashName) {
-      const exact = findTemplateBySlashName(templates, slashName);
-      const picked = exact ?? slashMatches[slashHighlight] ?? slashMatches[0];
-      const rendered = applySlashTemplate(picked?.name ?? slashName);
-      if (rendered === null) return;
-      textToSend = rendered;
+    // The highlighted row is the template, including after ArrowDown moved off a name that also matches the
+    // draft. Insert it; the operator sends with the next Enter or the Send button. A draft the picker does
+    // not resolve (`/start`, a list still loading or one that failed) is sent as typed.
+    if (slashOpen && slashIndex >= 0) {
+      insertSlashTemplate(slashMatches[slashIndex]);
+      return;
     }
+
+    const textToSend = messageInput.trim();
+    if (!textToSend && !attachment) return;
 
     // With focus in the composer form, the field takes it before the Send button disables (it does once the text is
     // cleared): the browser drops focus from a disabled control to the page, and the next message would be typed
@@ -439,6 +417,41 @@ function ChatComposer({
     }
   };
 
+  // Enter sends. Shift+Enter breaks the line. While the template picker is open, Escape only dismisses it.
+  // Arrow keys move the highlight; Tab does not select, so it can leave the field.
+  const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (isComposingKey(event.nativeEvent)) return;
+    if (slashOpen && event.key === 'Escape') {
+      event.preventDefault();
+      setSlashDismissed(true);
+      return;
+    }
+    if (slashOpen && slashMatches.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setSlashHighlight(i => (i + 1) % slashMatches.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setSlashHighlight(i => (i - 1 + slashMatches.length) % slashMatches.length);
+        return;
+      }
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void handleSend();
+    }
+  };
+
+  const slashStatus = templatesLoading
+    ? t('chats.slash.loading')
+    : templatesFailed
+      ? t('chats.slash.loadError')
+      : slashMatches.length === 0
+        ? t('chats.slash.empty')
+        : null;
+
   return (
     <>
       {/* Composer extras: the attachment, emoji and reply panels stack above the input bar. */}
@@ -500,28 +513,30 @@ function ChatComposer({
         </div>
       )}
 
-      {/* `/hola` shortcuts: session Templates filtered by the draft after `/`. */}
+      {/* `/name` shortcuts: the highlighted template is inserted, then sent like any other message. */}
       {slashOpen && (
-        <div className="composer-banner slash-template-picker" role="listbox" aria-label={t('chats.slash.title')}>
+        <div className="composer-banner slash-template-picker">
           <div className="slash-template-hint">{t('chats.slash.hint')}</div>
-          {slashMatches.length === 0 ? (
-            <div className="slash-template-empty">{t('chats.slash.empty')}</div>
-          ) : (
-            slashMatches.map((template, index) => (
-              <button
+          {slashStatus && <div className="slash-template-empty">{slashStatus}</div>}
+          <div className="slash-template-list" id={slashListId} role="listbox" aria-label={t('chats.slash.title')}>
+            {slashMatches.map((template, index) => (
+              <div
                 key={template.id}
-                type="button"
+                id={`${slashListId}-opt-${index}`}
                 role="option"
-                aria-selected={index === slashHighlight}
-                className={`slash-template-item${index === slashHighlight ? ' active' : ''}`}
+                aria-selected={index === slashIndex}
+                className={`slash-template-item${index === slashIndex ? ' active' : ''}`}
                 onMouseEnter={() => setSlashHighlight(index)}
-                onClick={() => pickSlashTemplate(template.name)}
+                onMouseDown={event => {
+                  event.preventDefault();
+                  insertSlashTemplate(template);
+                }}
               >
                 <span className="slash-template-name">/{normalizeTemplateName(template.name)}</span>
                 <span className="slash-template-preview">{renderTemplateText(template)}</span>
-              </button>
-            ))
-          )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -543,8 +558,13 @@ function ChatComposer({
 
           {/* The text field and the emoji toggle share one pill, as in WhatsApp. */}
           <div className="message-input-pill">
-            <input
-              type="text"
+            <textarea
+              rows={1}
+              role="combobox"
+              aria-expanded={slashOpen}
+              aria-controls={slashOpen ? slashListId : undefined}
+              aria-activedescendant={slashIndex >= 0 ? `${slashListId}-opt-${slashIndex}` : undefined}
+              aria-autocomplete="list"
               placeholder={
                 canWrite
                   ? attachment && !attachmentIsAudio

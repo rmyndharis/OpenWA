@@ -358,11 +358,12 @@
     },
     "slash": {
       "title": "Respuestas rápidas",
-      "hint": "Escribí /nombre y Enter para enviar un template de la página Templates",
+      "hint": "Enter inserta el template resaltado. Enviá cuando esté listo.",
       "placeholder": "Mensaje o /template…",
       "empty": "Ningún template coincide",
-      "needsVars": "Este template tiene {{variables}} — completalas y enviá",
-      "unknown": "No hay template llamado \"{{name}}\""
+      "needsVars": "Este template tiene variables — completalas y enviá",
+      "loading": "Cargando templates…",
+      "loadError": "No se pudieron cargar los templates"
     }
   },
   "errorBoundary": {

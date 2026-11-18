@@ -16,6 +16,7 @@ import { PageHeader } from '../components/PageHeader';
 import { Modal } from '../components/Modal';
 import { copyToClipboard } from '../utils/clipboard';
 import { captionLength } from '../utils/bulkMedia';
+import { extractPlaceholders, PLACEHOLDER_PATTERN } from '../utils/templatePlaceholders';
 import './Templates.css';
 
 type TemplateForm = {
@@ -31,22 +32,6 @@ const emptyForm: TemplateForm = {
   body: '',
   footer: '',
 };
-
-// The gateway's renderer pattern (PLACEHOLDER_PATTERN in src/common/utils/template-render.ts), kept verbatim: a send
-// fills the legacy single-brace `{key}` form as well as `{{key}}`, so the list and the preview read both. Only the
-// double-brace form is advertised.
-export const PLACEHOLDER_PATTERN = /\{\{\s*([\w.-]+)\s*\}\}|\{(\w+)\}/g;
-
-/** The variables a send fills, each once, with the form it is written in: `{{key}}`, or `{key}` for the legacy form. */
-function extractPlaceholders(template: TemplateForm | MessageTemplate): Array<{ key: string; token: string }> {
-  const source = [template.header, template.body, template.footer].filter(Boolean).join('\n');
-  const tokens = new Map<string, string>();
-  for (const [, doubleKey, singleKey] of source.matchAll(PLACEHOLDER_PATTERN)) {
-    const key = doubleKey ?? singleKey;
-    if (!tokens.has(key)) tokens.set(key, doubleKey !== undefined ? `{{${key}}}` : `{${key}}`);
-  }
-  return [...tokens.keys()].sort().map(key => ({ key, token: tokens.get(key)! }));
-}
 
 function toPayload(form: TemplateForm): TemplatePayload {
   return {

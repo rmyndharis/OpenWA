@@ -7,6 +7,7 @@ import {
   renderTemplateText,
   slashQuery,
   templateNeedsVariables,
+  templateVariables,
 } from './templateSlash.ts';
 
 const templates = [
@@ -45,4 +46,10 @@ test('renderTemplateText joins header body footer', () => {
   assert.equal(renderTemplateText(templates[2]), 'Nucleo\n\nTu pedido {{orderId}} está en camino.');
   assert.equal(templateNeedsVariables(templates[0]), false);
   assert.equal(templateNeedsVariables(templates[2]), true);
+});
+
+test('template variables follow the gateway placeholder forms', () => {
+  const dotted = { id: '4', name: 'aviso', body: 'Hi {{customer.name}}, ref {{order-id}} code {otp}' };
+  assert.deepEqual(templateVariables(dotted), ['customer.name', 'order-id', 'otp']);
+  assert.equal(templateNeedsVariables({ id: '5', name: 'plain', body: 'sin variables' }), false);
 });

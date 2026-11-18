@@ -353,11 +353,12 @@
     },
     "slash": {
       "title": "Hazır yanıtlar",
-      "hint": "Templates sayfasındaki bir şablonu göndermek için /ad yazıp Enter",
+      "hint": "Enter vurgulanan şablonu ekler. Hazır olunca gönderin.",
       "placeholder": "Mesaj veya /şablon…",
       "empty": "Eşleşen şablon yok",
-      "needsVars": "Bu şablonda {{variables}} var — doldurup gönderin",
-      "unknown": "\"{{name}}\" adlı şablon yok"
+      "needsVars": "Bu şablonda değişkenler var — doldurup gönderin",
+      "loading": "Şablonlar yükleniyor…",
+      "loadError": "Şablonlar yüklenemedi"
     }
   },
   "errorBoundary": {

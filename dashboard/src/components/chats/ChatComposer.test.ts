@@ -160,6 +160,17 @@ test('sending while a replacement pick is still being read sends neither file an
   );
 });
 
+test('Enter sends the draft and Shift+Enter does not', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  rtl.render(wrap(createElement(Harness)));
+  const field = screen.getByPlaceholderText('Type a message...');
+  fireEvent.change(field, { target: { value: 'hello' } });
+  fireEvent.keyDown(field, { key: 'Enter', shiftKey: true });
+  assert.equal(sentPaths.length, 0, 'Shift+Enter sent the draft');
+  fireEvent.keyDown(field, { key: 'Enter' });
+  await waitFor(() => assert.deepEqual(sentPaths, ['/api/sessions/sess-1/messages/send-text']));
+});
+
 test('the attachment and reply banners name the buttons that close them', async () => {
   const { screen, fireEvent, act } = rtl;
   const reply = {

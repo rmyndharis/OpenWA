@@ -973,7 +973,7 @@ test('a chat opened after a lookup is drawn with its own draft, not the text typ
   await screen.findByText('Lia');
   fireEvent.click(within(container.querySelector('.chats-sidebar') as HTMLElement).getByText('Alice'));
   await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
-  const composerSelector = 'input[placeholder="Type a message..."]';
+  const composerSelector = '.message-text-input';
   fireEvent.change(container.querySelector(composerSelector) as HTMLInputElement, { target: { value: 'for alice' } });
 
   // A mutation callback runs as a microtask, so it reads the page as the commit that drew Lia's room left it.

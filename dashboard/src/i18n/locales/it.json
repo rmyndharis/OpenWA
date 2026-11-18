@@ -358,11 +358,12 @@
     },
     "slash": {
       "title": "Risposte rapide",
-      "hint": "Scrivi /nome e Invio per inviare un template dalla pagina Templates",
+      "hint": "Invio inserisce il modello evidenziato. Invia quando è pronto.",
       "placeholder": "Messaggio o /template…",
       "empty": "Nessun template corrisponde",
-      "needsVars": "Questo template ha {{variables}} — compilale e invia",
-      "unknown": "Nessun template chiamato \"{{name}}\""
+      "needsVars": "Questo modello ha variabili — compilale, poi invia",
+      "loading": "Caricamento dei modelli…",
+      "loadError": "Impossibile caricare i modelli"
     }
   },
   "errorBoundary": {

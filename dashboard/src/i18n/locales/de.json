@@ -353,11 +353,12 @@
     },
     "slash": {
       "title": "Schnellantworten",
-      "hint": "/name und Enter sendet eine Vorlage aus Templates",
+      "hint": "Enter fügt die markierte Vorlage ein. Senden, wenn sie fertig ist.",
       "placeholder": "Nachricht oder /vorlage…",
       "empty": "Keine passende Vorlage",
-      "needsVars": "Diese Vorlage hat {{variables}} — bitte ausfüllen und senden",
-      "unknown": "Keine Vorlage namens „{{name}}“"
+      "needsVars": "Diese Vorlage hat Platzhalter — ausfüllen, dann senden",
+      "loading": "Vorlagen werden geladen…",
+      "loadError": "Vorlagen konnten nicht geladen werden"
     }
   },
   "errorBoundary": {

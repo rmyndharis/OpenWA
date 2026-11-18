@@ -353,11 +353,12 @@
     },
     "slash": {
       "title": "Canned replies",
-      "hint": "Type /name and Enter to send a template from the Templates page",
+      "hint": "Enter inserts the highlighted template. Send it when it is ready.",
       "placeholder": "Message or /template…",
       "empty": "No template matches",
-      "needsVars": "This template has {{variables}} — fill them in, then send",
-      "unknown": "No template named \"{{name}}\""
+      "needsVars": "This template has placeholders — fill them in, then send",
+      "loading": "Loading templates…",
+      "loadError": "Templates could not be loaded"
     }
   },
   "errorBoundary": {

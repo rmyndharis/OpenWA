@@ -358,11 +358,12 @@
     },
     "slash": {
       "title": "Réponses rapides",
-      "hint": "Tapez /nom puis Entrée pour envoyer un modèle de la page Templates",
+      "hint": "Entrée insère le modèle surligné. Envoyez-le quand il est prêt.",
       "placeholder": "Message ou /modèle…",
       "empty": "Aucun modèle ne correspond",
-      "needsVars": "Ce modèle a des {{variables}} — complétez-les puis envoyez",
-      "unknown": "Aucun modèle nommé « {{name}} »"
+      "needsVars": "Ce modèle a des variables — remplissez-les, puis envoyez",
+      "loading": "Chargement des modèles…",
+      "loadError": "Impossible de charger les modèles"
     }
   },
   "errorBoundary": {
