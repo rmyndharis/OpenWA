@@ -11,8 +11,8 @@ import { Repository } from 'typeorm';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { Session } from '../session/entities/session.entity';
+import { clientFacingSsrfError } from '../../common/media/client-facing-ssrf-error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
-import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { assertBase64WithinMediaCap, stripBase64DataUri } from '../message/media-cap.util';
 import {
@@ -213,14 +213,11 @@ export class MediaConversionService implements OnModuleInit, OnApplicationShutdo
       } catch (error) {
         // The fetch layer already answers 400/413 for a bad status, a timeout, a failed connection
         // or a body over the cap (503 when the session proxy fails before any response), exactly
-        // as on the send path. An SSRF block is reported
-        // generically: its raw message names the resolved internal address. Anything else (a
-        // malformed session proxy, say) is a server fault and stays a 500, as it does on a send,
-        // rather than a 400 carrying a message that can name the proxy.
-        if (error instanceof SsrfBlockedError) {
-          throw new BadRequestException(SSRF_BLOCKED_CLIENT_MESSAGE);
-        }
-        throw error;
+        // as on the send path. An SSRF block is mapped as a send maps it: a generic 400, because its
+        // raw message names the resolved internal address, which stays in the server log. Anything
+        // else (a malformed session proxy, say) is a server fault and stays a 500, as it does on a
+        // send, rather than a 400 carrying a message that can name the proxy.
+        throw clientFacingSsrfError(error);
       }
     }
     throw new BadRequestException('Either url or base64 must be provided');
