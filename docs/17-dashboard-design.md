@@ -100,6 +100,10 @@ becomes cards. The API keys table, which needs between 1085px and about 1600px d
 language, pins its row actions to the inline end of its container, so they stay in reach at any width; the Last used
 column scrolls into view beside them.
 
+The sidebar is 260px at any text size. A label that the browser's text size makes too long for its row (measured from
+125% in Spanish, French, Portuguese, Italian and Turkish, and from 150% in English and German) ends in an ellipsis,
+and its link or button carries the whole text in its title; at the default size no label is shortened.
+
 ## 17.2 Information Architecture
 
 The dashboard is a **flat, single-level route table** (see `src/App.tsx`). Each sidebar entry maps

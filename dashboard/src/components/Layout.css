@@ -68,6 +68,8 @@
   font-weight: 800;
   color: var(--text-primary);
   letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .brand-version {
@@ -323,6 +325,17 @@
   background: rgba(239, 68, 68, 0.12);
   border-color: rgba(239, 68, 68, 0.3);
   color: var(--error-text);
+}
+
+/* The sidebar is 260px at any text size, so a larger one (the browser's font size setting) makes some labels too long
+   for their row: they end in an ellipsis instead of being cut mid-letter, as .brand-update does, and their link or
+   button carries the whole text in its title. */
+.nav-item > span,
+.theme-toggle-btn > span,
+.logout-btn > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ==================== Main Content ==================== */
