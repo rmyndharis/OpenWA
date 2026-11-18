@@ -743,7 +743,7 @@ export function Webhooks() {
               display: 'block',
               marginTop: '0.5rem',
               padding: '0.5rem',
-              background: 'var(--color-bg-secondary)',
+              background: 'var(--bg-light)',
               borderRadius: '4px',
               fontSize: '0.85rem',
               wordBreak: 'break-all',
