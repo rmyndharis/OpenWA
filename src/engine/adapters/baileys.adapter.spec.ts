@@ -8345,8 +8345,10 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
       ['an encrypted edit', { secretEncryptedMessage: {} }],
       ['an encrypted reaction', { encReactionMessage: {} }],
       ['a pin', { pinInChatMessage: {} }],
+      ['a keep-in-chat toggle', { keepInChatMessage: {} }],
       ['an album header', { albumMessage: {} }],
       ['an event RSVP', { encEventResponseMessage: {} }],
+      ['an encrypted comment', { encCommentMessage: {} }],
       // The plain sender-key distribution is skipped by Baileys' own content type; this one is not.
       ['a fast-ratchet sender-key distribution', { fastRatchetKeySenderKeyDistributionMessage: {} }],
       ['a pin that merged after a fast-ratchet sender-key distribution', pinAfterDistribution],
