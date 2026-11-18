@@ -449,7 +449,9 @@ the header's place: text asks `GET /search` for that chat's stored messages, opt
 day, and a day with no text jumps to the first message the thread draws for it. It scrolls only to
 messages the thread has loaded. For a hit or a day older than those the bar stays open with its
 results and says that scrolling up in the chat loads older messages; nothing is paged
-automatically. Escape or the bar's Back button closes it, and so does opening another chat.
+automatically. Escape or the bar's Back button closes it, and so does opening another chat. Show
+more, here and in the sidebar's message search, adds the next page under the hits already listed,
+which stay where the reader is, with the loading line or the failure under them.
 
 `ChatComposer` is the message field with its attachment, emoji and reply panels. The field is
 multi-line and grows with its draft up to five lines: Enter sends, Shift+Enter breaks the line. A
