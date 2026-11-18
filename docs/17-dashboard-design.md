@@ -93,6 +93,11 @@ it; the one-line template fields keep the right edge that `index.css` gives the 
 Ids, phone numbers and URLs stay on `<bdi dir="ltr">`. `dashboard/src/user-text-direction.test.ts` fails the build
 when one of these rules is dropped.
 
+The audit log table gives each of its six columns a floor and shares the rest, so it fits a laptop window from about
+1100px beside the open sidebar; a session, key or address that is still too long ends in an ellipsis and keeps its
+whole value in the cell's title. Between 769px and that width the table scrolls sideways, and from 768px down it
+becomes cards.
+
 ## 17.2 Information Architecture
 
 The dashboard is a **flat, single-level route table** (see `src/App.tsx`). Each sidebar entry maps

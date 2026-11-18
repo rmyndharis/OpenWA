@@ -88,11 +88,25 @@
 /* Unified row styling - same class for header and data */
 .logs-page .logs-table .table-row {
   display: grid;
-  grid-template-columns: 180px 200px 150px 150px 150px 1fr;
+  /* Each track has a floor and shares what is left, so the six columns fit from about 1110px of window beside the
+     sidebar (41rem of floors, 5 gaps, the row's padding, the container's border, the sidebar and the page padding),
+     where fixed tracks needed 1340px and cut the Severity column. Narrower than that the container scrolls. */
+  grid-template-columns:
+    11rem
+    minmax(8rem, 1.4fr)
+    minmax(5rem, 1fr)
+    minmax(5rem, 1fr)
+    minmax(5.5rem, 1fr)
+    minmax(6.5rem, 0.8fr);
   gap: 1rem;
   padding: 1rem 1.5rem;
   align-items: center;
   border-bottom: 1px solid var(--border);
+}
+
+/* A cell may be narrower than its text: a long name is cut in its own cell instead of stretching its track. */
+.logs-page .logs-table .table-row > span {
+  min-width: 0;
 }
 
 .logs-page .logs-table .table-row:last-child {
@@ -144,6 +158,9 @@
    and its box is as wide as the text, so the text stays at the start edge the page puts it, under its column header
    (see .chat-item-name in Chats.css). */
 .logs-page .session {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   width: fit-content;
   max-width: 100%;
   unicode-bidi: plaintext;
@@ -152,16 +169,25 @@
 .logs-page .api-key {
   font-family: monospace;
   font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   width: fit-content;
   max-width: 100%;
   unicode-bidi: plaintext;
 }
 
+/* An address reads left to right in any page, so its ellipsis cuts the end and not the start; as wide as the address,
+   it keeps the edge the page puts it. */
 .logs-page .ip {
   font-family: monospace;
   font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  width: fit-content;
+  max-width: 100%;
+  unicode-bidi: plaintext;
 }
 
 .logs-page .severity-badge {

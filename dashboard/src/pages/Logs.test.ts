@@ -307,14 +307,43 @@ test('an exported cell that starts like a formula is neutralized', async () => {
   }
 });
 
+// The session, the key and the address are cut with an ellipsis where their cell is narrow, so each carries its whole
+// value in a title; a row without that value has nothing to show.
+test('a cell that the table may cut carries its whole value in a title', async () => {
+  const named: AuditLog = {
+    ...LOG_FAILED_SEND,
+    id: 'row-named',
+    action: 'key.rotate',
+    apiKeyName: 'reporting-integration-production-key',
+    ipAddress: '2001:0db8:85a3:0000:0000:8a2e:0370:7334',
+  };
+  LOGS.push(named);
+  try {
+    const container = renderLogs();
+    await rtl.screen.findByText('key.rotate');
+    const titles = (row: Element) =>
+      ['.session', '.api-key', '.ip'].map(cell => row.querySelector(cell)?.getAttribute('title') ?? null);
+    const rows = Array.from(container.querySelectorAll('.logs-table .table-row:not(.header)'));
+    assert.deepEqual(titles(rows[0]), [null, null, null]);
+    assert.deepEqual(titles(rows[2]), ['billing-bot', named.apiKeyName, named.ipAddress]);
+  } finally {
+    LOGS.pop();
+  }
+});
+
 test('the table grid declares one column track per rendered cell', async () => {
   const container = renderLogs();
   await rtl.screen.findByText('infra.restart');
   const css = readFileSync(fileURLToPath(new URL('./Logs.css', import.meta.url)), 'utf8');
-  const template = css.match(/\.logs-table \.table-row \{[^}]*grid-template-columns: ([^;]+);/)?.[1];
+  const template = css.match(/\.logs-table \.table-row \{[^}]*grid-template-columns:\s*([^;]+);/)?.[1];
   assert.ok(template, 'the row grid template was not found');
+  // A minmax() track holds a space of its own, so the tracks are counted outside the parentheses.
+  const tracks = template
+    .replace(/\([^)]*\)/g, '')
+    .trim()
+    .split(/\s+/);
   for (const row of container.querySelectorAll('.logs-table .table-row')) {
-    assert.equal(template.split(/\s+/).length, row.children.length, template);
+    assert.equal(tracks.length, row.children.length, template);
   }
 });
 
