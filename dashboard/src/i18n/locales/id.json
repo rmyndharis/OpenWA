@@ -357,7 +357,16 @@
       "date": "Lompat ke tanggal",
       "noDateHits": "Tidak ada pesan termuat pada hari itu",
       "open": "Cari di chat"
-    }
+    },
+    "slash": {
+      "title": "Balasan cepat",
+      "hint": "Ketik /nama lalu Enter untuk mengirim template dari halaman Templates",
+      "placeholder": "Pesan atau /template…",
+      "empty": "Tidak ada template yang cocok",
+      "needsVars": "Template ini punya {{variables}} — isi lalu kirim",
+      "unknown": "Tidak ada template bernama \"{{name}}\""
+    },
+    "draftLabel": "Draf:"
   },
   "errorBoundary": {
     "title": "Terjadi kesalahan",

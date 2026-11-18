@@ -357,7 +357,16 @@
       "date": "Zu Datum springen",
       "noDateHits": "Keine geladenen Nachrichten an diesem Tag",
       "open": "Im Chat suchen"
-    }
+    },
+    "slash": {
+      "title": "Schnellantworten",
+      "hint": "/name und Enter sendet eine Vorlage aus Templates",
+      "placeholder": "Nachricht oder /vorlage…",
+      "empty": "Keine passende Vorlage",
+      "needsVars": "Diese Vorlage hat {{variables}} — bitte ausfüllen und senden",
+      "unknown": "Keine Vorlage namens „{{name}}“"
+    },
+    "draftLabel": "Entwurf:"
   },
   "errorBoundary": {
     "title": "Etwas ist schiefgelaufen",

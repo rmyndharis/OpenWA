@@ -357,7 +357,16 @@
       "date": "跳至日期",
       "noDateHits": "當天沒有已載入的訊息",
       "open": "在聊天中搜尋"
-    }
+    },
+    "slash": {
+      "title": "快速回覆",
+      "hint": "輸入 /名稱 並按 Enter，傳送 Templates 頁的範本",
+      "placeholder": "訊息或 /範本…",
+      "empty": "沒有相符範本",
+      "needsVars": "此範本含 {{variables}} — 填妥後再傳送",
+      "unknown": "沒有名為「{{name}}」的範本"
+    },
+    "draftLabel": "草稿："
   },
   "errorBoundary": {
     "title": "發生問題",

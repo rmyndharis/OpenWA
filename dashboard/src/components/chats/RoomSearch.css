@@ -42,13 +42,21 @@
   background: transparent;
   color: var(--chat-meta);
   cursor: pointer;
+  outline: none;
 }
 
 .chats-page .room-search-date-btn:hover,
-.chats-page .room-search-date-btn:focus-visible,
 .chats-page .room-search-date-btn.has-day {
   color: var(--chat-accent-text);
   background: color-mix(in srgb, var(--chat-accent) 12%, transparent);
+}
+
+.chats-page .room-search-date-btn:focus-visible {
+  color: var(--chat-accent-text);
+  background: color-mix(in srgb, var(--chat-accent) 12%, transparent);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
 .chats-page .room-search-date-input {
@@ -70,6 +78,16 @@
   border-radius: 999px;
   background: var(--chat-composer-bg, var(--chat-panel-2, var(--chat-panel)));
   border: 1px solid var(--chat-divider);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.chats-page .room-search-input-wrap:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
 .chats-page .room-search-input-icon {
@@ -77,7 +95,7 @@
   color: var(--chat-meta);
 }
 
-.chats-page .room-search-input {
+.chats-page .room-search-input-wrap .room-search-input {
   flex: 1;
   min-width: 0;
   border: none;
@@ -85,11 +103,6 @@
   color: var(--chat-text);
   font-size: 0.875rem;
   outline: none;
-}
-
-.chats-page .room-search-input:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 .chats-page .room-search-clear {

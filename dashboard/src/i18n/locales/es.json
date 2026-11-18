@@ -362,7 +362,16 @@
       "date": "Ir a la fecha",
       "noDateHits": "No hay mensajes cargados ese día",
       "open": "Buscar en el chat"
-    }
+    },
+    "slash": {
+      "title": "Respuestas rápidas",
+      "hint": "Escribí /nombre y Enter para enviar un template de la página Templates",
+      "placeholder": "Mensaje o /template…",
+      "empty": "Ningún template coincide",
+      "needsVars": "Este template tiene {{variables}} — completalas y enviá",
+      "unknown": "No hay template llamado \"{{name}}\""
+    },
+    "draftLabel": "Borrador:"
   },
   "errorBoundary": {
     "title": "Algo salió mal",

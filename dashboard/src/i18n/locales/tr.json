@@ -357,7 +357,16 @@
       "date": "Tarihe git",
       "noDateHits": "O gün yüklenmiş mesaj yok",
       "open": "Sohbette ara"
-    }
+    },
+    "slash": {
+      "title": "Hazır yanıtlar",
+      "hint": "Templates sayfasındaki bir şablonu göndermek için /ad yazıp Enter",
+      "placeholder": "Mesaj veya /şablon…",
+      "empty": "Eşleşen şablon yok",
+      "needsVars": "Bu şablonda {{variables}} var — doldurup gönderin",
+      "unknown": "\"{{name}}\" adlı şablon yok"
+    },
+    "draftLabel": "Taslak:"
   },
   "errorBoundary": {
     "title": "Bir şeyler ters gitti",

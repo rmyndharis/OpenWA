@@ -357,7 +357,16 @@
       "date": "Jump to date",
       "noDateHits": "No loaded messages on that day",
       "open": "Search in chat"
-    }
+    },
+    "slash": {
+      "title": "Canned replies",
+      "hint": "Type /name and Enter to send a template from the Templates page",
+      "placeholder": "Message or /template…",
+      "empty": "No template matches",
+      "needsVars": "This template has {{variables}} — fill them in, then send",
+      "unknown": "No template named \"{{name}}\""
+    },
+    "draftLabel": "Draft:"
   },
   "errorBoundary": {
     "title": "Something went wrong",

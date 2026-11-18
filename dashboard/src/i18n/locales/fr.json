@@ -362,7 +362,16 @@
       "date": "Aller à la date",
       "noDateHits": "Aucun message chargé ce jour-là",
       "open": "Rechercher dans la discussion"
-    }
+    },
+    "slash": {
+      "title": "Réponses rapides",
+      "hint": "Tapez /nom puis Entrée pour envoyer un modèle de la page Templates",
+      "placeholder": "Message ou /modèle…",
+      "empty": "Aucun modèle ne correspond",
+      "needsVars": "Ce modèle a des {{variables}} — complétez-les puis envoyez",
+      "unknown": "Aucun modèle nommé « {{name}} »"
+    },
+    "draftLabel": "Brouillon :"
   },
   "errorBoundary": {
     "title": "Une erreur est survenue",
