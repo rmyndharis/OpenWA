@@ -7,6 +7,7 @@ import {
   useState,
   type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type SetStateAction,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -142,7 +143,8 @@ function ChatComposer({
   const [slashHighlight, setSlashHighlight] = useState(0);
   // The draft the picker is closed for: the one Escape or its close button dismissed it on, or the text an insert
   // left in the field. The draft itself rather than a flag, so that a template whose text is one slash word
-  // (`/start`) does not open the picker again and can be sent; any other draft opens it.
+  // (`/start`) does not open the picker again and can be sent; any other draft opens it. A refused send gives the draft
+  // back as it went out: closed, if it had been.
   const [slashClosedFor, setSlashClosedFor] = useState<string | null>(null);
   // Where the first placeholder of the template just inserted is, to be selected once the field holds the text.
   const [unfilled, setUnfilled] = useState<{ start: number; end: number } | null>(null);
@@ -215,6 +217,8 @@ function ChatComposer({
       if (document.querySelector('[role="dialog"], [role="menu"]')) return;
       event.preventDefault();
       setShowEmojiPicker(false);
+      // A key pressed on an emoji button: the button leaves with the panel, and the focus goes to the field.
+      if (document.activeElement?.closest('.chats-emoji-picker')) textInputRef.current?.focus();
     };
     document.addEventListener('keydown', dismissOnEscape, true);
     return () => document.removeEventListener('keydown', dismissOnEscape, true);
@@ -223,8 +227,21 @@ function ChatComposer({
   // References
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
-  // How the Send button was last pressed: the pointerdown's pointerType ('touch' for a tap), '' after a key on it.
-  const sendPressRef = useRef('');
+  // How a button of the composer was last pressed: the pointerdown's pointerType ('touch' for a tap), '' after a key.
+  const pressRef = useRef('');
+  const press = {
+    onPointerDown: (e: ReactPointerEvent) => {
+      pressRef.current = e.pointerType;
+    },
+    onKeyDown: () => {
+      pressRef.current = '';
+    },
+  };
+  // A button that closes with the focus on it hands the focus to the field, so that what is typed next goes there. Not
+  // after a tap: a focused field raises a phone's keyboard.
+  const focusField = () => {
+    if (pressRef.current !== 'touch') textInputRef.current?.focus();
+  };
 
   // Leaving this conversation — switching to another chat, or unmounting when the room closes —
   // invalidates an in-flight read, so its late `onload` drops the bytes instead of staging them
@@ -343,6 +360,7 @@ function ChatComposer({
   const handleEmojiClick = (emoji: string) => {
     setMessageInput(prev => prev + emoji);
     setShowEmojiPicker(false);
+    focusField();
   };
 
   const insertSlashTemplate = (template: SlashTemplate) => {
@@ -380,13 +398,15 @@ function ChatComposer({
 
     const textToSend = messageInput.trim();
     if (!textToSend && !attachment) return;
+    // The text the picker was closed for, if it goes out in this send: a refusal gives it back as it was.
+    const closedAtSend = slashClosedFor === messageInput;
 
     // With focus in the composer form, the field takes it before the Send button disables (it does once the text is
     // cleared): the browser drops focus from a disabled control to the page, and the next message would be typed
     // nowhere. Skipped when focus is outside the form, or when the Send button was last pressed by a tap: a tap focuses
     // the button in Chromium, and a focused field raises a phone's keyboard.
     const field = textInputRef.current;
-    if (sendPressRef.current !== 'touch' && field?.form?.contains(document.activeElement)) field.focus();
+    if (pressRef.current !== 'touch' && field?.form?.contains(document.activeElement)) field.focus();
 
     // Text that cannot travel with an audio file stays in the input to be sent as its own message.
     if (!attachmentIsAudio) setMessageInput('');
@@ -486,7 +506,10 @@ function ChatComposer({
       showErrorToast(t('chats.errors.send'), err instanceof Error ? err.message : undefined);
       updateMessage(selectedSessionId, activeChat.id, tempId, { status: 'failed' });
       // The field was emptied as Send was pressed (text next to audio was left in it).
-      if (textToSend && !attachmentIsAudio) onSendFailed?.(selectedSessionId, activeChat.id, messageInput);
+      if (textToSend && !attachmentIsAudio) {
+        if (closedAtSend) setSlashClosedFor(messageInput);
+        onSendFailed?.(selectedSessionId, activeChat.id, messageInput);
+      }
     } finally {
       setSendingByThread(prev => {
         const nextCount = (prev[threadKey] ?? 0) - 1;
@@ -548,7 +571,11 @@ function ChatComposer({
           </div>
           <button
             className="btn-banner-close btn-remove-attachment"
-            onClick={handleRemoveAttachment}
+            {...press}
+            onClick={() => {
+              handleRemoveAttachment();
+              focusField();
+            }}
             aria-label={t('messageTester.removeFile')}
           >
             <X size={18} />
@@ -563,7 +590,13 @@ function ChatComposer({
         <div className="composer-banner chats-emoji-picker">
           <div className="emoji-grid">
             {popularEmojis.map(emoji => (
-              <button key={emoji} type="button" className="emoji-btn" onClick={() => handleEmojiClick(emoji)}>
+              <button
+                key={emoji}
+                type="button"
+                className="emoji-btn"
+                {...press}
+                onClick={() => handleEmojiClick(emoji)}
+              >
                 {emoji}
               </button>
             ))}
@@ -585,7 +618,11 @@ function ChatComposer({
           </div>
           <button
             className="btn-banner-close btn-close-reply"
-            onClick={() => setReplyingTo(null)}
+            {...press}
+            onClick={() => {
+              setReplyingTo(null);
+              focusField();
+            }}
             aria-label={t('common.close')}
           >
             <X size={18} />
@@ -693,6 +730,7 @@ function ChatComposer({
               className={`btn-input-accessory inside ${showEmojiPicker ? 'active' : ''}`}
               title={t('chats.emojiTitle')}
               aria-label={t('chats.emojiTitle')}
+              aria-expanded={showEmojiPicker}
             >
               <Smile size={22} />
             </button>
@@ -701,12 +739,7 @@ function ChatComposer({
           <button
             type="submit"
             disabled={!canWrite || (!messageInput.trim() && !attachment) || sending || textTooLong || templateUnfilled}
-            onPointerDown={e => {
-              sendPressRef.current = e.pointerType;
-            }}
-            onKeyDown={() => {
-              sendPressRef.current = '';
-            }}
+            {...press}
             className="btn-send-message"
             aria-label={t('chats.send')}
             title={t('chats.send')}

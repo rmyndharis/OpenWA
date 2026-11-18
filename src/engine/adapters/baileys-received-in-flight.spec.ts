@@ -11,8 +11,9 @@ type Content = Record<string, unknown>;
  * still processing that a read of their chat has to account for are the ones Baileys counts and the session records.
  * Run over a limiter of one slot: a message held at its first await keeps the others waiting for a slot, in flight and
  * not yet looked at. The library functions mirror the ones the package exports (`isRealMessage` takes a message for
- * real unless it is a protocol message, a reaction, a poll vote or has no content, and counts an album header, a pin
- * and an encrypted edit or reaction among them), checked against the package for every message of this file.
+ * real unless it is a protocol message, a reaction, a poll vote or has no content, and counts an album header, a pin,
+ * a keep-in-chat toggle, an event RSVP, an encrypted comment and an encrypted edit or reaction among them), checked
+ * against the package for every message of this file.
  */
 const normalizeMessageContent = (content: unknown): unknown => content;
 const getContentType = (content: Content | undefined): string | undefined =>
@@ -153,12 +154,34 @@ describe('the messages received that the session is still processing', () => {
       incoming('VOTE', { pollUpdateMessage: { pollCreationMessageKey: { id: 'X' } } }),
       incoming('ALBUM', { albumMessage: { expectedImageCount: 2 } }),
       incoming('PIN', { pinInChatMessage: { key: { id: 'X' } } }),
+      incoming('KEEP', { keepInChatMessage: { key: { id: 'X' } } }),
+      incoming('RSVP', { encEventResponseMessage: { eventCreationMessageKey: { id: 'X' } } }),
+      incoming('ENC-COMMENT', { encCommentMessage: { targetMessageKey: { id: 'X' } } }),
       incoming('ENC-EDIT', { secretEncryptedMessage: { targetMessageKey: { id: 'X' } } }),
       incoming('ENC-REACT', { encReactionMessage: { targetMessageKey: { id: 'X' } } }),
       incoming('NOISE', { senderKeyDistributionMessage: { groupId: 'g' } }),
+      // Baileys counts this one, and the session drops it as protocol noise.
+      incoming('FAST-RATCHET', { fastRatchetKeySenderKeyDistributionMessage: { groupId: 'g' } }),
+      incoming('FAST-RATCHET-PIN', {
+        fastRatchetKeySenderKeyDistributionMessage: { groupId: 'g' },
+        pinInChatMessage: { key: { id: 'X' } },
+      }),
     );
 
     expect(events.receivedInFlight().map(m => m.id)).toEqual(['HELD']);
+    await drain();
+  });
+
+  it('lists a text that merged with a fast-ratchet sender-key distribution, whichever came first', async () => {
+    const { events, upsert, hold, drain } = setup();
+    await hold();
+
+    upsert(
+      incoming('FIRST', { fastRatchetKeySenderKeyDistributionMessage: { groupId: 'g' }, conversation: 'hello' }),
+      incoming('LAST', { conversation: 'hello', fastRatchetKeySenderKeyDistributionMessage: { groupId: 'g' } }),
+    );
+
+    expect(events.receivedInFlight().map(m => m.id)).toEqual(['HELD', 'FIRST', 'LAST']);
     await drain();
   });
 

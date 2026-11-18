@@ -196,6 +196,7 @@ export class CreateWebhookDto {
       'retry). An event that exhausts them is recorded in GET /api/webhooks/delivery-failures; the webhook ' +
       'stays active.',
     example: 3,
+    type: 'integer',
     minimum: 0,
     maximum: 5,
   })
@@ -291,6 +292,7 @@ export class UpdateWebhookDto {
       'Total delivery attempts per event, including the first (0 and 1 both mean a single attempt). Same ' +
       'range the create route enforces.',
     example: 3,
+    type: 'integer',
     minimum: 0,
     maximum: 5,
   })
@@ -483,6 +485,7 @@ export class RedriveWebhookDeliveriesDto {
   @ApiPropertyOptional({
     description: 'Max rows replayed by this call (1-500, default 100).',
     example: 100,
+    type: 'integer',
     minimum: 1,
     maximum: 500,
   })

@@ -563,3 +563,11 @@ code {
        changes width/anchoring. (Scrolling lives on .modal-body to avoid a double scrollbar.) */
   }
 }
+
+/* Forced colours drop fills, so the filled buttons draw a frame as the secondary one does. */
+@media (forced-colors: active) {
+  .btn-primary,
+  .btn-danger {
+    border: 1px solid ButtonText;
+  }
+}

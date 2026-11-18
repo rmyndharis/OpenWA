@@ -25,6 +25,8 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
   // run ahead of hits.length, and "more" stays up only while the server has rows past it.
   const [nextOffset, setNextOffset] = useState(0);
   const [loading, setLoading] = useState(false);
+  // The loading is for an appended page: the hits already listed stay, and the line goes under them.
+  const [paging, setPaging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scopeCurrent, setScopeCurrent] = useState(false);
   const [open, setOpen] = useState(false);
@@ -53,9 +55,11 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
         setNextOffset(0);
         setError(null);
         setLoading(false);
+        setPaging(false);
         return;
       }
       setLoading(true);
+      setPaging(append);
       setError(null);
       try {
         const res = await searchApi.search(params);
@@ -81,7 +85,10 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
           setNextOffset(0);
         }
       } finally {
-        if (id === requestId.current) setLoading(false);
+        if (id === requestId.current) {
+          setLoading(false);
+          setPaging(false);
+        }
       }
     },
     [scopeKey, t],
@@ -97,8 +104,16 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
       setNextOffset(0);
       setError(null);
       setLoading(false);
+      setPaging(false);
       return;
     }
+    // From the keystroke on, the hits listed and any answer still on its way are for the text before this one: that
+    // answer is dropped, the list no longer stands for any text (reopen searches again), and the loading line is
+    // alone until the search for this text answers.
+    requestId.current += 1;
+    searchedKey.current = '';
+    setLoading(true);
+    setPaging(false);
     // timer.current is non-null exactly while a search is pending, which the Escape handler reads.
     timer.current = setTimeout(() => {
       timer.current = null;
@@ -184,10 +199,9 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
       )}
       {open && q.trim() && (
         <div className="global-search-results" role="listbox">
-          {loading && <div className="global-search-state">{t('search.loading')}</div>}
-          {!loading && error && <div className="global-search-state">{error}</div>}
+          {loading && !paging && <div className="global-search-state">{t('search.loading')}</div>}
           {!loading && !error && hits.length === 0 && <div className="global-search-state">{t('search.empty')}</div>}
-          {!loading &&
+          {(!loading || paging) &&
             hits.map(h => (
               <button
                 key={h.messageId}
@@ -215,6 +229,9 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
                 </div>
               </button>
             ))}
+          {/* Under the hits, where a reader at the end of the list is looking: the next page loading, or failing. */}
+          {paging && <div className="global-search-state">{t('search.loading')}</div>}
+          {!loading && error && <div className="global-search-state">{error}</div>}
           {!loading && nextOffset < total && (
             // preventDefault on mousedown keeps focus in the input, so a mouse click does not start the
             // close timer; click still fires for the mouse and for Enter/Space.

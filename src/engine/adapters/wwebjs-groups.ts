@@ -19,9 +19,21 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { toMessageMedia } from './wwebjs-messaging';
-import { type WwebjsEngineHost, rethrowIfNavigation, withPage, withPageWrite, reportPageDeath } from './wwebjs-host';
-import { isNavigationError, isProtocolTimeout } from './wwebjs-lifecycle';
+import {
+  type WwebjsEngineHost,
+  navigationsSeen,
+  rethrowIfNavigation,
+  withPageWrite,
+  reportPageDeath,
+} from './wwebjs-host';
+import {
+  PAGE_RELOADING_MESSAGE,
+  isMissingRequireError,
+  isNavigationError,
+  isProtocolTimeout,
+} from './wwebjs-lifecycle';
 import { listChats, recoverGroupChatById } from './wwebjs-chats';
+import { type EvaluatePage, type PageWrite, runWriteInPage, settleWriteStatus } from './wwebjs-page-writes';
 
 /**
  * Extracts the JID of the parent community a group is linked to, if any.
@@ -45,23 +57,106 @@ export function extractLinkedParentJID(groupMetadata?: GroupMetadataRaw): string
  * refusal) and resolve nothing; revokeInvite alone lets it reject, so a refusal reached the caller as
  * an opaque 500. Outside the page the error's name is no longer reliable (Puppeteer rebuilds it from
  * the page's constructor name), so the check has to happen here.
+ *
+ * The job that resets the code has moved between WhatsApp Web builds: `WAWebGroupInviteJob` exports it on the build
+ * the gateway selects today and `WAWebGroupQueryJob` did before, and both take the same wid and resolve the same
+ * `{code}`. A module a build does not define throws from `require`, so each lookup is guarded; a document with no
+ * `require` at all is a page that is reloading, not a build without the job, and that failure is let through. A
+ * build with neither answers `'missing'` before anything was asked of WhatsApp. Otherwise it answers the status
+ * WhatsApp gave, with the new code on a 2xx: a rate limit or a server error removed nothing and is no refusal.
  */
-export async function revokeInviteInPage(chatId: string): Promise<string | undefined> {
-  const w = window as unknown as {
-    require: (m: string) => {
-      createWid: (id: string) => unknown;
-      resetGroupInviteCode: (wid: unknown) => Promise<{ code?: string } | undefined>;
-    };
-  };
+export async function revokeInviteInPage(chatId: string): Promise<{ status: number; code?: string } | 'missing'> {
+  type ResetJob = { resetGroupInviteCode: (wid: unknown) => Promise<{ code?: string } | undefined> };
+  const w = window as unknown as { require: (m: string) => unknown };
+  let job: ResetJob | undefined;
+  for (const name of ['WAWebGroupInviteJob', 'WAWebGroupQueryJob']) {
+    let found: Partial<ResetJob> | undefined;
+    try {
+      found = w.require(name) as Partial<ResetJob> | undefined;
+    } catch (err) {
+      if (typeof w.require !== 'function') throw err;
+    }
+    if (typeof found?.resetGroupInviteCode === 'function') {
+      job = found as ResetJob;
+      break;
+    }
+  }
+  if (!job) return 'missing';
   try {
-    const res = await w
-      .require('WAWebGroupQueryJob')
-      .resetGroupInviteCode(w.require('WAWebWidFactory').createWid(chatId));
-    return res?.code;
+    const wids = w.require('WAWebWidFactory') as { createWid: (id: string) => unknown };
+    const res = await job.resetGroupInviteCode(wids.createWid(chatId));
+    return { status: 200, code: res?.code };
   } catch (err) {
-    if ((err as Error | undefined)?.name === 'ServerStatusCodeError') return undefined;
+    const refusal = err as { name?: unknown; status?: unknown } | undefined;
+    if (refusal?.name === 'ServerStatusCodeError') {
+      return { status: typeof refusal.status === 'number' ? refusal.status : 403 };
+    }
     throw err;
   }
+}
+
+/**
+ * GroupChat.getInviteCode, run IN-PAGE with the status mapping the revoke has. The library reads every rejection named
+ * `ServerStatusCodeError` as "no code", which the adapter read as missing admin rights: a rate limit or a server error,
+ * which only means the same request may pass later, was a 403, and a refusal of the Mex class
+ * (`MexServerStatusCodeError`, which carries a status too) was a bare 500. This answers the status WhatsApp gave, with
+ * the code on a 2xx. A build with no job to read the code answers `'missing'` before anything was asked, and the caller
+ * runs the library's own call as it always did (see {@link NO_INVITE_JOB_ERRORS}). A document with no `require` at all
+ * is a page that is reloading, not a build without the job, and that failure is let through. Any other rejection is
+ * rethrown.
+ */
+export async function readInviteCodeInPage(chatId: string): Promise<{ status: number; code?: string } | 'missing'> {
+  type CodeJob = { fetchMexGroupInviteCode: (id: string) => Promise<{ code?: string } | string | undefined> };
+  const w = window as unknown as { require: (m: string) => unknown };
+  let job: Partial<CodeJob> | undefined;
+  try {
+    job = w.require('WAWebMexFetchGroupInviteCodeJob') as Partial<CodeJob> | undefined;
+  } catch (err) {
+    if (typeof w.require !== 'function') throw err;
+  }
+  if (typeof job?.fetchMexGroupInviteCode !== 'function') return 'missing';
+  try {
+    const res = await job.fetchMexGroupInviteCode(chatId);
+    return { status: 200, code: typeof res === 'string' ? res : res?.code };
+  } catch (err) {
+    const refusal = err as { name?: unknown; status?: unknown } | undefined;
+    if (typeof refusal?.name === 'string' && refusal.name.endsWith('ServerStatusCodeError')) {
+      return { status: typeof refusal.status === 'number' ? refusal.status : 403 };
+    }
+    throw err;
+  }
+}
+
+/**
+ * How the library's own `getInviteCode` fails on a build with no job to read the code with. It reads the job's module
+ * without asking, so a module that answers `undefined` is a TypeError, a module without the call is another, and
+ * Meta's `require` throws for a module the build does not define. Puppeteer hands the page's error over as a plain
+ * Error, so the message is what is matched, and only where it names the job: any other failure is not this one.
+ * `queryGroupInviteCode` is the call an older library reads.
+ */
+const NO_INVITE_JOB_ERRORS = [
+  /Cannot read properties of undefined \(reading '(?:fetchMexGroupInviteCode|queryGroupInviteCode)'\)/,
+  /\.(?:fetchMexGroupInviteCode|queryGroupInviteCode) is not a function/,
+  /Requiring unknown module "WAWebMexFetchGroupInviteCodeJob"/,
+];
+
+/**
+ * Whether the page still exports the invitation sender that `GroupChat.addParticipants` calls for a participant whose
+ * privacy settings allow only an invitation: `sendGroupInviteMessage` of `WAWebChatSendMessages`. The build the gateway
+ * selects today exports it from `WAWebChatSendGroupInviteMessage` instead, taking one options object where the library
+ * passes positional arguments, so the library's call is a TypeError in its loop. A module a build does not define throws
+ * from `require`. A document with no `require` at all is a page that is reloading, not a build without the sender, and
+ * that failure is let through (spelled as the library spells it, which is how the reload is read).
+ */
+export function readInviteSenderInPage(): boolean {
+  type Messages = { sendGroupInviteMessage?: unknown } | undefined;
+  let messages: Messages;
+  try {
+    messages = (window as unknown as { require: (m: string) => Messages }).require('WAWebChatSendMessages');
+  } catch (err) {
+    if (typeof (window as unknown as { require?: unknown }).require !== 'function') throw err;
+  }
+  return typeof messages?.sendGroupInviteMessage === 'function';
 }
 
 /**
@@ -161,6 +256,7 @@ export class WwebjsGroups {
 
   async getGroupInfo(groupId: string): Promise<GroupInfo | null> {
     this.host.ensureReady();
+    const since = navigationsSeen(this.host);
     try {
       // A group whose refresh fails one of WhatsApp Web's own invariants is read from the metadata the
       // page already holds, as the group list reads it (readChatModels): as last loaded, not refreshed,
@@ -218,7 +314,7 @@ export class WwebjsGroups {
       // A dead page and a genuinely-missing group both land in this catch; only the second may
       // become null (→ service 404). A transport death surfaced as "group not found" sends
       // operators debugging the wrong layer — report it and answer 503 instead.
-      rethrowIfNavigation(this.host, error);
+      rethrowIfNavigation(this.host, error, since);
       if (this.host.isPageTransportError(error)) {
         this.host.reportIfPageTransportError(error, 'getGroupInfo');
         throw new EngineTransportError(`Transport died while reading group ${groupId}`);
@@ -260,7 +356,18 @@ export class WwebjsGroups {
   async addParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
     const chat = await this.requireGroupChat(groupId, 'addParticipants');
     const participantIds = participants.map(toParticipantWid);
-    const raw = await reportPageDeath(this.host, 'addParticipants', () => chat.addParticipants(participantIds));
+    // Where the library's invitation sender is gone, its call would end the whole batch: add without the invitation,
+    // which leaves the participant that needs one a 403 of its own. The question is a read made before anything is
+    // sent, so it answers as the group lookup above does (a dead page or a timeout is a 503, a reload a 409); only the
+    // add keeps the raw error of a write that does not converge.
+    const invitesWork = await withPageWrite(this.host, 'addParticipants', () =>
+      this.page().evaluate(readInviteSenderInPage),
+    );
+    const raw = await reportPageDeath(this.host, 'addParticipants', () =>
+      invitesWork
+        ? chat.addParticipants(participantIds)
+        : chat.addParticipants(participantIds, { autoSendInviteV4: false }),
+    );
     // whatsapp-web.js reports a batch-level refusal (no admin rights, empty group) by RESOLVING a
     // plain reason string (GroupChat.js:106-107,128-130) instead of throwing — surface it as a
     // refusal, not a success.
@@ -389,31 +496,101 @@ export class WwebjsGroups {
     await reportPageDeath(this.host, 'leaveGroup', () => chat.leave());
   }
 
+  /** The page of the client, for the writes the adapter sends itself. */
+  private page(): EvaluatePage {
+    return (this.client() as unknown as { pupPage: EvaluatePage }).pupPage;
+  }
+
+  /**
+   * One write of the group settings, sent IN-PAGE so that WhatsApp's own status decides the answer: whatsapp-web.js
+   * reads every status as `false`, which this adapter read as missing admin rights, so a rate limit or a server error
+   * (nothing was changed, the same request may pass later) was a 403. A page that lacks the job to send it with answers
+   * before anything was sent, and the write is then the library's own call, as it always was: `legacy` runs it and
+   * `refusal` words its `false`. Every write here converges when repeated. `unchanged` says what a rate limit or a
+   * server error left, for the write that can be applied in part.
+   */
+  private async write(
+    op: string,
+    request: PageWrite,
+    what: string,
+    refusal: string,
+    legacy: () => Promise<boolean>,
+    unchanged = 'changed nothing',
+  ): Promise<void> {
+    const answer = await withPageWrite(this.host, op, () => this.page().evaluate(runWriteInPage, request));
+    if (answer === 'missing') {
+      if (!(await withPageWrite(this.host, op, legacy))) {
+        throw new EngineRefusedError(`${refusal} — admin rights required`);
+      }
+      return;
+    }
+    settleWriteStatus(answer.status, {
+      request: what,
+      nothing: unchanged,
+      refused: status => `${refusal}: WhatsApp refused it (${status}), as when admin rights are required`,
+    });
+  }
+
   async setGroupSubject(groupId: string, subject: string): Promise<void> {
     const chat = await this.requireGroupChat(groupId, 'setGroupSubject');
     // GroupChat.setSubject resolves false when WA Web rejects the change (e.g. the account lacks
     // admin rights; index.d.ts:1982) instead of throwing — surface the refusal, not a false success.
-    const ok = await withPageWrite(this.host, 'setGroupSubject', () => chat.setSubject(subject));
-    if (!ok) {
-      throw new EngineRefusedError(`Failed to set the subject for group ${groupId} — admin rights required`);
-    }
+    await this.write(
+      'setGroupSubject',
+      { kind: 'subject', chatId: groupId, subject },
+      `the subject change for group ${groupId}`,
+      `Failed to set the subject for group ${groupId}`,
+      () => chat.setSubject(subject),
+    );
   }
 
   async setGroupDescription(groupId: string, description: string): Promise<void> {
     const chat = await this.requireGroupChat(groupId, 'setGroupDescription');
     // Same discarded-boolean contract as setSubject (index.d.ts:1984).
-    const ok = await withPageWrite(this.host, 'setGroupDescription', () => chat.setDescription(description));
-    if (!ok) {
-      throw new EngineRefusedError(`Failed to set the description for group ${groupId} — admin rights required`);
-    }
+    await this.write(
+      'setGroupDescription',
+      { kind: 'description', chatId: groupId, description },
+      `the description change for group ${groupId}`,
+      `Failed to set the description for group ${groupId}`,
+      () => chat.setDescription(description),
+    );
   }
 
   async getGroupInviteCode(groupId: string): Promise<string> {
     const chat = await this.requireGroupChat(groupId, 'getGroupInviteCode');
+    const since = navigationsSeen(this.host);
+    // Read in the page, so that WhatsApp's own status decides the answer: a rate limit or a server error is a 503, a
+    // refusal a 403. A page with no job to read it with is the library's own call, as it always was.
+    const answer = await withPageWrite(this.host, 'getGroupInviteCode', () =>
+      this.page().evaluate(readInviteCodeInPage, groupId),
+    );
+    let inviteCode: string | undefined;
+    if (answer === 'missing') {
+      inviteCode = await withPageWrite(this.host, 'getGroupInviteCode', () => chat.getInviteCode()).catch(
+        (error: unknown) => {
+          // Read after withPageWrite, so a navigation, a dead page and a timeout are answered by now. The library dying
+          // for want of the job asked nothing of WhatsApp and this build has no other way to read the code: the 501 the
+          // revoke answers, not a bare 500. Every other failure keeps its answer.
+          const message = error instanceof Error ? error.message : String(error);
+          if (!NO_INVITE_JOB_ERRORS.some(pattern => pattern.test(message))) throw error;
+          // A page that reloaded during the read has not booted its modules yet either: that is the 409.
+          rethrowIfNavigation(this.host, error, since);
+          throw new EngineNotSupportedError('getGroupInviteCode(no invite code job on this build)');
+        },
+      );
+    } else {
+      settleWriteStatus(answer.status, {
+        request: `the invite code read for group ${groupId}`,
+        nothing: 'gave no code',
+        refused: refusedWith =>
+          `Failed to get the invite code for group ${groupId}: WhatsApp refused it (${refusedWith}), as when admin ` +
+          'rights are required',
+      });
+      inviteCode = answer.code;
+    }
     // Typed Promise<string>, but WA Web yields nothing when the account is not an admin of the
     // group — and String(undefined) is the literal 'undefined', which the caller renders as the
     // link "https://chat.whatsapp.com/undefined". Same refusal contract as setDescription.
-    const inviteCode = await withPageWrite(this.host, 'getGroupInviteCode', () => chat.getInviteCode());
     if (!inviteCode) {
       throw new EngineRefusedError(`Failed to get the invite code for group ${groupId} — admin rights required`);
     }
@@ -423,17 +600,33 @@ export class WwebjsGroups {
 
   async revokeGroupInviteCode(groupId: string): Promise<string> {
     await this.requireGroupChat(groupId, 'revokeGroupInviteCode');
-    const page = (
-      this.client() as unknown as { pupPage: { evaluate: <T, A>(fn: (arg: A) => Promise<T>, arg: A) => Promise<T> } }
-    ).pupPage;
-    const newCode = await reportPageDeath(this.host, 'revokeGroupInviteCode', () =>
-      page.evaluate(revokeInviteInPage, groupId),
-    );
-    if (!newCode) {
+    const answer = await reportPageDeath(this.host, 'revokeGroupInviteCode', () =>
+      this.page().evaluate(revokeInviteInPage, groupId),
+    ).catch((error: unknown) => {
+      // The page function reads `require` first, so a document that has none ends it before anything was asked of
+      // WhatsApp: the one failure here that proves the code was not rotated, and so the retryable 409. Every other
+      // failure, a navigation that cut the call included, leaves the outcome unknown and keeps the raw error.
+      if (isMissingRequireError(error)) throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
+      throw error;
+    });
+    // A build with no job to reset a code: nothing was asked of WhatsApp, so this is no refusal and no failure.
+    if (answer === 'missing') {
+      throw new EngineNotSupportedError('revokeGroupInviteCode(no reset job on this build)');
+    }
+    // A status answer means WhatsApp refused it and rotated nothing, so a repeat converges: the 503 is safe here, where
+    // a transport death is not (see reportPageDeath).
+    settleWriteStatus(answer.status, {
+      request: `the invite code revoke for group ${groupId}`,
+      nothing: 'kept the current code',
+      refused: refusedWith =>
+        `Failed to revoke the invite code for group ${groupId}: WhatsApp refused it (${refusedWith}), as when admin ` +
+        'rights are required',
+    });
+    if (!answer.code) {
       throw new EngineRefusedError(`Failed to revoke the invite code for group ${groupId} — admin rights required`);
     }
     this.host.logger.debug('Revoked group invite code, new code generated', { groupId });
-    return newCode;
+    return answer.code;
   }
 
   /**
@@ -461,12 +654,13 @@ export class WwebjsGroups {
     // the endpoint's most common error input, which the route documents (and Baileys answers) as
     // 404. The sibling joinGroupViaInviteCode maps the same cause; this is the read half.
     let raw: RawInviteInfo;
+    const since = navigationsSeen(this.host);
     try {
       raw = await this.client().getInviteInfo(inviteCode);
     } catch (error) {
       // A dead page and a refused invite both land here; only the second is a 404. Folding a
       // transport death into "no such invite" sends operators debugging the wrong layer.
-      rethrowIfNavigation(this.host, error);
+      rethrowIfNavigation(this.host, error, since);
       if (this.host.isPageTransportError(error)) {
         this.host.reportIfPageTransportError(error, 'getGroupJoinInfo');
         throw new EngineTransportError(`Transport died while previewing invite ${inviteCode}`);
@@ -580,14 +774,13 @@ export class WwebjsGroups {
     const groupChat = await this.requireGroupChat(groupId, 'setGroupMessagesAdminsOnly');
     // Resolves false instead of throwing when the account lacks admin rights (GroupChat.js:503) —
     // surface that as an error rather than a silent no-op.
-    const ok = await withPageWrite(this.host, 'setGroupMessagesAdminsOnly', () =>
-      groupChat.setMessagesAdminsOnly(adminsOnly),
+    await this.write(
+      'setGroupMessagesAdminsOnly',
+      { kind: 'property', chatId: groupId, property: 'announcement', value: adminsOnly ? 1 : 0 },
+      `the messages-admins-only change for group ${groupId}`,
+      `Failed to update the messages-admins-only setting for group ${groupId}`,
+      () => groupChat.setMessagesAdminsOnly(adminsOnly),
     );
-    if (!ok) {
-      throw new EngineRefusedError(
-        `Failed to update the messages-admins-only setting for group ${groupId} — admin rights required`,
-      );
-    }
   }
 
   async setGroupPicture(groupId: string, media: MediaInput): Promise<void> {
@@ -597,34 +790,30 @@ export class WwebjsGroups {
     // The fetch can outlast the session, and the chat writes through the client that read it.
     this.host.ensureReady();
     // GroupChat.setPicture, NOT Client.setProfilePicture — the latter targets the own account.
-    const ok = await withPageWrite(this.host, 'setGroupPicture', () => groupChat.setPicture(picture));
-    if (!ok) {
-      throw new EngineRefusedError(`Failed to set the picture for group ${groupId} — admin rights required`);
-    }
+    await this.write(
+      'setGroupPicture',
+      { kind: 'picture', chatId: groupId, picture },
+      `the picture change for group ${groupId}`,
+      `Failed to set the picture for group ${groupId}`,
+      () => groupChat.setPicture(picture),
+    );
   }
 
   async deleteGroupPicture(groupId: string): Promise<void> {
     await this.requireGroupChat(groupId, 'deleteGroupPicture');
-    const page = (
-      this.client() as unknown as { pupPage: { evaluate: <T, A>(fn: (arg: A) => Promise<T>, arg: A) => Promise<T> } }
-    ).pupPage;
     const status = await withPageWrite(this.host, 'deleteGroupPicture', () =>
-      page.evaluate(deleteGroupPictureInPage, groupId),
+      this.page().evaluate(deleteGroupPictureInPage, groupId),
     );
     this.host.logger.debug('WhatsApp answered the group picture delete', { groupId, status });
-    // WhatsApp answers 200 for a group with no picture as for one it removed, so a repeat converges.
-    if (status >= 200 && status < 300) return;
-    // A rate limit or a server error: nothing was deleted, and the same request may pass later.
-    if (status === 423 || status === 429 || status >= 500) {
-      throw new EngineTransportError(
-        `WhatsApp answered ${status} to the picture delete for group ${groupId} and removed nothing. ` +
-          'Retry after a pause.',
-      );
-    }
-    throw new EngineRefusedError(
-      `Failed to delete the picture for group ${groupId}: WhatsApp refused it (${status}), as when admin rights ` +
+    // WhatsApp answers 200 for a group with no picture as for one it removed, so a repeat converges. A rate limit or
+    // a server error deleted nothing, and the same request may pass later.
+    settleWriteStatus(status, {
+      request: `the picture delete for group ${groupId}`,
+      nothing: 'removed nothing',
+      refused: refusedWith =>
+        `Failed to delete the picture for group ${groupId}: WhatsApp refused it (${refusedWith}), as when admin rights ` +
         'are required',
-    );
+    });
   }
 
   // Set who may add participants. NOT a groupSettingUpdate option on either engine — wwjs has its
@@ -632,36 +821,39 @@ export class WwebjsGroups {
   // means mode 'admins'.
   async setGroupMemberAddMode(groupId: string, mode: GroupMemberAddMode): Promise<void> {
     const groupChat = await this.requireGroupChat(groupId, 'setGroupMemberAddMode');
-    const ok = await withPageWrite(this.host, 'setGroupMemberAddMode', () =>
-      groupChat.setAddMembersAdminsOnly(mode === 'admins'),
+    await this.write(
+      'setGroupMemberAddMode',
+      { kind: 'property', chatId: groupId, property: 'member_add_mode', value: mode === 'admins' ? 0 : 1 },
+      `the member-add-mode change for group ${groupId}`,
+      `Failed to update the member-add-mode setting for group ${groupId}`,
+      () => groupChat.setAddMembersAdminsOnly(mode === 'admins'),
+      // Setting admins on a group whose link mode is open is two writes in the page, and the second can fail after the
+      // first was applied.
+      'it may have been applied in part',
     );
-    if (!ok) {
-      throw new EngineRefusedError(
-        `Failed to update the member-add-mode setting for group ${groupId} — admin rights required`,
-      );
-    }
   }
 
   // Set "only admins can edit group info" (locked/restrict)
   async setGroupInfoAdminsOnly(groupId: string, adminsOnly: boolean): Promise<void> {
     const groupChat = await this.requireGroupChat(groupId, 'setGroupInfoAdminsOnly');
-    const ok = await withPageWrite(this.host, 'setGroupInfoAdminsOnly', () => groupChat.setInfoAdminsOnly(adminsOnly));
-    if (!ok) {
-      throw new EngineRefusedError(
-        `Failed to update the info-admins-only setting for group ${groupId} — admin rights required`,
-      );
-    }
+    await this.write(
+      'setGroupInfoAdminsOnly',
+      { kind: 'property', chatId: groupId, property: 'restrict', value: adminsOnly ? 1 : 0 },
+      `the info-admins-only change for group ${groupId}`,
+      `Failed to update the info-admins-only setting for group ${groupId}`,
+      () => groupChat.setInfoAdminsOnly(adminsOnly),
+    );
   }
 
-  // whatsapp-web.js 1.34.7 exposes no disappearing-messages setter (no Client/GroupChat symbol in
-  // index.d.ts; only a create-time messageTimer option, Client.js:2371) — an honest 501, not a no-op.
+  // whatsapp-web.js 1.34.8 exposes no disappearing-messages setter (no Client/GroupChat symbol in
+  // index.d.ts; only a create-time messageTimer option, Client.js createGroup) — an honest 501, not a no-op.
   // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars
   async setGroupEphemeral(_groupId: string, _durationSec: number): Promise<void> {
     this.host.ensureReady();
     throw new EngineNotSupportedError('setGroupEphemeral');
   }
 
-  // whatsapp-web.js 1.34.7 has no member-label setter (no memberLabel or member tag symbol in index.d.ts
+  // whatsapp-web.js 1.34.8 has no member-label setter (no memberLabel or member tag symbol in index.d.ts
   // or src/), so this is an honest 501 rather than a no-op.
   // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars
   async setGroupMemberLabel(_groupId: string, _label: string): Promise<void> {
@@ -676,7 +868,7 @@ export class WwebjsGroups {
     const chat = await this.requireGroupChat(groupId, 'getGroupMembershipRequests');
     // The library reads the page's own request store, which answers a non-admin without asking WhatsApp.
     this.refuseNonAdmin(chat, 'getGroupMembershipRequests', groupId);
-    return withPage(this.host, 'getGroupMembershipRequests', async () => {
+    return withPageWrite(this.host, 'getGroupMembershipRequests', async () => {
       const raw = await this.client().getGroupMembershipRequests(groupId);
       // Raw page-context store objects: wids can arrive as {_serialized} OR {$1} (the #747
       // minifier rename), so every id goes through readWid; a requester whose wid is unreadable

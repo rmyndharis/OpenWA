@@ -18,9 +18,10 @@
 # Environment:
 #   MAIN_DATABASE_NAME  restore target for the auth/audit DB (default: <data dir>/main.sqlite)
 #   DATABASE_NAME       restore target for the SQLite data store (default: <data dir>/openwa.sqlite)
-#                       Both resolve EXACTLY like the app: the environment first, then ./.env, then
-#                       .env.generated (the archive's copy when it carries one, else the data dir's),
-#                       otherwise the app's ./data default (see lib-env.sh).
+#                       Both resolve EXACTLY like the app: the environment first (a value of only
+#                       blanks counts as unset), then ./.env, then .env.generated (the archive's copy
+#                       when it carries one, else the data dir's), otherwise the app's ./data default
+#                       (see lib-env.sh).
 #   DATABASE_TYPE     resolved the same way, and read only for an archive that holds the SQLite data store:
 #                     with postgres, where DATABASE_NAME names a database, the restore stops before it
 #                     writes anything
@@ -450,9 +451,11 @@ PLUGIN_PACKAGES_DIR="$(openwa_resolve PLUGINS_DIR "$DATA_DIR/plugins" path)"
 # resolved here exactly like PLUGINS_DIR above. Hardcoding $DATA_DIR/plugins meant an operator who
 # moved plugin state got an archive with neither the registry nor any plugin's storage in it, and
 # a restore that put nothing back. Resolved under its own name because the knob names the ROOT,
-# not the plugins directory inside it.
+# not the plugins directory inside it. That directory is not named PLUGIN_STATE_DIR: a variable of the
+# key's name keeps the export of a key in the environment (compose forwards one, blank), and from_archive
+# reads the environment by key name.
 PLUGIN_STATE_ROOT="$(openwa_resolve PLUGIN_STATE_DIR "$DATA_DIR" path)"
-PLUGIN_STATE_DIR="$PLUGIN_STATE_ROOT/plugins"
+PLUGIN_STATE_TARGET="$PLUGIN_STATE_ROOT/plugins"
 # The app reads the plaintext admin key from BOOTSTRAP_KEY_FILE when that is set.
 ADMIN_KEY_FILE="$(openwa_resolve BOOTSTRAP_KEY_FILE "$DATA_DIR/.api-key" path)"
 
@@ -474,7 +477,7 @@ done
 # follows wherever it points, and a target inside or around a directory refilled from the archive, whose links
 # are in place before the other target is written. Setting the key in the environment or ./.env lifts this.
 from_archive() {
-  [ "$OPENWA_GENERATED_ENV" = "$STAGE/.env.generated" ] && [ -z "$(printenv "$1" 2>/dev/null || true)" ] &&
+  [ "$OPENWA_GENERATED_ENV" = "$STAGE/.env.generated" ] && [ -z "$(openwa_env "$1")" ] &&
     ! openwa_env_file_value ./.env "$1" >/dev/null 2>&1 &&
     openwa_env_file_value "$OPENWA_GENERATED_ENV" "$1" >/dev/null 2>&1
 }
@@ -537,7 +540,7 @@ if [ -d "$STAGE/plugin-packages" ]; then
   archive_target PLUGINS_DIR "$PLUGIN_PACKAGES_DIR" dir "$DATA_DIR/plugins"
 fi
 if [ -d "$STAGE/plugin-state" ]; then
-  archive_target PLUGIN_STATE_DIR "$PLUGIN_STATE_DIR" dir "$DATA_DIR/plugins"
+  archive_target PLUGIN_STATE_DIR "$PLUGIN_STATE_TARGET" dir "$DATA_DIR/plugins"
 fi
 if [ -f "$STAGE/.api-key" ]; then
   archive_target BOOTSTRAP_KEY_FILE "$ADMIN_KEY_FILE" file "$DATA_DIR/.api-key"
@@ -632,7 +635,7 @@ fi
 
 MERGED_PLUGINS_DIR=""
 if [ -d "$STAGE/plugin-packages" ] && [ -d "$STAGE/plugin-state" ] &&
-  [ "$(resolve_path "$PLUGIN_PACKAGES_DIR")" = "$(resolve_path "$PLUGIN_STATE_DIR")" ]; then
+  [ "$(resolve_path "$PLUGIN_PACKAGES_DIR")" = "$(resolve_path "$PLUGIN_STATE_TARGET")" ]; then
   # Docker deployments deliberately colocate package and state files. Build the complete target in
   # staging and replace it once, so neither half can erase the other during restore.
   MERGED_PLUGINS_DIR="$STAGE/plugin-merged"
@@ -668,7 +671,7 @@ restore_targets() {
       replace_tree "$STAGE/plugin-packages" "$PLUGIN_PACKAGES_DIR" "installed plugin packages"
     fi
     if [ -d "$STAGE/plugin-state" ]; then
-      replace_tree "$STAGE/plugin-state" "$PLUGIN_STATE_DIR" "plugin registry and persisted state"
+      replace_tree "$STAGE/plugin-state" "$PLUGIN_STATE_TARGET" "plugin registry and persisted state"
     fi
   fi
   if [ -f "$STAGE/.api-key" ]; then

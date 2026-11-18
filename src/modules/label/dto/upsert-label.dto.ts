@@ -27,6 +27,7 @@ export class UpsertLabelDto {
       "WhatsApp's colour INDEX (0-19), not a hex value — the read path's `hexColor` cannot be " +
       'translated back, because neither engine exposes the mapping. An omitted colour is not preserved.',
     example: 3,
+    type: 'integer',
     minimum: 0,
     maximum: 19,
   })

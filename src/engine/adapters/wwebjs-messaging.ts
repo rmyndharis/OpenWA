@@ -42,7 +42,7 @@ import { RecipientUnreachableError } from '../../common/errors/recipient-unreach
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
-import { type WwebjsEngineHost, requireClient, withPage, withPageWrite } from './wwebjs-host';
+import { type WwebjsEngineHost, requireClient, withPageWrite } from './wwebjs-host';
 import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
@@ -425,9 +425,9 @@ export class WwebjsMessaging {
     }
   }
 
-  /** See {@link withPage} for what a dead page answers here. */
+  /** The reads of this delegate: {@link withPageWrite} says what a dead page and an expired timeout answer. */
   private withPage<T>(context: string, op: () => Promise<T>): Promise<T> {
-    return withPage(this.host, context, op);
+    return withPageWrite(this.host, context, op);
   }
 
   /**

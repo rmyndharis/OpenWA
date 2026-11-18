@@ -5,6 +5,7 @@ import { EngineEventCallbacks, IncomingMessage, MessageType } from '../interface
 import {
   BAILEYS_NON_CONTENT_TYPES,
   buildIncomingMessageFromBaileys,
+  contentTypeOf,
   extractBaileysBody,
   extractBaileysButtonReply,
   extractBaileysButtons,
@@ -407,8 +408,8 @@ export class BaileysHistory {
   /**
    * Media-free WAMessage -> IncomingMessage map for bulk history (downloading media for thousands of
    * messages would be ruinous; the type is kept, the payload dropped). Returns null for protocol /
-   * reaction / key / empty messages and for BAILEYS_NON_CONTENT_TYPES, which carry nothing for the
-   * chat view.
+   * reaction / empty messages, for a message of protocol noise alone (sender-key distributions) and for
+   * BAILEYS_NON_CONTENT_TYPES, which carry nothing for the chat view.
    */
   private mapHistoryMessage(b: typeof BaileysLib, msg: WAMessage): IncomingMessage | null {
     const raw = msg.message;
@@ -420,12 +421,11 @@ export class BaileysHistory {
     // already unwrapped. Derive ONE contentType from the normalized content for both the skip-filter and
     // the type mapping, and reuse extractBaileysBody (the same body extraction the live path uses).
     const content = b.normalizeMessageContent(raw) ?? raw;
-    const contentType = b.getContentType(content);
+    const contentType = contentTypeOf(content, b.getContentType);
     if (
       !contentType ||
       contentType === 'protocolMessage' ||
       contentType === 'reactionMessage' ||
-      contentType === 'senderKeyDistributionMessage' ||
       BAILEYS_NON_CONTENT_TYPES.has(contentType)
     ) {
       return null;

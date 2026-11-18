@@ -6,7 +6,7 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { readWid, type SerializedWid } from '../types/whatsapp-web-js.types';
-import { type WwebjsEngineHost, rethrowIfNavigation, withPage, withPageWrite } from './wwebjs-host';
+import { type WwebjsEngineHost, navigationsSeen, rethrowIfNavigation, withPage, withPageWrite } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
 
 /** The raw whatsapp-web.js contact element type, kept local so the wwebjs `Contact` type never leaks. */
@@ -187,6 +187,7 @@ export class WwebjsContacts {
     let raw: RawWwebjsContact[];
     let unreadable: number;
     let firstError: string | undefined;
+    const since = navigationsSeen(this.host);
     try {
       // A direct in-page walk that yields so the liveness probe is not starved (see readLeanContacts,
       // #1501), instead of whatsapp-web.js's atomic client.getContacts(). The projected rows are a
@@ -198,7 +199,7 @@ export class WwebjsContacts {
       unreadable = read?.failed ?? 0;
       firstError = read?.firstError;
     } catch (error) {
-      rethrowIfNavigation(this.host, error);
+      rethrowIfNavigation(this.host, error, since);
       // A dead page surfaces here as a raw Puppeteer error; convert it to the documented transport
       // failure the way wwebjs-chats.ts does, so a transport death answers 503 instead of a bare 500.
       if (this.host.isPageTransportError(error)) {
@@ -251,11 +252,12 @@ export class WwebjsContacts {
 
   async getContactById(contactId: string): Promise<Contact | null> {
     this.host.ensureReady();
+    const since = navigationsSeen(this.host);
     try {
       const contact = await this.client().getContactById(contactId);
       return this.toContact(contact);
     } catch (error) {
-      rethrowIfNavigation(this.host, error);
+      rethrowIfNavigation(this.host, error, since);
       // Unlike the avatar lookup, a throw here can legitimately mean the contact is absent:
       // `window.WWebJS.getContact` has no try/catch and reads `contact.isBusiness` straight off
       // `Contact.find`, so an unknown id throws a TypeError on null. Null (→ 404) stays the answer
@@ -434,10 +436,11 @@ export class WwebjsContacts {
     // gets nothing leaves the first outcome standing.
     const byLid = parseWaId(contactId).kind === 'user';
     let url: string | undefined;
+    const since = navigationsSeen(this.host);
     try {
       url = await this.client().getProfilePicUrl(contactId);
     } catch (error) {
-      rethrowIfNavigation(this.host, error);
+      rethrowIfNavigation(this.host, error, since);
       const pageDown = this.host.isPageTransportError(error) || isProtocolTimeout(error);
       const viaLid = byLid && !pageDown ? await this.profilePictureByLid(contactId) : undefined;
       if (viaLid) return viaLid;

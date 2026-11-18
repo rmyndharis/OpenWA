@@ -144,19 +144,24 @@ export class IngressEnqueueService implements OnApplicationBootstrap {
    * is enqueued instead, and IngressProcessor holds it until the plugin is up.
    */
   defersInlineDispatch(pluginId: string): boolean {
-    const queued = this.config.get<boolean>('queue.enabled', false) && !!this.ingressQueue;
-    return !queued && this.loader.isRestorePending(pluginId);
+    return !this.isQueueActive() && this.loader.isRestorePending(pluginId);
+  }
+
+  /** Whether deliveries go through the queue, so that the state of a delivery's job says something about it. */
+  isQueueActive(): boolean {
+    return this.config.get<boolean>('queue.enabled', false) && !!this.ingressQueue;
   }
 
   /**
-   * State of the job an earlier enqueue() of this delivery left in the queue, or undefined when the
-   * queue is off, holds no such job, or cannot answer. add() resolves for a duplicate jobId whatever
-   * state the existing job is in, so a caller replaying under the original jobId must look first: a
+   * State of the job an earlier enqueue() of this delivery left in the queue, undefined when the queue is
+   * off or holds no such job, and 'unreachable' when it could not be asked (Redis down or not yet connected):
+   * the job may well exist, so a caller must not treat that as none. add() resolves for a duplicate jobId
+   * whatever state the existing job is in, so a caller replaying under the original jobId must look first: a
    * retained failed job (removeOnFail keeps it for a day) would silently swallow the replay. When that
    * job failed or is gone, a live or completed re-queued copy (see requeuedJobIds) answers for it: the
    * copy owns the delivery, so neither a replay nor a dead-letter row may stand in for it.
    */
-  async existingJobState(data: IngressJobData, jobId: string): Promise<JobState | undefined> {
+  async existingJobState(data: IngressJobData, jobId: string): Promise<JobState | 'unreachable' | undefined> {
     if (!this.config.get<boolean>('queue.enabled', false) || !this.ingressQueue) return undefined;
     try {
       await producerReady(this.ingressQueue);
@@ -169,8 +174,8 @@ export class IngressEnqueueService implements OnApplicationBootstrap {
       }
       return state === 'unknown' ? undefined : state;
     } catch (err) {
-      // Redis unreachable or not yet connected: enqueue() then takes its own inline fallback, as it would
-      // without the probe.
+      // Redis unreachable or not yet connected. Said as such, because enqueue() would take its inline
+      // fallback and dispatch a delivery whose job is still in Redis.
       this.logger.warn('Ingress job state lookup failed', {
         pluginId: data.pluginId,
         instanceId: data.instanceId,
@@ -178,7 +183,7 @@ export class IngressEnqueueService implements OnApplicationBootstrap {
         error: err instanceof Error ? err.message : String(err),
         action: 'ingress_job_state_lookup_failed',
       });
-      return undefined;
+      return 'unreachable';
     }
   }
 

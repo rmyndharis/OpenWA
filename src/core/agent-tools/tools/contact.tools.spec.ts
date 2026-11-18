@@ -80,15 +80,15 @@ describe('contactTools', () => {
   });
 
   it('ContactCheckNumber asks the engine about the digits of a typed number and echoes what was typed', async () => {
-    const getNumberId = jest.fn().mockResolvedValue('6281270008896@c.us');
+    const getNumberId = jest.fn().mockResolvedValue('6281234567890@c.us');
     const engines = new EngineRegistry();
     engines.set('s1', { getNumberId } as unknown as IWhatsAppEngine);
     const tool = makeTools(new ContactService(engines)).get('ContactCheckNumber')!;
 
-    const out = await run(tool, { sessionId: 's1', number: '+62 812-7000-8896' });
+    const out = await run(tool, { sessionId: 's1', number: '+62 812-3456-7890' });
 
-    expect(getNumberId).toHaveBeenCalledWith('6281270008896');
-    expect(out).toEqual({ number: '+62 812-7000-8896', exists: true, whatsappId: '6281270008896@c.us' });
+    expect(getNumberId).toHaveBeenCalledWith('6281234567890');
+    expect(out).toEqual({ number: '+62 812-3456-7890', exists: true, whatsappId: '6281234567890@c.us' });
   });
 
   it('ContactCheckNumber requires OPERATOR: a below-role key is refused before the lookup runs', async () => {

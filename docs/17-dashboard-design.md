@@ -70,11 +70,40 @@ backed by `localStorage` — there is no Zustand store.
    in `--error`), and a hover is never fainter than the border at rest.
    `dashboard/src/field-focus-hover.test.ts` fails the build when a field focus rule paints the focus
    border without the ring, or a field hover rule paints a border fainter than the one at rest.
+   Both read the focus rules that exist, so `dashboard/src/field-focus-cues.test.ts` lists every rule
+   that draws a focus cue and fails the build when one is deleted or a new one is not listed.
+   Forced colors (a Windows contrast theme) drop fills and shadows and replace colors, which would
+   leave a focus ring, a selected state, a filled button's shape and a switch undrawn. Each is
+   restated as an outline or a border in a `@media (forced-colors: active)` block at the end of the
+   stylesheet that holds it, in system colors, so the user's palette stays in charge.
+   `dashboard/src/forced-colors.test.ts` fails the build when a stylesheet gains a ring box, a
+   selected state, a filled button or a switch without its block.
    Known gap: the exclusive button groups report `aria-pressed` without arrow-key roving focus. Every
    page has a render test, but only Infrastructure's resolves the caption references
    against a real DOM; elsewhere they are checked structurally. Treat the claim as directional, not
    certified.
 5. **Dark mode** - Support for light/dark themes
+
+Arabic and Hebrew mirror the layout, and text that a person typed or that a contact or a plugin author wrote
+(names, template bodies, found messages, plugin descriptions, and the fields they are typed into) takes its
+direction from its own characters (`unicode-bidi: plaintext`), so a Latin line keeps its full stop in an Arabic
+page and an Arabic line in an English one. The property aligns the text by that direction too, so a box that its
+container would stretch is as wide as its text (`width: fit-content`) and the text stays at the edge the page puts
+it; the one-line template fields keep the right edge that `index.css` gives the other text fields in an Arabic page.
+Ids, phone numbers and URLs stay on `<bdi dir="ltr">`. `dashboard/src/user-text-direction.test.ts` fails the build
+when one of these rules is dropped.
+
+The audit log table gives each of its six columns a floor and shares the rest, so it fits a laptop window from about
+1100px beside the open sidebar; a session, key or address that is still too long ends in an ellipsis and keeps its
+whole value in the cell's title. Between 769px and that width the table scrolls sideways, and from 768px down it
+becomes cards. The API keys table, which needs between about 1180px and 1450px depending on the keys and the
+language, pins its row actions to the inline end of its container, so they stay in reach at any width; the Last used
+column scrolls into view beside them.
+
+The sidebar is 260px at any text size. A label that the browser's text size makes too long for its row (cut at the row's
+edge from about 120% in Spanish, French and Portuguese, 130% in Turkish, 140% in Italian and German, and 150% in
+English) ends in an ellipsis where the row would have cut it, and its link or button carries the whole text in its
+title; at the default size no label is shortened.
 
 ## 17.2 Information Architecture
 
@@ -449,17 +478,24 @@ the header's place: text asks `GET /search` for that chat's stored messages, opt
 day, and a day with no text jumps to the first message the thread draws for it. It scrolls only to
 messages the thread has loaded. For a hit or a day older than those the bar stays open with its
 results and says that scrolling up in the chat loads older messages; nothing is paged
-automatically. Escape or the bar's Back button closes it, and so does opening another chat.
+automatically. Escape or the bar's Back button closes it, and so does opening another chat. Show
+more, here and in the sidebar's message search, adds the next page under the hits already listed,
+which stay where the reader is, with the loading line or the failure under them.
 
 `ChatComposer` is the message field with its attachment, emoji and reply panels. The field is
 multi-line and grows with its draft up to five lines: Enter sends, Shift+Enter breaks the line. A
 draft that is one word starting with `/` opens a picker of the session's templates whose name
 matches it (`utils/templateSlash.ts`), for a key that can write and with no file staged. Enter, the
 Send button or a click puts the highlighted template's text in the field, to be edited and sent
-like any other message; Escape or the picker's close button leaves the draft to be sent as typed.
+like any other message; Escape or the picker's close button leaves the draft to be sent as typed,
+and a send the gateway refuses gives the draft back with the picker still closed for it.
 A template with placeholders such as `{{name}}` is not sent exactly as inserted, and the composer
 says the placeholders are to be filled in for as long as one of them is left in the draft. A thread
-at its bottom stays there when the composer under it changes height.
+at its bottom stays there when the composer under it changes height, and a thread the page scrolled
+to a search hit stays on that message. A button that closes with the focus on it (an emoji of the
+panel, the remove button of a staged file, the close button of the reply banner) hands the focus to
+the message field, except after a tap, which would raise a phone's keyboard; Escape on an emoji does
+the same, and so does starting a reply from the menu of a message.
 
 The message thread is paged. `useChatMessages` is a `useInfiniteQuery` whose cursor is the number
 of DB rows fetched so far, not the length of the rendered list — the thread also carries engine

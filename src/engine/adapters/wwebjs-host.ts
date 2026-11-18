@@ -30,6 +30,11 @@ export interface WwebjsEngineHost {
    * without it keeps the text-free behaviour of simply carrying on.
    */
   reportOnceGone?(error: unknown, context: string): Promise<void>;
+  /**
+   * How many page navigations have been stamped so far, for a call to tell that one landed while it ran (see
+   * {@link rethrowIfNavigation}). Optional so a host built without it keeps the text-only reading of a failure.
+   */
+  navigationCount?(): number;
   ensureNotChannelRecipient(chatId: string): void;
   getNumberId(number: string): Promise<string | null>;
   capInboundMediaFor(
@@ -54,17 +59,27 @@ export function requireClient(host: WwebjsEngineHost): Client {
   return client;
 }
 
+/** The page navigations stamped so far, read where a page call starts and handed to {@link rethrowIfNavigation}. */
+export function navigationsSeen(host: WwebjsEngineHost): number {
+  return host.navigationCount?.() ?? 0;
+}
+
 /**
  * Answer the retryable 409 the adapter gives inside the navigation window when the error says the page
  * navigated under the call, and return for any other error. A call already in flight when WhatsApp Web
  * reloads dies with Puppeteer's navigation error before the window is stamped, so it would otherwise be a
  * bare 500, or, where a catch folds a failed lookup into "not found", a 404 for a group, contact or label
  * that exists. A navigation is not a death: nothing is reported.
+ *
+ * `since` is {@link navigationsSeen} where the call started: a navigation stamped after that is the reload whatever
+ * the failure says (see isNavigationError), for a call made before the page told of its navigation and held for the
+ * new document. Only for a read or a write that converges when repeated: a caller whose repeat could duplicate
+ * keeps its own answer and does not come here.
  */
-export function rethrowIfNavigation(host: WwebjsEngineHost, error: unknown): void {
+export function rethrowIfNavigation(host: WwebjsEngineHost, error: unknown, since: number): void {
   // The lifecycle never reads a navigation-shaped error as a dead page, so with it this is the navigation test alone;
   // a host that does read one as dead keeps it a death. A page that really died reports through the death listeners.
-  if (isNavigationError(error) && !host.isPageTransportError(error))
+  if (isNavigationError(error, navigationsSeen(host) !== since) && !host.isPageTransportError(error))
     throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
 }
 
@@ -78,10 +93,11 @@ export function rethrowIfNavigation(host: WwebjsEngineHost, error: unknown): voi
  * held a byte-identical private copy, and ./wwebjs-contacts needed a fourth.
  */
 export async function withPage<T>(host: WwebjsEngineHost, context: string, op: () => Promise<T>): Promise<T> {
+  const since = navigationsSeen(host);
   try {
     return await op();
   } catch (error) {
-    rethrowIfNavigation(host, error);
+    rethrowIfNavigation(host, error, since);
     if (host.isPageTransportError(error)) {
       host.reportIfPageTransportError(error, context);
       throw new EngineTransportError(`Transport died during ${context}`);
@@ -91,10 +107,10 @@ export async function withPage<T>(host: WwebjsEngineHost, context: string, op: (
 }
 
 /**
- * {@link withPage} for a write that converges when repeated, and for the lookups it makes before it writes. A
- * command that outran Puppeteer's protocol budget got no answer either way and is no page death, so it is the 503 the
- * route documents (the change may or may not have been applied), not the raw timeout as a 500, and nothing is
- * reported: a slow renderer is not a dead one. Every other outcome is withPage's.
+ * {@link withPage} for a read, for a write that converges when repeated, and for the lookups it makes before it
+ * writes. A command that outran Puppeteer's protocol budget got no answer either way and is no page death, so it is
+ * the 503 the route documents (a read read nothing, a write may or may not have been applied), not the raw timeout as
+ * a 500, and nothing is reported: a slow renderer is not a dead one. Every other outcome is withPage's.
  *
  * Not for a read that folds a failure into a verdict (getNumberId answers the typed number when the phone read of
  * a migrated number fails), and not for the write itself when it does not converge (see {@link reportPageDeath}):

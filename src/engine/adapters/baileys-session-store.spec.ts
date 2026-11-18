@@ -1323,6 +1323,24 @@ describe('BaileysSessionStore', () => {
       },
     );
 
+    // What is left of the update of a message that is none of its own once its time and the message are taken out.
+    it('keeps a deleted chat deleted, with its mark, for an update that carries no time and no message', async () => {
+      const s = newStore();
+      s.upsertChats([{ id: PHONE, conversationTimestamp: 1_700_000_000 }]);
+      s.removeChats([PHONE]);
+      await flush();
+      const mark = fake.get(SID, PHONE)?.deletedAt;
+      expect(mark).toEqual(expect.any(Number));
+
+      s.upsertChats([{ id: PHONE, ephemeralExpiration: 86_400 }]);
+      await flush();
+
+      expect(s.listChats()).toEqual([]);
+      expect(fake.get(SID, PHONE)?.deletedAt).toBe(mark);
+      // A timer WhatsApp keeps across a deletion still applies.
+      expect(s.getEphemeralExpiration(PHONE)).toBe(86_400);
+    });
+
     it('finds the lid through the persisted mapping table as well', () => {
       fake.rows.set(K(LID), { muteEndTime: null, archived: true, pinned: false });
       const lidStore = {

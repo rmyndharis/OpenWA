@@ -128,6 +128,14 @@ function restoreValue(
     }
     const sameLength = incoming.length === existingArr.length;
     const sigs = incoming.map(item => elementSignature(item, itemField));
+    // A row that matches exactly one stored row at another index shows that rows were added or removed before it,
+    // so the stored row at an index no longer says which row this save put there (see the positional twin below).
+    const shifted =
+      sameLength &&
+      sigs.some((s, i) => {
+        const group = bySig.get(s);
+        return group?.length === 1 && existingArr.indexOf(group[0]) !== i;
+      });
     // Only an element that still carries a mask needs a stored counterpart; one whose secrets were all
     // typed in is stored as provided, so it must not count toward, or take the slot of, a stored row.
     const masked = incoming.map(
@@ -169,13 +177,22 @@ function restoreValue(
           // one to the k-th stored one, since a removal before or between them shifts their positions; (4)
           // otherwise bind the positional twin ONLY when its masked signature still equals this element's,
           // so an append keeps each surviving sentinel's stored secret while a genuinely-new or
-          // signature-changed row at that position is never grafted with a stored secret.
+          // signature-changed row at that position is never grafted with a stored secret. The twin of (2) is
+          // withheld from a row with no match of its own once a row that matches by content has moved: the
+          // stored secret at that position then belongs to a row removed or moved, and the payload cannot say
+          // which. A row renamed in place in the same save loses its secret with it; the operator enters it again.
+          // Rows that share this signature and are all still in the save bind in order, the k-th to the k-th: the
+          // stored row at their position may be one that another row moved away from.
           const twin = existingArr[i];
           const match =
             storedCount === 1
               ? group[0]
               : sameLength
-                ? twin
+                ? storedCount === 0 && shifted
+                  ? undefined
+                  : storedCount > 1 && inCount.get(s) === storedCount
+                    ? group[k]
+                    : twin
                 : inCount.get(s) === storedCount
                   ? group[k]
                   : twin !== undefined && elementSignature(twin, itemField) === s

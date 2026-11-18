@@ -692,7 +692,7 @@ describe('MessageService', () => {
   // ── getMessages chatId filter is dialect-agnostic ─────────────────
   describe('getMessages chatId filter matches across dialects', () => {
     // A message stored with the raw @s.whatsapp.net chatId (e.g. an outbound send addressed by a raw id).
-    const stored = { id: 'm1', from: '628113@c.us', chatId: '6281316434311@s.whatsapp.net' } as Message;
+    const stored = { id: 'm1', from: '628113@c.us', chatId: '6281234500011@s.whatsapp.net' } as Message;
 
     const makeChatQb = () => {
       let chatIds: string[] | null = null;
@@ -715,7 +715,7 @@ describe('MessageService', () => {
       const qb = makeChatQb();
       (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
 
-      const { messages } = await service.getMessages('sess-1', { chatId: '6281316434311@c.us' });
+      const { messages } = await service.getMessages('sess-1', { chatId: '6281234500011@c.us' });
 
       expect(messages.map(m => m.id)).toEqual(['m1']);
     });

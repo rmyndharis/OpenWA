@@ -608,7 +608,7 @@ export function ApiKeys() {
                   style={{
                     flex: 1,
                     padding: '0.75rem',
-                    background: 'var(--bg-secondary)',
+                    background: 'var(--bg-light)',
                     borderRadius: '6px',
                     wordBreak: 'break-all',
                   }}

@@ -46,6 +46,16 @@ test('emptyForField: a string field seeds to an empty string', () => {
   assert.equal(emptyForField(str), '');
 });
 
+// A row added to a list is seeded from here. The gateway reads an empty secret as "keep the stored value", so the
+// row must carry no secret key until one is typed.
+test('emptyForField: a secret field seeds to undefined, so a new row has no secret key', () => {
+  const secret: PluginConfigField = { type: 'string', secret: true };
+  assert.equal(emptyForField(secret), undefined);
+
+  const row = emptyForField({ type: 'object', properties: { url: str, token: secret } });
+  assert.deepEqual(JSON.parse(JSON.stringify(row)), { url: '' });
+});
+
 // The save merges over the stored config and JSON drops an undefined key, so simply omitting a
 // cleared field would keep its old value.
 test('fillClearedFields: a cleared field saves its default, or null when it had a value and has none', () => {

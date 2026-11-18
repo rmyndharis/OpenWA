@@ -110,3 +110,10 @@
 .dashboard-charts .recharts-surface {
   direction: ltr;
 }
+
+/* Forced colours drop fills, so the selected period draws a heavy frame. */
+@media (forced-colors: active) {
+  .dashboard-charts .period-tab.active {
+    border: 3px solid CanvasText;
+  }
+}

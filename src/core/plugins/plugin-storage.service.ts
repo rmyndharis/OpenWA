@@ -59,6 +59,13 @@ function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: 
 const ENCODED_KEY_PREFIX = 'key-';
 
 /**
+ * A lone UTF-16 surrogate (text cut by `slice` inside an emoji) has no UTF-8 form: encodeStorageKey writes U+FFFD for
+ * it, so two keys that differ only there would share one file. A key that holds one is refused like any unsafe key.
+ */
+const LONE_SURROGATE = /\p{Cs}/u;
+const isStorableKey = (key: string): boolean => isSafeStorageKey(key) && !LONE_SURROGATE.test(key);
+
+/**
  * Thrown by a registry write that had to reach the disk and could not. The change is not applied: the
  * in-memory entry is put back, so a restart cannot undo what the caller was told had been stored.
  */
@@ -457,7 +464,7 @@ export class PluginStorageService {
     // Containment: validate the logical key, then encode it to a filesystem-safe filename. This keeps
     // JID-style keys (`group:sess-1:12345@g.us`) portable on Windows while still rejecting traversal.
     const resolveKeyPath = (key: string): string | null => {
-      if (!isSafeStorageKey(key)) return null;
+      if (!isStorableKey(key)) return null;
       const fileName = `${encodeStorageKey(key)}.json`;
       return isPathWithin(pluginDataDir, fileName) ? path.join(pluginDataDir, fileName) : null;
     };
@@ -465,7 +472,7 @@ export class PluginStorageService {
     // Backward compatibility for pre-encoded storage files (`state.json`). Reads/deletes consult it,
     // but new writes always use the encoded filename above.
     const resolveLegacyKeyPath = (key: string): string | null => {
-      if (!isSafeStorageKey(key)) return null;
+      if (!isStorableKey(key)) return null;
       // These are package-owned files when package code and state share a directory. They must never
       // be treated as legacy plugin storage (or get/delete/set migration can read or remove code).
       if (key === 'manifest' || key === 'package') return null;

@@ -150,6 +150,33 @@ export class IngressProcessor extends WorkerHost {
       throw err;
     }
     if (REQUEUED_JOB_ID.test(String(job.id))) await this.settleRequeued(d);
+    else await this.retireSettled(d);
+  }
+
+  /**
+   * The delivery reached the plugin, or its dead letter is written: the event row, which kept its payload so a job
+   * that Redis loses could be replayed from it, no longer needs it. Only while the row is 'pending', so one that a
+   * recovery pass already failed or settled is not touched. Never rejects: the dispatch succeeded and a retry would
+   * deliver it again, and a row left 'pending' is settled by the reconciler once it finds the job completed.
+   */
+  private async retireSettled(d: IngressJobData): Promise<void> {
+    try {
+      await this.events.update(
+        { pluginId: d.pluginId, instanceId: d.instanceId, providerDeliveryId: d.deliveryId, dispatchState: 'pending' },
+        { dispatchState: 'dispatched', payload: null },
+      );
+    } catch (err) {
+      this.logger.error(
+        'Could not record a settled ingress delivery',
+        err instanceof Error ? err.message : String(err),
+        {
+          pluginId: d.pluginId,
+          instanceId: d.instanceId,
+          deliveryId: d.deliveryId,
+          action: 'ingress_settle_failed',
+        },
+      );
+    }
   }
 
   /**
@@ -191,9 +218,8 @@ export class IngressProcessor extends WorkerHost {
 
   /**
    * A job failed by stall exhaustion never enters process(): the worker fails it internally and only
-   * emits 'failed'. The ingress_events row already retired its payload when the enqueue returned
-   * 'queued', so without this the failed BullMQ job (pruned by removeOnFail) is the only copy and no
-   * DLQ row exists to redrive. Any other failure was already recorded by process() on the final
+   * emits 'failed'. Without this no DLQ row exists to redrive until the reconciler finds the failed job
+   * and writes one from the event row. Any other failure was already recorded by process() on the final
    * attempt, so only the stall sentinel is handled here. `job` is undefined once removeOnFail pruned it.
    */
   @OnWorkerEvent('failed')
@@ -227,6 +253,9 @@ export class IngressProcessor extends WorkerHost {
     const d = job.data;
     try {
       await this.deadLetter(d, attempts, errorMessage, REQUEUED_JOB_ID.test(String(job.id)));
+      // The dead letter is the payload's home now, so the event row lets go of it. Not when the write failed: the
+      // delivery then goes back on the queue and the row keeps its payload.
+      await this.retireSettled(d);
     } catch (err) {
       const meta = { jobId: job.id, pluginId: d.pluginId, instanceId: d.instanceId, deliveryId: d.deliveryId };
       const reason = err instanceof Error ? err.message : String(err);

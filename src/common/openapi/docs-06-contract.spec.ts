@@ -214,6 +214,60 @@ describe('docs/06 matches the published contract', () => {
     expect(undeclared.sort()).toEqual([]);
   });
 
+  type SchemaNode = { $ref?: string; required?: string[]; properties?: Record<string, SchemaNode>; items?: SchemaNode };
+
+  const readShapes = () =>
+    JSON.parse(read('openapi.json')) as {
+      paths: Record<
+        string,
+        Record<string, { responses: Record<string, { content?: Record<string, { schema: SchemaNode }> }> }>
+      >;
+      components: { schemas: Record<string, SchemaNode> };
+    };
+
+  /** The JSON of the first fence after the `**Response** `200`` label of a route's section in docs/06. */
+  const responseExample = (heading: string): Record<string, unknown> => {
+    const doc = read('docs', '06-api-specification.md');
+    const start = doc.indexOf(`\n#### ${heading}\n`);
+    if (start === -1) throw new Error(`docs/06 has no section for ${heading}`);
+    const next = doc.indexOf('\n#### ', start + 1);
+    const section = doc.slice(start, next === -1 ? doc.length : next);
+    const label = section.indexOf('**Response** `200`');
+    if (label === -1) throw new Error(`docs/06 shows no 200 response for ${heading}`);
+    const fence = /```json\n([\s\S]*?)\n```/.exec(section.slice(label));
+    if (fence === null) throw new Error(`docs/06 shows no JSON example for ${heading}`);
+    return JSON.parse(fence[1]) as Record<string, unknown>;
+  };
+
+  /** The keys the contract requires of an entry that the example leaves out, and the keys it invents. */
+  const entryProblems = (entry: Record<string, unknown>, schema: SchemaNode): string[] => {
+    const known = Object.keys(schema.properties ?? {});
+    return [
+      ...(schema.required ?? []).filter(key => !(key in entry)).map(key => `lacks ${key}`),
+      ...Object.keys(entry)
+        .filter(key => !known.includes(key))
+        .map(key => `invents ${key}`),
+    ];
+  };
+
+  /** The schema of the entries of a response property, following `$ref` one level at each step. */
+  const entrySchema = (path: string, property: string): SchemaNode => {
+    const { paths, components } = readShapes();
+    const resolve = (node: SchemaNode): SchemaNode =>
+      node.$ref === undefined ? node : components.schemas[node.$ref.slice('#/components/schemas/'.length)];
+    const body = resolve(paths[path].get.responses['200'].content?.['application/json']?.schema ?? {});
+    return resolve(body.properties?.[property]?.items ?? {});
+  };
+
+  it.each([
+    ['GET /api/stats/messages', '/api/stats/messages'],
+    ['GET /api/stats/sessions/:sessionId', '/api/stats/sessions/{sessionId}'],
+  ])('the %s example gives each topChats entry the keys of the contract', (heading, path) => {
+    const entries = responseExample(heading).topChats as Array<Record<string, unknown>>;
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) expect(entryProblems(entry, entrySchema(path, 'topChats'))).toEqual([]);
+  });
+
   // The gate's own controls. Without these, a matcher that silently stops working is
   // indistinguishable from a document that is correct.
   describe('the checks themselves can fail', () => {
@@ -232,6 +286,14 @@ describe('docs/06 matches the published contract', () => {
     it('accepts a documenting file that spells the parameter differently', () => {
       // docs/25 writes `:route` where the contract writes `{path}`.
       expect(backs('docs/25-integration-fabric.md', 'GET /api/ingress/:pluginId/:instanceId/:path')).toBe(true);
+    });
+
+    it('reports a response example entry that lacks a required key or invents one', () => {
+      const schema = entrySchema('/api/stats/messages', 'topChats');
+      expect(entryProblems({ chatId: 'x@c.us', messageCount: 1 }, schema)).toEqual(['lacks chatName']);
+      expect(entryProblems({ chatId: 'x@c.us', chatName: null, messageCount: 1, extra: true }, schema)).toEqual([
+        'invents extra',
+      ]);
     });
   });
 });

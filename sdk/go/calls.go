@@ -15,7 +15,8 @@ const (
 )
 
 // CreateCallLinkRequest is the body for CallsService.CreateLink. Type is "audio" or "video";
-// WhatsApp's own URL path for audio is /voice/. StartTime is absolute epoch MILLISECONDS.
+// WhatsApp's own URL path for audio is /voice/. StartTime is absolute epoch MILLISECONDS and a whole number:
+// the gateway answers 400 for a fraction.
 type CreateCallLinkRequest struct {
 	Type      CallLinkType `json:"type"`
 	StartTime float64      `json:"startTime"`

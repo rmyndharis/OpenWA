@@ -36,8 +36,8 @@ export class LabelController {
   @ApiResponse({
     status: 503,
     description:
-      'The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the ' +
-      'session is ready again.',
+      'The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the ' +
+      'protocol timeout, so nothing could be read. Retry shortly.',
   })
   async findAll(@Param('sessionId') sessionId: string) {
     return this.labelService.getLabels(sessionId);
@@ -55,8 +55,8 @@ export class LabelController {
   @ApiResponse({
     status: 503,
     description:
-      'The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the ' +
-      'session is ready again.',
+      'The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the ' +
+      'protocol timeout, so nothing could be read. Retry shortly.',
   })
   async findOne(@Param('sessionId') sessionId: string, @Param('labelId') labelId: string) {
     return this.labelService.getLabelById(sessionId, labelId);

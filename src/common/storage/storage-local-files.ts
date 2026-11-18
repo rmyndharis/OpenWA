@@ -144,9 +144,10 @@ export async function putLocalFile(localPath: string, filePath: string, data: Bu
   const fullPath = path.join(localPath, filePath);
 
   // Async, non-blocking: a synchronous write here stalls the event loop during an import.
-  // mkdir recursive is idempotent, so it doubles as the existsSync check.
-  await fs.promises.mkdir(path.dirname(fullPath), { recursive: true });
-  await fs.promises.writeFile(fullPath, data);
+  // mkdir recursive is idempotent, so it doubles as the existsSync check. What it creates is owner-only (0700
+  // directories, 0600 files), as the databases and the engine auth directories are.
+  await fs.promises.mkdir(path.dirname(fullPath), { recursive: true, mode: 0o700 });
+  await fs.promises.writeFile(fullPath, data, { mode: 0o600 });
 }
 
 export async function deleteLocalFile(localPath: string, filePath: string): Promise<void> {

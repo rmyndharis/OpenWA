@@ -1585,6 +1585,17 @@ class TestCallLink:
         assert backend.calls[-1].url.endswith("/sessions/s/calls/link")
         assert backend.calls[-1].body == {"type": "video", "startTime": 1800000000000}
         assert "call.whatsapp.com" in res["link"]
+
+    def test_a_fractional_start_time_is_a_type_error(self):
+        # The gateway refuses a fraction with 400, so startTime is typed int. mypy reports the float on the
+        # call below and the ignore silences it; warn_unused_ignores fails the run if the type goes back to float.
+        backend = MockBackend()
+        backend.on("POST", "/calls/link", body={"link": "https://call.whatsapp.com/video/AbC"})
+        client = make_client(backend)
+        client.calls.create_link("s", {"type": "video", "startTime": 1800000000000.5})  # type: ignore[typeddict-item]
+        assert backend.calls[-1].body == {"type": "video", "startTime": 1800000000000.5}
+
+
 class TestChannelAdminOwnership:
     def test_demote_and_transfer(self):
         backend = MockBackend()

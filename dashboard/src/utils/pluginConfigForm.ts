@@ -21,7 +21,9 @@ export function emptyForField(field: PluginConfigField): unknown {
       // type:'number' field hands the plugin a string where it expects a number.
       return undefined;
     default: // string | textarea
-      return '';
+      // A secret is left unset: the gateway reads '' as "keep the stored value", so a row added to a list with a
+      // blank secret could take the stored secret of another row.
+      return field.secret ? undefined : '';
   }
 }
 

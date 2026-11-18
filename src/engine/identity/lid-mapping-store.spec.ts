@@ -310,7 +310,7 @@ describe('LidMappingStoreService — LRU cap', () => {
     expect(repo.rows.find(r => r.lid === 'lid-a')?.phone).toBe('620009');
   });
 
-  it('forgets a failed write along with the evicted entry', async () => {
+  it('keeps a failed write past the evicted entry, until a report of the lid lands', async () => {
     process.env.LID_MAPPING_CACHE_MAX = '1';
     const repo = makeFakeRepo([{ lid: 'lid-a', phone: '620001' }]);
     const store = await newStore(repo);
@@ -321,8 +321,13 @@ describe('LidMappingStoreService — LRU cap', () => {
     store.getCached('lid-a'); // warms lid-a back from its row
     for (let i = 0; i < 20 && store.getCached('lid-a') === undefined; i++) await new Promise(r => setImmediate(r));
     expect(store.getCached('lid-a')).toBe('620001');
+    // The row is the phone this node was told the lid no longer has: no lookup answers it.
+    expect(await store.findPhoneForLid('lid-a@lid')).toBeNull();
 
-    repo.rows[0].phone = '620009'; // another node re-maps it
+    repo.rows[0].phone = '620009'; // another node re-maps it: refused as while the entry is resident
+    expect(await store.findPhoneForLid('lid-a@lid')).toBeNull();
+
+    await store.remember('lid-a', '620009'); // the next report of the lid lands and ends the refusal
     expect(await store.findPhoneForLid('lid-a@lid')).toBe('620009');
   });
 
@@ -3739,4 +3744,622 @@ describe('LidMappingStoreService: the table statements of one lid run in the ord
       expect({ trial, calls, ...got }).toEqual({ trial, calls, ...(await answers(inSequence, sequential)) });
     }
   }, 120_000);
+});
+
+describe('LidMappingStoreService: a lid whose table write is still under way', () => {
+  // SQLite in memory; on PostgreSQL (DATABASE_TYPE=postgres, the test-postgres job) a schema of its own.
+  const pg = process.env.DATABASE_TYPE === 'postgres';
+  const server = {
+    type: 'postgres' as const,
+    host: process.env.DATABASE_HOST || 'localhost',
+    port: Number(process.env.DATABASE_PORT || 5432),
+    username: process.env.DATABASE_USERNAME || 'openwa',
+    password: process.env.DATABASE_PASSWORD || 'openwa',
+    database: process.env.DATABASE_NAME || 'openwa',
+  };
+  const OWNER = '11111111-1111-4111-8111-111111111111';
+  const OTHER = '22222222-2222-4222-8222-222222222222';
+  const savedCap = process.env.LID_MAPPING_CACHE_MAX;
+  let ds: DataSource;
+  let repo: Repository<LidMapping>;
+  let store: LidMappingStoreService;
+  let warn: jest.SpyInstance;
+  let schema = '';
+  const onServer = async (sql: string): Promise<void> => {
+    const admin = await new DataSource(server).initialize();
+    await admin.query(sql).finally(() => admin.destroy());
+  };
+
+  beforeEach(async () => {
+    // A mirror of two lids: the lids reported after one push it out.
+    process.env.LID_MAPPING_CACHE_MAX = '2';
+    const entities = [LidMapping, Session];
+    if (pg) {
+      schema = `lid_inflight_${randomUUID().replace(/-/g, '')}`;
+      await onServer(`CREATE SCHEMA "${schema}"`);
+    }
+    ds = await new DataSource(
+      pg
+        ? { ...server, schema, extra: { options: `-c search_path=${schema},public` }, entities, synchronize: true }
+        : { type: 'better-sqlite3', database: ':memory:', entities, synchronize: true },
+    ).initialize();
+    await ds.getRepository(Session).insert([
+      { id: OWNER, name: 'owner', phone: '6290000001' },
+      { id: OTHER, name: 'other', phone: '6290000002' },
+    ]);
+    repo = ds.getRepository(LidMapping);
+    await repo.insert({ lid: '333', phone: '628111', sessionId: OWNER, isReported: true });
+    store = new LidMappingStoreService(repo);
+    warn = jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn');
+    await store.onModuleInit();
+  });
+
+  afterEach(async () => {
+    store.onModuleDestroy();
+    await ds.destroy();
+    if (pg) await onServer(`DROP SCHEMA "${schema}" CASCADE`);
+    if (savedCap === undefined) delete process.env.LID_MAPPING_CACHE_MAX;
+    else process.env.LID_MAPPING_CACHE_MAX = savedCap;
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  /** Holds the next call of a repository method until `release` is called; `reached` settles on entry. */
+  function hold(method: 'query' | 'upsert' | 'update') {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const reached = new Promise<void>(resolve => (entered = resolve));
+    const real = repo[method].bind(repo) as (...args: unknown[]) => Promise<unknown>;
+    jest.spyOn(repo, method).mockImplementationOnce((async (...args: unknown[]) => {
+      entered();
+      await gate;
+      return real(...args);
+    }) as never);
+    return { release, reached };
+  }
+
+  /** The lids reported after lid 333 push it out of a mirror of two. */
+  const pushOut = async (): Promise<void> => {
+    await store.remember('444', '628444', OWNER);
+    await store.remember('555', '628555', OWNER);
+  };
+
+  /** What can happen to the mirror entry of lid 333 while a write of the lid is under way. */
+  const leaves = [
+    ['its entry is in the mirror', () => Promise.resolve()],
+    ['later lids pushed its entry out of the mirror', pushOut],
+    ['a reload left its entry out of the mirror', () => store.reload()],
+  ] as const;
+
+  /** Another node re-maps the lid in the shared table. */
+  const peerRemaps = (phone: string) =>
+    repo.update({ lid: '333' }, { phone, sessionId: OTHER, isReported: true, updatedAt: new Date() });
+
+  const fence = (phone: string): Promise<boolean> =>
+    new ChatScopeService(store).allows({ allowedChats: [`${phone}@c.us`] }, '333@lid');
+
+  /** Every lookup answers `phone` for lid 333, and the chat fence admits it to a key limited to that phone. */
+  const answers = async (phone: string): Promise<void> => {
+    expect(await store.findPhoneForLid('333@lid')).toBe(phone);
+    expect(await store.phonesForLidsPersisted(['333'])).toEqual({ 333: phone });
+    expect(await store.findLidsForPhone(phone)).toEqual(['333']);
+    expect(await store.lidsForPhonesPersisted([phone])).toEqual({ [phone]: ['333'] });
+    expect(await fence(phone)).toBe(true);
+  };
+
+  /** Every lookup answers none for lid 333 and for each phone, and the chat fence admits it to no key. */
+  const refused = async (phones: string[]): Promise<void> => {
+    expect(await store.findPhoneForLid('333@lid')).toBeNull();
+    expect(await store.phonesForLidsPersisted(['333'])).toEqual({ 333: null });
+    for (const phone of phones) expect(await store.findLidsForPhone(phone)).toEqual([]);
+    expect(await store.lidsForPhonesPersisted(phones)).toEqual(Object.fromEntries(phones.map(phone => [phone, []])));
+    for (const phone of phones) expect(await fence(phone)).toBe(false);
+  };
+
+  describe.each([
+    ['a re-map to another phone', 'upsert', () => store.remember('333', '628222', OWNER), '628222'],
+    ['a revocation by a display lookup', 'update', () => store.rememberIfUnknown('333', '628222', OTHER), null],
+  ] as const)('while %s is being written', (_write, method, start, landed) => {
+    describe.each(leaves)('and %s', (_state, leave) => {
+      it('answers no phone for the lid, and the lid for neither phone', async () => {
+        const held = hold(method);
+        const writing = start();
+        await held.reached;
+        await leave();
+
+        await refused(['628111', '628222']);
+
+        held.release();
+        await writing;
+        expect(await store.findPhoneForLid('333@lid')).toBe(landed);
+        expect(await store.findLidsForPhone('628222')).toEqual(landed ? ['333'] : []);
+        expect(await fence('628222')).toBe(landed !== null);
+        expect(await fence('628111')).toBe(false);
+      });
+    });
+  });
+
+  describe.each(leaves)('a negative that clears the row while a later write is under way, and %s', (_state, leave) => {
+    it('ends what the earlier writes were held against, as it ends a resident entry', async () => {
+      const report = hold('upsert');
+      const clearing = hold('update'); // the negative's statement
+      const contradicting = hold('update'); // the lookup's, which runs behind it
+      const remap = store.remember('333', '628222', OWNER);
+      await report.reached;
+      const negative = store.remember('333', null, OWNER); // the owner's: it clears the row once the report has landed
+      const lookup = store.rememberIfUnknown('333', '628444', OTHER); // contradicts the report
+      await leave();
+      report.release();
+      await clearing.reached;
+      clearing.release();
+      await negative;
+      await contradicting.reached; // the lookup is the only write still under way
+
+      await peerRemaps('628333');
+
+      await answers('628333');
+
+      contradicting.release();
+      await Promise.all([remap, lookup]);
+    });
+  });
+
+  it('keeps refusing the lid when a lookup of the stored phone follows the report and its entry then leaves the mirror', async () => {
+    const held = hold('upsert');
+    const remap = store.remember('333', '628222', OWNER);
+    await held.reached;
+    const lookup = store.rememberIfUnknown('333', '628111', OWNER); // queued behind the report
+    await pushOut();
+
+    await refused(['628111', '628222']);
+
+    held.release();
+    await Promise.all([remap, lookup]);
+    expect(await store.findPhoneForLid('333@lid')).toBeNull(); // the lookup contradicted the phone that landed
+  });
+
+  it('answers the stored phone to a report of it that follows a revocation still being written', async () => {
+    const held = hold('update');
+    const revocation = store.rememberIfUnknown('333', '628222', OTHER);
+    await held.reached;
+    const report = store.remember('333', '628111', OWNER); // takes the lid off the lookup's distrust
+
+    expect(await store.findPhoneForLid('333@lid')).toBe('628111');
+    expect(await store.lidsForPhonesPersisted(['628111'])).toEqual({ 628111: ['333'] });
+
+    held.release();
+    await Promise.all([revocation, report]);
+    expect(await store.findPhoneForLid('333@lid')).toBe('628111');
+  });
+
+  it('keeps answering the stored pair while a repeat of it is written and its entry has left the mirror', async () => {
+    const held = hold('query'); // a pair its owner reported before is checked against the row in one statement
+    const repeat = store.remember('333', '628111', OWNER);
+    await held.reached;
+    await pushOut();
+
+    expect(await store.findPhoneForLid('333@lid')).toBe('628111');
+    expect(await store.phonesForLidsPersisted(['333'])).toEqual({ 333: '628111' });
+    expect(await store.findLidsForPhone('628111')).toEqual(['333']);
+    expect(await store.lidsForPhonesPersisted(['628111'])).toEqual({ 628111: ['333'] });
+
+    held.release();
+    await repeat;
+  });
+
+  it('keeps answering a lid with no write of its own while a sync of new pairs is written past the cap', async () => {
+    const held = hold('upsert');
+    const first = store.remember('444', '628444', OWNER);
+    await held.reached;
+    await store.remember('555', '628555', OWNER); // lid 333 is no longer in the mirror
+
+    expect(await store.findPhoneForLid('333@lid')).toBe('628111');
+    expect(await store.phonesForLidsPersisted(['333'])).toEqual({ 333: '628111' });
+    expect(await store.findLidsForPhone('628111')).toEqual(['333']);
+    expect(await store.lidsForPhonesPersisted(['628111'])).toEqual({ 628111: ['333'] });
+    expect(await store.findPhoneForLid('444@lid')).toBeNull(); // a new pair answers once its write has landed
+
+    held.release();
+    await first;
+    expect(await store.findPhoneForLid('444@lid')).toBe('628444');
+  });
+
+  describe('once every write of the lid has settled', () => {
+    it('answers the table again after a report landed beside a negative the owner rule refused', async () => {
+      const report = store.remember('333', '628222', OWNER);
+      const negative = store.remember('333', null, OTHER); // another linked session: the owner keeps the row
+      await expect(Promise.all([report, negative])).resolves.toEqual([true, true]);
+      expect(await repo.findOneBy({ lid: '333' })).toMatchObject({ phone: '628222', sessionId: OWNER });
+
+      await peerRemaps('628333');
+
+      await answers('628333');
+    });
+
+    it('answers the table again after a report landed beside a lookup that revoked it', async () => {
+      const report = store.remember('333', '628222', OWNER);
+      const lookup = store.rememberIfUnknown('333', '628444', OTHER); // contradicts the report
+      await expect(Promise.all([report, lookup])).resolves.toEqual([true, true]);
+      expect(await repo.findOneBy({ lid: '333' })).toMatchObject({ phone: '628222', isReported: false });
+
+      await peerRemaps('628333');
+
+      await answers('628333');
+    });
+
+    it('keeps refusing the lid after a report that failed beside a negative the owner rule refused', async () => {
+      jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+      const report = store.remember('333', '628222', OWNER);
+      const negative = store.remember('333', null, OTHER);
+      await expect(Promise.all([report, negative])).resolves.toEqual([false, true]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockClear();
+
+      await peerRemaps('628333');
+
+      await refused(['628222', '628333']); // this node holds a phone the table does not have
+    });
+
+    it('keeps refusing the lid after a later report failed beside a negative the owner rule refused', async () => {
+      const upsert = repo.upsert.bind(repo);
+      jest
+        .spyOn(repo, 'upsert')
+        .mockImplementationOnce((...args: Parameters<typeof upsert>) => upsert(...args))
+        .mockRejectedValueOnce(new Error('connection lost'));
+      const reports = [store.remember('333', '628222', OWNER), store.remember('333', '628333', OWNER)];
+      const negative = store.remember('333', null, OTHER);
+      await expect(Promise.all([...reports, negative])).resolves.toEqual([true, false, true]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockClear();
+
+      await peerRemaps('628444');
+
+      await refused(['628333', '628444']);
+    });
+
+    it('keeps refusing the lid after a failed report that only a negative the owner rule refused followed', async () => {
+      jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(store.remember('333', '628222', OWNER)).resolves.toBe(false);
+      warn.mockClear();
+      await expect(store.remember('333', null, OTHER)).resolves.toBe(true);
+
+      await peerRemaps('628333');
+
+      await refused(['628222', '628333']);
+    });
+  });
+
+  // The table still names the phone a failed write was to replace. The cap's eviction and a reload are no reason to answer it.
+  describe('when its write failed and the mirror entry then left', () => {
+    const failReport = async (): Promise<void> => {
+      jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(store.remember('333', '628222', OWNER)).resolves.toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockClear();
+    };
+    const evicted = (): number => (store as unknown as { failedPhones: Map<string, string> }).failedPhones.size;
+
+    it('answers no phone after later lids pushed the entry out, and the lid for neither phone', async () => {
+      await failReport();
+      await pushOut();
+      expect(evicted()).toBe(1);
+
+      await refused(['628111', '628222']);
+    });
+
+    it('answers no phone after the entry was pushed out and warmed back from the row it distrusts', async () => {
+      await failReport();
+      await pushOut();
+      store.getCached('333');
+      // The warm is one table read: wait for it with a deadline, not for a count of event loop turns.
+      const deadline = Date.now() + 5000;
+      while (store.getCached('333') === undefined && Date.now() < deadline) await new Promise(r => setTimeout(r, 5));
+      expect(store.getCached('333')).toBe('628111');
+
+      await refused(['628111', '628222']);
+    });
+
+    it('answers no phone when the entry left while the write was under way and the write then failed', async () => {
+      let reject!: (err: Error) => void;
+      jest.spyOn(repo, 'upsert').mockImplementationOnce(
+        () =>
+          new Promise((_, fail) => {
+            reject = fail;
+          }),
+      );
+      const report = store.remember('333', '628222', OWNER);
+      await pushOut();
+      reject(new Error('connection lost'));
+      await expect(report).resolves.toBe(false);
+      warn.mockClear();
+
+      await refused(['628111', '628222']);
+    });
+
+    it('answers no phone after a revocation by a display lookup failed and the entry was pushed out', async () => {
+      jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(store.rememberIfUnknown('333', '628222', OTHER)).resolves.toBe(false);
+      warn.mockClear();
+      await pushOut();
+
+      await refused(['628111', '628222']);
+    });
+
+    it('keeps refusing the lid when another node re-maps it, as it did while the entry was resident', async () => {
+      await failReport();
+      await pushOut();
+      await peerRemaps('628333');
+
+      await refused(['628111', '628222', '628333']);
+    });
+
+    it('answers the table again once a report of the lid has landed', async () => {
+      await failReport();
+      await pushOut();
+
+      await expect(store.remember('333', '628222', OWNER)).resolves.toBe(true);
+
+      expect(evicted()).toBe(0);
+      await answers('628222');
+    });
+
+    it('answers the table again once a report of the lid begins and its write fails the same way', async () => {
+      await failReport();
+      await pushOut();
+      await peerRemaps('628333');
+      jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(store.remember('333', '628333', OWNER)).resolves.toBe(false);
+      warn.mockClear();
+      await pushOut();
+      expect(evicted()).toBe(1);
+
+      await answers('628333'); // the report of the phone the table holds replaced the mark of the one before it
+    });
+
+    it('answers the table again once a negative has cleared the row', async () => {
+      await failReport();
+      await pushOut();
+
+      await expect(store.remember('333', null, OWNER)).resolves.toBe(true);
+      await peerRemaps('628333');
+
+      expect(evicted()).toBe(0);
+      await answers('628333');
+    });
+
+    it('answers the table after a reload, which replaces it', async () => {
+      await failReport();
+      await pushOut();
+
+      await store.reload();
+
+      expect(evicted()).toBe(0);
+      await answers('628111');
+    });
+
+    it('keeps no more marks than the mirror holds entries, the oldest dropped first', async () => {
+      for (const lid of ['601', '602', '603', '604']) {
+        jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+        await expect(store.remember(lid, `62${lid}`, OWNER)).resolves.toBe(false);
+        warn.mockClear();
+      }
+      await pushOut();
+
+      expect(evicted()).toBe(2); // the cap of this mirror
+    });
+  });
+});
+
+describe('LidMappingStoreService: the readers agree with the table once overlapping calls have settled', () => {
+  // SQLite in memory; on PostgreSQL (DATABASE_TYPE=postgres, the test-postgres job) a schema of its own, where a pool
+  // hands the statements of two writes to two connections.
+  const pg = process.env.DATABASE_TYPE === 'postgres';
+  const server = {
+    type: 'postgres' as const,
+    host: process.env.DATABASE_HOST || 'localhost',
+    port: Number(process.env.DATABASE_PORT || 5432),
+    username: process.env.DATABASE_USERNAME || 'openwa',
+    password: process.env.DATABASE_PASSWORD || 'openwa',
+    database: process.env.DATABASE_NAME || 'openwa',
+  };
+  // Two linked sessions, one logged out, and one that is not in `sessions` at all.
+  const LIVE1 = '11111111-1111-4111-8111-111111111111';
+  const LIVE2 = '22222222-2222-4222-8222-222222222222';
+  const LOGGED_OUT = '33333333-3333-4333-8333-333333333333';
+  const DELETED = '44444444-4444-4444-8444-444444444444';
+  const PEER_PHONE = '628999';
+  const PHONES = ['628001', '628002', '628003'];
+  const MODES = ['plain', 'reload', 'evict', 'fail', 'failreload'] as const;
+  let ds: DataSource;
+  let schema = '';
+  const onServer = async (sql: string): Promise<void> => {
+    const admin = await new DataSource(server).initialize();
+    await admin.query(sql).finally(() => admin.destroy());
+  };
+
+  beforeAll(async () => {
+    const entities = [LidMapping, Session];
+    if (pg) {
+      schema = `lid_readers_${randomUUID().replace(/-/g, '')}`;
+      await onServer(`CREATE SCHEMA "${schema}"`);
+    }
+    ds = await new DataSource(
+      pg
+        ? { ...server, schema, extra: { options: `-c search_path=${schema},public` }, entities, synchronize: true }
+        : { type: 'better-sqlite3', database: ':memory:', entities, synchronize: true },
+    ).initialize();
+    await ds.getRepository(Session).insert([
+      { id: LIVE1, name: 'live1', phone: '6290000001' },
+      { id: LIVE2, name: 'live2', phone: '6290000002' },
+      { id: LOGGED_OUT, name: 'logged out' },
+    ]);
+  });
+
+  afterAll(async () => {
+    await ds.destroy();
+    if (pg) await onServer(`DROP SCHEMA "${schema}" CASCADE`);
+  });
+
+  // A generator with a seed, so a trial that fails can be run again.
+  const seeded = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) >>> 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const tick = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+  const until = async (done: () => boolean, what: string): Promise<void> => {
+    const deadline = performance.now() + 10_000;
+    while (!done()) {
+      if (performance.now() >= deadline) throw new Error(what);
+      await tick(1);
+    }
+  };
+
+  type Call = { kind: 'report' | 'negative' | 'lookup'; phone: string; session: string | undefined; delay: number };
+  type Internals = {
+    unsettledWrites: Map<string, unknown>;
+    pendingLookups: Set<string>;
+    racedLookups: Set<string>;
+    reloadsOut: Set<unknown>;
+    turns: Map<string, unknown>;
+    failedWrites: Set<string>;
+    lidToPhone: Map<string, string | null>;
+    phoneToLids: Map<string, Set<string>>;
+  };
+
+  /** What every lookup answers for the lid and for each phone. */
+  const lookups = async (store: LidMappingStoreService, lid: string, phones: string[]) => {
+    const batch = await store.lidsForPhonesPersisted(phones);
+    return {
+      phone: await store.findPhoneForLid(`${lid}@lid`),
+      batch: (await store.phonesForLidsPersisted([lid]))[lid],
+      lids: await Promise.all(phones.map(async phone => (await store.findLidsForPhone(phone)).includes(lid))),
+      batchLids: phones.map(phone => batch[phone].includes(lid)),
+    };
+  };
+
+  it.each(MODES)(
+    'answers the table, with no veto left behind by a write that landed (%s)',
+    async mode => {
+      const savedCap = process.env.LID_MAPPING_CACHE_MAX;
+      if (mode === 'evict') process.env.LID_MAPPING_CACHE_MAX = '2'; // the lids reported beside a trial push its lid out
+      const slow = new Repository(LidMapping, ds.manager);
+      const store = new LidMappingStoreService(slow);
+      if (savedCap === undefined) delete process.env.LID_MAPPING_CACHE_MAX;
+      else process.env.LID_MAPPING_CACHE_MAX = savedCap;
+      const logger = (store as unknown as { logger: { warn: () => void; log: () => void } }).logger;
+      jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+      jest.spyOn(logger, 'log').mockImplementation(() => undefined);
+      // Every statement takes its time, and in the failing modes one in five of the writes fails.
+      let random = seeded(0);
+      const failing = mode === 'fail' || mode === 'failreload';
+      for (const method of ['query', 'upsert', 'update', 'findOne', 'find'] as const) {
+        const real = slow[method].bind(slow) as (...args: unknown[]) => Promise<unknown>;
+        jest.spyOn(slow, method).mockImplementation((async (...args: unknown[]) => {
+          await tick(Math.floor(random() * 4));
+          if (failing && method !== 'findOne' && method !== 'find' && random() < 0.2) {
+            throw new Error('connection lost');
+          }
+          return real(...args);
+        }) as never);
+      }
+      await store.onModuleInit();
+      const inner = store as unknown as Internals;
+
+      const kinds: Call['kind'][] = ['report', 'report', 'report', 'negative', 'lookup'];
+      const sessions = [LIVE1, LIVE1, LIVE2, LIVE2, LOGGED_OUT, DELETED, undefined];
+      const trials = pg ? 30 : 80;
+      const mismatches: unknown[] = [];
+      for (let trial = 0; trial < trials && mismatches.length < 3; trial++) {
+        random = seeded(trial * 7919 + MODES.indexOf(mode) + 1);
+        const calls: Call[] = Array.from({ length: 2 + Math.floor(random() * 5) }, () => ({
+          kind: kinds[Math.floor(random() * kinds.length)],
+          phone: PHONES[Math.floor(random() * PHONES.length)],
+          session: sessions[Math.floor(random() * sessions.length)],
+          delay: Math.floor(random() * 7),
+        }));
+        const lid = `7${MODES.indexOf(mode)}${trial}`;
+        const began: Call[] = [];
+        const work = calls.map(async call => {
+          await tick(call.delay);
+          began.push(call);
+          return call.kind === 'lookup'
+            ? store.rememberIfUnknown(lid, call.phone, call.session)
+            : store.remember(lid, call.kind === 'negative' ? null : call.phone, call.session);
+        });
+        const beside: Promise<unknown>[] = [];
+        if (mode === 'reload' || mode === 'failreload')
+          beside.push(tick(Math.floor(random() * 8)).then(() => store.reload()));
+        if (mode === 'evict') {
+          for (let i = 0; i < 4; i++) {
+            const other = `9${trial}${i}`;
+            beside.push(tick(Math.floor(random() * 8)).then(() => store.remember(other, `62877${i}`, LIVE1)));
+          }
+        }
+        await Promise.all([...work, ...beside]);
+        await until(
+          () => inner.unsettledWrites.size === 0 && inner.reloadsOut.size === 0 && inner.turns.size === 0,
+          `trial ${trial}: the writes did not settle`,
+        );
+
+        const row = await ds.getRepository(LidMapping).findOneBy({ lid });
+        const tablePhone = row?.isReported ? row.phone : null;
+        const answered = await lookups(store, lid, PHONES);
+        // The next synchronous read warms the mirror from the table.
+        store.getCached(lid);
+        await until(() => !inner.pendingLookups.has(lid), `trial ${trial}: the mirror was not warmed`);
+        const mirror = store.resolveLid(`${lid}@lid`);
+
+        const problems: string[] = [];
+        // A lookup never answers a phone the table does not report for the lid.
+        if (answered.phone !== null && answered.phone !== tablePhone) problems.push('findPhoneForLid');
+        if (answered.batch !== null && answered.batch !== tablePhone) problems.push('phonesForLidsPersisted');
+        PHONES.forEach((phone, i) => {
+          if (phone !== tablePhone && answered.lids[i]) problems.push(`findLidsForPhone ${phone}`);
+          if (phone !== tablePhone && answered.batchLids[i]) problems.push(`lidsForPhonesPersisted ${phone}`);
+        });
+        if (failing) {
+          // The mirror may distrust a pair the table holds, but not trust one the table lacks while a lookup answers.
+          if (mirror !== null && mirror !== tablePhone && answered.phone !== null)
+            problems.push('mirror trusts a pair');
+        } else {
+          // Nothing failed, so nothing may be distrusted, and no mark of a failed write is left.
+          if (answered.phone !== tablePhone) problems.push('findPhoneForLid differs from the row');
+          if (answered.batch !== tablePhone) problems.push('phonesForLidsPersisted differs from the row');
+          PHONES.forEach((phone, i) => {
+            if (answered.lids[i] !== (phone === tablePhone)) problems.push(`findLidsForPhone ${phone} differs`);
+            if (answered.batchLids[i] !== (phone === tablePhone))
+              problems.push(`lidsForPhonesPersisted ${phone} differs`);
+          });
+          if (mirror !== tablePhone) problems.push('the mirror differs from the row');
+          if (inner.failedWrites.has(lid)) problems.push('a mark of a failed write is left');
+          // Another node re-maps the lid, with nothing of this node pending: every lookup answers its row.
+          await ds
+            .getRepository(LidMapping)
+            .upsert({ lid, phone: PEER_PHONE, sessionId: LIVE2, isReported: true, updatedAt: new Date() }, ['lid']);
+          const remapped = await lookups(store, lid, [PEER_PHONE]);
+          if (remapped.phone !== PEER_PHONE) problems.push('findPhoneForLid does not answer a peer re-map');
+          if (remapped.batch !== PEER_PHONE) problems.push('phonesForLidsPersisted does not answer a peer re-map');
+          if (!remapped.lids[0] || !remapped.batchLids[0])
+            problems.push('a lookup by phone does not list a peer re-map');
+        }
+        // The forward and the reverse mirror agree, and nothing of the trial is left behind.
+        PHONES.forEach(phone => {
+          if (store.lidsForPhone(phone).includes(lid) !== (mirror === phone)) problems.push(`reverse mirror ${phone}`);
+        });
+        for (const [phone, lids] of inner.phoneToLids) {
+          if (lids.size === 0) problems.push(`empty reverse entry for ${phone}`);
+          for (const reverse of lids)
+            if (inner.lidToPhone.get(reverse) !== phone) problems.push('orphan reverse entry');
+        }
+        if (inner.pendingLookups.has(lid) || inner.racedLookups.has(lid)) problems.push('lookup bookkeeping left');
+        if (problems.length) mismatches.push({ mode, trial, calls: began, row, answered, mirror, problems });
+      }
+      store.onModuleDestroy();
+      expect(mismatches).toEqual([]);
+    },
+    120_000,
+  );
 });

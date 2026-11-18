@@ -133,15 +133,15 @@ describe('Contact LID lookup gate (e2e)', () => {
   });
 
   it('asks the engine about the digits of a typed number and echoes what was typed', async () => {
-    const check = jest.fn().mockResolvedValue('6281270008896@c.us');
+    const check = jest.fn().mockResolvedValue('6281234567890@c.us');
     app.get(EngineRegistry).set(sessionId, { ...engine, getNumberId: check } as unknown as IWhatsAppEngine);
 
     const res = await request(app.getHttpServer())
-      .get(`/api/sessions/${sessionId}/contacts/check/${encodeURIComponent('+62 812-7000-8896')}`)
+      .get(`/api/sessions/${sessionId}/contacts/check/${encodeURIComponent('+62 812-3456-7890')}`)
       .set('X-API-Key', operatorKey)
       .expect(200);
 
-    expect(check).toHaveBeenCalledWith('6281270008896');
-    expect(res.body).toEqual({ number: '+62 812-7000-8896', exists: true, whatsappId: '6281270008896@c.us' });
+    expect(check).toHaveBeenCalledWith('6281234567890');
+    expect(res.body).toEqual({ number: '+62 812-3456-7890', exists: true, whatsappId: '6281234567890@c.us' });
   });
 });

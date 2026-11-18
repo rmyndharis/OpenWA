@@ -63,7 +63,7 @@ class ChatsResource
      */
     public function markRead(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/chats/read", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/chats/read", [], HttpExecutor::lists($body, 'messageIds'));
     }
 
     /** @return array<string,mixed> */

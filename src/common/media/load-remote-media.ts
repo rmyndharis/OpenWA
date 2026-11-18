@@ -56,9 +56,10 @@ function carriesCredentials(url: string): boolean {
  * same `fetch failed` as an unreachable target, so the two cannot be told apart, and blaming the
  * caller's URL for an operator's proxy outage would send the client to fix a link that works. Once a
  * response has arrived the target was reached, and its failures stay 400/413. The 503 is an
- * `EngineNotSentError`: the fetch runs before WhatsApp is asked, so a paced send gives its admission
- * back. For the same reason every 400 and 413 here, and the SSRF block, carries `markNothingSent`: a keyed
- * send frees its `Idempotency-Key` for them, as it does for the 503.
+ * `EngineNotSentError`: the fetch runs before WhatsApp is asked, so a bulk item or a product send hands its
+ * pacing admission back (a single send keeps its FAILED row, which counts). For the same reason every 400 and 413
+ * here, and the SSRF block, carries `markNothingSent`: a keyed send frees its `Idempotency-Key` for them, as it
+ * does for the 503.
  *
  * `sessionProxyUrl` is the egress proxy of the session the fetch is attributed to, or undefined for
  * a direct one. It is required rather than optional so a new call site cannot leave a proxied

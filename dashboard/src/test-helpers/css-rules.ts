@@ -2,7 +2,9 @@
 // A stylesheet read into its style rules, for tests that guard a layout. Each rule carries the @media
 // condition it sits under ('' at the top level), so a test can ask what a selector declares at one width
 // and not at another. At-rules other than @media (keyframes, font-face) are left out.
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export interface Rule {
   media: string;
@@ -12,6 +14,25 @@ export interface Rule {
 
 export function readRules(sheet: URL): Rule[] {
   return parse(readFileSync(sheet, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''));
+}
+
+const SRC = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+function sheetsUnder(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return sheetsUnder(full);
+    return entry.name.endsWith('.css') ? [full.slice(SRC.length + 1)] : [];
+  });
+}
+
+/** Every stylesheet under src/, by its path from src/, with its rules. */
+export function readAllSheets(): Map<string, Rule[]> {
+  return new Map(
+    sheetsUnder(SRC)
+      .sort()
+      .map(file => [file, readRules(pathToFileURL(join(SRC, file)))]),
+  );
 }
 
 function parse(text: string, media = ''): Rule[] {

@@ -188,6 +188,7 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
       isPageTransportError: error => this.isPageTransportError(error),
       reportIfPageTransportError: (error, context) => this.reportIfPageTransportError(error, context),
       reportOnceGone: (error, context) => this.lifecycle.reportOnceGone(error, context),
+      navigationCount: () => this.lifecycle.stampedNavigations(),
       ensureNotChannelRecipient: chatId => this.ensureNotChannelRecipient(chatId),
       // The raw answer, `@lid` included: the send resolver addresses a migrated contact by it, while the
       // public getNumberId reports the neutral phone id.
@@ -510,7 +511,7 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
   }
 
   /**
-   * whatsapp-web.js 1.34.7 can read labels and assign them, but cannot create, rename, recolour or
+   * whatsapp-web.js 1.34.8 can read labels and assign them, but cannot create, rename, recolour or
    * delete one — `index.d.ts` exposes getLabels / getLabelById / getChatLabels / getChatsByLabelId /
    * addOrRemoveLabels and nothing that edits the label itself.
    */

@@ -109,8 +109,9 @@ if (process.env.QUEUE_ENABLED === 'true') {
           // The app's global throttler storage (Redis when enabled), so the bucket is shared across nodes.
           admitInstance: (pluginId, instanceId) => admitIngressInstance(throttlerStorage, pluginId, instanceId),
           // Live ingress delivery: record the dispatch outcome on the event row (so the reconciler
-          // can tell a stranded 'pending' row from one that reached the dispatch tier) and, on a
-          // swallowed inline-dispatch failure, persist a dead-letter row so RedriveService can replay
+          // can tell a stranded 'pending' row from one whose delivery settled; a queued one stays 'pending'
+          // with its payload until the worker settles it, so a job Redis loses is replayed from the row) and,
+          // on a swallowed inline-dispatch failure, persist a dead-letter row so RedriveService can replay
           // it — IngressService.handle() always 202s, so nothing else would. RedriveService calls
           // enqueue() directly (it is already replaying a DLQ row) so it never double-writes here.
           // Both writes are best-effort: a failure must not 500 the ingress request (the delivery is

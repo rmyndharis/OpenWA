@@ -5,6 +5,7 @@ import { IngressEvent } from './entities/ingress-event.entity';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { IngressReconcilerService } from './ingress-reconciler.service';
 import { createLogger } from '../../common/services/logger.service';
+import { pruneInBatches } from '../../common/utils/batched-prune';
 
 // Dedup rows are a delivery-id oracle, not an audit log: provider retries arrive within minutes, so
 // a short window (default 7 days) bounds the table without weakening dedup. Failure rows carry the
@@ -17,8 +18,10 @@ const DEFAULT_FAILURE_RETENTION_DAYS = 90;
  * `ingress_events` (the inbound dedup/event log) and `integration_delivery_failures` (the DLQ).
  *
  * Mirrors the AuditService / WebhookService retention: runs once at startup then daily via a raw
- * `setInterval` (unref'd). Both tables carry a `createdAt` column (ingress_events is indexed on it),
- * so the prune is an indexed `createdAt < cutoff` delete — the same shape as the sibling prunes.
+ * `setInterval` (unref'd). Both tables carry a `createdAt` column (ingress_events is indexed on it).
+ * Each prune removes its backlog in statements of a bounded number of rows that give up the event loop
+ * between them (see `pruneInBatches`), like the sibling prunes: one statement over a backlog held the
+ * process for as long as it ran on SQLite.
  *
  * Two independent windows:
  * - `INGRESS_DEDUP_RETENTION_DAYS` (default 7) prunes `ingress_events`. <= 0 does NOT disable it —
@@ -34,6 +37,7 @@ const DEFAULT_FAILURE_RETENTION_DAYS = 90;
 export class IntegrationRetentionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('IntegrationRetentionService');
   private cleanupTimer?: ReturnType<typeof setInterval>;
+  private stopped = false;
 
   constructor(
     @InjectRepository(IngressEvent, 'data') private readonly eventRepository: Repository<IngressEvent>,
@@ -81,6 +85,7 @@ export class IntegrationRetentionService implements OnModuleInit, OnModuleDestro
   }
 
   onModuleDestroy(): void {
+    this.stopped = true;
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
     }
@@ -110,23 +115,27 @@ export class IntegrationRetentionService implements OnModuleInit, OnModuleDestro
         `Integration ingress retention: ${step} failed`,
         err instanceof Error ? err.stack : String(err),
       );
-      return { affected: 0 };
+      return 0;
     };
-    const failuresResult =
+    const failures =
       failuresDays === null
-        ? { affected: 0 }
-        : await this.failureRepository
-            .delete({ createdAt: LessThan(failuresCutoff) })
-            .catch(logFailure('delivery-failure prune'));
+        ? 0
+        : await pruneInBatches({
+            repository: this.failureRepository,
+            where: { createdAt: LessThan(failuresCutoff) },
+            stopped: () => this.stopped,
+          }).catch(logFailure('delivery-failure prune'));
     const aged = LessThan(eventsCutoff);
-    const eventsResult = await this.eventRepository
-      .delete([
+    const events = await pruneInBatches({
+      repository: this.eventRepository,
+      where: [
         { createdAt: aged, dispatchState: Not('pending') },
         { createdAt: aged, dispatchState: IsNull() },
         { createdAt: aged, payload: IsNull() },
-      ])
-      .catch(logFailure('dedup prune'));
+      ],
+      stopped: () => this.stopped,
+    }).catch(logFailure('dedup prune'));
     await this.reconciler.deadLetterAgedPending(eventsCutoff).catch(logFailure('undispatched event hand-off'));
-    return { events: eventsResult.affected || 0, failures: failuresResult.affected || 0 };
+    return { events, failures };
   }
 }

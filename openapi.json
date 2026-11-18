@@ -84,6 +84,7 @@
                 "send_pacing_blocked",
                 "send_breaker_tripped",
                 "webhook_created",
+                "webhook_updated",
                 "webhook_deleted",
                 "webhook_triggered",
                 "webhook_failed",
@@ -6635,7 +6636,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "description": "The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6758,7 +6759,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "description": "The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6878,7 +6879,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "description": "The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10497,7 +10498,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers a setting with a rate limit or a server error (423, 429 or 5xx): that setting was not applied, or, for a member add mode change, may have been applied in part, and the message names any setting of the same request that was already applied.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11349,7 +11350,7 @@
             }
           },
           "403": {
-            "description": "The engine refused the change — admin rights are required. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The engine refused the change: editing the group info takes an admin, or any member of a group whose info is not restricted to admins. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11379,7 +11380,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11460,7 +11461,7 @@
             }
           },
           "403": {
-            "description": "The engine refused the change — admin rights are required. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The engine refused the change: editing the group info takes an admin, or any member of a group whose info is not restricted to admins. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11490,7 +11491,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11883,7 +11884,7 @@
             }
           },
           "403": {
-            "description": "The engine refused the change — admin rights required. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The engine refused the change: editing the group info takes an admin, or any member of a group whose info is not restricted to admins. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11923,7 +11924,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a pause. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11992,7 +11993,7 @@
             }
           },
           "403": {
-            "description": "The engine refused the change: admin rights are required. A group with no picture is not refused: WhatsApp accepts the delete and the route answers 200. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The engine refused the change: editing the group info takes an admin, or any member of a group whose info is not restricted to admins. A group with no picture is not refused: WhatsApp accepts the delete and the route answers 200. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12122,8 +12123,18 @@
               }
             }
           },
+          "501": {
+            "description": "On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to read an invite code with. Nothing was asked of WhatsApp.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
-            "description": "WhatsApp did not answer the invite-code query — retry shortly. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer the invite-code query — retry shortly. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the read with a rate limit or a server error (423, 429 or 5xx): no code was returned, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12223,8 +12234,18 @@
               }
             }
           },
+          "501": {
+            "description": "On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to reset an invite code. Nothing was asked of WhatsApp: the current code is unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
-            "description": "WhatsApp did not answer the invite-code query — retry shortly. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer the invite-code query — retry shortly. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, the revoke is also answered 503 when WhatsApp answers it with a rate limit or a server error (423, 429 or 5xx): the current code is unchanged, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12407,6 +12428,16 @@
               }
             }
           },
+          "501": {
+            "description": "On whatsapp-web.js, answered when the WhatsApp Web build the session runs no longer has the call the library uses to set the About text. Nothing was asked of WhatsApp.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came.",
             "content": {
@@ -12510,7 +12541,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a pause. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12878,7 +12909,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "description": "The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12989,7 +13020,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "description": "The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13759,6 +13790,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "On whatsapp-web.js, answered when the page died mid-read or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Get all subscribed channels/newsletters",
@@ -14156,6 +14197,16 @@
           },
           "501": {
             "description": "Not supported by the active engine: the Baileys adapter cannot read channel messages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "On whatsapp-web.js, answered when the page died mid-read or WhatsApp Web did not answer within the protocol timeout, so nothing could be read. Retry shortly.",
             "content": {
               "application/json": {
                 "schema": {
@@ -18689,6 +18740,14 @@
     {
       "name": "health",
       "description": "Health check endpoints"
+    },
+    {
+      "name": "automation",
+      "description": "Automation rules (auto-reply)"
+    },
+    {
+      "name": "media",
+      "description": "Media conversion"
     }
   ],
   "servers": [
@@ -19325,7 +19384,7 @@
             "nullable": true
           },
           "maxReconnectAttempts": {
-            "type": "number",
+            "type": "integer",
             "description": "Cap on consecutive reconnect attempts (`0` disables reconnect entirely). Send `null` for unlimited, which is the default. Applies on the next session start, not to a reconnect sequence already in flight. Bounds the gateway's own reconnect, which is every reconnect on whatsapp-web.js and, on Baileys, only the one after a logged-out close: the Baileys engine retries a transient drop itself, with a fixed 1s to 60s backoff and no cap.",
             "minimum": 0,
             "maximum": 20,
@@ -19333,7 +19392,7 @@
             "nullable": true
           },
           "reconnectBaseDelay": {
-            "type": "number",
+            "type": "integer",
             "description": "Base delay of the reconnect backoff in milliseconds. Applies on the next session start, not to a reconnect sequence already in flight. Same engine scope as `maxReconnectAttempts`: the Baileys engine's internal retry uses its own fixed backoff instead.",
             "minimum": 1000,
             "maximum": 300000,
@@ -20060,7 +20119,7 @@
             ]
           },
           "retryCount": {
-            "type": "number",
+            "type": "integer",
             "description": "Total delivery attempts per event, including the first (0 and 1 both mean a single attempt with no retry). An event that exhausts them is recorded in GET /api/webhooks/delivery-failures; the webhook stays active.",
             "example": 3,
             "minimum": 0,
@@ -20264,7 +20323,7 @@
             "description": "Enable/disable webhook"
           },
           "retryCount": {
-            "type": "number",
+            "type": "integer",
             "description": "Total delivery attempts per event, including the first (0 and 1 both mean a single attempt). Same range the create route enforces.",
             "example": 3,
             "minimum": 0,
@@ -20391,7 +20450,7 @@
             "type": "array"
           },
           "limit": {
-            "type": "number",
+            "type": "integer",
             "description": "Max rows replayed by this call (1-500, default 100).",
             "example": 100,
             "minimum": 1,
@@ -20462,7 +20521,7 @@
             "description": "Match conditions in the webhook filter format (message family: sender, recipient, chatId, body, type, isGroup, kind, fromMe, hasMedia, mentions). All conditions must match (AND). Omitted or empty means the rule matches every inbound message except channel, broadcast-list and status messages, which a rule answers only when it has a `kind` condition that matches them. On Baileys a message received through a contact's broadcast list is filed under the sender's chat (`kind` individual), so it matches."
           },
           "cooldownSeconds": {
-            "type": "number",
+            "type": "integer",
             "description": "Quiet period per chat, in seconds: after the rule replies in a chat it stays silent there for this long (default 60, 0 disables). This is the guard against two auto-repliers answering each other forever, so disable it knowingly.",
             "default": 60,
             "minimum": 0,
@@ -20543,7 +20602,7 @@
             "description": "Match conditions in the webhook filter format (message family: sender, recipient, chatId, body, type, isGroup, kind, fromMe, hasMedia, mentions). All conditions must match (AND). Omitted or empty means the rule matches every inbound message except channel, broadcast-list and status messages, which a rule answers only when it has a `kind` condition that matches them. On Baileys a message received through a contact's broadcast list is filed under the sender's chat (`kind` individual), so it matches."
           },
           "cooldownSeconds": {
-            "type": "number",
+            "type": "integer",
             "description": "Quiet period per chat, in seconds: after the rule replies in a chat it stays silent there for this long (default 60, 0 disables). This is the guard against two auto-repliers answering each other forever, so disable it knowingly.",
             "minimum": 0,
             "maximum": 86400
@@ -24307,7 +24366,7 @@
             "description": "Only admins can edit group info (locked group)"
           },
           "ephemeralSeconds": {
-            "type": "number",
+            "type": "integer",
             "description": "Disappearing-messages timer in seconds; 0 disables. Known values: 86400 (24h), 604800 (7d), 7776000 (90d)",
             "minimum": 0
           },
@@ -24783,7 +24842,7 @@
             "maxLength": 100
           },
           "color": {
-            "type": "number",
+            "type": "integer",
             "description": "WhatsApp's colour INDEX (0-19), not a hex value — the read path's `hexColor` cannot be translated back, because neither engine exposes the mapping. An omitted colour is not preserved.",
             "example": 3,
             "minimum": 0,

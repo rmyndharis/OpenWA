@@ -8,7 +8,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { type Dispatcher } from 'undici';
 import type * as BaileysLib from '@whiskeysockets/baileys';
-import type { WASocket } from '@whiskeysockets/baileys';
+import type { Chat, WASocket } from '@whiskeysockets/baileys';
 import type { ILogger } from '@whiskeysockets/baileys/lib/Utils/logger.js';
 import {
   type ConnectionCloseStage,
@@ -32,7 +32,7 @@ import {
 } from '../terminal-engine-failure';
 import { differentWaIds, keyChatIds, type BaileysEvents } from './baileys-events';
 import type { BaileysHistory } from './baileys-history';
-import { withoutNonContentUnread } from './baileys-message-mapper';
+import { withoutMergedNonContentMessage, withoutNonContentMessage } from './baileys-message-mapper';
 import { SESSION_STORE_MAP_CAP_DEFAULT, type BaileysSessionStore } from './baileys-session-store';
 import { ownAccountIds } from './baileys-stored-chat-previews.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
@@ -188,6 +188,10 @@ export interface BaileysLifecycleHost {
   upsertChats: BaileysSessionStore['upsertChats'];
   /** Drop chats the socket reports deleted (chats.delete). */
   removeChats: BaileysSessionStore['removeChats'];
+  /** End the wait for the replay of a chat's mark-read write: a count the filter took out was that replay. */
+  endReadEcho?: BaileysSessionStore['endReadEcho'];
+  /** Forget the replays the session awaits of its own mark-read writes: the socket that held them is replaced. */
+  dropReadEchoes?: BaileysSessionStore['dropReadEchoes'];
   /** List the chats the gateway stored messages of (once, before the first socket opens). */
   seedStoredPreviews: BaileysSessionStore['seedStoredPreviews'];
   /** Learn lid<->phone mappings pushed by the socket (messaging-history.set, lid-mapping.update). */
@@ -486,8 +490,10 @@ export class BaileysLifecycle {
     }
 
     // Group changes made while the previous socket was down never reached it, so nothing it cached is
-    // trusted by the next one.
+    // trusted by the next one. The same holds for the replay of a write it still held: ending the socket destroys its
+    // event buffer, and a zero the next socket brings is a read of the account, not that replay.
     this.groupMetadata.clear();
+    this.host.dropReadEchoes?.();
     this.cancelPairingWindow();
 
     const fetchDispatcher = this.fetchDispatcher();
@@ -670,7 +676,7 @@ export class BaileysLifecycle {
         event: 'upsert',
         count: chats?.length ?? 0,
       });
-      this.host.upsertChats(chats);
+      this.host.upsertChats(this.withoutMergedNonContent(chats));
     });
     sock.ev.on('chats.update', updates => {
       this.host.logger.debug('Baileys chats event', {
@@ -684,11 +690,18 @@ export class BaileysLifecycle {
       for (const update of updates ?? []) {
         if (Object.hasOwn(update, 'ephemeralExpiration')) this.groupMetadata.invalidate(update.id);
       }
-      // The chat keeps the count it had when the one message Baileys counted is none of its own.
-      const b = this.loadedLib;
-      const typeOf = (content: BaileysLib.proto.IMessage | null | undefined): string | undefined =>
-        b && content ? b.getContentType(b.normalizeMessageContent(content) ?? content) : undefined;
-      this.host.upsertChats((updates ?? []).map(update => withoutNonContentUnread(update, typeOf)));
+      // A message that is none of its own leaves the chat as it was: its count stays out, and so does its time, which
+      // would bring back a chat WhatsApp deleted. A count taken out may be the one the library summed the replay of the
+      // session's own read into, and upsertChats never sees it, so it ends the wait for that replay here.
+      this.host.upsertChats(
+        (updates ?? []).flatMap(update => {
+          const kept = withoutNonContentMessage(update, this.loadedLib);
+          if (update.id && Object.hasOwn(update, 'unreadCount') && !(kept && Object.hasOwn(kept, 'unreadCount'))) {
+            this.host.endReadEcho?.(update.id);
+          }
+          return kept ?? [];
+        }),
+      );
     });
     sock.ev.on('chats.delete', ids => {
       this.host.logger.debug('Baileys chats event', {
@@ -729,7 +742,7 @@ export class BaileysLifecycle {
           name: undefined,
         })),
       );
-      this.host.upsertChats(history.chats);
+      this.host.upsertChats(this.withoutMergedNonContent(history.chats));
       this.host.addLidMappings(history.lidPnMappings ?? []);
       void this.host
         .captureHistoryMessages(history.messages ?? [])
@@ -753,6 +766,15 @@ export class BaileysLifecycle {
     sock.ev.on('lid-mapping.update', ({ lid, pn }) => this.host.addLidMappings([{ lid, pn }]));
     sock.ev.on('call', calls => this.host.handleCallEvents(calls));
     sock.ev.on('presence.update', update => this.host.handlePresenceUpdate(update));
+  }
+
+  /**
+   * The chats of a history chunk or an upsert, as the library's event buffer hands them over: one that a chat update
+   * was merged into carries that update's last message and time, which a message that is none of its own must not
+   * leave on the chat (see {@link withoutMergedNonContentMessage}).
+   */
+  private withoutMergedNonContent(chats: Partial<Chat>[] | undefined): Partial<Chat>[] {
+    return (chats ?? []).map(chat => withoutMergedNonContentMessage(chat, this.loadedLib));
   }
 
   /**

@@ -81,7 +81,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
     baileys: { status: 'supported' },
     evidence:
-      "baileys addLabel(jid, LabelActionBody{id,name?,color?,deleted?}) (Socket/chats.d.ts) emits one `label_edit` app-state patch indexed by ['label_edit', id] (Utils/chat-utils.js), so create and update are the same write; whatsapp-web.js 1.34.7 exposes getLabels/getLabelById/getChatLabels/getChatsByLabelId/addOrRemoveLabels (index.d.ts) and nothing that edits a label itself",
+      "baileys addLabel(jid, LabelActionBody{id,name?,color?,deleted?}) (Socket/chats.d.ts) emits one `label_edit` app-state patch indexed by ['label_edit', id] (Utils/chat-utils.js), so create and update are the same write; whatsapp-web.js 1.34.8 exposes getLabels/getLabelById/getChatLabels/getChatsByLabelId/addOrRemoveLabels (index.d.ts) and nothing that edits a label itself",
   },
   deleteLabel: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
@@ -99,7 +99,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      "wwjs GroupChat.addParticipants → per-participant {code,message} object, or a reason STRING on batch refusal (index.d.ts; GroupChat.js) — both mapped at the adapter; baileys groupParticipantsUpdate(jid,pids,'add') → per-jid [{status:'200'|error}] (Socket/groups.js); per-participant results surface on the HTTP `results` field, a total refusal throws",
+      "wwjs GroupChat.addParticipants → per-participant {code,message} object, or a reason STRING on batch refusal (index.d.ts; GroupChat.js) — both mapped at the adapter, and where the page's WAWebChatSendMessages has no sendGroupInviteMessage (the library's invitation sender, gone on current WhatsApp Web builds) the adapter adds with autoSendInviteV4 false, so an invite-only participant is a 403 and no invite is sent; baileys groupParticipantsUpdate(jid,pids,'add') → per-jid [{status:'200'|error}] (Socket/groups.js); per-participant results surface on the HTTP `results` field, a total refusal throws",
   },
   approveGroupMembershipRequests: {
     wwjs: { status: 'supported' },
@@ -347,7 +347,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
     baileys: { status: 'supported' },
     evidence:
-      "baileys presenceSubscribe(toJid) (Socket/chats.d.ts) + the 'presence.update' event carrying a per-participant PresenceData map (Types/Events.d.ts, Types/Chat.d.ts); whatsapp-web.js 1.34.7 has only sendPresenceAvailable/sendPresenceUnavailable (index.d.ts), which publish the ACCOUNT's own presence — it exposes no subscribe and emits no presence event",
+      "baileys presenceSubscribe(toJid) (Socket/chats.d.ts) + the 'presence.update' event carrying a per-participant PresenceData map (Types/Events.d.ts, Types/Chat.d.ts); whatsapp-web.js 1.34.8 has only sendPresenceAvailable/sendPresenceUnavailable (index.d.ts), which publish the ACCOUNT's own presence — it exposes no subscribe and emits no presence event",
   },
   starMessage: {
     wwjs: { status: 'supported' },
@@ -359,19 +359,19 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      "wwjs GroupChat.setDescription(description) → boolean (index.d.ts; false → adapter throws EngineRefusedError) — depends on 🔧⁹ (scripts/patch-wwebjs-group-description.js): stock 1.34.7 calls the page's WAWebGroupModifyInfoJob.setGroupDescription positionally, but that job now takes a single options object {desc, groupWid, newDescId, prevDescId}, so widToGroupJid reads an undefined Wid and throws inside the page, reaching the caller as a bare 500. setGroupSubject in the same module is still positional and is unaffected. Patched call measured live on wwjs 1.34.7: set reads back, empty string clears. baileys groupUpdateDescription(jid, description?) (Socket/groups.d.ts)",
+      "wwjs GroupChat.setDescription(description) → boolean (index.d.ts; false → adapter throws EngineRefusedError) — depends on 🔧⁹ (scripts/patch-wwebjs-group-description.js): stock 1.34.8 calls the page's WAWebGroupModifyInfoJob.setGroupDescription positionally, but that job now takes a single options object {desc, groupWid, newDescId, prevDescId}, so widToGroupJid reads an undefined Wid and throws inside the page, reaching the caller as a bare 500. setGroupSubject in the same module is still positional and is unaffected. Patched call measured live on wwjs 1.34.7: set reads back, empty string clears. The adapter sends the same options-object call itself in the page and answers WhatsApp's status, so the patch matters only where the page has no job for it and the library's own call runs. baileys groupUpdateDescription(jid, description?) (Socket/groups.d.ts)",
   },
   setGroupEphemeral: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
     baileys: { status: 'supported' },
     evidence:
-      'wwjs 1.34.7 exposes NO ephemeral setter — 0 hits for ephemeral in index.d.ts; only a create-time messageTimer option (Client.js); adapter throws EngineNotSupportedError; baileys groupToggleEphemeral(jid, ephemeralExpiration) (Socket/groups.d.ts)',
+      'wwjs 1.34.8 exposes NO ephemeral setter — 0 hits for ephemeral in index.d.ts; only a create-time messageTimer option (Client.js); adapter throws EngineNotSupportedError; baileys groupToggleEphemeral(jid, ephemeralExpiration) (Socket/groups.d.ts)',
   },
   setGroupMemberLabel: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
     baileys: { status: 'supported' },
     evidence:
-      'wwjs 1.34.7 exposes NO member-label setter: 0 hits for memberLabel or member tag in index.d.ts and src/; adapter throws EngineNotSupportedError; baileys updateMemberLabel(jid, memberLabel) (Socket/messages-send.d.ts) relays a GROUP_MEMBER_LABEL_CHANGE protocol message to the group with the label cut by slice(0, 30) (messages-send.js)',
+      'wwjs 1.34.8 exposes NO member-label setter: 0 hits for memberLabel or member tag in index.d.ts and src/; adapter throws EngineNotSupportedError; baileys updateMemberLabel(jid, memberLabel) (Socket/messages-send.d.ts) relays a GROUP_MEMBER_LABEL_CHANGE protocol message to the group with the label cut by slice(0, 30) (messages-send.js)',
   },
   setGroupInfoAdminsOnly: {
     wwjs: { status: 'supported' },
@@ -430,7 +430,8 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
   setProfileStatus: {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
-    evidence: 'wwjs Client.setStatus(status) (index.d.ts); baileys updateProfileStatus(status) (Socket/chats.d.ts)',
+    evidence:
+      'wwjs Client.setStatus(status) (index.d.ts) calls setMyStatus of WAWebContactStatusBridge in the page, which WhatsApp Web builds from about mid November 2026 no longer export (the About text became an expiring text status, set through modules the library does not call): the adapter asks the page for it and answers 501 on such a build; baileys updateProfileStatus(status) (Socket/chats.d.ts)',
   },
   subscribeToChannel: {
     wwjs: { status: 'not-available', rootCause: 'adapter-gap' },

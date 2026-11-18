@@ -17,6 +17,7 @@
   background: var(--bg-white);
   color: var(--text-primary);
   font-size: 0.875rem;
+  unicode-bidi: plaintext;
 }
 
 .global-search-input:focus {
@@ -110,6 +111,11 @@
   line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  /* A found message is text of its own: under the page direction a Latin one showed its full stop first. Its box is
+     as wide as the text, so the text stays at the start edge the page puts it (see .chat-item-name in Chats.css). */
+  width: fit-content;
+  max-width: 100%;
+  unicode-bidi: plaintext;
 }
 
 .global-search-hit-snippet mark {
@@ -135,4 +141,11 @@
 .global-search-more:hover {
   background: var(--primary-soft);
   color: var(--primary-text);
+}
+
+/* Forced colours drop fills, so the load-more button draws a frame. */
+@media (forced-colors: active) {
+  .global-search-more {
+    border: 1px solid ButtonText;
+  }
 }

@@ -212,6 +212,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 140px;
+  /* Text of its own, hugging the start edge (see .chat-item-name in Chats.css). */
+  width: fit-content;
+  unicode-bidi: plaintext;
 }
 
 .dashboard .phone {

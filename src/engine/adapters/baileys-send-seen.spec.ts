@@ -242,6 +242,76 @@ describe('sendSeen', () => {
       );
     });
 
+    // Baileys emits the replay of the write before chatModify resolves, and its event buffer holds it while it is open: the
+    // zero it carries reaches the session after the read has returned, and the session is told to expect it.
+    describe('the replay of the write', () => {
+      const replaying = (
+        socket: Record<string, unknown>,
+        chatModify: jest.Mock = jest.fn().mockResolvedValue(undefined),
+        overrides: Partial<Record<keyof BaileysContactsHost, unknown>> = {},
+      ) => {
+        const expectReadEcho = jest.fn();
+        const { host } = marked(chatModify, {
+          getSocket: () => ({ readMessages: jest.fn().mockResolvedValue(undefined), chatModify, ...socket }),
+          expectReadEcho,
+          ...overrides,
+        });
+        return { host, expectReadEcho, chatModify };
+      };
+      const buffering = (held: boolean) => ({ ev: { isBuffering: jest.fn(() => held) } });
+
+      it('is expected, for the chat the write was keyed to, once the write is confirmed and the buffer holds it', async () => {
+        let confirm!: () => void;
+        const chatModify = jest.fn(() => new Promise<void>(resolve => (confirm = resolve)));
+        const { host, expectReadEcho } = replaying(buffering(true), chatModify);
+        const read = new BaileysContacts(host, 500).sendSeen('628123@c.us');
+        for (let turn = 0; turn < 50 && !chatModify.mock.calls.length; turn++) await new Promise(r => setImmediate(r));
+        expect(chatModify).toHaveBeenCalledTimes(1);
+        expect(expectReadEcho).not.toHaveBeenCalled();
+
+        confirm();
+        await expect(read).resolves.toBe(true);
+
+        // The id the write was keyed to, not the one the caller named.
+        expect(expectReadEcho).toHaveBeenCalledTimes(1);
+        expect(expectReadEcho).toHaveBeenCalledWith(LAST.jid);
+      });
+
+      it.each([
+        ['the event buffer holds nothing', buffering(false)],
+        ['the socket has no event buffer', {}],
+        ['the event buffer cannot say', { ev: {} }],
+      ])('is not expected when %s', async (_why, socket) => {
+        const { host, expectReadEcho, chatModify } = replaying(socket);
+        await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+        expect(chatModify).toHaveBeenCalledTimes(1);
+        expect(expectReadEcho).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['WhatsApp never confirms the write', () => jest.fn(never)],
+        ['WhatsApp refuses the write', () => jest.fn().mockRejectedValue(new Error('App state key not present!'))],
+      ])('is not expected when %s', async (_case, failing) => {
+        const { host, expectReadEcho } = replaying(buffering(true), failing());
+        await expect(new BaileysContacts(host, 15).sendSeen('628123@c.us')).resolves.toBe(true);
+        expect(expectReadEcho).not.toHaveBeenCalled();
+      });
+
+      it('is not expected for a chat that carries no mark, which sends no write', async () => {
+        const { host, expectReadEcho, chatModify } = replaying(buffering(true), undefined, {
+          isMarkedUnread: () => false,
+        });
+        await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+        expect(chatModify).not.toHaveBeenCalled();
+        expect(expectReadEcho).not.toHaveBeenCalled();
+      });
+
+      it('still answers for the receipt on a host that cannot expect it', async () => {
+        const { host } = replaying(buffering(true), undefined, { expectReadEcho: undefined });
+        await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us')).resolves.toBe(true);
+      });
+    });
+
     it('does not undo the mark on a socket that replaced the one the receipt went out on', async () => {
       const replacement = { readMessages: jest.fn(), chatModify: jest.fn().mockResolvedValue(undefined) };
       let current: Record<string, jest.Mock> = replacement;

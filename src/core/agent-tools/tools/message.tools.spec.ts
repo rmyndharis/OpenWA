@@ -461,7 +461,7 @@ describe('messageTools', () => {
     const service = { sendText: jest.fn(), sendLocation: jest.fn(), reactToMessage: jest.fn() };
     const tools = makeTools(service as unknown as MessageService);
 
-    await expect(run(tools.get(name)!, { sessionId: 's1', chatId: '6281270008896', ...rest })).rejects.toMatchObject({
+    await expect(run(tools.get(name)!, { sessionId: 's1', chatId: '6281234567890', ...rest })).rejects.toMatchObject({
       response: { message: [expect.stringContaining('localpart@host') as unknown as string] },
     });
     expect(service.sendText).not.toHaveBeenCalled();

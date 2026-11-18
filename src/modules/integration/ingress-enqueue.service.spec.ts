@@ -59,9 +59,9 @@ describe('IngressEnqueueService', () => {
       expect(getJobState).toHaveBeenCalledWith(sanitizeIngressJobId('d1', 'chatwoot\u0000acct1'));
     });
 
-    it('reports no job when the queue holds none, is off, or cannot answer', async () => {
+    it('reports no job when the queue holds none or is off', async () => {
       (config.get as jest.Mock).mockReturnValue(true);
-      const getJobState = jest.fn().mockResolvedValueOnce('unknown').mockRejectedValueOnce(new Error('ECONNREFUSED'));
+      const getJobState = jest.fn().mockResolvedValueOnce('unknown');
       const svc = new IngressEnqueueService(
         loader as PluginLoaderService,
         config as ConfigService,
@@ -71,12 +71,25 @@ describe('IngressEnqueueService', () => {
         } as never,
       );
       expect(await svc.existingJobState(data, 'd1')).toBeUndefined();
-      expect(await svc.existingJobState(data, 'd1')).toBeUndefined();
 
       getJobState.mockClear();
       (config.get as jest.Mock).mockReturnValue(false);
       expect(await svc.existingJobState(data, 'd1')).toBeUndefined();
       expect(getJobState).not.toHaveBeenCalled();
+    });
+
+    // A queue that cannot be asked may well hold the job, so the answer says so instead of reading as none: a caller
+    // that took it for none would replay the delivery inline beside a job that is alive in Redis.
+    it('reports the queue unreachable, not empty, when it cannot answer', async () => {
+      (config.get as jest.Mock).mockReturnValue(true);
+      const getJobState = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+      const svc = new IngressEnqueueService(
+        loader as PluginLoaderService,
+        config as ConfigService,
+        { ...queue, getJobState } as never,
+      );
+
+      expect(await svc.existingJobState(data, 'd1')).toBe('unreachable');
     });
 
     // IngressProcessor re-queues a delivery whose dead-letter write failed under a copy id: that copy
@@ -294,7 +307,7 @@ describe('IngressEnqueueService', () => {
   // Until the first connect, BullMQ holds every queue call without sending a command and retries the
   // connection for ever, so enableOfflineQueue:false never rejects: with Redis unreachable since boot,
   // the ingress request, a redrive and the reconciler's row in hand would wait indefinitely.
-  it('falls back to inline dispatch and reports no job when Redis has not connected within the connect timeout', async () => {
+  it('falls back to inline dispatch and reports the queue unreachable when Redis has not connected within the connect timeout', async () => {
     (config.get as jest.Mock).mockReturnValue(true);
     const pending = () => new Promise<never>(() => {});
     queue.waitUntilReady.mockImplementation(pending);
@@ -316,7 +329,7 @@ describe('IngressEnqueueService', () => {
       jest.useRealTimers();
     }
 
-    expect(results).toEqual([undefined, { outcome: 'dispatched' }]);
+    expect(results).toEqual(['unreachable', { outcome: 'dispatched' }]);
     expect(getJobState).not.toHaveBeenCalled();
     expect(queue.add).not.toHaveBeenCalled();
     expect(loader.dispatchWebhookForInstance).toHaveBeenCalledWith(data);

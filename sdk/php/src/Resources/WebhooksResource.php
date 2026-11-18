@@ -71,7 +71,7 @@ class WebhooksResource
      */
     public function redriveDeliveryFailures(array $body = []): array
     {
-        return $this->http->request('POST', '/api/webhooks/delivery-failures/redrive', [], (object) $body);
+        return $this->http->request('POST', '/api/webhooks/delivery-failures/redrive', [], (object) HttpExecutor::lists($body, 'ids'));
     }
 
     /** @return array<int,array<string,mixed>> */
@@ -100,7 +100,7 @@ class WebhooksResource
         if (isset($body['headers']) && is_array($body['headers'])) {
             $body = array_merge($body, ['headers' => (object) $body['headers']]);
         }
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks", [], self::listFields($body));
     }
 
     /**
@@ -116,7 +116,7 @@ class WebhooksResource
         if (isset($body['headers']) && is_array($body['headers'])) {
             $body = array_merge($body, ['headers' => (object) $body['headers']]);
         }
-        return $this->http->request('PUT', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks/{$this->http->encodeSegment($id)}", [], $body);
+        return $this->http->request('PUT', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks/{$this->http->encodeSegment($id)}", [], self::listFields($body));
     }
 
     public function delete(string $sessionId, string $id): void
@@ -128,5 +128,28 @@ class WebhooksResource
     public function test(string $sessionId, string $id): array
     {
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks/{$this->http->encodeSegment($id)}/test");
+    }
+
+    /**
+     * The lists of a webhook body, as JSON arrays whatever their keys: `events`, the filter's `conditions` and the
+     * list `value` of a condition.
+     *
+     * @param array<string,mixed> $body
+     * @return array<string,mixed>
+     */
+    private static function listFields(array $body): array
+    {
+        $body = HttpExecutor::lists($body, 'events');
+        if (isset($body['filters']) && is_array($body['filters'])) {
+            $filters = HttpExecutor::lists($body['filters'], 'conditions');
+            if (isset($filters['conditions']) && is_array($filters['conditions'])) {
+                $filters = array_replace($filters, ['conditions' => array_map(
+                    static fn ($condition) => is_array($condition) ? HttpExecutor::lists($condition, 'value') : $condition,
+                    $filters['conditions']
+                )]);
+            }
+            $body = array_replace($body, ['filters' => $filters]);
+        }
+        return $body;
     }
 }

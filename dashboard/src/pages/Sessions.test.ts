@@ -88,6 +88,8 @@ interface FetchCall {
   method: string;
   path: string;
   body?: unknown;
+  // performance.now() when the stub saw the call, for a test that bounds how close two calls were.
+  at: number;
 }
 
 const fetchCalls: FetchCall[] = [];
@@ -205,7 +207,7 @@ function installFetchStub(): void {
         body = init.body;
       }
     }
-    fetchCalls.push({ method, path, body });
+    fetchCalls.push({ method, path, body, at: performance.now() });
 
     if (method === 'GET' && path === '/api/sessions') {
       if (Date.now() < listRefusedUntil) return Promise.resolve(throttled());
@@ -2164,39 +2166,93 @@ test('a connect retries a failed list read once, even when each failure carries 
   assert.equal(listReads(), 2);
 });
 
-// A network drop brings every session back at about the same time, and each ready push asks for the list. The
-// gateway refuses this route past 10 reads a second per client: one read per push left the newest read refused,
-// its error over the page and the phones the pushes asked for unread.
-test('a burst of ready pushes over a second shares a few list reads and is not throttled', async () => {
-  const { screen, waitFor, act } = rtl;
-  resetFetchCalls();
-  window.sessionStorage.setItem('openwa_api_key', 'test-key');
-  const burst: Session[] = Array.from({ length: 12 }, (_, i) => ({
+// Sessions.tsx holds the list reads that pushes ask for for this long (PUSHED_READ_WINDOW_MS).
+const PUSHED_READ_WINDOW_MS = 250;
+
+// Twelve sessions on their way back. comeBack() is a ready push for one, after the gateway wrote the phone that only a
+// list read brings to its card.
+const burstSessions = (): Session[] =>
+  Array.from({ length: 12 }, (_, i) => ({
     ...SESSION_RECONNECTING,
     id: `sess-burst-${i}`,
     name: `burst-${i}`,
     phone: `1555010${String(i).padStart(4, '0')}`,
   }));
+const comeBack = (row: Session, i: number): void => {
+  Object.assign(row, { status: 'ready', phone: `1555020${String(i).padStart(4, '0')}` });
+  pushSessionStatus(row.id, 'ready');
+};
+const listReadCalls = (): FetchCall[] => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions');
+
+// A network drop brings every session back at about the same time, and each ready push asks for the list. The
+// gateway refuses this route past 10 reads a second per client: one read per push left the newest read refused,
+// its error over the page and the phones the pushes asked for unread.
+//
+// What a slow runner changes is how many windows the pushes span, never how far apart two reads are: a window is held
+// for its full length, and a push only ever opens one after the one before it was sent. So the spec bounds the gap
+// between reads and waits for the last phone, instead of bounding a count that grows with the time the loop took.
+test('a burst of ready pushes over a second shares a few list reads and is not throttled', async () => {
+  const { screen, waitFor, act } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  const burst = burstSessions();
   SESSIONS.push(...burst);
   try {
     renderSessions();
     await screen.findByText('burst-11');
     await waitFor(() => assert.ok(lastSocket()?.connected));
     await act(() => new Promise(resolve => setTimeout(resolve, 300)));
-    const listReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
-    const before = listReads();
+    const before = listReadCalls().length;
     listThrottle = { limit: 10, delayMs: 20, windowStart: 0, hits: 0 };
     for (const [i, row] of burst.entries()) {
-      // The phone the gateway writes on ready, which only a list read brings to the card.
-      Object.assign(row, { status: 'ready', phone: `1555020${String(i).padStart(4, '0')}` });
-      pushSessionStatus(row.id, 'ready');
+      comeBack(row, i);
       await act(() => new Promise(resolve => setTimeout(resolve, 80)));
     }
-    await act(() => new Promise(resolve => setTimeout(resolve, 600)));
-    const reads = listReads() - before;
-    assert.ok(reads <= 6, `12 pushes sent ${reads} list reads`);
+    // The last phone is on its card once the read that follows the last push has landed.
+    await waitFor(
+      () => {
+        for (const row of burst) screen.getByText(row.phone as string);
+      },
+      { timeout: 10_000 },
+    );
+    const reads = listReadCalls().slice(before);
+    for (const [i, read] of reads.entries()) {
+      if (i === 0) continue;
+      const gap = read.at - reads[i - 1].at;
+      // Not less than the window (a timer may be read a few milliseconds early).
+      assert.ok(gap >= PUSHED_READ_WINDOW_MS - 10, `list reads ${i - 1} and ${i} were ${Math.round(gap)} ms apart`);
+    }
     assert.equal(screen.queryByText('ThrottlerException: Too Many Requests') === null, true, 'a list read was refused');
-    for (const row of burst) screen.getByText(row.phone as string);
+  } finally {
+    SESSIONS.splice(SESSIONS.length - burst.length, burst.length);
+  }
+});
+
+// No timer fires inside one synchronous run, so pushes that arrive together share a window however slowly the machine
+// runs them. This holds the sharing itself, which the spread burst above cannot on a runner too slow for any two
+// of its pushes to meet.
+test('ready pushes that arrive together share one list read', async () => {
+  const { screen, waitFor, act } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  const burst = burstSessions();
+  SESSIONS.push(...burst);
+  try {
+    renderSessions();
+    await screen.findByText('burst-11');
+    await waitFor(() => assert.ok(lastSocket()?.connected));
+    await act(() => new Promise(resolve => setTimeout(resolve, 300)));
+    const before = listReadCalls().length;
+    listThrottle = { limit: 10, delayMs: 20, windowStart: 0, hits: 0 };
+    for (const [i, row] of burst.entries()) comeBack(row, i);
+    await waitFor(
+      () => {
+        for (const row of burst) screen.getByText(row.phone as string);
+      },
+      { timeout: 10_000 },
+    );
+    assert.equal(listReadCalls().length - before, 1, '12 pushes that arrived together sent more than one list read');
+    assert.equal(screen.queryByText('ThrottlerException: Too Many Requests') === null, true, 'a list read was refused');
   } finally {
     SESSIONS.splice(SESSIONS.length - burst.length, burst.length);
   }

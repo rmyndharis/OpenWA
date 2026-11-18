@@ -1,3 +1,4 @@
+import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { Chat, proto } from '@whiskeysockets/baileys';
 import {
   DeliveryStatus,
@@ -28,30 +29,131 @@ export const BAILEYS_NON_CONTENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * A live chat update without the unread count Baileys raised for a message that is none of its own. Baileys counts
- * whatever is not a plain reaction, edit, delete or poll vote as a received message, so a contact's encrypted edit or
- * reaction, a pin, an album header or an event RSVP listed the chat as unread with nothing new to read. Only an update
- * that counts exactly that one message is recognised: Baileys' event buffer adds the counts of one flush and keeps
- * the last message alone, so a larger count may hold a message of its own and is left as it is. For the same reason
- * the message has to be one Baileys counts, received and with no stub type: after a contact's text, the account's own
- * pin or edit in the same flush leaves the text's count of one beside a message that was never counted.
+ * Top-level Message keys that carry no user content: sender-key distributions (Signal traffic every group participant
+ * emits on its first write or a key rotation) and history-sync notices. `messageContextInfo` rides along on real
+ * content too, so on its own it is not enough to call a message noise (see {@link isNoiseOnly}).
+ */
+export const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
+  'senderKeyDistributionMessage',
+  'fastRatchetKeySenderKeyDistributionMessage',
+  'messageContextInfo',
+  'messageHistoryNotice',
+  'messageHistoryBundle',
+]);
+
+/** The helpers of the loaded library that name the content a message carries. */
+export type ContentTypeLib = Pick<typeof BaileysLib, 'normalizeMessageContent' | 'getContentType'>;
+
+/**
+ * Whether a normalized message is made of protocol noise alone, which nothing announces. `messageContextInfo` is also
+ * carried by real content and by a type newer than the bundled proto, so a message of that key alone is not noise,
+ * unless `ciphertextStub` says part of its stanza failed to decrypt: what survived of that is dropped whatever it holds,
+ * so that a redelivery carrying the real body is not skipped as a duplicate.
+ */
+export function isNoiseOnly(content: object | null | undefined, ciphertextStub = false): boolean {
+  const keys = Object.keys(content ?? {});
+  return (
+    keys.every(key => PROTOCOL_NOISE_KEYS.has(key)) &&
+    (ciphertextStub || keys.some(key => key !== 'messageContextInfo'))
+  );
+}
+
+/**
+ * The key of the content a normalized message carries, as Baileys' `getContentType` names it, except that the noise keys
+ * are passed over. Baileys passes over the plain sender-key distribution by name, but the fast-ratchet one contains
+ * `Message` too, and Baileys merges the decrypted parts of a stanza in the order the stanza lists them: a real message
+ * whose parts merged with it first would be typed by it, announced as `unknown` and judged by the wrong key.
+ */
+export function contentTypeOf(
+  content: proto.IMessage | null | undefined,
+  getContentType: ContentTypeLib['getContentType'],
+): string | undefined {
+  const type = getContentType(content ?? undefined);
+  if (type === undefined || !PROTOCOL_NOISE_KEYS.has(type)) return type;
+  const rest = Object.entries(content ?? {}).filter(([key]) => !PROTOCOL_NOISE_KEYS.has(key));
+  return getContentType(Object.fromEntries(rest));
+}
+
+/**
+ * Whether a normalized message is none of its own: protocol noise alone, or a type that only changes or annotates
+ * another message (BAILEYS_NON_CONTENT_TYPES). The live path and the history capture drop such a message, and every
+ * list that has to agree with them asks this.
+ */
+export function isNonContent(
+  content: proto.IMessage | null | undefined,
+  getContentType: ContentTypeLib['getContentType'],
+): boolean {
+  const type = contentTypeOf(content, getContentType);
+  return isNoiseOnly(content) || (type !== undefined && BAILEYS_NON_CONTENT_TYPES.has(type));
+}
+
+/**
+ * A live chat update without what a message that is none of its own put in it: its unread count, its time and the
+ * message itself. Baileys counts whatever is not a plain reaction, edit, delete or poll vote as a received message, so
+ * a contact's encrypted edit or reaction, a pin, a keep-in-chat toggle, an album header, an event RSVP, an encrypted
+ * comment or a lone fast-ratchet sender-key distribution listed the chat unread with nothing new to read, and, by its
+ * time, brought back a chat WhatsApp had deleted, which only a message of its own may do. Only an update that counts
+ * exactly that one message is recognised: Baileys' event buffer adds the counts of one flush and keeps the last message
+ * alone, so a larger count may hold a message of its own and is left as it is. For the same reason the message has to
+ * be one Baileys counts, received and with no stub type: after a contact's text, the account's own pin or edit in the
+ * same flush leaves the text's count of one beside a message that was never counted. The account's own message carries
+ * no count at all, so an own count in the update belongs to something else and leaves it whole.
+ *
+ * Whatever else the update carries (a timer, a name, a mute, a pin, `archived`) is still the chat's. `undefined` says
+ * nothing is left of it but its id, which a store that has never seen the chat would take for a chat of its own.
  *
  * One case cannot be told apart: an unread mark set on the phone that Baileys delivers in the same flush just before
  * such a message, as after a reconnect. The buffer folds the mark into the message's count and emits exactly what the
  * message alone produces, so the mark is not listed. It stays on the account, and the phone still shows it.
  */
-export function withoutNonContentUnread(
+export function withoutNonContentMessage(
   update: Partial<Chat>,
-  typeOf: (content: proto.IMessage | null | undefined) => string | undefined,
-): Partial<Chat> {
-  if (update.unreadCount !== 1) return update;
-  const counted = update.messages?.[0]?.message;
-  if (!counted || counted.key?.fromMe === true || counted.messageStubType) return update;
-  const type = typeOf(counted.message);
-  if (type === undefined || !BAILEYS_NON_CONTENT_TYPES.has(type)) return update;
-  const uncounted = { ...update };
-  delete uncounted.unreadCount;
-  return uncounted;
+  lib: ContentTypeLib | undefined,
+): Partial<Chat> | undefined {
+  const last = nonContentLast(update, lib);
+  if (!last || (last.key?.fromMe === true ? Object.hasOwn(update, 'unreadCount') : update.unreadCount !== 1)) {
+    return update;
+  }
+  const rest = { ...update };
+  delete rest.unreadCount;
+  delete rest.conversationTimestamp;
+  delete rest.messages;
+  return Object.keys(rest).every(key => key === 'id' || key === 'conditional') ? undefined : rest;
+}
+
+/**
+ * A chat of a history chunk or an upsert, without the time and message of a last message that is none of its own. While
+ * the library's event buffer holds such a chat, it merges a chat update into it: the update's message, its time and its
+ * count added to the chunk's. The chat then reached the store with a time that is the message's, which brings back a
+ * chat WhatsApp deleted, and with the message as its last. The time is taken out only when it is the message's: after a
+ * message that came before the chunk it is the chunk's own, and stays.
+ *
+ * As for a live update ({@link withoutNonContentMessage}), only a chat that counts exactly that one message is
+ * recognised: a received message leaves a count of one, one of the account's own leaves none. A larger count may hold a
+ * message of its own, and a deleted chat that lost its time would drop the count of a text of the same flush, which is
+ * recorded only afterwards and brings the chat back with none. So a chunk that held a count of its own, or that a text
+ * was merged into as well, is left as it is: it keeps the time and message of the last update merged into it.
+ *
+ * The count stays whatever it is: it is the chunk's count plus the count of every update merged into it, and nothing in
+ * the chat says whether the chunk held a count to add to (the library replaces one that is not a number), so the
+ * message's count cannot be told from the rest. A pin merged into a chunk therefore still raises that chat's count by one.
+ */
+export function withoutMergedNonContentMessage(chat: Partial<Chat>, lib: ContentTypeLib | undefined): Partial<Chat> {
+  const last = nonContentLast(chat, lib);
+  if (!last || (last.key?.fromMe === true ? (chat.unreadCount ?? 0) > 0 : chat.unreadCount !== 1)) return chat;
+  const rest = { ...chat };
+  delete rest.messages;
+  if (last.messageTimestamp != null && Number(rest.conversationTimestamp) === Number(last.messageTimestamp)) {
+    delete rest.conversationTimestamp;
+  }
+  return rest;
+}
+
+/** The last message of a chat or chat update when it is none of its own and has content and no stub type. */
+function nonContentLast(chat: Partial<Chat>, lib: ContentTypeLib | undefined): proto.IWebMessageInfo | undefined {
+  const last = chat.messages?.[0]?.message;
+  if (!lib || !last?.message || last.messageStubType) return undefined;
+  return isNonContent(lib.normalizeMessageContent(last.message) ?? last.message, lib.getContentType) ? last : undefined;
 }
 
 /**

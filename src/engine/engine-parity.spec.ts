@@ -83,6 +83,12 @@ const ANY_THROW_SITE_RE = /(?:new EngineNotSupportedError|this\.unsupported)\(/;
 const CONDITIONAL_THROW_SITES: Readonly<Record<string, string>> = {
   'sendTextMessage(customPreview)':
     'wwjs sendTextMessage is supported; it refuses only when customPreview is passed, because whatsapp-web.js takes a boolean linkPreview and cannot represent a custom card',
+  'revokeGroupInviteCode(no reset job on this build)':
+    'wwjs revokeGroupInviteCode is supported; it answers 501 only on a WhatsApp Web build that exports the invite reset job from neither WAWebGroupInviteJob nor WAWebGroupQueryJob',
+  'getGroupInviteCode(no invite code job on this build)':
+    'wwjs getGroupInviteCode is supported; it answers 501 only on a WhatsApp Web build that has no WAWebMexFetchGroupInviteCodeJob job, where whatsapp-web.js getInviteCode cannot read the code either',
+  'setProfileStatus(no status setter on this build)':
+    'wwjs setProfileStatus is supported; it answers 501 only on a WhatsApp Web build whose WAWebContactStatusBridge no longer exports setMyStatus, which Client.setStatus calls',
 };
 
 function readDelegateThrows(): Record<string, Set<string>> {

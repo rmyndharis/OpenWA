@@ -51,7 +51,7 @@ class StatusResource
      */
     public function sendText(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-text", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-text", [], HttpExecutor::lists($body, 'recipients'));
     }
 
     /**
@@ -62,7 +62,7 @@ class StatusResource
      */
     public function sendImage(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-image", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-image", [], HttpExecutor::lists($body, 'recipients'));
     }
 
     /**
@@ -73,7 +73,7 @@ class StatusResource
      */
     public function sendVideo(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-video", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-video", [], HttpExecutor::lists($body, 'recipients'));
     }
 
     /**
@@ -87,7 +87,7 @@ class StatusResource
      */
     public function sendVoice(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-voice", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-voice", [], HttpExecutor::lists($body, 'recipients'));
     }
 
     public function delete(string $sessionId, string $statusId): void

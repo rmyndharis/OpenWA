@@ -126,6 +126,8 @@ except OpenWANotFoundError as e:
   `client.request(method, path, query=…, body=…, idempotency_key=…)`. A path with a `.` or `..` segment (also after an
   encoded slash, as in `..%2F`), or one that does not begin with `/`, raises `ValueError` before anything is sent. An id
   with a `.` or `..` part between slashes, such as `../x`, is refused the same way.
+- On Python 3.9 the `TypedDict`s of `openwa.types` are meant for static type checkers: `typing.get_type_hints`
+  raises `TypeError` for those whose annotations use `X | None` or `X | Y`, which that version cannot evaluate.
 
 ## Receiving webhooks
 

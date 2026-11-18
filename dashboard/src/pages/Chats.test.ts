@@ -3728,7 +3728,8 @@ function makeScrollable(thread: HTMLElement, scrollTop: number): void {
     configurable: true,
     get: () => thread.querySelectorAll('.message-bubble').length * BUBBLE_PX,
   });
-  let top = scrollTop;
+  // The thread was pinned at its bottom when it opened, and that is where the browser has it until the reader moves it.
+  let top = thread.scrollHeight;
   Object.defineProperty(thread, 'scrollTop', {
     configurable: true,
     get: () => top,
@@ -3736,6 +3737,10 @@ function makeScrollable(thread: HTMLElement, scrollTop: number): void {
       top = value;
     },
   });
+  // A browser reports the box of a thread it has laid out before the reader can move it, and a thread pinned at its
+  // bottom stays there through that report. Only after it is the reader where the test puts them.
+  rtl.fireEvent.scroll(thread);
+  top = scrollTop;
 }
 
 /** Open Carol's thread and return its scroll container, with the first page rendered. */

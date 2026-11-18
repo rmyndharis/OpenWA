@@ -4,19 +4,17 @@ import { In, LessThan, Repository } from 'typeorm';
 import { Message } from './entities/message.entity';
 import { BatchStatus, MessageBatch } from './entities/message-batch.entity';
 import { createLogger } from '../../common/services/logger.service';
+import { PRUNE_BATCH_SIZE, pruneInBatches } from '../../common/utils/batched-prune';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Rows deleted per statement. Small enough to stay far below the bind-parameter limit of either
- * dialect and to keep each write short: SQLite has one writer, so a long delete (each row also fires
- * the full-text index trigger) would stall message ingest behind it.
+ * Rows removed per run and table: 200 statements of PRUNE_BATCH_SIZE rows. The statements are short and give up
+ * the event loop between them (see pruneInBatches): SQLite has one writer, and each message row also fires the
+ * full-text index trigger, so a long delete would stall message ingest behind it.
  */
-const PRUNE_BATCH_SIZE = 500;
-
-/** Statements per run and table, so one run deletes at most MAX_BATCHES_PER_RUN * PRUNE_BATCH_SIZE rows of each. */
-const MAX_BATCHES_PER_RUN = 200;
+const MAX_ROWS_PER_RUN = 200 * PRUNE_BATCH_SIZE;
 
 /**
  * Delay before the next run when one stopped at its cap. Without it a deployment that stores more
@@ -90,8 +88,7 @@ export class MessageRetentionService implements OnModuleInit, OnModuleDestroy {
               { action: 'messages_pruned', messages, batches },
             );
           }
-          const cap = MAX_BATCHES_PER_RUN * PRUNE_BATCH_SIZE;
-          if ((messages >= cap || batches >= cap) && !this.stopped) {
+          if ((messages >= MAX_ROWS_PER_RUN || batches >= MAX_ROWS_PER_RUN) && !this.stopped) {
             this.logger.warn('Message retention hit its per-run cap; expired rows remain, running again shortly', {
               action: 'messages_prune_capped',
             });
@@ -121,32 +118,20 @@ export class MessageRetentionService implements OnModuleInit, OnModuleDestroy {
     if (!cutoff || this.running) return { messages: 0, batches: 0 };
     this.running = true;
     try {
-      let messages = 0;
-      for (let i = 0; i < MAX_BATCHES_PER_RUN; i++) {
-        const rows = await this.messages.find({
-          select: { id: true },
-          where: { createdAt: LessThan(cutoff) },
-          order: { createdAt: 'ASC' },
-          take: PRUNE_BATCH_SIZE,
-        });
-        if (rows.length === 0) break;
-        await this.messages.delete({ id: In(rows.map(row => row.id)) });
-        messages += rows.length;
-        if (rows.length < PRUNE_BATCH_SIZE) break;
-      }
+      const messages = await pruneInBatches({
+        repository: this.messages,
+        where: { createdAt: LessThan(cutoff) },
+        order: { createdAt: 'ASC' },
+        maxRows: MAX_ROWS_PER_RUN,
+        stopped: () => this.stopped,
+      });
       // Finished batches go in the same short statements: one DELETE over a backlog held the writer as long.
-      let batches = 0;
-      for (let i = 0; i < MAX_BATCHES_PER_RUN; i++) {
-        const rows = await this.batches.find({
-          select: { id: true },
-          where: { status: In(TERMINAL_BATCH_STATUSES), createdAt: LessThan(cutoff) },
-          take: PRUNE_BATCH_SIZE,
-        });
-        if (rows.length === 0) break;
-        await this.batches.delete({ id: In(rows.map(row => row.id)) });
-        batches += rows.length;
-        if (rows.length < PRUNE_BATCH_SIZE) break;
-      }
+      const batches = await pruneInBatches({
+        repository: this.batches,
+        where: { status: In(TERMINAL_BATCH_STATUSES), createdAt: LessThan(cutoff) },
+        maxRows: MAX_ROWS_PER_RUN,
+        stopped: () => this.stopped,
+      });
       return { messages, batches };
     } finally {
       this.running = false;

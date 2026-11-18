@@ -41,7 +41,7 @@ class MessagesResource
      */
     public function sendText(string $sessionId, array $body, ?string $idempotencyKey = null): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-text", [], $body, $idempotencyKey);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-text", [], HttpExecutor::lists($body, 'mentions'), $idempotencyKey);
     }
 
     /**
@@ -80,7 +80,7 @@ class MessagesResource
     /** @return array<string,mixed> */
     private function sendMedia(string $sessionId, string $segment, array $body, ?string $idempotencyKey = null): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/{$this->http->encodeSegment($segment)}", [], $body, $idempotencyKey);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/{$this->http->encodeSegment($segment)}", [], HttpExecutor::lists($body, 'mentions'), $idempotencyKey);
     }
 
     /** @return array<string,mixed> */
@@ -98,6 +98,7 @@ class MessagesResource
     /** @return array<string,mixed> */
     public function sendTemplate(string $sessionId, array $body, ?string $idempotencyKey = null): array
     {
+        $body = HttpExecutor::lists($body, 'mentions');
         // Encode maps as objects without assigning through caller-held references.
         if (isset($body['vars']) && is_array($body['vars'])) {
             $body = array_merge($body, ['vars' => (object) $body['vars']]);
@@ -113,13 +114,13 @@ class MessagesResource
      */
     public function sendPoll(string $sessionId, array $body, ?string $idempotencyKey = null): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-poll", [], $body, $idempotencyKey);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-poll", [], HttpExecutor::lists($body, 'options'), $idempotencyKey);
     }
 
     /** @return array<string,mixed> */
     public function reply(string $sessionId, array $body, ?string $idempotencyKey = null): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/reply", [], $body, $idempotencyKey);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/reply", [], HttpExecutor::lists($body, 'mentions'), $idempotencyKey);
     }
 
     /**
@@ -160,7 +161,7 @@ class MessagesResource
      */
     public function editMessage(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/edit", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/edit", [], HttpExecutor::lists($body, 'mentions'));
     }
 
     /**
@@ -214,7 +215,7 @@ class MessagesResource
      */
     public function votePoll(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/vote-poll", [], $body) ?? [];
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/vote-poll", [], HttpExecutor::lists($body, 'options')) ?? [];
     }
 
     /**
@@ -257,6 +258,9 @@ class MessagesResource
         if (isset($body['messages']) && is_array($body['messages'])) {
             $body = array_merge($body, [
                 'messages' => array_values(array_map(static function ($item) {
+                    if (is_array($item) && isset($item['content']) && is_array($item['content'])) {
+                        $item = array_replace($item, ['content' => HttpExecutor::lists($item['content'], 'mentions')]);
+                    }
                     if (is_array($item) && isset($item['variables']) && is_array($item['variables'])) {
                         return array_merge($item, ['variables' => (object) $item['variables']]);
                     }

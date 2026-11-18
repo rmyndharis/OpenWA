@@ -22,10 +22,6 @@ export const INTENTIONALLY_UNEMITTED_ACTIONS: Partial<Record<AuditAction, string
     'Not emitted: per outbound message, fully redundant with the messages table, which persists every send with its outcome.',
   [AuditAction.MESSAGE_FAILED]:
     'Not emitted: per failed send, redundant with the outcome persisted on the messages table.',
-  [AuditAction.WEBHOOK_CREATED]:
-    'Not yet emitted: webhook create/delete is not currently audited. It is low-volume and security-relevant, so wiring it is a candidate for a separate enhancement; the gate will validate the emission once added, and this entry must then be removed.',
-  [AuditAction.WEBHOOK_DELETED]:
-    'Not yet emitted: webhook create/delete is not currently audited. It is low-volume and security-relevant, so wiring it is a candidate for a separate enhancement; the gate will validate the emission once added, and this entry must then be removed.',
   [AuditAction.WEBHOOK_TRIGGERED]:
     'Not emitted: per delivery attempt, redundant with the webhook_delivery_failures dead-letter table and the openwa_webhook_delivery_failures_total counter.',
   [AuditAction.WEBHOOK_FAILED]:

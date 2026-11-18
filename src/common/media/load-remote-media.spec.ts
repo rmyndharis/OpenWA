@@ -178,7 +178,7 @@ describe('loadRemoteMediaBuffer', () => {
       const body = JSON.stringify((error as ServiceUnavailableException).getResponse());
       expect(body).not.toMatch(/10\.0\.0\.5|proxy\.example|secret/);
       expect(countsTowardSendBreaker(error)).toBe(false);
-      // Nothing reached WhatsApp, so a paced send hands its admission back.
+      // Nothing reached WhatsApp, so a bulk item or a product send hands its admission back.
       expect(sentNothing(error)).toBe(true);
     });
 
