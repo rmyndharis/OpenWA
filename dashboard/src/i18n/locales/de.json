@@ -350,6 +350,13 @@
         "always": "Immer"
       },
       "saveContactUnavailable": "Braucht eine bekannte Telefonnummer: Dieser Chat hat nur eine Datenschutz-ID (@lid)."
+    },
+    "roomSearch": {
+      "title": "Nachrichten suchen",
+      "placeholder": "Suchen",
+      "date": "Zu Datum springen",
+      "noDateHits": "Keine geladenen Nachrichten an diesem Tag",
+      "open": "Im Chat suchen"
     }
   },
   "errorBoundary": {

@@ -350,6 +350,13 @@
         "always": "Always"
       },
       "saveContactUnavailable": "Needs a known phone number: this chat has only a privacy id (@lid)."
+    },
+    "roomSearch": {
+      "title": "Search messages",
+      "placeholder": "Search",
+      "date": "Jump to date",
+      "noDateHits": "No loaded messages on that day",
+      "open": "Search in chat"
     }
   },
   "errorBoundary": {

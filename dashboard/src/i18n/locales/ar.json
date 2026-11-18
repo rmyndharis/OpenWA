@@ -371,6 +371,13 @@
         "always": "دائمًا"
       },
       "saveContactUnavailable": "يتطلب رقم هاتف معروفًا: لهذه المحادثة معرّف خصوصية فقط (@lid)."
+    },
+    "roomSearch": {
+      "title": "بحث في الرسائل",
+      "placeholder": "بحث",
+      "date": "الانتقال إلى التاريخ",
+      "noDateHits": "لا رسائل محمّلة في ذلك اليوم",
+      "open": "بحث في المحادثة"
     }
   },
   "errorBoundary": {

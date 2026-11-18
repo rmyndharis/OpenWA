@@ -350,6 +350,13 @@
         "always": "永遠"
       },
       "saveContactUnavailable": "需要已知的電話號碼：此聊天只有私隱 ID（@lid）。"
+    },
+    "roomSearch": {
+      "title": "搜尋訊息",
+      "placeholder": "搜尋",
+      "date": "跳至日期",
+      "noDateHits": "當天沒有已載入的訊息",
+      "open": "在聊天中搜尋"
     }
   },
   "errorBoundary": {

@@ -350,6 +350,13 @@
         "always": "始终"
       },
       "saveContactUnavailable": "需要已知的电话号码：此聊天只有隐私 ID（@lid）。"
+    },
+    "roomSearch": {
+      "title": "搜索消息",
+      "placeholder": "搜索",
+      "date": "跳到日期",
+      "noDateHits": "当天没有已加载的消息",
+      "open": "在聊天中搜索"
     }
   },
   "errorBoundary": {

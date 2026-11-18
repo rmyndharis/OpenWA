@@ -361,6 +361,13 @@
         "always": "תמיד"
       },
       "saveContactUnavailable": "נדרש מספר טלפון ידוע: לשיחה זו יש רק מזהה פרטיות (@lid)."
+    },
+    "roomSearch": {
+      "title": "חיפוש הודעות",
+      "placeholder": "חיפוש",
+      "date": "מעבר לתאריך",
+      "noDateHits": "אין הודעות טעונות ביום הזה",
+      "open": "חיפוש בצ׳אט"
     }
   },
   "errorBoundary": {

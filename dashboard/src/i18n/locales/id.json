@@ -350,6 +350,13 @@
         "always": "Selalu"
       },
       "saveContactUnavailable": "Memerlukan nomor telepon yang diketahui: obrolan ini hanya memiliki ID privasi (@lid)."
+    },
+    "roomSearch": {
+      "title": "Cari pesan",
+      "placeholder": "Cari",
+      "date": "Lompat ke tanggal",
+      "noDateHits": "Tidak ada pesan termuat pada hari itu",
+      "open": "Cari di chat"
     }
   },
   "errorBoundary": {

@@ -350,6 +350,13 @@
         "always": "हमेशा"
       },
       "saveContactUnavailable": "ज्ञात फ़ोन नंबर चाहिए: इस चैट में केवल गोपनीयता आईडी (@lid) है।"
+    },
+    "roomSearch": {
+      "title": "संदेश खोजें",
+      "placeholder": "खोजें",
+      "date": "तिथि पर जाएँ",
+      "noDateHits": "उस दिन कोई लोडेड संदेश नहीं",
+      "open": "चैट में खोजें"
     }
   },
   "errorBoundary": {

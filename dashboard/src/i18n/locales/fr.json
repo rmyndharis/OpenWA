@@ -355,6 +355,13 @@
         "always": "Toujours"
       },
       "saveContactUnavailable": "Nécessite un numéro de téléphone connu : cette discussion n’a qu’un identifiant de confidentialité (@lid)."
+    },
+    "roomSearch": {
+      "title": "Rechercher des messages",
+      "placeholder": "Rechercher",
+      "date": "Aller à la date",
+      "noDateHits": "Aucun message chargé ce jour-là",
+      "open": "Rechercher dans la discussion"
     }
   },
   "errorBoundary": {

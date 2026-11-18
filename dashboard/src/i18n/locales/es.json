@@ -355,6 +355,13 @@
         "always": "Siempre"
       },
       "saveContactUnavailable": "Necesita un número de teléfono conocido: este chat solo tiene un ID de privacidad (@lid)."
+    },
+    "roomSearch": {
+      "title": "Buscar mensajes",
+      "placeholder": "Busca",
+      "date": "Ir a la fecha",
+      "noDateHits": "No hay mensajes cargados ese día",
+      "open": "Buscar en el chat"
     }
   },
   "errorBoundary": {
