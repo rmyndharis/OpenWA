@@ -11,6 +11,16 @@ import { createElement } from 'react';
 import { MENTION_CLOSE, MENTION_OPEN } from '../../utils/messageFormatter.ts';
 import { buildMentionNameMap, resolveMentions } from '../../utils/chatMessages.ts';
 
+/**
+ * CPU time this process has used since `since`, in milliseconds. A bound on work is asserted on it and not on the
+ * wall clock: a busy runner can hold the worker off the CPU for longer than the whole bound, while code that is slow
+ * burns the CPU on every run.
+ */
+const cpuMsSince = (since: NodeJS.CpuUsage): number => {
+  const { user, system } = process.cpuUsage(since);
+  return (user + system) / 1000;
+};
+
 let rtl: typeof import('@testing-library/react');
 let MessageBody: (typeof import('./MessageBody.tsx'))['default'];
 
@@ -94,10 +104,10 @@ test('a body past the link-scanning bound renders as plain text without being sc
   // Link detection grows with the square of an unbroken run of domain-like characters, so a long
   // body is left unlinked instead of freezing the thread for seconds.
   const body = `${'a.'.repeat(32_500)} https://example.com/x`;
-  const started = performance.now();
+  const started = process.cpuUsage();
   const { container } = rtl.render(createElement(MessageBody, { text: body }));
-  const elapsed = performance.now() - started;
-  assert.ok(elapsed < 1000, `rendering ${body.length} chars took ${Math.round(elapsed)} ms`);
+  const elapsed = cpuMsSince(started);
+  assert.ok(elapsed < 1000, `rendering ${body.length} chars took ${Math.round(elapsed)} ms of CPU`);
   assert.equal(container.querySelectorAll('a').length, 0);
   assert.equal(container.textContent, body);
 });
