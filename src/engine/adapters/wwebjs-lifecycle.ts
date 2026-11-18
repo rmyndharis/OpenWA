@@ -39,7 +39,10 @@ export function isExecutionContextDestroyedError(reason: string): boolean {
 /**
  * A first-inject rejection that reads as "the page navigated out from under the in-flight evaluate":
  * the exec-context class above plus the 'window.require is not a function' variant (an evaluate
- * landing on a document whose WA bundle has not booted yet). Deliberately SEPARATE from the
+ * landing on a document whose WA bundle has not booted yet), which the page functions this adapter
+ * ships spell 'w.require is not a function' because they read `require` through a local alias of the
+ * window. Only a missing `require` itself is a reload: 'w.require(...).x is not a function' names a
+ * function a WhatsApp Web build dropped, which no retry serves. Deliberately SEPARATE from the
  * stale-profile advisory classifier: the advisory names a remedy (delete the profile) that is wrong
  * for the window.require shape (see src/config/process-error-monitor.ts) — this predicate only
  * decides whether one in-place retry is worth it, both shapes being transient when a reload caused
@@ -49,7 +52,7 @@ export function isExecutionContextDestroyedError(reason: string): boolean {
  * the inject that would take over, so the launch rejects with one of these shapes as it always did (#1081).
  */
 function isNavigationShapedInitRejection(reason: string): boolean {
-  return isExecutionContextDestroyedError(reason) || /window\.require is not a function/i.test(reason);
+  return isExecutionContextDestroyedError(reason) || /\b(?:window|w)\.require is not a function/i.test(reason);
 }
 
 /** What whatsapp-web.js throws, as a bare string, when its wait for WhatsApp Web to boot runs out of authTimeoutMs. */

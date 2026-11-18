@@ -30,6 +30,9 @@ describe('isNavigationError', () => {
   it.each([
     NAVIGATION,
     'Evaluation failed: TypeError: window.require is not a function',
+    // The page functions this adapter ships read `require` through a local alias of the window, so V8 names that.
+    'Evaluation failed: TypeError: w.require is not a function',
+    'w.require is not a function',
     'execution context was destroyed',
   ])('reads %p as a navigation', message => {
     expect(isNavigationError(new Error(message))).toBe(true);
@@ -45,6 +48,10 @@ describe('isNavigationError', () => {
     'Protocol error (Runtime.callFunctionOn): Target closed',
     "Runtime.callFunctionOn timed out. Increase the 'protocolTimeout' setting in launch/connect calls",
     'Evaluation failed: TypeError: Cannot read properties of null',
+    // A build that moved a function is not a reload: reading it as one would answer a retryable 409 that never succeeds.
+    'Evaluation failed: TypeError: w.require(...).resetGroupInviteCode is not a function',
+    'Evaluation failed: TypeError: window.require(...).setMyStatus is not a function',
+    'Evaluation failed: TypeError: follow.require is not a function',
     '',
   ])('does not read %p as a navigation', message => {
     expect(isNavigationError(new Error(message))).toBe(false);
