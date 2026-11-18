@@ -59,7 +59,8 @@ interface ChatSidebarProps {
     pictures?: Record<string, string | null>;
     /** Parked composer text by chat id (current session). Shown on rows that are not open. */
     drafts?: Record<string, string>;
-    onSelectChat: (chat: Chat) => void;
+    /** `byPointer` says the row was clicked with a mouse, a pen or a finger, where a key leaves it unset. */
+    onSelectChat: (chat: Chat, byPointer?: boolean) => void;
     /** The actions behind the chevron on a group or 1:1 row. */
     rowActions?: ChatRowActions;
     /** The archive: how many chats it holds, whether the list shows it, and the switch between the two. */
@@ -91,7 +92,7 @@ interface ChatListRowProps {
   today: string;
   /** Unsent composer text parked for this chat. The row of the open chat does not show it. */
   draft?: string;
-  onSelectChat: (chat: Chat) => void;
+  onSelectChat: (chat: Chat, byPointer?: boolean) => void;
   rowActions?: ChatRowActions;
   menuOpen: boolean;
   onMenuOpenChange: (chatId: string, open: boolean) => void;
@@ -131,7 +132,14 @@ const ChatListRow = memo(
         data-chat-id={chat.id}
         aria-current={active ? 'true' : undefined}
         className={`chat-item-card ${active ? 'active' : ''} ${chat.unreadCount !== 0 ? 'unread' : ''}`}
-        onClick={() => onSelectChat(chat)}
+        // A double click's second press would move focus from the message field back to the row, and its click opens
+        // nothing, so nothing would return it: that press is refused.
+        onMouseDown={e => {
+          if (e.detail > 1) e.preventDefault();
+        }}
+        // A click made with a pointer has a count. One with no press behind it (assistive technology, a script) has
+        // none and, like Enter and Space below, leaves focus on the row.
+        onClick={e => onSelectChat(chat, e.detail > 0)}
         onKeyDown={e => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
