@@ -112,6 +112,10 @@
 #   (ax) the archive listing helper finds a member listed first in a listing that outgrows a pipe buffer
 #   (ay) restore refuses an archive that holds the SQLite data store, before it writes anything, while DATABASE_TYPE is
 #       postgres (from the environment, ./.env or the archive's .env.generated), and still restores a PostgreSQL archive
+#   (az) a value of only blanks in the environment, a Unicode blank included, in a UTF-8 locale too, counts as unset, as in
+#       the app, in both scripts: a blank DATABASE_TYPE leaves the type data/.env.generated sets, a blank path key leaves
+#       the check that keeps a path from the archive inside the data dir on, as does a key exported empty, and a value
+#       with blanks inside is still used as written
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -3305,6 +3309,77 @@ for ay_env in 'DATABASE_TYPE=postgres\n' 'DATABASE_TYPE="postgres" # migrated\n'
   fi
 done
 pass "(ay) a SQLite archive is refused under DATABASE_TYPE=postgres before anything is written"
+
+echo ""
+echo "==> (az) a value of only blanks in the environment is unset, as in the app, for backup and for restore"
+# The app drops a blank environment value, so ./.env and data/.env.generated supply the key. The scripts took only the
+# empty string for blank: a blank DATABASE_TYPE hid the PostgreSQL install (backup archived the SQLite file left from
+# before the move, restore wrote a data store the app never opens), and a blank path key hid itself from the check that
+# keeps a path from the archive inside the data dir. restore.sh's own variable named PLUGIN_STATE_DIR did the same to an
+# exported empty one.
+AZ="$WORK/az"
+mkdir -p "$AZ/install/data" "$AZ/bin" "$AZ/outside"
+make_fixture "$AZ/install/data/main.sqlite" "az-main"
+make_fixture "$AZ/install/data/openwa.sqlite" "az-stale"
+printf 'DATABASE_TYPE=postgres\nDATABASE_HOST=db.example.invalid\n' >"$AZ/install/data/.env.generated"
+printf '#!/bin/sh\necho dumped\n' >"$AZ/bin/pg_dump"
+chmod +x "$AZ/bin/pg_dump"
+(cd "$AZ/install" && PATH="$AZ/bin:$PATH" DATABASE_TYPE=' ' BACKUP_DIR="$AZ/out" "$BACKUP" >/dev/null) ||
+  fail "(az) backup stopped under a blank DATABASE_TYPE with PostgreSQL set in data/.env.generated"
+AZ_ARCHIVE="$(ls "$AZ"/out/openwa-backup-*.tar.gz)"
+if ! tar_lists -tzf "$AZ_ARCHIVE" -x './database.sql' || tar_lists -tzf "$AZ_ARCHIVE" -x './openwa.sqlite'; then
+  fail "(az) backup under a blank DATABASE_TYPE did not dump PostgreSQL, the type data/.env.generated sets"
+fi
+# One archive per reader: the type, a path key, and the plugin-state root that restore.sh's own variable once shadowed.
+mkdir -p "$AZ/stage-sqlite" "$AZ/stage-sessions/sessions/auth" "$AZ/stage-state/plugin-state"
+make_fixture "$AZ/stage-sqlite/main.sqlite" "az-main"
+make_fixture "$AZ/stage-sqlite/openwa.sqlite" "az-data"
+printf 'DATABASE_TYPE=postgres\n' >"$AZ/stage-sqlite/.env.generated"
+printf 'session\n' >"$AZ/stage-sessions/sessions/auth/creds"
+printf 'SESSION_DATA_PATH=%s\n' "$AZ/outside/sessions" >"$AZ/stage-sessions/.env.generated"
+printf '{}' >"$AZ/stage-state/plugin-state/registry.json"
+printf 'PLUGIN_STATE_DIR=%s\n' "$AZ/outside/state" >"$AZ/stage-state/.env.generated"
+for az_name in sqlite sessions state; do
+  tar -czf "$AZ/$az_name.tar.gz" -C "$AZ/stage-$az_name" .
+done
+# az_restore <archive> <VAR=value>...: a restore into an empty directory, its output left in OUT_AZ and its status in
+# rc.
+az_restore() {
+  rm -rf "$AZ/dst" && mkdir -p "$AZ/dst"
+  set +e
+  OUT_AZ="$(cd "$AZ/dst" && env "${@:2}" "$RESTORE" "$1" 2>&1)"
+  rc=$?
+  set -e
+}
+# az_refused <what> <message>: stopped with status 1 and the message, before it wrote anything in the target or outside
+# it.
+az_refused() {
+  if [ "$rc" -ne 1 ] || ! grep -qF "$2" <<<"$OUT_AZ" || [ -n "$(find "$AZ/dst" "$AZ/outside" -mindepth 1)" ]; then
+    fail "(az) $1 was not refused before anything was written (rc $rc): $OUT_AZ"
+  fi
+}
+az_restore "$AZ/sqlite.tar.gz" DATABASE_TYPE=' '
+az_refused "a SQLite archive under a blank DATABASE_TYPE with PostgreSQL in the archive's .env.generated" \
+  'the archive holds a SQLite data store'
+az_restore "$AZ/sessions.tar.gz" SESSION_DATA_PATH=' '
+az_refused "a sessions path outside the data dir under a blank SESSION_DATA_PATH" \
+  "SESSION_DATA_PATH from the archive's .env.generated is not inside the data directory"
+az_restore "$AZ/state.tar.gz" PLUGIN_STATE_DIR=
+az_refused "a plugin-state path outside the data dir with PLUGIN_STATE_DIR exported empty" \
+  "PLUGIN_STATE_DIR from the archive's .env.generated is not inside the data directory"
+# The blanks are the ones the app's trim() takes, matched as bytes: in a UTF-8 locale as in the C locale.
+az_loc="$(locale -a 2>/dev/null | grep -m 1 -ixE 'C\.UTF-?8|en_US\.UTF-?8')" || true
+if [ -n "$az_loc" ]; then
+  az_restore "$AZ/sessions.tar.gz" "LC_ALL=$az_loc" "SESSION_DATA_PATH=$(printf '\302\240\343\200\200')"
+  az_refused "a sessions path outside the data dir under a SESSION_DATA_PATH of Unicode blanks, with LC_ALL=$az_loc" \
+    "SESSION_DATA_PATH from the archive's .env.generated is not inside the data directory"
+fi
+# Only a value of nothing but blanks is unset: one with blanks inside is the caller's own and is used as written.
+az_restore "$AZ/sessions.tar.gz" "SESSION_DATA_PATH=$AZ/outside/a b"
+if [ "$rc" -ne 0 ] || [ "$(cat "$AZ/outside/a b/auth/creds" 2>/dev/null || true)" != session ]; then
+  fail "(az) a SESSION_DATA_PATH with a blank inside was not used as written (rc $rc): $OUT_AZ"
+fi
+pass "(az) a value of only blanks in the environment is unset in backup and restore; one with blanks inside is kept"
 
 echo ""
 echo "All smoke tests passed!"
