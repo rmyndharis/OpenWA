@@ -116,6 +116,16 @@ test('cut text that a flex column stretches hugs the start edge, where its sibli
   assert.match(quote, /max-width:\s*min\(\d+px,\s*100%\)/);
 });
 
+test('a draft in the chat list stays next to its label, and only the draft is cut', () => {
+  // The label is a box before the snippet, so the draft alone sets the snippet's direction. The row spreads its
+  // children apart: without the margin a short draft would sit at the far edge of the row, away from its label.
+  const snippet = body('pages/Chats.css', '.chats-page .chat-item-draft-label + .chat-item-snippet');
+  assert.match(snippet, /margin-inline-end:\s*auto/);
+  const label = body('pages/Chats.css', '.chats-page .chat-item-draft-label');
+  assert.match(label, /flex-shrink:\s*0/);
+  assert.match(label, /white-space:\s*nowrap/);
+});
+
 test("a group member's number hugs the start edge, where the name above it is", () => {
   // Isolated left to right, the number takes start as left: stretched across the column it sat at the left edge of an
   // Arabic page.
