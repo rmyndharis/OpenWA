@@ -43,7 +43,12 @@ const onSentCalls: Array<{ sessionId: string; chatId: string; snippet: string }>
 before(async () => {
   const { installJsdomGlobals } = await import('../../test-helpers/jsdom.ts');
   await installJsdomGlobals();
-  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost').pathname;
+    // Templates (and any non-send) must resolve at once — a hanging list query stalls the suite.
+    if (!path.includes('/messages/')) {
+      return Promise.resolve(new Response('[]', { headers: { 'Content-Type': 'application/json' } }));
+    }
     const parsed = init?.body ? (JSON.parse(String(init.body)) as { chatId?: string; text?: string }) : {};
     sentBodies.push(parsed);
     const idx = sentBodies.length;

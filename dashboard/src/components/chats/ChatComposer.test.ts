@@ -41,10 +41,11 @@ before(async () => {
   await installJsdomGlobals();
   (globalThis as Record<string, unknown>).FileReader = HeldFileReader;
   globalThis.fetch = ((input: RequestInfo | URL) => {
-    sentPaths.push(new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost').pathname);
-    return Promise.resolve(
-      new Response(JSON.stringify({ messageId: 'sent-1' }), { headers: { 'Content-Type': 'application/json' } }),
-    );
+    const path = new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost').pathname;
+    sentPaths.push(path);
+    // Composer also loads session templates for `/name` shortcuts; that list is an array.
+    const body = path.includes('/templates') ? '[]' : JSON.stringify({ messageId: 'sent-1' });
+    return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'application/json' } }));
   }) as typeof fetch;
   const { i18nReady } = await import('../../i18n/index.ts');
   await i18nReady;

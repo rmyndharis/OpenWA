@@ -2983,7 +2983,7 @@
   border-radius: 0.55rem;
   background: transparent;
   color: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 
