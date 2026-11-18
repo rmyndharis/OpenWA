@@ -22,8 +22,8 @@ const fakeSock = (id: string): FakeSock => ({
 /**
  * A Baileys send refuses with 409 when its socket was replaced (a reconnect, or a logout and a relink) while
  * it waited, and never moves to the new socket. Found before sock.sendMessage is called, that 409 proves
- * nothing was sent, so a keyed send frees its Idempotency-Key and a paced send hands its admission back; found
- * after, it proves nothing, and both keep what they hold.
+ * nothing was sent, so a keyed send frees its Idempotency-Key and a bulk item or a product send hands its
+ * admission back; found after, it proves nothing, and both keep what they hold.
  */
 describe('a Baileys send whose socket is replaced while it waits', () => {
   let server: Server;
