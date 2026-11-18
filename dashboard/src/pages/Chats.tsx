@@ -1517,6 +1517,7 @@ export function Chats() {
     (bounds: { dateFrom: number; dateTo: number }) => {
       if (!activeChat) return false;
       const msg = messages.find(m => {
+        if (typeof m.timestamp !== 'number') return false;
         const ms = m.timestamp * 1000;
         return ms >= bounds.dateFrom && ms <= bounds.dateTo;
       });
