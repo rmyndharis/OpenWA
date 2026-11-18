@@ -14,14 +14,14 @@ OpenWA ships five official, hand-written client libraries for the REST API. They
 | Java                    | [`com.rmyndharis:openwa`](https://central.sonatype.com/artifact/com.rmyndharis/openwa) | Maven Central                        | Sync, `java.net.http`. See [`sdk/java/README.md`](../sdk/java/README.md).        |
 | Go                      | [`github.com/rmyndharis/OpenWA/sdk/go`](../sdk/go)                                     | `go get`                             | Stdlib-only, no third-party deps. See [`sdk/go/README.md`](../sdk/go/README.md). |
 
-> The import names differ from the dist names where the ecosystem requires it. Python installs `rmyndharis-openwa` but imports `openwa`; the client class is `OpenWAClient` in JS/Python and `OpenWA\Client` in PHP.
+> The import names differ from the dist names where the ecosystem requires it. Python installs `rmyndharis-openwa` but imports `openwa`; the client class is `OpenWAClient` in JS, Python and Java (package `com.rmyndharis.openwa`), `OpenWA\Client` in PHP, and `openwa.Client` in Go (module path `github.com/rmyndharis/OpenWA/sdk/go`, package `openwa`).
 
 ### Design Principles
 
-- **One client, fluent resources.** A single client object (`OpenWAClient` / `OpenWA\Client`) exposes every resource as a property — `client.messages.sendText(...)`, `client.sessions.start(...)`. All five SDKs expose the **same** resource surface; only the language idioms differ (camelCase methods + objects in JS/PHP/Java, snake_case methods + dicts in Python, exported fields + structs in Go).
+- **One client, fluent resources.** A single client object (`OpenWAClient` / `OpenWA\Client` / `openwa.Client`) exposes every resource as a property — `client.messages.sendText(...)`, `client.sessions.start(...)`. All five SDKs expose the **same** resource surface; only the language idioms differ (camelCase methods + objects in JS/PHP/Java, snake_case methods + dicts in Python, exported fields + structs in Go).
 - **It is a request/response client, not an event SDK.** There is no WebSocket, EventEmitter, or `client.on(...)`. To receive inbound messages and acks, register a webhook (the `webhooks` resource) and host your own receiver, checking `X-OpenWA-Signature` with the SDK helper (`verifyWebhookSignature` in JavaScript, `verify_webhook_signature` in Python, `VerifyWebhookSignature` in Go, `WebhookSignature.verify` in Java, `WebhookSignature::verify` in PHP), or connect to the real-time Socket.IO API directly (see [API Specification §6.5](./06-api-specification.md)).
 - **Typed errors.** Non-2xx responses raise/throw a typed error mapped from the HTTP status (`401/403/404/409/429/501/503`), plus a timeout error — all `instanceof`/`catch`-checkable. See each language's Error Handling subsection. A Baileys throttle `503` on a send or a single write means nothing was sent or applied, and so does a send's `503` for a failed recipient lookup, a connection that closed before the message was written, or a media or preview image URL that could not be fetched through the session's proxy; each frees a keyed send's `Idempotency-Key`. A group settings update with several fields applies them one at a time, so a `503` on a later field leaves the earlier ones applied and lists them after `already applied:` in its message: re-read the settings before retrying, or send one field per request.
-- **Injectable transport.** The HTTP layer is replaceable (`fetch` in JS, an `httpx` transport in Python, a Guzzle client in PHP) — the extension point for retry/observability middleware and for testing without the network.
+- **Injectable transport.** The HTTP layer is replaceable (`fetch` in JS, an `httpx` transport in Python, a Guzzle client in PHP, `WithHTTPClient`, `WithTransport` and `WithMiddleware` in Go, an `HttpTransport` in Java) — the extension point for retry/observability middleware and for testing without the network.
 - **Safe by default.** Redirects are never followed (so the API key is never re-sent to a redirect target), the auth/JSON headers always take precedence over caller-supplied defaults, path segments are percent-encoded, a base-URL path prefix (e.g. behind a reverse proxy at `/v1`) is preserved, and there is a default 30s per-request timeout. **No automatic retries by default** — in JS, Python, PHP, and Java wrap calls in your own backoff if you need them (especially for `429`), and replay a send answered `503` only with the same `Idempotency-Key`, since the message may already have gone out; the Go SDK additionally ships an opt-in `WithRetry(RetryPolicy)` that never replays a `POST` or `PATCH` after a network error and limits their retries to `429`, and to `503` when the request carries an `Idempotency-Key` or the `503` carries `Retry-After`.
 
 ### Resource Coverage
@@ -1179,7 +1179,7 @@ The five SDKs are versioned **independently of the gateway** and of each other, 
 
 ### Contract-drift protection
 
-The wire types live in a dedicated module (`types.ts` / `types.py`) so they can later be regenerated by an OpenAPI codegen pass without touching the hand-written resource methods.
+The wire types live in dedicated files (`types.ts`, `types.py`, `types.go` with its `types_*.go` companions, and the Java `model` package; PHP passes arrays and has none) so they can later be regenerated by an OpenAPI codegen pass without touching the hand-written resource methods.
 
 **Requests.** Each SDK's test suite mocks the HTTP transport and **asserts on the exact request path, method, and body** — so a drift between an SDK method and the real API (the class of bug that once shipped `messages/text` instead of the real `messages/send-text`) breaks a test rather than reaching users.
 
@@ -1191,9 +1191,13 @@ The wire types live in a dedicated module (`types.ts` / `types.py`) so they can 
 # JavaScript (the tests need Node 22.12+; the published package runs on Node 18+)
 cd sdk/javascript && npm test && npm run build && npm run smoke   # smoke = require()+import() packaging plus request check
 # Python
-cd sdk/python && python -m pytest -q
+cd sdk/python && mypy && python -m pytest -q
 # PHP
 cd sdk/php && composer install && ./vendor/bin/phpunit
+# Java
+cd sdk/java && mvn -B verify
+# Go
+cd sdk/go && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...
 ```
 
 CI runs all five suites (`sdk-ci.yml`), path-filtered to `sdk/**` plus the server-side contract surfaces the SDKs are written against — `src/**/dto/**`, `src/**/*.controller.ts`, `src/**/*.service.ts` and `whatsapp-engine.interface.ts` — so a change to the wire contract re-runs them. The PHP package is mirrored to its own Packagist repository via a `git subtree split`, and that mirror publish is gated on the PHP tests passing, so a broken SDK cannot auto-publish. Bump the version, record the change in the root `CHANGELOG.md` `[Unreleased]` section prefixed with the SDK's name (for example `Java SDK:`), drop the methods it ships from the note at the top of this document, `sdk/README.md` and the "This document describes `main`" note near the top of that SDK's own README, run the suite above, then tag/publish to the relevant registry.
