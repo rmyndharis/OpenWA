@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -3965,6 +3965,170 @@ describe('requests for one session that overlap on a single node', () => {
 
       await expect(service.delete(row.id)).rejects.toBeInstanceOf(ConflictException);
       expect(await sessions.countBy({ id: row.id })).toBe(1);
+    });
+  });
+
+  // A claim is superseded when a later claim of the same session starts on this node before it ends: two requests for
+  // it within a few milliseconds. The earlier claim must not read that as a peer holding the session, which is what
+  // its caller turns a refusal into: it answers what the later one does. The transactions the claims open are held, so
+  // the two overlap in the same order on both dialects.
+  describe('two claims of one session that overlap', () => {
+    /** A peer that holds the session on a live lease. */
+    const claimedByPeer = (id: string): Promise<unknown> =>
+      sessions.update(
+        { id },
+        { nodeId: 'node-b', claimedAt: new Date(), leaseExpiresAt: new Date(Date.now() + 60_000) },
+      );
+    const answer = (request: Promise<unknown>): Promise<unknown> =>
+      request.then(
+        () => 'done',
+        (error: unknown) => error,
+      );
+    const kinds = (answers: unknown[]): string[] =>
+      answers.map(one => (one instanceof Error ? one.constructor.name : String(one)));
+
+    /**
+     * Hold the first `count` transactions the claims open until the test frees or fails them, in the order they
+     * begin.
+     */
+    function holdClaims(count: number) {
+      const real = db.transaction.bind(db) as (work: (manager: EntityManager) => Promise<unknown>) => Promise<unknown>;
+      const holds = Array.from({ length: count }, () => {
+        let settle!: (error?: Error) => void;
+        const opened = new Promise<Error | undefined>(resolve => (settle = resolve));
+        return { opened, free: (error?: Error) => settle(error) };
+      });
+      let begun = 0;
+      let finished = 0;
+      jest.spyOn(db, 'transaction').mockImplementation(((work: (manager: EntityManager) => Promise<unknown>) => {
+        const hold = holds[begun++];
+        if (!hold) return real(work);
+        return hold.opened.then(async error => {
+          if (error) throw error;
+          const result = await real(work);
+          finished++;
+          return result;
+        });
+      }) as never);
+      return { holds, begun: () => begun, finished: () => finished };
+    }
+
+    /**
+     * Two requests whose claims overlap: the earlier one runs to its generation check while the later one is still
+     * pending.
+     */
+    async function overlap(
+      begin: () => Promise<unknown>,
+      held: ReturnType<typeof holdClaims>,
+      laterError?: Error,
+    ): Promise<unknown[]> {
+      const first = answer(begin());
+      await until(() => held.begun() === 1);
+      const second = answer(begin());
+      await until(() => held.begun() === 2);
+      held.holds[0].free();
+      await until(() => held.finished() === 1);
+      held.holds[1].free(laterError);
+      return Promise.all([first, second]);
+    }
+
+    it('answers the earlier of two starts as the later one, never as a claim by another node', async () => {
+      const { service, engines } = stack({ adoptionHandler: true });
+      const row = await seed();
+
+      const answers = await overlap(() => service.start(row.id), holdClaims(2));
+
+      expect(kinds(answers).filter(kind => kind === 'ConflictException')).toEqual([]);
+      expect(engines).toHaveLength(1);
+      expect(kinds(answers)).toContain('done');
+      for (const one of answers) if (one instanceof Error) expect(one).toBeInstanceOf(BadRequestException);
+    });
+
+    it('answers the earlier of two deletes as the later one, never as a claim by another node', async () => {
+      const { service, lifecycle } = stack({ adoptionHandler: true });
+      const row = await seed();
+
+      const answers = await overlap(() => service.delete(row.id), holdClaims(2));
+
+      expect(kinds(answers).filter(kind => kind === 'ConflictException')).toEqual([]);
+      expect(kinds(answers)).toContain('done');
+      for (const one of answers) if (one instanceof Error) expect(one).toBeInstanceOf(NotFoundException);
+      expect(await sessions.countBy({ id: row.id })).toBe(0);
+      expect(leftoversOf(service, lifecycle, row.id)).toEqual({ stopMark: false, stopRequest: false });
+    });
+
+    it('still answers both with a conflict when a live peer holds the session', async () => {
+      const { service, engines } = stack({ adoptionHandler: true });
+      const row = await seed();
+      await claimedByPeer(row.id);
+
+      const answers = await overlap(() => service.start(row.id), holdClaims(2));
+
+      expect(answers).toHaveLength(2);
+      for (const one of answers) {
+        expect(one).toBeInstanceOf(ConflictException);
+        expect((one as Error).message).toContain('running on another node');
+      }
+      expect(engines).toHaveLength(0);
+      expect((await sessions.findOneByOrFail({ id: row.id })).nodeId).toBe('node-b');
+    });
+
+    it('rejects the earlier claim with the error of the later one that superseded it', async () => {
+      const { service } = stack({ adoptionHandler: true });
+      const row = await seed();
+
+      const answers = await overlap(() => service.start(row.id), holdClaims(2), new Error('claim SQL unavailable'));
+
+      expect(answers.map(one => (one as Error).constructor)).toEqual([
+        ServiceUnavailableException,
+        ServiceUnavailableException,
+      ]);
+    });
+
+    it('answers false for a claim that a release ended while it was in flight', async () => {
+      const { ownership } = stack({ adoptionHandler: true });
+      const row = await seed();
+      const { holds, begun } = holdClaims(1);
+
+      const claiming = ownership.claim(row.id);
+      await until(() => begun() === 1);
+      await ownership.release(row.id);
+      holds[0].free();
+
+      await expect(claiming).resolves.toBe(false);
+      expect(ownership.ownedIds()).toEqual([]);
+      expect((await sessions.findOneByOrFail({ id: row.id })).nodeId).toBeNull();
+    });
+
+    // Whatever the gap between two requests, and whether or not their claims overlap, the answers are the ones the
+    // pair gets far apart: one start, and a duplicate that is refused as such.
+    it.each([0, 1, 5])('answers two starts %s ms apart as it answers two far apart', async gap => {
+      const { service, engines } = stack({ adoptionHandler: true });
+      const row = await seed();
+
+      const first = answer(service.start(row.id));
+      if (gap > 0) await new Promise(resolve => setTimeout(resolve, gap));
+      const second = answer(service.start(row.id));
+      const answers = await Promise.all([first, second]);
+
+      expect(kinds(answers).filter(kind => kind === 'ConflictException')).toEqual([]);
+      expect(kinds(answers)).toContain('done');
+      expect(engines).toHaveLength(1);
+    });
+
+    it.each([
+      ['with the transactional adoption handler a running gateway registers', true],
+      ['without an adoption handler', false],
+    ])('answers two deletes issued together without a claim by another node, %s', async (_label, adoptionHandler) => {
+      const { service, lifecycle } = stack({ adoptionHandler });
+      const row = await seed();
+
+      const answers = await Promise.all([answer(service.delete(row.id)), answer(service.delete(row.id))]);
+
+      expect(kinds(answers).filter(kind => kind === 'ConflictException')).toEqual([]);
+      expect(kinds(answers)).toContain('done');
+      expect(await sessions.countBy({ id: row.id })).toBe(0);
+      expect(leftoversOf(service, lifecycle, row.id)).toEqual({ stopMark: false, stopRequest: false });
     });
   });
 
