@@ -59,6 +59,8 @@ interface UnsettledWrite {
   revoking?: boolean;
   /** The latest actual report is a negative. Unlike `latestReport`, an eviction or a reload leaves it. */
   latestNegative?: boolean;
+  /** A statement of these writes failed, so the table may lack what the cache holds. */
+  failed?: boolean;
 }
 
 /** An engine reported `newLid` for a phone the table already maps to the reported `previousLid`. */
@@ -471,6 +473,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       this.absentFromTable.delete(lid);
       return true;
     } catch (err) {
+      writing.failed = true;
       if (writing.latestOperation === lookup && this.seenBy.get(lid) === reporters && this.unreported.has(lid))
         this.failedWrites.add(lid);
       this.warnWriteFailed(`Could not store lid mapping: ${err instanceof Error ? err.message : String(err)}`);
@@ -569,6 +572,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       if (again?.phone === phone) this.queueSecondLid(lid, again);
       return true;
     } catch (err) {
+      writing.failed = true;
       this.warnWriteFailed(
         `Failed to persist lid->phone mapping for ${lid}: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -617,11 +621,17 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
    * Once the last write of the lid settles, the latest new pairing's check, if no landed write queued it, is owed
    * until a write of its phone lands, unless a newer report of the lid took its place. Not before: an overlapping
    * report or negative can fail while the pairing's own write is still in flight, and that write queues the check if
-   * it lands.
+   * it lands. It also ends the failed-write mark of a report that landed, when a write that came after the report kept
+   * it from clearing the mark itself.
    */
-  private endWrite(lid: string, writing: { count: number; check?: SecondLidCheck }): void {
+  private endWrite(lid: string, writing: UnsettledWrite): void {
     if (this.unsettledWrites.get(lid) !== writing || --writing.count > 0) return;
     this.unsettledWrites.delete(lid);
+    // A report clears the failed-write mark only while it is the lid's latest, yet a later write can displace it and
+    // leave the table holding its phone: a negative the owner rule refused, a lookup that only revoked it. With no
+    // failed statement and the cache still holding the last report's phone, nothing is pending or failed any more.
+    if (!writing.failed && writing.reportPhone !== undefined && this.lidToPhone.get(lid) === writing.reportPhone)
+      this.failedWrites.delete(lid);
     if (writing.check && !writing.check.queued) this.oweSecondLid(lid, writing.check);
   }
 
