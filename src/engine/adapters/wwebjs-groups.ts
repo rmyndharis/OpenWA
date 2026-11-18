@@ -65,6 +65,31 @@ export async function revokeInviteInPage(chatId: string): Promise<string | undef
 }
 
 /**
+ * Ask WhatsApp, IN-PAGE, to remove a group's picture, and answer the status it gave: 200, or the code it refused
+ * with. `GroupChat.deletePicture` sends the same request but only when the page's own copy of the picture allows
+ * it, and reads every refusal as `false`: a picture the page never loaded is then not deleted, a repeat of a
+ * delete cannot be told from missing rights, and a rate limit reads as a refusal. The status says which it was.
+ */
+export async function deleteGroupPictureInPage(chatId: string): Promise<number> {
+  const w = window as unknown as {
+    require: (m: string) => {
+      createWid: (id: string) => unknown;
+      requestDeletePicture: (wid: unknown) => Promise<unknown>;
+    };
+  };
+  try {
+    await w
+      .require('WAWebContactProfilePicThumbBridge')
+      .requestDeletePicture(w.require('WAWebWidFactory').createWid(chatId));
+    return 200;
+  } catch (err) {
+    const refusal = err as { name?: string; status?: unknown } | undefined;
+    if (refusal?.name === 'ServerStatusCodeError' && typeof refusal.status === 'number') return refusal.status;
+    throw err;
+  }
+}
+
+/**
  * Group-domain operations extracted from WhatsAppWebJsAdapter. The adapter keeps the public
  * methods as thin forwarders and injects the shared host surface (./wwebjs-host) via closures,
  * so the delegate never touches lifecycle state directly.
@@ -579,22 +604,27 @@ export class WwebjsGroups {
   }
 
   async deleteGroupPicture(groupId: string): Promise<void> {
-    const groupChat = await this.requireGroupChat(groupId, 'deleteGroupPicture');
-    const ok: boolean | undefined = await withPageWrite(this.host, 'deleteGroupPicture', () =>
-      groupChat.deletePicture(),
+    await this.requireGroupChat(groupId, 'deleteGroupPicture');
+    const page = (
+      this.client() as unknown as { pupPage: { evaluate: <T, A>(fn: (arg: A) => Promise<T>, arg: A) => Promise<T> } }
+    ).pupPage;
+    const status = await withPageWrite(this.host, 'deleteGroupPicture', () =>
+      page.evaluate(deleteGroupPictureInPage, groupId),
     );
-    // WhatsApp Web answers nothing, not false, when it does not attempt the delete: the group has no picture, or the
-    // account may not edit the group's info. The two cannot be told apart here, and a success could be a picture left
-    // in place, so it stays a refusal whose text names both.
-    if (ok === undefined) {
-      throw new EngineRefusedError(
-        `Failed to delete the picture for group ${groupId}: WhatsApp Web did not attempt it, as when the group has ` +
-          'no picture or admin rights are required',
+    this.host.logger.debug('WhatsApp answered the group picture delete', { groupId, status });
+    // WhatsApp answers 200 for a group with no picture as for one it removed, so a repeat converges.
+    if (status >= 200 && status < 300) return;
+    // A rate limit or a server error: nothing was deleted, and the same request may pass later.
+    if (status === 423 || status === 429 || status >= 500) {
+      throw new EngineTransportError(
+        `WhatsApp answered ${status} to the picture delete for group ${groupId} and removed nothing. ` +
+          'Retry after a pause.',
       );
     }
-    if (!ok) {
-      throw new EngineRefusedError(`Failed to delete the picture for group ${groupId} — admin rights required`);
-    }
+    throw new EngineRefusedError(
+      `Failed to delete the picture for group ${groupId}: WhatsApp refused it (${status}), as when admin rights ` +
+        'are required',
+    );
   }
 
   // Set who may add participants. NOT a groupSettingUpdate option on either engine — wwjs has its

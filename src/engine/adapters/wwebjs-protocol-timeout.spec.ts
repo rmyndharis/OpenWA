@@ -516,7 +516,7 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
       [
         'group picture removal',
         h => groups(h).deleteGroupPicture(GROUP),
-        e => ({ getChatById: resolved(groupChat({ deletePicture: failing(e) })) }),
+        e => ({ getChatById: resolved(groupChat({})), pupPage: { evaluate: failing(e) } }),
       ],
       [
         'group invite code',
