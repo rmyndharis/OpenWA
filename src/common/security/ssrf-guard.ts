@@ -149,6 +149,8 @@ const BLOCKED_V4_RANGES: ReadonlyArray<readonly [string, number]> = [
   ['172.16.0.0', 12], // RFC1918 private
   ['192.0.0.0', 24], // IETF protocol assignments
   ['192.0.2.0', 24], // documentation, TEST-NET-1 (RFC 5737)
+  ['192.88.99.2', 32], // 6a44 relay anycast (RFC 6751), not globally reachable; the rest of 192.88.99.0/24 is
+  // reachable and stays allowed
   ['192.168.0.0', 16], // RFC1918 private
   ['198.18.0.0', 15], // benchmarking
   ['198.51.100.0', 24], // documentation, TEST-NET-2 (RFC 5737)

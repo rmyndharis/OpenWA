@@ -8,6 +8,7 @@ describe('isBlockedAddress: documentation and benchmarking blocks', () => {
     ['TEST-NET-1', '192.0.2.0'],
     ['TEST-NET-1', '192.0.2.10'],
     ['TEST-NET-1', '192.0.2.255'],
+    ['6a44 relay anycast', '192.88.99.2'],
     ['TEST-NET-2', '198.51.100.0'],
     ['TEST-NET-2', '198.51.100.10'],
     ['TEST-NET-2', '198.51.100.255'],
@@ -43,6 +44,8 @@ describe('isBlockedAddress: documentation and benchmarking blocks', () => {
   it.each([
     ['the address below TEST-NET-1', '192.0.1.255'],
     ['the address above TEST-NET-1', '192.0.3.0'],
+    ['the address below the 6a44 relay anycast', '192.88.99.1'],
+    ['the address above the 6a44 relay anycast', '192.88.99.3'],
     ['the address below TEST-NET-2', '198.51.99.255'],
     ['the address above TEST-NET-2', '198.51.101.0'],
     ['the address below TEST-NET-3', '203.0.112.255'],
