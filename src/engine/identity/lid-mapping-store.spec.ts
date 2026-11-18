@@ -3740,3 +3740,222 @@ describe('LidMappingStoreService: the table statements of one lid run in the ord
     }
   }, 120_000);
 });
+
+describe('LidMappingStoreService: a lid whose table write is still under way', () => {
+  // SQLite in memory; on PostgreSQL (DATABASE_TYPE=postgres, the test-postgres job) a schema of its own.
+  const pg = process.env.DATABASE_TYPE === 'postgres';
+  const server = {
+    type: 'postgres' as const,
+    host: process.env.DATABASE_HOST || 'localhost',
+    port: Number(process.env.DATABASE_PORT || 5432),
+    username: process.env.DATABASE_USERNAME || 'openwa',
+    password: process.env.DATABASE_PASSWORD || 'openwa',
+    database: process.env.DATABASE_NAME || 'openwa',
+  };
+  const OWNER = '11111111-1111-4111-8111-111111111111';
+  const OTHER = '22222222-2222-4222-8222-222222222222';
+  const savedCap = process.env.LID_MAPPING_CACHE_MAX;
+  let ds: DataSource;
+  let repo: Repository<LidMapping>;
+  let store: LidMappingStoreService;
+  let warn: jest.SpyInstance;
+  let schema = '';
+  const onServer = async (sql: string): Promise<void> => {
+    const admin = await new DataSource(server).initialize();
+    await admin.query(sql).finally(() => admin.destroy());
+  };
+
+  beforeEach(async () => {
+    // A mirror of two lids: the lids reported after one push it out.
+    process.env.LID_MAPPING_CACHE_MAX = '2';
+    const entities = [LidMapping, Session];
+    if (pg) {
+      schema = `lid_inflight_${randomUUID().replace(/-/g, '')}`;
+      await onServer(`CREATE SCHEMA "${schema}"`);
+    }
+    ds = await new DataSource(
+      pg
+        ? { ...server, schema, extra: { options: `-c search_path=${schema},public` }, entities, synchronize: true }
+        : { type: 'better-sqlite3', database: ':memory:', entities, synchronize: true },
+    ).initialize();
+    await ds.getRepository(Session).insert([
+      { id: OWNER, name: 'owner', phone: '6290000001' },
+      { id: OTHER, name: 'other', phone: '6290000002' },
+    ]);
+    repo = ds.getRepository(LidMapping);
+    await repo.insert({ lid: '333', phone: '628111', sessionId: OWNER, isReported: true });
+    store = new LidMappingStoreService(repo);
+    warn = jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn');
+    await store.onModuleInit();
+  });
+
+  afterEach(async () => {
+    store.onModuleDestroy();
+    await ds.destroy();
+    if (pg) await onServer(`DROP SCHEMA "${schema}" CASCADE`);
+    if (savedCap === undefined) delete process.env.LID_MAPPING_CACHE_MAX;
+    else process.env.LID_MAPPING_CACHE_MAX = savedCap;
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  /** Holds the next call of a repository method until `release` is called; `reached` settles on entry. */
+  function hold(method: 'query' | 'upsert' | 'update') {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const reached = new Promise<void>(resolve => (entered = resolve));
+    const real = repo[method].bind(repo) as (...args: unknown[]) => Promise<unknown>;
+    jest.spyOn(repo, method).mockImplementationOnce((async (...args: unknown[]) => {
+      entered();
+      await gate;
+      return real(...args);
+    }) as never);
+    return { release, reached };
+  }
+
+  /** The lids reported after lid 333 push it out of a mirror of two. */
+  const pushOut = async (): Promise<void> => {
+    await store.remember('444', '628444', OWNER);
+    await store.remember('555', '628555', OWNER);
+  };
+
+  /** What can happen to the mirror entry of lid 333 while a write of the lid is under way. */
+  const leaves = [
+    ['its entry is in the mirror', () => Promise.resolve()],
+    ['later lids pushed its entry out of the mirror', pushOut],
+    ['a reload left its entry out of the mirror', () => store.reload()],
+  ] as const;
+
+  /** Another node re-maps the lid in the shared table. */
+  const peerRemaps = (phone: string) =>
+    repo.update({ lid: '333' }, { phone, sessionId: OTHER, isReported: true, updatedAt: new Date() });
+
+  const fence = (phone: string): Promise<boolean> =>
+    new ChatScopeService(store).allows({ allowedChats: [`${phone}@c.us`] }, '333@lid');
+
+  /** Every lookup answers `phone` for lid 333, and the chat fence admits it to a key limited to that phone. */
+  const answers = async (phone: string): Promise<void> => {
+    expect(await store.findPhoneForLid('333@lid')).toBe(phone);
+    expect(await store.phonesForLidsPersisted(['333'])).toEqual({ 333: phone });
+    expect(await store.findLidsForPhone(phone)).toEqual(['333']);
+    expect(await store.lidsForPhonesPersisted([phone])).toEqual({ [phone]: ['333'] });
+    expect(await fence(phone)).toBe(true);
+  };
+
+  /** Every lookup answers none for lid 333 and for each phone, and the chat fence admits it to no key. */
+  const refused = async (phones: string[]): Promise<void> => {
+    expect(await store.findPhoneForLid('333@lid')).toBeNull();
+    expect(await store.phonesForLidsPersisted(['333'])).toEqual({ 333: null });
+    for (const phone of phones) expect(await store.findLidsForPhone(phone)).toEqual([]);
+    expect(await store.lidsForPhonesPersisted(phones)).toEqual(Object.fromEntries(phones.map(phone => [phone, []])));
+    for (const phone of phones) expect(await fence(phone)).toBe(false);
+  };
+
+  describe.each([
+    ['a re-map to another phone', 'upsert', () => store.remember('333', '628222', OWNER), '628222'],
+    ['a revocation by a display lookup', 'update', () => store.rememberIfUnknown('333', '628222', OTHER), null],
+  ] as const)('while %s is being written', (_write, method, start, landed) => {
+    describe.each(leaves)('and %s', (_state, leave) => {
+      it('answers no phone for the lid, and the lid for neither phone', async () => {
+        const held = hold(method);
+        const writing = start();
+        await held.reached;
+        await leave();
+
+        await refused(['628111', '628222']);
+
+        held.release();
+        await writing;
+        expect(await store.findPhoneForLid('333@lid')).toBe(landed);
+        expect(await store.findLidsForPhone('628222')).toEqual(landed ? ['333'] : []);
+        expect(await fence('628222')).toBe(landed !== null);
+        expect(await fence('628111')).toBe(false);
+      });
+    });
+  });
+
+  describe.each(leaves)('a negative that clears the row while a later write is under way, and %s', (_state, leave) => {
+    it('ends what the earlier writes were held against, as it ends a resident entry', async () => {
+      const report = hold('upsert');
+      const clearing = hold('update'); // the negative's statement
+      const contradicting = hold('update'); // the lookup's, which runs behind it
+      const remap = store.remember('333', '628222', OWNER);
+      await report.reached;
+      const negative = store.remember('333', null, OWNER); // the owner's: it clears the row once the report has landed
+      const lookup = store.rememberIfUnknown('333', '628444', OTHER); // contradicts the report
+      await leave();
+      report.release();
+      await clearing.reached;
+      clearing.release();
+      await negative;
+      await contradicting.reached; // the lookup is the only write still under way
+
+      await peerRemaps('628333');
+
+      await answers('628333');
+
+      contradicting.release();
+      await Promise.all([remap, lookup]);
+    });
+  });
+
+  it('keeps refusing the lid when a lookup of the stored phone follows the report and its entry then leaves the mirror', async () => {
+    const held = hold('upsert');
+    const remap = store.remember('333', '628222', OWNER);
+    await held.reached;
+    const lookup = store.rememberIfUnknown('333', '628111', OWNER); // queued behind the report
+    await pushOut();
+
+    await refused(['628111', '628222']);
+
+    held.release();
+    await Promise.all([remap, lookup]);
+    expect(await store.findPhoneForLid('333@lid')).toBeNull(); // the lookup contradicted the phone that landed
+  });
+
+  it('answers the stored phone to a report of it that follows a revocation still being written', async () => {
+    const held = hold('update');
+    const revocation = store.rememberIfUnknown('333', '628222', OTHER);
+    await held.reached;
+    const report = store.remember('333', '628111', OWNER); // takes the lid off the lookup's distrust
+
+    expect(await store.findPhoneForLid('333@lid')).toBe('628111');
+    expect(await store.lidsForPhonesPersisted(['628111'])).toEqual({ 628111: ['333'] });
+
+    held.release();
+    await Promise.all([revocation, report]);
+    expect(await store.findPhoneForLid('333@lid')).toBe('628111');
+  });
+
+  it('keeps answering the stored pair while a repeat of it is written and its entry has left the mirror', async () => {
+    const held = hold('query'); // a pair its owner reported before is checked against the row in one statement
+    const repeat = store.remember('333', '628111', OWNER);
+    await held.reached;
+    await pushOut();
+
+    expect(await store.findPhoneForLid('333@lid')).toBe('628111');
+    expect(await store.phonesForLidsPersisted(['333'])).toEqual({ 333: '628111' });
+    expect(await store.findLidsForPhone('628111')).toEqual(['333']);
+    expect(await store.lidsForPhonesPersisted(['628111'])).toEqual({ 628111: ['333'] });
+
+    held.release();
+    await repeat;
+  });
+
+  it('keeps answering a lid with no write of its own while a sync of new pairs is written past the cap', async () => {
+    const held = hold('upsert');
+    const first = store.remember('444', '628444', OWNER);
+    await held.reached;
+    await store.remember('555', '628555', OWNER); // lid 333 is no longer in the mirror
+
+    expect(await store.findPhoneForLid('333@lid')).toBe('628111');
+    expect(await store.phonesForLidsPersisted(['333'])).toEqual({ 333: '628111' });
+    expect(await store.findLidsForPhone('628111')).toEqual(['333']);
+    expect(await store.lidsForPhonesPersisted(['628111'])).toEqual({ 628111: ['333'] });
+    expect(await store.findPhoneForLid('444@lid')).toBeNull(); // a new pair answers once its write has landed
+
+    held.release();
+    await first;
+    expect(await store.findPhoneForLid('444@lid')).toBe('628444');
+  });
+});
