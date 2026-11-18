@@ -4,6 +4,16 @@ import { ConsoleLogger, Logger } from '@nestjs/common';
 import { LoggerService, LogLevel, LogFormat, createLogger, redactSecrets } from './logger.service';
 import { runWithRequestId } from './request-context';
 
+/**
+ * CPU time this process has used since `since`, in milliseconds. A bound on work is asserted on it and not on the
+ * wall clock: a busy runner can hold the worker off the CPU for longer than the whole bound, while code that is slow
+ * burns the CPU on every run.
+ */
+const cpuMsSince = (since: NodeJS.CpuUsage): number => {
+  const { user, system } = process.cpuUsage(since);
+  return (user + system) / 1000;
+};
+
 interface LogEntry {
   timestamp: string;
   level: string;
@@ -396,18 +406,18 @@ describe('LoggerService', () => {
     const parsed = (): Record<string, unknown> => getLogOutput(consoleSpy) as unknown as Record<string, unknown>;
 
     it('is written as [Truncated] at once in the first levels, with the rest of the line kept', () => {
-      const started = Date.now();
+      const started = process.cpuUsage();
       logger.log('saved', { sessionId: 's1', list: sparse() });
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       expect(parsed()).toMatchObject({ message: 'saved', sessionId: 's1', list: '[Truncated]' });
     });
 
     it('is written as [Truncated] at once below the fifth level, with the rest of the line kept', () => {
-      const started = Date.now();
+      const started = process.cpuUsage();
       logger.log('saved', { sessionId: 's1', a: { b: { c: { d: { e: { list: sparse() } } } } } });
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       expect(parsed()).toMatchObject({
         message: 'saved',
         sessionId: 's1',
@@ -424,20 +434,20 @@ describe('LoggerService', () => {
     it('is written as its type and length at once in the first levels, with the rest of the line kept', () => {
       const file = Buffer.alloc(5_000_000);
 
-      const started = Date.now();
+      const started = process.cpuUsage();
       logger.log('saved', { sessionId: 's1', file });
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       expect(parsed()).toMatchObject({ message: 'saved', sessionId: 's1', file: written });
     });
 
     it('is written as its type and length at once below the fifth level, with the rest of the line kept', () => {
       const file = Buffer.alloc(5_000_000);
 
-      const started = Date.now();
+      const started = process.cpuUsage();
       logger.log('saved', { sessionId: 's1', a: { b: { c: { d: { e: { file } } } } } });
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(cpuMsSince(started)).toBeLessThan(1000);
       expect(parsed()).toMatchObject({ sessionId: 's1', a: { b: { c: { d: { e: { file: written } } } } } });
     });
   });
@@ -1512,11 +1522,11 @@ describe('redactSecrets', () => {
 
       it('finishes a record of 900 references to one wide object in a bounded time', () => {
         const shared = wide(20_000);
-        const started = Date.now();
+        const started = process.cpuUsage();
 
         redactSecrets(deep(Array.from({ length: 900 }, () => shared)));
 
-        expect(Date.now() - started).toBeLessThan(500);
+        expect(cpuMsSince(started)).toBeLessThan(500);
       });
 
       it('spends the node budget on the keys of a too wide object, so what follows it is [Truncated]', () => {
