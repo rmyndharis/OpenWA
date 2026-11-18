@@ -25,6 +25,7 @@ import {
   mapBaileysStatus,
   setBaileysText,
   storedKeyInChatPersisted,
+  withoutMergedNonContentMessage,
   withoutNonContentMessage,
 } from './baileys-message-mapper';
 import type { Chat, proto } from '@whiskeysockets/baileys';
@@ -1554,6 +1555,96 @@ describe('what is no message of its own', () => {
     it('leaves an update alone before the library is loaded', () => {
       const update = raised(PIN);
       expect(withoutNonContentMessage(update, undefined)).toBe(update);
+    });
+  });
+
+  describe('withoutMergedNonContentMessage', () => {
+    const lib = { getContentType: libraryContentType, normalizeMessageContent: (content: unknown) => content } as never;
+    const CHAT_ID = '628111@s.whatsapp.net';
+    const PIN = { pinInChatMessage: {} };
+    /** A history chunk's chat after the library merged a chat update into it: its last message, its time, the summed count. */
+    const merged = (
+      content: Record<string, unknown>,
+      over: { time?: unknown; messageTime?: unknown; stub?: number; count?: number; fromMe?: boolean } = {},
+    ): Partial<Chat> => ({
+      id: CHAT_ID,
+      name: 'Rina',
+      unreadCount: over.count ?? 1,
+      conversationTimestamp: 'time' in over ? (over.time as number) : 1700000040,
+      messages: [
+        {
+          message: {
+            key: { remoteJid: CHAT_ID, fromMe: over.fromMe === true, id: 'X1' },
+            message: content,
+            messageTimestamp: 'messageTime' in over ? (over.messageTime as number) : 1700000040,
+            ...(over.stub ? { messageStubType: over.stub } : {}),
+          },
+        },
+      ],
+    });
+
+    it('takes out the message and its time, and keeps the count and the rest of the chunk', () => {
+      const chat = merged(PIN);
+      const before = { ...chat };
+      expect(withoutMergedNonContentMessage(chat, lib)).toEqual({ id: CHAT_ID, name: 'Rina', unreadCount: 1 });
+      expect(chat).toEqual(before);
+    });
+
+    it.each<[string, unknown, unknown]>([
+      ['a Long', { low: 1700000040, high: 0, unsigned: false, toString: () => '1700000040' }, 1700000040],
+      ['a string', '1700000040', 1700000040],
+    ])('finds the time of the message under %s', (_what, messageTime, time) => {
+      expect(withoutMergedNonContentMessage(merged(PIN, { messageTime, time }), lib)).not.toHaveProperty(
+        'conversationTimestamp',
+      );
+    });
+
+    it('keeps a time that is not the message', () => {
+      expect(withoutMergedNonContentMessage(merged(PIN, { time: 1700000010 }), lib)).toEqual({
+        id: CHAT_ID,
+        name: 'Rina',
+        unreadCount: 1,
+        conversationTimestamp: 1700000010,
+      });
+    });
+
+    it.each<[string, Partial<Chat>]>([
+      ['a message with a time of its own', merged({ conversation: 'hi' })],
+      ['a stub type', merged(PIN, { stub: 2 })],
+      ['a count above one, which may hold a text or a count of the chunk', merged(PIN, { count: 2 })],
+      ['a count the chunk held, with a pin of the account after it', merged(PIN, { count: 3, fromMe: true })],
+      ['no message', { ...merged(PIN), messages: [] }],
+      ['no messages key', { id: CHAT_ID, conversationTimestamp: 1700000040, unreadCount: 3 }],
+      ['a message with no content', { ...merged(PIN), messages: [{ message: { key: { id: 'X1' } } }] }],
+    ])('leaves the chat whole for %s', (_what, chat) => {
+      expect(withoutMergedNonContentMessage(chat, lib)).toBe(chat);
+    });
+
+    it.each<[string, Partial<Chat>]>([
+      ['a count of zero', merged(PIN, { count: 0, fromMe: true })],
+      ['no count', { ...merged(PIN, { fromMe: true }), unreadCount: undefined }],
+      ['a mark in place of the count', merged(PIN, { count: -1, fromMe: true })],
+    ])('recognises a pin of the account beside %s', (_what, chat) => {
+      const { messages, conversationTimestamp, ...rest } = withoutMergedNonContentMessage(chat, lib);
+      expect([messages, conversationTimestamp]).toEqual([undefined, undefined]);
+      expect(rest).toEqual({
+        id: CHAT_ID,
+        name: 'Rina',
+        ...('unreadCount' in chat ? { unreadCount: chat.unreadCount } : {}),
+      });
+    });
+
+    it('takes out the time of a message that has none of its own, only when the chat has one', () => {
+      const noTime = merged(PIN, { messageTime: null });
+      expect(withoutMergedNonContentMessage(noTime, lib)).toHaveProperty('conversationTimestamp', 1700000040);
+      expect(
+        withoutMergedNonContentMessage({ ...merged(PIN), conversationTimestamp: undefined }, lib),
+      ).not.toHaveProperty('messages');
+    });
+
+    it('leaves a chat alone before the library is loaded', () => {
+      const chat = merged(PIN);
+      expect(withoutMergedNonContentMessage(chat, undefined)).toBe(chat);
     });
   });
 });

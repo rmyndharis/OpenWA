@@ -110,15 +110,50 @@ export function withoutNonContentMessage(
   update: Partial<Chat>,
   lib: ContentTypeLib | undefined,
 ): Partial<Chat> | undefined {
-  const last = update.messages?.[0]?.message;
-  if (!lib || !last?.message || last.messageStubType) return update;
-  if (last.key?.fromMe === true ? Object.hasOwn(update, 'unreadCount') : update.unreadCount !== 1) return update;
-  if (!isNonContent(lib.normalizeMessageContent(last.message) ?? last.message, lib.getContentType)) return update;
+  const last = nonContentLast(update, lib);
+  if (!last || (last.key?.fromMe === true ? Object.hasOwn(update, 'unreadCount') : update.unreadCount !== 1)) {
+    return update;
+  }
   const rest = { ...update };
   delete rest.unreadCount;
   delete rest.conversationTimestamp;
   delete rest.messages;
   return Object.keys(rest).every(key => key === 'id' || key === 'conditional') ? undefined : rest;
+}
+
+/**
+ * A chat of a history chunk or an upsert, without the time and message of a last message that is none of its own. While
+ * the library's event buffer holds such a chat, it merges a chat update into it: the update's message, its time and its
+ * count added to the chunk's. The chat then reached the store with a time that is the message's, which brings back a
+ * chat WhatsApp deleted, and with the message as its last. The time is taken out only when it is the message's: after a
+ * message that came before the chunk it is the chunk's own, and stays.
+ *
+ * As for a live update ({@link withoutNonContentMessage}), only a chat that counts exactly that one message is
+ * recognised: a received message leaves a count of one, one of the account's own leaves none. A larger count may hold a
+ * message of its own, and a deleted chat that lost its time would drop the count of a text of the same flush, which is
+ * recorded only afterwards and brings the chat back with none. So a chunk that held a count of its own, or that a text
+ * was merged into as well, is left as it is: it keeps the time and message of the last update merged into it.
+ *
+ * The count stays whatever it is: it is the chunk's count plus the count of every update merged into it, and nothing in
+ * the chat says whether the chunk held a count to add to (the library replaces one that is not a number), so the
+ * message's count cannot be told from the rest. A pin merged into a chunk therefore still raises that chat's count by one.
+ */
+export function withoutMergedNonContentMessage(chat: Partial<Chat>, lib: ContentTypeLib | undefined): Partial<Chat> {
+  const last = nonContentLast(chat, lib);
+  if (!last || (last.key?.fromMe === true ? (chat.unreadCount ?? 0) > 0 : chat.unreadCount !== 1)) return chat;
+  const rest = { ...chat };
+  delete rest.messages;
+  if (last.messageTimestamp != null && Number(rest.conversationTimestamp) === Number(last.messageTimestamp)) {
+    delete rest.conversationTimestamp;
+  }
+  return rest;
+}
+
+/** The last message of a chat or chat update when it is none of its own and has content and no stub type. */
+function nonContentLast(chat: Partial<Chat>, lib: ContentTypeLib | undefined): proto.IWebMessageInfo | undefined {
+  const last = chat.messages?.[0]?.message;
+  if (!lib || !last?.message || last.messageStubType) return undefined;
+  return isNonContent(lib.normalizeMessageContent(last.message) ?? last.message, lib.getContentType) ? last : undefined;
 }
 
 /**

@@ -8,7 +8,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { type Dispatcher } from 'undici';
 import type * as BaileysLib from '@whiskeysockets/baileys';
-import type { WASocket } from '@whiskeysockets/baileys';
+import type { Chat, WASocket } from '@whiskeysockets/baileys';
 import type { ILogger } from '@whiskeysockets/baileys/lib/Utils/logger.js';
 import {
   type ConnectionCloseStage,
@@ -32,7 +32,7 @@ import {
 } from '../terminal-engine-failure';
 import { differentWaIds, keyChatIds, type BaileysEvents } from './baileys-events';
 import type { BaileysHistory } from './baileys-history';
-import { withoutNonContentMessage } from './baileys-message-mapper';
+import { withoutMergedNonContentMessage, withoutNonContentMessage } from './baileys-message-mapper';
 import { SESSION_STORE_MAP_CAP_DEFAULT, type BaileysSessionStore } from './baileys-session-store';
 import { ownAccountIds } from './baileys-stored-chat-previews.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
@@ -676,7 +676,7 @@ export class BaileysLifecycle {
         event: 'upsert',
         count: chats?.length ?? 0,
       });
-      this.host.upsertChats(chats);
+      this.host.upsertChats(this.withoutMergedNonContent(chats));
     });
     sock.ev.on('chats.update', updates => {
       this.host.logger.debug('Baileys chats event', {
@@ -742,7 +742,7 @@ export class BaileysLifecycle {
           name: undefined,
         })),
       );
-      this.host.upsertChats(history.chats);
+      this.host.upsertChats(this.withoutMergedNonContent(history.chats));
       this.host.addLidMappings(history.lidPnMappings ?? []);
       void this.host
         .captureHistoryMessages(history.messages ?? [])
@@ -766,6 +766,15 @@ export class BaileysLifecycle {
     sock.ev.on('lid-mapping.update', ({ lid, pn }) => this.host.addLidMappings([{ lid, pn }]));
     sock.ev.on('call', calls => this.host.handleCallEvents(calls));
     sock.ev.on('presence.update', update => this.host.handlePresenceUpdate(update));
+  }
+
+  /**
+   * The chats of a history chunk or an upsert, as the library's event buffer hands them over: one that a chat update
+   * was merged into carries that update's last message and time, which a message that is none of its own must not
+   * leave on the chat (see {@link withoutMergedNonContentMessage}).
+   */
+  private withoutMergedNonContent(chats: Partial<Chat>[] | undefined): Partial<Chat>[] {
+    return (chats ?? []).map(chat => withoutMergedNonContentMessage(chat, this.loadedLib));
   }
 
   /**

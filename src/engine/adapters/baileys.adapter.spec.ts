@@ -10084,6 +10084,76 @@ describe('BaileysAdapter chat writes keyed to a message (#1891)', () => {
         await settle();
         expect(await adapter.getChats()).toEqual([]);
       });
+
+      // While the event buffer holds a history chunk or an upsert of the chat, the library merges the update into it: the
+      // chat then arrives with the message as its last, and with its time unless the chunk has a time of its own.
+      describe('when the library merged it into a history chunk or an upsert of the chat', () => {
+        const merged = (content: Record<string, unknown>, over: Record<string, unknown> = {}) => ({
+          id: PHONE,
+          unreadCount: 1,
+          conversationTimestamp: now() + 60,
+          messages: [
+            {
+              message: {
+                key: { remoteJid: PHONE, fromMe: false, id: 'X1' },
+                message: content,
+                messageTimestamp: now() + 60,
+              },
+            },
+          ],
+          ...over,
+        });
+        const EVENTS: Array<[string, (chat: Record<string, unknown>) => void]> = [
+          [
+            'a history chunk',
+            chat => fakeSock.fire('messaging-history.set', { chats: [chat], contacts: [], messages: [] }),
+          ],
+          ['an upsert', chat => fakeSock.fire('chats.upsert', [chat])],
+        ];
+
+        it.each(EVENTS)(
+          'keeps the chat out of the list, with its deletion mark, for a pin merged into %s',
+          async (_what, fire) => {
+            const adapter = await deletedOnPhone();
+            const deletedAt = await persistedDeletion();
+            expect(deletedAt).toEqual(expect.any(Number));
+            fire(merged({ pinInChatMessage: {} }));
+            await settle();
+            expect(await adapter.getChats()).toEqual([]);
+            expect(await persistedDeletion()).toBe(deletedAt);
+          },
+        );
+
+        it.each(EVENTS)('lists the chat again for a text merged into %s', async (_what, fire) => {
+          const adapter = await deletedOnPhone();
+          fire(merged({ conversation: 'back again' }));
+          await settle();
+          expect(await adapter.getChats()).toEqual([expect.objectContaining({ id: '628111@c.us', unreadCount: 1 })]);
+        });
+
+        it.each(EVENTS)(
+          'keeps the time of a chunk that has one of its own, and not the pin, in %s',
+          async (_what, fire) => {
+            const adapter = await started(newStore());
+            fire(merged({ pinInChatMessage: {} }, { conversationTimestamp: 1700000010 }));
+            await settle();
+            expect(await adapter.getChats()).toEqual([
+              expect.objectContaining({ id: '628111@c.us', timestamp: 1700000010, lastMessage: undefined }),
+            ]);
+          },
+        );
+
+        it('applies a chunk with no chats, and a chat with no message, as it did', async () => {
+          const adapter = await started(newStore());
+          fakeSock.fire('messaging-history.set', { contacts: [], messages: [] });
+          fakeSock.fire('chats.upsert', undefined);
+          fakeSock.fire('chats.upsert', [{ id: PHONE, conversationTimestamp: 1700000010, unreadCount: 2 }]);
+          await settle();
+          expect(await adapter.getChats()).toEqual([
+            expect.objectContaining({ id: '628111@c.us', timestamp: 1700000010, unreadCount: 2 }),
+          ]);
+        });
+      });
     });
 
     it('lets a chat deleted through the API come back with its next message', async () => {

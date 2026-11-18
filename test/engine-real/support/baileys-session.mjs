@@ -163,8 +163,11 @@ export async function deliver(sock, wm, { gate } = {}) {
   sock.ev.flush();
 }
 
-/** Several messages that reach the socket in one flush: the buffer folds their updates before anything hears of them. */
-export async function deliverTogether(sock, messages) {
+/**
+ * Several messages that reach the socket in one flush: the buffer folds their updates before anything hears of them.
+ * `flush: false` leaves the buffer open for the caller to add to it (a history chunk) and flush.
+ */
+export async function deliverTogether(sock, messages, { flush = true } = {}) {
   sock.ev.buffer();
   for (const wm of messages) {
     await sock.ev.createBufferedFunction(async message => {
@@ -172,7 +175,7 @@ export async function deliverTogether(sock, messages) {
       await processMessage(message, contextOf(sock));
     })(wm);
   }
-  sock.ev.flush();
+  if (flush) sock.ev.flush();
 }
 
 /** What the adapter lists for the chat, or undefined for a chat it does not list. */
