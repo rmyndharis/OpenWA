@@ -306,6 +306,15 @@ describe('a call that a page navigation lands on', () => {
       },
       reloads,
     ],
+    [
+      'readInviteSenderInPage, the read made before an add',
+      w => {
+        w.client.getChatById = jest.fn().mockResolvedValue(group());
+        w.runOnPage(readInviteSenderInPage);
+        return w.adapter.addParticipants(GROUP, ['628111@c.us']);
+      },
+      reloads,
+    ],
     ...(
       [
         ['a subject', w => w.adapter.setGroupSubject(GROUP, 'name')],
@@ -350,13 +359,13 @@ describe('a call that a page navigation lands on', () => {
   describe('keeps its answer when the call could duplicate', () => {
     const PRESERVED: Array<[string, (w: Wire) => Promise<unknown>, RegExp]> = [
       [
-        'addParticipants (the invite sender read)',
+        'addParticipants (the add itself)',
         w => {
-          w.client.getChatById = jest.fn().mockResolvedValue(group());
-          w.runOnPage(readInviteSenderInPage);
+          w.client.getChatById = jest.fn().mockResolvedValue(group({ addParticipants: w.fail('addParticipants') }));
+          w.pupPage.evaluate.mockResolvedValue(true);
           return w.adapter.addParticipants(GROUP, ['628111@c.us']);
         },
-        /^window\.require is not a function$/,
+        /^Cannot read properties of undefined/,
       ],
       [
         'revokeGroupInviteCode (the revoke)',

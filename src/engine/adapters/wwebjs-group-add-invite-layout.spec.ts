@@ -1,6 +1,7 @@
 import * as wwebjs from 'whatsapp-web.js';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 
 const { GroupChat } = wwebjs as unknown as { GroupChat: new (client: unknown, data: unknown) => unknown };
@@ -177,12 +178,13 @@ describe('adding participants who can only be invited, on each WhatsApp Web layo
   });
 
   // A document that has not defined `require` yet is a page that is reloading: the question about the sender cannot be
-  // answered, which must not read as "this build has no sender" and carry on to an add without invitations.
+  // answered, which must not read as "this build has no sender" and carry on to an add without invitations. The question
+  // is a read made before anything is sent, so the reload is the retryable 409, as it is for the lookup before it.
   it('does not go on to the add when the page has no require to ask', async () => {
     g.window = {};
     const { adapter, libraryAdd } = adapterOnThatPage();
 
-    await expect(adapter.addParticipants(GROUP, [ADDED])).rejects.toThrow('window.require is not a function');
+    await expect(adapter.addParticipants(GROUP, [ADDED])).rejects.toBeInstanceOf(EngineNotReadyError);
     expect(libraryAdd).not.toHaveBeenCalled();
   });
 });

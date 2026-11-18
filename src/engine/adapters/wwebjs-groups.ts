@@ -306,12 +306,18 @@ export class WwebjsGroups {
   async addParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
     const chat = await this.requireGroupChat(groupId, 'addParticipants');
     const participantIds = participants.map(toParticipantWid);
-    const raw = await reportPageDeath(this.host, 'addParticipants', async () => {
-      // Where the library's invitation sender is gone, its call would end the whole batch: add without the invitation,
-      // which leaves the participant that needs one a 403 of its own.
-      if (await this.page().evaluate(readInviteSenderInPage)) return chat.addParticipants(participantIds);
-      return chat.addParticipants(participantIds, { autoSendInviteV4: false });
-    });
+    // Where the library's invitation sender is gone, its call would end the whole batch: add without the invitation,
+    // which leaves the participant that needs one a 403 of its own. The question is a read made before anything is
+    // sent, so it answers as the group lookup above does (a dead page or a timeout is a 503, a reload a 409); only the
+    // add keeps the raw error of a write that does not converge.
+    const invitesWork = await withPageWrite(this.host, 'addParticipants', () =>
+      this.page().evaluate(readInviteSenderInPage),
+    );
+    const raw = await reportPageDeath(this.host, 'addParticipants', () =>
+      invitesWork
+        ? chat.addParticipants(participantIds)
+        : chat.addParticipants(participantIds, { autoSendInviteV4: false }),
+    );
     // whatsapp-web.js reports a batch-level refusal (no admin rights, empty group) by RESOLVING a
     // plain reason string (GroupChat.js:106-107,128-130) instead of throwing — surface it as a
     // refusal, not a success.

@@ -203,16 +203,17 @@ describe('group writes classify a dead page', () => {
     expect(reportIfPageTransportError).toHaveBeenCalledWith(transportError, op);
   });
 
-  // The page is asked whether the library's invitation sender exists before the add, inside the same guard: a dead page
-  // there is reported and keeps its error, as one in the add does, and the add is never attempted.
-  it('addParticipants reports a dead page in the question about the invitation sender but keeps the raw error', async () => {
+  // The page is asked whether the library's invitation sender exists before the add. That is a read made before
+  // anything is sent, like the group lookup in front of it, so a dead page there answers 503 with the death signal and
+  // the add is never attempted. A dead page in the add itself keeps its raw error (above).
+  it('addParticipants answers 503 and reports a dead page in the question about the invitation sender', async () => {
     const addParticipants = jest.fn();
     const { groups, reportIfPageTransportError } = makeGroups(
       { addParticipants },
       { pupPage: { evaluate: jest.fn().mockRejectedValue(transportError) } },
     );
 
-    await expect(groups.addParticipants(GROUP, ['628111@c.us'])).rejects.toBe(transportError);
+    await expect(groups.addParticipants(GROUP, ['628111@c.us'])).rejects.toBeInstanceOf(EngineTransportError);
     expect(reportIfPageTransportError).toHaveBeenCalledWith(transportError, 'addParticipants');
     expect(addParticipants).not.toHaveBeenCalled();
   });
