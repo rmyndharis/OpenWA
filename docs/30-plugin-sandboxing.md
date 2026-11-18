@@ -61,14 +61,19 @@ from disk is user-installed and sandboxed.
   running at the cap dies with the process.
 - **Bounded worker output.** A loop that never yields posts messages faster than the host's one thread can
   read them, and the backlog would stall every session and request and grow in native memory, outside the heap
-  cap. The worker therefore limits what it posts. `ctx.logger.*` lines are limited to 198 per 10 s: the rest are
-  dropped inside the worker, with one note at the first drop and a count with the first line after the window
-  ends. The two notes bring a window to the 200 messages per 10 s that the host's log relay admits as a
-  backstop, so neither is refused there. A capability call is refused with a thrown `Error` while 64 calls
-  are unanswered, twice the 32 concurrent calls the host runs. A plugin that awaits its calls and logs at an
-  ordinary rate never reaches either limit. Output these limits do not cover, such as a message posted to the
-  port directly, is outside the boundary like the other direct access described below. A loop that only spins
-  on its own thread is ended by the liveness check once a dispatch to the plugin times out.
+  cap. The worker therefore limits the log lines and capability calls it posts. `ctx.logger.*` lines are
+  limited to 198 per 10 s: the rest are dropped inside the worker, with one note at the first drop and a count
+  with the first line after the window ends. The two notes bring a window to the 200 messages per 10 s that the
+  host's log relay admits as a backstop, so neither is refused there. A capability call is refused with a
+  thrown `Error` while 64 calls are unanswered, twice the 32 concurrent calls the host runs. A plugin that
+  awaits its calls and logs at an ordinary rate never reaches either limit. Registration is deduplicated but
+  not counted: `ctx.registerWebhook` tells the host about a route once, `ctx.registerSearchProvider` once, and
+  `ctx.registerHook` about an event once, then again only for a handler whose priority is lower than every
+  earlier one for that event, since the host runs the plugin's handlers for an event from one entry, at the
+  lowest priority asked for. A loop that registers new route names or ever lower priorities posts on every
+  pass, and the worker leaves that to the plugin's own code. Output these limits do not cover, such as a
+  message posted to the port directly, is outside the boundary like the other direct access described below. A
+  loop that only spins on its own thread is ended by the liveness check once a dispatch to the plugin times out.
 - **Memory-kind boundary.** The heap cap bounds the V8 heap only. `Buffer`/`ArrayBuffer` allocations
   are native memory outside `maxOldGenerationSizeMb`, and worker threads share the host's address
   space, so a plugin that accumulates Buffers grows host RSS until the container's memory limit
