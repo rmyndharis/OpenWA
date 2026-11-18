@@ -188,6 +188,8 @@ export interface BaileysLifecycleHost {
   upsertChats: BaileysSessionStore['upsertChats'];
   /** Drop chats the socket reports deleted (chats.delete). */
   removeChats: BaileysSessionStore['removeChats'];
+  /** Forget the replays the session awaits of its own mark-read writes: the socket that held them is replaced. */
+  dropReadEchoes?: BaileysSessionStore['dropReadEchoes'];
   /** List the chats the gateway stored messages of (once, before the first socket opens). */
   seedStoredPreviews: BaileysSessionStore['seedStoredPreviews'];
   /** Learn lid<->phone mappings pushed by the socket (messaging-history.set, lid-mapping.update). */
@@ -486,8 +488,10 @@ export class BaileysLifecycle {
     }
 
     // Group changes made while the previous socket was down never reached it, so nothing it cached is
-    // trusted by the next one.
+    // trusted by the next one. The same holds for the replay of a write it still held: ending the socket destroys its
+    // event buffer, and a zero the next socket brings is a read of the account, not that replay.
     this.groupMetadata.clear();
+    this.host.dropReadEchoes?.();
     this.cancelPairingWindow();
 
     const fetchDispatcher = this.fetchDispatcher();

@@ -37,6 +37,8 @@ class FakeSock extends EventEmitter {
     removeAllListeners: (event: string) => {
       this.emitter.removeAllListeners(event);
     },
+    // Whether the event buffer is open, which holds the replay of an own app-state write until it flushes.
+    isBuffering: jest.fn(() => false),
   };
   public emitter = new EventEmitter();
   // Baileys builds sock.user from creds.me, which logout() reads live: a fake set up as linked has both.
@@ -875,6 +877,30 @@ describe('BaileysAdapter lifecycle & status', () => {
       await new Promise(r => setImmediate(r)); // let the async connect() body reach makeWASocket
       expect(makeWASocket).toHaveBeenCalledTimes(1);
       expect(onDisconnected).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('on a recoverable close: forgets the replays it awaited of the socket that closed', async () => {
+    const adapter = newAdapter();
+    await adapter.initialize(noopCallbacks({}));
+    const forget = jest.spyOn(
+      (adapter as unknown as { sessionStore: { dropReadEchoes(): void } }).sessionStore,
+      'dropReadEchoes',
+    );
+    forget.mockClear();
+
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+    try {
+      fakeSock.fire('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      });
+      expect(forget).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(2_000);
+      await new Promise(r => setImmediate(r)); // let the async connect() body reach makeWASocket
+      expect(forget).toHaveBeenCalledTimes(1);
     } finally {
       jest.useRealTimers();
     }
@@ -8610,6 +8636,76 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
       } finally {
         fakeSock.chatModify.mockReset().mockResolvedValue(undefined);
       }
+    });
+
+    // The replay of the write is a count of zero that the library's event buffer can hold until it flushes, after the read
+    // has returned. The count of a message that arrived while the write was out is not what the write covers.
+    describe('when the replay of the write reaches the session after the read returned', () => {
+      afterEach(() => {
+        fakeSock.chatModify.mockReset().mockResolvedValue(undefined);
+        fakeSock.ev.isBuffering.mockReturnValue(false);
+      });
+
+      /** A read whose write is still out when three more messages arrive; the write is then confirmed. */
+      const readWithMessagesArriving = async (adapter: BaileysAdapter, held: boolean): Promise<void> => {
+        fakeSock.ev.isBuffering.mockReturnValue(held);
+        let confirm!: () => void;
+        fakeSock.chatModify.mockImplementationOnce(() => new Promise<void>(resolve => (confirm = resolve)));
+        const read = adapter.sendSeen('628111@c.us');
+        for (let turn = 0; turn < 50 && !fakeSock.chatModify.mock.calls.length; turn++) {
+          await new Promise(r => setImmediate(r));
+        }
+        expect(fakeSock.chatModify).toHaveBeenCalledTimes(1);
+        fakeSock.fire('chats.update', [{ id: JID, unreadCount: 3, conversationTimestamp: 1700000050 }]);
+        fakeSock.fire('messages.upsert', {
+          type: 'notify',
+          messages: [
+            {
+              key: { remoteJid: JID, fromMe: false, id: 'M5' },
+              message: { conversation: 'more' },
+              messageTimestamp: 1700000050,
+            },
+          ],
+        });
+        await new Promise(r => setImmediate(r));
+        confirm();
+        expect(await read).toBe(true);
+        expect(await unread(adapter)).toBe(3);
+      };
+
+      it('keeps the count of what arrived while the write was out, where the buffer held the replay', async () => {
+        const adapter = await markedThenMessaged();
+        await readWithMessagesArriving(adapter, true);
+
+        fakeSock.fire('chats.update', [{ id: JID, unreadCount: 0 }]); // the buffer flushes
+
+        expect(await unread(adapter)).toBe(3);
+        // The read that covers them sends no second write: the first one took the mark.
+        expect(await adapter.sendSeen('628111@c.us')).toBe(true);
+        expect(fakeSock.chatModify).toHaveBeenCalledTimes(1);
+        expect(await unread(adapter)).toBe(0);
+      });
+
+      it('takes the zero a read on the phone brings later for what it is', async () => {
+        const adapter = await markedThenMessaged();
+        await readWithMessagesArriving(adapter, true);
+        fakeSock.fire('chats.update', [{ id: JID, unreadCount: 0 }]); // the replay
+        expect(await unread(adapter)).toBe(3);
+
+        fakeSock.fire('chats.update', [{ id: JID, unreadCount: 0 }]); // the account reads them on its phone
+
+        expect(await unread(adapter)).toBe(0);
+      });
+
+      // A write WhatsApp confirms only after the request budget is replayed by Baileys when nothing holds it any more.
+      it('clears that count when no buffer held the replay, as a zero Baileys delivers late does', async () => {
+        const adapter = await markedThenMessaged();
+        await readWithMessagesArriving(adapter, false);
+
+        fakeSock.fire('chats.update', [{ id: JID, unreadCount: 0 }]);
+
+        expect(await unread(adapter)).toBe(0);
+      });
     });
 
     it('is kept by a second message', async () => {

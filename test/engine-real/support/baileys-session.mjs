@@ -126,9 +126,9 @@ export async function startSession(t, { chatStateStore, unarchiveChats = false, 
 }
 
 /** A message as the socket reads it off the wire: built, wire-encoded and decoded. */
-export function wireMessage({ id, chat = PEER, fromMe = false, at, message }) {
+export function wireMessage({ id, chat = PEER, fromMe = false, participant, at, message }) {
   const wm = lib.proto.WebMessageInfo.fromObject({
-    key: { remoteJid: chat, fromMe, id },
+    key: { remoteJid: chat, fromMe, id, ...(participant ? { participant } : {}) },
     message,
     messageTimestamp: at,
   });

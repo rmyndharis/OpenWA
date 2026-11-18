@@ -60,6 +60,11 @@ export interface BaileysContactsHost {
   clearUnread(chatId: string, marks?: boolean): void;
   /** List the chat unread again after a zero that a message the read did not name had been counted under. */
   keepUnread?(chatId: string): void;
+  /**
+   * The write undoing an unread mark was confirmed while Baileys' event buffer holds the replay of that write, so its
+   * zero reaches the session after the read has returned. `jid` is the id the write was keyed to.
+   */
+  expectReadEcho?(jid: string): void;
   /** The `<lid>@lid` known for a 1:1 chat or a person under any spelling of it, or null (always for a group). */
   lidOf(jid: string): string | null;
   /** Every spelling of one chat the session can connect: the id, its engine form, and its lid or phone twin. */
@@ -512,6 +517,10 @@ export class BaileysContacts {
         this.sock(socket).chatModify({ markRead: true, lastMessages: range.lastMessages }, range.jid),
         'the read mark',
       );
+      // Baileys emitted the replay of the write before it resolved, so an open event buffer is holding it: its zero
+      // reaches the session after this read has returned, and must not wipe the count of a message this read left out.
+      // `socket` is the one the write went out on, which `this.sock(socket)` above insisted on.
+      if (socket.ev?.isBuffering?.()) this.host.expectReadEcho?.(range.jid);
       return true;
     } catch (err) {
       this.host.logger.warn('Sent the read receipt of a chat but could not undo its unread mark', {
