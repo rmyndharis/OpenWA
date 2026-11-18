@@ -1,0 +1,2 @@
+# tests/test_sdk.py imports conftest, which the default sdist file list leaves out
+include tests/conftest.py
