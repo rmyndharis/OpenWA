@@ -268,6 +268,8 @@ export function createSwaggerConfig(): Omit<OpenAPIObject, 'paths'> {
       .addTag('audit', 'Audit log')
       .addTag('metrics', 'Prometheus metrics')
       .addTag('health', 'Health check endpoints')
+      .addTag('automation', 'Automation rules (auto-reply)')
+      .addTag('media', 'Media conversion')
       // ORDER MATTERS. Swagger UI resolves "Try it" against servers[0], substituting the variable
       // defaults — it does not consider the origin the page was served from. A templated server
       // alone therefore aimed every request at `http://localhost:2785`, so on any deployment that

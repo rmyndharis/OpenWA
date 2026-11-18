@@ -18689,6 +18689,14 @@
     {
       "name": "health",
       "description": "Health check endpoints"
+    },
+    {
+      "name": "automation",
+      "description": "Automation rules (auto-reply)"
+    },
+    {
+      "name": "media",
+      "description": "Media conversion"
     }
   ],
   "servers": [
