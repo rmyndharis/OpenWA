@@ -13,7 +13,7 @@ import * as yaml from 'js-yaml';
 describe('Test lane partition', () => {
   const repoRoot = join(__dirname, '..', '..');
   const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
-    scripts: { 'test:docs'?: string; 'test:scripts'?: string };
+    scripts: { 'test:docs'?: string; 'test:scripts'?: string; 'test:engine-real'?: string };
     jest?: { testPathIgnorePatterns?: string[]; coveragePathIgnorePatterns?: string[] };
   };
 
@@ -103,6 +103,29 @@ describe('Test lane partition', () => {
     // Vacuity guard: an empty directory scan or an unparsed script would pass the diff below.
     expect(onDisk.length).toBeGreaterThan(10);
     expect(named.length).toBeGreaterThan(10);
+
+    expect({
+      neverRun: onDisk.filter(path => !named.includes(path)).sort(),
+      namedButAbsent: named.filter(path => !onDisk.includes(path)).sort(),
+    }).toEqual({ neverRun: [], namedButAbsent: [] });
+  });
+
+  /**
+   * `test/engine-real/` is run by `test:engine-real` alone, which hands node:test an explicit list of files, and the
+   * build job of ci.yml and the release workflow run nothing but that script. Jest never looks in that directory, so
+   * a proof written there and left out of the string runs NOWHERE, and a renamed or deleted one still named by it
+   * makes the whole invocation exit non-zero on a file it cannot open. The comparison is against the directory.
+   */
+  it('runs every spec under test/engine-real/ in the test:engine-real lane', () => {
+    const isSpec = (name: string): boolean => name.endsWith('.spec.mjs');
+    const onDisk = readdirSync(join(repoRoot, 'test', 'engine-real'))
+      .filter(isSpec)
+      .map(name => `test/engine-real/${name}`);
+    const named = (pkg.scripts['test:engine-real'] ?? '').split(/\s+/).filter(isSpec);
+
+    // Vacuity guard: an empty directory scan or an unparsed script would pass the diff below.
+    expect(onDisk.length).toBeGreaterThanOrEqual(2);
+    expect(named.length).toBeGreaterThanOrEqual(2);
 
     expect({
       neverRun: onDisk.filter(path => !named.includes(path)).sort(),
