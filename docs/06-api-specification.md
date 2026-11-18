@@ -163,6 +163,8 @@ Provide `url` or `base64`; when both are given, `base64` is used. Omitting both,
 
 A `url` is not followed through a redirect: one that answers `3xx` is refused with `400` and `Destination address is not allowed`, the text a blocked address gets, so send the address the redirect leads to (`SSRF_ALLOWED_HOSTS` does not lift it). The same holds for the `url` of a status post, a group or profile picture and a media conversion.
 
+A send by `url` holds the whole body in memory, about twice its size at the peak, until the engine has taken it. Only the per-key rate limit bounds how many run at once, so size the container memory for the number of large sends you run in parallel.
+
 A document sent without a `filename` is delivered under the default name `file` — on the whatsapp-web.js engine, a URL-based send first derives the URL basename before that fallback applies.
 
 ```json
