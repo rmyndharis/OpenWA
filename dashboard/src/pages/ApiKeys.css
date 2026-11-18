@@ -70,6 +70,7 @@
   font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
+  unicode-bidi: plaintext;
 }
 
 .api-keys-page .key-cell {
@@ -125,6 +126,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  unicode-bidi: plaintext;
 }
 
 .api-keys-page .sessions-cell.all {
@@ -547,6 +549,9 @@
     color: var(--text-primary);
     white-space: normal;
     overflow-wrap: anywhere;
+    /* A block in the card, so it is as wide as the name: the name keeps the edge the page puts it, as in the table. */
+    width: fit-content;
+    max-width: 100%;
   }
 
   /* Key cell */

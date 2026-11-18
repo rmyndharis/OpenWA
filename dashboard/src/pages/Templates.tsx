@@ -296,6 +296,7 @@ export function Templates() {
             <div className="templates-search">
               <Search size={16} />
               <input
+                type="text"
                 value={searchTerm}
                 onChange={event => setSearchTerm(event.target.value)}
                 placeholder={t('common.search')}
@@ -414,6 +415,7 @@ export function Templates() {
               <div className="form-group">
                 <label htmlFor="tpl-1">{t('common.name')}</label>
                 <input
+                  type="text"
                   id="tpl-1"
                   value={form.name}
                   onChange={event => setForm({ ...form, name: event.target.value })}
@@ -427,6 +429,7 @@ export function Templates() {
                 <div className="form-group">
                   <label htmlFor="tpl-2">{t('templates.header')}</label>
                   <input
+                    type="text"
                     id="tpl-2"
                     value={form.header}
                     onChange={event => setForm({ ...form, header: event.target.value })}
@@ -452,6 +455,7 @@ export function Templates() {
                 <div className="form-group">
                   <label htmlFor="tpl-4">{t('templates.footer')}</label>
                   <input
+                    type="text"
                     id="tpl-4"
                     value={form.footer}
                     onChange={event => setForm({ ...form, footer: event.target.value })}
@@ -498,6 +502,7 @@ export function Templates() {
                     <label key={key}>
                       <span>{token}</span>
                       <input
+                        type="text"
                         value={ownValue(previewValues, key) || ''}
                         onChange={event => setPreviewValues({ ...previewValues, [key]: event.target.value })}
                         placeholder={t('templates.previewValuePlaceholder')}

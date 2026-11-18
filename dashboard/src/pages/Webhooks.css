@@ -184,6 +184,9 @@
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--text-primary);
+  /* Text of its own, hugging the start edge (see .chat-item-name in Chats.css). */
+  width: fit-content;
+  unicode-bidi: plaintext;
 }
 
 .webhooks-page .webhook-events {

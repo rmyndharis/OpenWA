@@ -3282,6 +3282,9 @@
   /* Five whole lines, then the field scrolls. */
   max-height: calc(44px + 4 * 1.35em);
   overflow-y: auto;
+  /* What is typed is text of its own: under the page direction an Arabic page put the full stop of an English
+     sentence on the wrong end of it. Each line follows its own characters; the field stays at the page's edge. */
+  unicode-bidi: plaintext;
 }
 
 /* A textarea wraps its placeholder, and a wrapped one is counted in the height the field is given: where the

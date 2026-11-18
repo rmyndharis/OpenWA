@@ -227,7 +227,7 @@ export function Logs() {
                   {log.action}
                   {log.errorMessage && <span className="log-message">{log.errorMessage}</span>}
                 </span>
-                <span>{log.sessionName || log.sessionId || '—'}</span>
+                <span className="session">{log.sessionName || log.sessionId || '—'}</span>
                 <span className="api-key">{log.apiKeyName || '—'}</span>
                 <span className="ip">{log.ipAddress || '—'}</span>
                 <span>

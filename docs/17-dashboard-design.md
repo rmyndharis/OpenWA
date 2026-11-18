@@ -84,6 +84,15 @@ backed by `localStorage` — there is no Zustand store.
    certified.
 5. **Dark mode** - Support for light/dark themes
 
+Arabic and Hebrew mirror the layout, and text that a person typed or that a contact or a plugin author wrote
+(names, template bodies, found messages, plugin descriptions, and the fields they are typed into) takes its
+direction from its own characters (`unicode-bidi: plaintext`), so a Latin line keeps its full stop in an Arabic
+page and an Arabic line in an English one. The property aligns the text by that direction too, so a box that its
+container would stretch is as wide as its text (`width: fit-content`) and the text stays at the edge the page puts
+it; the one-line template fields keep the right edge that `index.css` gives the other text fields in an Arabic page.
+Ids, phone numbers and URLs stay on `<bdi dir="ltr">`. `dashboard/src/user-text-direction.test.ts` fails the build
+when one of these rules is dropped.
+
 ## 17.2 Information Architecture
 
 The dashboard is a **flat, single-level route table** (see `src/App.tsx`). Each sidebar entry maps

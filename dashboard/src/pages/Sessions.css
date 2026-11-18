@@ -40,6 +40,7 @@
   background: none;
   font-size: 0.9375rem;
   color: var(--text-primary);
+  unicode-bidi: plaintext;
 }
 
 .sessions-page .search-input input:focus {
@@ -100,6 +101,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 180px;
+  unicode-bidi: plaintext;
 }
 
 .sessions-page .qr-placeholder {

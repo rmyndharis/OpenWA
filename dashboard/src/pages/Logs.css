@@ -38,6 +38,7 @@
   background: none;
   font-size: 0.9375rem;
   color: var(--text-primary);
+  unicode-bidi: plaintext;
 }
 
 .logs-page .search-input input:focus {
@@ -134,12 +135,27 @@
   color: var(--text-secondary);
   white-space: normal;
   overflow-wrap: anywhere;
+  width: fit-content;
+  max-width: 100%;
+  unicode-bidi: plaintext;
+}
+
+/* The session and the key an entry names are text somebody chose: each takes its direction from its own characters,
+   and its box is as wide as the text, so the text stays at the start edge the page puts it, under its column header
+   (see .chat-item-name in Chats.css). */
+.logs-page .session {
+  width: fit-content;
+  max-width: 100%;
+  unicode-bidi: plaintext;
 }
 
 .logs-page .api-key {
   font-family: monospace;
   font-size: 0.8125rem;
   white-space: nowrap;
+  width: fit-content;
+  max-width: 100%;
+  unicode-bidi: plaintext;
 }
 
 .logs-page .ip {

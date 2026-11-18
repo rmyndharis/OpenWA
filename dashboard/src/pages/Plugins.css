@@ -93,6 +93,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
 }
 
 .plugins-page .plugin-version {
@@ -162,6 +163,10 @@
   font-size: 0.875rem;
   margin-bottom: 1rem;
   line-height: 1.5;
+  /* Text of its own, hugging the start edge (see .chat-item-name in Chats.css). */
+  width: fit-content;
+  max-width: 100%;
+  unicode-bidi: plaintext;
 }
 
 .plugins-page .plugin-status-row {
@@ -712,10 +717,14 @@
 .plugins-page .rail-active-name {
   font-size: 0.8125rem;
   color: var(--text-primary);
-  flex: 1;
+  /* As wide as the name, which stays at the start edge the page puts it, beside its dot (see .chat-item-name in
+     Chats.css); the type label is pushed to the other end by the margin. */
+  flex: 0 1 auto;
+  margin-inline-end: auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  unicode-bidi: plaintext;
 }
 
 .plugins-page .rail-active-type {
@@ -1151,6 +1160,9 @@
 
 .plugins-page .catalog-row-name {
   font-weight: 600;
+  width: fit-content;
+  max-width: 100%;
+  unicode-bidi: plaintext;
 }
 
 .plugins-page .catalog-row-version {
@@ -1163,6 +1175,13 @@
   color: var(--text-secondary);
   font-size: 0.85rem;
   margin-top: 2px;
+  width: fit-content;
+  max-width: 100%;
+  unicode-bidi: plaintext;
+}
+
+.plugins-page .catalog-row-author {
+  unicode-bidi: plaintext;
 }
 
 .plugins-page .catalog-row-meta {
