@@ -40,12 +40,12 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   border-bottom: 1px solid var(--border);
-  padding: 1.125rem 1.5rem;
+  padding: 1.125rem 1rem;
   text-align: start;
 }
 
 .api-keys-page .keys-table tbody tr.table-row td {
-  padding: 1.125rem 1.5rem;
+  padding: 1.125rem 1rem;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
