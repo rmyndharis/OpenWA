@@ -1094,6 +1094,8 @@ class WebhookRedriveResult(TypedDict):
 class ChatSummary(TypedDict):
     id: Jid
     name: str
+    # Phone digits of a privacy-id chat, when the session can map it.
+    phone: NotRequired[str]
     isGroup: bool
     unreadCount: int
     # Server returns a plain preview string, not a message object.

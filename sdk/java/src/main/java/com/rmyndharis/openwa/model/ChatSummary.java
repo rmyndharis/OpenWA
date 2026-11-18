@@ -21,14 +21,16 @@ public record ChatSummary(
     Boolean muted,
     /** Epoch milliseconds the mute ends, null unless muted; 0 means indefinitely. */
     Long muteExpiration,
-    MessageType lastMessageType) {
+    MessageType lastMessageType,
+    /** Phone digits of a privacy-id chat, null when the chat is phone-keyed or the mapping is unknown. */
+    String phone) {
 
-    /** Construct a chat summary without last-message type metadata. */
+    /** Construct a chat summary without last-message type metadata or a resolved phone. */
     public ChatSummary(
         String id, String name, Boolean isGroup, Integer unreadCount, String lastMessage,
         Long timestamp, ChatKind kind, Boolean archived, Boolean pinned, Boolean muted,
         Long muteExpiration) {
         this(id, name, isGroup, unreadCount, lastMessage, timestamp, kind, archived, pinned,
-            muted, muteExpiration, null);
+            muted, muteExpiration, null, null);
     }
 }
