@@ -151,6 +151,28 @@ class HttpExecutor
     }
 
     /**
+     * Re-index the named list fields of a body that the caller may have built with array_filter() or
+     * array_unique(): json_encode writes an array whose keys are not 0 to n-1 as an object, which the gateway
+     * refuses where it takes a list. A field that is absent, null or not an array is left alone, and the caller's
+     * array is never modified, not even a list in it that the caller holds by reference.
+     *
+     * @internal Used by the resource classes; not part of the public API.
+     *
+     * @param array<string,mixed> $body
+     * @return array<string,mixed>
+     */
+    public static function lists(array $body, string ...$keys): array
+    {
+        foreach ($keys as $key) {
+            if (isset($body[$key]) && is_array($body[$key])) {
+                // A new array: assigning into $body would write through a reference the caller holds.
+                $body = array_replace($body, [$key => array_values($body[$key])]);
+            }
+        }
+        return $body;
+    }
+
+    /**
      * Perform one request and return the decoded JSON body (or null for 204).
      *
      * @param string               $method  HTTP method.

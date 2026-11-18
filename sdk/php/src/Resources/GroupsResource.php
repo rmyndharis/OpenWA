@@ -43,11 +43,7 @@ class GroupsResource
      */
     public function create(string $sessionId, array $body): array
     {
-        // json_encode writes a list with key gaps (array_unique, array_filter) as an object, which the gateway refuses.
-        if (isset($body['participants']) && is_array($body['participants'])) {
-            $body['participants'] = array_values($body['participants']);
-        }
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/groups", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/groups", [], HttpExecutor::lists($body, 'participants'));
     }
 
     /**
