@@ -1147,8 +1147,14 @@ adapter boundary — none silently stubs.
 - **Channel writes (wwjs) answer by WhatsApp's status.** The delete, the mute and unmute, and the unsubscription of a
   channel are sent by the adapter in the page, with the lookups, the job and the arguments whatsapp-web.js uses
   (`Client.deleteChannel`, `Channel.mute` and `unmute`, `Client.unsubscribeFromChannel`), so that the status the job
-  rejects with decides the answer as it does for the group writes above: `408`, `423`, `429` and `5xx` are the retryable
-  `503`, and any other status the `403`. The library reads that class of error as `false`, which the adapter read as a
+  rejects with decides the answer as it does for the group writes above: `423`, `429` and `5xx` are the retryable `503`
+  that changed nothing, and any other status the `403`. A `408`, and a `500` whose text starts with `MexIqError:`, are an
+  unknown outcome instead: a `503` that says the operation may or may not have been applied, in the words of the
+  protocol timeout. A `408` is a timeout. The `500` is what the Mex client makes of a request whose send failed, a
+  socket that dropped after the request left, which the page had already sent again (it retries a `429` and a `500`
+  three times); an IQ error that WhatsApp did answer with a `500` carries the same text and cannot be told from it. A
+  repeat of a delete after such an answer may meet a channel that is gone, which answers `403`.
+  The library reads that class of error as `false`, which the adapter read as a
   refusal; the Mex subclass that carries the error of a query itself (`MexServerStatusCodeError`) was not caught by the
   library at all and was a bare `500`, and both are answered by their status now. What the library answered `false`
   for without asking WhatsApp, a channel the page does not hold and a channel the account owns when it unsubscribes, is

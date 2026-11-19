@@ -27,10 +27,15 @@ const THROTTLED_503 =
   'retry after a pause.';
 
 // On whatsapp-web.js the delete, the mute and the unsubscription are sent in the page, so WhatsApp's own status decides the
-// answer: a rate limit, a timeout or a server error is a 503 and says nothing was changed, where it read as a refusal.
+// answer: a rate limit or a server error is a 503 and says nothing was changed, where it read as a refusal. When its
+// answer never came, the write may have been applied.
 const WWJS_STATUS_503 =
-  ' On whatsapp-web.js, also when WhatsApp answers the request with a rate limit, a timeout or a server error ' +
-  '(408, 423, 429 or 5xx): nothing was changed, so retry after a pause.';
+  ' On whatsapp-web.js, also when WhatsApp answers the request with a rate limit or a server error (423, 429 or 5xx): ' +
+  'nothing was changed, so retry after a pause. When its answer never came (a timeout, 408, or a connection that ' +
+  'dropped after the request was sent) the operation may or may not have been applied: check before repeating it.';
+
+// A repeat of a delete meets a channel that is gone once the first one went through.
+const WWJS_GONE_403 = ' A repeat of it may meet a channel that is gone, which answers 403.';
 
 @ApiTags('channels')
 @Controller('sessions/:sessionId/channels')
@@ -163,7 +168,8 @@ export class ChannelController {
     description:
       'WhatsApp did not answer within the request budget — the operation may or may not have applied.' +
       THROTTLED_503 +
-      WWJS_STATUS_503,
+      WWJS_STATUS_503 +
+      WWJS_GONE_403,
   })
   @ApiResponse({ status: 400, description: 'Session not started' })
   @ApiResponse({ status: 403, description: 'The engine refused — not found, or this account does not own it' })

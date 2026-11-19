@@ -15,10 +15,11 @@ const { Client, Channel } = wwebjs as unknown as {
 /**
  * Deleting a channel, muting or unmuting it and unsubscribing from it are jobs of WhatsApp Web, and whatsapp-web.js
  * reads every status that a job rejects with (`ServerStatusCodeError`) as `false`, which the adapter read as a refusal: a
- * rate limit, a timeout or a server error, which changed nothing and may pass a moment later, was a 403. The channel jobs
- * reject that class for an error of the IQ that carries them and the class of the Mex query for an error of the query
- * itself (`MexServerStatusCodeError`), which the library did not catch, so that was a bare 500. The adapter now sends the
- * same request in the page and answers by the status WhatsApp gave.
+ * rate limit or a server error, which changed nothing and may pass a moment later, was a 403. The channel jobs reject
+ * that class for an error of the IQ that carries them and the class of the Mex query for an error of the query itself
+ * (`MexServerStatusCodeError`), which the library did not catch, so that was a bare 500. The adapter now sends the same
+ * request in the page and answers by the status WhatsApp gave, and says the outcome is unknown when no answer came (a
+ * timeout, or the 500 the Mex client makes of a send that failed).
  *
  * The page below behaves as build 2.3000.1054966512-alpha does, read off its scripts: the jobs resolve when WhatsApp took
  * the request and reject the status otherwise, and the unsubscription job reports a suspended channel as a 423 with the
@@ -129,17 +130,46 @@ describe('a channel write that WhatsApp answers with a status', () => {
     );
 
     // Nothing was changed and the request may pass later: a refusal here would tell a caller to give up.
-    it.each([408, 423, 429, 500, 503])(
-      'is a retryable failure, not a refusal, when WhatsApp answers %i',
-      async status => {
-        installPage({ job: { rejects: statusError(status) } });
+    it.each([423, 429, 500, 503])('is a retryable failure, not a refusal, when WhatsApp answers %i', async status => {
+      installPage({ job: { rejects: statusError(status) } });
 
-        const attempt = call(adapterOnThatPage());
+      const attempt = call(adapterOnThatPage());
 
-        await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
-        await expect(attempt).rejects.toThrow(new RegExp(`answered ${status} to `));
-      },
-    );
+      await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
+      await expect(attempt).rejects.toThrow(new RegExp(`answered ${status} to .*Retry after a pause`));
+    });
+
+    // WhatsApp answered nothing: a timeout, or a Mex request whose socket failed after it left (the Mex client makes a
+    // 500 of its own for it, with the text 'MexIqError:', after the page has sent the mutation again). The write may
+    // have been applied, so the answer is the 503 that says so in the gateway's words, and neither a refusal nor a
+    // failure that changed nothing.
+    it.each([
+      ['a timeout', statusError(408)],
+      ['a timeout of the Mex class', statusError(408, 'MexServerStatusCodeError')],
+      [
+        'a request whose socket failed after it left',
+        statusError(500, 'ServerStatusCodeError', 'MexIqError: Disconnected'),
+      ],
+      ['the same with no text', statusError(500, 'ServerStatusCodeError', 'MexIqError: ')],
+    ])('is a 503 that says the outcome is unknown for %s', async (_case, error) => {
+      installPage({ job: { rejects: error } });
+
+      const attempt = call(adapterOnThatPage());
+
+      await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
+      await expect(attempt).rejects.toThrow(/may or may not have been applied/);
+      await expect(attempt).rejects.not.toThrow(/answered|nothing|as it was/);
+    });
+
+    // Only a 408 and the 500 made by the Mex client are unknown: any other status of an IQ error is an answer.
+    it('still reads another status of a Mex IQ error as an answer that changed nothing', async () => {
+      installPage({ job: { rejects: statusError(503, 'ServerStatusCodeError', 'MexIqError: service-unavailable') } });
+
+      const attempt = call(adapterOnThatPage());
+
+      await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
+      await expect(attempt).rejects.toThrow(/answered 503 to /);
+    });
 
     it('reads the class of the Mex query the same way, which the library let through as a bare error', async () => {
       installPage({ job: { rejects: statusError(429, 'MexServerStatusCodeError') } });

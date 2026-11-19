@@ -3,6 +3,7 @@ import { Channel, ChannelMessage } from '../interfaces/whatsapp-engine.interface
 import { BusinessClient, WwjsChannelData, readWid } from '../types/whatsapp-web-js.types';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { type WwebjsEngineHost, withPageWrite, reportPageDeath } from './wwebjs-host';
 import { type EvaluatePage, settleWriteStatus } from './wwebjs-page-writes';
@@ -14,7 +15,7 @@ export type ChannelWrite = 'delete' | 'mute' | 'unmute' | 'unsubscribe';
  * One write to a channel, run IN-PAGE as whatsapp-web.js runs it (`Client.deleteChannel`, `Channel.mute` and `unmute`,
  * `Client.unsubscribeFromChannel`: the same lookups, the same job and the same arguments), and answered with the status
  * WhatsApp gave. The library reads every rejection named `ServerStatusCodeError` as `false`, which the adapter read as a
- * refusal, so a rate limit, a timeout or a server error, which changed nothing and may pass later, was a 403. The
+ * refusal, so a rate limit or a server error, which changed nothing and may pass later, was a 403. The
  * channel's jobs reject that class for an error of the IQ that carries them (`MexIqError`), and its Mex subclass for the
  * error of the query itself, which the library did not catch and so was a bare 500; both carry the status. What the
  * library answered `false` for without asking WhatsApp, a channel the page does not hold and a channel the account owns
@@ -23,14 +24,18 @@ export type ChannelWrite = 'delete' | 'mute' | 'unmute' | 'unsubscribe';
  * ('xwa2_newsletter_delete_v2 is null'), the unsubscription ('unexpected-null-mex-response') and the mute and unmute
  * ('unexpected_mex_mutation_response') report an answer of the query that holds nothing as a 500, which is how WhatsApp
  * can refuse an account that may not make the change. None is a status WhatsApp sent or a failure to retry, so all are
- * refusals too, matched by their exact text. Like the library's calls it does not look the jobs up, so a page without
- * one rejects as the library's call did. Any other rejection is rethrown. Self-contained, since Puppeteer ships it to
- * the page as source.
+ * refusals too, matched by their exact text. WhatsApp answering nothing is no answer that changed nothing: a 408 is a
+ * timeout, and the Mex client makes a 500 of its own, with the text 'MexIqError:', of a request whose send failed (a
+ * socket that dropped after the request left), which the page had already sent again (it retries a 429 and a 500 three
+ * times). An IQ error that WhatsApp did answer with a 500 carries the same text and cannot be told from it. For both the
+ * write may have been applied, so the answer says that (`outcomeUnknown`), and any other status is an answer that changed
+ * nothing. Like the library's calls it does not look the jobs up, so a page without one rejects as the library's call
+ * did. Any other rejection is rethrown. Self-contained, since Puppeteer ships it to the page as source.
  */
 export async function runChannelWriteInPage(
   write: ChannelWrite,
   channelId: string,
-): Promise<{ status: number; local?: true }> {
+): Promise<{ status: number; local?: true; outcomeUnknown?: true }> {
   type NewsletterChat = { newsletterMetadata?: { membershipType?: unknown } } | null;
   const w = window as unknown as {
     require(m: 'WAWebNewsletterDeleteAction'): { deleteNewsletterAction: (channel: unknown) => Promise<unknown> };
@@ -89,6 +94,9 @@ export async function runChannelWriteInPage(
         ].includes(text)
       ) {
         return { status: 403 };
+      }
+      if (failure.status === 408 || (failure.status === 500 && text.startsWith('MexIqError:'))) {
+        return { status: failure.status, outcomeUnknown: true };
       }
       return { status: typeof failure.status === 'number' ? failure.status : 403 };
     }
@@ -230,9 +238,11 @@ export class WwebjsChannels {
 
   /**
    * One write to a channel, sent IN-PAGE ({@link runChannelWriteInPage}) so that WhatsApp's own status decides the
-   * answer: whatsapp-web.js reads every status as `false`, which this adapter read as a refusal, so a rate limit, a
-   * timeout or a server error (nothing was changed, the same request may pass later) was a 403. `refusal` words the
-   * refusal, which keeps the words it always had.
+   * answer: whatsapp-web.js reads every status as `false`, which this adapter read as a refusal, so a rate limit or a
+   * server error (nothing was changed, the same request may pass later) was a 403. A write that WhatsApp did not answer
+   * (a timeout, or a socket that dropped after the request left) may have been applied: it is the 503 that says so, in
+   * the gateway's own words for an unknown outcome, and not an answer of WhatsApp. `refusal` words the refusal, which
+   * keeps the words it always had.
    */
   private async writeToChannel(
     op: string,
@@ -245,6 +255,12 @@ export class WwebjsChannels {
     const answer = await withPageWrite(this.host, op, () =>
       (this.client() as unknown as { pupPage: EvaluatePage }).pupPage.evaluate(runChannelWriteInPage, write, channelId),
     );
+    if (answer.outcomeUnknown) {
+      throw new EngineTransportError(
+        `WhatsApp did not answer ${request}, and it may or may not have been applied (the page reported ` +
+          `${answer.status}). Check before repeating it.`,
+      );
+    }
     settleWriteStatus(answer.status, { request, nothing, refused: () => refusal }, answer.local);
   }
 

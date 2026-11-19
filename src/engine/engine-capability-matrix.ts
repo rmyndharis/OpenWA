@@ -467,7 +467,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      'wwjs WAWebNewsletterUnsubscribeAction.unsubscribeFromNewsletterAction(channel, options), sent in-page by the adapter with the lookups and arguments of Client.unsubscribeFromChannel(channelId, options?) → boolean (index.d.ts; Client.js), which reads every status as false: 2xx success, 408/423/429/5xx a retryable 503, any other status, a channel the page does not hold and a channel the account owns EngineRefusedError; baileys newsletterUnfollow(jid) (Socket/newsletter.d.ts)',
+      'wwjs WAWebNewsletterUnsubscribeAction.unsubscribeFromNewsletterAction(channel, options), sent in-page by the adapter with the lookups and arguments of Client.unsubscribeFromChannel(channelId, options?) → boolean (index.d.ts; Client.js), which reads every status as false: 2xx success, 423/429/5xx a retryable 503 that changed nothing, a 408 and the 500 the Mex client makes of a send that failed a 503 that says the outcome is unknown, any other status, a channel the page does not hold and a channel the account owns EngineRefusedError; baileys newsletterUnfollow(jid) (Socket/newsletter.d.ts)',
   },
 };
 
