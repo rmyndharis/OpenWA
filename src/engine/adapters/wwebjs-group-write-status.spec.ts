@@ -194,14 +194,17 @@ describe('a group or profile write that WhatsApp answers with a status', () => {
     });
 
     // A rate limit or a server error changed nothing, and the same request may pass a moment later.
-    it.each([423, 429, 500, 503])('is a retryable failure, not a refusal, when WhatsApp answers %i', async status => {
-      installPage(page({ rejects: statusError(status) }));
+    it.each([408, 423, 429, 500, 503])(
+      'is a retryable failure, not a refusal, when WhatsApp answers %i',
+      async status => {
+        installPage(page({ rejects: statusError(status) }));
 
-      const outcome = await outcomeOf(write);
+        const outcome = await outcomeOf(write);
 
-      expect(outcome).toBeInstanceOf(EngineTransportError);
-      expect((outcome as Error).message).toContain(`answered ${status}`);
-    });
+        expect(outcome).toBeInstanceOf(EngineTransportError);
+        expect((outcome as Error).message).toContain(`answered ${status}`);
+      },
+    );
 
     it('keeps any other failure of the job as it was', async () => {
       const failure = new TypeError('something inside the job');
@@ -233,6 +236,7 @@ describe('a group or profile write that WhatsApp answers with a status', () => {
       it.each([
         ['SetPropertyResponseClientError', 429],
         ['SetPropertyResponseClientError', 423],
+        ['SetPropertyResponseClientError', 408],
         ['SetPropertyResponseServerError', 500],
       ])('is a retryable failure on %s %i, where it read as done', async (name, code) => {
         installPage({ property: { resolves: union(name, code) } });
@@ -444,7 +448,7 @@ describe('a group or profile write that WhatsApp answers with a status', () => {
       expect(() => settleWriteStatus(status, outcome)).not.toThrow();
     });
 
-    it.each([423, 429, 500, 503, 599])('asks for a retry on %i, and says what it left', status => {
+    it.each([408, 423, 429, 500, 503, 599])('asks for a retry on %i, and says what it left', status => {
       expect(() => settleWriteStatus(status, outcome)).toThrow(EngineTransportError);
       expect(() => settleWriteStatus(status, outcome)).toThrow(
         `WhatsApp answered ${status} to the change and changed nothing.`,

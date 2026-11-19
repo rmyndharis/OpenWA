@@ -57,14 +57,15 @@ const THROTTLED_503 =
   'retry after a pause.';
 
 // On whatsapp-web.js the group writes below are sent in the page, so WhatsApp's own status decides the answer: a rate
-// limit (423, 429) or a server error (5xx) is this 503 and says nothing was changed, where it read as missing admin rights.
+// limit (423, 429), a timeout (408) or a server error (5xx) is this 503 and says nothing was changed, where it read as
+// missing admin rights.
 const WWJS_STATUS_503 =
-  ' On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): ' +
+  ' On whatsapp-web.js, also when WhatsApp answers the change with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
   'nothing was changed, so retry after a pause.';
 
 // The invite code read is sent in the page the same way, so its status decides the answer too.
 const WWJS_INVITE_READ_503 =
-  ' On whatsapp-web.js, also when WhatsApp answers the read with a rate limit or a server error (423, 429 or 5xx): ' +
+  ' On whatsapp-web.js, also when WhatsApp answers the read with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
   'no code was returned, so retry after a pause.';
 
 // The subject, description and picture are the group's info: WhatsApp lets an admin edit them and, unless the group
@@ -267,7 +268,7 @@ export class GroupController {
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
       'the gateway stopped waiting for a confirmation that never came.' +
       THROTTLED_503 +
-      ' On whatsapp-web.js, also when WhatsApp answers a setting with a rate limit or a server error (423, 429 or 5xx): ' +
+      ' On whatsapp-web.js, also when WhatsApp answers a setting with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
       'that setting was not applied, or, for a member add mode change, may have been applied in part, and the message ' +
       'names any setting of the same request that was already applied.',
   })
@@ -725,7 +726,7 @@ export class GroupController {
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
       'the gateway stopped waiting for a confirmation that never came.' +
       THROTTLED_503 +
-      ' On whatsapp-web.js, also when WhatsApp answers the delete with a rate limit or a server error: ' +
+      ' On whatsapp-web.js, also when WhatsApp answers the delete with a rate limit, a timeout or a server error: ' +
       'nothing was deleted.',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
@@ -775,7 +776,7 @@ export class GroupController {
     description:
       'On Baileys, WhatsApp did not answer the invite-code revocation in time, or rate-limited or timed it out ' +
       '(code 429 or 408); retry after a pause. On whatsapp-web.js, only when WhatsApp answers the revoke with a rate ' +
-      'limit or a server error (423, 429 or 5xx): the current code is unchanged, so retry after a pause. On ' +
+      'limit, a timeout or a server error (408, 423, 429 or 5xx): the current code is unchanged, so retry after a pause. On ' +
       'whatsapp-web.js a protocol timeout or a page that died mid-call answers 500 instead, since the revoke may ' +
       'already have rotated the code: read the current code before repeating it.',
   })

@@ -23,8 +23,8 @@ export type PageWriteAnswer = { status: number; local?: true } | 'missing';
 /**
  * Run one group or profile write IN-PAGE through the WhatsApp Web job whatsapp-web.js calls for it, and answer the
  * status WhatsApp gave. The library reads every status as `false` (a refusal), and the adapter read `false` as missing
- * admin rights, so a rate limit (423, 429) or a server error (5xx), which removed or changed nothing and may pass
- * later, was reported as a 403. The status says which it was.
+ * admin rights, so a rate limit (423, 429), a timeout (408) or a server error (5xx), which removed or changed nothing
+ * and may pass later, was reported as a 403. The status says which it was.
  *
  * A status is answered however the build reports it: `ServerStatusCodeError` and its Mex subclass carry it as
  * `.status`, the property writes of the current build RESOLVE the response union instead (`SetPropertyResponse*`),
@@ -229,13 +229,13 @@ export interface WriteOutcome {
 }
 
 /**
- * Settle the status WhatsApp answered to a write the adapter sent itself: 2xx is done; 423, 429 and 5xx are a
- * retryable failure (a 503), since a rate limit or a server error means nothing was applied and the same request may
- * pass a moment later; any other code is the refusal (a 403).
+ * Settle the status WhatsApp answered to a write the adapter sent itself: 2xx is done; 408, 423, 429 and 5xx are a
+ * retryable failure (a 503), since a timeout, a rate limit or a server error means nothing was applied and the same
+ * request may pass a moment later; any other code is the refusal (a 403).
  */
 export function settleWriteStatus(status: number, outcome: WriteOutcome, local = false): void {
   if (status >= 200 && status < 300) return;
-  if (status === 423 || status === 429 || status >= 500) {
+  if (status === 408 || status === 423 || status === 429 || status >= 500) {
     throw new EngineTransportError(
       `WhatsApp answered ${status} to ${outcome.request} and ${outcome.nothing}. Retry after a pause.`,
     );

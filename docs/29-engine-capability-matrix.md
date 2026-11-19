@@ -1126,13 +1126,17 @@ adapter boundary — none silently stubs.
 - **Group and profile writes (wwjs) answer by WhatsApp's status.** The subject, description, picture, announce,
   locked and member-add-mode writes of a group, the account's own profile picture and the invite revoke are sent by
   the adapter in the page, through the WhatsApp Web job whatsapp-web.js calls, so that the status WhatsApp gave
-  decides the answer: 2xx is done, a rate limit or a server error (`423`, `429`, `5xx`) is a `503` that changed
-  nothing (member add mode, which is two writes when it sets admins on a group whose link mode is open, can have
-  applied the first), and any other code, or the page's own refusal of an account that may not make the change, is a `403`. The
-  library reads every such status as `false`, which the adapter used to read as missing admin rights. The announce
+  decides the answer: 2xx is done, a rate limit, a timeout or a server error (`408`, `423`, `429`, `5xx`) is a `503`
+  that changed nothing (member add mode, which is two writes when it sets admins on a group whose link mode is open, can
+  have applied the first), and any other code, or the page's own refusal of an account that may not make the change, is a
+  `403`. The library reads every such status as `false`, which the adapter used to read as missing admin rights. The announce
   and locked jobs of the current build resolve a response (`SetPropertyResponse*`) where an earlier build rejected a
   status, and the library reads a resolved response as success; the adapter reads the response. Where the page has
   none of the jobs, the write is the library's own call, as before.
+  The engines do not classify every status alike on these writes. `408` is a `503` on both. `429` is a `503` on both.
+  `423` is a `503` on whatsapp-web.js and a `403` on Baileys, which maps `408` and `429` to a `503` and every other `4xx` to
+  a `403`. A `5xx` is a `503` on whatsapp-web.js and is rethrown as it came on Baileys (a `500`). Baileys is left as it
+  is: whether WhatsApp sends `423` or a `5xx` to these writes has not been traced on a live account.
 - **`editMessage` / `pinMessage` / `unpinMessage` refusals (baileys).** Both engines refuse what they
   can judge locally: the target must be addressable inside the given chat, and the Baileys adapter
   additionally refuses an edit of a message the account did not send or of one with no text or caption

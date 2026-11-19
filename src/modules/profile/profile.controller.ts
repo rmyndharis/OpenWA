@@ -90,7 +90,7 @@ export class ProfileController {
     description:
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
       'the gateway stopped waiting for a confirmation that never came. On whatsapp-web.js, also when WhatsApp answers ' +
-      'the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a ' +
+      'the change with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): nothing was changed, so retry after a ' +
       'pause. ' +
       MEDIA_URL_PROXY_503,
   })
