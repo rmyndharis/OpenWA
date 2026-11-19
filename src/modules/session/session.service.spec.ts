@@ -2209,9 +2209,11 @@ describe('SessionService', () => {
       });
       let finishFirstClaim: () => void = () => undefined;
       let finishSecondClaim: () => void = () => undefined;
+      // The first start asks once more while the second still runs, and a peer still holds the session.
       ownership.claim
         .mockImplementationOnce(() => new Promise<boolean>(resolve => (finishFirstClaim = () => resolve(false))))
-        .mockImplementationOnce(() => new Promise<boolean>(resolve => (finishSecondClaim = () => resolve(true))));
+        .mockImplementationOnce(() => new Promise<boolean>(resolve => (finishSecondClaim = () => resolve(true))))
+        .mockResolvedValueOnce(false);
 
       const stopping = service.stop('sess-uuid-1');
       const first = service.start('sess-uuid-1', { explicit: true }).catch((error: unknown) => error);

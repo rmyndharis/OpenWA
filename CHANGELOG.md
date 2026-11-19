@@ -138,7 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update `guzzlehttp/guzzle` to 8.5.0 in the PHP SDK lockfile; this touches development and test setups only.
 - The image's Node.js 22.23.4 to 22.23.5, a security release for the `http`, `http2`, `https`, `tls`, `permission` and `zlib` modules.
 - The built-in S3 storage image `pgsty/silo` RELEASE.2026-09-16 to RELEASE.2026-11-12, a security release; an existing `openwa-minio` container keeps its image until it is recreated (see `docs/14-migration-guide.md`).
-- The dependency audit excuses the `picomatch` advisory GHSA-fc5q-39xc-vjpf by id in the gateway, dashboard and JavaScript SDK trees: every published version is affected, and no glob pattern reaches it from outside the repository. The dashboard and SDK audits now run the same per-advisory gate as the gateway's.
+- The dashboard and SDK audits run the same per-advisory gate as the gateway's.
 
 ### Upgrade notes (behavior changes)
 

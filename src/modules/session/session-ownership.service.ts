@@ -168,7 +168,20 @@ export class SessionOwnershipService {
     // A successful SQL write may still await its reply; a local overlap shares that ownership too.
     if (this.owned.has(sessionId) || this.claimGen.has(sessionId)) {
       const generation = this.claimGen.get(sessionId);
-      const renewed = await this.sessions.update({ id: sessionId, nodeId: this.nodeId }, { leaseExpiresAt });
+      const inFlight = !this.owned.has(sessionId);
+      const renew = (): Promise<{ affected?: number }> =>
+        this.sessions.update({ id: sessionId, nodeId: this.nodeId }, { leaseExpiresAt });
+      let renewed = await renew();
+      // A claim in flight when this one began may write the row after this renewal ran. Once that claim has settled,
+      // the miss says nothing about the row: ask again rather than replace the generation it settled with.
+      if (
+        renewed.affected !== 1 &&
+        inFlight &&
+        this.owned.has(sessionId) &&
+        this.claimGen.get(sessionId) === generation
+      ) {
+        renewed = await renew();
+      }
       if (this.claimGen.get(sessionId) !== generation) return 'superseded';
       if (renewed.affected === 1) {
         this.owned.add(sessionId);
