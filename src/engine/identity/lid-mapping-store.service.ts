@@ -382,7 +382,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       return (await this.readLidsForPhones([phone]))[phone];
     } catch (err) {
       this.logger.warn(`Could not read lids for a phone: ${err instanceof Error ? err.message : String(err)}`);
-      return this.lidsForPhone(phone).filter(lid => !this.unreported.has(lid));
+      return this.mirrorLids(phone);
     }
   }
 
@@ -396,7 +396,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     if (lids.length === 0) return out;
     // The mirror is only the fallback for a failed table read, so it is read without getCached:
     // that warms every miss with a findOne of its own, one per lid ahead of the batched query below.
-    for (const lid of lids) out[lid] = this.unreported.has(lid) ? null : (this.lidToPhone.get(lid) ?? null);
+    for (const lid of lids) out[lid] = this.mirrorPhone(lid, this.lidToPhone.get(lid));
     try {
       for (const batch of chunk(lids)) {
         const rows = await this.repo.find({ where: { lid: In(batch) } });
@@ -416,10 +416,22 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       return await this.readLidsForPhones(phones);
     } catch {
       // The table may not exist yet (migration pending); the cache is the best available answer.
-      return Object.fromEntries(
-        phones.map(phone => [phone, this.lidsForPhone(phone).filter(lid => !this.unreported.has(lid))]),
-      );
+      return Object.fromEntries(phones.map(phone => [phone, this.mirrorLids(phone)]));
     }
+  }
+
+  /**
+   * What the mirror answers for a lid while the table cannot be read: its entry, judged as a row would be. A lid with
+   * a failed write has the table's row warmed back into the mirror beside its mark, and that row is the phone the
+   * write was to replace: the mirror is the best answer there is, but not one that the mark refuses.
+   */
+  private mirrorPhone(lid: string, held: string | null | undefined): string | null {
+    return !held || this.unreported.has(lid) ? null : this.rowPhone(lid, held, true);
+  }
+
+  /** The lids the mirror maps to a phone while the table cannot be read, judged as {@link mirrorPhone} does. */
+  private mirrorLids(phone: string): string[] {
+    return this.lidsForPhone(phone).filter(lid => this.mirrorPhone(lid, phone) === phone);
   }
 
   /** Read only current table rows on success; a resident mapping cannot restore a deleted row. */
@@ -484,7 +496,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     } catch (err) {
       this.logger.warn(`Could not read the phone for a lid: ${err instanceof Error ? err.message : String(err)}`);
     }
-    return this.unreported.has(lid) ? null : (this.getCached(lid) ?? null);
+    return this.unreported.has(lid) ? null : this.mirrorPhone(lid, this.getCached(lid));
   }
 
   /**
@@ -935,6 +947,9 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
    * next one hits. A table miss IS remembered, so an unmapped lid stops re-querying on every
    * lookup ({@link absentFromTable}), but only when nothing learned that lid in the meantime;
    * a read error is swallowed (the table may not exist yet), the same posture as reload().
+   * A lid with a failed-write mark is warmed too, with the row the write was to replace: the synchronous views then
+   * show that row, display and attribution only, and the readers that authorize judge the entry through
+   * {@link rowPhone}, where the mark outranks it, also when they fall back to the mirror ({@link mirrorPhone}).
    */
   private warmFromTable(lid: string): void {
     if (!lid || this.pendingLookups.has(lid) || this.absentFromTable.has(lid) || this.markDropped(lid)) return;

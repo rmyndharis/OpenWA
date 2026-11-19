@@ -4341,6 +4341,100 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
 
       expect(evicted()).toBe(2); // the cap of this mirror
     });
+
+    // The mirror answers when the table cannot be read, and a lid with a failed write can have the row it distrusts
+    // warmed back into it beside its mark: the readers judge that entry as they judge a row.
+    describe('and the table then cannot be read', () => {
+      const unreadable = (): void => {
+        jest.spyOn(repo, 'findOne').mockRejectedValue(new Error('the database is down'));
+        jest.spyOn(repo, 'find').mockRejectedValue(new Error('the database is down'));
+      };
+
+      /** The row 628111 is warmed back into the mirror, beside the mark of a failed report of 628222. */
+      const warmedBack = async (): Promise<void> => {
+        await failReport();
+        await pushOut();
+        store.getCached('333');
+        const deadline = Date.now() + 5000;
+        while (store.getCached('333') === undefined && Date.now() < deadline) await new Promise(r => setTimeout(r, 5));
+        expect(store.getCached('333')).toBe('628111');
+        expect(evicted()).toBe(1);
+      };
+
+      it('answers no phone for the lid, and the lid for neither phone', async () => {
+        await warmedBack();
+        await refused(['628111', '628222']); // the mark refuses the row while the table is read
+
+        unreadable();
+
+        await refused(['628111', '628222']);
+        warn.mockClear();
+      });
+
+      it('answers no phone for a lid whose write failed while a reload read the table, once its row was warmed back', async () => {
+        const read = holdRead();
+        const reloading = store.reload();
+        await read.reached;
+        let reject!: (err: Error) => void;
+        const entered = new Promise<void>(resolve =>
+          jest.spyOn(repo, 'upsert').mockImplementationOnce(
+            () =>
+              new Promise((_, fail) => {
+                reject = fail;
+                resolve();
+              }),
+          ),
+        );
+        const report = store.remember('333', '628222', OWNER); // the reload leaves the lid out of its snapshot
+        await entered;
+        read.release();
+        await reloading;
+        reject(new Error('connection lost'));
+        await expect(report).resolves.toBe(false);
+        warn.mockClear();
+        store.getCached('333');
+        const deadline = Date.now() + 5000;
+        while (store.getCached('333') === undefined && Date.now() < deadline) await new Promise(r => setTimeout(r, 5));
+        expect(store.getCached('333')).toBe('628111');
+
+        unreadable();
+
+        await refused(['628111', '628222']);
+        warn.mockClear();
+      });
+
+      it('answers no phone from the mirror for a lid of a batch whose read failed after another batch was read', async () => {
+        await warmedBack();
+        const others = Array.from({ length: 500 }, (_, i) => `9${String(i).padStart(3, '0')}`); // the first batch
+        const find = repo.find.bind(repo) as (...args: unknown[]) => Promise<unknown>;
+        jest
+          .spyOn(repo, 'find')
+          .mockImplementationOnce(((...args: unknown[]) => find(...args)) as never)
+          .mockRejectedValue(new Error('the database is down'));
+
+        const answered = await store.phonesForLidsPersisted([...others, '333']);
+
+        expect(answered['333']).toBeNull();
+        expect(answered[others[0]]).toBeNull();
+      });
+
+      it('answers the phone its entry holds for a lid with no failed write, and for a report not stored yet', async () => {
+        unreadable();
+        await answers('628111');
+
+        warn.mockClear();
+        jest.restoreAllMocks();
+        jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+        await expect(store.remember('333', '628222', OWNER)).resolves.toBe(false); // its entry holds the new phone
+        warn.mockClear();
+        unreadable();
+
+        expect(await store.findPhoneForLid('333@lid')).toBe('628222');
+        expect(await store.findLidsForPhone('628222')).toEqual(['333']);
+        expect(await store.findLidsForPhone('628111')).toEqual([]);
+        warn.mockClear();
+      });
+    });
   });
 
   // A reload ends the marks made before its read, against the table it replaced. A write that fails while the read is out

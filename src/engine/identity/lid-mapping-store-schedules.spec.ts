@@ -26,7 +26,17 @@ interface CallSpec {
   session: string;
 }
 type Environment =
-  'evict' | 'reload' | 'warm' | 'peer' | 'reloadBegin' | 'reloadEnd' | 'failReports' | 'failLookups' | 'recover';
+  | 'evict'
+  | 'reload'
+  | 'warm'
+  | 'peer'
+  | 'reloadBegin'
+  | 'reloadEnd'
+  | 'failReports'
+  | 'failLookups'
+  | 'recover'
+  | 'down'
+  | 'up';
 type Step = { step: 'begin' } | { step: 'settle'; outcome: Outcome } | { step: Environment };
 type Init = 'reported' | 'display' | 'none' | 'negative';
 interface Scope {
@@ -211,6 +221,8 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
   let slow: Repository<LidMapping>;
   let gated = false;
   let failingFillers = false;
+  /** The table cannot be read: every read of the store fails, and the readers answer from the mirror. */
+  let down = false;
   const read: { release?: () => void } = {};
   const takeRead = (): (() => void) | undefined => {
     const release = read.release;
@@ -264,7 +276,13 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
     };
     slow = new Repository(LidMapping, ds.manager);
     const find = (slow.find as (...args: unknown[]) => Promise<unknown>).bind(slow);
+    const findOne = (slow.findOne as (...args: unknown[]) => Promise<unknown>).bind(slow);
+    jest
+      .spyOn(slow, 'findOne')
+      .mockImplementation(((...args: unknown[]) =>
+        down ? Promise.reject(new Error('the database is down')) : findOne(...args)) as never);
     jest.spyOn(slow, 'find').mockImplementation(((...args: unknown[]) => {
+      if (down) return Promise.reject(new Error('the database is down'));
       if (!holdRead) return find(...args);
       holdRead = false;
       return new Promise((resolve, reject) => {
@@ -334,6 +352,7 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
     const repo = ds.getRepository(LidMapping);
     gated = false;
     failingFillers = false;
+    down = false;
     holdRead = false;
     read.release = undefined;
     parked = [];
@@ -374,36 +393,38 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
 
     const checkLid = async (after: string): Promise<void> => {
       const row = await repo.findOneBy({ lid: LID });
-      const refusal = reference.refusal(row);
+      // With the table unreadable the readers answer from the mirror, and its entry is judged as a row would be.
+      const held = inner.unreported.has(LID) ? null : (inner.lidToPhone.get(LID) ?? null);
+      const view = down ? (held === null ? null : { phone: held, isReported: true }) : row;
+      const refusal = reference.refusal(view);
       const answer = await store.findPhoneForLid(own);
-      if (answer !== null && (refusal !== '' || answer !== row?.phone))
+      if (answer !== null && (refusal !== '' || answer !== view?.phone))
         unexpected(after, `the lid answers ${answer} while ${refusal || 'the row names another phone'}`);
-      else if (answer === null && refusal === '') {
+      else if (!down && answer === null && refusal === '') {
         stats.overRefused++;
         // At rest, the failed writes of other lids are no reason to refuse this one.
         if (!failed && !peered && !reference.pending())
           unexpected(after, 'the lid is refused though no write of it failed');
       }
       // A lid whose latest write landed answers it, whatever became of the other lids.
-      const must = reference.mustAnswer(row);
+      const must = down ? undefined : reference.mustAnswer(row);
       if (must !== undefined && answer !== must)
         unexpected(after, `the lid whose report landed answers ${String(answer)}, not ${must}`);
       // The synchronous view of the mirror only ever holds what the calls left there.
       if (!inner.lidToPhone.has(LID)) reference.held = undefined;
-      const mirror = inner.unreported.has(LID) ? null : (inner.lidToPhone.get(LID) ?? null);
-      if (mirror !== null && mirror !== reference.held)
-        unexpected(after, `the mirror answers ${mirror}, not ${String(reference.held)}`);
+      if (held !== null && held !== reference.held)
+        unexpected(after, `the mirror answers ${held}, not ${String(reference.held)}`);
       const admits = async (key: string, chat: string): Promise<boolean> => scope.allows({ allowedChats: [key] }, chat);
       for (const phone of PHONES) {
         if (full || phone === STORED || phone === FIRST) {
-          if ((await admits(`${phone}@c.us`, own)) && (refusal !== '' || phone !== row?.phone))
+          if ((await admits(`${phone}@c.us`, own)) && (refusal !== '' || phone !== view?.phone))
             unexpected(
               after,
               `a key limited to ${phone} reaches the lid while ${refusal || 'the row names another phone'}`,
             );
         }
         if (!full) continue;
-        if ((await admits(own, `${phone}@c.us`)) && (refusal !== '' || phone !== row?.phone))
+        if ((await admits(own, `${phone}@c.us`)) && (refusal !== '' || phone !== view?.phone))
           unexpected(
             after,
             `a key limited to the lid reaches the chat of ${phone} while ${refusal || 'the row names another phone'}`,
@@ -411,12 +432,12 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
         const listed =
           (await store.findLidsForPhone(phone)).includes(LID) ||
           (await store.lidsForPhonesPersisted([phone]))[phone].includes(LID);
-        if (listed && (refusal !== '' || phone !== row?.phone))
+        if (listed && (refusal !== '' || phone !== view?.phone))
           unexpected(after, `the lid is listed for ${phone} while ${refusal || 'the row names another phone'}`);
       }
       if (full) {
         const batch = (await store.phonesForLidsPersisted([LID]))[LID];
-        if (batch !== null && (refusal !== '' || batch !== row?.phone))
+        if (batch !== null && (refusal !== '' || batch !== view?.phone))
           unexpected(after, `the batch reader answers ${batch} while ${refusal || 'the row names another phone'}`);
       }
     };
@@ -424,9 +445,9 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
     const checkFillers = async (after: string): Promise<void> => {
       for (const [lid, filler] of fillers) {
         const answer = await store.findPhoneForLid(`${lid}@lid`);
-        if (filler.state === 'failed' && answer !== null)
+        if (filler.state === 'failed' && answer !== null && !(down && answer === filler.engine))
           unexpected(after, `a lid whose ${filler.kind} failed answers ${answer}, the table holds ${filler.row}`);
-        if (filler.state === 'landed' && answer !== filler.engine)
+        if (!down && filler.state === 'landed' && answer !== filler.engine)
           unexpected(
             after,
             `a lid reported again after its write failed answers ${String(answer)}, not ${filler.engine}`,
@@ -439,7 +460,7 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
           unexpected(after, `a key limited to ${filler.row} reaches the lid whose ${filler.kind} failed`);
       }
       const untouched = await store.findPhoneForLid(`${UNTOUCHED.lid}@lid`);
-      if (untouched !== UNTOUCHED.row)
+      if (!down && untouched !== UNTOUCHED.row)
         unexpected(after, `the lid no call wrote answers ${String(untouched)}, not ${UNTOUCHED.row}`);
     };
 
@@ -484,13 +505,17 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
       } else if (step.step === 'evict') {
         for (let i = 0; i < 3; i++) inner.index(`e${evictions++}`, `62877${i}`, null);
         reference.evict();
+      } else if (step.step === 'down' || step.step === 'up') {
+        down = step.step === 'down';
       } else if (step.step === 'reload') {
         gated = false;
         await store.reload();
         gated = true;
-        const row = await repo.findOneBy({ lid: LID });
-        reference.reload(row === null ? undefined : row.phone);
-        for (const filler of fillers.values()) if (filler.state === 'failed') filler.state = 'ended';
+        if (!down) {
+          const row = await repo.findOneBy({ lid: LID });
+          reference.reload(row === null ? undefined : row.phone);
+          for (const filler of fillers.values()) if (filler.state === 'failed') filler.state = 'ended';
+        }
       } else if (step.step === 'reloadBegin') {
         holdRead = true;
         reloading = store.reload();
@@ -515,7 +540,7 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
           await new Promise<void>(resolve => setImmediate(resolve));
         }
         const row = await repo.findOneBy({ lid: LID });
-        if (!reference.pending() && !inner.unsettledWrites.has(LID))
+        if (!down && !reference.pending() && !inner.unsettledWrites.has(LID))
           reference.warm(row === null ? undefined : row.phone);
       } else if (step.step === 'peer') {
         await repo.upsert({ lid: LID, phone: PEER, sessionId: OTHER, isReported: true, updatedAt: new Date() }, [
@@ -549,6 +574,7 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
     }
     await Promise.allSettled(calling);
     gated = false;
+    down = false;
     if (!failed && fillers.size === 0) {
       // Nothing failed and everything has landed: the readers answer exactly what the table holds.
       const settledRow = await repo.findOneBy({ lid: LID });
@@ -751,5 +777,36 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
     });
     expect(three.explored).toBeGreaterThan(3000);
     expect(three.problems).toEqual([]);
+  }, 600_000);
+
+  // With the table unreadable the readers answer from the mirror, which is judged as a row would be: a lid whose write
+  // failed can have the row it distrusts warmed back into it, by an eviction or by a reload that read the table while the
+  // write was under way.
+  it('answers the lid no phone it no longer has, when the table cannot be read', async () => {
+    const events: Environment[][] = [
+      ['down'],
+      ['down', 'up'],
+      ['warm', 'down'],
+      ['evict', 'warm', 'down'],
+      ['evict', 'down', 'warm'],
+      ['reloadBegin', 'reloadEnd', 'warm', 'down'],
+    ];
+    const found = await explore({
+      ...base,
+      inits: ['reported', 'display'],
+      lists: lists(['reportFirst', 'lookupFirst', 'lookupStored', 'negative'], 1),
+      events,
+      full: true,
+    });
+    expect(found.explored).toBeGreaterThan(300);
+    expect(found.problems).toEqual([]);
+    const two = await explore({
+      ...base,
+      inits: ['reported', 'display'],
+      lists: lists(['reportFirst', 'lookupFirst'], 2),
+      events,
+    });
+    expect(two.explored).toBeGreaterThan(4200);
+    expect(two.problems).toEqual([]);
   }, 600_000);
 });
