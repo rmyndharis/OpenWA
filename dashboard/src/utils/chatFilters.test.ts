@@ -277,6 +277,21 @@ test('a chat titled by its mapped phone is found by that phone, and a chat with 
   assert.deepEqual(found('alice'), ['628111@c.us']);
 });
 
+test('a number typed as it is written finds the chat titled by it and the phone id of that number', () => {
+  const rows = [...PHONE_ROWS, { id: '15550007777@c.us', name: '', kind: 'individual' }];
+  const found = (query: string) => filterChats(rows, query).map(c => c.id);
+  for (const query of ['+1 555 000 6666', '+1 (555) 000-6666', '+1.555.000.6666', ' 1 555 0006666 ']) {
+    assert.deepEqual(found(query), ['262813461250072@lid'], query);
+  }
+  for (const query of ['+1 555 000 7777', '(555) 000-7777']) {
+    assert.deepEqual(found(query), ['15550007777@c.us'], query);
+  }
+  assert.deepEqual(found(`+${native('15550006666', 0x0660)}`), ['262813461250072@lid']);
+  // A query with words is a name search: its digits match no number.
+  assert.deepEqual(found('Shop 2'), []);
+  assert.deepEqual(found('+1 555 000 9999'), []);
+});
+
 test('a phone typed in the digits of another script finds the chat titled by it', () => {
   const found = (query: string) => filterChats(PHONE_ROWS, query).map(c => c.id);
   assert.deepEqual(found(native('5550006', 0x0660)), ['262813461250072@lid']);

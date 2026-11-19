@@ -6,7 +6,7 @@
  * As inline consts inside the page these were three unrelated rules reading one piece of state; as
  * functions they take the query as an argument and can be tested.
  */
-import { normalizePhoneText } from './phone.ts';
+import { normalizePhoneText, phoneQueryDigits } from './phone.ts';
 
 // The last query as matches() reads it. Every filter calls matches() once per row on every render of the Chats page,
 // and folding a native digit walks back to its script's zero, so the fold is made once per query, not once per row.
@@ -39,7 +39,16 @@ interface ChatLike {
  * their own tabs instead, so a channel never appears twice.
  */
 export function filterChats<T extends ChatLike>(chats: T[], query: string): T[] {
-  return chats.filter(c => c.kind !== 'channel' && c.kind !== 'status' && matches(query, c.name, c.id, c.phone));
+  // A number typed as it is written, with its spaces, plus sign or parentheses, is compared by its digits. Read once per
+  // search, like the fold in matches().
+  const digits = phoneQueryDigits(query);
+  return chats.filter(
+    c =>
+      c.kind !== 'channel' &&
+      c.kind !== 'status' &&
+      (matches(query, c.name, c.id, c.phone) ||
+        (digits !== '' && (c.id.includes(digits) || c.phone?.includes(digits)))),
+  );
 }
 
 /** The quick filters above the Chats tab list, applied after the search box. */

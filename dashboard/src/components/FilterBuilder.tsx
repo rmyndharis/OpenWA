@@ -11,7 +11,7 @@ import {
 } from '../services/api';
 import { filterValueLabel } from '../utils/enumLabels';
 import { chatTitle } from '../utils/formatPhone';
-import { normalizePhoneText } from '../utils/phone';
+import { normalizePhoneText, phoneQueryDigits } from '../utils/phone';
 import { MAX_FILTER_CONDITIONS, MAX_FILTER_TEXT_LENGTH } from '../utils/webhookFilters';
 import { isComposingKey } from '../utils/composition';
 import './FilterBuilder.css';
@@ -91,6 +91,8 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
 
   const suggestions = useMemo(() => {
     const query = text.trim().toLowerCase();
+    // A number typed as it is written, with its spaces, plus sign or parentheses, is compared by its digits.
+    const digits = phoneQueryDigits(text);
     const chosen = new Set(value);
     return (
       chats
@@ -100,7 +102,7 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
             !query ||
             c.name.toLowerCase().includes(query) ||
             c.id.toLowerCase().includes(query) ||
-            c.phone?.includes(query),
+            (digits !== '' && (c.id.includes(digits) || c.phone?.includes(digits))),
         )
         // The dropdown scrolls, so this only bounds how much of an account with up to 1000 chats is
         // rendered on every keystroke. Typing narrows the list further.
