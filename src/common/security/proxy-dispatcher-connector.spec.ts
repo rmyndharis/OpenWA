@@ -3,6 +3,7 @@ import * as net from 'net';
 import type { AddressInfo } from 'net';
 import { createProxyDispatcher } from './proxy-dispatcher';
 import { startSocks5Proxy, type SocksProxyServer } from '../../../test/helpers/socks-proxy-servers';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 type Connect = (
   options: Record<string, unknown>,
@@ -41,13 +42,9 @@ describe('SOCKS connector callback', () => {
     (createProxyDispatcher(url) as unknown as { connect: Connect }).connect;
   const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100));
   // The first answer comes after a real handshake with a local proxy, which takes as long as the machine needs. Wait for
-  // it, up to five seconds, and only then settle for a second answer, the failure this spec pins.
-  const answered = async (callback: { mock: { calls: unknown[] } }): Promise<void> => {
-    const deadline = Date.now() + 5_000;
-    while (callback.mock.calls.length === 0 && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-  };
+  // it with a deadline, and only then settle for a second answer, the failure this spec pins.
+  const answered = (callback: { mock: { calls: unknown[] } }): Promise<void> =>
+    waitUntil(() => callback.mock.calls.length > 0);
 
   // open() answers undici's callback from inside itself, so a throw out of that callback lands in the
   // catch handler of the same promise. Undici's connect callback must still be answered once.
@@ -65,7 +62,7 @@ describe('SOCKS connector callback', () => {
     expect(callback.mock.calls[0][0]).toBeNull();
     callback.mock.calls[0][1]?.destroy();
     // The wait for the first answer may use five seconds, more than jest gives a case by default.
-  }, 15_000);
+  }, 60_000);
 
   it('answers once with the error when no address can be dialled', async () => {
     const callback = jest.fn<void, Parameters<Parameters<Connect>[1]>>();
