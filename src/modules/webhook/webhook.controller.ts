@@ -21,7 +21,10 @@ function urlHost(url: string): string {
   }
 }
 
-/** What an audit row says about a webhook: ids, the URL host and the events. Never the secret, headers or filters. */
+/**
+ * What an audit row says about a webhook: its id, the URL host, the events and whether it is active. Never the secret,
+ * headers or filters.
+ */
 function describeWebhook(webhook: Webhook): Record<string, unknown> {
   return { webhookId: webhook.id, urlHost: urlHost(webhook.url), events: webhook.events, active: webhook.active };
 }
