@@ -11,7 +11,8 @@
  * processMessage and event buffer into the compiled adapter (lifecycle listener, unread filter, session store), and through
  * the compiled handler for what the adapter makes of it. Baileys also merges the decrypted parts of one stanza into one
  * message in the order the stanza lists them, and types it by the first key that contains `Message`: the cases below
- * merge a real message with a fast-ratchet sender-key distribution in both orders.
+ * merge a real message with a fast-ratchet sender-key distribution in both orders, and follow it through what the
+ * adapter and the library do with it afterwards (its media, its stored copy, a click on it, a reply quoting it).
  *
  * Runs over dist/: `npm run build && node --test test/engine-real/baileys-dropped-content-unread.spec.mjs`.
  * No network, no socket, no WhatsApp account.
@@ -19,11 +20,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import * as fs from 'node:fs';
 import {
+  CHAT,
   PEER,
   deliver,
   lib,
   listed,
+  memoryMessageStore,
+  merged,
   processMessage,
   startSession,
   until,
@@ -41,21 +46,6 @@ const AT = 1_700_000_000;
 const silent = { log() {}, debug() {}, verbose() {}, warn() {}, error() {} };
 
 const messageOf = (id, message, chat = PEER) => wireMessage({ id, chat, at: AT, message });
-
-/**
- * The decrypted parts of one stanza merged as Baileys' decryptMessageNode merges them: `Object.assign` in the order the
- * stanza lists them, so the key order of the message is the order of its parts.
- */
-function merged(id, ...parts) {
-  const message = parts
-    .map(part => lib.proto.Message.decode(lib.proto.Message.encode(lib.proto.Message.fromObject(part)).finish()))
-    .reduce((all, part) => Object.assign(all, part));
-  return lib.proto.WebMessageInfo.fromObject({
-    key: { id, remoteJid: PEER, fromMe: false },
-    messageTimestamp: AT,
-    message,
-  });
-}
 
 /** Whether the library counts this message as a received one, which is what raises the chat's unread count. */
 async function countedByLibrary(wm) {
@@ -251,3 +241,153 @@ test('the history capture hands over nothing for a lone fast-ratchet sender-key 
     [['TEXT1', 'text', 'hi']],
   );
 });
+
+// What happens to such a real message after it was announced by its content: Baileys' own readers of it (the media
+// download, a quote of it) type it by the first key that contains `Message`, so they have to be handed the message
+// without the distribution, and the adapter's readers of the stored copy (a click on a prompt) have to agree.
+const SECRET = Buffer.alloc(32, 9);
+const TEXT = { conversation: 'original', messageContextInfo: { messageSecret: SECRET } };
+const PROMPT = {
+  buttonsMessage: {
+    contentText: 'Proceed?',
+    buttons: [{ buttonId: 'yes', buttonText: { displayText: 'Yes' }, type: 1 }],
+    headerType: 1,
+  },
+  messageContextInfo: { messageSecret: SECRET },
+};
+const inOrder = (order, content) =>
+  order === 'before' ? [{ [FAST_RATCHET]: {} }, content] : [content, { [FAST_RATCHET]: {} }];
+
+/** An image the library encrypted as WhatsApp's media hosts hold it, with the message that names it. */
+async function encryptedPhoto() {
+  const plain = Buffer.from('the bytes of a photo');
+  const encrypted = await lib.encryptedStream(plain, 'image', {});
+  const body = fs.readFileSync(encrypted.encFilePath);
+  fs.rmSync(encrypted.encFilePath, { force: true });
+  const directPath = '/v/t62.7118-24/photo.enc';
+  return {
+    plain,
+    body,
+    url: `https://mmg.whatsapp.net${directPath}`,
+    content: {
+      imageMessage: {
+        url: `https://mmg.whatsapp.net${directPath}`,
+        directPath,
+        mediaKey: encrypted.mediaKey,
+        mimetype: 'image/jpeg',
+        fileLength: plain.length,
+        fileSha256: encrypted.fileSha256,
+        fileEncSha256: encrypted.fileEncSha256,
+        caption: 'photo',
+      },
+      messageContextInfo: { messageSecret: SECRET },
+    },
+  };
+}
+
+/** Runs `body` with media downloads on and the fetch the library downloads through answered by `serve`. */
+async function withMediaFrom(serve, body) {
+  const fetchBefore = globalThis.fetch;
+  process.env.MEDIA_DOWNLOAD_ENABLED = 'true';
+  globalThis.fetch = serve;
+  try {
+    return await body();
+  } finally {
+    globalThis.fetch = fetchBefore;
+    process.env.MEDIA_DOWNLOAD_ENABLED = 'false';
+  }
+}
+
+for (const order of ['before', 'after']) {
+  test(`an image that merged with a fast-ratchet distribution ${order} its content is downloaded and announced with its bytes`, async t => {
+    const photo = await encryptedPhoto();
+    const announced = [];
+    const admissions = [];
+    const fetched = [];
+    const { sock } = await startSession(t, {
+      callbacks: {
+        onMessage: message => announced.push(message),
+        admitInbound: admission => void admissions.push(admission),
+      },
+    });
+    await withMediaFrom(
+      async url => {
+        fetched.push(String(url));
+        return new Response(photo.body);
+      },
+      async () => {
+        await deliver(sock, merged(`IMG-${order}`, ...inOrder(order, photo.content)));
+        await until(() => announced.length === 1, 'the image to be announced', 10_000);
+      },
+    );
+    assert.equal(announced[0].type, 'image');
+    assert.equal(announced[0].media.omitted, undefined, 'its media was not left out');
+    assert.equal(announced[0].media.data, photo.plain.toString('base64'));
+    assert.deepEqual(fetched, [photo.url]);
+    assert.equal(admissions[0].needsRoom, true, 'room is reserved for a download that happens');
+  });
+}
+
+test('a message that merged with a fast-ratchet distribution first is stored without it and with its context', async t => {
+  const store = memoryMessageStore();
+  const { sock } = await startSession(t, { messageStore: store });
+  await deliver(sock, merged('TEXT1', { [FAST_RATCHET]: {} }, TEXT));
+  await until(() => store.rows.has('TEXT1'), 'the message to be stored');
+  const kept = await store.getMessage('session', 'TEXT1');
+  assert.deepEqual(Object.keys(kept.message), ['conversation', 'messageContextInfo']);
+  // The store keeps a bytes field as base64, and the secret is what later edits, reactions and votes are read with.
+  assert.deepEqual(Buffer.from(kept.message.messageContextInfo.messageSecret, 'base64'), SECRET);
+});
+
+/** A socket that builds the message the library builds for a reply or a click, and notes what it quotes. */
+function replySocket(sent) {
+  return {
+    onWhatsApp: jid => Promise.resolve([{ jid, exists: true }]),
+    sendMessage: async (jid, content, options) => {
+      const built = lib.generateWAMessageFromContent(
+        jid,
+        lib.proto.Message.fromObject({ extendedTextMessage: { text: content.text ?? 'a click' } }),
+        { ...options, userJid: SELF },
+      );
+      sent.push({ content, quoted: built.message.extendedTextMessage.contextInfo?.quotedMessage });
+      return built;
+    },
+  };
+}
+
+for (const shape of ['received now', 'stored by an earlier version']) {
+  const receive = async (t, wm) => {
+    const store = memoryMessageStore();
+    const sent = [];
+    const { adapter, sock } = await startSession(t, { messageStore: store, socket: replySocket(sent) });
+    if (shape === 'received now') {
+      await deliver(sock, wm);
+      await until(() => store.rows.has(wm.key.id), 'the message to be stored');
+    } else {
+      store.seed(wm);
+    }
+    return { adapter, sent };
+  };
+
+  // The store keeps a message as JSON in the order of the proto's fields, which puts the distribution (field 15) before
+  // a business prompt (field 42) and after a text (field 1): the prompt is the one a quote reads wrongly.
+  for (const [what, content, key] of [
+    ['a text', TEXT, 'conversation'],
+    ['a business prompt', PROMPT, 'buttonsMessage'],
+  ]) {
+    test(`a reply to ${what} that merged with a fast-ratchet distribution first, ${shape}, quotes it`, async t => {
+      const { adapter, sent } = await receive(t, merged('QUOTED1', { [FAST_RATCHET]: {} }, content));
+      await adapter.replyToMessage(CHAT, 'QUOTED1', 'a reply');
+      assert.equal(sent.length, 1);
+      assert.deepEqual(Object.keys(sent[0].quoted), [key]);
+    });
+  }
+
+  test(`a business prompt that merged with a fast-ratchet distribution first, ${shape}, can be clicked`, async t => {
+    const { adapter, sent } = await receive(t, merged('PROMPT1', { [FAST_RATCHET]: {} }, PROMPT));
+    await adapter.clickButton(CHAT, 'PROMPT1', 'yes', 'Yes');
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].content.buttonReply.id, 'yes');
+    assert.deepEqual(Object.keys(sent[0].quoted), ['buttonsMessage']);
+  });
+}

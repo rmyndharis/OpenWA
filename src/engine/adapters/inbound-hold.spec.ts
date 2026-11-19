@@ -1013,6 +1013,22 @@ describe('Baileys inbound messages held for storage', () => {
       },
       true,
     ],
+    [
+      'an image that merged with a fast-ratchet distribution before it',
+      {
+        ...media('A', 'c@s.whatsapp.net'),
+        message: { fastRatchetKeySenderKeyDistributionMessage: {}, imageMessage: { fileLength: 3 } },
+      },
+      true,
+    ],
+    [
+      'an image that merged with a fast-ratchet distribution after it',
+      {
+        ...media('A', 'c@s.whatsapp.net'),
+        message: { imageMessage: { fileLength: 3 }, fastRatchetKeySenderKeyDistributionMessage: {} },
+      },
+      true,
+    ],
     ['media declared over the cap', media('A', 'c@s.whatsapp.net', { fileLength: 60 * 1024 * 1024 }), false],
     [
       'the account own status post',

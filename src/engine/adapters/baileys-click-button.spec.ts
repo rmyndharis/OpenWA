@@ -49,13 +49,11 @@ const TEMPLATE_PROMPT = {
   },
 };
 
+/** Baileys 7.0.0-rc14 getContentType (lib/Utils/messages.js): the first key that is `conversation` or contains `Message`. */
 function contentTypeOf(message: unknown): string | undefined {
-  const content = message as Record<string, unknown> | undefined;
-  if (content?.buttonsMessage) return 'buttonsMessage';
-  if (content?.templateMessage) return 'templateMessage';
-  if (content?.listMessage) return 'listMessage';
-  if (content?.interactiveMessage) return 'interactiveMessage';
-  return undefined;
+  return Object.keys((message as Record<string, unknown> | undefined) ?? {}).find(
+    key => (key === 'conversation' || key.includes('Message')) && key !== 'senderKeyDistributionMessage',
+  );
 }
 
 function makeMessaging(stored: unknown = PROMPT, opts: { ephemeralExpiration?: number } = {}) {
@@ -124,6 +122,21 @@ describe('BaileysMessaging.clickButton', () => {
     });
     expect(optionsOf(sendMessage)).toEqual(expect.objectContaining({ quoted: PROMPT }));
     expect(putStoredMessage).toHaveBeenCalled();
+    expect(result).toEqual({ id: 'CLICK-1', timestamp: 1700000000, body: 'Sim' });
+  });
+
+  it('clicks a prompt stored with a fast-ratchet distribution before its content, as one stored without it', async () => {
+    const stored = { ...PROMPT, message: { fastRatchetKeySenderKeyDistributionMessage: {}, ...PROMPT.message } };
+    const { messaging, sendMessage } = makeMessaging(stored);
+
+    const result = await messaging.clickButton('628111@s.whatsapp.net', 'PROMPT-1', 'yes', 'Sim');
+
+    expect(contentOf(sendMessage)).toEqual({
+      buttonReply: { displayText: 'Sim', id: 'yes', index: 0 },
+      type: 'plain',
+    });
+    // Baileys quotes by the first key that contains `Message`: the prompt is quoted without the distribution.
+    expect(optionsOf(sendMessage)).toEqual(expect.objectContaining({ quoted: PROMPT }));
     expect(result).toEqual({ id: 'CLICK-1', timestamp: 1700000000, body: 'Sim' });
   });
 

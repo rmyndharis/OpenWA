@@ -33,6 +33,7 @@ import {
   resolveBaileysButtonClick,
   setBaileysText,
   storedKeyInChatPersisted,
+  withoutFastRatchetDistribution,
 } from './baileys-message-mapper';
 import { LINK_PREVIEW_THUMBNAIL_MAX_BYTES, loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
@@ -1237,7 +1238,8 @@ export class BaileysMessaging {
    * that overtook it the same way is applied to a copy, so a quote or forward carries the edited text.
    */
   private async requireStored(messageId: string, allowDeleted = false): Promise<WAMessage> {
-    const found = await this.host.getStoredMessage(messageId);
+    // A row an earlier version wrote may still hold a fast-ratchet distribution, which Baileys would quote and click by.
+    const found = withoutFastRatchetDistribution(await this.host.getStoredMessage(messageId));
     const deleted = !found?.message || this.host.wasDeletedForEveryone(messageId);
     if (!found?.key || (deleted && !allowDeleted)) {
       // Every caller looks the message up before it writes anything, so nothing was sent.

@@ -87,14 +87,43 @@ export class FakeChatStateStore {
   }
 }
 
+/** The adapter's message store in memory, serialized as the real one is: through JSON with the library's BufferJSON. */
+export function memoryMessageStore() {
+  const rows = new Map();
+  const write = msg => rows.set(msg.key.id, JSON.stringify(msg, lib.BufferJSON.replacer));
+  const read = id => (rows.has(id) ? JSON.parse(rows.get(id), lib.BufferJSON.reviver) : null);
+  return {
+    rows,
+    /** A row written before the adapter left something out of what it stores. */
+    seed: write,
+    put: (_session, msg) => Promise.resolve(write(msg)),
+    getMessage: (_session, id) => Promise.resolve(read(id)),
+    getMessages: (_session, ids) => Promise.resolve(ids.flatMap(id => (rows.has(id) ? [read(id)] : []))),
+    update: (_session, id, change) => {
+      const next = rows.has(id) ? change(read(id)) : null;
+      if (next) write(next);
+      return Promise.resolve();
+    },
+    remove: (_session, id, shouldRemove) => {
+      if (rows.has(id) && shouldRemove(read(id))) rows.delete(id);
+      return Promise.resolve();
+    },
+    clearSession: () => Promise.resolve(rows.clear()),
+  };
+}
+
 const me = { id: '6280000000000:3@s.whatsapp.net', lid: '99999999999999:3@lid', name: 'Gateway' };
 
 /**
  * A session over a fake socket. `socket` adds or replaces members of the fake (a chatModify, a readMessages), `callbacks`
  * are the engine callbacks, `chatStateStore` is what the adapter is given for persisted chat state (none: no deletion
- * mark is kept at all, so a proof about deleted chats has to pass one).
+ * mark is kept at all, so a proof about deleted chats has to pass one), `messageStore` what it stores the messages it
+ * receives in (none: nothing is stored, so a proof about a stored copy has to pass one, see memoryMessageStore).
  */
-export async function startSession(t, { chatStateStore, unarchiveChats = false, socket = {}, callbacks = {} } = {}) {
+export async function startSession(
+  t,
+  { chatStateStore, messageStore, unarchiveChats = false, socket = {}, callbacks = {} } = {},
+) {
   const authDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openwa-real-'));
   const ev = lib.makeEventBuffer(quiet);
   const sock = {
@@ -113,6 +142,7 @@ export async function startSession(t, { chatStateStore, unarchiveChats = false, 
     dbSessionId: 'db-real-session',
     authDir,
     chatStateStore,
+    messageStore,
   });
   adapter.lifecycle.lib = { ...lib, default: () => sock, makeCacheableSignalKeyStore: store => store };
   await adapter.initialize({ onMessage: () => undefined, onMessageCreate: () => undefined, ...callbacks });
@@ -133,6 +163,21 @@ export function wireMessage({ id, chat = PEER, fromMe = false, participant, at, 
     messageTimestamp: at,
   });
   return lib.proto.WebMessageInfo.decode(lib.proto.WebMessageInfo.encode(wm).finish());
+}
+
+/**
+ * The decrypted parts of one stanza merged as Baileys' decryptMessageNode merges them: `Object.assign` in the order the
+ * stanza lists them, so the key order of the message is the order of its parts.
+ */
+export function merged(id, ...parts) {
+  const message = parts
+    .map(part => lib.proto.Message.decode(lib.proto.Message.encode(lib.proto.Message.fromObject(part)).finish()))
+    .reduce((all, part) => Object.assign(all, part));
+  return lib.proto.WebMessageInfo.fromObject({
+    key: { id, remoteJid: PEER, fromMe: false },
+    messageTimestamp: 1_700_000_000,
+    message,
+  });
 }
 
 /** The processMessage context of a socket. */

@@ -28,6 +28,8 @@ export const BAILEYS_NON_CONTENT_TYPES: ReadonlySet<string> = new Set([
   'encCommentMessage',
 ]);
 
+const FAST_RATCHET_DISTRIBUTION = 'fastRatchetKeySenderKeyDistributionMessage';
+
 /**
  * Top-level Message keys that carry no user content: sender-key distributions (Signal traffic every group participant
  * emits on its first write or a key rotation) and history-sync notices. `messageContextInfo` rides along on real
@@ -35,7 +37,7 @@ export const BAILEYS_NON_CONTENT_TYPES: ReadonlySet<string> = new Set([
  */
 export const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
   'senderKeyDistributionMessage',
-  'fastRatchetKeySenderKeyDistributionMessage',
+  FAST_RATCHET_DISTRIBUTION,
   'messageContextInfo',
   'messageHistoryNotice',
   'messageHistoryBundle',
@@ -72,6 +74,23 @@ export function contentTypeOf(
   if (type === undefined || !PROTOCOL_NOISE_KEYS.has(type)) return type;
   const rest = Object.entries(content ?? {}).filter(([key]) => !PROTOCOL_NOISE_KEYS.has(key));
   return getContentType(Object.fromEntries(rest));
+}
+
+/**
+ * The message without a fast-ratchet sender-key distribution merged into it, or the message itself when it holds none.
+ * Baileys applies a distribution while it decrypts the stanza and never reads this key again, but its own readers of a
+ * message (the media download, the quote of a reply) type it by the first key that contains `Message`, which a
+ * distribution merged in before the content is, as {@link contentTypeOf} passes over it for the adapter's own readers.
+ * Only this key goes: `messageContextInfo` carries the secret that later edits, reactions and votes are read with, and
+ * the plain distribution is passed over by Baileys already. A copy, so the message Baileys holds is left as it is.
+ */
+export function withoutFastRatchetDistribution<T extends { message?: proto.IMessage | null } | null | undefined>(
+  msg: T,
+): T {
+  const content = msg?.message;
+  if (!msg || !content || !Object.hasOwn(content, FAST_RATCHET_DISTRIBUTION)) return msg;
+  const rest = Object.entries(content).filter(([key]) => key !== FAST_RATCHET_DISTRIBUTION);
+  return { ...msg, message: Object.fromEntries(rest) };
 }
 
 /**
