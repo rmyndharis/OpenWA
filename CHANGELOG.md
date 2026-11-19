@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `GET /api/sessions/{sessionId}/chats` lists `phone` for a Baileys privacy-id chat the session can map, and the JavaScript, Python, Go and Java SDK types carry it (#2134). Thanks @juanbracamonte.
 - Dashboard: an open chat's header has a search button for that chat's stored messages, by text and optionally by day; a day alone jumps to its first loaded message. A hit older than the loaded messages is not scrolled to: the bar asks you to scroll up first (#2129). Thanks @juanbracamonte.
 - MCP: every tool is advertised with a `title`, the name a client shows: the tool name split into words, or the `title` its descriptor sets (#2098). Thanks @sudipta-prodevs.
 - MCP: `MCP_MAX_RESULT_BYTES`, an opt-in cap for clients that put a whole tool result in the model's context. When set, every result, an error answer included, is one text item, cut at that many bytes with a note of its full size, and none is offloaded as a base64 resource; unset or `0`, the default, changes nothing (#2100). Thanks @sudipta-prodevs.
@@ -17,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Baileys: `GET /api/sessions/{sessionId}/chats` lists `name` as `""` for a privacy-id chat that has no name, where it was the id's own digits, and the dashboard titles such a chat by its `phone` (#2134). Thanks @juanbracamonte.
 - whatsapp-web.js: block and unblock use the library's own LID handling, so an unblock no longer also removes an entry the same person holds under a second id, such as a phone-keyed block from before the LID migration (see Upgrade notes), and a number WhatsApp holds no privacy id for answers `400`. The install-time block patch is retired.
 - The MCP `MessageList` tool lists a media message without its payload unless the call sets `inlineMedia: true`, where it carried the base64 inline up to the 8 MiB budget, so one photo made the result larger than an MCP client takes.
 - Dashboard: a document in a chat shows as a card with its file name, its size where known and a PDF mark, and a click still downloads it; one left out of the message list showed only `Media` (#2105). Thanks @mbdali.
@@ -28,7 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Dashboard: an unnamed chat WhatsApp holds under a privacy id is titled by its phone number, in the list and in the header, where both showed the privacy id's own digits (#2134). Thanks @juanbracamonte.
-- JavaScript, Python, Go and Java SDKs: a chat summary carries `phone`, the digits of a privacy-id chat when the session can map it (#2134). Thanks @juanbracamonte.
 - Dashboard: opening a chat with a mouse click on its row, or from the New chat panel, puts focus in the message field, where typing first needed a click on it; a tap, or a row selected with the keyboard, does not move focus (#2124). Thanks @juanbracamonte.
 - Dashboard: starting an audio or video message pauses the one already playing, where both kept playing at once (#2106). Thanks @mbdali.
 - Baileys: `POST /api/sessions/{sessionId}/chats/read` sets the chat's `unreadCount` back to `0` when the receipt names the chat's newest received message, and undoes an unread mark set by hand (`chats/unread` or on the phone) on every record of the chat, also when a message received after the mark put its count in its place; the count and the mark used to stay, so the dashboard's unread badge came back on every reload (#2109). Thanks @juanbracamonte.
