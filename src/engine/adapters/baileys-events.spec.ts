@@ -1635,7 +1635,10 @@ describe('BaileysEvents record of conflicting copies removed', () => {
     const limit = BaileysEvents.DELETED_FOR_EVERYONE_LIMIT;
     const settled = Promise.resolve({ conflict: true });
     const events = new BaileysEvents(makeHost({ getOnMessage: () => () => ({ settled }) }));
-    const deliver = async (...ids: string[]): Promise<void> => {
+    const removals = (events as unknown as { copyRemovals: Map<string, number> }).copyRemovals;
+    // Waits for the removals to be recorded, with a deadline: how many turns of the event loop thousands of messages take
+    // depends on the machine, so no fixed number of them is enough.
+    const deliver = async (ids: string[], recorded: () => boolean): Promise<void> => {
       events.handleMessagesUpsert({
         type: 'notify',
         messages: ids.map(id => ({
@@ -1644,21 +1647,24 @@ describe('BaileysEvents record of conflicting copies removed', () => {
           message: { conversation: 'hi' },
         })),
       });
-      for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+      const deadline = Date.now() + 30_000;
+      while (!recorded() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
     };
-    const removals = (events as unknown as { copyRemovals: Map<string, number> }).copyRemovals;
 
-    await deliver(...Array.from({ length: limit }, (_, i) => `M${i}`));
+    await deliver(
+      Array.from({ length: limit }, (_, i) => `M${i}`),
+      () => removals.size === limit,
+    );
     expect(removals.size).toBe(limit);
     // M0 is removed again, which makes it the newest, and one more id pushes the oldest out.
-    await deliver('M0');
-    await deliver('EXTRA');
+    await deliver(['M0'], () => removals.get('M0') === 2);
+    await deliver(['EXTRA'], () => removals.has('EXTRA'));
 
     expect(removals.size).toBe(limit);
     expect(removals.get('M0')).toBe(2);
     expect(removals.has('M1')).toBe(false);
     expect(removals.get('EXTRA')).toBe(1);
-  });
+  }, 120_000);
 });
 
 describe('BaileysEvents live keys of a 1:1 chat', () => {
