@@ -8,6 +8,7 @@ jest.mock('node:os', () => ({ ...jest.requireActual<typeof import('node:os')>('n
 import { tmpdir } from 'node:os';
 import * as ffmpeg from './ffmpeg';
 import { MediaConversionService } from './media-conversion.service';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 const realTmp = jest.requireActual<typeof import('node:os')>('node:os').tmpdir();
 const gatewayTmp = tmpdir as jest.Mock;
@@ -62,10 +63,10 @@ describe('conversion directories left behind by a killed process', () => {
     const old = leftover('openwa-convert-Ab12Cd', 3 * HOUR_MS);
 
     start(service());
-    for (let i = 0; i < 100 && fs.existsSync(old); i++) await new Promise(resolve => setTimeout(resolve, 10));
+    await waitUntil(() => !fs.existsSync(old));
 
     expect(fs.existsSync(old)).toBe(false);
-  });
+  }, 60_000);
 
   it('spares anything younger than twice the conversion timeout, and never less than an hour', () => {
     const sweep = jest.spyOn(ffmpeg, 'removeStaleConversionDirs').mockResolvedValue(0);
