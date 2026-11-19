@@ -7,7 +7,7 @@ import type { HookEvent } from '../../hooks/hook.interfaces';
 import { PluginStorageService } from '../plugin-storage.service';
 import { dispatchCapabilityVerb, CapabilityContext } from './capability-router';
 import { PluginWorkerHost } from './plugin-worker-host';
-import { SANDBOX_MAX_INFLIGHT_CAPS } from './protocol';
+import { SANDBOX_MAX_INFLIGHT_CAPS, SANDBOX_MAX_PENDING_CAPS } from './protocol';
 import { WorkerThreadChannel } from './worker-thread-channel';
 
 const ROOT = path.resolve(__dirname, '../../../..');
@@ -177,5 +177,58 @@ describe('a sandboxed plugin that issues many capability calls at once', () => {
     } finally {
       await host.terminate();
     }
+  });
+
+  // The calls of a handler that returns without awaiting them are answered after its dispatch is over, when the host no
+  // longer honours the hook chain they were made in. A send among them fires message:sending, which dispatches the
+  // handler again, so the sends past the worker's bound are refused, as they were before calls were held.
+  describe('a hook handler that issues calls without awaiting them and returns', () => {
+    const SENDING = 'message:sending' as HookEvent;
+    const run = async (verb: 'send' | 'storage', calls: number) => {
+      const hooks = new HookManager();
+      const storage = storageDispatcher();
+      // A send re-fires message:sending on the host; the answer says whether the guard covers this call.
+      const { host, settled, exits } = start(
+        (name, args) =>
+          name === 'messages.sendText' ? Promise.resolve(hooks.isInFlight(SENDING)) : storage(name, args),
+        (events, work) => hooks.runInFlight(events as HookEvent[], work),
+      );
+      try {
+        await host.load(fixture('hook-fan-out-unawaited-plugin.cjs'), { pluginId: 'burst', config: { calls, verb } });
+        await host.runLifecycle('onEnable');
+        const result = await host.dispatchHook({ event: SENDING, data: {}, source: 'test', timeoutMs: 30_000 });
+        await waitFor(() => settled.length > 0 || exits.length > 0, 'every call of the handler to settle');
+        // The exits before the termination below, which is one more.
+        return { result, settled: [...settled], exits: [...exits] };
+      } finally {
+        await host.terminate();
+      }
+    };
+
+    it('answers the calls made inside the dispatch with the guard and refuses the sends held past its end', async () => {
+      const { result, settled, exits } = await run('send', 150);
+
+      expect(result.error).toBeUndefined();
+      expect(exits).toEqual([]);
+      expect(settled).toEqual([
+        {
+          guarded: SANDBOX_MAX_PENDING_CAPS,
+          unguarded: 0,
+          refused: 150 - SANDBOX_MAX_PENDING_CAPS,
+          refusal: expect.stringContaining(
+            'before the hook handler that made this messages.sendText call returned',
+          ) as string,
+        },
+      ]);
+    });
+
+    it('still writes every key it holds, since a write fires no hook', async () => {
+      const { result, settled, exits } = await run('storage', 150);
+
+      expect(result.error).toBeUndefined();
+      expect(exits).toEqual([]);
+      expect(settled).toEqual([{ guarded: 0, unguarded: 0, refused: 0, refusal: null }]);
+      expect(storedKeys()).toBe(150);
+    });
   });
 });

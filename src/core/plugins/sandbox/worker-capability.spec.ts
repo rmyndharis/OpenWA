@@ -218,15 +218,24 @@ describe('WorkerCapabilityClient', () => {
       const client = new WorkerCapabilityClient(m => sent.push(m));
       const hooks = new WorkerHookRegistry(m => sent.push(m));
       for (let i = 0; i < SANDBOX_MAX_PENDING_CAPS; i++) void issue(client, 'storage.get', [i]);
-      hooks.register('message:sending', () => {
+      let finish!: () => void;
+      hooks.register('message:sending', async () => {
         void issue(client, 'messages.sendText', ['in-hook']);
+        await new Promise<void>(resolve => (finish = resolve)); // a handler that awaits its calls is still running
         return { continue: true };
       });
       const chain = ['message:received', 'message:sending'];
-      await hooks.handleHook({ kind: 'hook', id: 1, event: 'message:sending', data: {}, source: 't', inFlight: chain });
+      const dispatch = hooks.handleHook({
+        kind: 'hook',
+        id: 1,
+        event: 'message:sending',
+        data: {},
+        source: 't',
+        inFlight: chain,
+      });
       void issue(client, 'messages.sendText', ['outside']); // an ingress handler or a timer
 
-      // The dispatch is over. The replies that free the slots arrive in the context of some other chain.
+      // The replies that free the slots arrive in the context of some other chain.
       hookConfigStore.run({ inFlight: ['unrelated'] }, () => {
         answer(client, sent[0], null);
         answer(client, sent[1], null);
@@ -237,6 +246,117 @@ describe('WorkerCapabilityClient', () => {
         ['in-hook', chain],
         ['outside', undefined],
       ]);
+      finish();
+      await dispatch;
+    });
+
+    describe('a call a hook handler leaves held past the end of its dispatch', () => {
+      // A handler that issues its calls and returns: every reply that frees a slot arrives after the dispatch is over.
+      const returnedHandler = async (
+        verbs: string[],
+      ): Promise<{ sent: WorkerToHostMessage[]; client: WorkerCapabilityClient; calls: Array<Promise<unknown>> }> => {
+        const sent: WorkerToHostMessage[] = [];
+        const client = new WorkerCapabilityClient(m => sent.push(m));
+        const hooks = new WorkerHookRegistry(m => sent.push(m));
+        for (let i = 0; i < SANDBOX_MAX_PENDING_CAPS; i++) void issue(client, 'storage.get', [i]);
+        const calls: Array<Promise<unknown>> = [];
+        hooks.register('message:sending', () => {
+          verbs.forEach((verb, i) => calls.push(issue(client, verb, [`held-${i}`])));
+          return { continue: true };
+        });
+        await hooks.handleHook({
+          kind: 'hook',
+          id: 1,
+          event: 'message:sending',
+          data: {},
+          source: 't',
+          inFlight: ['message:sending'],
+        });
+        return { sent, client, calls };
+      };
+
+      it.each([['messages.sendText'], ['messages.reply'], ['conversation.send']])(
+        'refuses %s, which would fire the hooks of the send outside the re-entrancy guard',
+        async verb => {
+          const { sent, client, calls } = await returnedHandler([verb]);
+          expect(heldOf(client)).toBe(1);
+
+          answer(client, sent[0], null);
+
+          await expect(calls[0]).rejects.toThrow(
+            `too many unanswered capability calls (limit ${SANDBOX_MAX_PENDING_CAPS}) before the hook handler that made this ${verb} call returned`,
+          );
+          expect(capsOf(sent).filter(message => message.verb === verb)).toEqual([]);
+          expect(heldOf(client)).toBe(0);
+          expect(pendingOf(client)).toBe(SANDBOX_MAX_PENDING_CAPS - 1);
+        },
+      );
+
+      it('still releases the calls behind a refused one, in the order they were made', async () => {
+        const { sent, client, calls } = await returnedHandler(['messages.sendText', 'storage.get', 'messages.reply']);
+
+        // A refused call takes no slot, so the slot that was freed goes to the next call, and the call behind it waits.
+        answer(client, sent[0], null);
+        await expect(calls[0]).rejects.toThrow('capability call rejected');
+        expect(
+          capsOf(sent)
+            .slice(SANDBOX_MAX_PENDING_CAPS)
+            .map(message => message.args[0]),
+        ).toEqual(['held-1']);
+        expect(heldOf(client)).toBe(1);
+
+        answer(client, capsOf(sent)[SANDBOX_MAX_PENDING_CAPS], 'value');
+        await expect(calls[1]).resolves.toBe('value');
+        await expect(calls[2]).rejects.toThrow('capability call rejected');
+        expect(heldOf(client)).toBe(0);
+      });
+
+      it.each([['storage.set'], ['engine.getChats'], ['net.fetch'], ['mappings.get']])(
+        'posts %s, which fires no hook, without the chain the dispatch no longer has',
+        async verb => {
+          const { sent, client } = await returnedHandler([verb]);
+
+          answer(client, sent[0], null);
+
+          const released = capsOf(sent).slice(SANDBOX_MAX_PENDING_CAPS);
+          expect(released.map(message => [message.verb, message.args[0], message.inFlight])).toEqual([
+            [verb, 'held-0', undefined],
+          ]);
+        },
+      );
+
+      it('does not refuse a send a timer made after the dispatch, which carries no chain to lose', async () => {
+        const sent: WorkerToHostMessage[] = [];
+        const client = new WorkerCapabilityClient(m => sent.push(m));
+        const hooks = new WorkerHookRegistry(m => sent.push(m));
+        for (let i = 0; i < SANDBOX_MAX_PENDING_CAPS; i++) void issue(client, 'storage.get', [i]);
+        let later!: Promise<unknown>;
+        let fireLater!: () => void;
+        const gate = new Promise<void>(resolve => (fireLater = resolve));
+        hooks.register('message:sending', () => {
+          later = gate.then(() => issue(client, 'messages.sendText', ['from-timer']));
+          return { continue: true };
+        });
+        await hooks.handleHook({
+          kind: 'hook',
+          id: 1,
+          event: 'message:sending',
+          data: {},
+          source: 't',
+          inFlight: ['message:sending'],
+        });
+        fireLater();
+        await gate;
+        await Promise.resolve();
+        expect(heldOf(client)).toBe(1);
+
+        answer(client, sent[0], null);
+
+        const released = capsOf(sent).slice(SANDBOX_MAX_PENDING_CAPS);
+        expect(released.map(message => [message.args[0], message.inFlight])).toEqual([['from-timer', undefined]]);
+        answer(client, capsOf(sent)[SANDBOX_MAX_PENDING_CAPS], 'sent');
+        await expect(later).resolves.toBe('sent');
+      });
     });
   });
 

@@ -51,6 +51,17 @@ export const SANDBOX_MAX_PENDING_CAPS = SANDBOX_MAX_INFLIGHT_CAPS * 2;
  */
 export const SANDBOX_MAX_HELD_CAPS = 10000;
 
+/**
+ * Capability verbs whose host-side work is an outbound message send. A send fires the hooks of the send (message:sending
+ * and the rest), so a hook handler that issues one can cause a dispatch of its own event again, and the host gives these
+ * verbs a wider timeout budget than a lookup.
+ */
+export const SEND_CAP_VERBS: ReadonlySet<string> = new Set([
+  'messages.sendText',
+  'messages.reply',
+  'conversation.send',
+]);
+
 export type HostToWorkerMessage =
   | { kind: 'load'; mainPath: string; context?: SandboxStaticContext }
   | { kind: 'lifecycle'; id: number; method: PluginLifecycleMethod }

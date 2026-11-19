@@ -1,4 +1,10 @@
-import { WorkerToHostMessage, HostToWorkerMessage, SANDBOX_MAX_PENDING_CAPS, SANDBOX_MAX_HELD_CAPS } from './protocol';
+import {
+  WorkerToHostMessage,
+  HostToWorkerMessage,
+  SANDBOX_MAX_PENDING_CAPS,
+  SANDBOX_MAX_HELD_CAPS,
+  SEND_CAP_VERBS,
+} from './protocol';
 import { hookConfigStore } from './worker-hooks';
 import { ConversationSendEnvelope } from '../plugin.interfaces';
 import { HandoverState } from '../../../modules/integration/entities/conversation-mapping.entity';
@@ -11,6 +17,8 @@ interface Waiter {
 interface Call {
   verb: string;
   args: unknown[];
+  // The dispatch a hook handler made the call in, and its chain at that time. Both are absent outside a handler.
+  store?: { inFlight?: string[] };
   inFlight?: string[];
   waiter: Waiter;
 }
@@ -22,7 +30,8 @@ interface Call {
  * At most SANDBOX_MAX_PENDING_CAPS calls are unanswered at once. A call made while that many are waiting
  * is held, and posted in the order it was made as each reply frees a slot: a loop that does not await its
  * calls then hands the host a bounded number of messages, and no call is refused until
- * SANDBOX_MAX_HELD_CAPS are held.
+ * SANDBOX_MAX_HELD_CAPS are held. A send held past the end of the hook handler that made it is refused instead:
+ * posted then, it would fire the hooks of the send outside the handler's re-entrancy guard and dispatch the handler again.
  */
 export class WorkerCapabilityClient {
   private nextId = 1;
@@ -35,7 +44,8 @@ export class WorkerCapabilityClient {
   call(verb: string, args: unknown[]): Promise<unknown> {
     return new Promise((resolve, reject) => {
       // Read now: a held call is posted from handleResult, which runs outside the hook dispatch that made it.
-      const call: Call = { verb, args, inFlight: hookConfigStore.getStore()?.inFlight, waiter: { resolve, reject } };
+      const store = hookConfigStore.getStore();
+      const call: Call = { verb, args, store, inFlight: store?.inFlight, waiter: { resolve, reject } };
       if (this.pending.size < SANDBOX_MAX_PENDING_CAPS) {
         this.send(call);
         return;
@@ -65,12 +75,26 @@ export class WorkerCapabilityClient {
     while (this.held.length > 0 && this.pending.size < SANDBOX_MAX_PENDING_CAPS) this.send(this.held.shift()!);
   }
 
-  private send({ verb, args, inFlight, waiter }: Call): void {
+  private send({ verb, args, store, inFlight, waiter }: Call): void {
+    // The chain is the dispatch's own while it is in flight, and gone once it settles: the host honours it no longer
+    // either. A send the handler made and left held then runs outside the re-entrancy guard, so the hooks of the send
+    // dispatch the handler again, and each pass holds more sends than the last. Refuse it, as a call past the bound was
+    // before calls were held. Any other verb fires no hook, and goes out without the chain.
+    const chain = store?.inFlight;
+    if (inFlight && !chain && SEND_CAP_VERBS.has(verb)) {
+      waiter.reject(
+        new Error(
+          `capability call rejected: too many unanswered capability calls (limit ${SANDBOX_MAX_PENDING_CAPS}) ` +
+            `before the hook handler that made this ${verb} call returned`,
+        ),
+      );
+      return;
+    }
     const id = this.nextId++;
     try {
       // Post before registering: an uncloneable arg throws here (rejecting this call alone), and an entry
       // registered first would never be removed, since no cap-result can come back for it.
-      this.post(inFlight ? { kind: 'cap', id, verb, args, inFlight } : { kind: 'cap', id, verb, args });
+      this.post(chain ? { kind: 'cap', id, verb, args, inFlight: chain } : { kind: 'cap', id, verb, args });
       this.pending.set(id, waiter);
     } catch (error) {
       waiter.reject(error);
