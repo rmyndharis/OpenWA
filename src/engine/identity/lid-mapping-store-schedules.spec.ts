@@ -205,11 +205,32 @@ class Reference {
       : undefined;
   }
 
+  /**
+   * The phone a lid must answer when the only writes of it that went wrong are lookups of the phone its row names:
+   * such a lookup revokes no row that names the phone it names, so it hides nothing.
+   */
+  mustAnswerLookup(row: { phone: string | null; isReported: boolean } | null): string | undefined {
+    const phones = new Set(this.lookups.map(l => this.calls[l.index].phone));
+    const failedOnly = this.lookups.length > 0 && this.lookups.every(l => l.state === 'failed');
+    return !this.report &&
+      !this.pending() &&
+      failedOnly &&
+      phones.size === 1 &&
+      row?.isReported &&
+      phones.has(row.phone)
+      ? (row.phone as string)
+      : undefined;
+  }
+
   /** Why the lid must answer none, or '' when it may answer the row. */
   refusal(row: { phone: string | null; isReported: boolean } | null): string {
     if (!row || !row.isReported || row.phone === null) return 'the row names no phone';
-    const lookup = this.lookups[0];
-    if (lookup) return `a display lookup is ${lookup.state}`;
+    // A lookup being written that contradicted the mirror refuses every row. One that failed may have revoked a row that
+    // names another phone than its own, and refuses such a row: with two phones among them, every row.
+    const pending = this.lookups.find(l => l.state === 'pending');
+    if (pending) return 'a display lookup is pending';
+    const named = new Set(this.lookups.map(l => this.calls[l.index].phone));
+    if (named.size > 1 || (named.size === 1 && !named.has(row.phone))) return 'a display lookup is failed';
     const unwritten = this.report && (this.report.state === 'pending' || this.report.state === 'failed');
     return unwritten && row.phone !== this.report?.phone ? `a report is ${this.report?.state}` : '';
   }
@@ -410,6 +431,10 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
       const must = down ? undefined : reference.mustAnswer(row);
       if (must !== undefined && answer !== must)
         unexpected(after, `the lid whose report landed answers ${String(answer)}, not ${must}`);
+      // A lookup that only repeats the phone of the row hides nothing, however often it fails.
+      const kept = down || peered || fillers.size > 0 ? undefined : reference.mustAnswerLookup(row);
+      if (kept !== undefined && answer !== kept)
+        unexpected(after, `the lid whose lookups of its own phone failed answers ${String(answer)}, not ${kept}`);
       // The synchronous view of the mirror only ever holds what the calls left there.
       if (!inner.lidToPhone.has(LID)) reference.held = undefined;
       if (held !== null && held !== reference.held)
@@ -445,7 +470,12 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
     const checkFillers = async (after: string): Promise<void> => {
       for (const [lid, filler] of fillers) {
         const answer = await store.findPhoneForLid(`${lid}@lid`);
-        if (filler.state === 'failed' && answer !== null && !(down && answer === filler.engine))
+        if (
+          filler.state === 'failed' &&
+          answer !== null &&
+          !(down && answer === filler.engine) &&
+          !(filler.kind === 'lookup' && answer === filler.row)
+        )
           unexpected(after, `a lid whose ${filler.kind} failed answers ${answer}, the table holds ${filler.row}`);
         if (!down && filler.state === 'landed' && answer !== filler.engine)
           unexpected(
@@ -455,6 +485,7 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
         if (
           full &&
           filler.state === 'failed' &&
+          filler.kind === 'report' &&
           (await scope.allows({ allowedChats: [`${filler.row}@c.us`] }, `${lid}@lid`))
         )
           unexpected(after, `a key limited to ${filler.row} reaches the lid whose ${filler.kind} failed`);

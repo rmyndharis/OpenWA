@@ -4214,18 +4214,58 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       await refused(['628111', '628222']);
     });
 
-    it('answers no phone when a lookup of the stored phone fails, until a report of the lid lands', async () => {
+    // A lookup revokes only the reported rows that name another phone than its own, so one that repeats the phone of the
+    // row hides nothing, however often it fails, and the row another node wrote after it is refused as it would have been
+    // had the lookup landed.
+    it('keeps answering the stored phone when a lookup of it fails, and refuses the row another node writes after', async () => {
       jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
       await expect(store.rememberIfUnknown('333', '628111', OTHER)).resolves.toBe(false);
       warn.mockClear();
       await pushOut();
 
       expect(evicted()).toBe(1);
-      await refused(['628111']);
-
-      await expect(store.remember('333', '628111', OWNER)).resolves.toBe(true);
-      expect(evicted()).toBe(0);
       await answers('628111');
+
+      jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(store.rememberIfUnknown('333', '628111', OTHER)).resolves.toBe(false); // the same lookup again
+      warn.mockClear();
+      expect(evicted()).toBe(1);
+      await answers('628111');
+
+      await peerRemaps('628333'); // the lookup would have revoked this row
+      await refused(['628111', '628333']);
+
+      await expect(store.remember('333', '628333', OWNER)).resolves.toBe(true);
+      expect(evicted()).toBe(0);
+      await answers('628333');
+    });
+
+    it('refuses the stored phone while a report of another phone is written after a lookup of it that failed', async () => {
+      let reject!: (err: Error) => void;
+      const entered = new Promise<void>(resolve =>
+        jest.spyOn(repo, 'update').mockImplementationOnce(
+          () =>
+            new Promise((_, fail) => {
+              reject = fail;
+              resolve();
+            }),
+        ),
+      );
+      const lookup = store.rememberIfUnknown('333', '628111', OTHER); // names the stored phone
+      await entered;
+      const held = hold('upsert');
+      const report = store.remember('333', '628222', OWNER); // queued behind the lookup
+      reject(new Error('connection lost'));
+      await expect(lookup).resolves.toBe(false);
+      warn.mockClear();
+      await held.reached;
+      await pushOut();
+
+      await refused(['628111', '628222']); // the mark of the lookup does not outrank the report under way
+
+      held.release();
+      await report;
+      await answers('628222');
     });
 
     // The statement revokes any reported row that names another phone than the lookup's, whatever the mirror holds: the
@@ -4614,6 +4654,17 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       expect(inner().failedPhones.has('333')).toBe(false);
       expect(inner().lidToPhone.has('333')).toBe(false);
       await refused(['628111', '628777']);
+    });
+
+    it('keeps refusing a lid whose mark went when a lookup of the stored phone fails after it', async () => {
+      await failReports([
+        ['333', '628222'],
+        ['601', '628601'],
+        ['602', '628602'],
+      ]); // the mark of 333, which 628222 was to replace the row 628111 with, went
+      await failLookups([['333', '628111']]); // names the phone the stale row holds
+
+      await refused(['628111', '628222']); // a mark that names 628111 would answer the phone 628222 replaced
     });
 
     it('refuses the lid of a lookup that named the row it holds, once its mark went', async () => {

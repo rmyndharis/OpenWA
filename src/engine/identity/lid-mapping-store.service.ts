@@ -539,11 +539,16 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       return true;
     } catch (err) {
       writing.failed = true;
-      // The update revokes any reported row that names another phone, whatever the mirror holds: a row another node
-      // reported is revoked by the statement that landed, so a failed one marks the lid however it compared with the
-      // mirror. The mark names no phone, so no row equals it, not even the one a failed report's mark would have
-      // admitted.
-      this.keepMark(lid, '');
+      // The update revokes any reported row that names another phone than the lookup's, whatever the mirror holds: a row
+      // another node reported is revoked by the statement that landed, so a failed one marks the lid however it compared
+      // with the mirror. The row the lookup names is the one the statement leaves, so the mark names that phone and
+      // answers that row only: a lookup that merely repeats the stored phone must not hide the lid. The mark names no
+      // phone where one would hide a witness: another mark (a failed report's mark must not come to admit a row), a
+      // report of another phone on the entry (a mark outranks it), or a lid whose marks the bound dropped (a mark would
+      // exempt it from {@link droppedMarks}).
+      const held = this.failedPhones.get(lid);
+      const named = held === phone || (held === undefined && !this.markDropped(lid));
+      this.keepMark(lid, named && (!writing.reportPhone || writing.reportPhone === phone) ? phone : '');
       this.warnWriteFailed(`Could not store lid mapping: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     } finally {
