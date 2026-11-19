@@ -219,7 +219,6 @@ export class SessionOwnershipService {
           now: leaseParam(now),
         })
         .execute();
-      if (this.claimGen.get(sessionId) !== generation) return 'superseded' as const;
       const claimed = (result.affected ?? 0) > 0;
       const adopted =
         claimed &&
@@ -227,10 +226,13 @@ export class SessionOwnershipService {
         previous.nodeId !== this.nodeId &&
         previous.leaseExpiresAt != null &&
         previous.leaseExpiresAt < now;
+      // Decided before the check below: a later claim that replaced this one while its write was in flight reads this
+      // node as the previous holder, so a takeover this write made is followed up here or by no one.
       if (adopted) {
         if (manager) await this.followAdoption(sessionId, manager);
         else followUp = true;
       }
+      if (this.claimGen.get(sessionId) !== generation) return 'superseded' as const;
       return claimed;
     }).catch(async (error: unknown) => {
       if (this.claimGen.get(sessionId) === generation) {
@@ -239,7 +241,10 @@ export class SessionOwnershipService {
       }
       throw error;
     });
-    if (claimed === 'superseded' || this.claimGen.get(sessionId) !== generation) return 'superseded';
+    if (claimed === 'superseded' || this.claimGen.get(sessionId) !== generation) {
+      if (followUp) void this.followAdoption(sessionId);
+      return 'superseded';
+    }
     if (claimed) {
       this.owned.add(sessionId);
       this.lastSeenLease.set(sessionId, leaseExpiresAt.getTime());
@@ -431,7 +436,8 @@ export class SessionOwnershipService {
    * claiming it (an explicit start, boot auto-start, the takeover sweep, a delete) or by releasing
    * that node's claim (a stop of such a session). Whatever that node left unfinished for the
    * session can no longer finish there. A session its holder released is not taken over: that holder
-   * may still be finishing its own work.
+   * may still be finishing its own work. With a detached handler (not `transactional`), two overlapping
+   * claims that both read the lapsed holder can each follow the takeover up, so it must be safe to run twice.
    */
   onAdoption(handler: (sessionId: string, manager?: EntityManager) => Promise<unknown>, transactional = false): void {
     this.onAdopted = { run: handler, transactional };

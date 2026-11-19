@@ -209,9 +209,12 @@ the session. `claimUnlessHeldElsewhere` (`session.service.ts`) leaves the 409 to
 confirms (another node on a live lease); otherwise it asks once more. That renews the hold of the request that
 replaced the claim (one generation shared by both, so the request that ends first leaves the claim to the one
 still running and the last one out releases it) or takes a row nobody holds.
+A takeover of a lapsed holder is followed up by the claim whose write made it, before that claim reports itself
+superseded: the later claim reads this node as the previous holder and would not.
 **Pinned by:** `session-delete-claim.spec.ts` ('two claims of one session that overlap': a start and a delete in
 either order, two deletes, a live peer refusing every pair; the 'older claim SQL reply' cases for a claim lost
-and regained), `session.service.spec.ts` ('ownership release': the second ask and its refusals).
+and regained), `session.service.spec.ts` ('ownership release': the second ask and its refusals) and
+`session-ownership-claim-schedules.spec.ts` (every schedule of two claims over a lapsed holder).
 **The naive fix that is wrong:** guessing a self-overlap from request state (another delete not yet returned, a
 second start reservation). A pair of the other kind, or a partner that has already returned, still answered the
 false 409.
