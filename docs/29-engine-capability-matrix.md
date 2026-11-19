@@ -84,7 +84,7 @@ Key adapter facts:
   construction fails the gate outside the one `unsupported()` helper body, as does a literal that
   names no interface method), and a refusal
   that fires only under a runtime condition - `sendTextMessage` with `customPreview` on whatsapp-web.js, or
-  `revokeGroupInviteCode`, `getGroupInviteCode`, `joinGroupViaInviteCode`, `pinMessage`, `unpinMessage` and `setProfileStatus` on a WhatsApp Web build that lacks the call each one makes - is
+  `revokeGroupInviteCode`, `getGroupInviteCode`, `joinGroupViaInviteCode`, `deleteGroupPicture`, `pinMessage`, `unpinMessage` and `setProfileStatus` on a WhatsApp Web build that lacks the call each one makes - is
   pinned in the gate's conditional list instead of flipping the cell, because 'supported with a refused option'
   is not 'not-available'.
 - **Inbound events** flow the other way: each adapter normalizes library events into the neutral
@@ -1221,6 +1221,10 @@ adapter boundary — none silently stubs.
   join with a request, which the job reports as an unexpected response: the adapter tells it apart in the page and says
   that a request to join was sent and the account has not joined, still as a `400`, where it said the invite was
   invalid. Baileys reads the same answer as no group id, so it still answers the invalid-invite text.
+- **`deleteGroupPicture` (wwjs) needs a WhatsApp Web build that has the picture delete job.** The adapter sends
+  `requestDeletePicture` of `WAWebContactProfilePicThumbBridge` in the page, with the group id built by
+  `WAWebWidFactory`, and answers `501` where either is missing, before anything is asked of WhatsApp, where it would
+  have been a bare `500`. Both exist on every build examined.
 - **`pinMessage` / `unpinMessage` (wwjs) need a WhatsApp Web build whose pin sender the adapter can call.** whatsapp-web.js
   calls `sendPinInChatMsg` of `WAWebSendPinMessageAction` with three positional arguments, which the builds up to
   `2.3000.1050403604` (15 October 2026) declare; the later builds checked (from `2.3000.1052565782`, 1 November, to the

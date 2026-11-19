@@ -141,7 +141,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      'wwjs WAWebContactProfilePicThumbBridge.requestDeletePicture(wid), sent in-page by the adapter (the request GroupChat.deletePicture() sends only when the page already holds the picture), answered by its status: 2xx success, 423/429/5xx a retryable 503, any other code EngineRefusedError; baileys removeProfilePicture(groupJid) (Socket/groups.d.ts) — the same call used for the own account, addressed at the group JID',
+      'wwjs WAWebContactProfilePicThumbBridge.requestDeletePicture(wid), sent in-page by the adapter (the request GroupChat.deletePicture() sends only when the page already holds the picture), answered by its status: 2xx success, 408/423/429/5xx a retryable 503, any other code EngineRefusedError, and a build without the job answers 501; baileys removeProfilePicture(groupJid) (Socket/groups.d.ts) — the same call used for the own account, addressed at the group JID',
   },
   demoteParticipants: {
     wwjs: { status: 'supported' },

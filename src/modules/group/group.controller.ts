@@ -731,6 +731,12 @@ export class GroupController {
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
+  @ApiResponse({
+    status: 501,
+    description:
+      'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to remove a group picture ' +
+      'with. Nothing was asked of WhatsApp: the picture is unchanged.',
+  })
   async deletePicture(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     await this.groupService.deleteGroupPicture(sessionId, groupId);
     return { success: true, message: 'Group picture removed' };

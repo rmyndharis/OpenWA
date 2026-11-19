@@ -205,18 +205,29 @@ export function readInviteSenderInPage(): boolean {
  * with. `GroupChat.deletePicture` sends the same request but only when the page's own copy of the picture allows
  * it, and reads every refusal as `false`: a picture the page never loaded is then not deleted, a repeat of a
  * delete cannot be told from missing rights, and a rate limit reads as a refusal. The status says which it was.
+ *
+ * Every lookup is guarded, since `require` throws for a module a build does not define and answers `undefined` for
+ * another. A build with no job to send the request, or no way to build the id it takes, answers `'missing'` before
+ * anything was asked of WhatsApp; a document with no `require` at all is a page that is reloading, not such a build,
+ * and that failure is let through. Self-contained, since Puppeteer ships it to the page as source.
  */
-export async function deleteGroupPictureInPage(chatId: string): Promise<number> {
-  const w = window as unknown as {
-    require: (m: string) => {
-      createWid: (id: string) => unknown;
-      requestDeletePicture: (wid: unknown) => Promise<unknown>;
-    };
+export async function deleteGroupPictureInPage(chatId: string): Promise<number | 'missing'> {
+  type Bridge = { requestDeletePicture?: (wid: unknown) => Promise<unknown> };
+  type Wids = { createWid?: (id: string) => unknown };
+  const w = window as unknown as { require: (m: string) => unknown };
+  const find = <T>(name: string): T | undefined => {
+    try {
+      return w.require(name) as T | undefined;
+    } catch (err) {
+      if (typeof w.require !== 'function') throw err;
+      return undefined;
+    }
   };
+  const bridge = find<Bridge>('WAWebContactProfilePicThumbBridge');
+  const wids = find<Wids>('WAWebWidFactory');
+  if (typeof bridge?.requestDeletePicture !== 'function' || typeof wids?.createWid !== 'function') return 'missing';
   try {
-    await w
-      .require('WAWebContactProfilePicThumbBridge')
-      .requestDeletePicture(w.require('WAWebWidFactory').createWid(chatId));
+    await bridge.requestDeletePicture(wids.createWid(chatId));
     return 200;
   } catch (err) {
     const refusal = err as { name?: string; status?: unknown } | undefined;
@@ -861,6 +872,9 @@ export class WwebjsGroups {
     const status = await withPageWrite(this.host, 'deleteGroupPicture', () =>
       this.page().evaluate(deleteGroupPictureInPage, groupId),
     );
+    // A build with no job to send the delete: nothing was asked of WhatsApp, so this is no refusal and no failure.
+    if (status === 'missing')
+      throw new EngineNotSupportedError('deleteGroupPicture(no picture delete job on this build)');
     this.host.logger.debug('WhatsApp answered the group picture delete', { groupId, status });
     // WhatsApp answers 200 for a group with no picture as for one it removed, so a repeat converges. A rate limit or
     // a server error deleted nothing, and the same request may pass later.
