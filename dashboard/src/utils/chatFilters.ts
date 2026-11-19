@@ -29,6 +29,8 @@ export const matches = (query: string, ...fields: (string | undefined)[]): boole
 interface ChatLike {
   id: string;
   name?: string;
+  /** Phone digits of a privacy-id chat, which a row with no name is titled by. */
+  phone?: string;
   kind?: string;
 }
 
@@ -37,7 +39,7 @@ interface ChatLike {
  * their own tabs instead, so a channel never appears twice.
  */
 export function filterChats<T extends ChatLike>(chats: T[], query: string): T[] {
-  return chats.filter(c => c.kind !== 'channel' && c.kind !== 'status' && matches(query, c.name, c.id));
+  return chats.filter(c => c.kind !== 'channel' && c.kind !== 'status' && matches(query, c.name, c.id, c.phone));
 }
 
 /** The quick filters above the Chats tab list, applied after the search box. */

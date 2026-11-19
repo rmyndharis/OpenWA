@@ -258,3 +258,27 @@ test('a name typed with letters still matches as typed', () => {
   );
   assert.ok(!matches('xyz', 'Ben', '628123456789'));
 });
+
+// A chat WhatsApp holds under a privacy id carries no name worth showing, so its row is titled by the phone the session
+// maps it to, and that phone is what an operator types to find it.
+const PHONE_ROWS = [
+  { id: '262813461250072@lid', name: '', phone: '15550006666', kind: 'individual' },
+  { id: '262813461250073@lid', name: '', kind: 'individual' },
+  { id: '628111@c.us', name: 'Alice', kind: 'individual' },
+];
+
+test('a chat titled by its mapped phone is found by that phone, and a chat with none is not', () => {
+  const found = (query: string) => filterChats(PHONE_ROWS, query).map(c => c.id);
+  assert.deepEqual(found('15550006666'), ['262813461250072@lid']);
+  assert.deepEqual(found('5550006'), ['262813461250072@lid']);
+  assert.deepEqual(found('5550009'), []);
+  // The privacy id and the name keep finding their chats.
+  assert.deepEqual(found('2628134612500'), ['262813461250072@lid', '262813461250073@lid']);
+  assert.deepEqual(found('alice'), ['628111@c.us']);
+});
+
+test('a phone typed in the digits of another script finds the chat titled by it', () => {
+  const found = (query: string) => filterChats(PHONE_ROWS, query).map(c => c.id);
+  assert.deepEqual(found(native('5550006', 0x0660)), ['262813461250072@lid']);
+  assert.deepEqual(found(native('5550006', 0xff10)), ['262813461250072@lid']);
+});

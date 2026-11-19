@@ -90,3 +90,12 @@ test('a suggestion for a chat with no name shows its phone, with its id on the s
     ],
   );
 });
+
+test('typing the phone a chat is titled by lists that chat among the suggestions', () => {
+  const { container } = rtl.render(createElement(Harness));
+  const input = container.querySelector<HTMLInputElement>('.chips-text')!;
+  rtl.act(() => input.focus());
+  rtl.fireEvent.change(input, { target: { value: '5550006' } });
+  const names = Array.from(container.querySelectorAll('.chips-suggestion-name')).map(name => name.textContent);
+  assert.deepEqual(names, [isolated('+1 555 000 6666')]);
+});

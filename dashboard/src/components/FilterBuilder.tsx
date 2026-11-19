@@ -95,7 +95,13 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
     return (
       chats
         .filter(c => !chosen.has(c.id))
-        .filter(c => !query || c.name.toLowerCase().includes(query) || c.id.toLowerCase().includes(query))
+        .filter(
+          c =>
+            !query ||
+            c.name.toLowerCase().includes(query) ||
+            c.id.toLowerCase().includes(query) ||
+            c.phone?.includes(query),
+        )
         // The dropdown scrolls, so this only bounds how much of an account with up to 1000 chats is
         // rendered on every keystroke. Typing narrows the list further.
         .slice(0, 50)
