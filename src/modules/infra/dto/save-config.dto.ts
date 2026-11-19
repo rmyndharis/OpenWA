@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsIn, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsObject, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 import { ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 
 /**
@@ -68,10 +68,11 @@ export class DatabaseConfigDto {
   @IsString()
   schema?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ type: 'integer', minimum: 0 })
   @ToStrictNumber()
   @IsOptional()
-  @IsNumber()
+  @IsInt()
+  @Min(0)
   poolSize?: number;
 
   @ApiPropertyOptional()

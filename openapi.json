@@ -22979,7 +22979,7 @@
             "example": "public"
           },
           "poolSize": {
-            "type": "number",
+            "type": "integer",
             "example": 10
           },
           "sslEnabled": {
@@ -23203,7 +23203,8 @@
             "type": "string"
           },
           "poolSize": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "sslEnabled": {
             "type": "boolean"

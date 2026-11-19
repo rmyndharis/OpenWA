@@ -310,7 +310,7 @@ export class InfraConfigDatabaseDto {
   @ApiProperty({ example: 'public' })
   schema!: string;
 
-  @ApiProperty({ example: 10 })
+  @ApiProperty({ type: 'integer', example: 10 })
   poolSize!: number;
 
   @ApiProperty({ example: false })

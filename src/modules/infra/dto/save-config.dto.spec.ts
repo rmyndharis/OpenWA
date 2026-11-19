@@ -87,6 +87,17 @@ describe('SaveConfigDto strict coercion', () => {
     expect(errors).toHaveLength(0);
     expect(instance.database?.poolSize).toBe(25);
   });
+
+  it.each([1.5, '1.5', -1])('refuses a poolSize of %j, which is not a whole number of 0 or more', async poolSize => {
+    const { errors } = await run({ database: { type: 'postgres', poolSize } });
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  // The dashboard sends null for a pool size input that was emptied, which reads as absent.
+  it.each([0, null])('accepts a poolSize of %j', async poolSize => {
+    const { errors } = await run({ database: { type: 'postgres', poolSize } });
+    expect(errors).toHaveLength(0);
+  });
 });
 
 // @ValidateNested checks an array element by element, so a section sent as [] or [{...}] passed validation.
