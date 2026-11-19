@@ -1350,7 +1350,7 @@ export class BaileysSessionStore {
       id,
       // A title that is only the privacy id's own digits is not a name. The phone, when known, is
       // `phone` so the client can format it the way WhatsApp does, instead of listing the @lid.
-      name: this.chatDisplayName(rawId, [c, ...others]),
+      name: this.chatDisplayName(rawId, [c, ...others], phone),
       ...(phone ? { phone } : {}),
       isGroup: rawId.endsWith('@g.us'),
       kind: chatKind(id),
@@ -1531,43 +1531,38 @@ export class BaileysSessionStore {
 
   /**
    * Best-known display name for a chat id when Baileys gave the chat no title (#369). Prefers the saved
-   * contact name, then verifiedName, then pushName (`notify`); for a @lid chat it also tries the contact
-   * behind the resolved phone. A phone-keyed chat with no name falls back to its digits. A privacy id
-   * does not: those digits are not a phone number, and the listing carries the mapped number separately.
+   * contact name, then verifiedName, then pushName (`notify`), the first of them that is a real name; for
+   * a @lid chat it also tries the contact saved under `phone`, the number the row lists. A phone-keyed
+   * chat with no name falls back to its digits. A privacy id does not: those digits are not a phone
+   * number, and the listing carries the mapped number separately.
    */
-  private resolveContactName(id: string): string {
-    const direct = this.contactDisplayName(id);
-    if (direct && !this.isLidIdentityLabel(id, direct)) {
+  private resolveContactName(id: string, phone?: string): string {
+    const direct = this.contactDisplayName(id, id);
+    if (direct) {
       return direct;
     }
-    const parsed = parseWaId(id);
-    if (parsed.kind === 'lid') {
-      const lidJid = `${parsed.userPart}@lid`;
-      const pn =
-        this.lidToPn.get(lidJid) ??
-        this.lidToPn.get(id) ??
-        (this.contacts.get(lidJid) ?? this.contacts.get(id))?.phoneNumber;
-      if (pn) {
-        const viaPhone =
-          this.contactDisplayName(pn) ??
-          this.contactDisplayName(`${userPart(pn)}@s.whatsapp.net`) ??
-          this.contactDisplayName(`${userPart(pn)}@c.us`);
-        if (viaPhone && !this.isLidIdentityLabel(id, viaPhone)) {
-          return viaPhone;
-        }
-      }
-      return '';
+    if (parseWaId(id).kind !== 'lid') {
+      return userPart(id);
     }
-    return userPart(id);
+    const viaPhone = phone
+      ? (this.contactDisplayName(`${phone}@s.whatsapp.net`, id) ?? this.contactDisplayName(`${phone}@c.us`, id))
+      : undefined;
+    return viaPhone ?? '';
   }
 
   /** The chat title to list: a real name, else the contact's, else nothing for a privacy id. */
-  private chatDisplayName(id: string, records: Array<{ name?: string | null }>): string {
+  private chatDisplayName(id: string, records: Array<{ name?: string | null }>, phone?: string): string {
     for (const record of records) {
-      const name = record.name?.trim();
-      if (name && !this.isLidIdentityLabel(id, name)) return name;
+      const name = this.realName(id, record.name);
+      if (name) return name;
     }
-    return this.resolveContactName(id);
+    return this.resolveContactName(id, phone);
+  }
+
+  /** `name` trimmed, or undefined when it is blank or only the privacy id itself: neither is a name. */
+  private realName(id: string, name: string | null | undefined): string | undefined {
+    const trimmed = name?.trim();
+    return trimmed && !this.isLidIdentityLabel(id, trimmed) ? trimmed : undefined;
   }
 
   /** True when the label is only the privacy id itself (`2714…` or `2714…@lid`), which is no name. */
@@ -1578,9 +1573,10 @@ export class BaileysSessionStore {
     return trimmed === parsed.userPart || trimmed === `${parsed.userPart}@lid`;
   }
 
-  private contactDisplayName(id: string): string | undefined {
-    const c = this.contacts.get(id);
-    return c ? (c.name ?? c.verifiedName ?? c.notify ?? undefined) : undefined;
+  /** The first of the saved, verified and push names of the contact filed under `key` that names chat `id`. */
+  private contactDisplayName(key: string, id: string): string | undefined {
+    const c = this.contacts.get(key);
+    return c ? [c.name, c.verifiedName, c.notify].map(name => this.realName(id, name)).find(Boolean) : undefined;
   }
 
   private toUnixSeconds(ts: number | { toNumber(): number } | null | undefined): number {
