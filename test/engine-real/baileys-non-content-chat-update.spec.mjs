@@ -271,6 +271,56 @@ for (const [label, message] of NO_MESSAGE_OF_ITS_OWN) {
   });
 }
 
+// A first-sync chunk (or a history fetch) of a chat the session holds nothing else of: the chunk's time is that of its last
+// message, which is none of its own, and it is the only time the phone gave the chat. It is listed with it, without a preview.
+const HISTORY_KINDS = [
+  ['an in-chat pin', { pinInChatMessage: { type: 1, senderTimestampMs: 1 } }],
+  ['a keep-in-chat toggle', { keepInChatMessage: { key: { ...target, fromMe: true }, keepType: 1, timestampMs: 1 } }],
+  ['an album header', { albumMessage: { expectedImageCount: 2, expectedVideoCount: 0 } }],
+  ['an encrypted reaction', { encReactionMessage: { targetMessageKey: target, ...sealed } }],
+];
+const firstSync = (chat, messages) => ({
+  chats: [chat],
+  contacts: [],
+  messages,
+  syncType: 1,
+  isLatest: true,
+  progress: 100,
+  chunkOrder: 1,
+});
+
+for (const [label, message] of HISTORY_KINDS) {
+  for (const [who, fromMe, unreadCount] of [
+    ['a contact', false, 1],
+    ['the account', true, 0],
+  ]) {
+    test(`a first-sync chunk whose only message is ${label} from ${who} is listed at the time the phone gave it, with no preview`, async t => {
+      const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore() });
+      const last = wireMessage({ id: 'P1', at: SEEN_AT, message, fromMe });
+      sock.ev.emit(
+        'messaging-history.set',
+        firstSync({ id: PEER, conversationTimestamp: SEEN_AT, unreadCount, messages: [{ message: last }] }, [last]),
+      );
+      const chat = await listed(adapter);
+      assert.equal(chat.timestamp, SEEN_AT);
+      assert.equal(chat.lastMessage, undefined, 'the message is not the preview');
+      assert.equal(chat.unreadCount, unreadCount, 'the count is as it was');
+    });
+  }
+}
+
+test('a first-sync chunk whose last message is a pin and which holds a text before it is listed with that text and its time', async t => {
+  const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore() });
+  const text = wireMessage({ id: 'TEXT1', at: SEEN_AT - 600, message: { conversation: 'the text' } });
+  const pin = wireMessage({ id: 'PIN1', at: SEEN_AT, message: pinOf() });
+  sock.ev.emit(
+    'messaging-history.set',
+    firstSync({ id: PEER, conversationTimestamp: SEEN_AT, unreadCount: 1, messages: [{ message: pin }] }, [text, pin]),
+  );
+  await until(async () => (await listed(adapter))?.lastMessage === 'the text', 'the text to be listed');
+  assert.equal((await listed(adapter)).timestamp, SEEN_AT - 600, 'the pin dates nothing');
+});
+
 // Controls: a message of its own, merged into the same chunk, is the chat's last message and brings the chat back.
 test('a chat deleted on the phone is listed again when a text from a contact is merged into a history chunk of it', async t => {
   const { adapter, sock } = await withDeletedChat(t);

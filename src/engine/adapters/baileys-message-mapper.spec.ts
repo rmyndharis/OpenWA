@@ -18,6 +18,7 @@ import {
   extractBaileysContext,
   type ContentTypeLib,
   contentTypeOf,
+  droppedMessageTime,
   isBaileysCatalogShare,
   isNonContent,
   isNoiseOnly,
@@ -1692,6 +1693,30 @@ describe('what is no message of its own', () => {
         id: CHAT_ID,
         name: 'Rina',
         ...('unreadCount' in chat ? { unreadCount: chat.unreadCount } : {}),
+      });
+    });
+
+    describe('droppedMessageTime', () => {
+      it('names the time that was taken out, for the chat the filter returned', () => {
+        const chat = merged(PIN);
+        expect(droppedMessageTime(withoutMergedNonContentMessage(chat, lib))).toBe(1700000040);
+        expect(droppedMessageTime(withoutMergedNonContentMessage(merged(PIN, { count: 0, fromMe: true }), lib))).toBe(
+          1700000040,
+        );
+      });
+
+      it('names the time of a Long as a number', () => {
+        const messageTime = { low: 1700000040, high: 0, unsigned: false, toString: () => '1700000040' };
+        expect(droppedMessageTime(withoutMergedNonContentMessage(merged(PIN, { messageTime }), lib))).toBe(1700000040);
+      });
+
+      it('names nothing when the chat kept its time, or was left whole, or is not what the filter returned', () => {
+        const kept = withoutMergedNonContentMessage(merged(PIN, { time: 1700000010 }), lib);
+        const whole = merged({ conversation: 'hi' });
+        expect(droppedMessageTime(kept)).toBeUndefined();
+        expect(droppedMessageTime(withoutMergedNonContentMessage(whole, lib))).toBeUndefined();
+        expect(droppedMessageTime(merged(PIN))).toBeUndefined();
+        expect(droppedMessageTime({ ...withoutMergedNonContentMessage(merged(PIN), lib) })).toBeUndefined();
       });
     });
 

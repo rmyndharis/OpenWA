@@ -140,6 +140,9 @@ export function withoutNonContentMessage(
   return Object.keys(rest).every(key => key === 'id' || key === 'conditional') ? undefined : rest;
 }
 
+/** The time {@link withoutMergedNonContentMessage} took out of a chat, by the chat it returned. */
+const droppedMessageTimes = new WeakMap<object, number>();
+
 /**
  * A chat of a history chunk or an upsert, without the time and message of a last message that is none of its own. While
  * the library's event buffer holds such a chat, it merges a chat update into it: the update's message, its time and its
@@ -156,6 +159,10 @@ export function withoutNonContentMessage(
  * The count stays whatever it is: it is the chunk's count plus the count of every update merged into it, and nothing in
  * the chat says whether the chunk held a count to add to (the library replaces one that is not a number), so the
  * message's count cannot be told from the rest. A pin merged into a chunk therefore still raises that chat's count by one.
+ *
+ * The time that was taken out is the only time the phone gave a chat the session may know nothing else of, which is
+ * listed at the epoch without it. The filter cannot see the session, so it names the time ({@link droppedMessageTime})
+ * and the session store gives it back to a chat that is not deleted and holds no time of its own.
  */
 export function withoutMergedNonContentMessage(chat: Partial<Chat>, lib: ContentTypeLib | undefined): Partial<Chat> {
   const last = nonContentLast(chat, lib);
@@ -163,9 +170,19 @@ export function withoutMergedNonContentMessage(chat: Partial<Chat>, lib: Content
   const rest = { ...chat };
   delete rest.messages;
   if (last.messageTimestamp != null && Number(rest.conversationTimestamp) === Number(last.messageTimestamp)) {
+    droppedMessageTimes.set(rest, Number(rest.conversationTimestamp));
     delete rest.conversationTimestamp;
   }
   return rest;
+}
+
+/**
+ * The time a chat returned by {@link withoutMergedNonContentMessage} lost because it was only that of its last message,
+ * which is none of its own; undefined for any other chat. A copy of the returned chat names none, so a chat handed on in
+ * another shape keeps the time out, as the filter leaves it.
+ */
+export function droppedMessageTime(chat: object): number | undefined {
+  return droppedMessageTimes.get(chat);
 }
 
 /** The last message of a chat or chat update when it is none of its own and has content and no stub type. */

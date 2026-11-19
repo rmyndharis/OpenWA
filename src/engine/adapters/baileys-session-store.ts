@@ -4,7 +4,7 @@ import { chatKind, parseWaId, toNeutralJid as canonicalizeWaId, userPart } from 
 import type { LidMappingStore } from '../identity/lid-mapping-store.service';
 import { mergeTwinStates, type ChatStateStore, type ChatStateValue } from './baileys-chat-state-store.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
-import { baileysChatJid, baileysMessageText } from './baileys-message-mapper';
+import { baileysChatJid, baileysMessageText, droppedMessageTime } from './baileys-message-mapper';
 import type { StoredChatPreview } from './baileys-stored-chat-previews.service';
 
 interface LastMessage {
@@ -451,16 +451,22 @@ export class BaileysSessionStore {
         }
         continue;
       }
+      // The only time the phone gave a chunk's chat was that of a last message that is none of its own, which the filter
+      // took out so that it cannot date a chat or bring back a deleted one. The deleted chat was refused above; a chat
+      // that holds no time of its own takes it, as it would be listed at the epoch otherwise.
+      const messageTime = droppedMessageTime(record);
+      const dated =
+        messageTime !== undefined && !this.holdsTime(r.id, lidIndex) ? { ...r, conversationTimestamp: messageTime } : r;
       // Baileys adds this pair to the update of a counted message, and to a plain reaction to the account's own
       // message, when the account unarchives on a new message. It names no time and no message, so it proves no
       // chat: a chat this session holds no record of would get a row at the epoch. Whatever state it carries still
       // goes to a chat that has a persisted row, which a contact's message unarchives as it always has.
-      if (unarchivesOnly(r) && !this.chatTwins(r.id, lidIndex).some(k => this.chats.has(k))) {
-        this.persistChatState(r.id, r);
+      if (unarchivesOnly(dated) && !this.chatTwins(r.id, lidIndex).some(k => this.chats.has(k))) {
+        this.persistChatState(r.id, dated);
         continue;
       }
       const existing: StoredChat = this.chats.get(r.id) ?? { id: r.id };
-      const applied = this.withoutReadEcho(r, existing);
+      const applied = this.withoutReadEcho(dated, existing);
       // A count that replaces a mark set by hand leaves the mark on the account: the record remembers it, so the
       // read that covers the message undoes the mark as well. Any other count the update carries (a read or a mark
       // synced from the phone, or the `undefined` Baileys writes where a sync cancelled a mark) says how the chat
@@ -473,6 +479,13 @@ export class BaileysSessionStore {
       this.persistChatState(r.id, applied);
       this.applyChatTimer(r.id, applied, lidIndex);
     }
+  }
+
+  /** Whether a record of the chat, under any spelling of it, carries a time. A recorded message dates the listing itself. */
+  private holdsTime(chatId: string, lidIndex?: Map<string, string[]>): boolean {
+    return this.chatTwins(chatId, lidIndex).some(
+      key => this.toUnixSeconds(this.chats.get(key)?.conversationTimestamp) > 0,
+    );
   }
 
   /**

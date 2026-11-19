@@ -2,6 +2,7 @@ import { DataSource } from 'typeorm';
 import { BaileysSessionStore } from './baileys-session-store';
 import { LidMapping } from '../identity/lid-mapping.entity';
 import { LidMappingStoreService, type LidMappingStore } from '../identity/lid-mapping-store.service';
+import { withoutMergedNonContentMessage, type ContentTypeLib } from './baileys-message-mapper';
 import {
   mergeTwinStates,
   type ChatStateField,
@@ -1541,6 +1542,104 @@ describe('BaileysSessionStore', () => {
       expect(fake.get(SID, PHONE)?.deletedAt).toBe(mark);
       // A timer WhatsApp keeps across a deletion still applies.
       expect(s.getEphemeralExpiration(PHONE)).toBe(86_400);
+    });
+
+    // The chat of a history chunk (a first sync, a history fetch) whose newest message is a pin, as the lifecycle hands it
+    // to the store once the filter took the message and its time, which is the time of the chunk, out of it.
+    describe('a history chunk whose last message is none of its own', () => {
+      const lib = {
+        getContentType: (content: object | undefined) =>
+          Object.keys(content ?? {}).find(key => key === 'conversation' || key.includes('Message')),
+        normalizeMessageContent: (content: unknown) => content,
+      } as unknown as ContentTypeLib;
+      const T = 1_700_000_100;
+      const chunk = (id: string, fromMe = false, at = T) =>
+        withoutMergedNonContentMessage(
+          {
+            id,
+            conversationTimestamp: at,
+            unreadCount: fromMe ? 0 : 1,
+            messages: [
+              {
+                message: {
+                  key: { remoteJid: id, fromMe, id: 'PIN1' },
+                  message: { pinInChatMessage: {} },
+                  messageTimestamp: at,
+                },
+              },
+            ],
+          },
+          lib,
+        );
+      const text = (remoteJid: string, ts: number) => ({
+        key: { remoteJid, fromMe: false, id: 'TEXT1' },
+        message: { conversation: 'hello' },
+        messageTimestamp: ts,
+      });
+
+      it.each([
+        ['a contact', false, 1],
+        ['the account', true, 0],
+      ])(
+        'lists a chat it alone tells of, with a pin from %s, at the time the phone gave it',
+        (_who, fromMe, unread) => {
+          const s = newStore();
+          s.upsertChats([chunk(PHONE, fromMe)]);
+          expect(s.listChats()).toEqual([
+            expect.objectContaining({ id: '628111@c.us', timestamp: T, unreadCount: unread, lastMessage: undefined }),
+          ]);
+        },
+      );
+
+      it('lists such a chat at the time of a text recorded after it, with the text, and never with the pin', () => {
+        const s = newStore();
+        s.upsertChats([chunk(PHONE)]);
+        s.recordMessage(text(PHONE, T - 50));
+        expect(s.listChats()).toEqual([expect.objectContaining({ timestamp: T - 50, lastMessage: 'hello' })]);
+      });
+
+      it('leaves the time a record of the chat holds', () => {
+        const s = newStore();
+        s.upsertChats([{ id: PHONE, conversationTimestamp: T - 500 }]);
+        s.upsertChats([chunk(PHONE)]);
+        expect(s.listChats()).toEqual([expect.objectContaining({ timestamp: T - 500 })]);
+      });
+
+      it('leaves the time a record holds under the other spelling of the chat', () => {
+        const s = newStore();
+        s.addLidMappings([{ lid: LID, pn: PHONE }]);
+        s.upsertChats([{ id: LID, conversationTimestamp: T - 500 }]);
+        s.upsertChats([chunk(PHONE)]);
+        expect(s.listChats().map(chat => chat.timestamp)).not.toContain(T);
+      });
+
+      it('leaves the time and the preview of a message the session recorded', () => {
+        const s = newStore();
+        s.recordMessage(text(PHONE, T - 500));
+        s.upsertChats([chunk(PHONE)]);
+        expect(s.listChats()).toEqual([expect.objectContaining({ timestamp: T - 500, lastMessage: 'hello' })]);
+      });
+
+      it('keeps a deleted chat deleted, with its mark, for a pin newer than the deletion', async () => {
+        const s = newStore();
+        s.upsertChats([{ id: PHONE, conversationTimestamp: T - 500 }]);
+        s.removeChats([PHONE]);
+        await flush();
+        const mark = fake.get(SID, PHONE)?.deletedAt;
+        expect(mark).toEqual(expect.any(Number));
+
+        s.upsertChats([chunk(PHONE, false, Math.floor(Date.now() / 1000) + 60)]);
+        await flush();
+
+        expect(s.listChats()).toEqual([]);
+        expect(fake.get(SID, PHONE)?.deletedAt).toBe(mark);
+      });
+
+      it('takes no time for a copy of the chat the filter returned', () => {
+        const s = newStore();
+        s.upsertChats([{ ...chunk(PHONE) }]);
+        expect(s.listChats()).toEqual([expect.objectContaining({ timestamp: 0 })]);
+      });
     });
 
     // What Baileys writes for a counted message, or a plain reaction to an own message, when the account unarchives on a

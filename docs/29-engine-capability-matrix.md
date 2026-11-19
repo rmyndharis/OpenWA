@@ -1079,13 +1079,14 @@ adapter boundary — none silently stubs.
   increment and not a running total: a chat whose unread messages arrived one at a time is listed with
   `1`. Baileys also counts a contact's encrypted edit or reaction, a pin, a keep-in-chat toggle, an album header, an
   event RSVP and an encrypted comment as a received message; one that arrives on its own does not raise the count,
-  and is no message that brings back a chat WhatsApp deleted, as a message of its own does. Such a message that arrives
-  while Baileys holds a history chunk of the chat (a new link's first sync or a history fetch) or an upsert of it is merged
-  into that chunk. When the chunk then counts only that message (a count of one), it neither becomes the chat's last
-  message or its time nor brings back a deleted chat, but the count Baileys adds for it stays in the chunk's, so the chat
-  can be listed with one unread message more than it holds; a chunk that held a count of its own, or that a text was
-  merged into as well, counts more and is left as Baileys hands it over, so the message can still date the chat and
-  bring back a deleted one.
+  lists no chat the session holds no record of, and is no message that brings back a chat WhatsApp deleted, as a message
+  of its own does. Such a message that arrives while Baileys holds a history chunk of the chat (a new link's first sync or
+  a history fetch) or an upsert of it is merged into that chunk. When the chunk then counts only that message (a count of
+  one), it neither becomes the chat's last message nor brings back a deleted chat, and its time does not replace a time
+  the chat already has; a chat the session holds no other time for is listed at the time the phone gave it, with no
+  `lastMessage`. The count Baileys adds for it stays in the chunk's, so the chat can be listed with one unread message
+  more than it holds; a chunk that held a count of its own, or that a text was merged into as well, counts more and is
+  left as Baileys hands it over, so the message can still date the chat and bring back a deleted one.
   An unread mark set on the phone that Baileys delivers in the same batch just before such a message, as after a reconnect, is folded into that
   message's count by the library and is therefore not listed; the mark stays on the account. A receipt that names only older messages, or only the account's own (which Baileys leaves out of a
   receipt), leaves the count, and so does one a newer message overtook, recorded or still being processed; a session restarted since holds
