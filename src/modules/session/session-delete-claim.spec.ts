@@ -44,6 +44,9 @@ import { StatusStoreService } from '../status-store/status-store.service';
 import { SessionTakeoverService } from '../takeover/session-takeover.service';
 import { waitUntil } from '../../../test/helpers/wait-until';
 
+// The waits in this file are deadlines of thirty seconds, which is more than a test may take by default.
+jest.setTimeout(60_000);
+
 const entities = [
   Session,
   Message,

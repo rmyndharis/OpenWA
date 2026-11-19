@@ -21,6 +21,8 @@ import type {
 // revoked one does, or the index keeps serving the text the sender replaced. Runs on SQLite, and on the
 // postgres:16 service when DATABASE_TYPE=postgres.
 describe('message:persisted after a stored message changes its text', () => {
+  // The waits below are deadlines of thirty seconds, which is more than a test may take by default.
+  jest.setTimeout(60_000);
   const CHAT = '15550001111@c.us';
   let db: DataSource;
   let repository: Repository<Message>;
