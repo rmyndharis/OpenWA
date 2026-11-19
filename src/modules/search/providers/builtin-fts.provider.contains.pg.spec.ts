@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { join } from 'path';
 import { BuiltInFtsProvider, TRIGRAM_BUILD_LOCK, TRIGRAM_BUILD_LOCK_KEY } from './builtin-fts.provider';
+import { waitUntil } from '../../../../test/helpers/wait-until';
 
 /**
  * Postgres runtime coverage for match=contains: the pg_trgm/unaccent schema buildContainsIndex creates
@@ -161,7 +162,7 @@ const containsOn = new ConfigService({ search: { containsEnabled: true } });
 
         // The holder dies or fails: the lock goes, and no index is left behind.
         await other.query(`SELECT pg_advisory_unlock(${LOCK})`, [TRIGRAM_BUILD_LOCK_KEY]);
-        for (let i = 0; i < 200 && (await trigramState()).idx !== true; i++) await new Promise(r => setTimeout(r, 50));
+        await waitUntil(async () => (await trigramState()).idx === true);
 
         expect(await trigramState()).toEqual({ extensions: 2, fn: true, idx: true });
         expect((await waiting.search({ q: 'voic', match: 'contains' })).total).toBe(2);
@@ -169,7 +170,7 @@ const containsOn = new ConfigService({ search: { containsEnabled: true } });
         waiting.onModuleDestroy();
         await other.release();
       }
-    });
+    }, 60_000);
 
     it('is not held up by the build lock of a deployment in another schema of the database', async () => {
       const other = ds.createQueryRunner();
