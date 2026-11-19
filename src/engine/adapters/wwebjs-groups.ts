@@ -61,9 +61,10 @@ export function extractLinkedParentJID(groupMetadata?: GroupMetadataRaw): string
  *
  * The job that resets the code has moved between WhatsApp Web builds: `WAWebGroupInviteJob` exports it on the build
  * the gateway selects today and `WAWebGroupQueryJob` did before, and both take the same wid and resolve the same
- * `{code}`. A module a build does not define throws from `require`, so each lookup is guarded; a document with no
- * `require` at all is a page that is reloading, not a build without the job, and that failure is let through. A
- * build with neither answers `'missing'` before anything was asked of WhatsApp. Otherwise it answers the status
+ * `{code}`. From a page.evaluate Meta's `require` answers `undefined` for a module the page has not defined, and throws
+ * only inside a guard or before the page's error setup has run, so each lookup tests the answer and guards the throw; a
+ * document with no `require` at all is a page that is reloading, not a build without the job, and that failure is let
+ * through. A build with neither answers `'missing'` before anything was asked of WhatsApp. Otherwise it answers the status
  * WhatsApp gave, with the new code on a 2xx: a rate limit or a server error removed nothing and is no refusal.
  */
 export async function revokeInviteInPage(chatId: string): Promise<{ status: number; code?: string } | 'missing'> {
@@ -189,9 +190,11 @@ const NO_INVITE_JOB_ERRORS = [
  * Whether the page still exports the invitation sender that `GroupChat.addParticipants` calls for a participant whose
  * privacy settings allow only an invitation: `sendGroupInviteMessage` of `WAWebChatSendMessages`. The build the gateway
  * selects today exports it from `WAWebChatSendGroupInviteMessage` instead, taking one options object where the library
- * passes positional arguments, so the library's call is a TypeError in its loop. A module a build does not define throws
- * from `require`. A document with no `require` at all is a page that is reloading, not a build without the sender, and
- * that failure is let through (spelled as the library spells it, which is how the reload is read).
+ * passes positional arguments, so the library's call is a TypeError in its loop. From a page.evaluate Meta's `require`
+ * answers `undefined` for a module the page has not defined, and throws only inside a guard or before the page's error
+ * setup has run, so the lookup tests the answer and guards the throw. A document with no `require` at all is a page that
+ * is reloading, not a build without the sender, and that failure is let through (spelled as the library spells it, which
+ * is how the reload is read).
  */
 export function readInviteSenderInPage(): boolean {
   type Messages = { sendGroupInviteMessage?: unknown } | undefined;
@@ -210,10 +213,11 @@ export function readInviteSenderInPage(): boolean {
  * it, and reads every refusal as `false`: a picture the page never loaded is then not deleted, a repeat of a
  * delete cannot be told from missing rights, and a rate limit reads as a refusal. The status says which it was.
  *
- * Every lookup is guarded, since `require` throws for a module a build does not define and answers `undefined` for
- * another. A build with no job to send the request, or no way to build the id it takes, answers `'missing'` before
- * anything was asked of WhatsApp; a document with no `require` at all is a page that is reloading, not such a build,
- * and that failure is let through. Self-contained, since Puppeteer ships it to the page as source.
+ * Every lookup tests the answer and guards the throw: from a page.evaluate Meta's `require` answers `undefined` for a
+ * module the page has not defined, and throws only inside a guard or before the page's error setup has run. A build with
+ * no job to send the request, or no way to build the id it takes, answers `'missing'` before anything was asked of
+ * WhatsApp; a document with no `require` at all is a page that is reloading, not such a build, and that failure is let
+ * through. Self-contained, since Puppeteer ships it to the page as source.
  */
 export async function deleteGroupPictureInPage(chatId: string): Promise<number | 'missing'> {
   type Bridge = { requestDeletePicture?: (wid: unknown) => Promise<unknown> };

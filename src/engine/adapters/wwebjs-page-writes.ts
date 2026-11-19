@@ -34,9 +34,10 @@ export type PageWriteAnswer = { status: number; local?: true } | 'missing' | 'no
  * asked for (`local`). Any other answer of the
  * job is the library's own success, and any other failure is rethrown.
  *
- * Every lookup is guarded, since `require` throws for a module a build does not define, and a document with no
- * `require` at all is a page that is reloading, not a build without the job, so that failure is let through. Nothing
- * is sent when the page cannot run the write. A page without the helper whatsapp-web.js installs for it (`getChat` for
+ * Every lookup tests the answer and guards the throw: from a page.evaluate Meta's `require` answers `undefined` for a
+ * module the page has not defined (its error guard swallows the `ModuleError`), and throws that error only inside a
+ * guard or before the page's error setup has run. A document with no `require` at all is a page that is reloading, not
+ * a build without the job, so that failure is let through. Nothing is sent when the page cannot run the write. A page without the helper whatsapp-web.js installs for it (`getChat` for
  * a description or a property, `cropAndResizeImage` for a picture, `window.WWebJS` itself for a subject) is answered
  * `'no-helpers'`, and it is told first: a page that has not been re-injected cannot be judged on its jobs. Otherwise a
  * job the build lacks, or the wid factory or random id it needs, is answered `'missing'`. The library's own call reads
@@ -176,9 +177,10 @@ export type PinAnswer = boolean | 'legacy' | 'missing';
  * nothing for a type it does not know, and throws a plain error when the send did not go through, which is the refusal
  * the library read as `false`; a duration the page has no option for is the same refusal.
  *
- * Every lookup is guarded, since `require` throws for a module a build does not define and answers `undefined` for
- * another; a document with no `require` at all is a page that is reloading, not a build without the sender, so that
- * failure is let through. Self-contained, since Puppeteer ships it to the page as source.
+ * Every lookup tests the answer and guards the throw: from a page.evaluate Meta's `require` answers `undefined` for a
+ * module the page has not defined, and throws only inside a guard or before the page's error setup has run. A document
+ * with no `require` at all is a page that is reloading, not a build without the sender, so that failure is let through.
+ * Self-contained, since Puppeteer ships it to the page as source.
  */
 export async function pinInPage(messageId: string, pin: boolean, durationSeconds: number): Promise<PinAnswer> {
   type Module = Record<string, unknown> | undefined;

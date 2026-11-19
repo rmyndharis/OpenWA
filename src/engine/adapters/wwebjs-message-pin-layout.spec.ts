@@ -58,9 +58,9 @@ describe('pinning and unpinning a message on each WhatsApp Web layout', () => {
   interface Page {
     /** The older layout, whose sender takes the positional arguments the library passes. */
     positional?: boolean;
-    /** Module names this build does not define: Meta's `require` throws for them. */
+    /** Module names this build does not define: `require` throws for them, as it does before the page's error setup. */
     without?: string[];
-    /** Module names `require` answers `undefined` for, as it does from a page.evaluate with no guard active. */
+    /** Module names `require` answers `undefined` for, as it does from a page.evaluate on a booted page. */
     undefinedFor?: string[];
     /** The send does not go through. */
     refuse?: boolean;

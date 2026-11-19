@@ -17,9 +17,9 @@ const { Client } = wwebjs as unknown as { Client: { prototype: object } };
  * The job below is what build 2.3000.1054966512-alpha exports: `joinGroupViaInvite(code, requestsApproval, gid)`
  * resolves `{ gid }` for a join, rejects `ServerStatusCodeError(status)` when WhatsApp refuses the invite, and rejects
  * `UnexpectedJoinGroupViaInviteResponse` (with `membershipApprovalMode` true) when the group answers the invite with a
- * request that an admin has to approve. Meta's `require` throws for a module a build does not define, and answers
- * `undefined` from a page.evaluate with no guard active; both are run. The client is the library's own, so on a build
- * that has the job its `acceptInvite` is what the old call ran.
+ * request that an admin has to approve. From a page.evaluate Meta's `require` answers `undefined` for a module the page
+ * has not defined, and throws only inside a guard or before the page's error setup has run; both are run. The client is
+ * the library's own, so on a build that has the job its `acceptInvite` is what the old call ran.
  */
 describe('joining a group by invite code on each WhatsApp Web layout', () => {
   const g = globalThis as unknown as { window?: unknown };

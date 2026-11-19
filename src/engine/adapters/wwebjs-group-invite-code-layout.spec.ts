@@ -13,10 +13,11 @@ const { GroupChat } = wwebjs as unknown as { GroupChat: new (client: unknown, da
  * the job the gateway runs whatsapp-web.js's own `getInviteCode`, which reads the same module without asking and dies on
  * its absence with a TypeError, so the route answered a bare 500 where the revoke answers 501. The page below is WhatsApp
  * Web as such a build has it, and the library's own `getInviteCode` runs against it, so the text of the failure is the
- * one V8 makes of the library's line. On build 2.3000.1055177075 `require` answers `undefined` for the module; Meta's
- * `require` throws `Requiring unknown module` for one a build does not define, and a build that kept the module may
- * have dropped the job from it. An error thrown in the page reaches the adapter as puppeteer hands it over: a plain
- * Error with the page's name and message.
+ * one V8 makes of the library's line. On build 2.3000.1055177075 `require` answers `undefined` for the module, as the
+ * loader of every build examined does from a page.evaluate (its error guard swallows the `ModuleError`); it throws that
+ * error, `Requiring unknown module "%s"`, only inside a guard or before the page's error setup has run, and a build that
+ * kept the module may have dropped the job from it. An error thrown in the page reaches the adapter as puppeteer hands it
+ * over: a plain Error with the page's name and message.
  */
 describe('reading the invite code of a group on each WhatsApp Web layout', () => {
   const GROUP = '120363000000000001@g.us';

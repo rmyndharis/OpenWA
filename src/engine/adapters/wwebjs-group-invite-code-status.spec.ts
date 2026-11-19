@@ -23,10 +23,15 @@ describe('the group invite code read, answered by the status WhatsApp gave', () 
   const rejection = (name: string, status?: number, message = 'refused') =>
     Object.assign(new Error(message), { name, ...(status === undefined ? {} : { status }) });
 
-  /** A page whose invite code job is `job`, or has none; the page function runs as it does there. */
+  /**
+   * A page whose invite code job is `job`, or has none; the page function runs as it does there. For a module the page
+   * has not defined its `require` throws, as before the page's error setup has run, or answers `undefined`, as it does
+   * from a page.evaluate on a booted page.
+   */
   const adapterOnPage = (
     modules: Record<string, unknown>,
     getInviteCode = jest.fn().mockResolvedValue('FROMLIBRARY'),
+    unknownModule: 'throws' | 'undefined' = 'throws',
   ) => {
     const chat = { id: { _serialized: GROUP }, isGroup: true, participants: [], groupMetadata: {}, getInviteCode };
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
@@ -38,7 +43,10 @@ describe('the group invite code read, answered by the status WhatsApp gave', () 
         evaluate: jest.fn((fn: typeof readInviteCodeInPage, arg: string) => {
           g.window = {
             require: (name: string) => {
-              if (!(name in modules)) throw new Error(`Requiring unknown module "${name}"`);
+              if (!(name in modules)) {
+                if (unknownModule === 'undefined') return undefined;
+                throw new Error(`Requiring unknown module "${name}"`);
+              }
               return modules[name];
             },
           };
@@ -126,11 +134,12 @@ describe('the group invite code read, answered by the status WhatsApp gave', () 
     await expect(adapter.getGroupInviteCode(GROUP)).rejects.toBe(failure);
   });
 
-  it.each([
-    ['a build that has no such module', {}],
-    ['a module without the job', { WAWebMexFetchGroupInviteCodeJob: {} }],
-  ])('runs the library call on %s', async (_name, modules) => {
-    const { adapter, getInviteCode } = adapterOnPage(modules);
+  it.each<[string, Record<string, unknown>, 'throws' | 'undefined']>([
+    ['a build that has no such module, where require throws', {}, 'throws'],
+    ['a build that has no such module, where require answers undefined', {}, 'undefined'],
+    ['a module without the job', { WAWebMexFetchGroupInviteCodeJob: {} }, 'throws'],
+  ])('runs the library call on %s', async (_name, modules, unknownModule) => {
+    const { adapter, getInviteCode } = adapterOnPage(modules, undefined, unknownModule);
 
     await expect(adapter.getGroupInviteCode(GROUP)).resolves.toBe('FROMLIBRARY');
 

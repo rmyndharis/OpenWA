@@ -11,10 +11,11 @@ import { PAGE_RELOADING_MESSAGE } from './wwebjs-lifecycle';
 /**
  * Whether the page's `WAWebContactStatusBridge` still exports `setMyStatus`, which `Client.setStatus` calls. The build
  * the gateway selects today exports only `queryStatusAll` and `sendReadStatus`: the About text is an expiring text
- * status there, set through modules the library does not call, so the call was a TypeError in the page. A module a
- * build does not define throws from `require`. A document with no `require` at all is a page that is reloading, not
- * a build without the setter, and that failure is let through (spelled as the library spells it, which is how the
- * reload is read).
+ * status there, set through modules the library does not call, so the call was a TypeError in the page. From a
+ * page.evaluate Meta's `require` answers `undefined` for a module the page has not defined, and throws only inside a
+ * guard or before the page's error setup has run, so the lookup tests the answer and guards the throw. A document with
+ * no `require` at all is a page that is reloading, not a build without the setter, and that failure is let through
+ * (spelled as the library spells it, which is how the reload is read).
  */
 export function readStatusSetterInPage(): boolean {
   type Bridge = { setMyStatus?: unknown } | undefined;

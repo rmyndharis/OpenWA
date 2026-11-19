@@ -110,8 +110,9 @@ describe('the in-page delete of a group picture', () => {
     await expect(deleteGroupPictureInPage(GROUP)).rejects.toThrow('status not a number');
   });
 
-  // A build that lacks the job or the id factory: Meta's `require` throws for a module it does not define, and answers
-  // `undefined` from a page.evaluate with no guard active. Nothing is sent either way.
+  // A build that lacks the job or the id factory: from a page.evaluate Meta's `require` answers `undefined` for a module
+  // the page has not defined, and throws only inside a guard or before the page's error setup has run. Nothing is sent
+  // either way.
   describe.each([
     ['the module is not defined (require throws)', (name: string) => ({ throws: name })],
     ['the module answers undefined', (name: string) => ({ answers: name })],
