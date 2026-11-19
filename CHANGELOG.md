@@ -149,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - List the local media store and the storage export archive in the at-rest table of the security design: plaintext files, owner-only (`0600` in `0700` directories).
 - Say in the MCP `SessionGetChats` and `MessageSearch` descriptions, the plugin guide, the `ChatSummary.name` comment, the typed SDKs and the PHP client that a Baileys privacy-id chat with no name of its own lists `name` "" and, when the session can map the id, a `phone` to show instead.
 - Say in the security design that a host other users can log in to should run the gateway with `TMPDIR` set to a directory only its user can enter, since the engine libraries stage the media of an upload in the temporary directory.
+- Say in the API reference that, while the database cannot be read, the chat match of a chat-restricted key falls back to the gateway's in-memory mappings, which do not see a mapping another gateway node has changed since.
 
 ### Dependencies
 
