@@ -9,6 +9,7 @@ import type { WebhookService } from '../webhook/webhook.service';
 import type { HookManager } from '../../core/hooks';
 import type { StatusStoreService } from '../status-store/status-store.service';
 import type { SessionLidResolver } from './session-lid-resolver.service';
+import { waitUntil } from '../../../test/helpers/wait-until';
 import type { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import type {
   DeliveryStatus,
@@ -22,6 +23,8 @@ import type {
 // the edit, revoke and reaction paths already refuse. Runs on SQLite, and on the postgres:16 service when
 // DATABASE_TYPE=postgres.
 describe('a delivery ack names the chat of the message it advances', () => {
+  // A wait for an advance is a deadline of thirty seconds, which is more than a test may take by default.
+  jest.setTimeout(60_000);
   const GROUP = '120363000000000001@g.us';
   const PEER = '15550001111@c.us';
   const OTHER = '15550002222@c.us';
@@ -33,7 +36,11 @@ describe('a delivery ack names the chat of the message it advances', () => {
   let dispatch: jest.Mock;
   let lidPhones: Map<string, string>;
 
+  // What must NOT happen is read after a pause that outlasts the one retry an ack gets; what must happen is waited for
+  // with `waitUntil`, since a PostgreSQL round trip takes as long as it takes.
   const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, ACK_RECONCILE_DELAY_MS + 250));
+  const advanced = (id: string, status: MessageStatus): Promise<void> =>
+    waitUntil(async () => (await statusOf(id)) === status);
   const statusOf = async (id: string): Promise<MessageStatus | undefined> =>
     (await repository.findOne({ where: { sessionId: 's1', waMessageId: id } }))?.status;
   const announced = (id: string): number =>
@@ -138,6 +145,7 @@ describe('a delivery ack names the chat of the message it advances', () => {
   it('still advances, and announces, the message when the receipt names its chat in another dialect', async () => {
     await seed('WA_SAME', PEER);
     ack('WA_SAME', 'read', '15550001111@s.whatsapp.net');
+    await advanced('WA_SAME', MessageStatus.READ);
     await settle();
     expect(await statusOf('WA_SAME')).toBe(MessageStatus.READ);
     expect(announced('WA_SAME')).toBe(1);
@@ -146,14 +154,14 @@ describe('a delivery ack names the chat of the message it advances', () => {
   it('still advances the message when the ack names no chat', async () => {
     await seed('WA_NOCHAT', PEER);
     ack('WA_NOCHAT', 'delivered');
-    await settle();
+    await advanced('WA_NOCHAT', MessageStatus.DELIVERED);
     expect(await statusOf('WA_NOCHAT')).toBe(MessageStatus.DELIVERED);
   });
 
   it('advances a phone-stored message for a lid receipt with no reported pairing', async () => {
     await seed('WA_LID_UNMAPPED', PEER);
     ack('WA_LID_UNMAPPED', 'read', PEER_LID);
-    await settle();
+    await advanced('WA_LID_UNMAPPED', MessageStatus.READ);
     expect(await statusOf('WA_LID_UNMAPPED')).toBe(MessageStatus.READ);
   });
 
@@ -163,6 +171,7 @@ describe('a delivery ack names the chat of the message it advances', () => {
     lidPhones.set('99990001111', '15550001111');
     ack('WA_LID_SAME', 'delivered', PEER_LID);
     ack('WA_LID_OTHER', 'delivered', PEER_LID);
+    await advanced('WA_LID_SAME', MessageStatus.DELIVERED);
     await settle();
     expect(await statusOf('WA_LID_SAME')).toBe(MessageStatus.DELIVERED);
     expect(await statusOf('WA_LID_OTHER')).toBe(MessageStatus.SENT);
@@ -171,7 +180,7 @@ describe('a delivery ack names the chat of the message it advances', () => {
   it('advances a message the account sent to a broadcast list for a recipient receipt', async () => {
     await seed('WA_LIST', '1700000000@broadcast');
     ack('WA_LIST', 'read', PEER);
-    await settle();
+    await advanced('WA_LIST', MessageStatus.READ);
     expect(await statusOf('WA_LIST')).toBe(MessageStatus.READ);
   });
 
@@ -181,6 +190,7 @@ describe('a delivery ack names the chat of the message it advances', () => {
     await new Promise(resolve => setTimeout(resolve, 100));
     await seed('WA_LATE_SAME', PEER);
     await seed('WA_LATE_OTHER', GROUP);
+    await advanced('WA_LATE_SAME', MessageStatus.DELIVERED);
     await settle();
     expect(await statusOf('WA_LATE_SAME')).toBe(MessageStatus.DELIVERED);
     expect(await statusOf('WA_LATE_OTHER')).toBe(MessageStatus.SENT);
@@ -203,6 +213,7 @@ describe('a delivery ack names the chat of the message it advances', () => {
     projector.handleOwnSendEcho('s1', engine, own('WA_INFLIGHT_PEER', PEER));
     ack('WA_INFLIGHT_GROUP', 'read', OTHER);
     ack('WA_INFLIGHT_PEER', 'read', PEER);
+    await advanced('WA_INFLIGHT_PEER', MessageStatus.READ);
     await settle();
     expect(await statusOf('WA_INFLIGHT_GROUP')).toBe(MessageStatus.SENT);
     expect(await statusOf('WA_INFLIGHT_PEER')).toBe(MessageStatus.READ);
