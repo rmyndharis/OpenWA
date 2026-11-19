@@ -797,6 +797,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     this.endStop(id, request);
   }
 
+  /** Another delete of the session than `request` is running here: its call has not returned. */
+  private otherDeleteRuns(id: string, request: StopRequest): boolean {
+    const others = [...(this.stopRequests.get(id)?.requests ?? [])];
+    return others.some(other => other !== request && other.kind === 'delete' && !other.ended);
+  }
+
   /**
    * Hold the session's claim for as long as the delete runs. A row nobody held, or one whose holder's
    * lease lapsed, could otherwise be claimed by a peer's start or takeover while its rows are removed,
@@ -814,6 +820,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     let claimed: boolean;
     try {
       claimed = await ownership.claim(id, onClaimed);
+      // Another delete of the session here may have replaced this claim and settled first, which reads as a miss though
+      // no other node holds the row. Ask again: the claim then renews the one that delete holds.
+      if (!claimed && this.otherDeleteRuns(id, request)) claimed = await ownership.claim(id, onClaimed);
     } catch (error) {
       this.dropStopMark(id, request);
       this.withdrawStop(request);
@@ -1058,6 +1067,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     let claimed: boolean;
     try {
       claimed = await ownership.claim(id);
+      // As for a delete: a start still running here may have replaced this claim and settled first.
+      if (!claimed && (this.startReservations.get(id) ?? 0) > 1) claimed = await ownership.claim(id);
     } catch (error) {
       this.logger.warn(`Could not claim session ${id} for the start; nothing was started`, {
         sessionId: id,

@@ -102,6 +102,62 @@ describe('SessionOwnershipService', () => {
     });
   });
 
+  // Two claims of one session overlap on a node when two requests for it arrive within a few milliseconds. The renewal
+  // the later one issues can run before the earlier claim's write, and its answer is then handled after that claim
+  // settled: it describes the row as it was, not as the earlier claim left it.
+  describe('two claims of one session that overlap on a node', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    /** Answer the first renewal after the test lets it, as the miss it would be had it run before the other claim. */
+    const missedRenewal = (): { answer: () => void } => {
+      let answer!: () => void;
+      const reply = new Promise<{ affected: number; raw: never[]; generatedMaps: never[] }>(resolve => {
+        answer = () => resolve({ affected: 0, raw: [], generatedMaps: [] });
+      });
+      jest.spyOn(sessions, 'update').mockImplementationOnce(() => reply);
+      return { answer };
+    };
+
+    it('keeps the claim the earlier one settled when the renewal of the later one missed', async () => {
+      const session = await seed();
+      const node = service('node-a');
+      const renewal = missedRenewal();
+      let earlierOwned: (() => boolean) | undefined;
+      let laterOwned: (() => boolean) | undefined;
+
+      const earlier = node.claim(session.id, owns => (earlierOwned = owns));
+      const later = node.claim(session.id, owns => (laterOwned = owns));
+      await expect(earlier).resolves.toBe(true);
+      renewal.answer();
+      await expect(later).resolves.toBe(true);
+
+      expect(earlierOwned!()).toBe(true);
+      expect(laterOwned!()).toBe(true);
+      expect(node.ownedIds()).toEqual([session.id]);
+      expect((await sessions.findOneByOrFail({ id: session.id })).nodeId).toBe('node-a');
+    });
+
+    it('refuses both when a live peer holds the session', async () => {
+      const session = await seed();
+      await service('node-b').claim(session.id);
+      const node = service('node-a');
+      const renewal = missedRenewal();
+      const owned = jest.fn();
+
+      const earlier = node.claim(session.id, owned);
+      const later = node.claim(session.id, owned);
+      await expect(earlier).resolves.toBe(false);
+      renewal.answer();
+      await expect(later).resolves.toBe(false);
+
+      expect(owned).not.toHaveBeenCalled();
+      expect(node.ownedIds()).toEqual([]);
+      expect((await sessions.findOneByOrFail({ id: session.id })).nodeId).toBe('node-b');
+    });
+  });
+
   // What a node whose lease lapsed left unfinished (its bulk batches) is failed once this process takes
   // the session over, by claiming it or by releasing that node's claim.
   describe('taking a session over from a lapsed node', () => {

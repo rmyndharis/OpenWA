@@ -4044,6 +4044,41 @@ describe('requests for one session that overlap on a single node', () => {
       for (const one of answers) if (one instanceof Error) expect(one).toBeInstanceOf(BadRequestException);
     });
 
+    // The later claim settled before the reply of the earlier one, and the later start is still launching its engine.
+    it('answers the earlier of two starts as the later one when the later claim settled first', async () => {
+      const { service, factory, engines } = stack({ adoptionHandler: true });
+      const row = await seed();
+      const held = holdClaims(2);
+      const launching = deferred();
+      factory.create.mockImplementationOnce(() => {
+        const engine = {
+          initialize: jest.fn(() => launching.promise),
+          destroy: jest.fn().mockResolvedValue(undefined),
+          forceDestroy: jest.fn().mockResolvedValue(undefined),
+          disconnect: jest.fn().mockResolvedValue(undefined),
+          logout: jest.fn().mockResolvedValue(undefined),
+        };
+        engines.push(engine);
+        return engine;
+      });
+
+      const first = answer(service.start(row.id));
+      await until(() => held.begun() === 1);
+      const second = answer(service.start(row.id));
+      await until(() => held.begun() === 2);
+      held.holds[1].free();
+      await until(() => engines.length === 1 && engines[0].initialize.mock.calls.length === 1);
+      held.holds[0].free();
+      const earlier = await first;
+      launching.resolve();
+      const answers = [earlier, await second];
+
+      expect(kinds(answers).filter(kind => kind === 'ConflictException')).toEqual([]);
+      expect(engines).toHaveLength(1);
+      expect(kinds(answers)).toContain('done');
+      for (const one of answers) if (one instanceof Error) expect(one).toBeInstanceOf(BadRequestException);
+    });
+
     it('answers the earlier of two deletes as the later one, never as a claim by another node', async () => {
       const { service, lifecycle } = stack({ adoptionHandler: true });
       const row = await seed();
@@ -4055,6 +4090,130 @@ describe('requests for one session that overlap on a single node', () => {
       for (const one of answers) if (one instanceof Error) expect(one).toBeInstanceOf(NotFoundException);
       expect(await sessions.countBy({ id: row.id })).toBe(0);
       expect(leftoversOf(service, lifecycle, row.id)).toEqual({ stopMark: false, stopRequest: false });
+    });
+
+    /** Release each session:deleted hook as its delete reaches it, until the answers are in. */
+    async function releaseHooks(heldHooks: Array<{ release: () => void }>, answers: Promise<unknown[]>) {
+      let released = 0;
+      let settled = false;
+      const settle = (): void => {
+        settled = true;
+      };
+      void answers.then(settle, settle);
+      await until(() => {
+        while (released < heldHooks.length) heldHooks[released++].release();
+        return settled;
+      });
+      return answers;
+    }
+
+    // One delete removed the row and the other answers what a request a moment later gets: 404, never a claim by
+    // another node. The second delete met the claim it lost while the first, parked at its hook, still held the row.
+    const expectOneDeletedAndOneNotFound = async (
+      answers: unknown[],
+      { service, lifecycle }: Pick<ReturnType<typeof stack>, 'service' | 'lifecycle'>,
+      id: string,
+    ): Promise<void> => {
+      expect(kinds(answers).filter(kind => kind === 'ConflictException')).toEqual([]);
+      expect(kinds(answers).sort()).toEqual(['NotFoundException', 'done']);
+      expect(await sessions.countBy({ id })).toBe(0);
+      expect(leftoversOf(service, lifecycle, id)).toEqual({ stopMark: false, stopRequest: false });
+    };
+
+    // The renewal the later claim issues while the earlier one is in flight can run before that claim's write and miss.
+    // Its answer is handled after the earlier claim settled, and must not replace the claim the earlier delete holds.
+    it('answers the earlier of two deletes as the later one when the renewal of the later claim missed', async () => {
+      const stacked = stack({ adoptionHandler: true, holdDeleteHook: true });
+      const { service, heldHooks } = stacked;
+      const row = await seed();
+      const held = holdClaims(2);
+      const issued = deferred();
+      const answerMiss = deferred();
+      let missed = false;
+      const update = sessions.update.bind(sessions);
+      jest.spyOn(sessions, 'update').mockImplementation(((criteria: never, partial: never) => {
+        if (missed || Object.keys(partial).join() !== 'leaseExpiresAt') return update(criteria, partial);
+        missed = true;
+        issued.resolve();
+        return answerMiss.promise.then(() => ({ affected: 0, raw: [], generatedMaps: [] }));
+      }) as never);
+
+      const first = answer(service.delete(row.id));
+      await until(() => held.begun() === 1);
+      const second = answer(service.delete(row.id));
+      await issued.promise;
+      held.holds[0].free();
+      await until(() => held.begun() === 2);
+      answerMiss.resolve();
+      await until(() => heldHooks.length === 1);
+      held.holds[1].free();
+      const answers = await releaseHooks(heldHooks, Promise.all([first, second]));
+
+      await expectOneDeletedAndOneNotFound(answers, stacked, row.id);
+    });
+
+    // The later claim settled before the reply of the earlier one, which is then a claim superseded by one that is
+    // already over. Nothing but this node holds the row, and the other delete is parked at its hook.
+    it('answers the earlier of two deletes as the later one when the later claim settled first', async () => {
+      const stacked = stack({ adoptionHandler: true, holdDeleteHook: true });
+      const { service, heldHooks } = stacked;
+      const row = await seed();
+      const held = holdClaims(2);
+
+      const first = answer(service.delete(row.id));
+      await until(() => held.begun() === 1);
+      const second = answer(service.delete(row.id));
+      await until(() => held.begun() === 2);
+      held.holds[1].free();
+      await until(() => heldHooks.length === 1);
+      held.holds[0].free();
+      const answers = await releaseHooks(heldHooks, Promise.all([first, second]));
+
+      await expectOneDeletedAndOneNotFound(answers, stacked, row.id);
+    });
+
+    // The delete that holds the claim fails at its hook before it removed the row. No other delete runs beside the
+    // earlier one any more, so it keeps the conflict it had for a row that is still there; a repeat then succeeds.
+    it('keeps the conflict of the earlier delete when the later one failed before it removed the row', async () => {
+      const { service, heldHooks } = stack({ adoptionHandler: true, holdDeleteHook: true });
+      const row = await seed();
+      const held = holdClaims(2);
+
+      const first = answer(service.delete(row.id));
+      await until(() => held.begun() === 1);
+      const second = answer(service.delete(row.id));
+      await until(() => held.begun() === 2);
+      held.holds[1].free();
+      await until(() => heldHooks.length === 1);
+      heldHooks[0].fail(new Error('hook failed'));
+      expect(await second).toEqual(new Error('hook failed'));
+      held.holds[0].free();
+      const earlier = await first;
+
+      expect(earlier).toBeInstanceOf(ConflictException);
+      expect(await sessions.countBy({ id: row.id })).toBe(1);
+      const again = service.delete(row.id);
+      await until(() => heldHooks.length === 2);
+      heldHooks[1].release();
+      await expect(again).resolves.toBeUndefined();
+      expect(await sessions.countBy({ id: row.id })).toBe(0);
+    });
+
+    it('still answers both deletes with a conflict when a live peer took the session after the check', async () => {
+      const { service, ownership } = stack({ adoptionHandler: true });
+      const row = await seed();
+      await claimedByPeer(row.id);
+      jest.spyOn(ownership, 'isHeldByOtherNode').mockResolvedValue(false);
+
+      const answers = await Promise.all([answer(service.delete(row.id)), answer(service.delete(row.id))]);
+
+      expect(answers).toHaveLength(2);
+      for (const one of answers) {
+        expect(one).toBeInstanceOf(ConflictException);
+        expect((one as Error).message).toContain('running on another node');
+      }
+      expect(await sessions.countBy({ id: row.id })).toBe(1);
+      expect((await sessions.findOneByOrFail({ id: row.id })).nodeId).toBe('node-b');
     });
 
     it('still answers both with a conflict when a live peer holds the session', async () => {
