@@ -19554,6 +19554,7 @@
           },
           "name": {
             "type": "string",
+            "description": "The chat's name, an empty string for a Baileys chat held under a privacy id (@lid) that has no saved name or push name, which a client titles by `phone`.",
             "example": "Alice"
           },
           "phone": {
