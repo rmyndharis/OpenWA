@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { type Client } from 'whatsapp-web.js';
 import {
   Group,
@@ -122,6 +123,43 @@ export async function readInviteCodeInPage(chatId: string): Promise<{ status: nu
     const refusal = err as { name?: unknown; status?: unknown } | undefined;
     if (typeof refusal?.name === 'string' && refusal.name.endsWith('ServerStatusCodeError')) {
       return { status: typeof refusal.status === 'number' ? refusal.status : 403 };
+    }
+    throw err;
+  }
+}
+
+/**
+ * The join of the library's own `acceptInvite`, run IN-PAGE: `joinGroupViaInvite` of `WAWebGroupInviteJob`, called with
+ * the invite code alone, as the library calls it, and read the way the library reads it (`res.gid._serialized ||
+ * res.gid.$1`). The library does not look the job up, so on a build that has none it died in the page with a TypeError,
+ * which the adapter read as a refused invite: the caller was told a valid link was bad. A build with no such job answers
+ * `'missing'` before anything was asked of WhatsApp. A document with no `require` at all is a page that is reloading, not
+ * a build without the job, and that failure is let through.
+ *
+ * The job answers a group that lets an admin approve new members with a membership request instead of a join, which
+ * its response parser reads as an unexpected response (`UnexpectedJoinGroupViaInviteResponse`, with
+ * `membershipApprovalMode` true when the response held the request): the invite was accepted as a request, and the
+ * account has not joined. Puppeteer hands a page error over without its properties, so that is told apart here.
+ * Any other rejection is rethrown.
+ */
+export async function joinInviteInPage(inviteCode: string): Promise<{ gid?: string; requested?: true } | 'missing'> {
+  type Wid = { _serialized?: string; $1?: string };
+  type JoinJob = { joinGroupViaInvite: (code: string) => Promise<{ gid?: Wid } | undefined> };
+  const w = window as unknown as { require: (m: string) => unknown };
+  let job: Partial<JoinJob> | undefined;
+  try {
+    job = w.require('WAWebGroupInviteJob') as Partial<JoinJob> | undefined;
+  } catch (err) {
+    if (typeof w.require !== 'function') throw err;
+  }
+  if (typeof job?.joinGroupViaInvite !== 'function') return 'missing';
+  try {
+    const res = await job.joinGroupViaInvite(inviteCode);
+    return { gid: res?.gid?._serialized || res?.gid?.$1 };
+  } catch (err) {
+    const failure = err as { name?: unknown; membershipApprovalMode?: unknown } | undefined;
+    if (failure?.name === 'UnexpectedJoinGroupViaInviteResponse' && failure.membershipApprovalMode === true) {
+      return { requested: true };
     }
     throw err;
   }
@@ -697,13 +735,12 @@ export class WwebjsGroups {
 
   async joinGroupViaInviteCode(inviteCode: string): Promise<string> {
     this.host.ensureReady();
-    // acceptInvite throws a page-side evaluation error when the invite is refused (invalid/expired/
-    // revoked); otherwise it resolves the joined group's id (`res.gid._serialized || res.gid.$1`,
-    // Client.js:1836-1845) — already the neutral `<id>@g.us` dialect. A gid-less result is the same
-    // client-facing outcome as a thrown refusal: no such invite (400, not a 500).
-    let groupId: string | undefined;
+    // The job answers a refused invite (invalid/expired/revoked) by rejecting page-side, and otherwise resolves the joined
+    // group's id (`res.gid._serialized || res.gid.$1`) - already the neutral `<id>@g.us` dialect. A gid-less result is
+    // the same client-facing outcome as a thrown refusal: no such invite (400, not a 500).
+    let answer: Awaited<ReturnType<typeof joinInviteInPage>> | undefined;
     try {
-      groupId = await this.client().acceptInvite(inviteCode);
+      answer = await this.page().evaluate(joinInviteInPage, inviteCode);
     } catch (error) {
       // A refused invite and a broken page both land here, and only the first is the caller's
       // fault. A transport death must not be reported as "invalid invite" (400): report the death
@@ -722,8 +759,18 @@ export class WwebjsGroups {
         throw new EngineTransportError('WhatsApp Web reloaded its page during the group invite acceptance');
       }
       this.host.logger.warn(`Failed to accept group invite: ${String(error)}`);
-      groupId = undefined;
     }
+    // A build with no job to join with: nothing was asked of WhatsApp, so this is no refused invite and no failure.
+    if (answer === 'missing') {
+      throw new EngineNotSupportedError('joinGroupViaInviteCode(no join job on this build)');
+    }
+    // The group has an admin approve new members: WhatsApp took the invite as a request to join, so the invite is good.
+    if (answer?.requested) {
+      throw new BadRequestException(
+        'could not join the group: it needs an admin to approve new members, and a request to join was sent',
+      );
+    }
+    const groupId = answer?.gid;
     if (!groupId) {
       throw new InvalidInviteCodeError();
     }

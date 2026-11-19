@@ -84,7 +84,7 @@ Key adapter facts:
   construction fails the gate outside the one `unsupported()` helper body, as does a literal that
   names no interface method), and a refusal
   that fires only under a runtime condition - `sendTextMessage` with `customPreview` on whatsapp-web.js, or
-  `revokeGroupInviteCode`, `getGroupInviteCode` and `setProfileStatus` on a WhatsApp Web build that lacks the call each one makes - is
+  `revokeGroupInviteCode`, `getGroupInviteCode`, `joinGroupViaInviteCode`, `pinMessage`, `unpinMessage` and `setProfileStatus` on a WhatsApp Web build that lacks the call each one makes - is
   pinned in the gate's conditional list instead of flipping the cell, because 'supported with a refused option'
   is not 'not-available'.
 - **Inbound events** flow the other way: each adapter normalizes library events into the neutral
@@ -718,7 +718,7 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 
 | Library method                   | OpenWA exposure                     |
 | -------------------------------- | ----------------------------------- |
-| `acceptInvite`                   | ✅ `joinGroupViaInviteCode`         |
+| `acceptInvite`                   | ❌ **not exposed** (run in-page)    |
 | `approveGroupMembershipRequests` | ✅ `approveGroupMembershipRequests` |
 | `createGroup`                    | ❌ not-available (29.6.2)           |
 | `getCommonGroups`                | ❌ **not exposed**                  |
@@ -1209,6 +1209,14 @@ adapter boundary — none silently stubs.
   page with no such job runs the library's own `getInviteCode`, which reads the same module, so where that call fails
   for want of the job (the module answers `undefined`, lacks the call, or is not defined) the answer is `501`, before
   anything is asked of WhatsApp, where it was a bare `500`. A reload during the read is the retryable `409`.
+- **`joinGroupViaInviteCode` (wwjs) needs a WhatsApp Web build that has the join job.** The adapter runs
+  `joinGroupViaInvite` of `WAWebGroupInviteJob` in the page, calling it with the invite code alone as
+  `Client.acceptInvite` does, and answers `501` where the build has no such job, before anything is asked of WhatsApp. The
+  library's own call died in the page there, which the adapter read as a refused invite and answered `400`, so a valid
+  link was reported as bad. A refused invite is still the `400`. A group that has an admin approve new members answers the
+  join with a request, which the job reports as an unexpected response: the adapter tells it apart in the page and says
+  that a request to join was sent and the account has not joined, still as a `400`, where it said the invite was
+  invalid. Baileys reads the same answer as no group id, so it still answers the invalid-invite text.
 - **`pinMessage` / `unpinMessage` (wwjs) need a WhatsApp Web build whose pin sender the adapter can call.** whatsapp-web.js
   calls `sendPinInChatMsg` of `WAWebSendPinMessageAction` with three positional arguments, which the builds up to
   `2.3000.1050403604` (15 October 2026) declare; the later builds checked (from `2.3000.1052565782`, 1 November, to the
@@ -1266,8 +1274,8 @@ adapter sources — re-derive the same way when anything changes:
   (`probeLiveness`, `getPhoneNumber`, `getPushName`, `checkNumberExists`) are ⚙️ internal and have no route.
 - Full engine inventory (29.5), split by the exposure legend rather than lumped: Baileys **152**
   socket methods — 50 wired into interface methods, 5 internal wiring, 29 plumbing, **68 ❌ not
-  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 42 wired,
-  4 internal wiring, 1 class plumbing, **34 ❌ not exposed** (26 real capabilities + 8
+  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 41 wired,
+  4 internal wiring, 1 class plumbing, **35 ❌ not exposed** (27 real capabilities + 8
   session/transport settings that are not WhatsApp capabilities). The backlog is the ❌ rows minus
   those 8 settings; 🔩 plumbing is correctly never exposed.
 - Events: Baileys **34** (18 consumed / 16 dropped), wwjs **31** (18 consumed / 13 dropped).

@@ -196,7 +196,12 @@ export class GroupController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiBody({ type: JoinGroupDto })
   @ApiResponse({ status: 200, description: 'Joined the group', type: GroupJoinedResponseDto })
-  @ApiResponse({ status: 400, description: 'Invalid or expired invite code, or session is not started' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Invalid or expired invite code, or session is not started. Also answered when the group has an admin approve ' +
+      'new members: the invite is good and a request to join was sent, but the account has not joined.',
+  })
   @ApiResponse({
     status: 503,
     description:
@@ -205,6 +210,12 @@ export class GroupController {
       THROTTLED_503,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({
+    status: 501,
+    description:
+      'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to join a group with. ' +
+      'Nothing was asked of WhatsApp: the invite code is not judged.',
+  })
   async join(@Param('sessionId') sessionId: string, @Body() dto: JoinGroupDto) {
     const groupId = await this.groupService.joinGroupViaInviteCode(sessionId, dto.inviteCode);
     return { success: true, groupId };

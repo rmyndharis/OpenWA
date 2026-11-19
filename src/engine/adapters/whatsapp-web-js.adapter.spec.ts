@@ -1,7 +1,7 @@
 import { Client, MessageMedia, WAState } from 'whatsapp-web.js';
 import { EventEmitter } from 'events';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
-import { extractLinkedParentJID } from './wwebjs-groups';
+import { extractLinkedParentJID, joinInviteInPage } from './wwebjs-groups';
 import {
   downloadMediaInPage,
   isHttpUrl,
@@ -8120,8 +8120,8 @@ describe('WhatsAppWebJsAdapter page transport error detection (wedged page fast-
   // conflated with a dead page at that call site). The dead page still has to reach the liveness
   // path rather than being reported purely as the caller's bad invite code.
   it('detects a transport error during joinGroupViaInviteCode (a 503 to the caller)', async () => {
-    const acceptInvite = jest.fn().mockRejectedValue(new Error('Protocol error: Target closed'));
-    const { adapter, onDisconnected } = readyAdapter({ acceptInvite });
+    const evaluate = jest.fn().mockRejectedValue(new Error('Protocol error: Target closed'));
+    const { adapter, onDisconnected } = readyAdapter({ pupPage: { evaluate } });
 
     await expect(adapter.joinGroupViaInviteCode('CODE123')).rejects.toBeInstanceOf(EngineTransportError);
 
@@ -8131,8 +8131,8 @@ describe('WhatsAppWebJsAdapter page transport error detection (wedged page fast-
   });
 
   it('does not report an ordinary refused invite as a disconnect', async () => {
-    const acceptInvite = jest.fn().mockRejectedValue(new Error('Evaluation failed: invite revoked'));
-    const { adapter, onDisconnected } = readyAdapter({ acceptInvite });
+    const evaluate = jest.fn().mockRejectedValue(new Error('Evaluation failed: invite revoked'));
+    const { adapter, onDisconnected } = readyAdapter({ pupPage: { evaluate } });
 
     await expect(adapter.joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(InvalidInviteCodeError);
 
@@ -8161,22 +8161,24 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
   };
 
   describe('joinGroupViaInviteCode', () => {
-    it('returns the joined group id from acceptInvite', async () => {
-      const acceptInvite = jest.fn().mockResolvedValue('120363000@g.us');
-      await expect(readyAdapter({ acceptInvite }).joinGroupViaInviteCode('CODE123')).resolves.toBe('120363000@g.us');
-      expect(acceptInvite).toHaveBeenCalledWith('CODE123');
+    it('returns the joined group id the join job answers', async () => {
+      const evaluate = jest.fn().mockResolvedValue({ gid: '120363000@g.us' });
+      await expect(readyAdapter({ pupPage: { evaluate } }).joinGroupViaInviteCode('CODE123')).resolves.toBe(
+        '120363000@g.us',
+      );
+      expect(evaluate).toHaveBeenCalledWith(joinInviteInPage, 'CODE123');
     });
 
     it('maps a thrown page error to InvalidInviteCodeError (400)', async () => {
-      const acceptInvite = jest.fn().mockRejectedValue(new Error('Evaluation failed: invite revoked'));
-      await expect(readyAdapter({ acceptInvite }).joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(
+      const evaluate = jest.fn().mockRejectedValue(new Error('Evaluation failed: invite revoked'));
+      await expect(readyAdapter({ pupPage: { evaluate } }).joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(
         InvalidInviteCodeError,
       );
     });
 
     it('maps a gid-less result to InvalidInviteCodeError (400)', async () => {
-      const acceptInvite = jest.fn().mockResolvedValue(undefined);
-      await expect(readyAdapter({ acceptInvite }).joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(
+      const evaluate = jest.fn().mockResolvedValue({});
+      await expect(readyAdapter({ pupPage: { evaluate } }).joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(
         InvalidInviteCodeError,
       );
     });
@@ -8724,7 +8726,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
     });
 
     it('joinGroupViaInviteCode answers EngineTransportError (503) on a dead page — not 400', async () => {
-      const adapter = readyAdapter({ acceptInvite: jest.fn().mockRejectedValue(transportError()) });
+      const adapter = readyAdapter({ pupPage: { evaluate: jest.fn().mockRejectedValue(transportError()) } });
       await expect(adapter.joinGroupViaInviteCode('CODE123')).rejects.toBeInstanceOf(EngineTransportError);
     });
 
@@ -8807,7 +8809,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
 
     it('joinGroupViaInviteCode still maps a refused invite to InvalidInviteCodeError (400)', async () => {
       const adapter = readyAdapter({
-        acceptInvite: jest.fn().mockRejectedValue(new Error('Evaluation failed: Error: 404')),
+        pupPage: { evaluate: jest.fn().mockRejectedValue(new Error('Evaluation failed: Error: 404')) },
       });
       await expect(adapter.joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(InvalidInviteCodeError);
     });

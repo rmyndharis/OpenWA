@@ -212,10 +212,16 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
   const CHAT = '628@c.us';
   const chats = (host: WwebjsEngineHost): WwebjsChats => new WwebjsChats(host, {} as WwebjsMessaging);
 
+  /** A client whose call `method` rejects: a method of the library, or the page itself for a call run in the page. */
+  const rejecting = (method: string, error: Error): Record<string, jest.Mock> =>
+    (method === 'pupPage.evaluate'
+      ? { pupPage: { evaluate: jest.fn().mockRejectedValue(error) } }
+      : { [method]: jest.fn().mockRejectedValue(error) }) as unknown as Record<string, jest.Mock>;
+
   const OPS: Record<string, [string, (host: WwebjsEngineHost) => Promise<unknown>]> = {
     getGroupInfo: ['getChatById', host => new WwebjsGroups(host).getGroupInfo('120363@g.us')],
     getGroupJoinInfo: ['getInviteInfo', host => new WwebjsGroups(host).getGroupJoinInfo('AbCdEf')],
-    joinGroupViaInviteCode: ['acceptInvite', host => new WwebjsGroups(host).joinGroupViaInviteCode('AbCdEf')],
+    joinGroupViaInviteCode: ['pupPage.evaluate', host => new WwebjsGroups(host).joinGroupViaInviteCode('AbCdEf')],
     getChatsByLabel: ['getChatsByLabelId', host => new WwebjsLabels(host).getChatsByLabel('7')],
     getContactById: ['getContactById', host => new WwebjsContacts(host).getContactById('628@c.us')],
     upsertContact: ['saveOrEditAddressbookContact', host => new WwebjsContacts(host).upsertContact('628@c.us', 'Ada')],
@@ -233,7 +239,7 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
   it.each(Object.keys(OPS))('%s answers an expired protocolTimeout with a 503 and reports no death', async op => {
     const [method, call] = OPS[op];
     const timeout = new Error(await puppeteerProtocolTimeoutMessage());
-    const { host, reportIfPageTransportError } = makeHost({ [method]: jest.fn().mockRejectedValue(timeout) });
+    const { host, reportIfPageTransportError } = makeHost(rejecting(method, timeout));
 
     await expect(call(host)).rejects.toBeInstanceOf(EngineTransportError);
     expect(reportIfPageTransportError).not.toHaveBeenCalled();
@@ -289,7 +295,7 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
     ['deleteChat', false],
   ])('%s keeps its verdict for an ordinary refusal', async (op, verdict) => {
     const [method, call] = OPS[op];
-    const { host } = makeHost({ [method]: jest.fn().mockRejectedValue(new Error('Evaluation failed: not found')) });
+    const { host } = makeHost(rejecting(method, new Error('Evaluation failed: not found')));
 
     if (typeof verdict === 'function') {
       await expect(call(host)).rejects.toBeInstanceOf(verdict);
