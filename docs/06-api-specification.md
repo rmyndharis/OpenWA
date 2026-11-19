@@ -163,6 +163,8 @@ Provide `url` or `base64`; when both are given, `base64` is used. Omitting both,
 
 A `url` is not followed through a redirect: one that answers `3xx` is refused with `400` and `Destination address is not allowed`, the text a blocked address gets, so send the address the redirect leads to (`SSRF_ALLOWED_HOSTS` does not lift it). The same holds for the `url` of a status post, a group or profile picture and a media conversion.
 
+A send by `url` holds the whole body in memory, about twice its size at the peak, until the engine has taken it. Only the per-key rate limit bounds how many run at once, so size the container memory for the number of large sends you run in parallel.
+
 A document sent without a `filename` is delivered under the default name `file` — on the whatsapp-web.js engine, a URL-based send first derives the URL basename before that fallback applies.
 
 ```json
@@ -1041,7 +1043,7 @@ Mark a chat as read/seen.
 
 Baileys acknowledges individual messages rather than chats, and the receipt enumerates ids instead of carrying a read-up-to watermark. Without `messageIds` only the newest received message gets a receipt: the one the engine holds in memory, else, for a session restarted since it arrived, the newest received message the gateway stored. A burst therefore leaves its earlier messages unread. Each supplied id is resolved through the message store, which is what carries the `participant` a group receipt needs. An id the store never held (history backfill) in a group takes its `participant` from the author the gateway stored for that message; one with no stored author is left out of the receipt, and the route answers `{ "success": false }` when none of the ids could be named. Under `STORE_EPHEMERAL_MESSAGES=false` neither the store nor the gateway keeps a message received in a disappearing-messages chat, so in a group such an id is left out of the receipt. Ignored by whatsapp-web.js, whose own `sendSeen` is chat-level.
 
-Once a receipt that names the chat's newest received message has gone out, Baileys sets the chat's `unreadCount` back to `0` in `GET /api/sessions/:sessionId/chats`: the engine reports the chat unread with each message received, and no receipt lowers that. Nothing more is sent for it. The value is what the engine last reported for the chat, an increment and not a running total, so a chat whose unread messages arrived one at a time is listed with `1`. A contact's encrypted edit or reaction, a pin, an album header or an event RSVP, each of which the engine counts as a received message, does not raise the count when it arrives on its own. The engine merges what arrives in one batch, as after a reconnect: an unread mark set on the phone just before such a message is folded into that message's count there, so the chat is then not listed as unread (the mark stays on the account). A read whose `messageIds` name only older messages, or only the account's own, leaves the count as it is, and so does a read a newer message overtook, whether the session has recorded that message or is still processing it. A chat marked unread by hand, through `POST /api/sessions/:sessionId/chats/unread` or on the phone, is listed with `unreadCount` `-1` and takes a second write that undoes the mark in the account's app state, keyed to the newest message the chat holds (the newest received one when the session has none in memory) and not sent when the session knows none. A message received after the mark lists the chat with its count in place of `-1`; the mark is still on the account, and the read that covers that message undoes it too, provided the session had listed the mark: a mark and a message that the engine delivers in one batch, as after a reconnect, reach it as the message's count alone, and the mark then stays on the account. That write does not change the answer: when WhatsApp refuses it or does not confirm it within the request budget, a warning is logged, the route still answers for the receipt, and the chat is listed with `-1` again. A write confirmed only after that budget sets the count to `0`, including that of a message received in the meantime.
+Once a receipt that names the chat's newest received message has gone out, Baileys sets the chat's `unreadCount` back to `0` in `GET /api/sessions/:sessionId/chats`: the engine reports the chat unread with each message received, and no receipt lowers that. Nothing more is sent for it. The value is what the engine last reported for the chat, an increment and not a running total, so a chat whose unread messages arrived one at a time is listed with `1`. A contact's encrypted edit or reaction, a pin, a keep-in-chat toggle, an album header, an event RSVP or an encrypted comment, each of which the engine counts as a received message, does not raise the count when it arrives on its own, and does not bring back a chat deleted on WhatsApp, as a message of its own does. Such a message that arrives while the engine holds a history chunk of the chat (a new link's first sync or a history fetch) or an upsert of it is merged into that chunk. When the chunk then counts only that message (a count of one), it neither becomes the chat's last message or its time nor brings back a deleted chat, but the count the engine adds for it stays in the chunk's, so the chat can be listed with one unread message more than it holds; a chunk that held a count of its own, or that a text was merged into as well, counts more and is left as the engine hands it over, so the message can still date the chat and bring back a deleted one. The engine merges what arrives in one batch, as after a reconnect: an unread mark set on the phone just before such a message is folded into that message's count there, so the chat is then not listed as unread (the mark stays on the account). A read whose `messageIds` name only older messages, or only the account's own, leaves the count as it is, and so does a read a newer message overtook, whether the session has recorded that message or is still processing it. A chat marked unread by hand, through `POST /api/sessions/:sessionId/chats/unread` or on the phone, is listed with `unreadCount` `-1` and takes a second write that undoes the mark in the account's app state, keyed to the newest message the chat holds (the newest received one when the session has none in memory) and not sent when the session knows none. A message received after the mark lists the chat with its count in place of `-1`; the mark is still on the account, and the read that covers that message undoes it too, provided the session had listed the mark: a mark and a message that the engine delivers in one batch, as after a reconnect, reach it as the message's count alone, and the mark then stays on the account. That write does not change the answer: when WhatsApp refuses it or does not confirm it within the request budget, a warning is logged, the route still answers for the receipt, and the chat is listed with `-1` again. A write confirmed only after that budget sets the count to `0`, including that of a message received in the meantime. A write confirmed in time keeps that count; a read made on the phone while the event buffer still holds the write's own replay (a tenth of a second, longer while other work keeps the buffer open) is taken for that replay and leaves the count of the message it read listed until the next read.
 
 ```json
 { "chatId": "1234567890@c.us", "messageIds": ["3EB0C767D26B8A3F1A2B", "3EB0C767D26B8A3F1A2C"] }
@@ -1350,6 +1352,8 @@ The delete holds its claim while it runs. Each destructive batch and the final t
 
 The delete first removes the session's messages, webhook outbox rows and webhook delivery-failure records in batches (on SQLite up to 2000 rows, each sized to about 150 ms; 500 rows on PostgreSQL) that are not atomic with the rest: a failure part-way (a database error, a timeout, a restart), while the delete still owns its claim, leaves the session in place with fewer rows and stopped, as `POST /stop` leaves it, and repeating the delete finishes it. It then removes, in one transaction, the session's message batches, chat states, received statuses, webhooks, templates, stored Baileys messages, automation rules, integration dead-letter rows and send idempotency claims together with the session itself, then purges its on-disk auth data. It keeps the audit log, the LID mappings, and the integration conversation mappings (so a re-paired session keeps its provider conversations); ingress dedup rows age out on their own after `INGRESS_DEDUP_RETENTION_DAYS` (default 7).
 
+The delete removes no file from the media store. The session's received-status media (`statuses/<sessionId>/`) and archived chat media (`chat-media/<sessionId>/`) stay on the local disk or in the S3 bucket until the orphan sweeps remove them; the rows that pointed to them are gone, so no message or status media route serves them. A sweep deletes a file once it has found it unreferenced for the grace window (`STATUS_ORPHAN_GRACE_MS` and `CHAT_MEDIA_ORPHAN_GRACE_MS`, 1 hour by default) and runs hourly by default (`STATUS_ORPHAN_SWEEP_INTERVAL_MS` and `CHAT_MEDIA_ORPHAN_SWEEP_INTERVAL_MS`), so with the defaults the files go one to two hours after the delete, three at most when a pass falls just short of the grace window, and later when the gateway restarts in between, since the time a sweep first saw a file is kept in memory. A pass tracks at most 100000 unreferenced files, so a session with more than 200000 stored files takes one more sweep for each further 100000.
+
 An auth directory that is a symbolic link (a profile relocated onto another volume) is removed as a link only: what it points to stays in place, with any WhatsApp login stored there, and a warning in the log names it (`action=engine_purge_link`). Remove that directory by hand to destroy the login.
 
 **Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session, or key role below OPERATOR · `404` session not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; on a `409` the row is **not** deleted and no hook/auth-purge runs — retry after cleanup settles), or, on a multi-node deployment, another node currently holds this session's live engine (no `code`; nothing is deleted; send the delete to the owning node), or ownership changed during removal (earlier batches may already be removed) · `503` the session could not be read, checked or claimed for the delete because the database did not answer (nothing is deleted; retry), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed; retry)
@@ -1510,7 +1514,7 @@ Each item may also include `isStatusBroadcast`, `mentionedIds`, `isLidSender`, `
 
 Entries WhatsApp Web keeps in a chat that nobody sent are left out: its security, business and group notices, the header of an album (its photos and videos are entries of their own), and anything of a kind whatsapp-web.js does not list that carries neither text nor media. A message deleted for everyone is returned as `revoked` under the id the message had, so it matches the stored row and the `message.revoked` event. The delete notice that names the original can write a person's chat, or in a group the author, by phone number where the stored row has the lid, so the id is returned in the form its stored row has (a row stored while the chat was still known by phone number keeps that form). It is returned as the notice names it when no row is stored, or when the gateway holds no reported pairing between the form the notice uses and the form the row has (a message the account sent and deleted in a group is also tried under the account's own id): that a lid and a phone number are one person is learned from the engine, never guessed. WhatsApp Web itself lists the entry under the id of the delete notice, and that id is returned only when the notice does not name the original.
 
-**Errors:** `400` session not active · `401` missing/invalid API key · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
+**Errors:** `400` session not active · `401` missing/invalid API key · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read, or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### GET /api/sessions/:sessionId/messages/:chatId/:messageId/reactions
 
@@ -1539,7 +1543,7 @@ Returns a bare array of `MessageReaction`:
 ]
 ```
 
-**Errors:** `400` session not active · `401` missing/invalid API key · `404` message not found in the chat (whatsapp-web.js) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
+**Errors:** `400` session not active · `401` missing/invalid API key · `404` message not found in the chat (whatsapp-web.js) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read, or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### GET /api/sessions/:sessionId/messages/:chatId/:messageId/receipts
 
@@ -1584,7 +1588,7 @@ Returns a `MessageReceipts` object; this illustrative group-message response lis
 }
 ```
 
-**Errors:** `400` session not active · `401` missing/invalid API key · `403` the message was received rather than sent by this account, or the key's `allowedChats` excludes the chat · `404` message not found in the chat · `409` conflict or engine not ready (retryable) · `500` engine error · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
+**Errors:** `400` session not active · `401` missing/invalid API key · `403` the message was received rather than sent by this account, or the key's `allowedChats` excludes the chat · `404` message not found in the chat · `409` conflict or engine not ready (retryable) · `500` engine error · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read, or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### POST /api/sessions/:sessionId/messages/vote-poll
 
@@ -3099,7 +3103,7 @@ Set the group's picture. The account must be allowed to edit the group's info: a
 
 **Response** `200` — `{ "success": true, "message": "Group picture updated" }`
 
-**Errors:** `400` the id does not name a group, the session is not active, neither `url` nor `base64` was supplied, the `url` answers non-2xx (a redirect is not followed), times out or cannot be reached, or the image cannot be read (Baileys refuses an SVG) · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `413` base64 or downloaded media over the media cap (see §6.3) · `503` a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable), or WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, the session is not active, neither `url` nor `base64` was supplied, the `url` answers non-2xx (a redirect is not followed), times out or cannot be reached, or the image cannot be read (Baileys refuses an SVG) · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (editing the group info takes an admin, or any member of a group whose info is not restricted to admins) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `413` base64 or downloaded media over the media cap (see §6.3) · `503` a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable), or WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, retry after a pause
 
 #### DELETE /api/sessions/:sessionId/groups/:groupId/picture
 
@@ -3111,7 +3115,7 @@ Remove the group's picture. The account must be allowed to edit the group's info
 
 Removing a picture that is already absent answers `200` as well: WhatsApp accepts the delete either way, so a repeat is safe on both engines. On whatsapp-web.js the gateway sends the request itself and answers by WhatsApp's status, whatever WhatsApp Web holds for the picture.
 
-**Errors:** `400` the id does not name a group, or the session is not active · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `503` on whatsapp-web.js WhatsApp answered the delete with a rate limit or a server error (nothing was deleted: retry after a pause), or WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or the session is not active · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (editing the group info takes an admin, or any member of a group whose info is not restricted to admins) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `503` on whatsapp-web.js WhatsApp answered the delete with a rate limit or a server error (nothing was deleted: retry after a pause), or WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### GET /api/sessions/:sessionId/groups/:groupId/invite-code
 
@@ -3137,7 +3141,7 @@ Get the group invite code and full invite link. The code is a transferable join 
 }
 ```
 
-**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `501` on whatsapp-web.js, the WhatsApp Web build the session runs has no job to read an invite code with, so nothing was asked of WhatsApp · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the read with a rate limit or a server error (423, 429 or 5xx): no code was returned, retry after a pause
 
 #### POST /api/sessions/:sessionId/groups
 
@@ -3221,7 +3225,7 @@ Status is forced to `200` via `@HttpCode(HttpStatus.OK)` (overriding the POST de
 
 Each entry is a `ParticipantOperationResult`: `id` (the participant the outcome belongs to), `success` (true only when the engine confirmed the change for that participant), and the optional engine-reported `status`/`message` (e.g. `200` ok, `403` invite-only/not-admin, `404` not registered, `409` already a member). Engines that only confirm the batch as a whole report one success entry per requested participant.
 
-A participant whose privacy settings allow joining only by invitation is answered differently by the engines: whatsapp-web.js sends that person a private group invite message when WhatsApp allows one and, once it went out, reports `success: true` with a message saying the invite was sent (otherwise `success: false, status: 403`), while Baileys sends nothing and reports `success: false, status: 403`. A batch made only of such participants therefore answers `200` on whatsapp-web.js when every invite went out and `403` on Baileys.
+A participant whose privacy settings allow joining only by invitation is answered differently by the engines: whatsapp-web.js sends that person a private group invite message when WhatsApp allows one and, once it went out, reports `success: true` with a message saying the invite was sent (otherwise `success: false, status: 403`), while Baileys sends nothing and reports `success: false, status: 403`. A batch made only of such participants therefore answers `200` on whatsapp-web.js when every invite went out and `403` on Baileys. On a WhatsApp Web build where the library's invite sender no longer exists, whatsapp-web.js sends no invitation either: such a participant is reported as `success: false, status: 403` and the others keep their own outcomes.
 
 **Errors:** `400` validation / session not started, the id does not name a group, or a participant does not name an individual (phone, `<phone>@c.us` or `<lid>@lid`), or (send pacing on) the request names more new contacts than the whole day's cold-reachout allowance (no `retryAfterSeconds`; split the batch, see Send pacing) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or WhatsApp refused every listed participant (a partial refusal still returns `200`) · `404` group not found · `409` conflict or engine not ready (retryable) · `429` `SEND_PACING_LIMITED` when send pacing is enabled (cold-reachout cap reached for today, see Send pacing) · `503` session not ready or dependency unavailable (retryable), or WhatsApp did not answer within the request budget, so no per-participant outcome was read; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
@@ -3334,7 +3338,7 @@ Demote participants from group admin.
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/subject
 
-Change the group name/subject.
+Change the group name/subject. The account must be allowed to edit the group's info: a group admin, or any member where the group leaves its info open to every member.
 
 **Auth:** API key (OPERATOR)
 
@@ -3363,11 +3367,11 @@ No `@HttpCode`; PUT default is `200`.
 { "success": true, "message": "Group subject updated" }
 ```
 
-**Errors:** `400` validation (empty `subject`) / session not started, or the id does not name a group · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation (empty `subject`) / session not started, or the id does not name a group · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (editing the group info takes an admin, or any member of a group whose info is not restricted to admins) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, retry after a pause
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/description
 
-Change the group description. An empty string clears the description.
+Change the group description. An empty string clears the description. The account must be allowed to edit the group's info: a group admin, or any member where the group leaves its info open to every member.
 
 **Auth:** API key (OPERATOR)
 
@@ -3396,7 +3400,7 @@ No `@HttpCode`; PUT default is `200`.
 { "success": true, "message": "Group description updated" }
 ```
 
-**Errors:** `400` validation (`description` missing / not a string) / session not started, or the id does not name a group · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation (`description` missing / not a string) / session not started, or the id does not name a group · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (editing the group info takes an admin, or any member of a group whose info is not restricted to admins) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, retry after a pause
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/member-label
 
@@ -3489,7 +3493,7 @@ Revoke the current invite code and generate a new one.
 }
 ```
 
-**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `501` on whatsapp-web.js, the WhatsApp Web build the session runs has no job to reset an invite code, so nothing was asked of WhatsApp and the current code is unchanged · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the revoke with a rate limit or a server error (423, 429 or 5xx): the current code is unchanged, retry after a pause
 
 #### GET /api/sessions/:sessionId/groups/join-info
 
@@ -3628,7 +3632,7 @@ Update group settings. Each present field maps to one engine call; absent fields
 { "success": true, "message": "Group settings updated" }
 ```
 
-**Errors:** `400` session is not started / the id does not name a group / empty patch / unknown body field / a value outside its constraints in the table above, or `null` · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, the account is not a group admin (`memberAddMode` on whatsapp-web.js), or a key restricted to selected chats names a group outside its allowlist · `404` group not found · `501` `ephemeralSeconds` on the whatsapp-web.js engine (library limitation) · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` session is not started / the id does not name a group / empty patch / unknown body field / a value outside its constraints in the table above, or `null` · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, the account is not a group admin (`announce`, `locked` and `memberAddMode` on whatsapp-web.js), or a key restricted to selected chats names a group outside its allowlist · `404` group not found · `501` `ephemeralSeconds` on the whatsapp-web.js engine (library limitation) · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers a setting with a rate limit or a server error (423, 429 or 5xx): that setting was not applied, or, for a member add mode change, may have been applied in part, and the message names any setting of the same request that was already applied
 
 #### GET /api/sessions/:sessionId/groups/:groupId/membership-requests
 
@@ -4091,7 +4095,7 @@ Bare array, no envelope. Only the whatsapp-web.js engine serves this route, and 
 fills only `id`, `name` and `description`: `inviteCode`, `subscriberCount`, `verified`, `picture` and
 `createdAt` never appear here even though the channel schema declares them.
 
-**Errors:** `400` `Session is not started` · `401` missing/invalid API key · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine
+**Errors:** `400` `Session is not started` · `401` missing/invalid API key · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` on whatsapp-web.js, the page died mid-read or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### GET /api/sessions/:sessionId/channels/:channelId
 
@@ -4163,7 +4167,7 @@ Get recent messages from a channel/newsletter.
 
 Bare array. `timestamp` is an epoch number (seconds). Neither engine populates `mediaUrl` on channel messages today; use `hasMedia` to tell a media post apart. An update with neither text nor media is not listed, which is how WhatsApp Web keeps an update that was deleted.
 
-**Errors:** `400` `Session is not started` · `401` missing/invalid API key · `404` `Channel <channelId> not found` (on whatsapp-web.js, the id is not among the channels the account follows) · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine
+**Errors:** `400` `Session is not started` · `401` missing/invalid API key · `404` `Channel <channelId> not found` (on whatsapp-web.js, the id is not among the channels the account follows) · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` on whatsapp-web.js, the page died mid-read or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### POST /api/sessions/:sessionId/channels
 
@@ -4383,7 +4387,7 @@ List all labels defined for the session. Labels exist only on a WhatsApp Busines
 
 Bare array — raw return of `engine.getLabels()`; no envelope.
 
-**Errors:** `400` session is not started (no live engine) · `401` missing/invalid API key · `501` the Baileys engine does not implement label reads (whatsapp-web.js only) · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died mid-read (retryable)
+**Errors:** `400` session is not started (no live engine) · `401` missing/invalid API key · `501` the Baileys engine does not implement label reads (whatsapp-web.js only) · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died mid-read, or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### GET /api/sessions/:sessionId/labels/:labelId
 
@@ -4406,7 +4410,7 @@ Get a single label by its ID.
 
 The engine resolves `Label | null`; a `null` is mapped to `404` in the service, so a `200` always carries a label.
 
-**Errors:** `400` session is not started · `401` missing/invalid API key · `404` `Label <labelId> not found` · `501` the Baileys engine does not implement label reads (whatsapp-web.js only) · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died mid-read (retryable)
+**Errors:** `400` session is not started · `401` missing/invalid API key · `404` `Label <labelId> not found` · `501` the Baileys engine does not implement label reads (whatsapp-web.js only) · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died mid-read, or WhatsApp Web did not answer within the protocol timeout (retryable)
 
 #### GET /api/sessions/:sessionId/labels/:labelId/chats
 
@@ -5601,7 +5605,7 @@ Get message statistics over a period: time series, counts by type, by session, a
   ],
   "byType": { "chat": 180, "image": 24, "unknown": 3 },
   "bySession": [{ "sessionId": "9f1c…", "name": "support-line", "sent": 200, "received": 140 }],
-  "topChats": [{ "chatId": "6281234567890@c.us", "messageCount": 320 }]
+  "topChats": [{ "chatId": "6281234567890@c.us", "chatName": "Customer A", "messageCount": 320 }]
 }
 ```
 
@@ -5627,7 +5631,9 @@ Get statistics for a single session: identity, message counts, top chats, and 24
 {
   "session": { "id": "9f1c…", "name": "support-line", "status": "ready" },
   "messages": { "sent": 200, "received": 140, "today": 18, "failed": 1 },
-  "topChats": [{ "chatId": "6281234567890@c.us", "count": 64, "lastActive": "2026-06-25 11:42:07" }],
+  "topChats": [
+    { "chatId": "6281234567890@c.us", "chatName": "Customer A", "count": 64, "lastActive": "2026-06-25 11:42:07" }
+  ],
   "hourlyActivity": [
     { "hour": 0, "sent": 0, "received": 0 },
     { "hour": 1, "sent": 3, "received": 2 }
@@ -5673,20 +5679,20 @@ Notes: raw return of an in-memory `Settings` object built once in the controller
 
 #### GET /api/audit
 
-List audit-log entries, newest first. API-key lifecycle changes, session lifecycle events, send-pacing and rate-limit enforcement, queue-dashboard mutations, webhook delivery redrives, integration-instance changes, plugin management (install, update, uninstall, enable, disable, configuration, session activation), ADMIN infra operations and a number reported under a second privacy id (`phone_second_lid_reported`) land here. **The eight actions below are never emitted**, so filtering for any of them returns zero rows by design: `message_sent` and `message_failed` (every send and its outcome is in the `messages` table), `webhook_triggered` and `webhook_failed` (tracked in `webhook_delivery_failures` and the `openwa_webhook_delivery_failures_total` counter), `webhook_created` and `webhook_deleted` (not wired yet), `api_key_used` (it would fire on every authenticated request; failed authentication is audited as `api_key_auth_failed`), and `session_connected` (an engine-level transition already reflected in `sessions.status`; the user-initiated `session_started` and `session_stopped` are audited, and `session_stopped` is also written, with `via: infra_import_data` in its metadata, for each session a data import with `stopOrphans` stops, whether or not the import then commits).
+List audit-log entries, newest first. API-key lifecycle changes, session lifecycle events, send-pacing and rate-limit enforcement, queue-dashboard mutations, webhook changes (`webhook_created`, `webhook_updated`, `webhook_deleted`), webhook delivery redrives, integration-instance changes, plugin management (install, update, uninstall, enable, disable, configuration, session activation), ADMIN infra operations and a number reported under a second privacy id (`phone_second_lid_reported`) land here. **The six actions below are never emitted**, so filtering for any of them returns zero rows by design: `message_sent` and `message_failed` (every send and its outcome is in the `messages` table), `webhook_triggered` and `webhook_failed` (tracked in `webhook_delivery_failures` and the `openwa_webhook_delivery_failures_total` counter), `api_key_used` (it would fire on every authenticated request; failed authentication is audited as `api_key_auth_failed`), and `session_connected` (an engine-level transition already reflected in `sessions.status`; the user-initiated `session_started` and `session_stopped` are audited, and `session_stopped` is also written, with `via: infra_import_data` in its metadata, for each session a data import with `stopOrphans` stops, whether or not the import then commits).
 
 **Auth:** API key (ADMIN) · **Scope:** rows are confined to the calling key's `allowedSessions` — the `sessionId` query may only narrow within that list, never widen it
 
 **Query parameters**
 
-| Name        | Type                          | Required | Default | Description                                                                                                                                                                                 |
-| ----------- | ----------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `action`    | string                        | No       | —       | Filter by `AuditAction` (e.g. `api_key_created`, `session_started`, `infra_data_imported`). Message, webhook, `api_key_used` and `session_connected` actions are never emitted (see above). |
-| `severity`  | `'info' \| 'warn' \| 'error'` | No       | —       | Filter by `AuditSeverity`. `error` is reserved and nothing writes it (rows are `info` or `warn`), so that filter returns zero rows.                                                         |
-| `sessionId` | string                        | No       | —       | Narrow to one session. A value outside the key's `allowedSessions` returns `{ "data": [], "total": 0 }`.                                                                                    |
-| `apiKeyId`  | string                        | No       | —       | Filter by the acting key's id.                                                                                                                                                              |
-| `limit`     | integer                       | No       | `50`    | Page size, clamped to a maximum of `200`.                                                                                                                                                   |
-| `offset`    | integer                       | No       | `0`     | Rows to skip; a negative value resolves to `0`, and a value above `9007199254740991` is capped at it, which returns an empty page.                                                          |
+| Name        | Type                          | Required | Default | Description                                                                                                                                                                                                               |
+| ----------- | ----------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `action`    | string                        | No       | —       | Filter by `AuditAction` (e.g. `api_key_created`, `session_started`, `infra_data_imported`). Message, `webhook_triggered`, `webhook_failed`, `api_key_used` and `session_connected` actions are never emitted (see above). |
+| `severity`  | `'info' \| 'warn' \| 'error'` | No       | —       | Filter by `AuditSeverity`. `error` is reserved and nothing writes it (rows are `info` or `warn`), so that filter returns zero rows.                                                                                       |
+| `sessionId` | string                        | No       | —       | Narrow to one session. A value outside the key's `allowedSessions` returns `{ "data": [], "total": 0 }`.                                                                                                                  |
+| `apiKeyId`  | string                        | No       | —       | Filter by the acting key's id.                                                                                                                                                                                            |
+| `limit`     | integer                       | No       | `50`    | Page size, clamped to a maximum of `200`.                                                                                                                                                                                 |
+| `offset`    | integer                       | No       | `0`     | Rows to skip; a negative value resolves to `0`, and a value above `9007199254740991` is capped at it, which returns an empty page.                                                                                        |
 
 **Response** `200`
 
@@ -6316,7 +6322,7 @@ List all loaded plugins (built-in + installed), with secret config values redact
     "description": "Visual reply flows",
     "author": "openwa-plugins",
     "status": "enabled",
-    "config": { "apiKey": "********" },
+    "config": { "apiKey": "***" },
     "builtIn": false,
     "provides": ["message-hook"],
     "ingressCapable": false,
@@ -6388,7 +6394,7 @@ Get a single plugin by id.
 #### GET /api/plugins/:id/config-ui
 
 Serve a plugin's sandboxed config-UI entry HTML (for an opaque-origin iframe `srcdoc`; the dashboard
-applies its document-specific CSP nonce to inline scripts and keeps any declared schema form available as fallback).
+applies its document-specific CSP nonce to inline scripts, shows this editor alone in place of the generated schema form, and shows an error when the editor's bridge does not initialize within 5 s).
 
 **Auth:** API key (ADMIN)
 
@@ -6892,6 +6898,8 @@ Set the account display name (max 25 chars).
 
 Set the account about/status text (max 139 chars; empty string clears it).
 
+On whatsapp-web.js the library sets the text through a call that WhatsApp Web builds from about mid November 2026 no longer have: the About text became a status that expires, which the library does not set. On such a build the route answers `501` and changes nothing; on an earlier build it works as before. Baileys is not affected.
+
 **Auth:** API key (OPERATOR)
 
 ```json
@@ -6900,7 +6908,7 @@ Set the account about/status text (max 139 chars; empty string clears it).
 
 **Response** `200` — `{ "success": true, "message": "Profile status updated" }`
 
-**Errors:** `400` session is not started / status too long · `401` · `403` · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
+**Errors:** `400` session is not started / status too long · `401` · `403` · `409` conflict or engine not ready (retryable) · `501` on whatsapp-web.js, the WhatsApp Web build the session runs no longer has the call the library uses to set the About text, so nothing was asked of WhatsApp · `503` session not ready or dependency unavailable (retryable)
 
 #### PUT /api/sessions/:sessionId/profile/picture
 
@@ -6920,7 +6928,7 @@ or
 
 **Response** `200` — `{ "success": true, "message": "Profile picture updated" }`
 
-**Errors:** `400` neither `url` nor `base64` provided / base64 without `mimetype` / a `url` that answers non-2xx (a redirect is not followed), times out or cannot be reached / an image that cannot be read (Baileys refuses an SVG) · `401` · `403` the whatsapp-web.js engine refused the change (the Baileys engine has no acceptance signal and answers `200`) · `409` conflict or engine not ready (retryable) · `413` base64 or downloaded image over the media cap (see §6.3) · `503` session not ready, dependency unavailable, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable)
+**Errors:** `400` neither `url` nor `base64` provided / base64 without `mimetype` / a `url` that answers non-2xx (a redirect is not followed), times out or cannot be reached / an image that cannot be read (Baileys refuses an SVG) · `401` · `403` the whatsapp-web.js engine refused the change (the Baileys engine has no acceptance signal and answers `200`) · `409` conflict or engine not ready (retryable) · `413` base64 or downloaded image over the media cap (see §6.3) · `503` session not ready, dependency unavailable, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable); on whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, retry after a pause
 
 #### DELETE /api/sessions/:sessionId/profile/picture
 

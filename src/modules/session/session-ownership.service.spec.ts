@@ -270,6 +270,64 @@ describe('SessionOwnershipService', () => {
     });
   });
 
+  // A delete ends its claim at the commit that removes the row: the heartbeat must not read the missing row as a loss.
+  describe('forgetting a claim whose row was removed', () => {
+    it('ends the claim in memory and leaves the database alone', async () => {
+      const session = await seed();
+      const nodeA = service('node-a');
+      const claimGen = (nodeA as unknown as { claimGen: Map<string, number> }).claimGen;
+      await nodeA.claim(session.id);
+
+      nodeA.forget(session.id);
+
+      expect(nodeA.ownedIds()).toEqual([]);
+      expect(claimGen.size).toBe(0);
+      expect((await sessions.findOneByOrFail({ id: session.id })).nodeId).toBe('node-a');
+    });
+
+    it('is not reported as lost by the next tick once the row is gone', async () => {
+      const session = await seed();
+      const nodeA = service('node-a');
+      await nodeA.claim(session.id);
+      const lost: string[][] = [];
+      nodeA.onLeaseLoss(ids => void lost.push(ids));
+
+      await sessions.delete({ id: session.id });
+      nodeA.forget(session.id);
+      await nodeA.renew();
+
+      expect(lost).toEqual([]);
+    });
+
+    it('is reported as lost when the row goes without the claim being forgotten', async () => {
+      const session = await seed();
+      const nodeA = service('node-a');
+      await nodeA.claim(session.id);
+      const lost: string[][] = [];
+      nodeA.onLeaseLoss(ids => void lost.push(ids));
+
+      await sessions.delete({ id: session.id });
+      await nodeA.renew();
+
+      expect(lost).toEqual([[session.id]]);
+    });
+
+    it('ends the claim its caller captured, and only that one', async () => {
+      const session = await seed();
+      const nodeA = service('node-a');
+      await nodeA.claim(session.id);
+      const captured = nodeA.captureClaim(session.id);
+      await nodeA.release(session.id);
+      await nodeA.claim(session.id);
+
+      nodeA.forget(session.id, captured);
+      expect(nodeA.ownedIds()).toEqual([session.id]);
+
+      nodeA.forget(session.id, nodeA.captureClaim(session.id));
+      expect(nodeA.ownedIds()).toEqual([]);
+    });
+  });
+
   describe('releasing a lapsed foreign claim', () => {
     // A deliberate teardown of a session whose crashed owner's lease expired must actually leave it
     // down. A row still naming the dead node reads as an abandoned orphan, and the takeover sweep

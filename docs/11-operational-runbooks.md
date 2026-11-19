@@ -712,7 +712,7 @@ curl -H "X-API-Key: $API_KEY" http://localhost:2785/api/health
 ```
 
 > Restoring `sessions/` is required, not optional, when the rollback crosses a browser major upgrade (on
-> amd64, 0.23.5 moved Chrome for Testing from 146 to 153, 0.26.0 moves it to 156 and 0.29.0 moves it to 157; arm64
+> amd64, 0.23.5 moved Chrome for Testing from 146 to 153, 0.26.0 moves it to 156, 0.29.0 moves it to 157 and 0.31.0 moves it to 158; arm64
 > runs the chromium Debian shipped when each image was built; a source install without
 > `PUPPETEER_EXECUTABLE_PATH` runs the Chrome Puppeteer downloads, which moved from 156 to 157 with Puppeteer
 > 25.17.0), and the backup must predate the first start

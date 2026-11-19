@@ -14,7 +14,7 @@ import {
 } from './plugin-activation';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
-import { PluginLogLevel } from './sandbox/protocol';
+import { PluginLogLevel, SANDBOX_LOG_MAX_PER_WINDOW, SANDBOX_LOG_WINDOW_MS } from './sandbox/protocol';
 import { shouldDispatchToPlugin } from './handover-gate';
 import { countMetaValues, metaText } from './sandbox-log-meta';
 import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
@@ -48,13 +48,12 @@ const SANDBOX_LIFECYCLE_TIMEOUT_MS = 30000;
 const SANDBOX_HOOK_ERROR_LOG_INTERVAL_MS = 60000;
 
 /**
- * Worker log-relay bounds (per sandboxed plugin): at most this many lines per window are relayed;
+ * Worker log-relay bounds (per sandboxed plugin): at most SANDBOX_LOG_MAX_PER_WINDOW lines per window are relayed;
  * excess is dropped, counted, and surfaced as one warn per window. Longer lines are truncated. The
  * worker is not a security boundary — these are robustness bounds against a chatty/buggy plugin
- * flooding the host log, not isolation.
+ * flooding the host log, not isolation. The worker applies the same per-window bound before it posts a line
+ * (WorkerLogLimiter), so this relay is the backstop for a worker that posts straight to its port.
  */
-const SANDBOX_LOG_MAX_PER_WINDOW = 200;
-const SANDBOX_LOG_WINDOW_MS = 10000;
 const SANDBOX_LOG_MAX_MESSAGE_LENGTH = 8192;
 
 /** Per-enable log-relay rate-limit window, shared by the onLog relay and the onWorkerExit final flush. */

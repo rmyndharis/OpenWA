@@ -68,7 +68,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { chatKind, parseWaId } from '../../engine/identity/wa-id';
 import { Message, MessageDirection } from '../message/entities/message.entity';
-import { ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
+import { refuseLostDeleteClaim, ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
 import { phoneKey } from './message-mutation-guard';
 import { ownAccountIds } from '../../engine/adapters/baileys-stored-chat-previews.service';
 // Type-only: the module binds this class to PLUGIN_SESSION_PORT with a `useExisting` alias, which
@@ -864,7 +864,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         .where({ id, nodeId: this.ownership!.nodeId })
         .execute();
       if (affected !== 1 || ownsClaim?.() === false) {
-        throw new ConflictException(`Session ${id} is no longer owned by this delete`);
+        return refuseLostDeleteClaim(manager, id, `Session ${id} is no longer owned by this delete`);
       }
       await record(manager.getRepository(Session));
     });

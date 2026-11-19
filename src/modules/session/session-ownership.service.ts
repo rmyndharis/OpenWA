@@ -49,6 +49,8 @@ export class SessionOwnershipService {
    */
   private readonly claimGen = new Map<string, number>();
   private claimSeq = 0;
+  /** The newest claim in flight per session, dropped once it settles: a claim a newer one superseded answers for it. */
+  private readonly latestClaim = new Map<string, Promise<boolean>>();
   /** Notified when a renewal proves this process no longer holds sessions it thought it did. */
   private onLeaseLost?: (sessionIds: string[]) => Promise<void> | void;
   /** Notified when this process takes a session over from a node whose lease lapsed. See onAdoption. */
@@ -125,21 +127,49 @@ export class SessionOwnershipService {
   }
 
   /**
-   * Take ownership, returning false when a live peer holds it or a newer local claim supersedes it.
+   * Take ownership, returning false when a live peer holds it.
    *
    * The update is conditional on the same predicate the read used, so two processes racing on the
    * same free session cannot both succeed: the second one's UPDATE matches no row, because the
    * first has already written its own `nodeId` and a future expiry. Deciding on the read alone
    * would let both pass.
+   *
+   * Two claims of one session on this node overlap when two requests for it arrive within a few milliseconds. The
+   * later one takes the ownership, and the earlier one, which an older SQL reply must not let replace it, answers what
+   * the newest claim in flight does, and fails with its error: no peer is involved, so it must not read as one holding
+   * the session. It answers false when a release or a loss ended its claim, or when the newer claim has already
+   * settled, since a peer may have held the row in between.
    */
   async claim(sessionId: string, onClaimed?: (ownsClaim: () => boolean) => void): Promise<boolean> {
+    const own: { claim?: Promise<boolean> } = {};
+    const claim = (async (): Promise<boolean> => {
+      const result = await this.claimOnce(sessionId, onClaimed);
+      if (result !== 'superseded') return result;
+      const newest = this.latestClaim.get(sessionId);
+      if (!newest || newest === own.claim || !this.claimGen.has(sessionId)) return false;
+      return newest;
+    })();
+    own.claim = claim;
+    this.latestClaim.set(sessionId, claim);
+    const settled = (): void => {
+      if (this.latestClaim.get(sessionId) === claim) this.latestClaim.delete(sessionId);
+    };
+    claim.then(settled, settled);
+    return claim;
+  }
+
+  /** One claim attempt: 'superseded' when a newer claim, a release or a loss replaced its generation meanwhile. */
+  private async claimOnce(
+    sessionId: string,
+    onClaimed?: (ownsClaim: () => boolean) => void,
+  ): Promise<boolean | 'superseded'> {
     const now = new Date();
     const leaseExpiresAt = new Date(now.getTime() + this.leaseTtlMs);
     // A successful SQL write may still await its reply; a local overlap shares that ownership too.
     if (this.owned.has(sessionId) || this.claimGen.has(sessionId)) {
       const generation = this.claimGen.get(sessionId);
       const renewed = await this.sessions.update({ id: sessionId, nodeId: this.nodeId }, { leaseExpiresAt });
-      if (this.claimGen.get(sessionId) !== generation) return false;
+      if (this.claimGen.get(sessionId) !== generation) return 'superseded';
       if (renewed.affected === 1) {
         this.owned.add(sessionId);
         if (!this.claimGen.has(sessionId)) this.claimGen.set(sessionId, ++this.claimSeq);
@@ -165,7 +195,7 @@ export class SessionOwnershipService {
       const previous = this.onAdopted
         ? await sessions.findOne({ where: { id: sessionId }, select: { id: true, nodeId: true, leaseExpiresAt: true } })
         : null;
-      if (this.claimGen.get(sessionId) !== generation) return false;
+      if (this.claimGen.get(sessionId) !== generation) return 'superseded' as const;
       const result = await sessions
         .createQueryBuilder()
         .update(Session)
@@ -176,7 +206,7 @@ export class SessionOwnershipService {
           now: leaseParam(now),
         })
         .execute();
-      if (this.claimGen.get(sessionId) !== generation) return false;
+      if (this.claimGen.get(sessionId) !== generation) return 'superseded' as const;
       const claimed = (result.affected ?? 0) > 0;
       const adopted =
         claimed &&
@@ -196,7 +226,7 @@ export class SessionOwnershipService {
       }
       throw error;
     });
-    if (this.claimGen.get(sessionId) !== generation) return false;
+    if (claimed === 'superseded' || this.claimGen.get(sessionId) !== generation) return 'superseded';
     if (claimed) {
       this.owned.add(sessionId);
       this.lastSeenLease.set(sessionId, leaseExpiresAt.getTime());
@@ -322,6 +352,17 @@ export class SessionOwnershipService {
         .execute();
       if ((lapsed.affected ?? 0) > 0) await this.followAdoption(sessionId, manager);
     });
+  }
+
+  /**
+   * End this process's claim on a session whose row has just been removed, without touching the database. Left in
+   * place, the next renew() reads the missing row as a claim a peer took and reports a loss that never happened.
+   * Only the claim `ownsClaim` captured is ended: one a later claim of the same id replaced stays.
+   */
+  forget(sessionId: string, ownsClaim?: () => boolean): void {
+    if (ownsClaim && !ownsClaim()) return;
+    this.owned.delete(sessionId);
+    this.claimGen.delete(sessionId);
   }
 
   /**

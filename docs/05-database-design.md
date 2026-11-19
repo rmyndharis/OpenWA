@@ -673,8 +673,10 @@ lifecycle (`session_created`, `session_started`, `session_stopped`, `session_for
 already maps to another reported id (`phone_second_lid_reported`, a WARN row filed under the reporting session;
 pairs the table already held are not reported, unless an id has left the gateway's mapping cache), messages
 (`message_sent`, `message_failed`), send-pacing enforcement (`send_pacing_blocked`, sampled to at
-most one row per session per minute; `send_breaker_tripped`, never sampled), webhooks (`webhook_created`, `webhook_deleted`,
-`webhook_triggered`, `webhook_failed`), the delivery-failure redrive (`webhook_deliveries_redriven`, one row per
+most one row per session per minute; `send_breaker_tripped`, never sampled), webhook changes (`webhook_created`,
+`webhook_updated`, `webhook_deleted`; metadata carries the webhook id, the URL host, the events and, for an update, the
+names of the changed fields, never the secret, the headers or the URL path and query), webhook deliveries
+(`webhook_triggered`, `webhook_failed`), the delivery-failure redrive (`webhook_deliveries_redriven`, one row per
 batch), rate-limit enforcement (`rate_limit_exceeded`, sampled to at
 most one row per subject+kind per minute), the queue dashboard (`queue_board_mutated`), integration
 plugin instances (`integration_instance_created`, `integration_instance_updated`,
@@ -685,9 +687,9 @@ id, version, the host of the requested download URL and config field names, neve
 `infra_restart_requested`, `infra_data_exported`, `infra_data_imported`, `infra_storage_exported`,
 `infra_storage_imported`).
 
-Eight of these are reserved and never emitted, so no row ever carries them: `api_key_used`,
-`session_connected`, `message_sent`, `message_failed`, `webhook_created`, `webhook_deleted`,
-`webhook_triggered` and `webhook_failed`. `src/modules/audit/intentionally-unemitted-actions.ts` is the
+Six of these are reserved and never emitted, so no row ever carries them: `api_key_used`,
+`session_connected`, `message_sent`, `message_failed`, `webhook_triggered` and `webhook_failed`.
+`src/modules/audit/intentionally-unemitted-actions.ts` is the
 authoritative list, with the reason for each. The `error` severity is reserved too: nothing writes it, so every row carries `info` or `warn`, and `GET /api/audit?severity=error` returns zero rows.
 
 > [!NOTE]
@@ -1032,8 +1034,11 @@ onModuleInit(): void {
 async cleanup(olderThanDays = 30): Promise<number> {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - olderThanDays);
-  const result = await this.auditRepository.delete({ createdAt: LessThan(cutoff) });
-  return result.affected || 0;
+  return pruneInBatches({
+    repository: this.auditRepository,
+    where: { createdAt: LessThan(cutoff) },
+    stopped: () => this.stopped,
+  });
 }
 ```
 
@@ -1046,6 +1051,8 @@ The other interval-based prunes are the same shape: one prune at startup, then a
 - **`ingress_events`** and **`integration_delivery_failures`** — `IntegrationRetentionService` (`src/modules/integration/integration-retention.service.ts`) prunes both in one timer on two independent windows. `INGRESS_DEDUP_RETENTION_DAYS` (default 7) bounds the dedup rows; a non-positive value does **not** disable it — an unpruned dedup table grows without bound for no functional gain, so the service warns and falls back to the 7-day default. `INGRESS_RETENTION_DAYS` (default 90) bounds the DLQ rows, where long retention can be a deliberate operator choice, so ≤ 0 disables that prune (and only that prune). An aged `pending` event that still carries its payload is first given a dead-letter row and a `failed` mark, and a later run prunes it; it is kept if that write fails. One whose instance or session was deleted, or whose queue job still owns the delivery, is settled and pruned without a dead-letter row.
 - **`messages`** and finished **`message_batches`**: `MessageRetentionService` (`src/modules/message/message-retention.service.ts`), window `MESSAGE_RETENTION_DAYS` (default 0, which keeps everything; boot rejects a value above 36500). Messages are deleted by `createdAt` in batches of 500 ids, at most 200 batches per run, so a run deletes at most 100,000 messages, and finished batches the same way; a run that hits either limit logs a warning and is followed by another a minute later until the backlog is cleared. Pending and processing batches are never pruned. Once enabled, send pacing treats a contact silent for longer than the window as a new (cold) contact again, stats totals and search results shrink, archived media files are reclaimed by the chat-media orphan sweep, and a history sync does not write back messages older than the window. Search plugins get no `message:deleted` for pruned rows, so an external index keeps its copies.
 - **`send_idempotency_keys`**: `SendIdempotencyService` (`src/modules/message/idempotency/send-idempotency.service.ts`) deletes rows past `expiresAt` (24 hours after the claim) on an hourly `setInterval`, with no startup run: a claim that collides with an expired row deletes it and claims the key itself, so a late prune never blocks a send.
+
+Every prune above, the audit-log cleanup included, removes its backlog in statements of 500 ids (`pruneInBatches`, `src/common/utils/batched-prune.ts`) and not in one. SQLite runs a statement on the event loop, so one `DELETE` over a backlog (a start after a long stop, a shorter window, receivers that were down for days) held the whole process for as long as it ran, and on PostgreSQL one that outlasts `statement_timeout` is cancelled and never shrinks the backlog. On SQLite the prune pauses 5 ms between statements, so requests are answered during it; on PostgreSQL one read of up to 10,000 ids feeds twenty statements. A service that is shutting down ends its prune at the next statement, and the rows it did not reach wait for the next run.
 
 ### Status-Update TTL Sweep
 

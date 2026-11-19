@@ -44,6 +44,7 @@ import { SessionOwnershipService } from '../session/session-ownership.service';
 import { HookManager } from '../../core/hooks';
 import { assertBase64LengthWithinMediaCap, assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
 import { stripBatchMediaPayloads } from './batch-media.util';
+import { logSsrfRefusal } from '../../common/media/client-facing-ssrf-error';
 import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { renderedLength, renderTemplate, TemplateRenderError } from '../../common/utils/template-render';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -759,8 +760,10 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
         lifetime.assertCurrent();
       }
       result.status = BatchMessageStatus.FAILED;
-      // Sanitize: an SSRF block names an internal address — never store/return/log it verbatim.
+      // Sanitize: an SSRF block names an internal address, so the stored result and the hook get the generic
+      // text; the detail goes to the log only, as on every other route.
       const sanitized = sanitizeBatchError(error);
+      if (error instanceof SsrfBlockedError) logSsrfRefusal(error);
       result.error = sanitized;
       batch.progress.failed++;
       batch.progress.pending--;

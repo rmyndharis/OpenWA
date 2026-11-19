@@ -1563,7 +1563,8 @@ curl "$BASE/api/plugins/chat-flow" \
 #### GET /api/plugins/:id/config-ui
 
 Fetch a plugin's sandboxed config-UI HTML. The dashboard renders it in an opaque-origin iframe,
-uses a `postMessage` bridge for config, and retains any schema form as a fallback.
+uses a `postMessage` bridge for config, shows this editor alone in place of the generated schema form, and shows an
+error when the bridge does not initialize within 5 s.
 
 ```bash
 curl "$BASE/api/plugins/chat-flow/config-ui" \

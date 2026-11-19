@@ -1,0 +1,129 @@
+import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
+import { readInviteCodeInPage } from './wwebjs-groups';
+import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EngineRefusedError } from '../../common/errors/engine-refused.error';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
+
+/**
+ * whatsapp-web.js reads every rejection named `ServerStatusCodeError` of the invite code job as "no code", which the
+ * adapter read as missing admin rights, so a rate limit or a server error, which only means the same request may pass
+ * later, was a 403, and a refusal of the Mex class, which carries a status as well, was a bare 500. The code is now read
+ * in the page and answers by the status WhatsApp gave: 503 for 423, 429 and 5xx, 403 for any other status. A page with
+ * no job to read it with is the library's own call, as it was.
+ */
+describe('the group invite code read, answered by the status WhatsApp gave', () => {
+  const GROUP = '120363000000000001@g.us';
+  const g = globalThis as unknown as { window?: unknown };
+
+  afterEach(() => {
+    delete g.window;
+  });
+
+  const rejection = (name: string, status?: number, message = 'refused') =>
+    Object.assign(new Error(message), { name, ...(status === undefined ? {} : { status }) });
+
+  /** A page whose invite code job is `job`, or has none; the page function runs as it does there. */
+  const adapterOnPage = (
+    modules: Record<string, unknown>,
+    getInviteCode = jest.fn().mockResolvedValue('FROMLIBRARY'),
+  ) => {
+    const chat = { id: { _serialized: GROUP }, isGroup: true, participants: [], groupMetadata: {}, getInviteCode };
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = {
+      info: {},
+      getChatById: jest.fn().mockResolvedValue(chat),
+      pupPage: {
+        evaluate: jest.fn((fn: typeof readInviteCodeInPage, arg: string) => {
+          g.window = {
+            require: (name: string) => {
+              if (!(name in modules)) throw new Error(`Requiring unknown module "${name}"`);
+              return modules[name];
+            },
+          };
+          return Promise.resolve().then(() => fn(arg));
+        }),
+      },
+    };
+    return { adapter, getInviteCode };
+  };
+  const withJob = (fetchMexGroupInviteCode: jest.Mock) => ({
+    WAWebMexFetchGroupInviteCodeJob: { fetchMexGroupInviteCode },
+  });
+
+  it.each([
+    ['a code as a string', 'ABC123', 'ABC123'],
+    ['a code in an object', { code: 'XYZ789' }, 'XYZ789'],
+  ])('returns %s without the library call', async (_name, answer, code) => {
+    const fetch = jest.fn().mockResolvedValue(answer);
+    const { adapter, getInviteCode } = adapterOnPage(withJob(fetch));
+
+    await expect(adapter.getGroupInviteCode(GROUP)).resolves.toBe(code);
+
+    expect(fetch).toHaveBeenCalledWith(GROUP);
+    expect(getInviteCode).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: 'a rate limit (429)', status: 429 },
+    { name: 'a lock (423)', status: 423 },
+    { name: 'a server error (500)', status: 500 },
+    { name: 'an unavailable service (503)', status: 503 },
+  ])('answers the retryable 503 for $name, in either class', async ({ status }) => {
+    for (const name of ['ServerStatusCodeError', 'MexServerStatusCodeError']) {
+      const { adapter } = adapterOnPage(withJob(jest.fn().mockRejectedValue(rejection(name, status))));
+
+      await expect(adapter.getGroupInviteCode(GROUP)).rejects.toBeInstanceOf(EngineTransportError);
+    }
+  });
+
+  it.each([
+    { name: 'a refusal (403)', status: 403 },
+    { name: 'a missing group (404)', status: 404 },
+    { name: 'a bad request (400)', status: 400 },
+    { name: 'a refusal that names no status', status: undefined },
+  ])('answers the 403 for $name, in either class', async ({ status }) => {
+    for (const name of ['ServerStatusCodeError', 'MexServerStatusCodeError']) {
+      const { adapter } = adapterOnPage(withJob(jest.fn().mockRejectedValue(rejection(name, status))));
+
+      await expect(adapter.getGroupInviteCode(GROUP)).rejects.toBeInstanceOf(EngineRefusedError);
+    }
+  });
+
+  it('keeps the 403 of a job that gives no code', async () => {
+    const { adapter } = adapterOnPage(withJob(jest.fn().mockResolvedValue(undefined)));
+
+    await expect(adapter.getGroupInviteCode(GROUP)).rejects.toBeInstanceOf(EngineRefusedError);
+  });
+
+  it('leaves any other rejection as it was', async () => {
+    const failure = rejection('Error', undefined, '[MEX][GROUP] group invite code is null');
+    const { adapter } = adapterOnPage(withJob(jest.fn().mockRejectedValue(failure)));
+
+    await expect(adapter.getGroupInviteCode(GROUP)).rejects.toBe(failure);
+  });
+
+  it.each([
+    ['a build that has no such module', {}],
+    ['a module without the job', { WAWebMexFetchGroupInviteCodeJob: {} }],
+  ])('runs the library call on %s', async (_name, modules) => {
+    const { adapter, getInviteCode } = adapterOnPage(modules);
+
+    await expect(adapter.getGroupInviteCode(GROUP)).resolves.toBe('FROMLIBRARY');
+
+    expect(getInviteCode).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers the 409 of a reload on a document that has no require yet', async () => {
+    const { adapter, getInviteCode } = adapterOnPage({});
+    const evaluate = (adapter as unknown as { client: { pupPage: { evaluate: jest.Mock } } }).client.pupPage.evaluate;
+    evaluate.mockImplementation((fn: typeof readInviteCodeInPage, arg: string) => {
+      g.window = {};
+      return Promise.resolve().then(() => fn(arg));
+    });
+
+    await expect(adapter.getGroupInviteCode(GROUP)).rejects.toBeInstanceOf(EngineNotReadyError);
+    expect(getInviteCode).not.toHaveBeenCalled();
+  });
+});

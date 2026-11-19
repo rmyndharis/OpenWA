@@ -64,12 +64,38 @@ export class BodyWidthPipe implements PipeTransform {
   }
 }
 
+/** Whether an object with its own `toString` sits anywhere in a parsed request value. */
+const holdsOwnToString = (value: unknown): boolean =>
+  typeof value === 'object' &&
+  value !== null &&
+  ((!Array.isArray(value) && Object.hasOwn(value, 'toString')) || Object.values(value).some(holdsOwnToString));
+
+/**
+ * The ValidationPipe, answering as the caller's mistake the one failure its implicit conversion raises on the caller's
+ * data. A string or number property is converted with String() or Number(), and both throw a TypeError on an object
+ * whose own `toString` is not a function, before any validator runs, which would answer 500 for a value every other
+ * wrong type answers 400 for. Only that case is answered: a TypeError from the application's own code (a custom
+ * transform, a validator) is a defect and still reaches the exception handler, so the body must hold such an object.
+ */
+export class GlobalValidationPipe extends ValidationPipe {
+  override async transform(value: unknown, metadata: ArgumentMetadata): Promise<unknown> {
+    try {
+      return await super.transform(value, metadata);
+    } catch (error) {
+      if (error instanceof TypeError && holdsOwnToString(value)) {
+        throw new BadRequestException('Request body holds a value of the wrong type');
+      }
+      throw error;
+    }
+  }
+}
+
 /** Apply the HTTP prefix and DTO validation contract shared by production and e2e applications. */
 export function applyGlobalValidation(app: INestApplication): void {
   app.setGlobalPrefix('api');
   app.useGlobalPipes(
     new BodyWidthPipe(),
-    new ValidationPipe({
+    new GlobalValidationPipe({
       ...GLOBAL_VALIDATION_OPTIONS,
       disableErrorMessages: !isValidationErrorDetailEnabled(process.env.VALIDATION_ERROR_DETAIL, process.env.NODE_ENV),
     }),

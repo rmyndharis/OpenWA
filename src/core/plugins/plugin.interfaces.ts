@@ -108,7 +108,8 @@ export interface PluginManifest {
   minOpenWAVersion?: string | null;
 
   // Inbound webhook routes this plugin claims (requires the `webhook:ingress` permission). Validated
-  // by validateIngressManifest, which the loader calls on every external plugin load (loadPlugin).
+  // by validateIngressManifest, which install and update call (parsePluginPackage) and the loader calls on
+  // every external plugin load (loadPlugin).
   // (Built-in registration declares no ingress and bypasses that validation.)
   ingress?: PluginIngressRoute[];
 }
@@ -355,7 +356,8 @@ const INGRESS_ROUTE_SEGMENT = /^[^/\\?#%\x00-\x1f\x7f\p{Cs}]+$/u;
  * endpoint — once an instance is provisioned, anyone who can reach the host can POST a forged
  * payload that triggers outbound WhatsApp sends. Rejecting it at load (rather than only warning)
  * keeps that surface from lighting up silently. A manifest with no `ingress` entries is a no-op.
- * Called from PluginLoaderService.loadPlugin, so a malformed declaration is rejected at load time.
+ * Called from parsePluginPackage, so an install or an update refuses a malformed declaration before anything is
+ * written, and from PluginLoaderService.loadPlugin, so a package already on disk is refused at load time.
  */
 export function validateIngressManifest(manifest: PluginManifest, allowUnsignedIngress = false): void {
   if (!manifest.ingress?.length) return; // no ingress declared → nothing to validate

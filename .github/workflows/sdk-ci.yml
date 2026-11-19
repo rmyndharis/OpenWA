@@ -91,6 +91,20 @@ jobs:
       # does not exist.
       - run: mypy
       - run: pytest
+      # The sdist ships tests/, so a packager can run them from the unpacked archive. A file the archive
+      # leaves out (tests/conftest.py once was) stops pytest at collection there, and the steps above test
+      # the checkout, which has every file. A clean directory and a fresh environment keep the checkout from
+      # standing in for the archive.
+      - name: Test the unpacked sdist
+        run: |
+          python -m pip install --upgrade build
+          python -m build --sdist --outdir "$RUNNER_TEMP/dist"
+          mkdir "$RUNNER_TEMP/sdist"
+          tar -xzf "$RUNNER_TEMP"/dist/*.tar.gz -C "$RUNNER_TEMP/sdist" --strip-components=1
+          python -m venv "$RUNNER_TEMP/venv"
+          cd "$RUNNER_TEMP/sdist"
+          "$RUNNER_TEMP/venv/bin/pip" install '.[dev]'
+          "$RUNNER_TEMP/venv/bin/pytest" tests
 
   php:
     name: PHP SDK (${{ matrix.php }}, Guzzle ${{ matrix.guzzle }})

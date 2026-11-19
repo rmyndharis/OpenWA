@@ -35,6 +35,8 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
   const [total, setTotal] = useState(0);
   const [nextOffset, setNextOffset] = useState(0);
   const [loading, setLoading] = useState(false);
+  // The loading is for an appended page: the hits already listed stay, and the line goes under them.
+  const [paging, setPaging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Why the thread did not move for the hit or the day just picked. Shown under the list, which stays.
   const [notice, setNotice] = useState<string | null>(null);
@@ -68,9 +70,11 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
         setNextOffset(0);
         setError(null);
         setLoading(false);
+        setPaging(false);
         return;
       }
       setLoading(true);
+      setPaging(append);
       setError(null);
       try {
         const res = await searchApi.search(params);
@@ -93,7 +97,10 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
           setNextOffset(0);
         }
       } finally {
-        if (id === requestId.current) setLoading(false);
+        if (id === requestId.current) {
+          setLoading(false);
+          setPaging(false);
+        }
       }
     },
     [sessionId, chatId, dayFrom, dayTo, t],
@@ -115,10 +122,12 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
       setNextOffset(0);
       setError(null);
       setLoading(false);
+      setPaging(false);
       return;
     }
     // Searching from the keystroke on, so that "no messages" is only ever said of a search that has run.
     setLoading(true);
+    setPaging(false);
     timer.current = setTimeout(() => {
       timer.current = null;
       void run(q, 0, false);
@@ -247,10 +256,9 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
         <div className="room-search-results">
           {listed && (
             <div role="listbox">
-              {loading && <div className="room-search-state">{t('search.loading')}</div>}
-              {!loading && error && <div className="room-search-state">{error}</div>}
+              {loading && !paging && <div className="room-search-state">{t('search.loading')}</div>}
               {!loading && !error && hits.length === 0 && <div className="room-search-state">{t('search.empty')}</div>}
-              {!loading &&
+              {(!loading || paging) &&
                 hits.map(h => (
                   <button
                     key={h.messageId}
@@ -272,6 +280,9 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
                     </div>
                   </button>
                 ))}
+              {/* Under the hits, where a reader at the end of the list is looking: the next page loading, or failing. */}
+              {paging && <div className="room-search-state">{t('search.loading')}</div>}
+              {!loading && error && <div className="room-search-state">{error}</div>}
               {!loading && nextOffset < total && (
                 <button
                   type="button"

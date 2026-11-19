@@ -25,9 +25,9 @@
 # Environment:
 #   MAIN_DATABASE_NAME  auth/audit SQLite file (default: <data dir>/main.sqlite)
 #   DATABASE_NAME       data-store SQLite file (default: <data dir>/openwa.sqlite; sqlite only)
-#                       Both resolve EXACTLY like the app: the environment first, then ./.env, then
-#                       <data dir>/.env.generated, otherwise the app's ./data default (see
-#                       lib-env.sh).
+#                       Both resolve EXACTLY like the app: the environment first (a value of only
+#                       blanks counts as unset), then ./.env, then <data dir>/.env.generated,
+#                       otherwise the app's ./data default (see lib-env.sh).
 #   OPENWA_DATA_DIR   the app's ./data directory, such as a volume's mountpoint on the host
 #                     (default: ./data); the ./data defaults, and a ./data/... path read from ./.env
 #                     or .env.generated, are taken under it
@@ -109,9 +109,10 @@ PLUGIN_PACKAGES_DIR="$(openwa_resolve PLUGINS_DIR "$DATA_DIR/plugins" path)"
 # resolved here exactly like PLUGINS_DIR above. Hardcoding $DATA_DIR/plugins meant an operator who
 # moved plugin state got an archive with neither the registry nor any plugin's storage in it, and
 # a restore that put nothing back. Resolved under its own name because the knob names the ROOT,
-# not the plugins directory inside it.
+# not the plugins directory inside it. That directory is not named PLUGIN_STATE_DIR: a variable of the
+# key's name keeps the export of a key in the environment, which restore.sh reads by name.
 PLUGIN_STATE_ROOT="$(openwa_resolve PLUGIN_STATE_DIR "$DATA_DIR" path)"
-PLUGIN_STATE_DIR="$PLUGIN_STATE_ROOT/plugins"
+PLUGIN_STATE_TARGET="$PLUGIN_STATE_ROOT/plugins"
 GENERATED_ENV="$DATA_DIR/.env.generated"
 # The app writes the generated admin key to BOOTSTRAP_KEY_FILE when that is set.
 ADMIN_KEY_FILE="$(openwa_resolve BOOTSTRAP_KEY_FILE "$DATA_DIR/.api-key" path)"
@@ -457,9 +458,9 @@ if [ -z "$(openwa_resolve PLUGINS_DIR '')" ] &&
   log "      move them into $PLUGIN_PACKAGES_DIR, or set PLUGINS_DIR=./plugins, and back up again"
 fi
 
-if [ -d "$PLUGIN_STATE_DIR" ]; then
+if [ -d "$PLUGIN_STATE_TARGET" ]; then
   log "Backing up plugin registry and persisted state"
-  copy_live_tree "$PLUGIN_STATE_DIR" "$STAGE/plugin-state"
+  copy_live_tree "$PLUGIN_STATE_TARGET" "$STAGE/plugin-state"
 fi
 
 if [ -f "$GENERATED_ENV" ]; then

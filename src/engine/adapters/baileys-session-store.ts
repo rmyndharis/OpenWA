@@ -24,6 +24,13 @@ interface LastMessage {
 export const SESSION_STORE_MAP_CAP_DEFAULT = 5000;
 
 /**
+ * How long the session waits for the replay of its own mark-read write after the write returned: longer than the 30 s
+ * after which Baileys' event buffer delivers whatever it holds (BUFFER_TIMEOUT_MS in Utils/event-buffer.js), so a replay
+ * the buffer held has arrived by then. A note nothing consumed lapses with it.
+ */
+const READ_ECHO_WINDOW_MS = 35_000;
+
+/**
  * Insertion-ordered Map with an LRU cap, the same discipline as LidMappingStoreService: a read or
  * write re-inserts the key at the most-recent end, and a set evicts the least-recently-used entry
  * while over `max`. `max = 0` means unbounded.
@@ -68,8 +75,17 @@ class LruMap<K, V> {
     return this.map.has(key);
   }
 
+  get size(): number {
+    return this.map.size;
+  }
+
   delete(key: K): void {
     this.drop(key);
+  }
+
+  clear(): void {
+    this.map.clear();
+    this.unpinned = 0;
   }
 
   get(key: K): V | undefined {
@@ -263,6 +279,11 @@ export class BaileysSessionStore {
    * tells whether the message came after the deletion (see {@link recordMessage}).
    */
   private readonly heldChatUpdates: LruMap<string, { mark: DeletionMark; chatId: string; update: Partial<Chat> }>;
+  /**
+   * The chats whose mark-read write the session has confirmed while Baileys' event buffer holds its replay, by the jid
+   * the write was keyed to, with the time (epoch ms) until which that replay is awaited. See {@link expectReadEcho}.
+   */
+  private readonly readEchoes: LruMap<string, number>;
 
   /**
    * @param lidStore       optional persisted, cross-session lid->phone table that backs resolution beyond
@@ -296,6 +317,7 @@ export class BaileysSessionStore {
     this.timerSetAt = new LruMap(maxEntries * 2);
     this.deletionMarks = new LruMap(maxEntries);
     this.heldChatUpdates = new LruMap(maxEntries);
+    this.readEchoes = new LruMap(maxEntries);
   }
 
   upsertContacts(records: Partial<BaileysContact>[] = []): void {
@@ -411,18 +433,39 @@ export class BaileysSessionStore {
         continue;
       }
       const existing: StoredChat = this.chats.get(r.id) ?? { id: r.id };
+      const applied = this.withoutReadEcho(r, existing);
       // A count that replaces a mark set by hand leaves the mark on the account: the record remembers it, so the
       // read that covers the message undoes the mark as well. Any other count the update carries (a read or a mark
       // synced from the phone, or the `undefined` Baileys writes where a sync cancelled a mark) says how the chat
       // stands now. Only a count the update carries itself is one: a chat decoded from a history sync answers
       // `null` from its prototype when the wire held none, and the merge below copies own keys alone.
-      const markCovered = Object.hasOwn(r, 'unreadCount')
-        ? (r.unreadCount ?? 0) > 0 && ((existing.unreadCount ?? 0) < 0 || existing.markCovered === true)
+      const markCovered = Object.hasOwn(applied, 'unreadCount')
+        ? (applied.unreadCount ?? 0) > 0 && ((existing.unreadCount ?? 0) < 0 || existing.markCovered === true)
         : existing.markCovered;
-      this.chats.set(r.id, { ...existing, ...r, ...(markCovered === undefined ? {} : { markCovered }) });
-      this.persistChatState(r.id, r);
-      this.applyChatTimer(r.id, r, lidIndex);
+      this.chats.set(r.id, { ...existing, ...applied, ...(markCovered === undefined ? {} : { markCovered }) });
+      this.persistChatState(r.id, applied);
+      this.applyChatTimer(r.id, applied, lidIndex);
     }
+  }
+
+  /**
+   * The update without the zero Baileys replays for the session's own mark-read write, when that zero came after the
+   * read had returned (see {@link expectReadEcho}) and would wipe a count the write never covered: it was raised after
+   * the read reset the counts, and the write's range stops short of it. The first count the chat reports after the
+   * write stands for the replay, whichever it is: a zero ends the wait here, and a count the library added the replay
+   * to (it sums the counts of one flush) is the replay already. Whatever else the update carries still applies. The key
+   * is taken out of a copy, never set to `undefined`, which is how a cancelled mark reads.
+   */
+  private withoutReadEcho(r: Partial<Chat>, existing: StoredChat): Partial<Chat> {
+    const id = r.id;
+    if (!id || !this.readEchoes.size || !Object.hasOwn(r, 'unreadCount')) return r;
+    const until = this.readEchoes.get(id);
+    if (until === undefined) return r;
+    this.readEchoes.delete(id);
+    if (until <= Date.now() || r.unreadCount !== 0 || (existing.unreadCount ?? 0) <= 0) return r;
+    const kept = { ...r };
+    delete kept.unreadCount;
+    return kept;
   }
 
   /**
@@ -1112,6 +1155,30 @@ export class BaileysSessionStore {
         this.chats.set(key, { ...chat, unreadCount: chat.markCovered ? -1 : 0, markCovered: false });
       }
     }
+  }
+
+  /**
+   * The session confirmed a mark-read write keyed `jid` while Baileys' event buffer holds the replay of that write: the
+   * zero it carries reaches {@link upsertChats} after the read has returned, and a count raised before the write's resync
+   * opened the buffer would be wiped by it. Noted until the replay is due (the first count the chat reports next) or
+   * {@link READ_ECHO_WINDOW_MS} has passed. A write with no replay held is not noted: its zero was applied before the
+   * read returned, where {@link keepUnread} repairs it.
+   */
+  expectReadEcho(jid: string): void {
+    this.readEchoes.set(jid, Date.now() + READ_ECHO_WINDOW_MS);
+  }
+
+  /**
+   * The chat reported a count that never reaches {@link upsertChats}: the filter for a message that is none of its own
+   * took it out, and the library had summed the held replay into it. That count is the replay, so the wait is over.
+   */
+  endReadEcho(jid: string): void {
+    this.readEchoes.delete(jid);
+  }
+
+  /** Forget every note: the socket that held the replays is gone, and its event buffer with them. */
+  dropReadEchoes(): void {
+    this.readEchoes.clear();
   }
 
   /**

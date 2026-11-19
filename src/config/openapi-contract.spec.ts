@@ -90,6 +90,25 @@ describe('openapi.json structural invariants', () => {
     expect(untyped).toEqual([]);
   });
 
+  // The API explorer groups operations by tag and takes each group's description from the document's tag
+  // list, so a tag an operation uses without a described entry there shows as a bare group.
+  it('every tag an operation uses is declared with a description', () => {
+    const doc = snapshot();
+    const described = new Set((doc.tags ?? []).filter(tag => tag.description).map(tag => tag.name));
+    const undescribed = new Set<string>();
+
+    for (const item of Object.values(doc.paths)) {
+      for (const [method, operation] of Object.entries(item)) {
+        if (!OPERATION_KEYS.has(method)) continue;
+        for (const tag of (operation as { tags?: string[] }).tags ?? []) {
+          if (!described.has(tag)) undescribed.add(tag);
+        }
+      }
+    }
+
+    expect([...undescribed].sort()).toEqual([]);
+  });
+
   // Every participant write goes through runParticipantsUpdate, which spends the shared request
   // budget (baileys-groups.ts), so each can answer 503 — and each ALSO reports per-participant
   // refusals inside its 200, which is the neighbouring claim it is easiest to mistake the 503 for.

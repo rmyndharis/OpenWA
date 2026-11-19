@@ -83,9 +83,10 @@ Key adapter facts:
   plain single-quoted string naming the refused method (a template-literal or variable-argument
   construction fails the gate outside the one `unsupported()` helper body, as does a literal that
   names no interface method), and a refusal
-  that fires only under a runtime condition - `sendTextMessage` with `customPreview` on whatsapp-web.js -
-  is pinned in the gate's conditional list instead of flipping the cell, because 'supported with a
-  refused option' is not 'not-available'.
+  that fires only under a runtime condition - `sendTextMessage` with `customPreview` on whatsapp-web.js, or
+  `revokeGroupInviteCode`, `getGroupInviteCode` and `setProfileStatus` on a WhatsApp Web build that lacks the call each one makes - is
+  pinned in the gate's conditional list instead of flipping the cell, because 'supported with a refused option'
+  is not 'not-available'.
 - **Inbound events** flow the other way: each adapter normalizes library events into the neutral
   `EngineEventCallbacks` (`onMessage`, `onMessageAck`, `onGroupEvent`, `onCall`, …), which the
   session module turns into OpenWA webhook events. Which library events are consumed — and which
@@ -180,7 +181,7 @@ class of rows (🔧¹⁰) and for 🔧¹³, stated in the table instead.
 | 🔧⁵ app-state resync bound  | No single row — keeps the Baileys socket's app-state resync from spinning (~1000 wasted 60s queries/day). Connection health under **every baileys cell**; the baileys column header carries `🔧⁵`.                                                                                                                                                                                                                                                                                                                                                       |
 | 🔧⁶ newsletter-create parse | `createChannel` on **baileys** — without it the call always answers 500 and leaks the channel it just created. Row-marked.                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 🔧⁷ participant arity       | `removeParticipants`, `promoteParticipants`, `demoteParticipants` on **wwjs**. Without it a request naming only non-members throws an arity assertion on removal, and promote/demote answer `200` for people WhatsApp never touched; the patch returns one boolean per REQUESTED id so the adapter reports a real per-participant outcome. Row-marked.                                                                                                                                                                                                   |
-| 🔧⁹ group description       | `setGroupDescription` on **wwjs**. Without it every call throws in the page and answers a bare `500`, so the capability is dead rather than degraded; `setGroupSubject` beside it is unaffected. Row-marked.                                                                                                                                                                                                                                                                                                                                             |
+| 🔧⁹ group description       | `setGroupDescription` on **wwjs**. Without it every call throws in the page and answers a bare `500`, so the capability is dead rather than degraded; `setGroupSubject` beside it is unaffected. The adapter now sends this write itself in the page, with the same options object (see the status note in 29.7), so the patch matters only to the library's own call, which the adapter falls back to where the page has no job for it. Row-marked.                                                                                                     |
 | 🔧¹⁰ media send repair      | Every **wwjs** media send built by `processMediaData`: `sendImageMessage`, `sendVideoMessage`, `sendAudioMessage` (voice notes included, through `ptt`), `sendDocumentMessage` and the media status posts. A sticker is built by `processStickerData`, which returns a new object rather than the media model. On the WhatsApp Web builds from 2026-09-17 the library's own id is clobbered by the media model and every such send answers a bare `500`, while text sends keep working. Not row-marked: it covers a whole class of rows rather than one. |
 | 🔧¹¹ send error capture     | No row. Every **wwjs** send that fails in the page reports what the page threw instead of `t: t`, but no cell's outcome depends on it: a send that works without the patch works the same way with it.                                                                                                                                                                                                                                                                                                                                                   |
 | 🔧¹² pairing refresh        | No row. Baileys linking by QR or pairing code: notification ACKs go out before login, retired registration secrets rotate and the current QR re-renders without spending a ref. Once a pairing code was requested (`creds.me` set) the QR timer stops, so running out of refs no longer ends that socket, as it does upstream. OpenWA ends it instead 5 minutes after the latest pairing request, and the session registers again with a new QR.                                                                                                         |
@@ -1074,10 +1075,17 @@ adapter boundary — none silently stubs.
   chat unread with each message received and lowers that for no receipt the session sends, so a chat read
   through the gateway stayed listed as unread. The value is what Baileys last reported for the chat, an
   increment and not a running total: a chat whose unread messages arrived one at a time is listed with
-  `1`. Baileys also counts a contact's encrypted edit or reaction, a pin, an album header and an event RSVP as a
-  received message; one that arrives on its own does not raise the count. An unread mark set on the phone that Baileys
-  delivers in the same batch just before such a message, as after a reconnect, is folded into that message's count by
-  the library and is therefore not listed; the mark stays on the account. A receipt that names only older messages, or only the account's own (which Baileys leaves out of a
+  `1`. Baileys also counts a contact's encrypted edit or reaction, a pin, a keep-in-chat toggle, an album header, an
+  event RSVP and an encrypted comment as a received message; one that arrives on its own does not raise the count,
+  and is no message that brings back a chat WhatsApp deleted, as a message of its own does. Such a message that arrives
+  while Baileys holds a history chunk of the chat (a new link's first sync or a history fetch) or an upsert of it is merged
+  into that chunk. When the chunk then counts only that message (a count of one), it neither becomes the chat's last
+  message or its time nor brings back a deleted chat, but the count Baileys adds for it stays in the chunk's, so the chat
+  can be listed with one unread message more than it holds; a chunk that held a count of its own, or that a text was
+  merged into as well, counts more and is left as Baileys hands it over, so the message can still date the chat and
+  bring back a deleted one.
+  An unread mark set on the phone that Baileys delivers in the same batch just before such a message, as after a reconnect, is folded into that
+  message's count by the library and is therefore not listed; the mark stays on the account. A receipt that names only older messages, or only the account's own (which Baileys leaves out of a
   receipt), leaves the count, and so does one a newer message overtook, recorded or still being processed; a session restarted since holds
   no received message to compare, and takes any received id for the read. Only a chat marked unread by
   hand (listed with `unreadCount` `-1`, by `markUnread` or on the phone) takes a second write,
@@ -1094,7 +1102,11 @@ adapter boundary — none silently stubs.
   `POST chats/read` still answers `{"success": true}` for the receipt, and the chat stays marked unread: it is
   listed with `-1`, also where a message's count stood in place of the mark. A write WhatsApp confirms only
   after that budget is replayed by Baileys as a count of `0`, which also clears the count of a message received
-  in the meantime.
+  in the meantime. A write confirmed in time is replayed before the read returns, or while Baileys' event buffer
+  still holds it, and the session then keeps the count of a message received after the read reset the counts; a read
+  made on the phone while the buffer still holds that replay (a tenth of a second, longer while other work keeps the
+  buffer open) reaches the session together with it, is taken for it, and leaves the count of the message it read
+  listed until the next read.
   A session restarted since the mark was set no longer lists it (`unreadCount` reads `0`, as above), so
   its read sends the receipt alone and the mark stays on the account.
 - **`setProfileName` / `setProfilePicture` / `deleteProfilePicture` refusals (baileys).**
@@ -1102,6 +1114,22 @@ adapter boundary — none silently stubs.
   resolve `false`, `deleteProfilePicture` resolves an explicit `false`) and raises a `403`. The
   Baileys calls resolve with no acceptance signal, so a change WhatsApp declined answers `200`. Only
   `setProfileStatus` is symmetric: neither engine surfaces a refusal for it.
+- **`setProfileStatus` (wwjs) needs a WhatsApp Web build that still has `setMyStatus`.** `Client.setStatus` calls
+  `setMyStatus` of `WAWebContactStatusBridge`, which WhatsApp Web builds from about mid November 2026 no longer
+  export: the About text became a text status that expires (a day by default), set through modules the library
+  does not call. The adapter asks the page whether the call exists and answers `501` where it does not, without
+  asking WhatsApp. On an earlier build the text is set as before. The gateway does not set the new text status:
+  its expiry and its gating by account cannot be settled without a linked account to check against.
+- **Group and profile writes (wwjs) answer by WhatsApp's status.** The subject, description, picture, announce,
+  locked and member-add-mode writes of a group, the account's own profile picture and the invite revoke are sent by
+  the adapter in the page, through the WhatsApp Web job whatsapp-web.js calls, so that the status WhatsApp gave
+  decides the answer: 2xx is done, a rate limit or a server error (`423`, `429`, `5xx`) is a `503` that changed
+  nothing (member add mode, which is two writes when it sets admins on a group whose link mode is open, can have
+  applied the first), and any other code, or the page's own refusal of an account that may not make the change, is a `403`. The
+  library reads every such status as `false`, which the adapter used to read as missing admin rights. The announce
+  and locked jobs of the current build resolve a response (`SetPropertyResponse*`) where an earlier build rejected a
+  status, and the library reads a resolved response as success; the adapter reads the response. Where the page has
+  none of the jobs, the write is the library's own call, as before.
 - **`editMessage` / `pinMessage` / `unpinMessage` refusals (baileys).** Both engines refuse what they
   can judge locally: the target must be addressable inside the given chat, and the Baileys adapter
   additionally refuses an edit of a message the account did not send or of one with no text or caption
@@ -1162,7 +1190,22 @@ adapter boundary — none silently stubs.
   message when WhatsApp allows one and the adapter reports `success: true` with a message saying the invite was
   sent once it went out (otherwise `success: false, status: 403`), while Baileys sends nothing and reports
   `success: false, status: 403`, so a batch made only of such participants answers `200` on wwjs when every
-  invite went out and `403` on Baileys.
+  invite went out and `403` on Baileys. The invite is sent through `sendGroupInviteMessage` of
+  `WAWebChatSendMessages`, which the WhatsApp Web build the gateway selects today no longer exports (the function
+  moved and takes one options object, where the library passes positional arguments). The adapter asks the page
+  whether the export exists and, where it does not, adds the participants without sending invitations: a
+  participant who needs one is reported as `success: false, status: 403` and every other participant keeps their
+  own outcome. Without that, the library's call failed inside its loop and the whole batch answered `500`.
+- **`revokeGroupInviteCode` (wwjs) needs a WhatsApp Web build that has the reset job.** The adapter runs the
+  job in the page: `resetGroupInviteCode` of `WAWebGroupInviteJob`, where the build keeps it, or of
+  `WAWebGroupQueryJob` on a build that still does (the library's own `revokeInvite` reads only the second). Both
+  take the same group id and resolve the same `{code}`, and a refusal is the `403` as before. A build with neither
+  answers `501` before anything is asked of WhatsApp, so the current code stays valid.
+- **`getGroupInviteCode` (wwjs) needs a WhatsApp Web build that has the invite code job.** The adapter reads
+  `fetchMexGroupInviteCode` of `WAWebMexFetchGroupInviteCodeJob` in the page and answers by the status WhatsApp gives. A
+  page with no such job runs the library's own `getInviteCode`, which reads the same module, so where that call fails
+  for want of the job (the module answers `undefined`, lacks the call, or is not defined) the answer is `501`, before
+  anything is asked of WhatsApp, where it was a bare `500`. A reload during the read is the retryable `409`.
 - **Group owner and group event ids (wwjs).** whatsapp-web.js folds a group's participant list to the phone
   dialect, but the group `owner` (`getGroupInfo`, `getGroupJoinInfo`) and the actor and participant ids of group
   events reach the adapter as WhatsApp Web holds them, which on a LID-addressed group is `<lid>@lid` even when the

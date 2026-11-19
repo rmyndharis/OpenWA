@@ -32,8 +32,9 @@ export class WebhookRegistry {
   constructor(private readonly post: (message: WorkerToHostMessage) => void) {}
 
   register(route: string, handler: WebhookHandler): void {
+    // The host is told about a route once; registering it again only replaces the handler.
+    if (!this.handlers.has(route)) this.post({ kind: 'webhook-subscribe', route });
     this.handlers.set(route, handler);
-    this.post({ kind: 'webhook-subscribe', route });
   }
 
   async handleWebhook(message: Extract<HostToWorkerMessage, { kind: 'webhook' }>): Promise<void> {

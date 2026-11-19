@@ -507,6 +507,7 @@ export function Chats() {
     onMediaLoad,
     measureMedia,
     onOlderMessagesRequested,
+    showRow,
   } = useChatScrollPosition(
     activeChat ? `${selectedSessionId}:${activeChat.id}` : null,
     hasRenderableMessages,
@@ -1573,7 +1574,7 @@ export function Chats() {
   const scrollToRow = (matches: (row: HTMLElement) => boolean): boolean => {
     const rows = messagesContainerRef.current?.querySelectorAll<HTMLElement>('[data-scroll-anchor]');
     const row = Array.from(rows ?? []).find(matches);
-    row?.scrollIntoView({ block: 'center' });
+    if (row) showRow(row);
     return row !== undefined;
   };
 
@@ -1727,13 +1728,14 @@ export function Chats() {
     if (container) {
       try {
         const el = container.querySelector(`[data-wa-message-id="${pending.waMessageId}"]`);
-        if (el instanceof HTMLElement) el.scrollIntoView({ block: 'center' });
+        // Through the hook, so that the pin the restore just made is not kept for a thread that has left its bottom.
+        if (el instanceof HTMLElement) showRow(el);
       } catch {
         // Unexpected chars in the id made the selector invalid — ignore.
       }
     }
     pendingHitRef.current = null;
-  }, [activeChat, loadingMessages, messages, messagesContainerRef, hitSeq]);
+  }, [activeChat, loadingMessages, messages, messagesContainerRef, showRow, hitSeq]);
 
   // Helper formats. The list time follows WhatsApp's ladder, so the list scans the way operators
   // expect: the clock for today, "Yesterday", the weekday within the last week, else a short date.
@@ -1808,7 +1810,8 @@ export function Chats() {
   // with a mouse or a pen, or a pick in the New chat panel, which closes and would leave focus on the page. Bumped
   // when the chat is chosen, so that the focus is made once the room has rendered: a room opened from the placeholder
   // has no field until then. Never after a tap, where a focused field raises a phone's keyboard over the thread that
-  // was just opened. A read-only key keeps its focus as well, its field being disabled.
+  // was just opened. A read-only key keeps its focus as well, its field being disabled. A reply started from a
+  // message's menu is the same: the menu goes with the pointer, and the focus its button held with it.
   const [composerFocusSeq, setComposerFocusSeq] = useState(0);
   // How the page was last pressed: the pointerdown's pointerType ('touch' for a tap), '' after a key.
   const pagePressRef = useRef('');
@@ -1822,6 +1825,12 @@ export function Chats() {
   const handleSelectChat = useCallback((chat: Chat, byPointer?: boolean) => {
     if (byPointer && chat.id !== activeChatIdRef.current) setComposerFocusSeq(n => n + 1);
     setActiveChat(chat);
+  }, []);
+  // The answer to a message is typed next, so the field takes the focus when the reply starts, again if that message is
+  // already the one being answered.
+  const startReply = useCallback((message: ChatMessageView) => {
+    setReplyingTo(message);
+    setComposerFocusSeq(n => n + 1);
   }, []);
 
   // Open a chat picked in the new-chat panel. A chat with no history is not in the engine's list, so
@@ -2502,7 +2511,7 @@ export function Chats() {
                     const opened = imageMessages.find(m => m.id === messageId);
                     if (opened) setLightbox(viewedImage(opened));
                   }}
-                  onReply={setReplyingTo}
+                  onReply={startReply}
                   onReact={handleReactMessage}
                   onDelete={handleDeleteMessage}
                   onClickButton={handleClickButton}

@@ -60,6 +60,69 @@ describe('history chat previews', () => {
   });
 });
 
+describe('history messages made of protocol noise', () => {
+  /** Baileys 7.0.0-rc14 `getContentType`: the first key that is `conversation` or contains `Message`, but the plain sender-key distribution. */
+  const libraryContentType = (content: Record<string, unknown>): string | undefined =>
+    Object.keys(content).find(
+      key => (key === 'conversation' || key.includes('Message')) && key !== 'senderKeyDistributionMessage',
+    );
+  const FAST_RATCHET = 'fastRatchetKeySenderKeyDistributionMessage';
+
+  /** The messages the capture hands over for one history chunk of these message contents. */
+  const handedOver = async (contents: Array<Record<string, unknown>>): Promise<Array<[string, string, string]>> => {
+    const handed: Array<[string, string, string]> = [];
+    const host = {
+      loadLib: () =>
+        Promise.resolve({
+          normalizeMessageContent: (m: unknown) => m,
+          getContentType: libraryContentType,
+          proto: { Message: { ProtocolMessage: { Type: { REVOKE: 0 } } } },
+        }),
+      normalizedSelfJid: () => 'me@s.whatsapp.net',
+      toNeutralJid: (id: string) => id,
+      extractEphemeralDuration: () => undefined,
+      recordMessage: jest.fn(),
+      recordMessageEdit: jest.fn(),
+      upsertContacts: jest.fn(),
+      getOnHistoryMessages: () => (messages: Array<{ id: string; type: string; body: string }>) => {
+        handed.push(...messages.map((m): [string, string, string] => [m.id, m.type, m.body]));
+      },
+      applyHistoryRevoke: (key: WAMessage['key']) => Promise.resolve(key),
+      wasDeletedForEveryone: () => false,
+    } as unknown as BaileysHistoryHost;
+    await new BaileysHistory(host).captureHistoryMessages(
+      contents.map((message, i) => ({
+        key: { id: `H${i}`, remoteJid: '100@s.whatsapp.net', fromMe: false },
+        message,
+        messageTimestamp: 100 + i,
+      })),
+    );
+    return handed;
+  };
+
+  it.each<[string, Record<string, unknown>]>([
+    ['a sender-key distribution', { senderKeyDistributionMessage: {} }],
+    ['a fast-ratchet sender-key distribution', { [FAST_RATCHET]: {} }],
+    ['a fast-ratchet distribution with its context info', { messageContextInfo: {}, [FAST_RATCHET]: {} }],
+  ])('hands over nothing for %s', async (_what, content) => {
+    expect(await handedOver([content])).toEqual([]);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['before', { [FAST_RATCHET]: {}, conversation: 'hi' }],
+    ['after', { conversation: 'hi', [FAST_RATCHET]: {} }],
+  ])(
+    'hands over a text that merged with a fast-ratchet distribution %s it as the text it is',
+    async (_where, content) => {
+      expect(await handedOver([content])).toEqual([['H0', 'text', 'hi']]);
+    },
+  );
+
+  it('drops a pin that merged after a fast-ratchet distribution, as it drops a pin', async () => {
+    expect(await handedOver([{ pinInChatMessage: {} }, { [FAST_RATCHET]: {}, pinInChatMessage: {} }])).toEqual([]);
+  });
+});
+
 describe('history sender names', () => {
   it('files the push name of a 1:1 message whose key names an empty participant under the chat', async () => {
     const upsertContacts = jest.fn();

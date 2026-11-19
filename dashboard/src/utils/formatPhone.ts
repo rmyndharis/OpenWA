@@ -56,7 +56,7 @@ export function formatPhoneForDisplay(phoneOrJid: string): string | null {
   const rest = digits.slice(ccLen);
   if (rest.length <= 4) return `+${cc} ${rest}`;
   // Groups of three from the left; a length that is not a multiple of three makes the last one or
-  // two groups four digits, so no group is shorter than three ("812 345 6789", "817 7000 8896",
+  // two groups four digits, so no group is shorter than three ("812 345 6789", "817 1234 5678",
   // "9123 4567", "812 345 678"). Five digits cannot be split that way and stay whole.
   const fours = rest.length % 3;
   const cut = rest.length - 4 * fours;

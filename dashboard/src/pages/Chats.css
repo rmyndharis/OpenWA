@@ -618,6 +618,7 @@
   font-size: 0.9375rem;
   color: var(--text-primary);
   outline: none;
+  unicode-bidi: plaintext;
 }
 
 .chats-page .chat-search-input input::placeholder {
@@ -3038,7 +3039,7 @@
 /* One highlight, which the pointer and the arrow keys both move: a hover style of its own would mark a second row
    when the keys scroll the list under a pointer at rest. */
 .chats-page .slash-template-item.active {
-  background: color-mix(in srgb, var(--chat-meta) 14%, transparent);
+  background: color-mix(in srgb, var(--chat-meta) 12%, transparent);
 }
 
 /* A name and a preview are text of their own: under the page direction an Arabic page drew "/aviso" as "aviso/" and
@@ -3282,6 +3283,9 @@
   /* Five whole lines, then the field scrolls. */
   max-height: calc(44px + 4 * 1.35em);
   overflow-y: auto;
+  /* What is typed is text of its own: under the page direction an Arabic page put the full stop of an English
+     sentence on the wrong end of it. Each line follows its own characters; the field stays at the page's edge. */
+  unicode-bidi: plaintext;
 }
 
 /* A textarea wraps its placeholder, and a wrapped one is counted in the height the field is given: where the
@@ -3811,5 +3815,29 @@
 
   .main-content:not(.expanded) .chats-page .contact-info-panel {
     width: 100%;
+  }
+}
+
+/* Forced colours drop fills and shadows: the search boxes and the composer draw an outline on focus, the open chat, the
+   highlighted template and a toggle that is on draw a heavy frame, and the send, scroll and create buttons a frame. */
+@media (forced-colors: active) {
+  .chats-page .chat-search-input:focus-within,
+  .chats-page .session-picker-search:focus-within,
+  .chats-page .message-input-pill:focus-within {
+    outline: 2px solid var(--focus-ring);
+  }
+
+  .chats-page .slash-template-item.active,
+  .chats-page .chat-item-card.active,
+  .chats-page .icon-btn.active,
+  .chats-page .btn-input-accessory.active,
+  .chats-page .status-compose-modal .compose-type-toggle button.active {
+    border: 3px solid CanvasText;
+  }
+
+  .chats-page .btn-send-message,
+  .chats-page .scroll-to-bottom-btn,
+  .chats-page .new-group-create {
+    border: 1px solid ButtonText;
   }
 }

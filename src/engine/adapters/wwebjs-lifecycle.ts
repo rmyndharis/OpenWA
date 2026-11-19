@@ -39,7 +39,10 @@ export function isExecutionContextDestroyedError(reason: string): boolean {
 /**
  * A first-inject rejection that reads as "the page navigated out from under the in-flight evaluate":
  * the exec-context class above plus the 'window.require is not a function' variant (an evaluate
- * landing on a document whose WA bundle has not booted yet). Deliberately SEPARATE from the
+ * landing on a document whose WA bundle has not booted yet), which the page functions this adapter
+ * ships spell 'w.require is not a function' because they read `require` through a local alias of the
+ * window. Only a missing `require` itself is a reload: 'w.require(...).x is not a function' names a
+ * function a WhatsApp Web build dropped, which no retry serves. Deliberately SEPARATE from the
  * stale-profile advisory classifier: the advisory names a remedy (delete the profile) that is wrong
  * for the window.require shape (see src/config/process-error-monitor.ts) — this predicate only
  * decides whether one in-place retry is worth it, both shapes being transient when a reload caused
@@ -49,7 +52,23 @@ export function isExecutionContextDestroyedError(reason: string): boolean {
  * the inject that would take over, so the launch rejects with one of these shapes as it always did (#1081).
  */
 function isNavigationShapedInitRejection(reason: string): boolean {
-  return isExecutionContextDestroyedError(reason) || /window\.require is not a function/i.test(reason);
+  return isExecutionContextDestroyedError(reason) || MISSING_REQUIRE_PATTERN.test(reason);
+}
+
+/** What V8 says when a page function reads `require` on a document WhatsApp Web has not booted, under either spelling. */
+const MISSING_REQUIRE_PATTERN = /\b(?:window|w)\.require is not a function/i;
+
+/**
+ * Whether a page function failed on its first statement, a `require` of a document that has none yet. Nothing was
+ * asked of WhatsApp before that, which is what a write that does not converge needs to know to answer the retryable
+ * 409: any other shape of a navigation, a context destroyed while the call ran, leaves the outcome unknown.
+ */
+export function isMissingRequireError(error: unknown): boolean {
+  if (error instanceof HttpException) {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return !message.startsWith(CAPTURED_PAGE_ERROR_PREFIX) && MISSING_REQUIRE_PATTERN.test(message);
 }
 
 /** What whatsapp-web.js throws, as a bare string, when its wait for WhatsApp Web to boot runs out of authTimeoutMs. */
@@ -99,13 +118,22 @@ export const PAGE_RELOADING_MESSAGE =
  * hidden by this answer: it is not reported here, but the liveness probe fails outside the re-inject window
  * and the watchdog reconnects. Left unread, the same message became a false 404 or 400 at the catches that
  * fold a failed lookup into "not found", or a bare 500.
+ *
+ * `navigatedDuringCall` says a navigation was stamped after the call began, which no text can say. Chrome clears the
+ * old page context before puppeteer delivers `framenavigated`, and a call made in between is held until the new
+ * context exists, which comes after that event: it runs on a document WhatsApp Web has not booted, so a page function
+ * that starts from `window.WWebJS` dies on `Cannot read properties of undefined`, the text of any ordinary page error.
+ * With it, any other failure of the call is the reload too. The protocol timeout keeps its own answer.
  */
-export function isNavigationError(error: unknown): boolean {
+export function isNavigationError(error: unknown, navigatedDuringCall = false): boolean {
   if (error instanceof HttpException) {
     return false;
   }
   const message = error instanceof Error ? error.message : String(error);
-  return !message.startsWith(CAPTURED_PAGE_ERROR_PREFIX) && isNavigationShapedInitRejection(message);
+  if (message.startsWith(CAPTURED_PAGE_ERROR_PREFIX)) {
+    return false;
+  }
+  return isNavigationShapedInitRejection(message) || (navigatedDuringCall && !isProtocolTimeout(error));
 }
 
 /**
@@ -1383,6 +1411,11 @@ export class WwebjsLifecycle {
   /** Whether a probe found the page now loaded without whatsapp-web.js's helpers (see pageWithoutHelpers). */
   isPageWithoutHelpers(): boolean {
     return this.pageWithoutHelpers;
+  }
+
+  /** The navigations stamped so far. A call that reads it before it starts can tell that one landed while it ran. */
+  stampedNavigations(): number {
+    return this.navigationCount;
   }
 
   private clearNavigationReinjectWindow(): void {

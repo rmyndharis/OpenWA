@@ -6,7 +6,7 @@
 # The application fills its configuration from three layers (src/config/load-env.ts), each supplying
 # only what the previous one left unset:
 #
-#   1. the process environment
+#   1. the process environment, where a value of only blanks counts as unset, as in the app
 #   2. ./.env
 #   3. <data dir>/.env.generated   — written by Dashboard > Infrastructure
 #
@@ -188,6 +188,10 @@ openwa_env_opener() (
   done
 )
 
+# The code points beyond ASCII that dotenv's \s and JavaScript's trim() take as blank: the Unicode blanks and the
+# byte-order mark, as UTF-8 byte patterns for a regular expression matched in the C locale.
+OPENWA_BLANK=$'\xc2\xa0|\xe1\x9a\x80|\xe2\x80[\x80-\x8a\xa8\xa9\xaf]|\xe2\x81\x9f|\xe3\x80\x80|\xef\xbb\xbf'
+
 # openwa_env_file_value <file> <key> - print the value from one env-file layer. Returns 1 when the layer
 # does not set the key and 2 when it may set it in a form rejected below; a blank value succeeds and
 # prints nothing.
@@ -196,8 +200,7 @@ openwa_env_file_value() {
   # The trims below take only ASCII blanks whatever the operator's locale, so a Unicode blank after a
   # closing quote stops the run on every host.
   local LC_ALL=C
-  # The code points beyond ASCII that dotenv's \s matches: the Unicode blanks and the byte-order mark.
-  local blank=$'\xc2\xa0|\xe1\x9a\x80|\xe2\x80[\x80-\x8a\xa8\xa9\xaf]|\xe2\x81\x9f|\xe3\x80\x80|\xef\xbb\xbf'
+  local blank="$OPENWA_BLANK"
   local s="([[:space:]]|$blank)"
   # A line dotenv or Docker Compose may read as setting the key: `KEY=`, `KEY:` or a bare `KEY`.
   # dotenv skips `KEY:value`, but Compose interpolates ./.env into the container and reads it as a
@@ -431,9 +434,9 @@ openwa_media_dir() {
   case "$dir" in
     ./uploads | uploads)
       if ! openwa_writable "$dir" || { [ ! -d "$dir" ] && [ -d "$DATA_DIR/media" ]; } ||
-        { [ -z "$(printenv STORAGE_LOCAL_PATH)" ] && ! openwa_is_cwd_data_dir; }; then
+        { [ -z "$(openwa_env STORAGE_LOCAL_PATH)" ] && ! openwa_is_cwd_data_dir; }; then
         local fix="Remove the line from ./.env or .env.generated."
-        [ -z "$(printenv STORAGE_LOCAL_PATH)" ] || fix="Unset it in the environment."
+        [ -z "$(openwa_env STORAGE_LOCAL_PATH)" ] || fix="Unset it in the environment."
         echo "[config] WARN: STORAGE_LOCAL_PATH=$dir is a leftover the app does not use here, so it keeps" >&2
         echo "[config]       media in ./data/media; using $DATA_DIR/media. $fix" >&2
         # A non-empty ./uploads beside a missing or empty <data dir>/media (the entrypoint creates an
@@ -455,6 +458,19 @@ openwa_media_dir() {
 # shell; restore.sh points it at the archive's copy, which replaces this file during the restore.
 OPENWA_GENERATED_ENV="${DATA_DIR:-./data}/.env.generated"
 
+# openwa_env <key> - layer 1, the process environment's value of <key>, read as the app reads it. The app drops
+# a value that is empty once trimmed (clearBlankEnv in src/config/env-precedence.ts; a compose forward with
+# nothing set renders an empty one), so the layers below supply the key: here that value prints as nothing. A
+# value that is not blank prints as written. PLUGINS_DIR, which the app reads as `PLUGINS_DIR || default`, and
+# DATABASE_URL, which only these scripts read, are not cleared there and print as written, blank or not. Each
+# read of a setting from the environment goes through here, so that none takes as set what another takes as unset.
+openwa_env() {
+  local LC_ALL=C v re="^([[:space:]]|$OPENWA_BLANK)*\$"
+  v="$(printenv "$1" 2>/dev/null || true)"
+  if [ "$1" != PLUGINS_DIR ] && [ "$1" != DATABASE_URL ] && [[ $v =~ $re ]]; then v=""; fi
+  printf '%s' "$v"
+}
+
 # openwa_resolve <key> <default> [path] - the application's precedence: environment, then ./.env,
 # then $OPENWA_GENERATED_ENV, then the built-in default. Requires DATA_DIR to be set before sourcing.
 # With a third argument of `path`, the value names a filesystem path: a ./data or ./data/... value
@@ -468,7 +484,7 @@ OPENWA_GENERATED_ENV="${DATA_DIR:-./data}/.env.generated"
 # from a command substitution or for a substitution in a command's arguments.
 openwa_resolve() {
   local key="$1" fallback="$2" kind="${3:-}" current value layer rc
-  current="$(printenv "$key" 2>/dev/null || true)"
+  current="$(openwa_env "$key")"
   if [ -n "$current" ]; then
     printf '%s' "$current"
     return 0

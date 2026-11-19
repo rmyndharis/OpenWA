@@ -301,7 +301,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
                 className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
                 end={to === '/'}
                 onClick={handleNavClick}
-                title={collapsed ? label : undefined}
+                title={label}
               >
                 <Icon size={20} />
                 {!collapsed && <span>{label}</span>}
@@ -353,7 +353,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
               {!collapsed && <span>{themeLabel}</span>}
             </button>
           </div>
-          <button className="logout-btn" onClick={onLogout} title={collapsed ? t('common.logout') : undefined}>
+          <button className="logout-btn" onClick={onLogout} title={t('common.logout')}>
             <LogOut size={20} />
             {!collapsed && <span>{t('common.logout')}</span>}
           </button>

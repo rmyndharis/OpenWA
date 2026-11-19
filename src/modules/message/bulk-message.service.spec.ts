@@ -26,7 +26,7 @@ import { MessageService } from './message.service';
 import { SendPacingService, SEND_PACING_LIMITED } from './send-pacing.service';
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { HookManager } from '../../core/hooks';
-import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { EnginePageError } from '../../common/errors/engine-page.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
@@ -1367,6 +1367,33 @@ describe('BulkMessageService.processBatch', () => {
 
     expect(warn).toHaveBeenCalled();
     expect(warn.mock.calls.flat().join(' ')).not.toContain('10.0.0.1');
+  });
+
+  it('logs the guard detail of a blocked media URL, and stores and hands the hook only the generic text', async () => {
+    const batch = makeBatch(1);
+    repo.findOne.mockResolvedValue(batch);
+    engine.sendTextMessage.mockRejectedValueOnce(new SsrfBlockedError('Blocked internal address: 10.0.0.1'));
+    const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation();
+
+    try {
+      await runProcessBatch();
+
+      expect(warn).toHaveBeenCalledWith(
+        'Outbound media fetch blocked by SSRF guard: Blocked internal address: 10.0.0.1',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+    const result = batch.results[0];
+    expect(result.status).toBe(BatchMessageStatus.FAILED);
+    expect(result.error).toEqual({ code: 'SEND_BLOCKED', message: SSRF_BLOCKED_CLIENT_MESSAGE });
+    expect(JSON.stringify(batch.results)).not.toContain('10.0.0.1');
+    expect(hookManager.execute).toHaveBeenCalledWith(
+      'message:failed',
+      expect.objectContaining({ error: SSRF_BLOCKED_CLIENT_MESSAGE }),
+      expect.anything(),
+    );
+    expect(JSON.stringify(hookManager.execute.mock.calls)).not.toContain('10.0.0.1');
   });
 
   it('does NOT fire message:failed when the gate blocks a bulk item (a block is a moderation decision, not a delivery failure)', async () => {

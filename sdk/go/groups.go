@@ -173,7 +173,7 @@ func (s *GroupsService) GetPicture(ctx context.Context, sessionID, groupID strin
 	return &out, nil
 }
 
-// SetPicture sets the group's picture. Requires admin rights on the group.
+// SetPicture sets the group's picture. Requires the right to edit the group info: an admin, or any member of a group whose info is not restricted to admins.
 func (s *GroupsService) SetPicture(ctx context.Context, sessionID, groupID string, body SetGroupPictureRequest) (*SuccessResult, error) {
 	var out SuccessResult
 	if err := s.client.do(ctx, "PUT", s.base(sessionID)+"/"+pathEscape(groupID)+"/picture", nil, body, &out); err != nil {
@@ -182,7 +182,7 @@ func (s *GroupsService) SetPicture(ctx context.Context, sessionID, groupID strin
 	return &out, nil
 }
 
-// DeletePicture removes the group's picture. Requires admin rights on the group.
+// DeletePicture removes the group's picture. Requires the right to edit the group info: an admin, or any member of a group whose info is not restricted to admins.
 func (s *GroupsService) DeletePicture(ctx context.Context, sessionID, groupID string) (*SuccessResult, error) {
 	var out SuccessResult
 	if err := s.client.do(ctx, "DELETE", s.base(sessionID)+"/"+pathEscape(groupID)+"/picture", nil, nil, &out); err != nil {

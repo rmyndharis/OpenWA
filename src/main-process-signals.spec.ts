@@ -125,6 +125,24 @@ function probe(port: number, path: string): Promise<{ status?: number; body: unk
   });
 }
 
+/**
+ * `probe` again until the gateway answers or the deadline passes. A process that has just written a diagnostic report
+ * has held its event loop for a while, and one unanswered attempt then says nothing about whether it keeps running.
+ */
+async function probeUntilAnswered(
+  port: number,
+  path: string,
+  deadlineMs = 30_000,
+): Promise<{ status?: number; body: unknown }> {
+  const deadline = Date.now() + deadlineMs;
+  let answer = await probe(port, path);
+  while (answer.status === undefined && Date.now() < deadline) {
+    await sleep(100);
+    answer = await probe(port, path);
+  }
+  return answer;
+}
+
 function hasCompiler(): boolean {
   try {
     execFileSync('cc', ['--version'], { stdio: 'ignore' });
@@ -329,7 +347,7 @@ describePosix('process signals on the running gateway', () => {
         return false;
       };
       const written = await reportWritten();
-      const live = await probe(gateway.port, '/api/health/live');
+      const live = await probeUntilAnswered(gateway.port, '/api/health/live');
       const stillRunning = gateway.child.exitCode === null && gateway.child.signalCode === null;
       gateway.child.kill('SIGTERM');
       const outcome = await within(gateway.exited, 30_000, 'still running' as const);

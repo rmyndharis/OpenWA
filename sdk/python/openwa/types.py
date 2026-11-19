@@ -106,7 +106,7 @@ class CreateCallLinkRequest(TypedDict):
     """
 
     type: CallLinkType
-    startTime: float
+    startTime: int
 
 
 class CallLinkResponse(TypedDict):

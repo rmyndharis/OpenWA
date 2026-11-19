@@ -70,9 +70,9 @@ describe('IngressProcessor', () => {
     expect(hooks.execute).toHaveBeenCalledWith('ingress:error', expect.anything(), expect.anything());
   });
 
-  // Once the attempts are spent the DLQ row is the only durable copy: the ingress_events row retired its
-  // payload on 'queued' and removeOnFail prunes the failed job. A data database that is down for the
-  // whole retry window refuses the row too, so the delivery goes back on the queue instead.
+  // Once the attempts are spent the DLQ row is the only durable copy: removeOnFail prunes the failed job, and
+  // the ingress_events row lets go of its payload once the dead letter is written. A data database that is down
+  // for the whole retry window refuses the row too, so the delivery goes back on the queue instead.
   it('re-queues the delivery when the final-attempt DLQ write fails, and still rethrows the dispatch error', async () => {
     const loader = {
       isRestorePending: () => false,
@@ -192,8 +192,13 @@ describe('IngressProcessor', () => {
     );
 
     await proc.process(job({ id: 'ing-abc' }));
-    expect(events.update).not.toHaveBeenCalled();
+    // An original job retires only a row that is still pending, and closes no dead letter.
+    expect(events.update).toHaveBeenCalledWith(
+      { pluginId: 'chatwoot', instanceId: 'acct1', providerDeliveryId: 'd1', dispatchState: 'pending' },
+      { dispatchState: 'dispatched', payload: null },
+    );
     expect(failures.update).not.toHaveBeenCalled();
+    events.update.mockClear();
 
     await proc.process(job({ id: 'ing-abc-requeued-1' }));
     expect(events.update).toHaveBeenCalledWith(
@@ -208,6 +213,130 @@ describe('IngressProcessor', () => {
     // The delivery already reached the plugin: a failed bookkeeping write must not fail the job into a retry.
     events.update.mockRejectedValue(new Error('db down'));
     await expect(proc.process(job({ id: 'ing-abc-requeued-2' }))).resolves.toBeUndefined();
+  });
+
+  // The row keeps its payload while the job is queued, so a job that Redis loses can be replayed from it; once the
+  // delivery settles the row lets go.
+  describe('the event row of a queued delivery', () => {
+    const pending = {
+      pluginId: 'chatwoot',
+      instanceId: 'acct1',
+      providerDeliveryId: 'd1',
+      dispatchState: 'pending',
+    };
+    const retired = { dispatchState: 'dispatched', payload: null };
+
+    it('is retired once the dispatch succeeds, and a failed write does not fail the job that delivered', async () => {
+      const events = { update: jest.fn().mockResolvedValue(undefined) };
+      const proc = new IngressProcessor(
+        { isRestorePending: () => false, dispatchWebhookForInstance: jest.fn().mockResolvedValue(undefined) } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        events as never,
+      );
+
+      await proc.process(job());
+      expect(events.update).toHaveBeenCalledTimes(1);
+      expect(events.update).toHaveBeenCalledWith(pending, retired);
+
+      events.update.mockRejectedValue(new Error('db down'));
+      await expect(proc.process(job())).resolves.toBeUndefined();
+    });
+
+    it('is left alone while the job is still being retried', async () => {
+      const events = { update: jest.fn() };
+      const proc = new IngressProcessor(
+        {
+          isRestorePending: () => false,
+          dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+        } as never,
+        { save: jest.fn() } as never,
+        { execute: jest.fn() } as never,
+        {} as never,
+        events as never,
+      );
+
+      await expect(proc.process(job({ attemptsMade: 0, opts: { attempts: 3 } }))).rejects.toThrow('boom');
+
+      expect(events.update).not.toHaveBeenCalled();
+    });
+
+    it('is retired once the dead letter of a failed final attempt is written, and not before', async () => {
+      const order: string[] = [];
+      const failures = {
+        save: jest.fn(() => {
+          order.push('dead letter');
+          return Promise.resolve(undefined);
+        }),
+        count: jest.fn().mockResolvedValue(0),
+      };
+      const events = {
+        update: jest.fn(() => {
+          order.push('retire');
+          return Promise.resolve(undefined);
+        }),
+      };
+      const proc = new IngressProcessor(
+        {
+          isRestorePending: () => false,
+          dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+        } as never,
+        failures as never,
+        { execute: jest.fn().mockResolvedValue({ continue: true }) } as never,
+        {} as never,
+        events as never,
+      );
+
+      await expect(proc.process(job({ attemptsMade: 2, opts: { attempts: 3 } }))).rejects.toThrow('boom');
+
+      expect(order).toEqual(['dead letter', 'retire']);
+      expect(events.update).toHaveBeenCalledWith(pending, retired);
+    });
+
+    it('is retired once the dead letter of a job that stalled out is written', async () => {
+      const events = { update: jest.fn().mockResolvedValue(undefined) };
+      const proc = new IngressProcessor(
+        {} as never,
+        { save: jest.fn().mockResolvedValue(undefined), count: jest.fn().mockResolvedValue(0) } as never,
+        { execute: jest.fn().mockResolvedValue({ continue: true }) } as never,
+        {} as never,
+        events as never,
+      );
+
+      await proc.onWorkerFailed(
+        job({ attemptsMade: 1, deferredFailure: 'job stalled more than allowable limit' }),
+        new Error('job stalled more than allowable limit'),
+      );
+
+      expect(events.update).toHaveBeenCalledWith(pending, retired);
+    });
+
+    it('keeps its payload when the dead-letter write fails and the delivery goes back on the queue', async () => {
+      const events = { update: jest.fn() };
+      const queue = {
+        waitUntilReady: jest.fn().mockResolvedValue(undefined),
+        add: jest.fn().mockResolvedValue(undefined),
+        remove: jest.fn().mockResolvedValue(1),
+      };
+      const proc = new IngressProcessor(
+        {
+          isRestorePending: () => false,
+          dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+        } as never,
+        { save: jest.fn().mockRejectedValue(new Error('db down')), count: jest.fn().mockResolvedValue(0) } as never,
+        { execute: jest.fn().mockResolvedValue({ continue: true }) } as never,
+        queue as never,
+        events as never,
+      );
+
+      await expect(
+        proc.process(job({ id: 'ing-abc', name: 'ingress', attemptsMade: 2, opts: { attempts: 3 } })),
+      ).rejects.toThrow('boom');
+
+      expect(queue.add).toHaveBeenCalledTimes(1);
+      expect(events.update).not.toHaveBeenCalled();
+    });
   });
 
   it('does not add a second DLQ row when one is already open for the delivery', async () => {

@@ -678,8 +678,8 @@ export class MessageController {
   @ApiResponse({
     status: 503,
     description:
-      'The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the ' +
-      'session is ready again.',
+      'The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the ' +
+      'protocol timeout, so nothing could be read. Retry shortly.',
   })
   async getChatHistory(
     @Param('sessionId') sessionId: string,
@@ -725,8 +725,8 @@ export class MessageController {
   @ApiResponse({
     status: 503,
     description:
-      'The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the ' +
-      'session is ready again.',
+      'The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the ' +
+      'protocol timeout, so nothing could be read. Retry shortly.',
   })
   async getReactions(
     @Param('sessionId') sessionId: string,
@@ -768,8 +768,8 @@ export class MessageController {
   @ApiResponse({
     status: 503,
     description:
-      'The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the ' +
-      'session is ready again.',
+      'The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the ' +
+      'protocol timeout, so nothing could be read. Retry shortly.',
   })
   async getReceipts(
     @Param('sessionId') sessionId: string,

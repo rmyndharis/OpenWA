@@ -173,12 +173,13 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   (`UNIQUE(pluginId, instanceId, providerDeliveryId)`, insert-or-skip). It also carries the dispatch-lifecycle
   markers the reconciler sweeps on: `dispatchState` (`pending | dispatched | failed`, `NULL` on rows
   that predate the columns on a synchronize-bootstrapped DB — "not watched"), `dispatchAttempts`, and
-  `lastDispatchAt`. New rows are `pending`; a recorded enqueue outcome flips them to `dispatched`;
+  `lastDispatchAt`. New rows are `pending`; a delivery that settles (dispatched inline, finished by its queue job, or dead-lettered by the worker) flips them to `dispatched`, and a queued row stays `pending` until then;
   `failed` is terminal (recovery continues via the DLQ row + redrive), except that a re-queued copy
   (see §25.4) that delivers moves the event to `dispatched` and retires the delivery's open DLQ row.
-  The row carries the **full request payload only while it is the sole durability handle** — from the
-  persist until the dispatch outcome is recorded. Once the dispatch tier owns the delivery (the BullMQ
-  job data, or the DLQ row on failure), the payload is retired to `NULL` and the row slims to its
+  The row carries the **full request payload only until the delivery settles**: from the
+  persist until the plugin has the delivery or the DLQ row holds it. While its job is queued the row
+  still carries the payload, so a job that Redis loses is replayed from the row (§25.7); the payload is
+  then retired to `NULL` and the row slims to its
   dedup marker plus `payloadHash` (a sha256 of the raw body kept for operator correlation). This keeps
   steady-state growth at a few hundred bytes per delivery instead of up to 2× `maxBodyBytes`; dedup
   rows are pruned on their own short window (`INGRESS_DEDUP_RETENTION_DAYS`, default 7 — a dedup
@@ -321,9 +322,9 @@ an empty key (so a trailing or doubled slash looks for that key), and an array t
 A pointer that finds no string, number or boolean leaves the delivery on the per-instance lane; one
 written without its leading slash resolves as it always did.
 
-Persist-before-acknowledge alone is not delivery: a crash between the persist and the enqueue, or a
-fire-and-forget enqueue on a `response` route whose outcome is never recorded, would strand the row
-with the provider already acknowledged. The **ingress reconciler** closes that window: every
+Persist-before-acknowledge alone is not delivery: a crash between the persist and the enqueue, a
+fire-and-forget enqueue on a `response` route whose outcome is never recorded, or a queued job that
+Redis loses would strand the row with the provider already acknowledged. The **ingress reconciler** closes that window: every
 `INGRESS_RECONCILE_INTERVAL_MS` (default 60s, `0` disables; a blank value falls back to the
 default, and a negative or unparseable value fails the boot) it re-dispatches a bounded batch
 (`INGRESS_RECONCILE_BATCH_SIZE`, default 50) of `pending` rows whose last activity is older than a
@@ -334,14 +335,23 @@ the crashed live path may have enqueued. The stored row is sufficient for re-dis
 provenance; the conversation lane is re-derived from the current manifest. After
 `INGRESS_RECONCILE_MAX_ATTEMPTS` (default 5) the row goes `failed` and a dead-letter row is
 guaranteed to exist **before** the row's payload is retired, so recovery continues through the
-bounded redrive path instead of an infinite replay loop; a successful replay likewise retires the
-row's payload with the `dispatched` mark and retires any live-path dead-letter row for the same
-delivery so a later redrive never double-delivers. The replay looks the queue job up first: a job
-still in the queue or completed, or a live or completed re-queued copy of it, takes the `dispatched`
-mark without a second enqueue, and a job that failed with no such copy is not replayed: the row goes
-`failed` with a dead-letter row guaranteed as above, so none is written while a copy can still
-deliver. A `pending` row found without a payload (only possible for imported/corrupt history —
-payloads are retired only with a recorded outcome) is excluded from the sweep and never replayed
+bounded redrive path instead of an infinite replay loop; an inline replay that succeeds retires the
+row's payload with the `dispatched` mark, and every successful replay retires any live-path
+dead-letter row for the same delivery so a later redrive never double-delivers. The replay looks the
+queue job up first. A job that is waiting, running or delayed, or a live re-queued copy of it, owns
+the delivery: the row keeps its payload and stays `pending` for the worker to settle, and the sweep
+looks at it again after fifteen minutes (it remembers up to 1000 such rows together with the
+unreadable ones below, and a restart forgets them), so a backlog of live jobs does not hold back the
+stranded rows behind it. A completed job settles the row with the `dispatched` mark and no second
+delivery. A job that failed with no live copy is not replayed: the row goes `failed` with a
+dead-letter row guaranteed as above, so none is written while a copy can still deliver. A job that
+is gone (Redis restarted without its data, failed over to a replica that was behind, evicted it, or
+an operator removed it in the queue dashboard) is added again from the row under the original id,
+and the row stays `pending` with one more attempt counted: a delivery whose job keeps vanishing is
+dead-lettered after `INGRESS_RECONCILE_MAX_ATTEMPTS` replays. While Redis cannot be asked the sweep
+replays nothing, because the job may be alive, and waits for the next pass. A `pending` row found
+without a payload (only possible for imported/corrupt history: payloads are retired only once a
+delivery settles) is excluded from the sweep and never replayed
 empty; nothing logs it, and it stays `pending` until `INGRESS_DEDUP_RETENTION_DAYS` prunes it. A
 `pending` row whose stored payload does not parse (again only imported or hand-edited history) is
 logged as `ingress_reconcile_row_unreadable` and left untouched: the sweep sets it aside for an hour
@@ -349,6 +359,21 @@ logged as `ingress_reconcile_row_unreadable` and left untouched: the sweep sets 
 for the rest of its run. With more than about a thousand of them, the healthy stranded rows behind
 them are neither replayed nor dead-lettered until the unreadable rows are repaired or deleted in the
 database.
+
+**The queue's Redis.** An acknowledged delivery is not held by Redis alone: its row keeps the payload
+until the delivery settles, so the reconciler can add a job that Redis lost. That is a repair, not
+exactly-once delivery. A second delivery follows when a job completed but its row write was lost and
+the completed job left Redis (`removeOnComplete` keeps one for an hour or the last 1000) before the
+sweep saw it, and a job removed in the queue dashboard is added again until the replay budget is
+spent. A Redis you run yourself should keep its keys: `maxmemory-policy noeviction`, and persistence
+(`appendonly yes`), so a restart does not begin with an empty queue; the bundled container and
+`docker-compose.yml` set both. With the queue off, the reconciler cannot ask Redis about a job, so it replays a
+`pending` row inline whatever Redis still holds, and a job left in `ingress-queue` runs again when the queue is
+turned back on: a second delivery of the same event. Before turning the queue off, wait until `ingress-queue` has
+no waiting, delayed or active jobs (the commands are in [14](./14-migration-guide.md), BullMQ Migration). A
+redrive marks its dead letter redriven as soon as the replay job is queued, so a replay job that Redis then loses
+is not found by the reconciler: the dead-letter row keeps its payload until `INGRESS_RETENTION_DAYS` prunes it,
+so reset `redriven` on the row or send the delivery again.
 
 **Plugin restore window.** The gateway opens its port before a slow plugin restore has finished (see
 [19](./19-plugin-architecture.md), Restore on boot), so a delivery can arrive for a plugin that has no

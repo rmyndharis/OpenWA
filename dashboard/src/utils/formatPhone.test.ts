@@ -68,7 +68,7 @@ test('formatPhoneForDisplay picks the country code by its ITU prefix: 3 digits, 
 
 test('formatPhoneForDisplay never leaves a group shorter than three digits (#1940)', () => {
   assert.equal(formatPhoneForDisplay('4915733344455'), '+49 157 3334 4455');
-  assert.equal(formatPhoneForDisplay('6281770008896'), '+62 817 7000 8896');
+  assert.equal(formatPhoneForDisplay('6281712345678'), '+62 817 1234 5678');
   assert.equal(formatPhoneForDisplay('5511987654321'), '+55 119 8765 4321');
   assert.equal(formatPhoneForDisplay('6591234567'), '+65 9123 4567');
   assert.equal(formatPhoneForDisplay('85291234567'), '+852 9123 4567');

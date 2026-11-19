@@ -480,6 +480,7 @@ export class SessionEngineLifecycle {
         this.bindingEpochs.delete(id);
         this.phoneWrites.forget(id);
       },
+      forgetClaim: (id, ownsClaim) => this.ownership?.forget(id, ownsClaim),
       readAfterPhoneWrites: (id, read) => this.phoneWrites.readSettled(id, read),
       writePhone: (id, write) => this.phoneWrites.run(id, write),
       prepareStart: (id, desiredState) => this.prepareStart(id, desiredState),
@@ -705,8 +706,11 @@ export class SessionEngineLifecycle {
    * writes in the event wiring, the exhausted-reconnect FAILED, the start-path FAILED in controls, the push
    * name stored after ready, and the terminal-unlink phone clear in recordTerminalUnlink (like FAILED, a wrongly nulled
    * phone does not self-heal until the owner's next READY). NOT fenced: handleEngineReady's direct
-   * row write and handleEngineDisconnected's DISCONNECTED — both statuses are in the boot reset's
-   * activeStatuses AND in TAKEOVER_STATUSES, so a wrong one self-heals, unlike FAILED. The gate is
+   * row write, handleEngineDisconnected's DISCONNECTED and initializeEngine's INITIALIZING, which go by id.
+   * A wrong READY or INITIALIZING is corrected by the boot reset and the correction of a lapsed claim, which read
+   * the active statuses, unlike FAILED. A wrong DISCONNECTED is not among those, so it stays until the owning
+   * engine next reports a state or its node restarts; TAKEOVER_STATUSES only matters once that node's lease
+   * lapses. The heartbeat's teardown of the stale engine closes the window within one interval. The gate is
    * also a point-in-time read: `owned` can change while the awaited write is in flight, so this
    * narrows the window rather than closing it.
    */

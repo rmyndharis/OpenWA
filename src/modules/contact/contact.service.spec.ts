@@ -100,7 +100,7 @@ describe('ContactService', () => {
       expect(getContactLid).not.toHaveBeenCalled();
     });
 
-    it.each(['628123456789', '+62 812-7000-8896', '628123456789@c.us', '628123456789@s.whatsapp.net', 'abc'])(
+    it.each(['628123456789', '+62 812-3456-7890', '628123456789@c.us', '628123456789@s.whatsapp.net', 'abc'])(
       'hands %s to the engine, which keeps its digits',
       async typed => {
         const getContactLid = jest.fn().mockResolvedValue(null);

@@ -8,6 +8,7 @@ import { Session } from '../session/entities/session.entity';
 import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveSessionScope } from '../../common/security/session-scope';
+import { pruneInBatches } from '../../common/utils/batched-prune';
 import { ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { generateDeliveryId } from './utils/idempotency.util';
 import { buildDeliveryHeaders } from './utils/deliver-once';
@@ -43,6 +44,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookService');
   private cleanupTimer?: ReturnType<typeof setInterval>;
   private payloadCleanupTimer?: ReturnType<typeof setInterval>;
+  private stopped = false;
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -84,6 +86,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleDestroy(): void {
+    this.stopped = true;
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
     }
@@ -93,13 +96,16 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Delete delivery-failure rows older than the retention window. Returns the number removed.
+   * Delete delivery-failure rows older than the retention window, a batch at a time. Returns the number removed.
    */
   async pruneDeliveryFailures(olderThanDays: number): Promise<number> {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - olderThanDays);
-    const result = await this.failureRepository.delete({ createdAt: LessThan(cutoff) });
-    return result.affected || 0;
+    return pruneInBatches({
+      repository: this.failureRepository,
+      where: { createdAt: LessThan(cutoff) },
+      stopped: () => this.stopped,
+    });
   }
 
   /**
@@ -109,11 +115,12 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
    */
   async pruneDeliveryFailurePayloads(olderThanHours: number): Promise<number> {
     const cutoff = new Date(Date.now() - olderThanHours * 60 * 60 * 1000);
-    const result = await this.failureRepository.update(
-      { payload: Not(IsNull()), createdAt: LessThan(cutoff) },
-      { payload: null },
-    );
-    return result.affected || 0;
+    return pruneInBatches({
+      repository: this.failureRepository,
+      where: { payload: Not(IsNull()), createdAt: LessThan(cutoff) },
+      clear: { payload: null },
+      stopped: () => this.stopped,
+    });
   }
 
   /**

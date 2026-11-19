@@ -74,14 +74,14 @@ describe('ContactService number check input', () => {
 
   describe('a phone number typed any way, or a phone id', () => {
     it.each([
-      ['a bare number', '628127000889', '628127000889'],
-      ['a formatted number', '+62 812-7000-8896', '6281270008896'],
-      ['a number in brackets', '(62) 812 7000 889', '628127000889'],
-      ['a phone id', '628127000889@c.us', '628127000889'],
-      ['an id in the protocol dialect', '628127000889@s.whatsapp.net', '628127000889'],
-      ['an id of a linked device', '628127000889:5@s.whatsapp.net', '628127000889'],
-      ['a hosted id', '628127000889@hosted', '628127000889'],
-      ['an id with an upper-case domain', '628127000889@C.US', '628127000889'],
+      ['a bare number', '628123456789', '628123456789'],
+      ['a formatted number', '+62 812-3456-7890', '6281234567890'],
+      ['a number in brackets', '(62) 812 3456 789', '628123456789'],
+      ['a phone id', '628123456789@c.us', '628123456789'],
+      ['an id in the protocol dialect', '628123456789@s.whatsapp.net', '628123456789'],
+      ['an id of a linked device', '628123456789:5@s.whatsapp.net', '628123456789'],
+      ['a hosted id', '628123456789@hosted', '628123456789'],
+      ['an id with an upper-case domain', '628123456789@C.US', '628123456789'],
     ])('passes %s to the engine as its digits', async (_label, typed, digits) => {
       const getNumberId = jest.fn().mockResolvedValue(`${digits}@c.us`);
       const service = makeService({ getNumberId });
@@ -94,13 +94,13 @@ describe('ContactService number check input', () => {
     it('still answers 400 when the session is not started', () => {
       const service = new ContactService(new EngineRegistry());
 
-      expect(() => service.getNumberId('missing', '628127000889')).toThrow(BadRequestException);
+      expect(() => service.getNumberId('missing', '628123456789')).toThrow(BadRequestException);
     });
   });
 
   describe('what each engine receives for a formatted number', () => {
-    it('is the digits on whatsapp-web.js, which would otherwise build `+62 812-7000-8000@c.us` in the page', async () => {
-      const getNumberId = jest.fn().mockResolvedValue({ _serialized: '6281270008000@c.us' });
+    it('is the digits on whatsapp-web.js, which would otherwise build `+62 812-3456-1000@c.us` in the page', async () => {
+      const getNumberId = jest.fn().mockResolvedValue({ _serialized: '6281234561000@c.us' });
       const host = {
         ensureReady: jest.fn(),
         getClient: () => ({ getNumberId }) as unknown as Client,
@@ -111,13 +111,13 @@ describe('ContactService number check input', () => {
       const contacts = new WwebjsContacts(host);
       const service = makeService({ getNumberId: number => contacts.getNumberId(number) });
 
-      await expect(service.getNumberId('s1', '+62 812-7000-8000')).resolves.toBe('6281270008000@c.us');
+      await expect(service.getNumberId('s1', '+62 812-3456-1000')).resolves.toBe('6281234561000@c.us');
       expect(getNumberId).toHaveBeenCalledTimes(1);
-      expect(getNumberId).toHaveBeenCalledWith('6281270008000');
+      expect(getNumberId).toHaveBeenCalledWith('6281234561000');
     });
 
     it('is the digits on whatsapp-web.js for an id in the protocol dialect, which the library would suffix again', async () => {
-      const getNumberId = jest.fn().mockResolvedValue({ _serialized: '6281270008000@c.us' });
+      const getNumberId = jest.fn().mockResolvedValue({ _serialized: '6281234561000@c.us' });
       const host = {
         ensureReady: jest.fn(),
         getClient: () => ({ getNumberId }) as unknown as Client,
@@ -128,13 +128,13 @@ describe('ContactService number check input', () => {
       const contacts = new WwebjsContacts(host);
       const service = makeService({ getNumberId: number => contacts.getNumberId(number) });
 
-      await service.getNumberId('s1', '6281270008000@s.whatsapp.net');
+      await service.getNumberId('s1', '6281234561000@s.whatsapp.net');
 
-      expect(getNumberId).toHaveBeenCalledWith('6281270008000');
+      expect(getNumberId).toHaveBeenCalledWith('6281234561000');
     });
 
     it('is the digits on Baileys, whose contact query would otherwise carry the spaces and hyphens', async () => {
-      const onWhatsApp = jest.fn().mockResolvedValue([{ jid: '6281270008000@s.whatsapp.net', exists: true }]);
+      const onWhatsApp = jest.fn().mockResolvedValue([{ jid: '6281234561000@s.whatsapp.net', exists: true }]);
       const socket = { onWhatsApp } as unknown as WASocket;
       const messaging = new BaileysMessaging({
         ensureReady: () => undefined,
@@ -143,9 +143,9 @@ describe('ContactService number check input', () => {
       } as unknown as BaileysMessagingHost);
       const service = makeService({ getNumberId: number => messaging.getNumberId(number) });
 
-      await expect(service.getNumberId('s1', '+62 812-7000-8000')).resolves.toBe('6281270008000@c.us');
+      await expect(service.getNumberId('s1', '+62 812-3456-1000')).resolves.toBe('6281234561000@c.us');
       expect(onWhatsApp).toHaveBeenCalledTimes(1);
-      expect(onWhatsApp).toHaveBeenCalledWith('6281270008000');
+      expect(onWhatsApp).toHaveBeenCalledWith('6281234561000');
     });
   });
 });

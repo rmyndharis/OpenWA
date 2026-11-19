@@ -78,6 +78,8 @@ describe('WebhookService', () => {
       find: jest.fn().mockResolvedValue([]),
       delete: jest.fn().mockResolvedValue({ affected: 0 }),
       update: jest.fn().mockResolvedValue({ affected: 0 }),
+      // The dialect the batched prunes ask for.
+      manager: { connection: { options: { type: 'better-sqlite3' } } } as never,
     };
 
     sessionRepository = {
@@ -497,10 +499,24 @@ describe('WebhookService', () => {
   describe('delivery-failure retention', () => {
     afterEach(() => service.onModuleDestroy());
 
+    // The ids are read with the age condition (and, for a payload, the column that still holds one), then
+    // removed or cleared by id.
+    const readWhere = (call: number) =>
+      ((failureRepository.find as jest.Mock).mock.calls[call] as [{ where: Record<string, FindOperator<Date>> }])[0]
+        .where;
+
     it('pruneDeliveryFailures deletes rows older than the retention window and returns the count', async () => {
+      (failureRepository.find as jest.Mock).mockResolvedValueOnce([{ id: 'f1' }, { id: 'f2' }, { id: 'f3' }]);
       (failureRepository.delete as jest.Mock).mockResolvedValue({ affected: 3 });
+      const before = Date.now();
+
       await expect(service.pruneDeliveryFailures(90)).resolves.toBe(3);
+
       expect(failureRepository.delete).toHaveBeenCalledTimes(1);
+      expect(failureRepository.delete).toHaveBeenCalledWith(['f1', 'f2', 'f3']);
+      expect(readWhere(0).createdAt.type).toBe('lessThan');
+      const cutoff = readWhere(0).createdAt.value.getTime();
+      expect(Math.abs(cutoff - (before - 90 * 24 * 3600_000))).toBeLessThanOrEqual(2 * 3600_000 + 1000);
     });
 
     it('onModuleInit skips scheduling when WEBHOOK_FAILURE_RETENTION_DAYS <= 0 (retention disabled)', () => {
@@ -515,11 +531,15 @@ describe('WebhookService', () => {
       }
     });
 
-    it('onModuleInit prunes once at startup when retention is enabled', () => {
+    it('onModuleInit prunes once at startup when retention is enabled', async () => {
       const prev = process.env.WEBHOOK_FAILURE_RETENTION_DAYS;
       process.env.WEBHOOK_FAILURE_RETENTION_DAYS = '30';
+      (failureRepository.find as jest.Mock).mockImplementation(({ where }: { where: { payload?: unknown } }) =>
+        Promise.resolve('payload' in where ? [] : [{ id: 'f1' }]),
+      );
       try {
         service.onModuleInit();
+        await new Promise(resolve => setImmediate(resolve));
         expect(failureRepository.delete).toHaveBeenCalledTimes(1);
       } finally {
         if (prev === undefined) delete process.env.WEBHOOK_FAILURE_RETENTION_DAYS;
@@ -528,16 +548,14 @@ describe('WebhookService', () => {
     });
 
     it('pruneDeliveryFailurePayloads clears expired payloads and keeps the rows', async () => {
+      (failureRepository.find as jest.Mock).mockResolvedValueOnce([{ id: 'f1' }, { id: 'f2' }]);
       (failureRepository.update as jest.Mock).mockResolvedValue({ affected: 2 });
       const before = Date.now();
 
       await expect(service.pruneDeliveryFailurePayloads(72)).resolves.toBe(2);
 
-      const [where, patch] = (failureRepository.update as jest.Mock).mock.calls[0] as [
-        { payload: FindOperator<unknown>; createdAt: FindOperator<Date> },
-        Record<string, unknown>,
-      ];
-      expect(patch).toEqual({ payload: null });
+      expect(failureRepository.update).toHaveBeenCalledWith(['f1', 'f2'], { payload: null });
+      const where = readWhere(0) as unknown as { payload: FindOperator<unknown>; createdAt: FindOperator<Date> };
       expect(where.payload.type).toBe('not');
       expect(where.createdAt.type).toBe('lessThan');
       const cutoff = where.createdAt.value.getTime();
@@ -546,12 +564,21 @@ describe('WebhookService', () => {
       expect(failureRepository.delete).not.toHaveBeenCalled();
     });
 
-    it('with payload retention off, startup clears leftover payloads once and schedules nothing', () => {
+    // One row holding a payload for the clear to find, whatever else it is asked for.
+    const withPayloadToClear = (): void => {
+      (failureRepository.find as jest.Mock).mockImplementation(({ where }: { where: { payload?: unknown } }) =>
+        Promise.resolve('payload' in where ? [{ id: 'f1' }] : []),
+      );
+    };
+
+    it('with payload retention off, startup clears leftover payloads once and schedules nothing', async () => {
+      withPayloadToClear();
       jest.useFakeTimers();
       try {
         service.onModuleInit();
+        await jest.advanceTimersByTimeAsync(0);
         expect(failureRepository.update).toHaveBeenCalledTimes(1);
-        jest.advanceTimersByTime(2 * 60 * 60 * 1000);
+        await jest.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
         expect(failureRepository.update).toHaveBeenCalledTimes(1);
       } finally {
         service.onModuleDestroy();
@@ -559,15 +586,17 @@ describe('WebhookService', () => {
       }
     });
 
-    it('with payload retention on, expired payloads are cleared at startup and then hourly', () => {
+    it('with payload retention on, expired payloads are cleared at startup and then hourly', async () => {
       (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T) =>
         key === 'webhook.failurePayloadRetentionHours' ? 24 : def,
       );
+      withPayloadToClear();
       jest.useFakeTimers();
       try {
         service.onModuleInit();
+        await jest.advanceTimersByTimeAsync(0);
         expect(failureRepository.update).toHaveBeenCalledTimes(1);
-        jest.advanceTimersByTime(60 * 60 * 1000);
+        await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
         expect(failureRepository.update).toHaveBeenCalledTimes(2);
       } finally {
         service.onModuleDestroy();

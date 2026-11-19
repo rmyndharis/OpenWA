@@ -26,6 +26,7 @@ import {
   BAILEYS_NON_CONTENT_TYPES,
   baileysChatJid,
   buildIncomingMessageFromBaileys,
+  contentTypeOf,
   extractBaileysBody,
   extractBaileysButtonReply,
   extractBaileysButtons,
@@ -35,6 +36,8 @@ import {
   extractBaileysContext,
   extractBaileysLocation,
   isBaileysCatalogShare,
+  isNoiseOnly,
+  isNonContent,
   keyParticipant,
   mapBaileysEventResponseType,
   mapBaileysStatus,
@@ -114,18 +117,6 @@ const PRESENCE_STATES: ReadonlySet<PresenceState> = new Set<PresenceState>([
  * only ones message.receipt is documented for. A 1:1 chat reports through messages.update instead.
  */
 const RECEIPT_CHAT_KINDS: ReadonlySet<ChatKind> = new Set<ChatKind>(['group', 'status']);
-
-/**
- * Top-level Message keys that carry no user content. A live message made only of these is dropped;
- * messageContextInfo rides along on real content too, so on its own it is not enough to drop.
- */
-const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
-  'senderKeyDistributionMessage',
-  'fastRatchetKeySenderKeyDistributionMessage',
-  'messageContextInfo',
-  'messageHistoryNotice',
-  'messageHistoryBundle',
-]);
 
 /** Wire value of `proto.WebMessageInfo.StubType.CIPHERTEXT`, set when part of a stanza failed to decrypt. */
 const CIPHERTEXT_STUB_TYPE = 2 as BaileysLib.proto.WebMessageInfo.StubType;
@@ -731,7 +722,7 @@ export class BaileysEvents {
    * Baileys has counted as unread already, which it does when the message arrives and not once it is recorded: where
    * each belongs, and its place in the order observed. What Baileys takes for no message (a reaction, an edit sent as
    * a protocol message) is not listed, nor what this session drops as no message of its own (see
-   * BAILEYS_NON_CONTENT_TYPES), which would otherwise keep a chat unread until the next read.
+   * isNonContent), which would otherwise keep a chat unread until the next read.
    */
   receivedInFlight(): Array<{ chatJid: string; id: string; timestamp: number; order: number }> {
     const b = this.host.getLoadedLib?.();
@@ -739,8 +730,8 @@ export class BaileysEvents {
     for (const [id, { key, message, timestamp, order }] of this.inboundInFlight) {
       if (key.fromMe === true || !key.remoteJid) continue;
       if (b) {
-        const type = b.getContentType(b.normalizeMessageContent(message ?? undefined) ?? message ?? undefined);
-        if (!b.isRealMessage({ key, message }) || (type !== undefined && BAILEYS_NON_CONTENT_TYPES.has(type))) continue;
+        const content = b.normalizeMessageContent(message ?? undefined) ?? message ?? undefined;
+        if (!b.isRealMessage({ key, message }) || isNonContent(content, b.getContentType)) continue;
       }
       received.push({ chatJid: baileysChatJid(key.remoteJid, key.participant, false), id, timestamp, order });
     }
@@ -821,7 +812,7 @@ export class BaileysEvents {
     const ownStatusPost = msg.key.fromMe === true && msg.key.remoteJid === 'status@broadcast';
     const normalized = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
     return (
-      isBaileysMediaType(b.getContentType(normalized)) &&
+      isBaileysMediaType(contentTypeOf(normalized, b.getContentType)) &&
       !ownStatusPost &&
       !this.dropsAsEphemeral(msg, extractBaileysContext(normalized ?? {}).ephemeralDuration) &&
       isMediaDownloadEnabled() &&
@@ -962,7 +953,7 @@ export class BaileysEvents {
       // normalized content too: a client wraps an edit in `editedMessage`, and `ephemeralMessage` can hold
       // a revoke or a reaction just as well, so the raw root does not always carry them.
       const normalizedRoot = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
-      const contentType = b.getContentType(normalizedRoot);
+      const contentType = contentTypeOf(normalizedRoot, b.getContentType);
       // A contact's edit, and a reaction in some chats, arrive encrypted under the secret of the message
       // they change. Read with the stored original's secret, they are handled as the plain protocol or
       // reaction message they stand for; one that cannot be read stays dropped as non-content. The read of
@@ -1029,17 +1020,13 @@ export class BaileysEvents {
       // A stanza with a CIPHERTEXT stub lost part of its payload to a decryption failure; if what
       // survived holds only protocol noise (even a lone messageContextInfo), drop it before storing
       // so a redelivery carrying the real body is not skipped as a duplicate.
-      const keys = Object.keys(normalizedRoot ?? {});
       const ciphertextStub = msg.messageStubType === CIPHERTEXT_STUB_TYPE;
-      if (
-        keys.every(k => PROTOCOL_NOISE_KEYS.has(k)) &&
-        (ciphertextStub || keys.some(k => k !== 'messageContextInfo'))
-      ) {
+      if (isNoiseOnly(normalizedRoot, ciphertextStub)) {
         this.host.logger.debug('Dropping contentless protocol message', {
           action: 'baileys_drop_protocol_noise',
           msgId: msg.key.id,
           remoteJid,
-          keys,
+          keys: Object.keys(normalizedRoot ?? {}),
           ...(ciphertextStub ? { ciphertextStub: true } : {}),
         });
         return;

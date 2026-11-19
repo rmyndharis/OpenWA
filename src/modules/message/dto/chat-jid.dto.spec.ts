@@ -14,8 +14,8 @@ const failedProperties = async (cls: new () => object, obj: unknown): Promise<st
 // An id the engine cannot decode (no domain, or whitespace) used to reach it: Baileys threw a TypeError out
 // of `jidDecode`, the caller saw a 500, and the send breaker counted it against a healthy session.
 describe('a chat id on a send or action body must be localpart@host', () => {
-  const refused = ['x', '6281270008896', '628127 0008896@c.us', '@c.us', 'abc@', 628123456789];
-  const accepted = ['6281270008896@c.us', '120363000000000001@g.us', '1234@s.whatsapp.net', '1234567890123@lid'];
+  const refused = ['x', '6281234567890', '628123 4567890@c.us', '@c.us', 'abc@', 628123456789];
+  const accepted = ['6281234567890@c.us', '120363000000000001@g.us', '1234@s.whatsapp.net', '1234567890123@lid'];
 
   it.each(refused)('refuses %j on a text send', async chatId => {
     expect(await failedProperties(SendTextMessageDto, { chatId, text: 'hi' })).toEqual(['chatId']);

@@ -116,13 +116,25 @@ describe('ChannelController OpenAPI 503 responses', () => {
       Object.getOwnPropertyDescriptor(ChannelController.prototype, name)!.value as object,
     ) ?? {}) as Record<string, { description?: string }>;
 
+  // The two reads Baileys cannot do answer 501 there, so their 503 belongs to whatsapp-web.js alone and has no
+  // Baileys rate limit to name.
+  const BAILEYS_UNSUPPORTED = ['findAll', 'getMessages'];
+
   // Baileys answers 503 for WhatsApp's own rate limit (429) as well as for an unanswered query.
   it('names the WhatsApp rate limit on every 503 it declares', () => {
     const silent = Object.getOwnPropertyNames(ChannelController.prototype).filter(name => {
+      if (BAILEYS_UNSUPPORTED.includes(name)) return false;
       const description = responsesOf(name)['503']?.description;
       return description !== undefined && !description.includes('429');
     });
     expect(silent).toEqual([]);
+  });
+
+  it('declares the 503 of the reads Baileys cannot do as whatsapp-web.js only, next to their 501', () => {
+    for (const name of BAILEYS_UNSUPPORTED) {
+      expect(responsesOf(name)['501']).toBeDefined();
+      expect(responsesOf(name)['503']?.description).toContain('whatsapp-web.js');
+    }
   });
 
   it('declares the rate-limited 503 on channel creation', () => {

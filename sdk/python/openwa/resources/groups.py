@@ -106,13 +106,13 @@ class GroupsResource:
         )
 
     def set_picture(self, session_id: str, group_id: str, body: SetGroupPictureRequest) -> SuccessResult:
-        """Set the group's picture. Requires admin rights on the group."""
+        """Set the group's picture. Requires the right to edit the group info: an admin, or any member of a group whose info is not restricted to admins."""
         return self._http.request(
             "PUT", f"/api/sessions/{quote_segment(session_id)}/groups/{quote_segment(group_id)}/picture", body=body
         )
 
     def delete_picture(self, session_id: str, group_id: str) -> SuccessResult:
-        """Remove the group's picture. Requires admin rights on the group."""
+        """Remove the group's picture. Requires the right to edit the group info: an admin, or any member of a group whose info is not restricted to admins."""
         return self._http.request(
             "DELETE", f"/api/sessions/{quote_segment(session_id)}/groups/{quote_segment(group_id)}/picture"
         )

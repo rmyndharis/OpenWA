@@ -102,6 +102,16 @@ export function nextSqliteDeleteBatchSize(rows: number, tookMs: number): number 
   return Math.max(SESSION_DELETE_BATCH_MIN_SQLITE, Math.min(SESSION_DELETE_BATCH_SIZE_SQLITE, rows * 2, scaled));
 }
 
+/**
+ * Refuse a delete that found its claim gone. When the session row is gone too, another delete of the session removed
+ * it and nothing changed owner: the answer is the 404 the same request gets a moment later, not a 409 that points at
+ * another node. A row that is still there is held by someone else or under another claim, and stays the conflict.
+ */
+export async function refuseLostDeleteClaim(manager: EntityManager, id: string, conflict: string): Promise<never> {
+  if (!(await manager.exists(Session, { where: { id } }))) throw sessionNotFound(id);
+  throw new ConflictException(conflict);
+}
+
 /** One table's pass of the batched delete: the repository to delete from and the reader of the next page of ids. */
 type TrafficPass = { rows: Repository<{ id: string }>; next: (take: number) => Promise<string[]> };
 
@@ -264,6 +274,8 @@ export interface SessionEngineControlsHost {
   /** Same contract as SessionEngineWiringHost.bindingEpoch. */
   bindingEpoch(id: string): number;
   forgetBindingEpoch?(id: string): void;
+  /** delete(), once the row is removed: the claim guards nothing from there on (SessionOwnershipService.forget). */
+  forgetClaim?(id: string, ownsClaim?: () => boolean): void;
   /**
    * `read`, once the phone writes this process issued (an unlink's clear, the number and push name a READY links, the
    * clear of a logout) have been answered: a row read that overlaps one can return the binding it replaces.
@@ -1129,6 +1141,9 @@ export class SessionEngineControls {
         await manager.remove(session);
       });
       parentDeleted = true;
+      // The row is gone, so the claim on it guards nothing: a heartbeat tick during the credential purge would read
+      // the missing row as a claim a peer took, and tear down a session this delete already removed.
+      this.host.forgetClaim?.(id, hooks.ownsClaim);
       this.logger.log(`Session deleted: ${session.name}`, {
         sessionId: id,
         action: 'delete',
@@ -1307,10 +1322,13 @@ export class SessionEngineControls {
           .set({ nodeId: this.host.nodeId, updatedAt: () => '"updatedAt"' })
           .where({ id: session.id, nodeId: this.host.nodeId, claimedAt: session.claimedAt ?? IsNull() })
           .execute();
-        if (affected !== 1) throw new ConflictException(`Session ${session.id} is no longer owned by this node`);
+        if (affected !== 1) {
+          return refuseLostDeleteClaim(manager, session.id, `Session ${session.id} is no longer owned by this node`);
+        }
       }
-      if (ownsClaim?.() === false)
-        throw new ConflictException(`Session ${session.id} is no longer owned by this delete`);
+      if (ownsClaim?.() === false) {
+        return refuseLostDeleteClaim(manager, session.id, `Session ${session.id} is no longer owned by this delete`);
+      }
       await remove(manager);
     });
   }

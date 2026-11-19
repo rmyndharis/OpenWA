@@ -13,7 +13,7 @@ import * as yaml from 'js-yaml';
 describe('Test lane partition', () => {
   const repoRoot = join(__dirname, '..', '..');
   const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
-    scripts: { 'test:docs'?: string; 'test:scripts'?: string };
+    scripts: { 'test:docs'?: string; 'test:scripts'?: string; 'test:engine-real'?: string };
     jest?: { testPathIgnorePatterns?: string[]; coveragePathIgnorePatterns?: string[] };
   };
 
@@ -103,6 +103,31 @@ describe('Test lane partition', () => {
     // Vacuity guard: an empty directory scan or an unparsed script would pass the diff below.
     expect(onDisk.length).toBeGreaterThan(10);
     expect(named.length).toBeGreaterThan(10);
+
+    expect({
+      neverRun: onDisk.filter(path => !named.includes(path)).sort(),
+      namedButAbsent: named.filter(path => !onDisk.includes(path)).sort(),
+    }).toEqual({ neverRun: [], namedButAbsent: [] });
+  });
+
+  /**
+   * `test/engine-real/` is run by `test:engine-real` alone, which hands node:test an explicit list of files, and the
+   * build job of ci.yml and the release workflow run nothing but that script. Jest never looks in that directory, so
+   * a proof written there and left out of the string runs NOWHERE, and a renamed or deleted one still named by it
+   * makes the whole invocation exit non-zero on a file it cannot open. The comparison is against the directory, all
+   * of it: a proof in a subdirectory, or named `*.test.mjs` or `*.spec.js`, is as unrun as a top-level `*.spec.mjs`.
+   * Only the helpers under `support/` are imported rather than run.
+   */
+  it('runs every proof under test/engine-real/ in the test:engine-real lane', () => {
+    const isProof = (path: string): boolean => /\.(mjs|js)$/.test(path) && !path.split('/').includes('support');
+    const onDisk = (readdirSync(join(repoRoot, 'test', 'engine-real'), { recursive: true }) as string[])
+      .map(path => `test/engine-real/${path.split('\\').join('/')}`)
+      .filter(isProof);
+    const named = (pkg.scripts['test:engine-real'] ?? '').split(/\s+/).filter(isProof);
+
+    // Vacuity guard: an empty directory scan or an unparsed script would pass the diff below.
+    expect(onDisk.length).toBeGreaterThanOrEqual(2);
+    expect(named.length).toBeGreaterThanOrEqual(2);
 
     expect({
       neverRun: onDisk.filter(path => !named.includes(path)).sort(),

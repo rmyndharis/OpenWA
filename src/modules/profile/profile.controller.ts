@@ -49,6 +49,12 @@ export class ProfileController {
   @ApiResponse({ status: 200, description: 'Profile status updated', type: ProfileAckResponseDto })
   @ApiResponse({ status: 400, description: 'Session is not started' })
   @ApiResponse({
+    status: 501,
+    description:
+      'On whatsapp-web.js, answered when the WhatsApp Web build the session runs no longer has the call the library ' +
+      'uses to set the About text. Nothing was asked of WhatsApp.',
+  })
+  @ApiResponse({
     status: 503,
     description:
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
@@ -83,7 +89,9 @@ export class ProfileController {
     status: 503,
     description:
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
-      'the gateway stopped waiting for a confirmation that never came. ' +
+      'the gateway stopped waiting for a confirmation that never came. On whatsapp-web.js, also when WhatsApp answers ' +
+      'the change with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a ' +
+      'pause. ' +
       MEDIA_URL_PROXY_503,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })

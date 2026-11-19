@@ -22,6 +22,27 @@ export interface SandboxStaticContext {
 
 export type PluginLogLevel = 'log' | 'debug' | 'warn' | 'error';
 
+/**
+ * Bound on the `ctx.logger.*` lines one plugin gets across to the host: the worker sends at most this many per
+ * window and drops the rest on its own thread, so a loop that logs without yielding costs the host no more than
+ * the lines it writes. The host's log relay keeps the same bound as a backstop.
+ */
+export const SANDBOX_LOG_MAX_PER_WINDOW = 200;
+export const SANDBOX_LOG_WINDOW_MS = 10000;
+
+/**
+ * Max worker-initiated capability calls the host runs concurrently per sandboxed plugin. A burst beyond this is
+ * rejected (the plugin sees a thrown Error) rather than amplified into unbounded host-side sends/fetches/writes.
+ */
+export const SANDBOX_MAX_INFLIGHT_CAPS = 32;
+
+/**
+ * Capability calls a worker leaves unanswered before it refuses the next one itself. Twice the host's bound, so a
+ * call the host would run is never refused here, and a loop that does not await its calls stops posting: each
+ * message past the host's bound is still read and answered on the host's one thread.
+ */
+export const SANDBOX_MAX_PENDING_CAPS = SANDBOX_MAX_INFLIGHT_CAPS * 2;
+
 export type HostToWorkerMessage =
   | { kind: 'load'; mainPath: string; context?: SandboxStaticContext }
   | { kind: 'lifecycle'; id: number; method: PluginLifecycleMethod }

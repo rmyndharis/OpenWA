@@ -56,7 +56,7 @@ export class ContactService {
 
   /**
    * Whether a phone number is registered, and the id WhatsApp holds for it. The engines are asked about the DIGITS of
-   * `number`: whatsapp-web.js appends `@c.us` unless the value already ends with it, so a typed `+62 812-7000-8896` or
+   * `number`: whatsapp-web.js appends `@c.us` unless the value already ends with it, so a typed `+62 812-3456-7890` or
    * an `@s.whatsapp.net` id reached its page as a malformed wid, and Baileys put the typed characters in its contact
    * query. An id of another dialect is refused, as the LID lookup does, and so is a value with no digits at all.
    */
@@ -101,7 +101,7 @@ export class ContactService {
   }
 
   /**
-   * The input of the number check and the LID lookup is a PHONE NUMBER, typed any way (`+62 812-7000-8896`) or as a
+   * The input of the number check and the LID lookup is a PHONE NUMBER, typed any way (`+62 812-3456-7890`) or as a
    * phone id (`628…@c.us`). An id of another dialect only looks like one: the digits of a privacy id or a group id
    * are no phone number, and the engines keep nothing but digits, so a lookup would spend a query on a stranger's
    * number and answer for it. It is refused before an engine is asked.

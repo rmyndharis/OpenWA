@@ -1665,8 +1665,11 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
   });
 
   describe('group picture', () => {
+    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
+    // covered in wwebjs-group-write-status.spec.ts.
     const groupChat = (over: Record<string, unknown> = {}) => ({
       getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...over }),
+      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
     });
 
     it('uses GroupChat.setPicture, not the own-account Client.setProfilePicture', async () => {
@@ -1726,8 +1729,10 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
   });
 
   describe('group invite code', () => {
+    // The page has no job to read the invite code with, so the library's own call answers.
     const groupChat = (over: Record<string, unknown> = {}) => ({
       getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...over }),
+      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
     });
 
     it('returns the code when WA Web supplies one', async () => {
@@ -1784,8 +1789,11 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
   });
 
   describe('setGroupMemberAddMode', () => {
+    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
+    // covered in wwebjs-group-write-status.spec.ts.
     const groupChat = (over: Record<string, unknown> = {}) => ({
       getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...over }),
+      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
     });
 
     it("maps 'admins' to adminsOnly=true — the wwjs setter is inverted relative to our vocabulary", async () => {
@@ -8172,8 +8180,11 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
   });
 
   describe('setGroupMessagesAdminsOnly / setGroupInfoAdminsOnly', () => {
+    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
+    // covered in wwebjs-group-write-status.spec.ts.
     const groupClient = (impl: Record<string, jest.Mock>) => ({
       getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...impl }),
+      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
     });
 
     it('resolves the group chat and calls setMessagesAdminsOnly', async () => {
@@ -8247,7 +8258,7 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
     });
   });
 
-  describe('setGroupEphemeral (no wwjs 1.34.7 API → honest 501)', () => {
+  describe('setGroupEphemeral (no wwjs 1.34.8 API → honest 501)', () => {
     it('rejects with EngineNotSupportedError (501)', async () => {
       const err = await readyAdapter({})
         .setGroupEphemeral('g@g.us', 86400)
@@ -8257,7 +8268,7 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
     });
   });
 
-  describe('setGroupMemberLabel (no wwjs 1.34.7 API → honest 501)', () => {
+  describe('setGroupMemberLabel (no wwjs 1.34.8 API → honest 501)', () => {
     it('rejects with EngineNotSupportedError (501)', async () => {
       const err = await readyAdapter({})
         .setGroupMemberLabel('g@g.us', 'Site A')
@@ -8285,7 +8296,9 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
 
     it('setProfileStatus delegates to client.setStatus', async () => {
       const setStatus = jest.fn().mockResolvedValue(undefined);
-      await readyAdapter({ setStatus }).setProfileStatus('busy');
+      // The page says the build still has the setter the library calls.
+      const pupPage = { evaluate: jest.fn().mockResolvedValue(true) };
+      await readyAdapter({ setStatus, pupPage }).setProfileStatus('busy');
       expect(setStatus).toHaveBeenCalledWith('busy');
     });
   });
@@ -8401,7 +8414,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         },
         '628333@c.us': { code: 409, message: 'The participant is already a group member', isInviteV4Sent: false },
       });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const adapter = readyAdapter({
+        getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })),
+        // The page still has the library's invitation sender, so the add is the library's own.
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      });
 
       const results = await adapter.addParticipants(GROUP, ['628111', '628222@c.us', '628333']);
 
@@ -8433,7 +8450,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
           isInviteV4Sent: true,
         },
       });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const adapter = readyAdapter({
+        getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })),
+        // The page still has the library's invitation sender, so the add is the library's own.
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      });
 
       const results = await adapter.addParticipants(GROUP, ['628111', '628222']);
 
@@ -8461,7 +8482,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
           isInviteV4Sent: false,
         },
       });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const adapter = readyAdapter({
+        getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })),
+        // The page still has the library's invitation sender, so the add is the library's own.
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      });
       const err = await adapter.addParticipants(GROUP, ['628111']).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(EngineRefusedError);
       expect((err as Error).message).toMatch(/failed for all 1 participant/);
@@ -8471,7 +8496,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       const addParticipants = jest
         .fn()
         .mockResolvedValue('AddParticipantsError: You have no admin rights to add a participant to a group');
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const adapter = readyAdapter({
+        getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })),
+        // The page still has the library's invitation sender, so the add is the library's own.
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      });
       const err = await adapter.addParticipants(GROUP, ['628111']).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(EngineRefusedError);
       expect((err as Error).message).toMatch(/no admin rights/);
@@ -8482,7 +8511,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         '628111@c.us': { code: 404, message: 'The phone number is not registered on WhatsApp', isInviteV4Sent: false },
         '628222@c.us': { code: 404, message: 'The phone number is not registered on WhatsApp', isInviteV4Sent: false },
       });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const adapter = readyAdapter({
+        getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })),
+        // The page still has the library's invitation sender, so the add is the library's own.
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      });
       const err = await adapter.addParticipants(GROUP, ['628111', '628222']).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(EngineRefusedError);
       expect((err as Error).message).toMatch(/failed for all 2 participant/);
@@ -8609,12 +8642,19 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
   );
 
   describe('setGroupSubject / setGroupDescription (library boolean is honored)', () => {
+    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
+    // covered in wwebjs-group-write-status.spec.ts.
+    const withoutPageJob = (chat: unknown) => ({
+      getChatById: jest.fn().mockResolvedValue(chat),
+      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
+    });
+
     it.each([
       ['setGroupSubject', 'setSubject'],
       ['setGroupDescription', 'setDescription'],
     ] as const)('%s throws EngineRefusedError when wwebjs resolves false', async (method, libMethod) => {
       const chat = groupChat({ [libMethod]: jest.fn().mockResolvedValue(false) });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
+      const adapter = readyAdapter(withoutPageJob(chat));
       await expect(
         (adapter as unknown as Record<string, (g: string, v: string) => Promise<void>>)[method](GROUP, 'New'),
       ).rejects.toBeInstanceOf(EngineRefusedError);
@@ -8625,7 +8665,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       ['setGroupDescription', 'setDescription'],
     ] as const)('%s resolves on true', async (method, libMethod) => {
       const chat = groupChat({ [libMethod]: jest.fn().mockResolvedValue(true) });
-      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
+      const adapter = readyAdapter(withoutPageJob(chat));
       await expect(
         (adapter as unknown as Record<string, (g: string, v: string) => Promise<void>>)[method](GROUP, 'New'),
       ).resolves.toBeUndefined();
@@ -8705,6 +8745,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       const adapter = readyAdapter({
         setDisplayName: jest.fn().mockRejectedValue(transportError()),
         setStatus: jest.fn().mockRejectedValue(transportError()),
+        pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
         setProfilePicture: jest.fn().mockRejectedValue(transportError()),
         deleteProfilePicture: jest.fn().mockRejectedValue(transportError()),
         getBroadcasts: jest.fn().mockRejectedValue(transportError()),
@@ -10635,6 +10676,7 @@ describe('WhatsAppWebJsAdapter per-action log lines', () => {
       'getGroupInviteCode',
       () => ({
         getChatById: jest.fn().mockResolvedValue({ isGroup: true, getInviteCode: jest.fn().mockResolvedValue('C0DE') }),
+        pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
       }),
       a => a.getGroupInviteCode(GROUP),
       '120363777000',

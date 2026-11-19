@@ -227,9 +227,15 @@ export function Logs() {
                   {log.action}
                   {log.errorMessage && <span className="log-message">{log.errorMessage}</span>}
                 </span>
-                <span>{log.sessionName || log.sessionId || '—'}</span>
-                <span className="api-key">{log.apiKeyName || '—'}</span>
-                <span className="ip">{log.ipAddress || '—'}</span>
+                <span className="session" title={log.sessionName || log.sessionId || undefined}>
+                  {log.sessionName || log.sessionId || '—'}
+                </span>
+                <span className="api-key" title={log.apiKeyName || undefined}>
+                  {log.apiKeyName || '—'}
+                </span>
+                <span className="ip" title={log.ipAddress || undefined}>
+                  {log.ipAddress || '—'}
+                </span>
                 <span>
                   <span className={`severity-badge ${log.severity}`}>{t(`logs.severity.${log.severity}`)}</span>
                 </span>
@@ -246,7 +252,12 @@ export function Logs() {
           </button>
           <span className="page-numbers">
             {pageWindow(page, totalPages).map(p => (
-              <button key={p} className={p === page ? 'active' : ''} onClick={() => setPage(p)}>
+              <button
+                key={p}
+                className={p === page ? 'active' : ''}
+                aria-current={p === page ? 'page' : undefined}
+                onClick={() => setPage(p)}
+              >
                 {p}
               </button>
             ))}

@@ -6,14 +6,24 @@ import { runWithRequestId, setRequestActor } from '../../common/services/request
 
 describe('AuditService', () => {
   let service: AuditService;
-  let repo: { create: jest.Mock; save: jest.Mock; findAndCount: jest.Mock; delete: jest.Mock };
+  let repo: {
+    create: jest.Mock;
+    save: jest.Mock;
+    findAndCount: jest.Mock;
+    find: jest.Mock;
+    delete: jest.Mock;
+    manager: unknown;
+  };
 
   beforeEach(() => {
     repo = {
       create: jest.fn((e: Partial<AuditLog>) => e),
       save: jest.fn((e: Partial<AuditLog>) => Promise.resolve({ id: 'a1', ...e })),
       findAndCount: jest.fn().mockResolvedValue([[], 0]),
+      find: jest.fn().mockResolvedValue([]),
       delete: jest.fn().mockResolvedValue({ affected: 0 }),
+      // The dialect the batched prune asks for.
+      manager: { connection: { options: { type: 'better-sqlite3' } } },
     };
     service = new AuditService(repo as unknown as Repository<AuditLog>);
   });
@@ -168,12 +178,15 @@ describe('AuditService', () => {
   });
 
   it('cleanup deletes rows older than the cutoff and returns the affected count', async () => {
+    repo.find.mockResolvedValue(Array.from({ length: 7 }, (_, i) => ({ id: `a${i}` })));
     repo.delete.mockResolvedValue({ affected: 7 });
     const removed = await service.cleanup(30);
 
     expect(removed).toBe(7);
-    const arg = (repo.delete.mock.calls as unknown[][])[0][0] as { createdAt: unknown };
-    const cutoff = (arg.createdAt as { value: Date }).value; // LessThan(cutoff)
+    // The ids are read with the age condition and removed by id, in statements of a bounded size.
+    const arg = (repo.find.mock.calls as unknown[][])[0][0] as { where: { createdAt: unknown } };
+    const cutoff = (arg.where.createdAt as { value: Date }).value; // LessThan(cutoff)
+    expect(repo.delete).toHaveBeenCalledWith(['a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6']);
     // Calendar days in local time, as the service counts them: a fixed 30 * 24h span is an hour off
     // whenever the window crosses a DST change.
     const expected = new Date();
@@ -182,6 +195,7 @@ describe('AuditService', () => {
   });
 
   it('cleanup returns 0 when the driver reports a null affected count', async () => {
+    repo.find.mockResolvedValue([{ id: 'a1' }]);
     repo.delete.mockResolvedValue({ affected: null });
     expect(await service.cleanup(10)).toBe(0);
   });
@@ -217,5 +231,38 @@ describe('AuditService.findAll paging on a real database', () => {
     const { data, total } = await service.findAll({ limit: 10, offset: 2 });
     expect(data).toHaveLength(1);
     expect(total).toBe(3);
+  });
+
+  it('cleanup removes a backlog larger than one statement, and only the rows past the window', async () => {
+    const repo = ds.getRepository(AuditLog);
+    await ds.query(
+      `WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM c WHERE i < 1203)
+       INSERT INTO audit_logs (id, action, severity, createdAt)
+       SELECT lower(hex(randomblob(16))), 'session_created', 'info', datetime('now', '-60 days') FROM c`,
+    );
+    const remove = jest.spyOn(repo, 'delete');
+
+    await expect(service.cleanup(30)).resolves.toBe(1203);
+
+    expect(remove.mock.calls.map(([ids]) => (ids as string[]).length)).toEqual([500, 500, 203]);
+    expect(await repo.count()).toBe(3);
+  });
+
+  it('cleanup stops between statements once the service is destroyed', async () => {
+    const repo = ds.getRepository(AuditLog);
+    await ds.query(
+      `WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM c WHERE i < 1203)
+       INSERT INTO audit_logs (id, action, severity, createdAt)
+       SELECT lower(hex(randomblob(16))), 'session_created', 'info', datetime('now', '-60 days') FROM c`,
+    );
+    const remove = jest.spyOn(repo, 'delete');
+    remove.mockImplementationOnce(async (ids: unknown) => {
+      service.onModuleDestroy();
+      return Repository.prototype.delete.call(repo, ids as string[]);
+    });
+
+    await expect(service.cleanup(30)).resolves.toBe(500);
+
+    expect(await repo.count()).toBe(703 + 3);
   });
 });

@@ -2,7 +2,13 @@ import AdmZip from 'adm-zip';
 import * as path from 'path';
 import * as zlib from 'zlib';
 import { BadRequestException } from '@nestjs/common';
-import { PluginManifest, RESERVED_PLUGIN_IDS, INSTALLABLE_TYPES, validatePluginManifest } from '../../core/plugins';
+import {
+  PluginManifest,
+  RESERVED_PLUGIN_IDS,
+  INSTALLABLE_TYPES,
+  validatePluginManifest,
+  validateIngressManifest,
+} from '../../core/plugins';
 
 // Re-exported so existing importers of this module keep working; the definitions live in
 // core/plugins/plugin-manifest.ts, shared with the boot-time loader validation.
@@ -45,13 +51,26 @@ export interface ParsedPackage {
   entries: { relPath: string; data: Buffer }[];
 }
 
+export interface ParsePackageOptions {
+  /** ALLOW_UNSIGNED_INGRESS: a route that declares `signature.scheme: 'none'` is accepted. */
+  allowUnsignedIngress?: boolean;
+}
+
 /**
  * Parse + validate an uploaded plugin `.zip` without touching the filesystem. Locates the package
  * root (the shallowest `manifest.json`, so both a flat zip and a single-folder zip work), validates
  * the manifest and id, and resolves every file path defensively (rejects absolute / `..` escapes and
  * over-size archives). The caller writes the returned entries; this function decides what is safe.
+ *
+ * The manifest's ingress declarations are checked here too, by the rules the loader applies when it loads the
+ * plugin, so a package the host would refuse at load is refused before anything is written and before an update
+ * stops the running plugin. Unsigned ingress routes are refused unless the caller says the operator allowed them.
  */
-export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAULT_PACKAGE_LIMITS): ParsedPackage {
+export function parsePluginPackage(
+  buffer: Buffer,
+  limits: PackageLimits = DEFAULT_PACKAGE_LIMITS,
+  options: ParsePackageOptions = {},
+): ParsedPackage {
   // The constructor reads only the end-of-central-directory record; the central directory itself is
   // parsed lazily by getEntries(), so an archive whose trailer parses and whose directory does not
   // escaped this guard as a plain Error and reached the caller as a 500. Both answer the same
@@ -105,6 +124,7 @@ export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAU
   // the attacker-controlled install path.
   try {
     validatePluginManifest(parsed);
+    validateIngressManifest(parsed, options.allowUnsignedIngress);
   } catch (error) {
     throw new BadRequestException(error instanceof Error ? error.message : String(error));
   }

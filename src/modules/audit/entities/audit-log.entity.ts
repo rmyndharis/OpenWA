@@ -57,6 +57,7 @@ export enum AuditAction {
 
   // Webhook events
   WEBHOOK_CREATED = 'webhook_created',
+  WEBHOOK_UPDATED = 'webhook_updated',
   WEBHOOK_DELETED = 'webhook_deleted',
   WEBHOOK_TRIGGERED = 'webhook_triggered',
   WEBHOOK_FAILED = 'webhook_failed',

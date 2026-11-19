@@ -6,7 +6,7 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { chatKind, isChannelJid } from '../identity/wa-id';
 import { WwebjsMessaging } from './wwebjs-messaging';
-import { type WwebjsEngineHost, rethrowIfNavigation } from './wwebjs-host';
+import { type WwebjsEngineHost, navigationsSeen, rethrowIfNavigation } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
 import { mapWwebjsMessageType, wwebjsBody } from './message-mapper';
@@ -110,13 +110,14 @@ const { GroupChat, PrivateChat } = wwebjs as unknown as { GroupChat: ChatConstru
 function rethrowTransportFailure(
   host: WwebjsEngineHost,
   error: unknown,
+  since: number,
   context: string,
   activity: string,
   timedOutMessage = `WhatsApp Web did not answer in time while ${activity}`,
 ): void {
   // A session that stopped during the lookup is the retryable 409, never a `false` refusal.
   if (error instanceof EngineNotReadyError) throw error;
-  rethrowIfNavigation(host, error);
+  rethrowIfNavigation(host, error, since);
   if (host.isPageTransportError(error)) {
     host.reportIfPageTransportError(error, context);
     throw new EngineTransportError(`Transport died while ${activity}`);
@@ -192,6 +193,7 @@ export async function recoverGroupChatById(
  * and anything else is rethrown.
  */
 export async function listChats(host: WwebjsEngineHost, context: string): Promise<Chat[]> {
+  const since = navigationsSeen(host);
   try {
     return await readChats(host, context);
   } catch (error) {
@@ -200,6 +202,7 @@ export async function listChats(host: WwebjsEngineHost, context: string): Promis
     rethrowTransportFailure(
       host,
       error,
+      since,
       context,
       'listing chats',
       'WhatsApp Web did not answer the chat list read in time',
@@ -280,6 +283,7 @@ export class WwebjsChats {
 
   async sendSeen(chatId: string): Promise<boolean> {
     this.host.ensureReady();
+    const since = navigationsSeen(this.host);
     try {
       const chat = await this.client()
         .getChatById(chatId)
@@ -289,7 +293,7 @@ export class WwebjsChats {
       return await chat!.sendSeen();
     } catch (error) {
       // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
-      rethrowTransportFailure(this.host, error, 'sendSeen', 'marking a chat as read');
+      rethrowTransportFailure(this.host, error, since, 'sendSeen', 'marking a chat as read');
       this.host.logger.error(`Error marking chat ${chatId} as read`, String(error));
       return false;
     }
@@ -297,6 +301,7 @@ export class WwebjsChats {
 
   async clearChatMessages(chatId: string): Promise<boolean> {
     this.host.ensureReady();
+    const since = navigationsSeen(this.host);
     try {
       // An unknown chat needs no special case: getChatById resolves undefined for one, and the
       // resulting TypeError lands in the catch below as the same `false` the injected helper
@@ -308,7 +313,7 @@ export class WwebjsChats {
       return await chat!.clearMessages();
     } catch (error) {
       // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
-      rethrowTransportFailure(this.host, error, 'clearChatMessages', 'clearing a chat');
+      rethrowTransportFailure(this.host, error, since, 'clearChatMessages', 'clearing a chat');
       this.host.logger.error(`Error clearing messages in chat ${chatId}`, String(error));
       return false;
     }
@@ -316,6 +321,7 @@ export class WwebjsChats {
 
   async archiveChat(chatId: string, archive: boolean): Promise<boolean> {
     this.host.ensureReady();
+    const since = navigationsSeen(this.host);
     try {
       // Client.archiveChat/unarchiveChat, NOT Chat.archive() — the Chat method resolves void.
       //
@@ -335,7 +341,7 @@ export class WwebjsChats {
       return true;
     } catch (error) {
       // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
-      rethrowTransportFailure(this.host, error, 'archiveChat', 'archiving a chat');
+      rethrowTransportFailure(this.host, error, since, 'archiveChat', 'archiving a chat');
       this.host.logger.error(`Error ${archive ? 'archiving' : 'unarchiving'} chat ${chatId}`, String(error));
       return false;
     }
@@ -356,6 +362,7 @@ export class WwebjsChats {
    */
   private async requireResolvableChat(chatId: string): Promise<void> {
     let chat: unknown;
+    const since = navigationsSeen(this.host);
     try {
       chat = await this.client()
         .getChatById(chatId)
@@ -364,7 +371,7 @@ export class WwebjsChats {
       // A dead page resolves NOTHING, so swallowing every rejection here reported it as "no such
       // chat" and named the caller's chatId as the problem. The other chat operations split that case
       // out; without this, the same file answered a dead page two different ways.
-      rethrowTransportFailure(this.host, error, 'requireResolvableChat', 'resolving a chat');
+      rethrowTransportFailure(this.host, error, since, 'requireResolvableChat', 'resolving a chat');
       chat = undefined; // an unknown chat rejects too — that is the 400 below
     }
     if (!chat) throw new BadRequestException(`Chat ${chatId} does not exist on this session`);
@@ -377,10 +384,11 @@ export class WwebjsChats {
    * for the reason above.
    */
   private async chatWrite<T>(context: string, op: () => Promise<T>): Promise<T> {
+    const since = navigationsSeen(this.host);
     try {
       return await op();
     } catch (error) {
-      rethrowIfNavigation(this.host, error);
+      rethrowIfNavigation(this.host, error, since);
       if (this.host.isPageTransportError(error)) {
         this.host.reportIfPageTransportError(error, context);
         throw new EngineTransportError(`Transport died during ${context}`);
@@ -431,6 +439,7 @@ export class WwebjsChats {
       // state to toggle on a channel. Report the no-op rather than throwing a TypeError.
       return false;
     }
+    const since = navigationsSeen(this.host);
     try {
       const chat = await this.client()
         .getChatById(chatId)
@@ -441,7 +450,7 @@ export class WwebjsChats {
       return true;
     } catch (error) {
       // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
-      rethrowTransportFailure(this.host, error, 'markUnread', 'marking a chat as unread');
+      rethrowTransportFailure(this.host, error, since, 'markUnread', 'marking a chat as unread');
       this.host.logger.error(`Error marking chat ${chatId} as unread`, String(error));
       return false;
     }
@@ -454,6 +463,7 @@ export class WwebjsChats {
       // deleteChannel()); a generic chat-delete must not silently unsubscribe a channel.
       return false;
     }
+    const since = navigationsSeen(this.host);
     try {
       const chat = await this.client()
         .getChatById(chatId)
@@ -462,7 +472,7 @@ export class WwebjsChats {
       return await chat!.delete();
     } catch (error) {
       // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
-      rethrowTransportFailure(this.host, error, 'deleteChat', 'deleting a chat');
+      rethrowTransportFailure(this.host, error, since, 'deleteChat', 'deleting a chat');
       this.host.logger.error(`Error deleting chat ${chatId}`, String(error));
       return false;
     }

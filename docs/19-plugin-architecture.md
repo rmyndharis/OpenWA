@@ -174,6 +174,8 @@ row), and the SDK major by the check applied to a manifest that declares `ingres
 | `provides` / `requires` | —        | Features this plugin provides / depends on                                                                                                                                                                                                                                                           |
 | `i18n`                  | —        | Localized dashboard text per locale (dashboard-only; a `configUi` editor receives it through the localized `schema`)                                                                                                                                                                                 |
 
+A manifest's `ingress` declaration is checked wherever a package is read. An install or an update answers `400` for one the host would refuse at load (a route that skips the signature while `ALLOW_UNSIGNED_INGRESS` is off, an unsupported `sdkVersion` major, a missing `webhook:ingress` permission) before anything is written and before an update stops the running plugin.
+
 Schema defaults are seeded into stored config when a plugin is loaded. A stored value remains unchanged across updates and restarts, even if a later version changes that field's default. Plugin authors should document required value changes for existing installations; operators must save those values explicitly. The current default applies only when the field has no stored value.
 
 **The `configUi` bridge.** The editor is injected as `srcdoc` into a `sandbox="allow-scripts"` iframe, so
@@ -204,7 +206,16 @@ host.
 
 A `configSchema` field may set `secret: true` (e.g. an API key): the value is masked on read and
 preserved on an unchanged write. A write keeps the stored value for the mask and for an empty string, and
-removes it for an explicit `null`. A per-session override and an integration instance's own config are
+removes it for an explicit `null`. In a list of rows with a secret column, a masked row is matched to its
+stored row by its other fields, so rows can be reordered, added and removed. A row whose other fields were
+edited, with its mask untouched, keeps the secret of the stored row at its position only in a save of the same
+length in which no row has moved. A row counts as moved when its other fields equal those of exactly one stored
+row and that row sits at another position. Removing a row ahead of a kept row and adding another moves the kept
+row, and so does reordering rows. In such a save, and in any save of another length, the payload cannot say
+which stored secret the edited row replaces, so it is saved without one and the secret is entered again. The
+generated form in the dashboard has no control to reorder rows, so only an API client, or a plugin's own config
+editor that reorders rows, sends the reordering form of this save.
+A per-session override and an integration instance's own config are
 overlaid on the base config, secret fields included, so a stored secret reaches every override that does
 not replace it. The exception is an override or instance that points a `net.allowConfigHosts` key at
 another origin than the layer beneath: it does not inherit that layer's secret fields (a list that holds
@@ -403,7 +414,7 @@ export interface PluginStorage {
 }
 ```
 
-Writes accept keys of at most 184 UTF-8 bytes, keeping their encoded filenames within the 255-byte filesystem limit. A longer key is rejected with a validation error before any file is written.
+Writes accept keys of at most 184 UTF-8 bytes, keeping their encoded filenames within the 255-byte filesystem limit. A longer key is rejected with a validation error before any file is written. A key that holds a lone UTF-16 surrogate (half of an emoji, left by cutting text with `slice`) is refused as an unsafe key: `set` and `delete` reject it and `get` answers `null`, because UTF-8 has no form for it and every such key at one place would name the same file.
 
 A key that is spelled like another key's encoded filename (`key-Zm9v` for `foo`) is not read as a legacy key, so it neither returns nor deletes that other key's value. `list()` returns only keys that `get` and `delete` accept.
 
@@ -870,6 +881,18 @@ tier automatically. Key properties:
 - After a hook, webhook or search dispatch times out, the host pings the worker. A worker whose event
   loop is blocked (a synchronous loop) cannot answer within 5 s, so it is terminated and the plugin is
   set to `ERROR`, as on a crash; a slow async handler answers and is left running.
+- The worker bounds the log lines and the capability calls it posts to the host, so a loop that never yields cannot
+  flood the host's one thread with either: `ctx.logger.*` lines are limited to **198 per 10 s** (the rest are
+  dropped inside the worker, with a note at the first drop and a count with the first line after the window ends;
+  the two notes bring a window to the **200** messages per 10 s that the host's log relay admits as a backstop,
+  so neither is refused there), and a capability call is refused with a thrown `Error` while **64** calls are
+  unanswered (twice the 32 concurrent calls the host runs). A plugin that awaits its calls and logs at an
+  ordinary rate never reaches either limit. Registration is deduplicated but not counted: `ctx.registerWebhook`
+  tells the host about a route once, `ctx.registerSearchProvider` once, and `ctx.registerHook` about an event
+  once, then again only for a handler whose priority is lower than every earlier one for that event (the host
+  runs the plugin's handlers for an event from one entry, at the lowest priority asked for). A loop that
+  registers new route names or ever lower priorities posts on every pass, and the worker leaves that to the
+  plugin's own code.
 - Lifecycle methods (`load`/`onLoad`/`onEnable`/`onDisable`) and `healthCheck` are bounded by a **30 s**
   / **5 s** timeout respectively, so a wedged plugin can't hang an ADMIN enable/disable or the health endpoint.
 - The worker gets a **minimal allowlisted env** (`NODE_ENV`, `NODE_EXTRA_CA_CERTS`, `TZ`) — host secrets
