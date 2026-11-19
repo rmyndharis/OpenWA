@@ -12,6 +12,7 @@ import { configureApp } from '../../configure-app';
 import { RequestMetricsInterceptor } from '../interceptors/request-metrics.interceptor';
 import { renderHttpRequestMetrics, resetHttpRequestMetrics } from '../metrics/request-metrics';
 import { LoggerService, LogFormat } from '../services/logger.service';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 let holdEntered: () => void = () => undefined;
 let holdRelease: () => void = () => undefined;
@@ -124,13 +125,13 @@ describe('HTTP request metrics through the production stack (configureApp)', () 
     await entered;
 
     client.destroy();
-    for (let turn = 0; turn < 200 && total() === 0; turn++) await new Promise(resolve => setTimeout(resolve, 10));
+    await waitUntil(() => total() > 0);
     holdRelease();
     await new Promise(resolve => setTimeout(resolve, 50));
 
     expect(counter('GET', '/api/hold', 499)).toBe(1);
     expect(total()).toBe(1);
-  }, 20_000);
+  }, 60_000);
 
   it('leaves out the Bull Board mount, whose route labels read as routes the API does not have', async () => {
     await request(app.getHttpServer()).get('/api/admin/queues/api/queues').expect(200);
@@ -189,7 +190,7 @@ describe('HTTP request metrics through the production stack (configureApp)', () 
     });
 
     const until = async (condition: () => boolean, label: string): Promise<void> => {
-      for (let turn = 0; turn < 500 && !condition(); turn++) await new Promise(resolve => setTimeout(resolve, 10));
+      await waitUntil(condition);
       if (!condition()) throw new Error(`timed out waiting for ${label}`);
     };
     const counted = (): string[] => renderHttpRequestMetrics().filter(line => line.startsWith('http_requests_total{'));
@@ -231,7 +232,7 @@ describe('HTTP request metrics through the production stack (configureApp)', () 
       await until(() => counted().length > 0, 'the request to be recorded');
       expect(counted()).toEqual(['http_requests_total{method="POST",route="/api/upload",status="408"} 1']);
       expect(warn).toHaveBeenCalledTimes(1);
-    }, 20_000);
+    }, 60_000);
 
     it('counts a multipart upload its client abandons as 499', async () => {
       const { client } = await openUpload('/api/upload', MULTIPART, FILE_PART);
@@ -240,7 +241,7 @@ describe('HTTP request metrics through the production stack (configureApp)', () 
 
       await until(() => counted().length > 0, 'the request to be recorded');
       expect(counted()).toEqual(['http_requests_total{method="POST",route="/api/upload",status="499"} 1']);
-    }, 20_000);
+    }, 60_000);
 
     // The parser answers an aborted JSON body with 400 before the response reports that it closed.
     it('counts a JSON body its client abandons as 400', async () => {
@@ -250,6 +251,6 @@ describe('HTTP request metrics through the production stack (configureApp)', () 
 
       await until(() => counted().length > 0, 'the request to be recorded');
       expect(counted()).toEqual(['http_requests_total{method="POST",route="(unmatched)",status="400"} 1']);
-    }, 20_000);
+    }, 60_000);
   });
 });

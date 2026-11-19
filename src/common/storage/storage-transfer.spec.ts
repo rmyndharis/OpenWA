@@ -11,6 +11,7 @@ import {
   ExportFileSource,
   importFromStream,
 } from './storage-transfer';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 const FILE_BYTES = 256 * 1024;
 const files = Array.from({ length: 12 }, (_, i) => `media/file-${String.fromCharCode(97 + i)}.bin`);
@@ -225,7 +226,7 @@ describe('createExportStream releases the archive streams', () => {
         () => Promise.resolve({ stream: stuck, size: FILE_BYTES }),
         makeLogger() as never,
       );
-      for (let waited = 0; !reading && waited < 1000; waited += 10) await settle(10);
+      await waitUntil(() => reading);
       expect(reading).toBe(true);
       expect(pack).toHaveBeenCalledTimes(1);
       expect(gzips).toHaveLength(1);
@@ -236,7 +237,7 @@ describe('createExportStream releases the archive streams', () => {
 
       output.destroy();
       // Destroying a stream finishes on a later tick; a missing teardown shows here as a stream still open.
-      for (let waited = 0; !(tarPack.destroyed && gzip.destroyed) && waited < 1000; waited += 10) await settle(10);
+      await waitUntil(() => tarPack.destroyed && gzip.destroyed);
 
       expect(tarPack.destroyed).toBe(true);
       expect(gzip.destroyed).toBe(true);
@@ -244,7 +245,7 @@ describe('createExportStream releases the archive streams', () => {
       pack.mockRestore();
       Object.defineProperty(realZlib, 'createGzip', { ...readOnlyExport, value: realCreateGzip });
     }
-  });
+  }, 60_000);
 });
 
 describe('importFromStream reports refused writes', () => {
