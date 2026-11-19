@@ -602,6 +602,10 @@ export interface PaginatedProducts {
  */
 export interface ChatSummary {
   id: string;
+  /**
+   * The chat's name. `''` for a Baileys chat held under a privacy id (`@lid`) that has no name of its own:
+   * title it by `phone`, when present.
+   */
   name: string;
   /**
    * Phone digits of a 1:1 chat WhatsApp holds under a privacy id (`@lid`), when this session can map

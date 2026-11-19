@@ -46,7 +46,7 @@ export function searchTools(search: SearchService | undefined, containsEnabled =
       // is how a plugin provider knows to refuse a restricted key.
       chatScope: ['chatId'],
       description:
-        'Search persisted messages across every session and chat the API key may read. Returns ranked hits with a <mark>-highlighted snippet, chatId, sender and timestamp; resolve names with SessionGetChats or ContactFindOne. ' +
+        'Search persisted messages across every session and chat the API key may read. Returns ranked hits with a <mark>-highlighted snippet, chatId, sender and timestamp; resolve names with SessionGetChats or ContactFindOne (a Baileys privacy-id chat with no name of its own lists name "" and a phone to show instead). ' +
         `${matchHelp} A key restricted to selected chats must pass chatId.`,
       tier: 'read',
       requiredRole: ApiKeyRole.OPERATOR,

@@ -44,7 +44,10 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
     defineTool({
       name: 'SessionGetChats',
       chatScope: 'filtered',
-      description: 'List recent chats for a session (most recent first). Use limit/offset to page through large lists.',
+      description:
+        'List recent chats for a session (most recent first). Use limit/offset to page through large lists. ' +
+        'On Baileys, a chat held under a privacy id (@lid) with no name of its own has name ""; its phone, ' +
+        'when present, is the number to show.',
       tier: 'read',
       sessionScoped: true,
       inputSchema: z.object({

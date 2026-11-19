@@ -365,6 +365,7 @@ export interface PluginEngineReadCapability {
   getContacts(sessionId: string): Promise<...>;
   getContactById(sessionId: string, contactId: string): Promise<...>;
   checkNumberExists(sessionId: string, phone: string): Promise<...>;
+  // `name` is '' for a Baileys privacy-id chat with no name of its own; `phone`, when present, is the number to show.
   getChats(sessionId: string): Promise<...>;
   // Recent messages for a chat, both directions, oldest first (history backfill). `limit` is clamped host-side to 1-100.
   getChatHistory(sessionId: string, chatId: string, limit?: number, includeMedia?: boolean): Promise<...>;
