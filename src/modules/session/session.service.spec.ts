@@ -2868,6 +2868,10 @@ describe('SessionService', () => {
         for (let i = 0; i < 200 && !condition(); i++) await new Promise(resolve => setImmediate(resolve));
         expect(condition()).toBe(true);
       };
+      /** The next stop's fence reads the session free; a live peer holds it when the stop then asks again. */
+      const peerClaimsBeforeTheRecordWrite = (): void => {
+        jest.spyOn(ownership, 'isHeldByOtherNode').mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      };
 
       beforeAll(async () => {
         db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [Session], synchronize: true });
@@ -3212,10 +3216,12 @@ describe('SessionService', () => {
         ],
         [
           'refused when its record is written',
-          () =>
+          () => {
+            peerClaimsBeforeTheRecordWrite();
             (repository.update as jest.Mock).mockImplementation((_where: unknown, patch: Partial<Session>) =>
               Promise.resolve({ affected: patch.desiredState ? 0 : 1 }),
-            ),
+            );
+          },
           ConflictException,
         ],
       ])(
@@ -3253,10 +3259,12 @@ describe('SessionService', () => {
           await until(() => mockEngine.initialize.mock.calls.length === 1 && !lifecycle.isEngineActive(row.id));
           await service.stop(row.id);
           if (refusal === 'ownership read') jest.spyOn(ownership, 'isHeldByOtherNode').mockResolvedValueOnce(true);
-          else
+          else {
+            peerClaimsBeforeTheRecordWrite();
             (repository.update as jest.Mock).mockImplementation((_where: unknown, patch: Partial<Session>) =>
               Promise.resolve({ affected: patch.desiredState ? 0 : 1 }),
             );
+          }
           await expect(service.stop(row.id)).rejects.toThrow(ConflictException);
 
           expect(await outcome).toBeInstanceOf(SessionStoppedException);

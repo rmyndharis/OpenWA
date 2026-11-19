@@ -198,12 +198,14 @@ for minutes; detaching from bootstrap means the API answers while engines warm.
 
 ### INV-11: Overlapping requests for one session on one node never read as a peer holding it
 
-**Interleaving:** two or more requests for one session (starts and deletes) begin within milliseconds. Their
+**Interleaving:** two or more requests for one session (starts, deletes, stops) begin within milliseconds. Their
 claims overlap: the ones that renew while another claim is in flight take generations in the order their replies
 arrive, not the order they began in, and a claim whose generation was replaced must not let its older SQL reply
 replace the newer ownership. Read as "a live peer holds the session", a claim that answered `false` for that reason
 answered 409 "running on another node" with no other node in the deployment, left the request undone, and could
-leave a later request's claim behind for a peer's takeover sweep to adopt.
+leave a later request's claim behind for a peer's takeover sweep to adopt. The record of a stop of a session whose
+holder's lease lapsed read its writes the same way: another stop cleared the row, or this node's own start took it,
+between the stop's writes, and the stop whose last write then matched nothing answered the same 409.
 **Defense:** only a peer's live lease makes that answer.
 
 - `claim()` answers a claim whose generation was replaced as the claim that took the newest generation (registered
@@ -215,6 +217,10 @@ leave a later request's claim behind for a peer's takeover sweep to adopt.
 - `claimUnlessHeldElsewhere` (`session.service.ts`) leaves the 409 of a start and a delete to a miss that
   `isHeldByOtherNode` confirms (another node on a live lease); otherwise, the claim having been ended by a release,
   it asks once more and writes the row nobody holds.
+- `keepDown` (the record of a stop) does the same for its writes: a row none of them could take is a peer's only when
+  `isHeldByOtherNode` says so. Otherwise the row changed under them, and they run again, at most five passes; a row
+  still unwritable after that is logged and the stop goes on, so a stop never answers that another node holds a
+  session none does.
 
 A takeover of a lapsed holder is followed up by the claim whose write made it, before that claim reports itself
 superseded: the later claim reads this node as the previous holder and would not.
@@ -222,7 +228,8 @@ superseded: the later claim reads this node as the previous holder and would not
 a row this node holds and a lapsed holder's, sampled schedules of four, and of three and four starts or deletes as
 `claimUnlessHeldElsewhere` asks them; a live peer refusing all of them), `session-delete-claim.spec.ts` ('two
 claims of one session that overlap': a start and a delete in either order, two and three requests, a live peer
-refusing every pair; the 'older claim SQL reply' cases for a claim lost and regained) and
+refusing every pair; 'stops of one session whose holder lapsed': two and three stops, a stop beside a start and
+beside a delete, a live peer; the 'older claim SQL reply' cases for a claim lost and regained) and
 `session.service.spec.ts` ('ownership release': the second ask and its refusals).
 **The naive fixes that are wrong:** guessing a self-overlap from request state (another delete not yet returned, a
 second start reservation): a pair of the other kind, or a partner that has already returned, still answered the

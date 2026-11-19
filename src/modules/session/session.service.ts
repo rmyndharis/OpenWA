@@ -78,6 +78,9 @@ import type { PluginSessionPort } from '../../core/plugins/plugin-host-ports';
 /** Stagger before the single transient-launch retry; short - the claim is held while it waits. */
 const SESSION_START_RETRY_DELAY_MS = 2_000;
 
+/** How often a stop writes its record again when the row changed under its writes and no peer holds it. */
+const KEEP_DOWN_PASSES = 5;
+
 /** `config.linkPreview` when it is a boolean; anything else left in the opaque blob means no default. */
 export function linkPreviewDefault(config: unknown): boolean | null {
   const value = (config as Record<string, unknown> | null)?.linkPreview;
@@ -1273,8 +1276,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * Persist a stop only while no live peer owns the engine. The initial ownership read may predate a peer's
    * claim; deciding in this write also fences a stop delayed until after that peer's start returned. A delete's
    * record still accepts a stop, while remaining distinguishable until its delete finishes.
+   *
+   * A row no write could take is a live peer's, or one another request changed since the write that missed: the
+   * other stop cleared an abandoned claim, this node's own start took it, a delete began. Only a live lease names
+   * another node, so with none the writes run again, up to `passes` times.
    */
-  private async keepDown(id: string): Promise<void> {
+  private async keepDown(id: string, passes = KEEP_DOWN_PASSES): Promise<void> {
     const claims: FindOptionsWhere<Session>[] = this.ownership
       ? [
           { id, nodeId: IsNull() },
@@ -1300,7 +1307,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // pending delete took the branch above and keeps its claim throughout removal.
       if (this.ownership && (await this.ownership.stopExpiredForeignClaim(id))) return;
       await this.findOne(id);
-      throw new ConflictException(`Session ${id} is running on another node`);
+      if (!this.ownership || (await this.ownership.isHeldByOtherNode(id))) {
+        throw new ConflictException(`Session ${id} is running on another node`);
+      }
+      if (passes > 1) return this.keepDown(id, passes - 1);
+      // The row kept changing under the writes and no peer holds it: the requests that changed it settle it.
+      this.logger.warn(`Could not record the stop of session ${id} on a row that kept changing`, {
+        sessionId: id,
+        action: 'session_stop_record_unsettled',
+      });
     }
   }
 

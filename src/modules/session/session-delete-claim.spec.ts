@@ -4519,6 +4519,146 @@ describe('requests for one session that overlap on a single node', () => {
     });
   });
 
+  // A stop records itself in a series of writes, and a session whose holder's lease lapsed still names that holder when
+  // the series begins. By the time its last write runs, another stop has cleared the row, this node's own start has
+  // claimed it, or a delete has begun: none of that is another node holding the session, which only a live lease is.
+  describe('stops of one session whose holder lapsed', () => {
+    const answer = (request: Promise<unknown>): Promise<unknown> =>
+      request.then(
+        () => 'done',
+        (error: unknown) => error,
+      );
+    /** The row a node that has since lost its lease left claimed. */
+    const abandoned = (id: string): Promise<unknown> =>
+      sessions.update(
+        { id },
+        { nodeId: 'node-b', claimedAt: new Date(Date.now() - 120_000), leaseExpiresAt: new Date(Date.now() - 60_000) },
+      );
+    /** Hold the clear of the abandoned claim, the last write of the first stop, until the test opens the gate. */
+    function holdFirstClear(ownership: SessionOwnershipService) {
+      const clear = ownership.stopExpiredForeignClaim.bind(ownership);
+      const reached = deferred();
+      const gate = deferred();
+      let calls = 0;
+      jest.spyOn(ownership, 'stopExpiredForeignClaim').mockImplementation(async id => {
+        if (calls++ === 0) {
+          reached.resolve();
+          await gate.promise;
+        }
+        return clear(id);
+      });
+      return { reached: reached.promise, open: gate.resolve };
+    }
+
+    it.each([2, 3])(
+      'answers %i stops as the one that found the row free and takes the claim over once',
+      async stops => {
+        const { service, ownership } = stack();
+        const adopted = jest.fn().mockResolvedValue(undefined);
+        ownership.onAdoption(adopted, true);
+        const row = await seed();
+        await abandoned(row.id);
+        const clear = holdFirstClear(ownership);
+
+        const first = answer(service.stop(row.id));
+        await clear.reached;
+        // The others run to their end while the first is held at its last write, which then finds the row cleared.
+        const others = await Promise.all(Array.from({ length: stops - 1 }, () => answer(service.stop(row.id))));
+        clear.open();
+
+        expect([await first, ...others]).toEqual(Array.from({ length: stops }, () => 'done'));
+        expect(await sessions.findOneByOrFail({ id: row.id })).toMatchObject({ nodeId: null, desiredState: 'stopped' });
+        expect(adopted).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    // The start claimed the row the stop still read as a lapsed holder's. The stop records itself on it and takes the
+    // engine the start launched down, as it does for any session this node runs.
+    it('answers a stop beside a start that claimed the row as the stop that recorded itself there', async () => {
+      const { service, ownership, engines } = stack({ adoptionHandler: true });
+      const row = await seed();
+      await abandoned(row.id);
+      const clear = holdFirstClear(ownership);
+
+      const stopping = answer(service.stop(row.id));
+      await clear.reached;
+      const started = await answer(service.start(row.id));
+      expect(started).toBe('done');
+      expect(engines).toHaveLength(1);
+      clear.open();
+
+      expect(await stopping).toBe('done');
+      expect(await sessions.findOneByOrFail({ id: row.id })).toMatchObject({ nodeId: null, desiredState: 'stopped' });
+      expect(service.getEngine(row.id)).toBeUndefined();
+      expect(ownership.ownedIds()).toEqual([]);
+    });
+
+    // The delete claimed the row and recorded itself while the stop was held. The stop adds its own record to the
+    // delete's, which the delete leaves in place if it fails, and answers as it would for any row this node holds.
+    it('answers a stop beside a delete that claimed the row, and leaves the delete to finish', async () => {
+      const { service, ownership, heldHooks } = stack({ adoptionHandler: true, holdDeleteHook: true });
+      const row = await seed();
+      await abandoned(row.id);
+      const clear = holdFirstClear(ownership);
+
+      const stopping = answer(service.stop(row.id));
+      await clear.reached;
+      const deleting = answer(service.delete(row.id));
+      await until(() => heldHooks.length === 1);
+      clear.open();
+
+      expect(await stopping).toBe('done');
+      expect(await sessions.findOneByOrFail({ id: row.id })).toMatchObject({ desiredState: 'deleting-stopped' });
+      heldHooks[0].release();
+      expect(await deleting).toBe('done');
+      expect(await sessions.countBy({ id: row.id })).toBe(0);
+      expect(ownership.ownedIds()).toEqual([]);
+    });
+
+    // The negative control: a peer that holds the session on a live lease when the stop asks is another node.
+    it('still answers a stop with a conflict when a live peer claimed the session after its check', async () => {
+      const { service, ownership } = stack({ adoptionHandler: true });
+      const row = await seed();
+      await sessions.update(
+        { id: row.id },
+        { nodeId: 'node-b', claimedAt: new Date(), leaseExpiresAt: new Date(Date.now() + 60_000) },
+      );
+      jest.spyOn(ownership, 'isHeldByOtherNode').mockResolvedValueOnce(false);
+
+      const refused = await answer(service.stop(row.id));
+
+      expect(refused).toBeInstanceOf(ConflictException);
+      expect((refused as Error).message).toContain('running on another node');
+      expect(await sessions.findOneByOrFail({ id: row.id })).toMatchObject({ nodeId: 'node-b', desiredState: null });
+    });
+
+    // A row no write can take and no peer holds is not another node's. The stop asks again a bounded number of times,
+    // says so, and answers as it would for a row this node holds.
+    it('asks a bounded number of times about a row no write can take, and names no other node', async () => {
+      const { service, ownership } = stack({ adoptionHandler: true });
+      const row = await seed();
+      await sessions.update(
+        { id: row.id },
+        {
+          nodeId: NODE,
+          claimedAt: new Date(),
+          leaseExpiresAt: new Date(Date.now() + 60_000),
+          desiredState: 'unknown' as never,
+        },
+      );
+      const held = jest.spyOn(ownership, 'isHeldByOtherNode');
+      const warn = jest.spyOn((service as unknown as { logger: { warn(message: string): void } }).logger, 'warn');
+
+      expect(await answer(service.stop(row.id))).toBe('done');
+
+      expect(held.mock.calls.length).toBeGreaterThan(1);
+      expect(held.mock.calls.length).toBeLessThanOrEqual(10);
+      expect(warn.mock.calls.map(([message]) => message)).toContain(
+        `Could not record the stop of session ${row.id} on a row that kept changing`,
+      );
+    });
+  });
+
   // The other side of the same read: a row removed by someone else (an operator, an import that left the engines
   // running) while its engine runs here is a claim that really ended, and the heartbeat must still stop that engine.
   describe('a row removed by someone else while its engine runs here', () => {
