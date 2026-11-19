@@ -5,7 +5,7 @@ import type { ConfigService } from '@nestjs/config';
 // The module namespace of fs cannot be spied on, so chmodSync is a passthrough the specs below can make refuse.
 jest.mock('fs', () => {
   const actual = jest.requireActual<typeof import('fs')>('fs');
-  return { ...actual, chmodSync: jest.fn(actual.chmodSync) };
+  return { ...actual, chmodSync: jest.fn(actual.chmodSync), statSync: jest.fn(actual.statSync) };
 });
 
 import * as fs from 'fs';
@@ -14,6 +14,7 @@ import { StorageService } from './storage.service';
 
 const realFs = jest.requireActual<typeof import('fs')>('fs');
 const chmodSync = fs.chmodSync as jest.Mock;
+const statSync = fs.statSync as jest.Mock;
 
 // Making the root owner-only is best effort: a volume or bind mount owned by another user refuses the chmod. The
 // gateway then keeps what it found, so it says so once at boot instead of leaving the operator to assume 0700.
@@ -28,6 +29,7 @@ describe('StorageService (local) root it cannot make owner-only', () => {
   afterEach(() => {
     jest.restoreAllMocks();
     chmodSync.mockReset().mockImplementation(realFs.chmodSync);
+    statSync.mockReset().mockImplementation(realFs.statSync);
     for (const dir of dirs.splice(0)) realFs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -58,6 +60,21 @@ describe('StorageService (local) root it cannot make owner-only', () => {
       realFs.chmodSync(target, mode);
     });
   };
+
+  // The warning is a diagnostic: a directory that cannot be read back is no reason to stop the boot.
+  it('starts without a warning when the root cannot be read back', () => {
+    const localPath = rootWithMode(0o755);
+    refuseChmodAt(localPath);
+    statSync.mockImplementation((target: fs.PathLike, ...rest: unknown[]) => {
+      if (String(target) === localPath) {
+        throw Object.assign(new Error(`EACCES: permission denied, stat '${localPath}'`), { code: 'EACCES' });
+      }
+      return (realFs.statSync as (...args: unknown[]) => fs.Stats)(target, ...rest);
+    });
+
+    expect(() => build(localPath)).not.toThrow();
+    expect(warn).not.toHaveBeenCalled();
+  });
 
   it('logs one warning naming the path, its mode and what to do, and starts anyway', () => {
     const localPath = rootWithMode(0o755);

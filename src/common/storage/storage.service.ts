@@ -227,7 +227,14 @@ export class StorageService implements OnModuleDestroy {
    */
   private warnWhenLocalRootIsOpen(): void {
     if (process.platform === 'win32') return;
-    const { mode, uid } = fs.statSync(this.localPath);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(this.localPath);
+    } catch {
+      // A diagnostic never stops the boot: what is wrong with the directory shows at its first use.
+      return;
+    }
+    const { mode, uid } = stat;
     if ((mode & 0o077) === 0) return;
     this.logger.warn(
       `The local media directory '${path.resolve(this.localPath)}' has mode ` +
