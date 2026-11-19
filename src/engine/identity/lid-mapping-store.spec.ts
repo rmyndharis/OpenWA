@@ -4001,6 +4001,22 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
     expect(await store.findPhoneForLid('333@lid')).toBeNull(); // the lookup contradicted the phone that landed
   });
 
+  // The writes of the lid still carry the report's phone once it has landed, and a lookup that names that phone revokes
+  // no row that names it: its failure leaves the lid answering the row, as a lookup of the stored phone does alone.
+  it('keeps answering the phone of a report that landed when a lookup of the same phone fails after it', async () => {
+    const held = hold('upsert');
+    const report = store.remember('333', '628111', OTHER); // the stored phone, from a session not counted yet
+    await held.reached;
+    jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+    const lookup = store.rememberIfUnknown('333', '628111', OTHER); // queued behind the report, naming the same phone
+
+    held.release();
+    await expect(Promise.all([report, lookup])).resolves.toEqual([true, false]);
+    warn.mockClear();
+
+    await answers('628111');
+  });
+
   it('answers the stored phone to a report of it that follows a revocation still being written', async () => {
     const held = hold('update');
     const revocation = store.rememberIfUnknown('333', '628222', OTHER);

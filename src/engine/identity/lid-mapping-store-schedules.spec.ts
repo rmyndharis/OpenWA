@@ -207,17 +207,14 @@ class Reference {
 
   /**
    * The phone a lid must answer when the only writes of it that went wrong are lookups of the phone its row names:
-   * such a lookup revokes no row that names the phone it names, so it hides nothing.
+   * such a lookup revokes no row that names the phone it names, so it hides nothing. A report of that phone that
+   * landed beside it changes nothing: it stored the row.
    */
   mustAnswerLookup(row: { phone: string | null; isReported: boolean } | null): string | undefined {
     const phones = new Set(this.lookups.map(l => this.calls[l.index].phone));
     const failedOnly = this.lookups.length > 0 && this.lookups.every(l => l.state === 'failed');
-    return !this.report &&
-      !this.pending() &&
-      failedOnly &&
-      phones.size === 1 &&
-      row?.isReported &&
-      phones.has(row.phone)
+    const landed = !this.report || (this.report.state === 'stored' && phones.has(this.report.phone));
+    return landed && !this.pending() && failedOnly && phones.size === 1 && row?.isReported && phones.has(row.phone)
       ? (row.phone as string)
       : undefined;
   }
