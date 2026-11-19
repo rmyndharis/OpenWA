@@ -26,6 +26,12 @@ const THROTTLED_503 =
   ' On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); ' +
   'retry after a pause.';
 
+// On whatsapp-web.js the delete, the mute and the unsubscription are sent in the page, so WhatsApp's own status decides the
+// answer: a rate limit, a timeout or a server error is a 503 and says nothing was changed, where it read as a refusal.
+const WWJS_STATUS_503 =
+  ' On whatsapp-web.js, also when WhatsApp answers the request with a rate limit, a timeout or a server error ' +
+  '(408, 423, 429 or 5xx): nothing was changed, so retry after a pause.';
+
 @ApiTags('channels')
 @Controller('sessions/:sessionId/channels')
 export class ChannelController {
@@ -155,7 +161,9 @@ export class ChannelController {
   @ApiResponse({
     status: 503,
     description:
-      'WhatsApp did not answer within the request budget — the operation may or may not have applied.' + THROTTLED_503,
+      'WhatsApp did not answer within the request budget — the operation may or may not have applied.' +
+      THROTTLED_503 +
+      WWJS_STATUS_503,
   })
   @ApiResponse({ status: 400, description: 'Session not started' })
   @ApiResponse({ status: 403, description: 'The engine refused — not found, or this account does not own it' })
@@ -183,7 +191,9 @@ export class ChannelController {
   @ApiResponse({
     status: 503,
     description:
-      'WhatsApp did not answer within the request budget — the operation may or may not have applied.' + THROTTLED_503,
+      'WhatsApp did not answer within the request budget — the operation may or may not have applied.' +
+      THROTTLED_503 +
+      WWJS_STATUS_503,
   })
   @ApiResponse({ status: 400, description: 'Session not started, or validation failed' })
   @ApiResponse({ status: 403, description: 'The engine refused' })
@@ -331,7 +341,9 @@ export class ChannelController {
   @ApiResponse({
     status: 503,
     description:
-      'WhatsApp did not answer within the request budget — the operation may or may not have applied.' + THROTTLED_503,
+      'WhatsApp did not answer within the request budget — the operation may or may not have applied.' +
+      THROTTLED_503 +
+      WWJS_STATUS_503,
   })
   @ApiResponse({ status: 400, description: 'Session not started' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })

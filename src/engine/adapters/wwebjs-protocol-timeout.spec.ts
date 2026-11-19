@@ -497,7 +497,7 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
             ...pageFailing(e),
           }) as unknown as Record<string, jest.Mock>,
       ],
-      ['channel delete', h => new WwebjsChannels(h).deleteChannel(CHANNEL), e => ({ deleteChannel: failing(e) })],
+      ['channel delete', h => new WwebjsChannels(h).deleteChannel(CHANNEL), e => pageFailing(e)],
       [
         'channel mute, the chat lookup',
         h => new WwebjsChannels(h).muteChannel(CHANNEL, true),
@@ -506,13 +506,9 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
       [
         'channel mute',
         h => new WwebjsChannels(h).muteChannel(CHANNEL, true),
-        e => ({ getChatById: resolved({ mute: failing(e), unmute: failing(e) }) }),
+        e => ({ getChatById: resolved({ mute: jest.fn(), unmute: jest.fn() }), ...pageFailing(e) }),
       ],
-      [
-        'channel unsubscribe',
-        h => new WwebjsChannels(h).unsubscribeFromChannel(CHANNEL),
-        e => ({ unsubscribeFromChannel: failing(e) }),
-      ],
+      ['channel unsubscribe', h => new WwebjsChannels(h).unsubscribeFromChannel(CHANNEL), e => pageFailing(e)],
       ['status delete', h => new WwebjsStatus(h).deleteStatus('status-id'), e => ({ revokeStatusMessage: failing(e) })],
       [
         'group subject',

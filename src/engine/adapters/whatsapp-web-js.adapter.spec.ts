@@ -1,6 +1,7 @@
 import { Client, MessageMedia, WAState } from 'whatsapp-web.js';
 import { EventEmitter } from 'events';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
+import { runChannelWriteInPage } from './wwebjs-channels';
 import { extractLinkedParentJID, joinInviteInPage } from './wwebjs-groups';
 import {
   downloadMediaInPage,
@@ -8717,16 +8718,20 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
     });
   });
 
-  describe('unsubscribeFromChannel (library boolean is honored)', () => {
-    it('throws EngineRefusedError when wwebjs resolves false', async () => {
-      const adapter = readyAdapter({ unsubscribeFromChannel: jest.fn().mockResolvedValue(false) });
+  describe('unsubscribeFromChannel (the status of the page is honored)', () => {
+    // The unsubscription is sent in the page, which answers the status WhatsApp gave. What the page answers for each
+    // status is covered in wwebjs-channel-write-status.spec.ts.
+    const pageAnswering = (answer: unknown) => ({ pupPage: { evaluate: jest.fn().mockResolvedValue(answer) } });
+
+    it('throws EngineRefusedError when the page answers a refusal', async () => {
+      const adapter = readyAdapter(pageAnswering({ status: 403, local: true }));
       await expect(adapter.unsubscribeFromChannel('120363401234567890@newsletter')).rejects.toBeInstanceOf(
         EngineRefusedError,
       );
     });
 
-    it('resolves on true', async () => {
-      const adapter = readyAdapter({ unsubscribeFromChannel: jest.fn().mockResolvedValue(true) });
+    it('resolves on 200', async () => {
+      const adapter = readyAdapter(pageAnswering({ status: 200 }));
       await expect(adapter.unsubscribeFromChannel('120363401234567890@newsletter')).resolves.toBeUndefined();
     });
   });
@@ -8760,11 +8765,6 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       ['getContactStatuses', (a: WhatsAppWebJsAdapter) => a.getContactStatuses()],
       ['deleteStatus', (a: WhatsAppWebJsAdapter) => a.deleteStatus('status@broadcast')],
       ['getSubscribedChannels', (a: WhatsAppWebJsAdapter) => a.getSubscribedChannels()],
-      // The channel WRITES take the same path: deleteChannel reached the client directly, so a dead
-      // page there surfaced as an opaque 500 under a session still reporting READY, while the route
-      // documents 503. unsubscribeFromChannel is its structural twin and was already wrapped.
-      ['deleteChannel', (a: WhatsAppWebJsAdapter) => a.deleteChannel('1200@newsletter')],
-      ['unsubscribeFromChannel', (a: WhatsAppWebJsAdapter) => a.unsubscribeFromChannel('1200@newsletter')],
     ])('%s answers EngineTransportError (503) on a dead page', async (_name, call) => {
       const adapter = readyAdapter({
         setDisplayName: jest.fn().mockRejectedValue(transportError()),
@@ -8774,16 +8774,16 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         sendMessage: jest.fn().mockRejectedValue(transportError()),
         revokeStatusMessage: jest.fn().mockRejectedValue(transportError()),
         getChannels: jest.fn().mockRejectedValue(transportError()),
-        deleteChannel: jest.fn().mockRejectedValue(transportError()),
-        unsubscribeFromChannel: jest.fn().mockRejectedValue(transportError()),
       });
       await expect(call(adapter)).rejects.toBeInstanceOf(EngineTransportError);
     });
 
-    // The pictures are sent in the page, so the death is the page call's.
+    // The pictures and the channel writes are sent in the page, so the death is the page call's.
     it.each([
       ['setProfilePicture', (a: WhatsAppWebJsAdapter) => a.setProfilePicture({ mimetype: 'image/png', data: 'aGk=' })],
       ['deleteProfilePicture', (a: WhatsAppWebJsAdapter) => a.deleteProfilePicture()],
+      ['deleteChannel', (a: WhatsAppWebJsAdapter) => a.deleteChannel('1200@newsletter')],
+      ['unsubscribeFromChannel', (a: WhatsAppWebJsAdapter) => a.unsubscribeFromChannel('1200@newsletter')],
     ])('%s answers EngineTransportError (503) on a dead page', async (_name, call) => {
       const adapter = readyAdapter({
         info: { wid: { _serialized: '628000000001@c.us' } },
@@ -9936,16 +9936,21 @@ describe('WhatsAppWebJsAdapter channel administration', () => {
     expect(channel).not.toHaveProperty('description');
   });
 
+  // The writes of a channel are sent in the page, which answers the status WhatsApp gave. What the page answers for each
+  // status is covered in wwebjs-channel-write-status.spec.ts.
   it('surfaces a refused delete rather than reporting success', async () => {
-    const deleteChannel = jest.fn().mockResolvedValue(false);
+    const evaluate = jest.fn().mockResolvedValue({ status: 403, local: true });
 
-    await expect(readyAdapter({ deleteChannel }).deleteChannel(CHANNEL)).rejects.toBeInstanceOf(EngineRefusedError);
+    await expect(readyAdapter({ pupPage: { evaluate } }).deleteChannel(CHANNEL)).rejects.toBeInstanceOf(
+      EngineRefusedError,
+    );
   });
 
   it('resolves a successful delete', async () => {
-    const deleteChannel = jest.fn().mockResolvedValue(true);
+    const evaluate = jest.fn().mockResolvedValue({ status: 200 });
 
-    await expect(readyAdapter({ deleteChannel }).deleteChannel(CHANNEL)).resolves.toBeUndefined();
+    await expect(readyAdapter({ pupPage: { evaluate } }).deleteChannel(CHANNEL)).resolves.toBeUndefined();
+    expect(evaluate).toHaveBeenCalledWith(runChannelWriteInPage, 'delete', CHANNEL);
   });
 
   // Mute lives on the Channel structure, reached through getChatById — the client itself has no
@@ -9953,20 +9958,26 @@ describe('WhatsAppWebJsAdapter channel administration', () => {
   it.each([
     [true, 'mute'],
     [false, 'unmute'],
-  ])('routes mute=%s to Channel.%s', async (mute, method) => {
-    const act = jest.fn().mockResolvedValue(true);
-    const getChatById = jest.fn().mockResolvedValue({ [method]: act });
+  ])('routes mute=%s to the %s write of the page', async (mute, write) => {
+    // The structure only has to exist, which is what tells a channel from a chat: the page sends the write.
+    const getChatById = jest.fn().mockResolvedValue({ [write]: jest.fn() });
+    const evaluate = jest.fn().mockResolvedValue({ status: 200 });
 
-    await expect(readyAdapter({ getChatById }).muteChannel(CHANNEL, mute)).resolves.toBeUndefined();
+    await expect(
+      readyAdapter({ getChatById, pupPage: { evaluate } }).muteChannel(CHANNEL, mute),
+    ).resolves.toBeUndefined();
 
     expect(getChatById).toHaveBeenCalledWith(CHANNEL);
-    expect(act).toHaveBeenCalled();
+    expect(evaluate).toHaveBeenCalledWith(runChannelWriteInPage, write, CHANNEL);
   });
 
   it('surfaces a refused mute rather than reporting success', async () => {
-    const getChatById = jest.fn().mockResolvedValue({ mute: jest.fn().mockResolvedValue(false) });
+    const getChatById = jest.fn().mockResolvedValue({ mute: jest.fn() });
+    const evaluate = jest.fn().mockResolvedValue({ status: 403 });
 
-    await expect(readyAdapter({ getChatById }).muteChannel(CHANNEL, true)).rejects.toBeInstanceOf(EngineRefusedError);
+    await expect(
+      readyAdapter({ getChatById, pupPage: { evaluate } }).muteChannel(CHANNEL, true),
+    ).rejects.toBeInstanceOf(EngineRefusedError);
   });
 
   // A non-channel chat has no mute() at all; that is a wrong-id error, not a refusal.

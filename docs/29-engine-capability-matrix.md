@@ -738,7 +738,7 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 | -------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `acceptChannelAdminInvite` | ❌ **not exposed**                                                                                   |
 | `createChannel`            | ✅ `createChannel`                                                                                   |
-| `deleteChannel`            | ✅ `deleteChannel`                                                                                   |
+| `deleteChannel`            | ❌ **not exposed** (run in-page)                                                                     |
 | `demoteChannelAdmin`       | ❌ **not exposed** — page function gone, see 29.4                                                    |
 | `getChannelByInviteCode`   | ❌ **not exposed** — the invite→channel bridge adapter-gap #2 needs (29.6.2)                         |
 | `getChannels`              | ✅ `getSubscribedChannels`, `getChannelMessages`                                                     |
@@ -747,7 +747,7 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 | `sendChannelAdminInvite`   | ❌ **not exposed**                                                                                   |
 | `subscribeToChannel`       | ❌ **not exposed** — adapter-gap #2; the delegate throws pending a verified two-step wiring (29.6.2) |
 | `transferChannelOwnership` | ❌ **not exposed** — page rejects locally, see 29.4                                                  |
-| `unsubscribeFromChannel`   | ✅ `unsubscribeFromChannel`                                                                          |
+| `unsubscribeFromChannel`   | ❌ **not exposed** (run in-page)                                                                     |
 
 **Labels** (5)
 
@@ -1144,6 +1144,19 @@ adapter boundary — none silently stubs.
   `423` is a `503` on whatsapp-web.js and a `403` on Baileys, which maps `408` and `429` to a `503` and every other `4xx` to
   a `403`. A `5xx` is a `503` on whatsapp-web.js and is rethrown as it came on Baileys (a `500`). Baileys is left as it
   is: whether WhatsApp sends `423` or a `5xx` to these writes has not been traced on a live account.
+- **Channel writes (wwjs) answer by WhatsApp's status.** The delete, the mute and unmute, and the unsubscription of a
+  channel are sent by the adapter in the page, with the lookups, the job and the arguments whatsapp-web.js uses
+  (`Client.deleteChannel`, `Channel.mute` and `unmute`, `Client.unsubscribeFromChannel`), so that the status the job
+  rejects with decides the answer as it does for the group writes above: `408`, `423`, `429` and `5xx` are the retryable
+  `503`, and any other status the `403`. The library reads that class of error as `false`, which the adapter read as a
+  refusal; the Mex subclass that carries the error of a query itself (`MexServerStatusCodeError`) was not caught by the
+  library at all and was a bare `500`, and both are answered by their status now. What the library answered `false`
+  for without asking WhatsApp, a channel the page does not hold and a channel the account owns when it unsubscribes, is
+  still the `403` and sends nothing. The jobs make up two statuses themselves: the unsubscription job reports a suspended
+  channel as a `423`, and the delete and the unsubscription report an answer that holds nothing as a `500` (which is how
+  WhatsApp can refuse an account that may not make the change). Neither is a status WhatsApp sent or a failure to
+  retry, so both are the `403` too. A page without one of the jobs dies on it as the library's call did, and answers a
+  bare `500`. Baileys maps `408` and `429` to a `503` and every other `4xx` to a `403`, and rethrows a `5xx` as it came.
 - **`editMessage` / `pinMessage` / `unpinMessage` refusals (baileys).** Both engines refuse what they
   can judge locally: the target must be addressable inside the given chat, and the Baileys adapter
   additionally refuses an edit of a message the account did not send or of one with no text or caption
@@ -1317,10 +1330,10 @@ adapter sources — re-derive the same way when anything changes:
   (`probeLiveness`, `getPhoneNumber`, `getPushName`, `checkNumberExists`) are ⚙️ internal and have no route.
 - Full engine inventory (29.5), split by the exposure legend rather than lumped: Baileys **152**
   socket methods — 50 wired into interface methods, 5 internal wiring, 29 plumbing, **68 ❌ not
-  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 38 wired,
-  4 internal wiring, 1 class plumbing, **38 ❌ not exposed** (26 real capabilities, 4 served in-page
+  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 36 wired,
+  4 internal wiring, 1 class plumbing, **40 ❌ not exposed** (26 real capabilities, 6 served in-page
   by an adapter page function, and 8 session/transport settings that are not WhatsApp capabilities).
-  The backlog is the ❌ rows minus those 4 and those 8 settings; 🔩 plumbing is correctly never exposed.
+  The backlog is the ❌ rows minus those 6 and those 8 settings; 🔩 plumbing is correctly never exposed.
 - Events: Baileys **34** (18 consumed / 16 dropped), wwjs **31** (18 consumed / 13 dropped).
 - **0** capabilities in 29.5.3: every capability with first-class symbols on both libraries is
   either wired or classified with evidence. Some are Baileys-only despite typed whatsapp-web.js

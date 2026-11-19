@@ -7,6 +7,7 @@ import {
   readInviteSenderInPage,
   revokeInviteInPage,
 } from './wwebjs-groups';
+import { runChannelWriteInPage } from './wwebjs-channels';
 import { readCurrentLid, readLeanContacts } from './wwebjs-contacts';
 import { readChatModels } from './wwebjs-chats';
 import { readLabelChatIds } from './wwebjs-labels';
@@ -73,6 +74,9 @@ describe('a page helper that lands on a document WhatsApp Web has not booted yet
     ['runWriteInPage, a description', runWriteInPage, { kind: 'description', chatId: GROUP, description: 'd' }],
     ['runWriteInPage, a picture', runWriteInPage, { kind: 'picture', chatId: GROUP, picture: {} }],
     ['runWriteInPage, a property', runWriteInPage, { kind: 'property', chatId: GROUP, property: 'restrict', value: 1 }],
+    ['runChannelWriteInPage, a delete', runChannelWriteInPage, 'delete'],
+    ['runChannelWriteInPage, a mute', runChannelWriteInPage, 'mute'],
+    ['runChannelWriteInPage, an unsubscription', runChannelWriteInPage, 'unsubscribe'],
   ] as Array<[string, (arg?: unknown) => unknown, unknown]>;
 
   it.each(HELPERS)(
