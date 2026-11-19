@@ -11,10 +11,7 @@ import { settleWriteStatus } from './wwebjs-page-writes';
 // The library's own page code: the functions it ships into WhatsApp Web, which `LoadUtils` installs as `window.WWebJS`.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { LoadUtils } = require('whatsapp-web.js/src/util/Injected/Utils') as { LoadUtils: () => void };
-const { GroupChat, Client } = wwebjs as unknown as {
-  GroupChat: new (client: unknown, data: unknown) => unknown;
-  Client: { prototype: { setProfilePicture(this: unknown, media: unknown): Promise<boolean> } };
-};
+const { GroupChat } = wwebjs as unknown as { GroupChat: new (client: unknown, data: unknown) => unknown };
 
 /**
  * A group or profile write is sent to WhatsApp by a job of WhatsApp Web, and whatsapp-web.js reads every status the job
@@ -27,8 +24,9 @@ const { GroupChat, Client } = wwebjs as unknown as {
  * account that cannot set a group property with an `ActionError` and, for announce and locked, RESOLVES the response
  * union (`SetPropertyResponse*`) of the request instead of rejecting a status, while member add mode goes through the
  * Mex job whose fatal error is a `MexServerStatusCodeError`; `WAWebContactProfilePicThumbBridge.sendSetPicture` rejects
- * the job's `ServerStatusCodeError`. The library's own page functions run against it, so what is asserted is what the
- * library does there.
+ * the job's `ServerStatusCodeError`. The adapter's page functions run against it, on top of the helpers the library
+ * installs as `window.WWebJS` (the picture crop and the chat lookup are replaced below, which need a canvas and the page's
+ * chat store), so what is asserted is what the adapter does there.
  */
 describe('a group or profile write that WhatsApp answers with a status', () => {
   const GROUP = '120363000000000001@g.us';
@@ -149,11 +147,7 @@ describe('a group or profile write that WhatsApp answers with a status', () => {
       isGroup: true,
       groupMetadata: { participants: [], owner: { _serialized: OWN }, creation: 1, desc: '' },
     });
-    Object.assign(client, {
-      getChatById: jest.fn().mockResolvedValue(chat),
-      // The library's own client method, run on this client.
-      setProfilePicture: (media: unknown) => Client.prototype.setProfilePicture.call(client, media),
-    });
+    Object.assign(client, { getChatById: jest.fn().mockResolvedValue(chat) });
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
     (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
     (adapter as unknown as { client: unknown }).client = client;
