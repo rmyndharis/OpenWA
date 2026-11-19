@@ -39,7 +39,11 @@ describe('reading the invite code of a group on each WhatsApp Web layout', () =>
     g.window = {
       require: (name: string) => {
         if (name in modules) return modules[name];
-        if (unknownModule === 'throws') throw new Error(`Requiring unknown module "${name}"`);
+        // What the loader throws, as the scripts of every build examined spell it: the module is a parameter of the
+        // message, not part of its text.
+        if (unknownModule === 'throws') {
+          throw Object.assign(new Error('Requiring unknown module "%s"'), { name: 'ModuleError' });
+        }
         return undefined;
       },
     };
@@ -154,7 +158,9 @@ describe('reading the invite code of a group on each WhatsApp Web layout', () =>
   it.each([
     "Cannot read properties of undefined (reading 'somethingElse')",
     'window.require(...).somethingElse is not a function',
-    'Requiring unknown module "WAWebSomeOtherJob"',
+    // The loader's other texts are about a module that exists and cannot run, which is no missing job.
+    'Requiring module "%s" which threw an exception',
+    'Requiring module "%s" with unresolved dependencies: %s',
   ])('leaves a failure about something else as it was: %s', async message => {
     const { adapter, chat } = adapterOn(withoutJob);
     chat.getInviteCode = () => Promise.reject(Object.assign(new Error(message), { name: 'TypeError' }));

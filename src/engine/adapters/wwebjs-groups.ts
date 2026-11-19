@@ -172,15 +172,17 @@ export async function joinInviteInPage(inviteCode: string): Promise<{ gid?: stri
 
 /**
  * How the library's own `getInviteCode` fails on a build with no job to read the code with. It reads the job's module
- * without asking, so a module that answers `undefined` is a TypeError, a module without the call is another, and
- * Meta's `require` throws for a module the build does not define. Puppeteer hands the page's error over as a plain
- * Error, so the message is what is matched, and only where it names the job: any other failure is not this one.
+ * without asking, so a module that answers `undefined` is a TypeError, a module without the call is another, and the
+ * `ModuleError` that Meta's `require` throws for a module the page has not defined (before its error setup has run)
+ * carries the loader's own text, in which the module is a parameter and not part of the message. That is the only module
+ * the library's call requires. Puppeteer hands the page's error over as a plain Error, so the message is what is matched,
+ * and only the messages that say the module or its call is missing: any other failure is not this one.
  * `queryGroupInviteCode` is the call an older library reads.
  */
 const NO_INVITE_JOB_ERRORS = [
   /Cannot read properties of undefined \(reading '(?:fetchMexGroupInviteCode|queryGroupInviteCode)'\)/,
   /\.(?:fetchMexGroupInviteCode|queryGroupInviteCode) is not a function/,
-  /Requiring unknown module "WAWebMexFetchGroupInviteCodeJob"/,
+  /Requiring unknown module "%s"/,
 ];
 
 /**
