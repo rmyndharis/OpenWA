@@ -252,6 +252,7 @@ import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { describeAudio, describeVideo } from './baileys-audio-probe';
 import * as safeLinkPreview from './safe-link-preview';
 import sharp from 'sharp';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 const fakeStore = {
   put: jest.fn().mockResolvedValue(undefined),
@@ -7878,7 +7879,7 @@ describe('BaileysAdapter contact + chat reads', () => {
             waMessageId: string,
             check: (row: Message) => boolean = () => true,
           ): Promise<Message> => {
-            const deadline = performance.now() + 5000;
+            const deadline = performance.now() + 30_000;
             for (;;) {
               const row = await ds.getRepository(Message).findOneBy({ waMessageId });
               if (row && check(row)) return row;
@@ -7928,6 +7929,8 @@ describe('BaileysAdapter contact + chat reads', () => {
             ],
           });
           await settle();
+          // The message is handed on after lookups that take a PostgreSQL round trip each: wait for it, not for turns.
+          await waitUntil(() => onMessage.mock.calls.some(([message]) => message.id === 'CACHE_ONLY'));
           fakeSock.fire('chats.upsert', [{ id: '111@lid' }, { id: '628111@s.whatsapp.net' }]);
           const chats = await adapter.getChats();
           const fence = new ChatScopeService(store);
@@ -7943,7 +7946,7 @@ describe('BaileysAdapter contact + chat reads', () => {
             false,
           );
           await drainProjection();
-          const persisted = await ds.getRepository(Message).findOneByOrFail({ waMessageId: 'CACHE_ONLY' });
+          const persisted = await rowEventually('CACHE_ONLY');
           expect(persisted.chatId).toBe('111@lid');
           expect(await fence.filter({ allowedChats: ['628111@c.us'] }, [persisted], message => message.chatId)).toEqual(
             [],
@@ -8051,6 +8054,9 @@ describe('BaileysAdapter contact + chat reads', () => {
           editLegacy('EDIT_FOREIGN');
           await drainProjection();
           expect((await ds.getRepository(Message).findOneByOrFail({ waMessageId: 'LEGACY' })).body).toBe('old body');
+          await waitUntil(
+            async () => (await adapter.getChats()).find(chat => chat.id === '628111@c.us')?.lastMessage === 'old body',
+          );
           expect((await adapter.getChats()).find(chat => chat.id === '628111@c.us')?.lastMessage).toBe('old body');
           if (source === 'contact') {
             expect(await adapter.getContactById('628111@c.us')).toBeNull();
@@ -8190,6 +8196,8 @@ describe('BaileysAdapter contact + chat reads', () => {
           }
         }
       },
+      // Room for the deadline waits above on a busy runner.
+      120_000,
     );
   });
 
