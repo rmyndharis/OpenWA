@@ -55,8 +55,11 @@ interface UnsettledWrite {
    * leave while that write is under way (the LRU, a reload), and this is what a row of the table is held against then.
    */
   reportPhone?: string;
-  /** A display lookup contradicted the stored phone and its revocation has not settled: no row is answered meanwhile. */
-  revoking?: boolean;
+  /**
+   * The display lookup that contradicted the stored phone, while its revocation has not settled and no report or
+   * clearing negative has taken its place: no row is answered meanwhile.
+   */
+  revoking?: object;
   /** The latest actual call begun, a report or a negative. Unlike `latestReport`, an eviction or a reload leaves it. */
   latestActual?: object;
   /** A statement of these writes failed, so the table may lack what the cache holds. */
@@ -195,11 +198,12 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
    */
   private readonly failedWrites = new Set<string>();
   /**
-   * The phone a write failed to store, by lid: that of a report that did not land, or of the display lookup whose
-   * revocation of the stored phone did not persist. The table still names the phone it was to replace, so the entry
-   * {@link failedWrites} marks going out with the mirror entry (the cap, a reload) must not make the lid answer it again.
-   * It outranks an entry warmed back from that row. Ended by a report of the lid that begins or lands, a negative that
-   * clears the row and a reload, which replaces the table; bounded like the mirror, oldest first.
+   * The phone a write failed to store, by lid: that of a report that did not land, or none (an empty one, which no
+   * row has) for the display lookup whose revocation of the stored phone did not persist, so that no row is answered.
+   * The table still names the phone it was to replace, so the entry {@link failedWrites} marks going out with the
+   * mirror entry (the cap, a reload) must not make the lid answer it again. It outranks an entry warmed back from that
+   * row. Ended by a report of the lid that begins or lands, a negative that clears the row and a reload, which
+   * replaces the table; bounded like the mirror, oldest first.
    */
   private readonly failedPhones = new Map<string, string>();
   /**
@@ -458,7 +462,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     }
     const reporters = this.seenBy.get(lid);
     const writing = this.beginWrite(lid, lookup);
-    if (cached && cached !== phone) writing.revoking = true;
+    if (cached && cached !== phone) writing.revoking = lookup;
     try {
       const { affected } = await this.inTurn(lid, async () => {
         await this.repo
@@ -484,9 +488,11 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       return true;
     } catch (err) {
       writing.failed = true;
-      if (writing.latestOperation === lookup && this.seenBy.get(lid) === reporters && this.unreported.has(lid)) {
-        this.failedWrites.add(lid);
-        setNewest(this.failedPhones, lid, phone, this.maxCachedLids || Infinity);
+      // The entry's own record of the revocation outlives the mirror entry and an overlapping lookup. The mark names no
+      // phone, so no row equals it, not even the one a failed report's mark would have admitted.
+      if (writing.revoking === lookup) {
+        setNewest(this.failedPhones, lid, '', this.maxCachedLids || Infinity);
+        if (this.lidToPhone.has(lid)) this.failedWrites.add(lid);
       }
       this.warnWriteFailed(`Could not store lid mapping: ${err instanceof Error ? err.message : String(err)}`);
       return false;
@@ -523,7 +529,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     const writing = this.beginWrite(lid, report, true);
     if (phone !== null) {
       writing.reportPhone = phone;
-      if (!seen) writing.revoking = false; // index() above took the lid off `unreported`
+      if (!seen) writing.revoking = undefined; // index() above took the lid off `unreported`
     }
     if (gaining) {
       writing.check = owed; // outside the cap of owed checks while the lid's writes are unsettled
@@ -709,7 +715,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     // run yet.
     if (writing?.latestActual === report) {
       writing.reportPhone = undefined;
-      writing.revoking = false;
+      writing.revoking = undefined;
     }
     // A newer report of a phone owns the cached entry. A newer negative says what this one did, so the entry goes
     // now: left to that negative, it would stay if its statement failed, answering a phone the table has cleared.

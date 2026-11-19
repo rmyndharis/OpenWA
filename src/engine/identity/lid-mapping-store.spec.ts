@@ -4148,6 +4148,90 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       await refused(['628111', '628222']);
     });
 
+    describe.each([
+      ['later lids pushed its entry out', pushOut],
+      ['a reload left it out', () => store.reload()],
+    ] as const)('a revocation by a display lookup that fails after %s', (_state, leave) => {
+      it('keeps refusing the lid, and the lid for neither phone', async () => {
+        let reject!: (err: Error) => void;
+        const entered = new Promise<void>(resolve =>
+          jest.spyOn(repo, 'update').mockImplementationOnce(
+            () =>
+              new Promise((_, fail) => {
+                reject = fail;
+                resolve();
+              }),
+          ),
+        );
+        const lookup = store.rememberIfUnknown('333', '628222', OTHER); // contradicts the stored 628111
+        await entered;
+        await leave();
+        await refused(['628111', '628222']); // refused while the revocation is written
+
+        reject(new Error('connection lost'));
+        await expect(lookup).resolves.toBe(false);
+        warn.mockClear();
+
+        expect(await repo.findOneBy({ lid: '333' })).toMatchObject({ phone: '628111', isReported: true });
+        await refused(['628111', '628222']);
+      });
+    });
+
+    it('keeps refusing the lid when a lookup of the stored phone overlaps the revocation that fails', async () => {
+      let reject!: (err: Error) => void;
+      const entered = new Promise<void>(resolve =>
+        jest.spyOn(repo, 'update').mockImplementationOnce(
+          () =>
+            new Promise((_, fail) => {
+              reject = fail;
+              resolve();
+            }),
+        ),
+      );
+      const revocation = store.rememberIfUnknown('333', '628222', OTHER); // contradicts the stored 628111
+      await entered;
+      const repeat = store.rememberIfUnknown('333', '628111', OWNER); // the stored phone, queued behind it
+      reject(new Error('connection lost'));
+      await expect(Promise.all([revocation, repeat])).resolves.toEqual([false, true]);
+      warn.mockClear();
+      await pushOut();
+
+      await refused(['628111', '628222']);
+    });
+
+    it('marks nothing when a lookup of the stored phone fails', async () => {
+      jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(store.rememberIfUnknown('333', '628111', OTHER)).resolves.toBe(false);
+      warn.mockClear();
+      await pushOut();
+
+      expect(evicted()).toBe(0);
+      await answers('628111');
+    });
+
+    it('marks nothing when a lookup of the phone a display-only row holds fails, so another node re-maps the lid', async () => {
+      await repo.update({ lid: '333' }, { isReported: false }); // 628111 is kept for display only
+      await store.reload();
+      jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(store.rememberIfUnknown('333', '628111', OTHER)).resolves.toBe(false);
+      warn.mockClear();
+      expect(evicted()).toBe(0);
+
+      await peerRemaps('628333');
+
+      await answers('628333');
+    });
+
+    it('keeps refusing the lid when a lookup of the stored phone fails after the report that replaced it failed', async () => {
+      await failReport(); // 628222 did not reach the table, which still names 628111
+      jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(store.rememberIfUnknown('333', '628111', OTHER)).resolves.toBe(false); // contradicts 628222
+      warn.mockClear();
+      await pushOut();
+
+      await refused(['628111', '628222']);
+    });
+
     it('keeps refusing the lid when another node re-maps it, as it did while the entry was resident', async () => {
       await failReport();
       await pushOut();
