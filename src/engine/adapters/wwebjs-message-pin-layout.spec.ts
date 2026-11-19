@@ -4,6 +4,7 @@ import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 
 // The library's own page code, which `LoadUtils` installs as `window.WWebJS`, and its own `Message.pin` and `unpin`.
@@ -215,6 +216,67 @@ describe('pinning and unpinning a message on each WhatsApp Web layout', () => {
       expect((pin as Error).message).toMatch(/the pin of message .* was rejected/);
       expect(unpin).toBeInstanceOf(EngineRefusedError);
       expect((unpin as Error).message).toMatch(/the unpin of message .* was rejected/);
+    });
+
+    // The page refuses a send to a contact the account blocked before it sends anything, with an error of its own that
+    // carries no status: a refusal, where it was a bare 500.
+    it('answers the 403 when the chat is with a contact the account blocked, without sending', async () => {
+      const page = installPage({
+        breakWith: Object.assign(new Error('Contact is blocked'), { name: 'ContactBlocked' }),
+      });
+
+      const pin = await adapterOnThatPage()
+        .pinMessage(CHAT, MESSAGE_ID, DAY)
+        .catch((e: unknown) => e);
+      const unpin = await adapterOnThatPage()
+        .unpinMessage(CHAT, MESSAGE_ID)
+        .catch((e: unknown) => e);
+
+      expect(pin).toBeInstanceOf(EngineRefusedError);
+      expect((pin as Error).message).toMatch(
+        /the pin of message .* was rejected \(the chat is with a contact .* blocked/,
+      );
+      expect(unpin).toBeInstanceOf(EngineRefusedError);
+      expect((unpin as Error).message).toMatch(/the unpin of message .* was rejected \(the chat is with a contact/);
+      expect(page.sent).toEqual([]);
+    });
+
+    // The sender reads the group's metadata before it sends, which WhatsApp Web asks WhatsApp for again after a
+    // reconnect, and that query rejects `ServerStatusCodeError(status)`: the status says what the answer is, where it
+    // was a bare 500.
+    describe('when the read in front of the send is answered with a status', () => {
+      const statusError = (status: number, name = 'ServerStatusCodeError') =>
+        Object.assign(new Error(`status ${status}`), { name, status, statusCode: status });
+
+      it.each([408, 423, 429, 500, 503])('is a retryable failure, not a refusal, for %i', async status => {
+        installPage({ breakWith: statusError(status) });
+
+        const pin = adapterOnThatPage().pinMessage(CHAT, MESSAGE_ID, DAY);
+        await expect(pin).rejects.toBeInstanceOf(EngineTransportError);
+        await expect(pin).rejects.toThrow(new RegExp(`answered ${status} to the pin of message .* changed nothing`));
+        await expect(adapterOnThatPage().unpinMessage(CHAT, MESSAGE_ID)).rejects.toBeInstanceOf(EngineTransportError);
+      });
+
+      it.each([401, 403, 404])('is a refusal that names the status for %i', async status => {
+        installPage({ breakWith: statusError(status) });
+
+        const pin = adapterOnThatPage().pinMessage(CHAT, MESSAGE_ID, DAY);
+        await expect(pin).rejects.toBeInstanceOf(EngineRefusedError);
+        await expect(pin).rejects.toThrow(
+          new RegExp(`the pin of message .* was rejected \\(WhatsApp answered ${status}\\)`),
+        );
+        await expect(adapterOnThatPage().unpinMessage(CHAT, MESSAGE_ID)).rejects.toBeInstanceOf(EngineRefusedError);
+      });
+
+      it('reads the class of a Mex job the same way, and an error with no status as a refusal', async () => {
+        installPage({ breakWith: statusError(429, 'MexServerStatusCodeError') });
+        await expect(adapterOnThatPage().pinMessage(CHAT, MESSAGE_ID, DAY)).rejects.toBeInstanceOf(
+          EngineTransportError,
+        );
+
+        installPage({ breakWith: Object.assign(new Error('refused'), { name: 'ServerStatusCodeError' }) });
+        await expect(adapterOnThatPage().pinMessage(CHAT, MESSAGE_ID, DAY)).rejects.toBeInstanceOf(EngineRefusedError);
+      });
     });
 
     it('answers the 403 for a duration the page has no option for, without sending', async () => {

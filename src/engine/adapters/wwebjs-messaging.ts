@@ -43,7 +43,7 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { type WwebjsEngineHost, requireClient, withPageWrite } from './wwebjs-host';
-import { type EvaluatePage, type PinAnswer, pinInPage } from './wwebjs-page-writes';
+import { type EvaluatePage, type PinAnswer, pinInPage, settleWriteStatus } from './wwebjs-page-writes';
 import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
@@ -1421,6 +1421,28 @@ export class WwebjsMessaging {
     });
   }
 
+  /**
+   * Settle a pin or an unpin that the page answered with a status and not a verdict: the read it makes in front of the
+   * send was answered with one (a rate limit, a timeout or a server error is the retryable 503, any other status a
+   * refusal), or it refused a chat with a contact the account blocked before it sent anything. Returns for any other
+   * answer.
+   */
+  private settlePinStatus(op: 'pin' | 'unpin', messageId: string, answer: PinAnswer): void {
+    if (typeof answer !== 'object') return;
+    settleWriteStatus(
+      answer.status,
+      {
+        request: `the ${op} of message ${messageId}`,
+        nothing: 'changed nothing',
+        refused: (status, local) =>
+          `the ${op} of message ${messageId} was rejected (${
+            local ? 'the chat is with a contact this account blocked, nothing was sent' : `WhatsApp answered ${status}`
+          })`,
+      },
+      answer.local,
+    );
+  }
+
   async pinMessage(chatId: string, messageId: string, durationSeconds: number): Promise<void> {
     this.host.ensureReady();
     // The sender answers false for every refusal: a message it cannot resolve, a duration it has no option for, or a
@@ -1428,7 +1450,8 @@ export class WwebjsMessaging {
     const pinned = await this.pinThroughPage('pinMessage', chatId, messageId, durationSeconds);
     // Nothing was sent: the build has no sender this adapter can call.
     if (pinned === 'missing') throw new EngineNotSupportedError('pinMessage(no compatible pin sender on this build)');
-    if (!pinned) {
+    this.settlePinStatus('pin', messageId, pinned);
+    if (pinned !== true) {
       throw new EngineRefusedError(
         `the pin of message ${messageId} was rejected — in a group only admins may pin, and the duration must be 24h, 7d or 30d`,
       );
@@ -1454,7 +1477,8 @@ export class WwebjsMessaging {
     const unpinned = await this.pinThroughPage('unpinMessage', chatId, messageId);
     if (unpinned === 'missing')
       throw new EngineNotSupportedError('unpinMessage(no compatible pin sender on this build)');
-    if (!unpinned) {
+    this.settlePinStatus('unpin', messageId, unpinned);
+    if (unpinned !== true) {
       throw new EngineRefusedError(`the unpin of message ${messageId} was rejected — in a group only admins may unpin`);
     }
     this.host.logger.debug('Unpinned message', { chatId, messageId });

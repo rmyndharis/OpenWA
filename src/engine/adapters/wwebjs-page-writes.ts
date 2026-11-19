@@ -155,11 +155,12 @@ export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer>
 }
 
 /**
- * What the page answers to a pin or an unpin: whether WhatsApp took it, `'legacy'` when the build's sender still takes
- * the positional arguments whatsapp-web.js passes (the caller then runs the library's own call), or `'missing'` when
- * the build has no sender this can call.
+ * What the page answers to a pin or an unpin: whether WhatsApp took it, the status the page gave instead (`local` marks
+ * a refusal the page decided on its own, before anything was sent), `'legacy'` when the build's sender still takes the
+ * positional arguments whatsapp-web.js passes (the caller then runs the library's own call), or `'missing'` when the
+ * build has no sender this can call.
  */
-export type PinAnswer = boolean | 'legacy' | 'missing';
+export type PinAnswer = boolean | { status: number; local?: true } | 'legacy' | 'missing';
 
 /**
  * Pin or unpin a message IN-PAGE through the page's own sender, called the way the running build takes it. whatsapp-web.js
@@ -175,7 +176,13 @@ export type PinAnswer = boolean | 'legacy' | 'missing';
  * `'legacy'`. Any other arity, or a build without the sender, the enum, the option mapper or the message collection,
  * answers `'missing'` before anything was sent. The sender resolves the send result when WhatsApp took the pin, resolves
  * nothing for a type it does not know, and throws a plain error when the send did not go through, which is the refusal
- * the library read as `false`; a duration the page has no option for is the same refusal.
+ * the library read as `false`; a duration the page has no option for is the same refusal. The sender throws that error
+ * for every send the page recorded as failed, a rate limit and a timeout included, and keeps nothing of why, so those
+ * cannot be told from a refusal here. Two failures come before the result of the send and carry their own: a chat with a
+ * contact the account blocked is refused by the page with a `ContactBlocked` error before anything is sent (answered as
+ * a refusal of the page's own), and the group's metadata is read first, which WhatsApp Web asks WhatsApp for again after
+ * a reconnect, so that read can reject `ServerStatusCodeError(status)` (answered as that status, a status-less error as
+ * 403).
  *
  * Every lookup tests the answer and guards the throw: from a page.evaluate Meta's `require` answers `undefined` for a
  * module the page has not defined, and throws only inside a guard or before the page's error setup has run. A document
@@ -222,8 +229,17 @@ export async function pinInPage(messageId: string, pin: boolean, durationSeconds
     })) as { messageSendResult?: unknown } | null | undefined;
     return sent?.messageSendResult === 'OK';
   } catch (err) {
-    const message = (err as { message?: unknown } | undefined)?.message;
-    if (typeof message === 'string' && /PinInChat send Error|Unexpeded pin expiry duration/.test(message)) return false;
+    const failure = err as { name?: unknown; message?: unknown; status?: unknown } | undefined;
+    if (
+      typeof failure?.message === 'string' &&
+      /PinInChat send Error|Unexpeded pin expiry duration/.test(failure.message)
+    ) {
+      return false;
+    }
+    if (failure?.name === 'ContactBlocked') return { status: 403, local: true };
+    if (typeof failure?.name === 'string' && failure.name.endsWith('ServerStatusCodeError')) {
+      return { status: typeof failure.status === 'number' ? failure.status : 403 };
+    }
     throw err;
   }
 }

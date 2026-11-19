@@ -1260,9 +1260,14 @@ adapter boundary — none silently stubs.
   bare `500`. The adapter asks the page which shape the sender has, calls it the way the build takes it (the page's own
   pin type and duration option, nothing of the page replaced), and leaves the call to the library on a build whose sender
   still takes positional arguments. A build with neither shape, or without the pin type, the duration mapper or the message
-  collection, answers `501` before anything is sent. A send that did not go through is the `403` as before. The options
-  call follows what the page's own pin dialog sends and has been run offline against the page's modules, not yet on a
-  linked account.
+  collection, answers `501` before anything is sent. A send that did not go through is the `403` as before. The sender
+  throws the same error for every send the page recorded as failed, a refusal, a rate limit and a timeout alike, and keeps
+  nothing of why, so none of them can be told from the others and a rate limit of the send is a `403` too. Two failures
+  come before the result of the send and are answered: a chat with a contact the account blocked, which the page refuses
+  before it sends, is a `403` (it was a bare `500`), and the read of the group's metadata that the sender makes first,
+  which WhatsApp Web repeats after a reconnect, is answered by the status it rejects with, the retryable `503` for `408`,
+  `423`, `429` and `5xx` and a `403` for any other. The options call follows what the page's own pin dialog sends and has
+  been run offline against the page's modules, not yet on a linked account.
 - **Group owner and group event ids (wwjs).** whatsapp-web.js folds a group's participant list to the phone
   dialect, but the group `owner` (`getGroupInfo`, `getGroupJoinInfo`) and the actor and participant ids of group
   events reach the adapter as WhatsApp Web holds them, which on a LID-addressed group is `<lid>@lid` even when the

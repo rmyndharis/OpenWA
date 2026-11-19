@@ -901,8 +901,9 @@ export class MessageController {
   @ApiResponse({
     status: 403,
     description:
-      'The whatsapp-web.js engine refused the pin (in a group only admins may pin). The Baileys ' +
-      'engine has no acceptance signal and answers 200.',
+      'The whatsapp-web.js engine refused the pin (in a group only admins may pin, or the chat is with a contact ' +
+      'the account blocked). Also answered when WhatsApp Web reports the send as failed, which its sender says no more ' +
+      'about, so a rate limit of the send reads the same. The Baileys engine has no acceptance signal and answers 200.',
   })
   @ApiResponse({ status: 404, description: 'Message not found in the chat' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
@@ -919,7 +920,9 @@ export class MessageController {
       ' ' +
       'The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the ' +
       'request budget. The pin may or may not have been applied; a ' +
-      'retry is safe, but it restarts the pin duration from the moment it succeeds.',
+      'retry is safe, but it restarts the pin duration from the moment it succeeds. Also answered on whatsapp-web.js ' +
+      'when WhatsApp answers the read of the group in front of the send with a rate limit, a timeout or a server error ' +
+      '(408, 423, 429 or 5xx): nothing was sent.',
   })
   async pinMessage(@Param('sessionId') sessionId: string, @Body() dto: PinMessageDto): Promise<{ success: boolean }> {
     return this.messageService.pinMessage(sessionId, dto);
@@ -936,8 +939,9 @@ export class MessageController {
   @ApiResponse({
     status: 403,
     description:
-      'The whatsapp-web.js engine refused the unpin (in a group only admins may unpin). The Baileys ' +
-      'engine has no acceptance signal and answers 200.',
+      'The whatsapp-web.js engine refused the unpin (in a group only admins may unpin, or the chat is with a contact ' +
+      'the account blocked). Also answered when WhatsApp Web reports the send as failed, which its sender says no more ' +
+      'about, so a rate limit of the send reads the same. The Baileys engine has no acceptance signal and answers 200.',
   })
   @ApiResponse({ status: 404, description: 'Message not found in the chat' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
@@ -954,7 +958,9 @@ export class MessageController {
       ' ' +
       'The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the ' +
       'request budget. The change may or may not have been applied; ' +
-      'repeating the request is safe, since it converges on the same state.',
+      'repeating the request is safe, since it converges on the same state. Also answered on whatsapp-web.js ' +
+      'when WhatsApp answers the read of the group in front of the send with a rate limit, a timeout or a server error ' +
+      '(408, 423, 429 or 5xx): nothing was sent.',
   })
   async unpinMessage(
     @Param('sessionId') sessionId: string,
