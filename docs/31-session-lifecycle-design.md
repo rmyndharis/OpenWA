@@ -225,7 +225,7 @@ between the stop's writes, and the stop whose last write then matched nothing an
 A takeover of a lapsed holder is followed up by the claim whose write made it, before that claim reports itself
 superseded: the later claim reads this node as the previous holder and would not.
 **Pinned by:** `session-ownership-claim-schedules.spec.ts` (every schedule of two and three claims over a free row,
-a row this node holds and a lapsed holder's, sampled schedules of four, and of three and four starts or deletes as
+a row this node holds and a lapsed holder's, a release that interrupts a claim when another claim begins after it, sampled schedules of four, and of three and four starts or deletes as
 `claimUnlessHeldElsewhere` asks them; a live peer refusing all of them), `session-delete-claim.spec.ts` ('two
 claims of one session that overlap': a start and a delete in either order, two and three requests, a live peer
 refusing every pair; 'stops of one session whose holder lapsed': two and three stops, a stop beside a start and
@@ -260,9 +260,7 @@ a row was claimed while the row names this node.
 - The claim write keeps `claimedAt` when the row already names this node (`CASE WHEN "nodeId" = :me`), so it changes
   only when the row was free or another node's. A delete that read it keeps the claim it read.
 
-**Pinned by:** `session-ownership-claim-schedules.spec.ts` (every schedule of one release, or two, or a shutdown
-release, and one claim or two, over a free row, a row this node holds in memory and in the database, and one only the
-database says it holds; a lapsed holder's row, whose takeover is followed up once; a live peer's, which refuses every
+**Pinned by:** `session-ownership-claim-schedules.spec.ts` (every schedule of one release and one or two claims, and of two releases and one claim, over a free row, a row this node holds in memory and in the database, and one only the database says it holds; every schedule of a shutdown release and one claim; a claim that begins between two overlapping releases; a lapsed holder's row, whose takeover is followed up once; a live peer's, which refuses every
 claim), `session-ownership.service.spec.ts` (the `claimedAt` rules, the bookkeeping after a release that failed) and
 `session-delete-claim.spec.ts` ('a request that begins while the claim is being handed back': a delete and a start
 beside a stop, a logout, a force-kill and a start the engine refused; a claim of this node that writes the row after a

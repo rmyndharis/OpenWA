@@ -131,6 +131,10 @@ describe('claims of one session that overlap on a node', () => {
     releases?: number;
     /** The releases are the one a node makes of everything it holds on its way down. */
     shutdown?: boolean;
+    /** The releases begin once this many stages were let through, not before the claims: they interrupt a claim. */
+    releaseAt?: number;
+    /** The last claim begins once no more than this many of the releases are still under way. */
+    lastClaimWhenReleasing?: number;
   }
 
   /**
@@ -141,7 +145,7 @@ describe('claims of one session that overlap on a node', () => {
     row: Partial<Session>,
     claims: number,
     transactional: boolean,
-    pick: (choices: Gate[], step: number) => number,
+    pick: (choices: Gate[], step: number, state: { releasing: number }) => number,
     ask: Ask = claimAsk,
     setup: Setup = {},
   ): Promise<Run & { taken: number[]; choices: number[] }> {
@@ -165,14 +169,15 @@ describe('claims of one session that overlap on a node', () => {
     held.gates.passThrough = transactional ? new Set(['begin', 'commit', 'rollback']) : new Set();
     held.gates.enabled = true;
     let releasing = setup.releases ?? 0;
-    for (let at = 0; at < (setup.releases ?? 0); at++) {
-      void (setup.shutdown ? node.releaseAll() : node.release(saved.id)).then(
-        () => void releasing--,
-        () => void (releasing--, problems.push('a release threw')),
-      );
-    }
-    const finished = (): boolean => releasing === 0 && answers.every(claim => claim.done);
-    for (let at = 0; at < claims; at++) {
+    const startReleases = (): void => {
+      for (let at = 0; at < (setup.releases ?? 0); at++) {
+        void (setup.shutdown ? node.releaseAll() : node.release(saved.id)).then(
+          () => void releasing--,
+          () => void (releasing--, problems.push('a release threw')),
+        );
+      }
+    };
+    const startClaim = (at: number): void => {
       const label = String.fromCharCode(65 + at);
       const claim: Claim = { label, done: false };
       answers.push(claim);
@@ -180,12 +185,30 @@ describe('claims of one session that overlap on a node', () => {
         answer => void ((claim.answer = answer), (claim.done = true)),
         () => void ((claim.answer = 'threw'), (claim.done = true)),
       );
+    };
+    // What begins later in the schedule: when its turn comes, or at once when no statement is held to let through.
+    const later: Array<{ due: (step: number) => boolean; start: () => void }> = [];
+    const finished = (): boolean => releasing === 0 && later.length === 0 && answers.every(claim => claim.done);
+    if (setup.releaseAt === undefined) startReleases();
+    else later.push({ due: step => step >= setup.releaseAt!, start: startReleases });
+    for (let at = 0; at < claims; at++) {
+      if (at === claims - 1 && setup.lastClaimWhenReleasing !== undefined) {
+        later.push({ due: () => releasing <= setup.lastClaimWhenReleasing!, start: () => startClaim(at) });
+      } else startClaim(at);
     }
     const schedule: string[] = [];
     const taken: number[] = [];
     const choices: number[] = [];
     for (let step = 0; step < 600; step++) {
       await settle();
+      for (
+        let next = later.findIndex(op => op.due(step) || held.gates.waiting.length === 0);
+        next >= 0;
+        next = later.findIndex(op => op.due(step) || held.gates.waiting.length === 0)
+      ) {
+        later.splice(next, 1)[0].start();
+        await settle();
+      }
       if (held.gates.waiting.length === 0) {
         if (finished()) break;
         // A claim with no statement held is waiting for the transaction another claim has open to end, or for a release.
@@ -199,7 +222,12 @@ describe('claims of one session that overlap on a node', () => {
           break;
         }
       }
-      const at = pick(held.gates.waiting, step);
+      const at = pick(held.gates.waiting, step, { releasing });
+      if (at < 0) {
+        // The schedule lets nothing through yet: what is under way elsewhere shows its next statement shortly.
+        await new Promise(resolve => setTimeout(resolve, 2));
+        continue;
+      }
       choices.push(held.gates.waiting.length);
       taken.push(at);
       const [gate] = held.gates.waiting.splice(at, 1);
@@ -477,6 +505,28 @@ describe('claims of one session that overlap on a node', () => {
     );
 
     it.each(forms)(
+      'answers every claim true in every schedule of three claims on a row the node holds, with %s',
+      async (_label, transactional) => {
+        const runs = await walk(heldByNode, 3, transactional);
+
+        expect(runs.length).toBeGreaterThan(300);
+        expect(problemsOf(runs)).toEqual([]);
+      },
+      300_000,
+    );
+
+    it.each(forms)(
+      'answers every claim true in every schedule of three claims on the row of a lapsed holder, with %s',
+      async (_label, transactional) => {
+        const runs = await walk(lapsedPeer, 3, transactional);
+
+        expect(runs.length).toBeGreaterThan(1000);
+        expect(problemsOf(runs)).toEqual([]);
+      },
+      300_000,
+    );
+
+    it.each(forms)(
       'answers every claim true in sampled schedules of four claims on a free row, with %s',
       async (_label, transactional) => {
         const runs = await sample(freeRow, 4, transactional, 200);
@@ -495,6 +545,27 @@ describe('claims of one session that overlap on a node', () => {
       },
       120_000,
     );
+
+    // A release ends the claim in flight and clears the row. A claim that begins once the release ended takes the next
+    // generation before the interrupted one looks again, so the interrupted claim answers for it: true, as the claim that
+    // holds the row does, where it would otherwise answer false with no other node in sight. The release goes first, and
+    // nothing else while it is under way, so that the later claim finds the interrupted one waiting. A claim that holds
+    // a transaction keeps the database from the release on SQLite, so this is the detached handler's.
+    it('answers a claim a release interrupted with the answer of the claim that began after it', async () => {
+      const releaseFirst = (choices: Gate[], _step: number, state: { releasing: number }): number => {
+        const release = choices.findIndex(gate => gate.label === 'release');
+        return release >= 0 ? release : state.releasing > 0 ? -1 : 0;
+      };
+
+      const run = await play(freeRow(), 2, false, releaseFirst, claimAsk, {
+        releases: 1,
+        releaseAt: 1,
+        lastClaimWhenReleasing: 0,
+      });
+
+      expect(run.problems).toEqual([]);
+      expect(run.answers).toEqual([true, true]);
+    });
 
     // The other side: a peer that holds the row on a live lease refuses every claim, and the check a start and a delete
     // make confirms it, whatever the order of the statements.
@@ -558,6 +629,34 @@ describe('claims of one session that overlap on a node', () => {
         expect(problemsOf(runs)).toEqual([]);
       },
       300_000,
+    );
+
+    // Two stops of one session in a row each release. A claim that begins once the first has ended, while the second is
+    // still writing, waits for the second: the entry of the first must not stand in for it, or the claim writes the row
+    // and the second release clears it.
+    it.each(forms)(
+      'ends holding the row when a claim begins between two overlapping releases, with %s',
+      async (_label, transactional) => {
+        const firstReleaseAlone = (choices: Gate[], _step: number, state: { releasing: number }): number => {
+          if (state.releasing === 2) {
+            const reply = choices.findIndex(gate => gate.label === 'release' && gate.stage === 'reply');
+            return reply >= 0 ? reply : 0;
+          }
+          // What is held besides the second release goes first, so that a claim that did not wait would write before it.
+          const other = choices.findIndex(gate => gate.label !== 'release');
+          return other >= 0 ? other : 0;
+        };
+
+        const run = await play(freeRow(), 1, transactional, firstReleaseAlone, claimAsk, {
+          holds: true,
+          releases: 2,
+          lastClaimWhenReleasing: 1,
+        });
+
+        expect(run.problems).toEqual([]);
+        expect(run.answers).toEqual([true]);
+      },
+      120_000,
     );
 
     // What a node does on its way down releases every claim it holds in one statement.
