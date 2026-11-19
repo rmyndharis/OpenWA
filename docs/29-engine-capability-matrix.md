@@ -1269,6 +1269,15 @@ adapter boundary — none silently stubs.
   picture allows it and reads every status as `false`; it now sends it whatever that copy says, as the group removal
   does, so a repeat is the same request. WhatsApp answering `200` for an account with no picture left, as it does for a
   group with none, has not been observed on an account.
+- **Three whatsapp-web.js calls still hide the status WhatsApp gave.** `createChannel` runs the library's create, which
+  turns every status into the text `CreateChannelError: An error occupied while creating a channel`; the adapter answers
+  it as the `403` refusal and does not call a rate limit retryable, because a create is not safe to repeat (a replay
+  after a server error can leave a second channel). `getProfilePicUrl` reads through a WhatsApp Web bridge that catches
+  every status itself and resolves a record with no picture, so a rate-limited read answers `200` with a `null` url, as a
+  contact with no picture does. Approving or rejecting a membership request reports a status for each requester, but a
+  failure of the whole request that is not a success carries no status and is named `ServerStatusCodeError` in the
+  result. Telling these apart needs a copy of the library's own logic in the page, and the answers err toward the
+  final one: a caller that sees the `403` or the `null` url may retry once if it knows the account is rate limited.
 - **`pinMessage` / `unpinMessage` (wwjs) need a WhatsApp Web build whose pin sender the adapter can call.** whatsapp-web.js
   calls `sendPinInChatMsg` of `WAWebSendPinMessageAction` with three positional arguments, which the builds up to
   `2.3000.1050403604` (15 October 2026) declare; the later builds checked (from `2.3000.1052565782`, 1 November, to the
