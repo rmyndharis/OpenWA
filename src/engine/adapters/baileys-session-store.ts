@@ -459,9 +459,10 @@ export class BaileysSessionStore {
         messageTime !== undefined && !this.holdsTime(r.id, lidIndex) ? { ...r, conversationTimestamp: messageTime } : r;
       // Baileys adds this pair to the update of a counted message, and to a plain reaction to the account's own
       // message, when the account unarchives on a new message. It names no time and no message, so it proves no
-      // chat: a chat this session holds no record of would get a row at the epoch. Whatever state it carries still
-      // goes to a chat that has a persisted row, which a contact's message unarchives as it always has.
-      if (unarchivesOnly(dated) && !this.chatTwins(r.id, lidIndex).some(k => this.chats.has(k))) {
+      // chat: a record under a spelling of the id that has none would be a second row at the epoch, also for a chat
+      // held under the other spelling. Whatever state it carries still goes to a chat that has a persisted row, which
+      // a contact's message unarchives as it always has.
+      if (unarchivesOnly(dated) && !this.chats.has(r.id)) {
         this.persistChatState(r.id, dated);
         continue;
       }

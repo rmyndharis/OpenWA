@@ -1675,15 +1675,34 @@ describe('BaileysSessionStore', () => {
         expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us' })]);
       });
 
-      it('keeps the update for a chat the session holds a record of under its other spelling', () => {
-        // No persisted state, so only the record the update creates under the phone spelling can show the change.
-        const s = new BaileysSessionStore();
-        s.addLidMappings([{ lid: LID, pn: PHONE }]);
-        s.upsertChats([{ id: LID, archived: true, conversationTimestamp: 1_700_000_000 }]);
+      // A record under the other spelling of the id would be a second row at the epoch beside the chat's own, so the pair
+      // creates none; the state it carries still goes to the persisted row, which unarchives the chat that is listed.
+      describe.each([
+        ['a lid', LID, PHONE],
+        ['a phone', PHONE, LID],
+      ])('a chat held under %s, when the pair comes with the other spelling', (_held, held, other) => {
+        it('adds no second row', () => {
+          const s = newStore();
+          s.addLidMappings([{ lid: LID, pn: PHONE }]);
+          s.upsertChats([{ id: held, conversationTimestamp: 1_700_000_000 }]);
+          const before = s.listChats().map(chat => chat.id);
 
-        s.upsertChats([{ id: PHONE, ...UNARCHIVES }]);
+          s.upsertChats([{ id: other, ...UNARCHIVES }]);
 
-        expect(s.listChats().find(chat => chat.id === '628111@c.us')).toMatchObject({ archived: false });
+          expect(before).toHaveLength(1);
+          expect(s.listChats().map(chat => chat.id)).toEqual(before);
+        });
+
+        it('still unarchives the chat that is listed', () => {
+          const s = newStore();
+          s.addLidMappings([{ lid: LID, pn: PHONE }]);
+          s.upsertChats([{ id: held, archived: true, conversationTimestamp: 1_700_000_000 }]);
+
+          s.upsertChats([{ id: other, ...UNARCHIVES }]);
+
+          const listed = s.listChats().find(chat => chat.id === held.replace('@s.whatsapp.net', '@c.us'));
+          expect(listed).toMatchObject({ archived: false });
+        });
       });
 
       it('unarchives a chat the session holds a record of', () => {
