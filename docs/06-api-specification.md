@@ -6288,7 +6288,7 @@ Export all storage files into a `tar.gz` under `data/exports` and return its **s
 { "message": "Storage export completed", "download": "data/exports/storage-export-1750000000000-abc.tar.gz" }
 ```
 
-`download` is a server filesystem path — feed it back to `POST /api/infra/storage/import`. The archive is auto-deleted after `STORAGE_EXPORT_TTL_MS` (default 1h).
+`download` is a server filesystem path — feed it back to `POST /api/infra/storage/import`. The archive is auto-deleted after `STORAGE_EXPORT_TTL_MS` (default 1h). It holds a copy of every stored file, so it is written owner-only (`0600` in a `0700` `data/exports` directory), like the local media store.
 
 **Errors:** `401` · `403` · `409` the local storage directory cannot be enumerated completely, so the archive would leave files out (a symbolic link, a directory the app cannot read, or one nested too deep; `message` names the path relative to the storage root and the cause; nothing is written) · `500` · `503` S3 configured but not reachable since boot (a later outage answers `500`)
 
