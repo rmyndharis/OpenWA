@@ -31,6 +31,18 @@ export const SESSION_STORE_MAP_CAP_DEFAULT = 5000;
 const READ_ECHO_WINDOW_MS = 35_000;
 
 /**
+ * Whether a chat update is the pair Baileys writes for a message when the account unarchives on a new message
+ * (`archived` and `readOnly`, both false) and nothing else but the id. An app-state archive carries no `readOnly`.
+ */
+function unarchivesOnly(update: Partial<Chat>): boolean {
+  return (
+    update.archived === false &&
+    update.readOnly === false &&
+    Object.keys(update).every(key => key === 'id' || key === 'conditional' || key === 'archived' || key === 'readOnly')
+  );
+}
+
+/**
  * Insertion-ordered Map with an LRU cap, the same discipline as LidMappingStoreService: a read or
  * write re-inserts the key at the most-recent end, and a set evicts the least-recently-used entry
  * while over `max`. `max = 0` means unbounded.
@@ -437,6 +449,14 @@ export class BaileysSessionStore {
         if (messageId && mark && timestamp === Math.floor(mark.at / 1000)) {
           this.heldChatUpdates.set(messageId, { mark, chatId: r.id, update: r });
         }
+        continue;
+      }
+      // Baileys adds this pair to the update of a counted message, and to a plain reaction to the account's own
+      // message, when the account unarchives on a new message. It names no time and no message, so it proves no
+      // chat: a chat this session holds no record of would get a row at the epoch. Whatever state it carries still
+      // goes to a chat that has a persisted row, which a contact's message unarchives as it always has.
+      if (unarchivesOnly(r) && !this.chatTwins(r.id, lidIndex).some(k => this.chats.has(k))) {
+        this.persistChatState(r.id, r);
         continue;
       }
       const existing: StoredChat = this.chats.get(r.id) ?? { id: r.id };

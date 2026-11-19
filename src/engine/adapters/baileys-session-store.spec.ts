@@ -1543,6 +1543,82 @@ describe('BaileysSessionStore', () => {
       expect(s.getEphemeralExpiration(PHONE)).toBe(86_400);
     });
 
+    // What Baileys writes for a counted message, or a plain reaction to an own message, when the account unarchives on a
+    // new message: the pair alone, once the message's time and the message itself are taken out.
+    describe('the pair of an unarchiving message, for a chat this session holds no record of', () => {
+      const GROUP = '120363000000000000@g.us';
+      const UNARCHIVES = { archived: false, readOnly: false };
+
+      it.each([
+        ['a phone chat', PHONE],
+        ['a privacy-id chat', LID],
+        ['a group', GROUP],
+        ['the status chat', 'status@broadcast'],
+      ])('lists no row for %s, nor writes a state row for it', (_what, id) => {
+        const s = newStore();
+        s.upsertChats([{ id, ...UNARCHIVES }]);
+        s.upsertChats([Object.assign({ id, ...UNARCHIVES }, { conditional: () => true })]);
+        expect(s.listChats()).toEqual([]);
+        expect(fake.rows.size).toBe(0);
+      });
+
+      it.each([
+        ['an app-state unarchive, which carries no readOnly', { archived: false }],
+        ['an app-state archive', { archived: true }],
+        ['a read-only flag alone', { readOnly: false }],
+        ['the pair with a name', { ...UNARCHIVES, name: 'Alice' }],
+        ['the pair with a time', { ...UNARCHIVES, conversationTimestamp: 1_700_000_000 }],
+        ['the pair with a count', { ...UNARCHIVES, unreadCount: 1 }],
+        ['the pair of a chat the account was removed from', { archived: false, readOnly: true }],
+      ])('still lists a chat the phone told of with %s', (_what, update) => {
+        const s = newStore();
+        s.upsertChats([{ id: PHONE, ...update }]);
+        expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us' })]);
+      });
+
+      it('keeps the update for a chat the session holds a record of under its other spelling', () => {
+        // No persisted state, so only the record the update creates under the phone spelling can show the change.
+        const s = new BaileysSessionStore();
+        s.addLidMappings([{ lid: LID, pn: PHONE }]);
+        s.upsertChats([{ id: LID, archived: true, conversationTimestamp: 1_700_000_000 }]);
+
+        s.upsertChats([{ id: PHONE, ...UNARCHIVES }]);
+
+        expect(s.listChats().find(chat => chat.id === '628111@c.us')).toMatchObject({ archived: false });
+      });
+
+      it('unarchives a chat the session holds a record of', () => {
+        const s = newStore();
+        s.upsertChats([{ id: PHONE, archived: true, conversationTimestamp: 1_700_000_000 }]);
+        s.upsertChats([{ id: PHONE, ...UNARCHIVES }]);
+        expect(s.listChats()).toEqual([expect.objectContaining({ archived: false })]);
+        expect(fake.get(SID, PHONE)?.archived).toBe(false);
+      });
+
+      it('unarchives a chat only its persisted state is known by, as after a restart', () => {
+        fake.rows.set(K(PHONE), { muteEndTime: null, archived: true, pinned: false });
+        const s = newStore();
+        expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', archived: true })]);
+
+        s.upsertChats([{ id: PHONE, ...UNARCHIVES }]);
+
+        expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', archived: false })]);
+        expect(fake.get(SID, PHONE)?.archived).toBe(false);
+      });
+
+      it('leaves a deleted chat out of the list', async () => {
+        const s = newStore();
+        s.upsertChats([{ id: PHONE, conversationTimestamp: 1_700_000_000 }]);
+        s.removeChats([PHONE]);
+        await flush();
+
+        s.upsertChats([{ id: PHONE, ...UNARCHIVES }]);
+
+        expect(s.listChats()).toEqual([]);
+        expect(fake.get(SID, PHONE)?.deletedAt).toEqual(expect.any(Number));
+      });
+    });
+
     it('finds the lid through the persisted mapping table as well', () => {
       fake.rows.set(K(LID), { muteEndTime: null, archived: true, pinned: false });
       const lidStore = {

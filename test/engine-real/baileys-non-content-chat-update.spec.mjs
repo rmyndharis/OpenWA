@@ -89,11 +89,17 @@ for (const [label, message] of NO_MESSAGE_OF_ITS_OWN) {
     assert.deepEqual(await adapter.getChats(), []);
   });
 
-  test(`a chat the session does not know is not listed when ${label} arrives from a contact`, async t => {
-    const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore() });
-    await deliver(sock, wireMessage({ id: 'NEW1', at: now() + 5, message }));
-    assert.deepEqual(await adapter.getChats(), []);
-  });
+  // With the account's unarchive setting on, Baileys adds `archived: false, readOnly: false` to the update of such a
+  // message, which names no chat: the chat the session never saw is not listed either way.
+  for (const unarchiveChats of [false, true]) {
+    for (const fromMe of [false, true]) {
+      test(`a chat the session does not know is not listed when ${label} arrives from ${fromMe ? 'another device of the account' : 'a contact'}, with the unarchive setting ${unarchiveChats ? 'on' : 'off'}`, async t => {
+        const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore(), unarchiveChats });
+        await deliver(sock, wireMessage({ id: 'NEW1', at: now() + 5, fromMe, message }));
+        assert.deepEqual(await adapter.getChats(), []);
+      });
+    }
+  }
 
   test(`a chat the session knows is listed as it was when ${label} arrives from a contact`, async t => {
     const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore() });
@@ -146,6 +152,64 @@ test('a chat deleted on the phone is listed again when the account sends a text 
     wireMessage({ id: 'PIN1', at: at + 1, fromMe: true, message: pinOf() }),
   ]);
   await until(async () => (await listed(adapter)) !== undefined, 'the text message to bring the chat back');
+});
+
+// The same for the chats that are not a person's: a group, a privacy-id chat, the sender chat of a broadcast list and the
+// status chat, and for the plain reaction to the account's own message, which Baileys also answers with the pair.
+const SENDER = '6281111111111@s.whatsapp.net';
+const OTHER_CHATS = [
+  ['a group', { chat: '120363000000000000@g.us', participant: SENDER }, pinOf()],
+  ['a privacy-id chat', { chat: '99999999999999@lid' }, pinOf()],
+  ['the sender chat of a broadcast list', { chat: '12345@broadcast', participant: SENDER }, pinOf()],
+  [
+    'the status chat',
+    { chat: 'status@broadcast', participant: SENDER },
+    { encReactionMessage: { targetMessageKey: { ...target, remoteJid: 'status@broadcast' }, ...sealed } },
+  ],
+];
+for (const [label, where, message] of OTHER_CHATS) {
+  test(`${label} the session does not know is not listed when a message that is none of its own arrives, with the unarchive setting on`, async t => {
+    const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore(), unarchiveChats: true });
+    await deliver(sock, wireMessage({ id: 'NEW1', at: now() + 5, message, ...where }));
+    assert.deepEqual(await adapter.getChats(), []);
+  });
+}
+
+for (const unarchiveChats of [false, true]) {
+  test(`a chat the session does not know is not listed when a contact reacts to the account's own message, with the unarchive setting ${unarchiveChats ? 'on' : 'off'}`, async t => {
+    const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore(), unarchiveChats });
+    const reaction = { reactionMessage: { key: { ...target, fromMe: true }, text: String.fromCodePoint(0x1f44d) } };
+    await deliver(sock, wireMessage({ id: 'NEW1', at: now() + 5, message: reaction }));
+    assert.deepEqual(await adapter.getChats(), []);
+  });
+}
+
+// Controls: the pair still unarchives a chat the session knows, whether by a record or by its persisted state alone,
+// and a chat that a text brings is listed as it was.
+test('an archived chat the session knows is unarchived by a contact pin, with the unarchive setting on', async t => {
+  const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore(), unarchiveChats: true });
+  await deliver(sock, wireMessage({ id: 'OLD1', at: now() - 3600, message: { conversation: 'an old message' } }));
+  await until(async () => (await listed(adapter))?.lastMessage === 'an old message', 'the old message to be listed');
+  sock.ev.emit('chats.update', [{ id: PEER, archived: true }]);
+  assert.equal((await listed(adapter)).archived, true);
+  await deliver(sock, wireMessage({ id: 'NEW1', at: now() + 5, message: pinOf() }));
+  assert.equal((await listed(adapter)).archived, false);
+});
+
+test('an archived chat only its persisted state is known by is unarchived by a contact pin, with the unarchive setting on', async t => {
+  const chatStateStore = new FakeChatStateStore();
+  await chatStateStore.remember('real-session', PEER, { archived: true });
+  const { adapter, sock } = await startSession(t, { chatStateStore, unarchiveChats: true });
+  assert.equal((await listed(adapter)).archived, true);
+  await deliver(sock, wireMessage({ id: 'NEW1', at: now() + 5, message: pinOf() }));
+  assert.equal((await listed(adapter)).archived, false);
+  assert.equal((await listed(adapter)).timestamp, 0, 'the pin dates nothing');
+});
+
+test('a chat the session does not know is listed when a text message arrives, with the unarchive setting on', async t => {
+  const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore(), unarchiveChats: true });
+  await deliver(sock, wireMessage({ id: 'NEW1', at: now() + 5, message: { conversation: 'hello' } }));
+  assert.equal((await listed(adapter)).unreadCount, 1);
 });
 
 // A history chunk (or an upsert) of the chat that the event buffer holds while the message is processed: the library merges
