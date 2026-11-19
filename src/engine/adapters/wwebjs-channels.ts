@@ -18,12 +18,14 @@ export type ChannelWrite = 'delete' | 'mute' | 'unmute' | 'unsubscribe';
  * channel's jobs reject that class for an error of the IQ that carries them (`MexIqError`), and its Mex subclass for the
  * error of the query itself, which the library did not catch and so was a bare 500; both carry the status. What the
  * library answered `false` for without asking WhatsApp, a channel the page does not hold and a channel the account owns
- * when it unsubscribes, is answered as a refusal of the page's own (`local`). The jobs make up two statuses themselves:
- * the unsubscription job reports a suspended channel as a 423, and the delete and the unsubscription report an answer
- * that holds nothing as a 500 (a null result of the query, which is how WhatsApp can refuse an account that may not make
- * the change). Neither is a status WhatsApp sent or a failure to retry, so both are refusals too. Like the library's
- * calls it does not look the jobs up, so a page without one rejects as the library's call did. Any other rejection is
- * rethrown. Self-contained, since Puppeteer ships it to the page as source.
+ * when it unsubscribes, is answered as a refusal of the page's own (`local`). The jobs make up a 423 and three 500s
+ * themselves: the unsubscription job reports a suspended channel as a 423 ('newsletter-suspended'), and the delete
+ * ('xwa2_newsletter_delete_v2 is null'), the unsubscription ('unexpected-null-mex-response') and the mute and unmute
+ * ('unexpected_mex_mutation_response') report an answer of the query that holds nothing as a 500, which is how WhatsApp
+ * can refuse an account that may not make the change. None is a status WhatsApp sent or a failure to retry, so all are
+ * refusals too, matched by their exact text. Like the library's calls it does not look the jobs up, so a page without
+ * one rejects as the library's call did. Any other rejection is rethrown. Self-contained, since Puppeteer ships it to
+ * the page as source.
  */
 export async function runChannelWriteInPage(
   write: ChannelWrite,
@@ -73,11 +75,21 @@ export async function runChannelWriteInPage(
   } catch (err) {
     const failure = err as { name?: unknown; status?: unknown; message?: unknown } | undefined;
     if (typeof failure?.name === 'string' && failure.name.endsWith('ServerStatusCodeError')) {
-      // A 423 or a 500 that the job made up itself (a suspended channel, an answer that holds nothing: how WhatsApp can
-      // refuse a delete or an unsubscription by an account that may not make it) is no status WhatsApp sent and no failure
-      // to retry, so it stays the refusal it was.
-      const own = failure.status === 423 ? /^newsletter-suspended$/ : failure.status === 500 ? /\bnull\b/ : undefined;
-      if (own?.test(String(failure.message))) return { status: 403 };
+      // The 423 and the three 500s that the jobs made up themselves (a suspended channel, an answer that holds nothing:
+      // how WhatsApp can refuse a change by an account that may not make it) are no status WhatsApp sent and no failure
+      // to retry, so they stay the refusal they were.
+      const text = String(failure.message);
+      if (failure.status === 423 && text === 'newsletter-suspended') return { status: 403 };
+      if (
+        failure.status === 500 &&
+        [
+          'xwa2_newsletter_delete_v2 is null',
+          'unexpected-null-mex-response',
+          'unexpected_mex_mutation_response',
+        ].includes(text)
+      ) {
+        return { status: 403 };
+      }
       return { status: typeof failure.status === 'number' ? failure.status : 403 };
     }
     throw err;

@@ -1152,11 +1152,13 @@ adapter boundary — none silently stubs.
   refusal; the Mex subclass that carries the error of a query itself (`MexServerStatusCodeError`) was not caught by the
   library at all and was a bare `500`, and both are answered by their status now. What the library answered `false`
   for without asking WhatsApp, a channel the page does not hold and a channel the account owns when it unsubscribes, is
-  still the `403` and sends nothing. The jobs make up two statuses themselves: the unsubscription job reports a suspended
-  channel as a `423`, and the delete and the unsubscription report an answer that holds nothing as a `500` (which is how
-  WhatsApp can refuse an account that may not make the change). Neither is a status WhatsApp sent or a failure to
-  retry, so both are the `403` too. A page without one of the jobs dies on it as the library's call did, and answers a
-  bare `500`. Baileys maps `408` and `429` to a `503` and every other `4xx` to a `403`, and rethrows a `5xx` as it came.
+  still the `403` and sends nothing. The jobs make up a `423` and three `500`s themselves: the unsubscription job reports a
+  suspended channel as a `423`, and the delete, the unsubscription and the mute and unmute each report an answer of the
+  query that holds nothing as a `500` in their own words (`xwa2_newsletter_delete_v2 is null`,
+  `unexpected-null-mex-response`, `unexpected_mex_mutation_response`), which is how WhatsApp can refuse an account that
+  may not make the change. None is a status WhatsApp sent or a failure to retry, so all are the `403` too, matched by
+  their exact text. A page without one of the jobs dies on it as the library's call did, and answers a bare `500`.
+  Baileys maps `408` and `429` to a `503` and every other `4xx` to a `403`, and rethrows a `5xx` as it came.
 - **`editMessage` / `pinMessage` / `unpinMessage` refusals (baileys).** Both engines refuse what they
   can judge locally: the target must be addressable inside the given chat, and the Baileys adapter
   additionally refuses an edit of a message the account did not send or of one with no text or caption

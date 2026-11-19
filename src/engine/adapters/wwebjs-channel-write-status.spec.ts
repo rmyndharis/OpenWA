@@ -200,8 +200,9 @@ describe('a channel write that WhatsApp answers with a status', () => {
     });
   });
 
-  // The delete and the unsubscription job report an answer that holds nothing as a 500 of their own, which is how
-  // WhatsApp can refuse an account that may not make the change: no status WhatsApp sent, and no failure to retry.
+  // The jobs report an answer of the query that holds nothing as a 500 of their own, each in its own words, which is
+  // how WhatsApp can refuse an account that may not make the change: no status WhatsApp sent, and no failure to retry.
+  // The mute and the unmute are no exception to the delete and the unsubscription.
   describe.each([
     [
       'the delete of a channel',
@@ -213,6 +214,16 @@ describe('a channel write that WhatsApp answers with a status', () => {
       (a: WhatsAppWebJsAdapter) => a.unsubscribeFromChannel(CHANNEL),
       'unexpected-null-mex-response',
     ],
+    [
+      'the mute of a channel',
+      (a: WhatsAppWebJsAdapter) => a.muteChannel(CHANNEL, true),
+      'unexpected_mex_mutation_response',
+    ],
+    [
+      'the unmute of a channel',
+      (a: WhatsAppWebJsAdapter) => a.muteChannel(CHANNEL, false),
+      'unexpected_mex_mutation_response',
+    ],
   ])('%s when the job reports an answer that holds nothing', (_name, call, message) => {
     it('is a refusal, not a retryable failure', async () => {
       installPage({ job: { rejects: statusError(500, 'ServerStatusCodeError', message) } });
@@ -220,8 +231,17 @@ describe('a channel write that WhatsApp answers with a status', () => {
       await expect(call(adapterOnThatPage())).rejects.toBeInstanceOf(EngineRefusedError);
     });
 
-    it('still reads a 500 that says nothing of the kind as the retryable failure', async () => {
-      installPage({ job: { rejects: statusError(500, 'ServerStatusCodeError', 'MexIqError: internal-server-error') } });
+    // Matched by the exact text: a real 500 that only mentions null is a failure like any other.
+    it('still reads a real 500 that only mentions null as the retryable failure', async () => {
+      installPage({
+        job: {
+          rejects: statusError(
+            500,
+            'MexServerStatusCodeError',
+            'MexFatalExtensionError: Mutation: Cannot return null for non-nullable field',
+          ),
+        },
+      });
 
       await expect(call(adapterOnThatPage())).rejects.toBeInstanceOf(EngineTransportError);
     });
