@@ -89,6 +89,8 @@ const CONDITIONAL_THROW_SITES: Readonly<Record<string, string>> = {
     'wwjs getGroupInviteCode is supported; it answers 501 only on a WhatsApp Web build that has no WAWebMexFetchGroupInviteCodeJob job, where whatsapp-web.js getInviteCode cannot read the code either',
   'deleteGroupPicture(no picture delete job on this build)':
     'wwjs deleteGroupPicture is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebContactProfilePicThumbBridge.requestDeletePicture or the WAWebWidFactory.createWid it takes its id from',
+  'deleteProfilePicture(no picture delete job on this build)':
+    'wwjs deleteProfilePicture is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebContactProfilePicThumbBridge.requestDeletePicture or the WAWebWidFactory.createWid it takes its id from, which whatsapp-web.js deleteProfilePicture reads as well',
   'setGroupSubject(no write job on this build)':
     'wwjs setGroupSubject is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebWidFactory.createWid or WAWebGroupModifyInfoJob.setGroupSubject, which whatsapp-web.js setSubject reads as well',
   'setGroupDescription(no write job on this build)':

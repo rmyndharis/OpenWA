@@ -419,7 +419,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      'baileys removeProfilePicture(ownJid) (Socket/groups.d.ts), the same symbol deleteGroupPicture already uses, resolving void; wwjs Client.deleteProfilePicture() (index.d.ts) forwards WWebJS.deletePicture, which returns undefined when canDelete() is false, true on HTTP 200 and false on a ServerStatusCodeError (Injected/Utils.js)',
+      'baileys removeProfilePicture(ownJid) (Socket/groups.d.ts), the same symbol deleteGroupPicture already uses, resolving void; wwjs WAWebContactProfilePicThumbBridge.requestDeletePicture(ownWid), sent in-page by the adapter (the call Client.deleteProfilePicture() makes, which reads every status as false), answered by its status: 2xx success, 408/423/429/5xx a retryable 503, any other code EngineRefusedError, and a build without the job answers 501',
   },
   setProfilePicture: {
     wwjs: { status: 'supported' },

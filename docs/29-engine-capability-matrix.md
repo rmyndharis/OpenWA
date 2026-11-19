@@ -86,8 +86,8 @@ Key adapter facts:
   that fires only under a runtime condition - `sendTextMessage` with `customPreview` on whatsapp-web.js, or
   `revokeGroupInviteCode`, `getGroupInviteCode`, `joinGroupViaInviteCode`, `deleteGroupPicture`, `pinMessage`, `unpinMessage`,
   `setProfileStatus`, and the group and profile writes (`setGroupSubject`, `setGroupDescription`, `setGroupPicture`,
-  `setGroupMessagesAdminsOnly`, `setGroupInfoAdminsOnly`, `setGroupMemberAddMode`, `setProfilePicture`) on a WhatsApp Web
-  build that lacks the call each one makes - is
+  `setGroupMessagesAdminsOnly`, `setGroupInfoAdminsOnly`, `setGroupMemberAddMode`, `setProfilePicture`,
+  `deleteProfilePicture`) on a WhatsApp Web build that lacks the call each one makes - is
   pinned in the gate's conditional list instead of flipping the cell, because 'supported with a refused option'
   is not 'not-available'.
 - **Inbound events** flow the other way: each adapter normalizes library events into the neutral
@@ -791,7 +791,7 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 
 | Library method            | OpenWA exposure                  |
 | ------------------------- | -------------------------------- |
-| `deleteProfilePicture`    | ✅ `deleteProfilePicture`        |
+| `deleteProfilePicture`    | ❌ **not exposed** (run in-page) |
 | `getProfilePicUrl`        | ✅ `getProfilePicture`           |
 | `sendPresenceAvailable`   | ✅ `setOnlinePresence`           |
 | `sendPresenceUnavailable` | ✅ `setOnlinePresence`           |
@@ -1116,8 +1116,9 @@ adapter boundary — none silently stubs.
   A session restarted since the mark was set no longer lists it (`unreadCount` reads `0`, as above), so
   its read sends the receipt alone and the mark stays on the account.
 - **`setProfileName` / `setProfilePicture` / `deleteProfilePicture` refusals (baileys).**
-  whatsapp-web.js reads a page-side verdict for all three (`setDisplayName` and `setProfilePicture`
-  resolve `false`, `deleteProfilePicture` resolves an explicit `false`) and raises a `403`. The
+  whatsapp-web.js raises a `403` for a name change its page says cannot be made (`setDisplayName` resolves
+  `false` only then) and for a picture change or removal WhatsApp refuses: both picture writes are sent in the page
+  and answered by WhatsApp's status, as the group and profile writes below. The
   Baileys calls resolve with no acceptance signal, so a change WhatsApp declined answers `200`. Only
   `setProfileStatus` is symmetric: neither engine surfaces a refusal for it.
 - **`setProfileStatus` (wwjs) needs a WhatsApp Web build that still has `setMyStatus`.** `Client.setStatus` calls
@@ -1127,8 +1128,8 @@ adapter boundary — none silently stubs.
   asking WhatsApp. On an earlier build the text is set as before. The gateway does not set the new text status:
   its expiry and its gating by account cannot be settled without a linked account to check against.
 - **Group and profile writes (wwjs) answer by WhatsApp's status.** The subject, description, picture, announce,
-  locked and member-add-mode writes of a group, the account's own profile picture and the invite revoke are sent by
-  the adapter in the page, through the WhatsApp Web job whatsapp-web.js calls, so that the status WhatsApp gave
+  locked and member-add-mode writes of a group, the account's own profile picture and its removal, and the invite
+  revoke are sent by the adapter in the page, through the WhatsApp Web job whatsapp-web.js calls, so that the status WhatsApp gave
   decides the answer: 2xx is done, a rate limit, a timeout or a server error (`408`, `423`, `429`, `5xx`) is a `503`
   that changed nothing (member add mode, which is two writes when it sets admins on a group whose link mode is open, can
   have applied the first), and any other code, or the page's own refusal of an account that may not make the change, is a
@@ -1233,10 +1234,14 @@ adapter boundary — none silently stubs.
   join with a request, which the job reports as an unexpected response: the adapter tells it apart in the page and says
   that a request to join was sent and the account has not joined, still as a `400`, where it said the invite was
   invalid. Baileys reads the same answer as no group id, so it still answers the invalid-invite text.
-- **`deleteGroupPicture` (wwjs) needs a WhatsApp Web build that has the picture delete job.** The adapter sends
-  `requestDeletePicture` of `WAWebContactProfilePicThumbBridge` in the page, with the group id built by
-  `WAWebWidFactory`, and answers `501` where either is missing, before anything is asked of WhatsApp, where it would
-  have been a bare `500`. Both exist on every build examined.
+- **`deleteGroupPicture` and `deleteProfilePicture` (wwjs) need a WhatsApp Web build that has the picture delete job.**
+  The adapter sends `requestDeletePicture` of `WAWebContactProfilePicThumbBridge` in the page, with the group id (or the
+  account's own) built by `WAWebWidFactory`, and answers `501` where either is missing, before anything is asked of
+  WhatsApp, where it would have been a bare `500`. Both exist on every build examined. The account's own removal used
+  to run the library's `deleteProfilePicture`, which sends the same request only when the page's own copy of the
+  picture allows it and reads every status as `false`; it now sends it whatever that copy says, as the group removal
+  does, so a repeat is the same request. WhatsApp answering `200` for an account with no picture left, as it does for a
+  group with none, has not been observed on an account.
 - **`pinMessage` / `unpinMessage` (wwjs) need a WhatsApp Web build whose pin sender the adapter can call.** whatsapp-web.js
   calls `sendPinInChatMsg` of `WAWebSendPinMessageAction` with three positional arguments, which the builds up to
   `2.3000.1050403604` (15 October 2026) declare; the later builds checked (from `2.3000.1052565782`, 1 November, to the
@@ -1293,10 +1298,10 @@ adapter sources — re-derive the same way when anything changes:
   (`probeLiveness`, `getPhoneNumber`, `getPushName`, `checkNumberExists`) are ⚙️ internal and have no route.
 - Full engine inventory (29.5), split by the exposure legend rather than lumped: Baileys **152**
   socket methods — 50 wired into interface methods, 5 internal wiring, 29 plumbing, **68 ❌ not
-  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 40 wired,
-  4 internal wiring, 1 class plumbing, **36 ❌ not exposed** (28 real capabilities + 8
-  session/transport settings that are not WhatsApp capabilities). The backlog is the ❌ rows minus
-  those 8 settings; 🔩 plumbing is correctly never exposed.
+  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 39 wired,
+  4 internal wiring, 1 class plumbing, **37 ❌ not exposed** (26 real capabilities, 3 served in-page
+  by an adapter page function, and 8 session/transport settings that are not WhatsApp capabilities).
+  The backlog is the ❌ rows minus those 3 and those 8 settings; 🔩 plumbing is correctly never exposed.
 - Events: Baileys **34** (18 consumed / 16 dropped), wwjs **31** (18 consumed / 13 dropped).
 - **0** capabilities in 29.5.3: every capability with first-class symbols on both libraries is
   either wired or classified with evidence. Some are Baileys-only despite typed whatsapp-web.js

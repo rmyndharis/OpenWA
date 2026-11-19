@@ -211,7 +211,9 @@ export function readInviteSenderInPage(): boolean {
  * Ask WhatsApp, IN-PAGE, to remove a group's picture, and answer the status it gave: 200, or the code it refused
  * with. `GroupChat.deletePicture` sends the same request but only when the page's own copy of the picture allows
  * it, and reads every refusal as `false`: a picture the page never loaded is then not deleted, a repeat of a
- * delete cannot be told from missing rights, and a rate limit reads as a refusal. The status says which it was.
+ * delete cannot be told from missing rights, and a rate limit reads as a refusal. The status says which it was. The
+ * request is the same for the account's own picture, which `Client.deleteProfilePicture` reads the same way, so the id
+ * may be the account's.
  *
  * Every lookup tests the answer and guards the throw: from a page.evaluate Meta's `require` answers `undefined` for a
  * module the page has not defined, and throws only inside a guard or before the page's error setup has run. A build with

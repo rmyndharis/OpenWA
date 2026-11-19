@@ -6961,7 +6961,7 @@ No request body.
 Removing a picture that is already absent is a no-op and also answers `200`, so the call is safe to
 repeat.
 
-**Errors:** `400` session is not started · `401` · `403` engine refused the removal · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
+**Errors:** `400` session is not started · `401` · `403` engine refused the removal · `409` conflict or engine not ready (retryable) · `501` on whatsapp-web.js, the WhatsApp Web build the session runs has no job to remove the picture with (nothing was asked of WhatsApp, the picture is unchanged) · `503` session not ready or dependency unavailable (retryable); on whatsapp-web.js, also when WhatsApp answers the removal with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): nothing was removed, retry after a pause
 
 ### 6.4.14 Calls
 

@@ -8757,7 +8757,6 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
     it.each([
       ['setProfileName', (a: WhatsAppWebJsAdapter) => a.setProfileName('New Name')],
       ['setProfileStatus', (a: WhatsAppWebJsAdapter) => a.setProfileStatus('Busy')],
-      ['deleteProfilePicture', (a: WhatsAppWebJsAdapter) => a.deleteProfilePicture()],
       ['getContactStatuses', (a: WhatsAppWebJsAdapter) => a.getContactStatuses()],
       ['deleteStatus', (a: WhatsAppWebJsAdapter) => a.deleteStatus('status@broadcast')],
       ['getSubscribedChannels', (a: WhatsAppWebJsAdapter) => a.getSubscribedChannels()],
@@ -8771,7 +8770,6 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         setDisplayName: jest.fn().mockRejectedValue(transportError()),
         setStatus: jest.fn().mockRejectedValue(transportError()),
         pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
-        deleteProfilePicture: jest.fn().mockRejectedValue(transportError()),
         getBroadcasts: jest.fn().mockRejectedValue(transportError()),
         sendMessage: jest.fn().mockRejectedValue(transportError()),
         revokeStatusMessage: jest.fn().mockRejectedValue(transportError()),
@@ -8782,15 +8780,16 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       await expect(call(adapter)).rejects.toBeInstanceOf(EngineTransportError);
     });
 
-    // The picture is sent in the page, so the death is the page call's.
-    it('setProfilePicture answers EngineTransportError (503) on a dead page', async () => {
+    // The pictures are sent in the page, so the death is the page call's.
+    it.each([
+      ['setProfilePicture', (a: WhatsAppWebJsAdapter) => a.setProfilePicture({ mimetype: 'image/png', data: 'aGk=' })],
+      ['deleteProfilePicture', (a: WhatsAppWebJsAdapter) => a.deleteProfilePicture()],
+    ])('%s answers EngineTransportError (503) on a dead page', async (_name, call) => {
       const adapter = readyAdapter({
         info: { wid: { _serialized: '628000000001@c.us' } },
         pupPage: { evaluate: jest.fn().mockRejectedValue(transportError()) },
       });
-      await expect(adapter.setProfilePicture({ mimetype: 'image/png', data: 'aGk=' })).rejects.toBeInstanceOf(
-        EngineTransportError,
-      );
+      await expect(call(adapter)).rejects.toBeInstanceOf(EngineTransportError);
     });
 
     /**

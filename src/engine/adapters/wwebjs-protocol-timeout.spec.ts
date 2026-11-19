@@ -457,7 +457,7 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
     const labels = (host: WwebjsEngineHost): WwebjsLabels => new WwebjsLabels(host);
     const messaging = (host: WwebjsEngineHost): WwebjsMessaging => new WwebjsMessaging(host);
 
-    // The group writes and the profile picture are sent in-page, and so is the invite code read: a page that fails is the
+    // The group writes and the profile picture and its removal are sent in-page, and so is the invite code read: a page that fails is the
     // page call itself running out of budget. A page that answers 'missing' has no job to read the code with, so that
     // read is the library's own call on the chat.
     const noPageJob = (): Record<string, jest.Mock> =>
@@ -491,7 +491,11 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
       [
         'profile picture removal',
         h => new WwebjsProfile(h).deleteProfilePicture(),
-        e => ({ deleteProfilePicture: failing(e) }),
+        e =>
+          ({
+            info: { wid: { _serialized: CHAT } },
+            ...pageFailing(e),
+          }) as unknown as Record<string, jest.Mock>,
       ],
       ['channel delete', h => new WwebjsChannels(h).deleteChannel(CHANNEL), e => ({ deleteChannel: failing(e) })],
       [

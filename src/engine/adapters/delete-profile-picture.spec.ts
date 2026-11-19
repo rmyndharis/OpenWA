@@ -2,62 +2,64 @@ import type { WASocket } from '@whiskeysockets/baileys';
 import type { Client } from 'whatsapp-web.js';
 import { BaileysContacts, type BaileysContactsHost } from './baileys-contacts';
 import { WwebjsProfile } from './wwebjs-profile';
+import { deleteGroupPictureInPage } from './wwebjs-groups';
 import { createLogger } from '../../common/services/logger.service';
 import { type WwebjsEngineHost } from './wwebjs-host';
+import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 
 /**
- * Delete the account's OWN profile picture — the fourth of the §29.5.3 backlog.
+ * Delete the account's OWN profile picture, the fourth of the §29.5.3 backlog.
  *
- * The declared type lies about the outcomes. `Client.deleteProfilePicture(): Promise<boolean>`
- * forwards `WWebJS.deletePicture`, which has THREE exits (`Injected/Utils.js:1404-1418`):
- *   `undefined`  — `collection.canDelete()` was false, so nothing was attempted
- *   `true`       — the delete request came back HTTP 200
- *   `false`      — a `ServerStatusCodeError`, i.e. WhatsApp refused
- * `undefined` is falsy, so a naive `if (!ok) throw` collapses "there was nothing to delete" into
- * "WhatsApp refused" and makes a repeat delete fail with a 403.
- *
- * The contract therefore treats `undefined` as success — deleting an absent picture is a no-op, not
- * an error — and `false` as a refusal, matching how `setProfileName` reports whatsapp-web.js's
- * falsy return. **That split is a decision, not a measurement**: `canDelete()` could equally be a
- * permission check, in which case a genuine refusal would arrive as `undefined` and be swallowed.
- * It is pinned here so the live probe can contradict it visibly rather than silently.
+ * whatsapp-web.js sends the request in the page, as the removal of a group's picture does, and answers by the status
+ * WhatsApp gave (wwebjs-profile-picture-delete.spec.ts runs the page job against the library's own page code). The
+ * library's `Client.deleteProfilePicture(): Promise<boolean>` reads every status as `false`, which left a rate limit or
+ * a server error reading as a refusal, and asks WhatsApp only when the page's own copy of the picture allows it.
  *
  * Baileys resolves `void` and has no refusal signal at all, so it reports success whenever the
  * write is acknowledged. Its `removeProfilePicture` takes a JID and is already wired for
- * `deleteGroupPicture` — the own-account call is the same symbol with the self JID, which is why
+ * `deleteGroupPicture`; the own-account call is the same symbol with the self JID, which is why
  * an unknown self JID has to fail loudly rather than silently target nothing.
  */
 
 const logger = createLogger('delete-profile-picture.spec');
 
 describe('WwebjsProfile.deleteProfilePicture', () => {
-  function makeProfile(client: Record<string, jest.Mock>): WwebjsProfile {
+  const OWN = '628000000001@c.us';
+
+  /** A client whose page answers the delete with `answer`. */
+  function clientAnswering(answer: number | 'missing') {
+    return { info: { wid: { _serialized: OWN } }, pupPage: { evaluate: jest.fn().mockResolvedValue(answer) } };
+  }
+
+  function makeProfile(client: unknown): WwebjsProfile {
     const host = {
       ensureReady: jest.fn(),
-      getClient: () => client as unknown as Client,
+      getClient: () => client as Client,
       logger,
     } as unknown as WwebjsEngineHost;
     return new WwebjsProfile(host);
   }
 
-  it('a confirmed delete resolves', async () => {
-    const deleteProfilePicture = jest.fn().mockResolvedValue(true);
-    await expect(makeProfile({ deleteProfilePicture }).deleteProfilePicture()).resolves.toBeUndefined();
-    expect(deleteProfilePicture).toHaveBeenCalledTimes(1);
+  it('a confirmed delete resolves, and the page job is asked for the account itself', async () => {
+    const client = clientAnswering(200);
+    await expect(makeProfile(client).deleteProfilePicture()).resolves.toBeUndefined();
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(1);
+    expect(client.pupPage.evaluate).toHaveBeenCalledWith(deleteGroupPictureInPage, OWN);
   });
 
-  // The distinction the declared `Promise<boolean>` hides.
-  it('treats undefined as "nothing to delete" rather than a refusal, so a repeat delete is a no-op', async () => {
-    const deleteProfilePicture = jest.fn().mockResolvedValue(undefined);
-    await expect(makeProfile({ deleteProfilePicture }).deleteProfilePicture()).resolves.toBeUndefined();
+  it('reports a status WhatsApp refused with as a refusal', async () => {
+    await expect(makeProfile(clientAnswering(403)).deleteProfilePicture()).rejects.toBeInstanceOf(EngineRefusedError);
   });
 
-  it('reports an explicit false as a refusal', async () => {
-    const deleteProfilePicture = jest.fn().mockResolvedValue(false);
-    await expect(makeProfile({ deleteProfilePicture }).deleteProfilePicture()).rejects.toBeInstanceOf(
-      EngineRefusedError,
+  it('reports a rate limit as the retryable failure it is', async () => {
+    await expect(makeProfile(clientAnswering(429)).deleteProfilePicture()).rejects.toBeInstanceOf(EngineTransportError);
+  });
+
+  it('answers 501 for a page without the job', async () => {
+    await expect(makeProfile(clientAnswering('missing')).deleteProfilePicture()).rejects.toBeInstanceOf(
+      EngineNotSupportedError,
     );
   });
 });
