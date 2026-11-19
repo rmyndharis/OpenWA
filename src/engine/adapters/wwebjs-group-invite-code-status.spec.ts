@@ -97,8 +97,30 @@ describe('the group invite code read, answered by the status WhatsApp gave', () 
     await expect(adapter.getGroupInviteCode(GROUP)).rejects.toBeInstanceOf(EngineRefusedError);
   });
 
-  it('leaves any other rejection as it was', async () => {
-    const failure = rejection('Error', undefined, '[MEX][GROUP] group invite code is null');
+  // The job of build 2.3000.1054966512-alpha throws a plain Error, with no status, when WhatsApp answers with no code:
+  // the same refusal as a job that resolves none, not a bare 500.
+  it.each([
+    ['the message of the job', '[MEX][GROUP] group invite code is null'],
+    ['a message that carries more text', 'Error: [MEX][GROUP] group invite code is null (group 120363@g.us)'],
+  ])('answers the 403 for the plain error of a read that gave no code: %s', async (_name, message) => {
+    const failure = rejection('Error', undefined, message);
+    const fetch = jest.fn().mockRejectedValue(failure);
+    const { adapter, getInviteCode } = adapterOnPage(withJob(fetch));
+
+    const error = await adapter.getGroupInviteCode(GROUP).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(EngineRefusedError);
+    expect((error as Error).message).toMatch(/admin rights required/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(getInviteCode).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['another error of the job', 'something inside the job'],
+    ['the same words without the group prefix', 'group invite code is null'],
+    ['another read of the same family', '[MEX][GROUP] group metadata is null'],
+  ])('leaves any other plain error as it was: %s', async (_name, message) => {
+    const failure = rejection('Error', undefined, message);
     const { adapter } = adapterOnPage(withJob(jest.fn().mockRejectedValue(failure)));
 
     await expect(adapter.getGroupInviteCode(GROUP)).rejects.toBe(failure);

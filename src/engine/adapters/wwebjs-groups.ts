@@ -103,8 +103,8 @@ export async function revokeInviteInPage(chatId: string): Promise<{ status: numb
  * (`MexServerStatusCodeError`, which carries a status too) was a bare 500. This answers the status WhatsApp gave, with
  * the code on a 2xx. A build with no job to read the code answers `'missing'` before anything was asked, and the caller
  * runs the library's own call as it always did (see {@link NO_INVITE_JOB_ERRORS}). A document with no `require` at all
- * is a page that is reloading, not a build without the job, and that failure is let through. Any other rejection is
- * rethrown.
+ * is a page that is reloading, not a build without the job, and that failure is let through. The plain error the job
+ * throws when WhatsApp gave no code is answered as no code; any other rejection is rethrown.
  */
 export async function readInviteCodeInPage(chatId: string): Promise<{ status: number; code?: string } | 'missing'> {
   type CodeJob = { fetchMexGroupInviteCode: (id: string) => Promise<{ code?: string } | string | undefined> };
@@ -120,10 +120,13 @@ export async function readInviteCodeInPage(chatId: string): Promise<{ status: nu
     const res = await job.fetchMexGroupInviteCode(chatId);
     return { status: 200, code: typeof res === 'string' ? res : res?.code };
   } catch (err) {
-    const refusal = err as { name?: unknown; status?: unknown } | undefined;
+    const refusal = err as { name?: unknown; status?: unknown; message?: unknown } | undefined;
     if (typeof refusal?.name === 'string' && refusal.name.endsWith('ServerStatusCodeError')) {
       return { status: typeof refusal.status === 'number' ? refusal.status : 403 };
     }
+    // When WhatsApp answers with no code the job throws a plain error with no status: the same answer as a job that
+    // resolves none, which the caller turns into the no-code refusal.
+    if (/\[MEX\]\[GROUP\][^\n]*invite code is null/.test(String(refusal?.message))) return { status: 200 };
     throw err;
   }
 }
