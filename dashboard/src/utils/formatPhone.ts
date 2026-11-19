@@ -4,6 +4,8 @@
 // enough for human-readable display. The raw JID is preserved separately in the UI for the
 // technical case where the exact id is needed.
 
+import { phoneQueryDigits } from './phone.ts';
+
 /**
  * Extract the local digits from a WhatsApp JID's user part. Returns null for anything that is
  * not a digits-only user JID (groups, LID privacy ids, status/broadcast/newsletter).
@@ -82,8 +84,9 @@ export interface ChatLabel {
 }
 
 /**
- * A saved name or a push name. The privacy id's own digits are not one: WhatsApp shows the phone number there.
- * A label that is only those digits, or only the mapped phone, is not a name either.
+ * A saved name or a push name. The digits of the chat's own id are not one: a privacy id's, where WhatsApp shows the
+ * phone number, and a phone id's, which the Baileys store lists for a chat it has no name for. Nor is the mapped phone
+ * written as a number, with spaces, signs or direction marks around its digits; a name with other words is one.
  */
 export function savedChatName(chat: ChatLabel): string | undefined {
   const name = chat.name?.trim();
@@ -91,8 +94,9 @@ export function savedChatName(chat: ChatLabel): string | undefined {
   const [user, host] = chat.id.split('@');
   const bare = user.split(':')[0];
   if (host?.split(':')[0] === 'lid' && (name === bare || name === `${bare}@lid`)) return undefined;
+  if (name === parsePhoneFromJid(chat.id)) return undefined;
   const phone = chat.phone?.replace(/\D/g, '');
-  if (phone && name.replace(/\D/g, '') === phone) return undefined;
+  if (phone && phoneQueryDigits(name) === phone) return undefined;
   return name;
 }
 

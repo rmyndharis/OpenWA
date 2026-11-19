@@ -30,7 +30,8 @@ afterEach(() => rtl.cleanup());
 
 const chat = (id: string, unreadCount: number): Chat => ({
   id,
-  name: id.split('@')[0],
+  // Not the bare digits of the id: the list titles a chat named so by its formatted number.
+  name: `Chat ${id.split('@')[0]}`,
   isGroup: false,
   kind: 'individual',
   unreadCount,
@@ -178,11 +179,11 @@ test("opening a row's menu closes any other, and the open one follows the page's
   const picked: boolean[] = [];
   const view = renderSidebar('chats', chats, noChannels, { rowActions: rowActionsOf(false, picked) });
   // Enter on a chevron is a click with no mousedown, so no press outside closes the menu opened first.
-  rtl.fireEvent.click(trigger('111111111'));
-  rtl.fireEvent.click(trigger('222222222'));
+  rtl.fireEvent.click(trigger('Chat 111111111'));
+  rtl.fireEvent.click(trigger('Chat 222222222'));
   assert.equal(popovers(view.container).length, 1, 'two row menus are open at once');
   assert.deepEqual(
-    [trigger('111111111').getAttribute('aria-expanded'), trigger('222222222').getAttribute('aria-expanded')],
+    [trigger('Chat 111111111').getAttribute('aria-expanded'), trigger('Chat 222222222').getAttribute('aria-expanded')],
     ['false', 'true'],
   );
 
@@ -194,9 +195,9 @@ test("opening a row's menu closes any other, and the open one follows the page's
   assert.equal(popovers(view.container).length, 0, 'picking an entry left the menu open');
 
   // The first row's menu opens on the page's current actions too, and its chevron closes it again.
-  rtl.fireEvent.click(trigger('111111111'));
+  rtl.fireEvent.click(trigger('Chat 111111111'));
   assert.ok(rtl.within(popovers(view.container)[0]).queryByRole('button', { name: rename }), 'Save is still offered');
-  rtl.fireEvent.click(trigger('111111111'));
+  rtl.fireEvent.click(trigger('Chat 111111111'));
   assert.equal(popovers(view.container).length, 0, 'the chevron did not close its menu');
 });
 
@@ -204,11 +205,11 @@ test('a row menu open when the list is swapped out is closed when the list comes
   const chats = [chat('111111111@c.us', 0)];
   const rowActions = rowActionsOf(false, []);
   const view = renderSidebar('chats', chats, noChannels, { rowActions });
-  rtl.fireEvent.click(trigger('111111111'));
+  rtl.fireEvent.click(trigger('Chat 111111111'));
   assert.equal(popovers(view.container).length, 1, 'the menu did not open');
 
   view.rerender(sidebarElement('channels', chats, noChannels, { rowActions }));
   view.rerender(sidebarElement('chats', chats, noChannels, { rowActions }));
   assert.equal(popovers(view.container).length, 0, 'the menu came back open with the list');
-  assert.equal(trigger('111111111').getAttribute('aria-expanded'), 'false');
+  assert.equal(trigger('Chat 111111111').getAttribute('aria-expanded'), 'false');
 });
