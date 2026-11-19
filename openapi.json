@@ -14173,7 +14173,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the request with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a pause. When its answer never came (a timeout, 408, or a connection that dropped after the request was sent) the operation may or may not have been applied: check before repeating it.",
+            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp Web reports a timeout, a rate limit or a server error (408, 423, 429 or 5xx): that report does not say whether the operation was applied, so it may or may not have been applied; check before repeating it. A repeat of it may meet a channel that is no longer followed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14398,7 +14398,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the request with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a pause. When its answer never came (a timeout, 408, or a connection that dropped after the request was sent) the operation may or may not have been applied: check before repeating it. A repeat of it may meet a channel that is gone, which answers 403.",
+            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp Web reports a timeout, a rate limit or a server error (408, 423, 429 or 5xx): that report does not say whether the operation was applied, so it may or may not have been applied; check before repeating it. A repeat of it may meet a channel that is gone, which answers 403.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14510,7 +14510,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the request with a rate limit or a server error (423, 429 or 5xx): nothing was changed, so retry after a pause. When its answer never came (a timeout, 408, or a connection that dropped after the request was sent) the operation may or may not have been applied: check before repeating it.",
+            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp Web reports a timeout, a rate limit or a server error (408, 423, 429 or 5xx): that report does not say whether the operation was applied, so it may or may not have been applied; check before repeating it.",
             "content": {
               "application/json": {
                 "schema": {
