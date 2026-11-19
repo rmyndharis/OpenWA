@@ -1326,8 +1326,10 @@ export class SessionEngineControls {
           return refuseLostDeleteClaim(manager, session.id, `Session ${session.id} is no longer owned by this node`);
         }
       }
+      // A delete holds a claim only where ownership is wired, so the update above matched the row and locked it: the
+      // row is still there, and a claim this delete lost is a conflict, never a 404.
       if (ownsClaim?.() === false) {
-        return refuseLostDeleteClaim(manager, session.id, `Session ${session.id} is no longer owned by this delete`);
+        throw new ConflictException(`Session ${session.id} is no longer owned by this delete`);
       }
       await remove(manager);
     });

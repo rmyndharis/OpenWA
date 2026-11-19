@@ -4005,6 +4005,23 @@ describe('requests for one session that overlap on a single node', () => {
       await expect(service.delete(row.id)).rejects.toBeInstanceOf(ConflictException);
       expect(await sessions.countBy({ id: row.id })).toBe(1);
     });
+
+    // The row names this node, but the claim the delete captured has ended since (another request of this node replaced
+    // it): the delete removes nothing, and answers a conflict because the row is still there.
+    it('refuses a delete whose captured claim ended while the row is still there, and removes nothing', async () => {
+      const { lifecycle } = stack();
+      const row = await seed();
+      await sessions.update(
+        { id: row.id },
+        { nodeId: NODE, claimedAt: new Date(), leaseExpiresAt: new Date(Date.now() + 60_000) },
+      );
+
+      const refused = await lifecycle.delete(row.id, { ownsClaim: () => false }).catch((error: unknown) => error);
+
+      expect(refused).toBeInstanceOf(ConflictException);
+      expect((refused as Error).message).toContain('no longer owned by this delete');
+      expect(await sessions.countBy({ id: row.id })).toBe(1);
+    });
   });
 
   // A claim is superseded when a later claim of the same session starts on this node before it ends: two requests for
