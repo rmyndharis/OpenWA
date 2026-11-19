@@ -84,7 +84,7 @@ const CONDITIONAL_THROW_SITES: Readonly<Record<string, string>> = {
   'sendTextMessage(customPreview)':
     'wwjs sendTextMessage is supported; it refuses only when customPreview is passed, because whatsapp-web.js takes a boolean linkPreview and cannot represent a custom card',
   'revokeGroupInviteCode(no reset job on this build)':
-    'wwjs revokeGroupInviteCode is supported; it answers 501 only on a WhatsApp Web build that exports the invite reset job from neither WAWebGroupInviteJob nor WAWebGroupQueryJob',
+    'wwjs revokeGroupInviteCode is supported; it answers 501 only on a WhatsApp Web build that exports the invite reset job from neither WAWebGroupInviteJob nor WAWebGroupQueryJob, or that lacks the WAWebWidFactory.createWid the job takes its id from',
   'getGroupInviteCode(no invite code job on this build)':
     'wwjs getGroupInviteCode is supported; it answers 501 only on a WhatsApp Web build that has no WAWebMexFetchGroupInviteCodeJob job, where whatsapp-web.js getInviteCode cannot read the code either',
   'deleteGroupPicture(no picture delete job on this build)':

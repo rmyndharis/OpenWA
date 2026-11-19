@@ -1210,8 +1210,9 @@ adapter boundary — none silently stubs.
 - **`revokeGroupInviteCode` (wwjs) needs a WhatsApp Web build that has the reset job.** The adapter runs the
   job in the page: `resetGroupInviteCode` of `WAWebGroupInviteJob`, where the build keeps it, or of
   `WAWebGroupQueryJob` on a build that still does (the library's own `revokeInvite` reads only the second). Both
-  take the same group id and resolve the same `{code}`, and a refusal is the `403` as before. A build with neither
-  answers `501` before anything is asked of WhatsApp, so the current code stays valid.
+  take the same group id, built by `createWid` of `WAWebWidFactory`, and resolve the same `{code}`, and a refusal is the
+  `403` as before. A build with neither job, or without the factory, answers `501` before anything is asked of
+  WhatsApp, so the current code stays valid.
 - **The group and profile writes (wwjs) need a WhatsApp Web build that has the job each one sends.** The subject and
   description go through `WAWebGroupModifyInfoJob` (the description also takes its id from `WARandomHex`), the group and
   profile picture through `sendSetPicture` of `WAWebContactProfilePicThumbBridge`, and the announce, locked and member

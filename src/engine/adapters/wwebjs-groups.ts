@@ -64,28 +64,32 @@ export function extractLinkedParentJID(groupMetadata?: GroupMetadataRaw): string
  * `{code}`. From a page.evaluate Meta's `require` answers `undefined` for a module the page has not defined, and throws
  * only inside a guard or before the page's error setup has run, so each lookup tests the answer and guards the throw; a
  * document with no `require` at all is a page that is reloading, not a build without the job, and that failure is let
- * through. A build with neither answers `'missing'` before anything was asked of WhatsApp. Otherwise it answers the status
- * WhatsApp gave, with the new code on a 2xx: a rate limit or a server error removed nothing and is no refusal.
+ * through. A build with neither, or without the factory that builds the id they take (`WAWebWidFactory`), answers
+ * `'missing'` before anything was asked of WhatsApp. Otherwise it answers the status WhatsApp gave, with the new code on a
+ * 2xx: a rate limit or a server error removed nothing and is no refusal.
  */
 export async function revokeInviteInPage(chatId: string): Promise<{ status: number; code?: string } | 'missing'> {
   type ResetJob = { resetGroupInviteCode: (wid: unknown) => Promise<{ code?: string } | undefined> };
   const w = window as unknown as { require: (m: string) => unknown };
-  let job: ResetJob | undefined;
-  for (const name of ['WAWebGroupInviteJob', 'WAWebGroupQueryJob']) {
-    let found: Partial<ResetJob> | undefined;
+  const find = <T>(name: string): T | undefined => {
     try {
-      found = w.require(name) as Partial<ResetJob> | undefined;
+      return w.require(name) as T | undefined;
     } catch (err) {
       if (typeof w.require !== 'function') throw err;
+      return undefined;
     }
+  };
+  let job: ResetJob | undefined;
+  for (const name of ['WAWebGroupInviteJob', 'WAWebGroupQueryJob']) {
+    const found = find<Partial<ResetJob>>(name);
     if (typeof found?.resetGroupInviteCode === 'function') {
       job = found as ResetJob;
       break;
     }
   }
-  if (!job) return 'missing';
+  const wids = find<{ createWid?: (id: string) => unknown }>('WAWebWidFactory');
+  if (!job || typeof wids?.createWid !== 'function') return 'missing';
   try {
-    const wids = w.require('WAWebWidFactory') as { createWid: (id: string) => unknown };
     const res = await job.resetGroupInviteCode(wids.createWid(chatId));
     return { status: 200, code: res?.code };
   } catch (err) {
