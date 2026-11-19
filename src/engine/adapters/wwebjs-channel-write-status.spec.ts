@@ -15,11 +15,13 @@ const { Client, Channel } = wwebjs as unknown as {
 /**
  * Deleting a channel, muting or unmuting it and unsubscribing from it are jobs of WhatsApp Web, and whatsapp-web.js
  * reads every status that a job rejects with (`ServerStatusCodeError`) as `false`, which the adapter read as a refusal: a
- * rate limit or a server error, which changed nothing and may pass a moment later, was a 403. The channel jobs reject
- * that class for an error of the IQ that carries them and the class of the Mex query for an error of the query itself
- * (`MexServerStatusCodeError`), which the library did not catch, so that was a bare 500. The adapter now sends the same
- * request in the page and answers by the status WhatsApp gave, and says the outcome is unknown when no answer came (a
- * timeout, or the 500 the Mex client makes of a send that failed).
+ * timeout, a rate limit or a server error was a 403. The channel jobs reject that class for an error of the IQ that
+ * carries them and the class of the Mex query for an error of the query itself (`MexServerStatusCodeError`), which the
+ * library did not catch, so that was a bare 500. The adapter now sends the same request in the page and answers by the
+ * status WhatsApp Web reported. A retryable status (408, 423, 429, 5xx) is the 503 that says the operation may or may
+ * not have been applied: the page sends a delete or a mute again on a 429 or a 500 and only the last error surfaces,
+ * the Mex client makes a 500 of its own of a send that failed, and an unsubscription is one request whose reply may
+ * not have come.
  *
  * The page below behaves as build 2.3000.1054966512-alpha does, read off its scripts: the jobs resolve when WhatsApp took
  * the request and reject the status otherwise, and the unsubscription job reports a suspended channel as a 423 with the
@@ -129,52 +131,37 @@ describe('a channel write that WhatsApp answers with a status', () => {
       },
     );
 
-    // Nothing was changed and the request may pass later: a refusal here would tell a caller to give up.
-    it.each([423, 429, 500, 503])('is a retryable failure, not a refusal, when WhatsApp answers %i', async status => {
-      installPage({ job: { rejects: statusError(status) } });
-
-      const attempt = call(adapterOnThatPage());
-
-      await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
-      await expect(attempt).rejects.toThrow(new RegExp(`answered ${status} to .*Retry after a pause`));
-    });
-
-    // WhatsApp answered nothing: a timeout, or a Mex request whose socket failed after it left (the Mex client makes a
-    // 500 of its own for it, with the text 'MexIqError:', after the page has sent the mutation again). The write may
-    // have been applied, so the answer is the 503 that says so in the gateway's words, and neither a refusal nor a
-    // failure that changed nothing.
+    // No retryable status of these writes can promise that nothing was changed: the page sends a delete or a mute again
+    // on a 429 or a 500 and only the error of the last attempt surfaces, so a lost first attempt can be followed by a
+    // rate limit, an outage or a refusal that hides it; a timeout answers nothing; the Mex client makes a 500 of its
+    // own of a send that failed; and an unsubscription is one request whose reply may not have come. Each is the 503
+    // that says the outcome is unknown, and neither a refusal nor a failure that changed nothing.
     it.each([
-      ['a timeout', statusError(408)],
+      ['a timeout (408)', statusError(408)],
+      ['a lock (423)', statusError(423)],
+      ['a rate limit (429)', statusError(429)],
+      ['a server error (500)', statusError(500)],
+      ['an outage (503)', statusError(503)],
+      ['a gateway timeout (504)', statusError(504)],
       ['a timeout of the Mex class', statusError(408, 'MexServerStatusCodeError')],
+      [
+        'a rate limit of the Mex class, which the library let through as a bare error',
+        statusError(429, 'MexServerStatusCodeError'),
+      ],
       [
         'a request whose socket failed after it left',
         statusError(500, 'ServerStatusCodeError', 'MexIqError: Disconnected'),
       ],
-      ['the same with no text', statusError(500, 'ServerStatusCodeError', 'MexIqError: ')],
+      ['an outage of a Mex IQ', statusError(503, 'ServerStatusCodeError', 'MexIqError: service-unavailable')],
     ])('is a 503 that says the outcome is unknown for %s', async (_case, error) => {
       installPage({ job: { rejects: error } });
 
       const attempt = call(adapterOnThatPage());
 
       await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
-      await expect(attempt).rejects.toThrow(/may or may not have been applied/);
-      await expect(attempt).rejects.not.toThrow(/answered|nothing|as it was/);
-    });
-
-    // Only a 408 and the 500 made by the Mex client are unknown: any other status of an IQ error is an answer.
-    it('still reads another status of a Mex IQ error as an answer that changed nothing', async () => {
-      installPage({ job: { rejects: statusError(503, 'ServerStatusCodeError', 'MexIqError: service-unavailable') } });
-
-      const attempt = call(adapterOnThatPage());
-
-      await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
-      await expect(attempt).rejects.toThrow(/answered 503 to /);
-    });
-
-    it('reads the class of the Mex query the same way, which the library let through as a bare error', async () => {
-      installPage({ job: { rejects: statusError(429, 'MexServerStatusCodeError') } });
-
-      await expect(call(adapterOnThatPage())).rejects.toBeInstanceOf(EngineTransportError);
+      await expect(attempt).rejects.toThrow(new RegExp(`^WhatsApp Web reported ${error.status} for the `));
+      await expect(attempt).rejects.toThrow(/may or may not have been applied\. Check before repeating it\.$/);
+      await expect(attempt).rejects.not.toThrow(/nothing|as it was|Retry after/);
     });
 
     it('is a refusal when the error carries no status', async () => {
@@ -221,59 +208,68 @@ describe('a channel write that WhatsApp answers with a status', () => {
         { eventSurface: 3, deleteLocalModels: true },
       );
     });
-
-    // The job reports a suspended channel as a 423 of its own, which is no lock to wait out.
-    it('is a refusal, not a retryable failure, for a suspended channel', async () => {
-      installPage({ job: { rejects: statusError(423, 'ServerStatusCodeError', 'newsletter-suspended') } });
-
-      await expect(adapterOnThatPage().unsubscribeFromChannel(CHANNEL)).rejects.toBeInstanceOf(EngineRefusedError);
-    });
   });
 
-  // The jobs report an answer of the query that holds nothing as a 500 of their own, each in its own words, which is
-  // how WhatsApp can refuse an account that may not make the change: no status WhatsApp sent, and no failure to retry.
-  // The mute and the unmute are no exception to the delete and the unsubscription.
+  // The jobs make up a status of their own for a suspended channel (a 423, which is no lock to wait out) and, each in
+  // its own words, for an answer of the query that holds nothing (a 500, which is how WhatsApp can refuse an account
+  // that may not make the change): no status WhatsApp sent, and no failure to retry. The mute and the unmute are no
+  // exception to the delete and the unsubscription.
   describe.each([
     [
       'the delete of a channel',
       (a: WhatsAppWebJsAdapter) => a.deleteChannel(CHANNEL),
+      500,
       'xwa2_newsletter_delete_v2 is null',
     ],
     [
       'the unsubscription from a channel',
       (a: WhatsAppWebJsAdapter) => a.unsubscribeFromChannel(CHANNEL),
+      500,
       'unexpected-null-mex-response',
+    ],
+    [
+      'the unsubscription from a suspended channel',
+      (a: WhatsAppWebJsAdapter) => a.unsubscribeFromChannel(CHANNEL),
+      423,
+      'newsletter-suspended',
     ],
     [
       'the mute of a channel',
       (a: WhatsAppWebJsAdapter) => a.muteChannel(CHANNEL, true),
+      500,
       'unexpected_mex_mutation_response',
     ],
     [
       'the unmute of a channel',
       (a: WhatsAppWebJsAdapter) => a.muteChannel(CHANNEL, false),
+      500,
       'unexpected_mex_mutation_response',
     ],
-  ])('%s when the job reports an answer that holds nothing', (_name, call, message) => {
-    it('is a refusal, not a retryable failure', async () => {
-      installPage({ job: { rejects: statusError(500, 'ServerStatusCodeError', message) } });
+  ])('%s when the job reports an answer it made up', (_name, call, status, message) => {
+    const outcomeUnknown = async (error: Error) => {
+      installPage({ job: { rejects: error } });
+
+      const attempt = call(adapterOnThatPage());
+
+      await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
+      await expect(attempt).rejects.toThrow(/may or may not have been applied/);
+    };
+
+    it('is a refusal, not a failure to retry', async () => {
+      installPage({ job: { rejects: statusError(status, 'ServerStatusCodeError', message) } });
 
       await expect(call(adapterOnThatPage())).rejects.toBeInstanceOf(EngineRefusedError);
     });
 
-    // Matched by the exact text: a real 500 that only mentions null is a failure like any other.
-    it('still reads a real 500 that only mentions null as the retryable failure', async () => {
-      installPage({
-        job: {
-          rejects: statusError(
-            500,
-            'MexServerStatusCodeError',
-            'MexFatalExtensionError: Mutation: Cannot return null for non-nullable field',
-          ),
-        },
-      });
-
-      await expect(call(adapterOnThatPage())).rejects.toBeInstanceOf(EngineTransportError);
+    // A real 500 that only mentions null is a failure like any other.
+    it('is the unknown outcome for a real 500 that only mentions null', async () => {
+      await outcomeUnknown(
+        statusError(
+          500,
+          'MexServerStatusCodeError',
+          'MexFatalExtensionError: Mutation: Cannot return null for non-nullable field',
+        ),
+      );
     });
   });
 

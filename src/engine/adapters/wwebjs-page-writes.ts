@@ -254,6 +254,11 @@ export interface WriteOutcome {
   refused: (status: number, local: boolean) => string;
 }
 
+/** The statuses a request may pass on a later try: a timeout, a rate limit and a server error. */
+export function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 423 || status === 429 || status >= 500;
+}
+
 /**
  * Settle the status WhatsApp answered to a write the adapter sent itself: 2xx is done; 408, 423, 429 and 5xx are a
  * retryable failure (a 503), since a timeout, a rate limit or a server error means nothing was applied and the same
@@ -261,7 +266,7 @@ export interface WriteOutcome {
  */
 export function settleWriteStatus(status: number, outcome: WriteOutcome, local = false): void {
   if (status >= 200 && status < 300) return;
-  if (status === 408 || status === 423 || status === 429 || status >= 500) {
+  if (isRetryableStatus(status)) {
     throw new EngineTransportError(
       `WhatsApp answered ${status} to ${outcome.request} and ${outcome.nothing}. Retry after a pause.`,
     );

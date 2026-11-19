@@ -1147,24 +1147,26 @@ adapter boundary — none silently stubs.
 - **Channel writes (wwjs) answer by WhatsApp's status.** The delete, the mute and unmute, and the unsubscription of a
   channel are sent by the adapter in the page, with the lookups, the job and the arguments whatsapp-web.js uses
   (`Client.deleteChannel`, `Channel.mute` and `unmute`, `Client.unsubscribeFromChannel`), so that the status the job
-  rejects with decides the answer as it does for the group writes above: `423`, `429` and `5xx` are the retryable `503`
-  that changed nothing, and any other status the `403`. A `408`, and a `500` whose text starts with `MexIqError:`, are an
-  unknown outcome instead: a `503` that says the operation may or may not have been applied, in the words of the
-  protocol timeout. A `408` is a timeout. The `500` is what the Mex client makes of a request whose send failed, a
-  socket that dropped after the request left, which the page had already sent again (it retries a `429` and a `500`
-  three times); an IQ error that WhatsApp did answer with a `500` carries the same text and cannot be told from it. A
-  repeat of a delete after such an answer may meet a channel that is gone, which answers `403`.
-  The library reads that class of error as `false`, which the adapter read as a
-  refusal; the Mex subclass that carries the error of a query itself (`MexServerStatusCodeError`) was not caught by the
-  library at all and was a bare `500`, and both are answered by their status now. What the library answered `false`
-  for without asking WhatsApp, a channel the page does not hold and a channel the account owns when it unsubscribes, is
-  still the `403` and sends nothing. The jobs make up a `423` and three `500`s themselves: the unsubscription job reports a
-  suspended channel as a `423`, and the delete, the unsubscription and the mute and unmute each report an answer of the
-  query that holds nothing as a `500` in their own words (`xwa2_newsletter_delete_v2 is null`,
-  `unexpected-null-mex-response`, `unexpected_mex_mutation_response`), which is how WhatsApp can refuse an account that
-  may not make the change. None is a status WhatsApp sent or a failure to retry, so all are the `403` too, matched by
-  their exact text. A page without one of the jobs dies on it as the library's call did, and answers a bare `500`.
-  Baileys maps `408` and `429` to a `503` and every other `4xx` to a `403`, and rethrows a `5xx` as it came.
+  rejects with decides the answer. Unlike the group writes above, no retryable status promises that nothing was
+  changed: `408`, `423`, `429` and `5xx` are all a `503` that says the operation may or may not have been applied, and
+  any other status the `403`. The page's Mex client sends a delete or a mute again on a `429` or a `500`, up to four
+  attempts in all, and only the error of the last attempt surfaces, so a lost first attempt can be followed by a rate
+  limit, an outage or a refusal that hides it. The Mex client also makes a `500` with the text `MexIqError:` of any send
+  that fails, a socket that dropped after the request left included, and an IQ error that WhatsApp did answer with a
+  `500` carries the same text. The unsubscription job is sent once, and its reply may not have come; a `408` is a
+  timeout. A repeat of a delete after such an answer may meet a channel that is gone, which answers `403`, and a repeat
+  of an unsubscription may meet a channel that is no longer followed. The library reads that class of error as `false`,
+  which the adapter read as a refusal; the Mex subclass that carries the error of a query itself
+  (`MexServerStatusCodeError`) was not caught by the library at all and was a bare `500`, and both are answered by
+  their status now. What the library answered `false` for without asking WhatsApp, a channel the page does not hold and
+  a channel the account owns when it unsubscribes, is still the `403` and sends nothing. The jobs make up a `423` and
+  three `500`s themselves: the unsubscription job reports a suspended channel as a `423`, and the delete, the
+  unsubscription and the mute and unmute each report an answer of the query that holds nothing as a `500` in their own
+  words (`xwa2_newsletter_delete_v2 is null`, `unexpected-null-mex-response`, `unexpected_mex_mutation_response`),
+  which is how WhatsApp can refuse an account that may not make the change. None is a status WhatsApp sent or a failure
+  to retry, so all are the `403` too, matched by their exact text and status. A page without one of the jobs dies on it
+  as the library's call did, and answers a bare `500`. Baileys maps `408` and `429` to a `503` and every other `4xx` to
+  a `403`, and rethrows a `5xx` as it came.
 - **`editMessage` / `pinMessage` / `unpinMessage` refusals (baileys).** Both engines refuse what they
   can judge locally: the target must be addressable inside the given chat, and the Baileys adapter
   additionally refuses an edit of a message the account did not send or of one with no text or caption
