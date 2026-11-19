@@ -4654,7 +4654,7 @@ describe('requests for one session that overlap on a single node', () => {
       expect(held.mock.calls.length).toBeGreaterThan(1);
       expect(held.mock.calls.length).toBeLessThanOrEqual(10);
       expect(warn.mock.calls.map(([message]) => message)).toContain(
-        `Could not record the stop of session ${row.id} on a row that kept changing`,
+        `Could not record the stop of session ${row.id}: no write took the row in 5 passes`,
       );
     });
   });

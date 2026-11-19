@@ -1311,11 +1311,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         throw new ConflictException(`Session ${id} is running on another node`);
       }
       if (passes > 1) return this.keepDown(id, passes - 1);
-      // The row kept changing under the writes and no peer holds it: the requests that changed it settle it.
-      this.logger.warn(`Could not record the stop of session ${id} on a row that kept changing`, {
-        sessionId: id,
-        action: 'session_stop_record_unsettled',
-      });
+      // No write took the row in any pass and no peer holds it: a row that kept changing is settled by the requests that
+      // changed it, and a row in a state the stop cannot change stays as it is.
+      this.logger.warn(
+        `Could not record the stop of session ${id}: no write took the row in ${KEEP_DOWN_PASSES} passes`,
+        {
+          sessionId: id,
+          action: 'session_stop_record_unsettled',
+        },
+      );
     }
   }
 
