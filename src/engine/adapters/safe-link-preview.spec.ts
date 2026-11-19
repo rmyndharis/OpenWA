@@ -3,16 +3,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { generateSafeLinkPreview } from './safe-link-preview';
 import * as ssrfGuard from '../../common/security/ssrf-guard';
-
-/**
- * CPU time this process has used since `since`, in milliseconds. A bound on work is asserted on it and not on the
- * wall clock: a busy runner can hold the worker off the CPU for longer than the whole bound, while code that is slow
- * burns the CPU on every run.
- */
-const cpuMsSince = (since: NodeJS.CpuUsage): number => {
-  const { user, system } = process.cpuUsage(since);
-  return (user + system) / 1000;
-};
+import { leastCpuMsAsync } from '../../../test/helpers/cpu-time';
 
 /**
  * This generator exists because the library's own delegates to a package with an unfixed SSRF
@@ -319,19 +310,27 @@ describe('generateSafeLinkPreview', () => {
   });
 
   // The scan runs on the event loop, where the fetch timeout cannot interrupt it. A page of unclosed
-  // tags made the old attribute patterns backtrack from every tag to the end of the body.
+  // tags made the old attribute patterns backtrack from every tag to the end of the body: one to two seconds
+  // of CPU per pattern for 128 KiB and four times that for 256 KiB, against a few dozen milliseconds now.
+  // The cheapest of three runs is bounded, so that a collection of the worker's heap that falls inside one
+  // run is not charged to the scan. The explicit timeout is for the failing case, which takes minutes.
   describe('a hostile page cannot stall the process', () => {
     it.each([
       ['unclosed <meta tags', '<meta '],
       ['unclosed <title tags', '<title'],
-    ])('scans a body of %s in linear time', async (_label, unit) => {
-      respondWith(unit.repeat((128 * 1024) / unit.length));
+    ])(
+      'scans a body of %s in linear time',
+      async (_label, unit) => {
+        respondWith(unit.repeat((256 * 1024) / unit.length));
 
-      const started = process.cpuUsage();
-      await expect(generateSafeLinkPreview('https://example.com')).resolves.toBeUndefined();
+        const cpuMs = await leastCpuMsAsync(() =>
+          expect(generateSafeLinkPreview('https://example.com')).resolves.toBeUndefined(),
+        );
 
-      expect(cpuMsSince(started)).toBeLessThan(500);
-    });
+        expect(cpuMs).toBeLessThan(1000);
+      },
+      300_000,
+    );
   });
 
   describe('when there is nothing worth showing', () => {
