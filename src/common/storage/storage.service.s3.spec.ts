@@ -176,3 +176,81 @@ describe('StorageService (s3) client init', () => {
     expect(s3AvailableOf(svc)).toBe(true);
   });
 });
+
+// The local directory is not an s3-only leftover: it is the fallback while the bucket is unreachable, and it still holds
+// what was stored there before a move to s3. So it is made owner-only whatever STORAGE_TYPE is, and what the fallback
+// writes is owner-only too.
+describe('StorageService (s3) local directory modes', () => {
+  const dirs: string[] = [];
+  const stores: StorageService[] = [];
+
+  beforeEach(() => {
+    mockedS3Client.mockClear();
+    for (const key of ENV_KEYS) delete process.env[key];
+    jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    for (const store of stores.splice(0)) store.onModuleDestroy();
+    jest.restoreAllMocks();
+    for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const modeOf = (target: string): number => fs.statSync(target).mode & 0o777;
+
+  /** The media directory of a deployment that stored files locally before it moved to s3. */
+  const upgradedRoot = (): string => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-s3-modes-'));
+    dirs.push(baseDir);
+    const root = path.join(baseDir, 'media');
+    const older = path.join(root, 'chat-media/session-a');
+    fs.mkdirSync(older, { recursive: true });
+    fs.writeFileSync(path.join(older, 'old.bin'), 'old');
+    for (const dir of [root, path.join(root, 'chat-media'), older]) fs.chmodSync(dir, 0o755);
+    fs.chmodSync(path.join(older, 'old.bin'), 0o644);
+    return root;
+  };
+
+  const build = (localPath: string): StorageService => {
+    const store = new StorageService({
+      get: (key: string) => {
+        if (key === 'storage.type') return 's3';
+        if (key === 'storage.localPath') return localPath;
+        if (key === 'storage.s3') return { accessKeyId: 'minio', secretAccessKey: 'minio123', region: 'us-east-1' };
+        return undefined;
+      },
+    } as unknown as ConfigService);
+    stores.push(store);
+    return store;
+  };
+
+  it('sets the local root owner-only with the bucket reachable, and leaves the files it holds', async () => {
+    const root = upgradedRoot();
+
+    const svc = build(root);
+    await flush();
+
+    expect(s3AvailableOf(svc)).toBe(true);
+    expect(modeOf(root)).toBe(0o700);
+    expect(modeOf(path.join(root, 'chat-media/session-a'))).toBe(0o755);
+    expect(modeOf(path.join(root, 'chat-media/session-a/old.bin'))).toBe(0o644);
+  });
+
+  it('writes the fallback owner-only while the bucket is unreachable', async () => {
+    const unreachable = { send: jest.fn().mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:9000')) };
+    // One client for the store and one for the downloads.
+    mockedS3Client.mockImplementationOnce(() => unreachable).mockImplementationOnce(() => unreachable);
+    const root = upgradedRoot();
+    const svc = build(root);
+    await flush();
+    expect(s3AvailableOf(svc)).toBe(false);
+
+    await svc.putFile('chat-media/session-b/clip.bin', Buffer.from('written during the outage'));
+
+    expect(modeOf(path.join(root, 'chat-media/session-b'))).toBe(0o700);
+    expect(modeOf(path.join(root, 'chat-media/session-b/clip.bin'))).toBe(0o600);
+    expect((await svc.getFile('chat-media/session-b/clip.bin')).toString()).toBe('written during the outage');
+  });
+});
