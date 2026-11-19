@@ -10518,7 +10518,7 @@
             }
           },
           "501": {
-            "description": "The active engine does not support a requested setting",
+            "description": "The active engine does not support a requested setting. On whatsapp-web.js, also answered when the WhatsApp Web build the session runs has no job to apply `announce`, `locked` or `memberAddMode` with: nothing was asked of WhatsApp for that setting.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11409,6 +11409,16 @@
               }
             }
           },
+          "501": {
+            "description": "On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to send the change with. Nothing was asked of WhatsApp: the group is unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the change with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): nothing was changed, so retry after a pause.",
             "content": {
@@ -11512,6 +11522,16 @@
           },
           "409": {
             "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to send the change with. Nothing was asked of WhatsApp: the group is unchanged.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11945,6 +11965,16 @@
           },
           "413": {
             "description": "The decoded base64 media, or the media downloaded from `url`, exceeds the media byte cap (`MEDIA_DOWNLOAD_MAX_BYTES`, 50 MiB by default). A whole request is separately bounded by `BODY_SIZE_LIMIT` (25 mb by default), and base64 inflates by about a third, so a large send usually meets that coarser limit first: the body parser rejects the request before this check runs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to send the change with. Nothing was asked of WhatsApp: the group is unchanged.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12572,6 +12602,16 @@
           },
           "413": {
             "description": "The decoded base64 media, or the media downloaded from `url`, exceeds the media byte cap (`MEDIA_DOWNLOAD_MAX_BYTES`, 50 MiB by default). A whole request is separately bounded by `BODY_SIZE_LIMIT` (25 mb by default), and base64 inflates by about a third, so a large send usually meets that coarser limit first: the body parser rejects the request before this check runs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to send the picture with. Nothing was asked of WhatsApp: the picture is unchanged.",
             "content": {
               "application/json": {
                 "schema": {
