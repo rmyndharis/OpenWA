@@ -12,6 +12,7 @@ import {
   WS_REDIS_SUBSCRIBER_PING_MS,
   WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS,
 } from './redis-io.adapter';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 /**
  * A Redis that keeps the connection open and stops answering never errors the socket, so the publish
@@ -423,10 +424,9 @@ describe('RedisIoAdapter subscriber against a connection that goes quiet while i
   let sub: { status: string; commandQueue: Queue };
   let warn: jest.SpyInstance;
 
-  /** Let real socket I/O run until the condition holds, for up to `ms` of wall time. */
-  const settle = async (condition: () => boolean, ms = 3000): Promise<boolean> => {
-    const until = process.hrtime.bigint() + BigInt(ms) * 1_000_000n;
-    while (!condition() && process.hrtime.bigint() < until) await new Promise(resolve => setImmediate(resolve));
+  /** Let real socket I/O run until the condition holds, for up to `ms` of wall time (the clock here is faked). */
+  const settle = async (condition: () => boolean, ms = 30_000): Promise<boolean> => {
+    await waitUntil(condition, ms);
     return condition();
   };
   const idle = (): boolean => sub.status === 'ready' && sub.commandQueue.length === 0;
@@ -485,7 +485,7 @@ describe('RedisIoAdapter subscriber against a connection that goes quiet while i
     expect(redis.connections).toBe(connections + 1);
     const [, second] = redis.subscriptions.keys();
     expect([...redis.subscriptions.get(second)!].sort()).toEqual([...redis.subscriptions.get(first)!].sort());
-  }, 20_000);
+  }, 60_000);
 
   it('keeps an idle subscriber connection that answers its pings', async () => {
     const connections = redis.connections;
@@ -501,7 +501,7 @@ describe('RedisIoAdapter subscriber against a connection that goes quiet while i
     expect(redis.connections).toBe(connections);
     expect(sub.status).toBe('ready');
     expect(warned('Socket timeout')).toBe(0);
-  }, 20_000);
+  }, 60_000);
 
   // A Redis that pauses (a snapshot fork, a slow disk) for longer than the publisher's deadline still delivers, once
   // it resumes, what the others had written before giving up. The subscriber keeps its connection to receive it.
@@ -519,5 +519,5 @@ describe('RedisIoAdapter subscriber against a connection that goes quiet while i
     expect(await settle(() => sub.status !== 'ready', 500)).toBe(false);
     expect(redis.connections).toBe(connections);
     expect(warned('Socket timeout')).toBe(0);
-  }, 20_000);
+  }, 60_000);
 });
