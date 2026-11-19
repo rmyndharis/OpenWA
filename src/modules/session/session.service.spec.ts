@@ -2209,11 +2209,11 @@ describe('SessionService', () => {
       });
       let finishFirstClaim: () => void = () => undefined;
       let finishSecondClaim: () => void = () => undefined;
-      // The first start asks once more while the second still runs, and a peer still holds the session.
+      // The first start is refused because a peer holds the session (the stop's own check found none before it).
+      ownership.isHeldByOtherNode.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
       ownership.claim
         .mockImplementationOnce(() => new Promise<boolean>(resolve => (finishFirstClaim = () => resolve(false))))
-        .mockImplementationOnce(() => new Promise<boolean>(resolve => (finishSecondClaim = () => resolve(true))))
-        .mockResolvedValueOnce(false);
+        .mockImplementationOnce(() => new Promise<boolean>(resolve => (finishSecondClaim = () => resolve(true))));
 
       const stopping = service.stop('sess-uuid-1');
       const first = service.start('sess-uuid-1', { explicit: true }).catch((error: unknown) => error);
@@ -2414,6 +2414,8 @@ describe('SessionService', () => {
     // then fails must not read as a used slot while that claim is awaited.
     it('hasStartCapacity() does not count a start whose claim is still awaited', async () => {
       const ownership = withOwnership();
+      // The claim is refused because a peer holds the session.
+      ownership.isHeldByOtherNode.mockResolvedValue(true);
       (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | number =>
         key === 'sessions.maxConcurrent' ? 2 : (def as T),
       );
@@ -2523,10 +2525,71 @@ describe('SessionService', () => {
     });
 
     it('start() answers 409 when a live peer really holds the session', async () => {
-      withOwnership(false);
+      const ownership = withOwnership(false);
+      ownership.isHeldByOtherNode.mockResolvedValue(true);
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
 
+      await expect(service.start('sess-uuid-1')).rejects.toThrow('running on another node');
+      // The row says a peer holds it, so the claim is not asked again.
+      expect(ownership.claim).toHaveBeenCalledTimes(1);
+    });
+
+    // A claim answers false for a miss of this node's own too (one a later claim of this node superseded), so the answer
+    // is not read as a peer without the row saying so: with no other node holding it the claim is asked again.
+    it('start() asks the claim again when no other node holds the session, and goes on once it is granted', async () => {
+      const ownership = withOwnership();
+      ownership.claim.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      jest.spyOn(lifecycle, 'start').mockResolvedValue(createMockSession());
+      jest.spyOn(lifecycle, 'isEngineActive').mockReturnValue(true);
+
+      await expect(service.start('sess-uuid-1')).resolves.toBeDefined();
+
+      expect(ownership.claim).toHaveBeenCalledTimes(2);
+      expect(ownership.isHeldByOtherNode).toHaveBeenCalledTimes(1);
+    });
+
+    it('start() answers 409 when the claim asked again is refused too', async () => {
+      const ownership = withOwnership(false);
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      const launch = jest.spyOn(lifecycle, 'start');
+
       await expect(service.start('sess-uuid-1')).rejects.toThrow(ConflictException);
+
+      expect(ownership.claim).toHaveBeenCalledTimes(2);
+      expect(launch).not.toHaveBeenCalled();
+    });
+
+    it('start() answers the retryable 503 when the check for a peer cannot be made', async () => {
+      const ownership = withOwnership(false);
+      ownership.isHeldByOtherNode.mockRejectedValue(new Error('Connection terminated unexpectedly'));
+      const launch = jest.spyOn(lifecycle, 'start');
+
+      await expect(service.start('sess-uuid-1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+      expect(launch).not.toHaveBeenCalled();
+    });
+
+    it('delete() answers 409 without asking the claim again when a live peer took the session after its check', async () => {
+      const ownership = withOwnership(false);
+      ownership.isHeldByOtherNode.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      const removal = jest.spyOn(lifecycle, 'delete');
+
+      await expect(service.delete('sess-uuid-1')).rejects.toThrow('running on another node');
+
+      expect(ownership.claim).toHaveBeenCalledTimes(1);
+      expect(removal).not.toHaveBeenCalled();
+    });
+
+    it('delete() answers 409 when the claim asked again is refused too, and removes nothing', async () => {
+      const ownership = withOwnership(false);
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      const removal = jest.spyOn(lifecycle, 'delete');
+
+      await expect(service.delete('sess-uuid-1')).rejects.toThrow(ConflictException);
+
+      expect(ownership.claim).toHaveBeenCalledTimes(2);
+      expect(removal).not.toHaveBeenCalled();
     });
 
     it('logout() hands the claim back once the engine is torn down', async () => {

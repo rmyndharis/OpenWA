@@ -196,6 +196,26 @@ for minutes; detaching from bootstrap means the API answers while engines warm.
 **Pinned by:** `session.service.spec.ts` (boot auto-start ordering/staggering cases; the stagger by
 'waits the full throttle between two auto-started launches').
 
+### INV-11: Overlapping requests for one session on one node never read as a peer holding it
+
+**Interleaving:** two requests for one session (two starts, two deletes, a start and a delete) begin their
+claims within milliseconds. The later claim takes the generation; the earlier one, whose SQL reply must not
+replace it, answers `false` although no other node is involved (the newer claim settled first, or a release
+ended it). Read as "a live peer holds the session", that answered 409 "running on another node" with no other
+node in the deployment, left the request undone, and could leave the later request's claim behind for a peer's
+takeover sweep to adopt.
+**Defense:** `claim()` answers `false` when this call claimed nothing, which is not the same as a peer holding
+the session. `claimUnlessHeldElsewhere` (`session.service.ts`) leaves the 409 to a miss that `isHeldByOtherNode`
+confirms (another node on a live lease); otherwise it asks once more. That renews the hold of the request that
+replaced the claim (one generation shared by both, so the request that ends first leaves the claim to the one
+still running and the last one out releases it) or takes a row nobody holds.
+**Pinned by:** `session-delete-claim.spec.ts` ('two claims of one session that overlap': a start and a delete in
+either order, two deletes, a live peer refusing every pair; the 'older claim SQL reply' cases for a claim lost
+and regained), `session.service.spec.ts` ('ownership release': the second ask and its refusals).
+**The naive fix that is wrong:** guessing a self-overlap from request state (another delete not yet returned, a
+second start reservation). A pair of the other kind, or a partner that has already returned, still answered the
+false 409.
+
 ---
 
 ## 31.2 Status-transition ownership

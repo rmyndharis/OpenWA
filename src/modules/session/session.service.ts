@@ -797,10 +797,21 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     this.endStop(id, request);
   }
 
-  /** Another delete of the session than `request` is running here: its call has not returned. */
-  private otherDeleteRuns(id: string, request: StopRequest): boolean {
-    const others = [...(this.stopRequests.get(id)?.requests ?? [])];
-    return others.some(other => other !== request && other.kind === 'delete' && !other.ended);
+  /**
+   * Claim the session for this node. A claim answers false for more than a peer holding the row: a claim of this node
+   * that a later one superseded and that settled first answers false too, as does one a release ended. Only the row
+   * says which, so a miss with no other node holding the row on a live lease is asked once more: the claim then renews
+   * the hold of the one that replaced it, or writes a row nobody holds. A peer that holds the row refuses at once.
+   */
+  private async claimUnlessHeldElsewhere(
+    id: string,
+    ownership: SessionOwnershipService,
+    onClaimed?: (ownsClaim: () => boolean) => void,
+  ): Promise<boolean> {
+    const claim = (): Promise<boolean> => (onClaimed ? ownership.claim(id, onClaimed) : ownership.claim(id));
+    if (await claim()) return true;
+    if (await ownership.isHeldByOtherNode(id)) return false;
+    return claim();
   }
 
   /**
@@ -819,10 +830,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   ): Promise<void> {
     let claimed: boolean;
     try {
-      claimed = await ownership.claim(id, onClaimed);
-      // Another delete of the session here may have replaced this claim and settled first, which reads as a miss though
-      // no other node holds the row. Ask again: the claim then renews the one that delete holds.
-      if (!claimed && this.otherDeleteRuns(id, request)) claimed = await ownership.claim(id, onClaimed);
+      claimed = await this.claimUnlessHeldElsewhere(id, ownership, onClaimed);
     } catch (error) {
       this.dropStopMark(id, request);
       this.withdrawStop(request);
@@ -1066,9 +1074,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   private async claimForStart(id: string, ownership: SessionOwnershipService): Promise<void> {
     let claimed: boolean;
     try {
-      claimed = await ownership.claim(id);
-      // As for a delete: a start still running here may have replaced this claim and settled first.
-      if (!claimed && (this.startReservations.get(id) ?? 0) > 1) claimed = await ownership.claim(id);
+      claimed = await this.claimUnlessHeldElsewhere(id, ownership);
     } catch (error) {
       this.logger.warn(`Could not claim session ${id} for the start; nothing was started`, {
         sessionId: id,

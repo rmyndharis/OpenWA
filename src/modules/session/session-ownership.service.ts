@@ -127,7 +127,7 @@ export class SessionOwnershipService {
   }
 
   /**
-   * Take ownership, returning false when a live peer holds it.
+   * Take ownership, answering false when a live peer holds it (or when this call otherwise claimed nothing, below).
    *
    * The update is conditional on the same predicate the read used, so two processes racing on the
    * same free session cannot both succeed: the second one's UPDATE matches no row, because the
@@ -136,9 +136,9 @@ export class SessionOwnershipService {
    *
    * Two claims of one session on this node overlap when two requests for it arrive within a few milliseconds. The
    * later one takes the ownership, and the earlier one, which an older SQL reply must not let replace it, answers what
-   * the newest claim in flight does, and fails with its error: no peer is involved, so it must not read as one holding
-   * the session. It answers false when a release or a loss ended its claim, or when the newer claim has already
-   * settled, since a peer may have held the row in between.
+   * the newest claim in flight does, and fails with its error. It answers false when a release or a loss ended its
+   * claim, or when the newer claim has already settled. False means this call claimed nothing, not that a peer holds
+   * the row: a caller that must tell the two apart asks isHeldByOtherNode, and asks again when none does.
    */
   async claim(sessionId: string, onClaimed?: (ownsClaim: () => boolean) => void): Promise<boolean> {
     const own: { claim?: Promise<boolean> } = {};
