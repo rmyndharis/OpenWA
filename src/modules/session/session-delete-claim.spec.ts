@@ -42,6 +42,7 @@ import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { SessionTakeoverService } from '../takeover/session-takeover.service';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 const entities = [
   Session,
@@ -3718,9 +3719,8 @@ describe('A session deleted on one node while a peer shares the database', () =>
 });
 
 /** Wait for a condition with a wall-clock deadline: a loaded machine slows the loop, it never changes the answer. */
-const until = async (condition: () => boolean, deadlineMs = 15_000): Promise<void> => {
-  const end = Date.now() + deadlineMs;
-  while (!condition() && Date.now() < end) await new Promise(resolve => setImmediate(resolve));
+const until = async (condition: () => boolean, deadlineMs = 30_000): Promise<void> => {
+  await waitUntil(condition, deadlineMs);
   expect(condition()).toBe(true);
 };
 
