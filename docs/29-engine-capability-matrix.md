@@ -35,8 +35,8 @@ Two complementary views:
 - **29.5 — the full engine inventory.** Rows are **every method the installed libraries expose**,
   each mapped to the OpenWA interface method that uses it (or marked unexposed). Use it as the
   implementation backlog: anything `❌ not exposed` with a library symbol behind it is wiring work,
-  not research work. 29.5.3 distills the sweetest spot: capabilities **both** libraries already
-  have and only OpenWA lacks.
+  not research work, unless the row is marked `run in-page`: an adapter page function already serves it.
+  29.5.3 distills the sweetest spot: capabilities **both** libraries already have and only OpenWA lacks.
 
 ## 29.2 Adapter architecture
 
@@ -461,6 +461,9 @@ Exposure column values:
   capabilities; correctly never exposed.
 - **❌ not exposed** — a real library capability with no OpenWA path. **This is the implementation
   backlog.**
+- **❌ not exposed (run in-page)** is not backlog: the library method is not called, and the capability is exposed
+  through an adapter page function that sends the same request in the page, so that the status WhatsApp gave decides
+  the answer. 29.8 counts these rows apart from the real capabilities that are missing.
 
 ### 29.5.1 Baileys — 152 socket methods
 
