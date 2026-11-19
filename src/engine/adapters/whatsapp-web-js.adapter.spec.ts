@@ -63,6 +63,7 @@ import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import * as loadRemoteMediaModule from '../../common/media/load-remote-media';
 import { fetch as undiciFetch } from 'undici';
 import { lookup } from 'dns/promises';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 // Allowlisted hosts are PINNED to their DNS answer (ssrf-guard pins allowlisted hosts to their DNS answers), so the specs that exercise
 // the SSRF_ALLOWED_HOSTS escape-hatch need a deterministic resolver. Default answers are PUBLIC
@@ -10460,6 +10461,10 @@ describe('WhatsAppWebJsAdapter number check through the library page code', () =
     };
     try {
       await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBe('551187654321');
+      // The seed is written in the background, through a PostgreSQL round trip: wait for the row, not for turns.
+      await waitUntil(
+        async () => (await repo.findOne({ where: { lid: '159442138038327' } }))?.phone === '551187654321',
+      );
       await settle();
       expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({ phone: '551187654321' });
       await peer.remember('159442138038327', '628222', s2);
@@ -10491,6 +10496,10 @@ describe('WhatsAppWebJsAdapter number check through the library page code', () =
       const hidden = checkOn({ knownLocally: false, secondQuery: 'absent' });
       engines.set(s1, hidden.adapter);
       await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBeNull();
+      await waitUntil(async () => {
+        const row = await repo.findOne({ where: { lid: '159442138038327' } });
+        return row?.phone === null && row.sessionId === s1;
+      });
       await settle();
       expect(hidden.queryWidExists).toHaveBeenCalledTimes(1);
       expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({ phone: null, sessionId: s1 });
@@ -10501,7 +10510,7 @@ describe('WhatsAppWebJsAdapter number check through the library page code', () =
         await admin.destroy();
       }
     }
-  });
+  }, 60_000);
 
   it('sends a second query when the page does not, and answers the phone it reads', async () => {
     const { adapter, queryWidExists } = checkOn({ knownLocally: false, secondQuery: 'fills' });
