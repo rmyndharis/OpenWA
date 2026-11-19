@@ -825,6 +825,30 @@ describe('BaileysSessionStore', () => {
         expect(store.listChats()[0].name).toBe('Alice');
       });
 
+      // A history chunk files a contact for every conversation, titled by the privacy id's digits when it has no name.
+      it.each([
+        ['saved name', { name: 'Carol' }, { name: '111' }],
+        ['verified name', { verifiedName: 'Acme Ltd' }, { verifiedName: '111@lid' }],
+        ['push name', { notify: 'Alice' }, { notify: '111' }],
+      ] as const)('keeps a held %s when a later title of the chat is only the privacy id', (_field, held, later) => {
+        const [expected] = Object.values(held);
+        store.upsertChats([{ id: '111@lid' }]);
+        store.upsertContacts([{ id: '111@lid', ...held }]);
+        store.upsertContacts([{ id: '111@lid', ...later }]);
+        expect(store.listChats()[0].name).toBe(expected);
+      });
+
+      it('takes a later real name over a held one, and a name over a held privacy id', () => {
+        store.upsertChats([{ id: '111@lid' }]);
+        store.upsertContacts([{ id: '111@lid', name: 'Carol' }]);
+        store.upsertContacts([{ id: '111@lid', name: 'Caroline' }]);
+        expect(store.listChats()[0].name).toBe('Caroline');
+        store.upsertContacts([{ id: '222@lid', name: '222' }]);
+        store.upsertContacts([{ id: '222@lid', name: 'Dan' }]);
+        store.upsertChats([{ id: '222@lid' }]);
+        expect(store.listChats().find(c => c.id === '222@lid')?.name).toBe('Dan');
+      });
+
       it('lists the verified name before the push name when the saved name is only the privacy id', () => {
         store.upsertChats([{ id: '111@lid' }]);
         store.upsertContacts([{ id: '111@lid', name: '111@lid', verifiedName: 'Acme Ltd', notify: 'Alice' }]);

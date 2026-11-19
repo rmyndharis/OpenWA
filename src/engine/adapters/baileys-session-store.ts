@@ -337,6 +337,13 @@ export class BaileysSessionStore {
       const merged: BaileysContact = { id: existing.id };
       this.assignDefined(merged, existing);
       this.assignDefined(merged, { ...r, id });
+      // A history chunk titles a privacy-id chat by the id's own digits when it has no name: that is no name, and it
+      // replaces none the contact already holds, whichever of the three fields it came in.
+      for (const field of ['name', 'verifiedName', 'notify'] as const) {
+        const held = existing[field];
+        const incoming = r[field];
+        if (held && incoming && this.isLidIdentityLabel(id, incoming)) merged[field] = held;
+      }
       this.contacts.set(id, merged);
       // Capture a lid->phone pair from the merged record (lid + phone can arrive in separate updates).
       // `phoneNumber` is the authoritative PN field; fall back to `id` itself only when it's already
