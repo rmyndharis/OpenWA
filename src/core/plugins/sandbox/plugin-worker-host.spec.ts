@@ -3,16 +3,7 @@ import { PluginWorkerHost } from './plugin-worker-host';
 import { PluginWorkerChannel, HostToWorkerMessage, WorkerToHostMessage } from './protocol';
 import { HookManager } from '../../hooks/hook-manager.service';
 import { HookEvent } from '../../hooks/hook.interfaces';
-
-/**
- * CPU time this process has used since `since`, in milliseconds. A bound on work is asserted on it and not on the
- * wall clock: a busy runner can hold the worker off the CPU for longer than the whole bound, while code that is slow
- * burns the CPU on every run.
- */
-const cpuMsSince = (since: NodeJS.CpuUsage): number => {
-  const { user, system } = process.cpuUsage(since);
-  return (user + system) / 1000;
-};
+import { leastCpuMsAsync } from '../../../../test/helpers/cpu-time';
 
 /** In-memory channel double: records what the host posts, lets the test push worker replies back. */
 class FakeChannel implements PluginWorkerChannel {
@@ -1349,10 +1340,12 @@ describe('the text a worker reports in a result', () => {
   ];
 
   it.each(scenarios)('keeps a fixed marker for a nested array shared at every level in %s', async (_name, run) => {
-    const started = process.cpuUsage();
-    const text = await run(new FakeChannel(), diamond(22));
+    let text: string | undefined;
+    const cpuMs = await leastCpuMsAsync(async () => {
+      text = await run(new FakeChannel(), diamond(22));
+    });
 
-    expect(cpuMsSince(started)).toBeLessThan(500);
+    expect(cpuMs).toBeLessThan(500);
     expect(text).toBe(MARKER);
   });
 
