@@ -3904,6 +3904,69 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
     });
   });
 
+  // The statements of one lid run in the order of the calls, so a negative can land while a report begun after it, and
+  // another negative begun after that, are still to be written.
+  describe('a negative that lands before the reports begun after it', () => {
+    it('keeps refusing the lid while the newest of two reports is written, the first having landed', async () => {
+      const clearing = hold('update'); // the first negative's statement
+      const first = hold('upsert');
+      const second = hold('upsert');
+      const negative = store.remember('333', null, OWNER); // the owner's: it clears 628111
+      const reports = [store.remember('333', '628222', OWNER), store.remember('333', '628333', OWNER)];
+      const latest = store.remember('333', null, OWNER); // the lid's latest call is a negative again
+      await clearing.reached;
+      clearing.release();
+      await first.reached;
+      first.release();
+      await second.reached; // 628222 is in the table, 628333 is being written
+      expect(await repo.findOneBy({ lid: '333' })).toMatchObject({ phone: '628222' });
+
+      await refused(['628111', '628222', '628333']);
+
+      second.release();
+      await Promise.all([negative, ...reports, latest]);
+      expect(await store.findPhoneForLid('333@lid')).toBeNull(); // the last negative cleared the row
+    });
+
+    it('keeps refusing the lid while a lookup that contradicts the report written after the negative is under way', async () => {
+      const clearing = hold('update'); // the first negative's statement
+      const report = hold('upsert');
+      const revocation = hold('update'); // the lookup's, which runs behind the report
+      const negative = store.remember('333', null, OWNER);
+      const remap = store.remember('333', '628222', OWNER);
+      const lookup = store.rememberIfUnknown('333', '628444', OTHER); // contradicts the report
+      const latest = store.remember('333', null, OWNER);
+      await clearing.reached;
+      clearing.release();
+      await report.reached;
+      report.release();
+      await revocation.reached; // 628222 is in the table, its revocation is being written
+      expect(await repo.findOneBy({ lid: '333' })).toMatchObject({ phone: '628222', isReported: true });
+
+      await refused(['628111', '628222', '628444']);
+
+      revocation.release();
+      await Promise.all([negative, remap, lookup, latest]);
+    });
+
+    it('keeps refusing the lid when the newest report failed, an older negative having landed before it', async () => {
+      const upsert = repo.upsert.bind(repo);
+      jest
+        .spyOn(repo, 'upsert')
+        .mockImplementationOnce((...args: Parameters<typeof upsert>) => upsert(...args))
+        .mockRejectedValueOnce(new Error('connection lost'));
+      const negative = store.remember('333', null, OWNER);
+      const reports = [store.remember('333', '628222', OWNER), store.remember('333', '628333', OWNER)];
+      const refusedNegative = store.remember('333', null, OTHER); // another linked session: the owner keeps the row
+      await expect(Promise.all([negative, ...reports, refusedNegative])).resolves.toEqual([true, true, false, true]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockClear();
+      expect(await repo.findOneBy({ lid: '333' })).toMatchObject({ phone: '628222', sessionId: OWNER });
+
+      await refused(['628222', '628333']); // this node holds a phone the table does not have
+    });
+  });
+
   it('keeps refusing the lid when a lookup of the stored phone follows the report and its entry then leaves the mirror', async () => {
     const held = hold('upsert');
     const remap = store.remember('333', '628222', OWNER);

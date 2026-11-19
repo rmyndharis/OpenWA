@@ -57,8 +57,8 @@ interface UnsettledWrite {
   reportPhone?: string;
   /** A display lookup contradicted the stored phone and its revocation has not settled: no row is answered meanwhile. */
   revoking?: boolean;
-  /** The latest actual report is a negative. Unlike `latestReport`, an eviction or a reload leaves it. */
-  latestNegative?: boolean;
+  /** The latest actual call begun, a report or a negative. Unlike `latestReport`, an eviction or a reload leaves it. */
+  latestActual?: object;
   /** A statement of these writes failed, so the table may lack what the cache holds. */
   failed?: boolean;
 }
@@ -633,7 +633,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     writing.latestOperation = operation;
     if (actual) {
       writing.latestReport = operation;
-      writing.latestNegative = operation.phone === null;
+      writing.latestActual = operation;
     }
     this.unsettledWrites.set(lid, writing);
     for (const raced of this.reloadsOut) raced.add(lid);
@@ -705,7 +705,9 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     if (!affected) return;
     const writing = this.unsettledWrites.get(lid);
     // The witnesses a resident entry would have had go with it, also after an eviction or a reload dropped the entry.
-    if (writing?.latestNegative) {
+    // Only when this negative is the lid's latest call: a report begun after it has its own, and its statement is not
+    // run yet.
+    if (writing?.latestActual === report) {
       writing.reportPhone = undefined;
       writing.revoking = false;
     }
