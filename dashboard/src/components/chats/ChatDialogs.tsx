@@ -143,7 +143,9 @@ export function SaveContactDialog({
             onChange={e => setTyped({ first: firstName, last: e.target.value })}
           />
         </label>
-        <p className="text-muted">{chat.id}</p>
+        <p className="text-muted">
+          <bdi dir="ltr">{chat.id}</bdi>
+        </p>
       </form>
     </Modal>
   );
