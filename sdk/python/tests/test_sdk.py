@@ -1274,6 +1274,16 @@ class TestChatsAndHealth:
         assert chats[0]["lastMessageType"] == "image"
         assert "lastMessageType" not in chats[1]
 
+    def test_chats_preserve_optional_phone_of_a_privacy_id_chat(self):
+        backend = MockBackend().on("GET", "/chats", body=[
+            {"id": "262813461250072@lid", "name": "", "phone": "15550006666"},
+            {"id": "15550001111@c.us", "name": "Alice"},
+        ])
+        chats = make_client(backend).chats.list("s")
+        assert chats[0]["phone"] == "15550006666"
+        assert chats[0]["name"] == ""
+        assert "phone" not in chats[1]
+
     def test_chats(self):
         backend = MockBackend()
         backend.on("GET", "/chats", body=[])

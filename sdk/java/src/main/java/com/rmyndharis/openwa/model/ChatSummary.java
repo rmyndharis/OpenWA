@@ -33,4 +33,13 @@ public record ChatSummary(
         this(id, name, isGroup, unreadCount, lastMessage, timestamp, kind, archived, pinned,
             muted, muteExpiration, null, null);
     }
+
+    /** Construct a chat summary without a resolved phone. */
+    public ChatSummary(
+        String id, String name, Boolean isGroup, Integer unreadCount, String lastMessage,
+        Long timestamp, ChatKind kind, Boolean archived, Boolean pinned, Boolean muted,
+        Long muteExpiration, MessageType lastMessageType) {
+        this(id, name, isGroup, unreadCount, lastMessage, timestamp, kind, archived, pinned,
+            muted, muteExpiration, lastMessageType, null);
+    }
 }
