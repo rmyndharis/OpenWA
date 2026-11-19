@@ -243,7 +243,11 @@ describe('a group or profile write that WhatsApp answers with a status', () => {
       it('is a refusal for an account that may not set group properties, where it was a bare error', async () => {
         installPage({ admin: false });
 
-        expect(await outcomeOf(write)).toBeInstanceOf(EngineRefusedError);
+        const outcome = await outcomeOf(write);
+
+        expect(outcome).toBeInstanceOf(EngineRefusedError);
+        expect((outcome as Error).message).toContain('the page says this account may not change it, nothing was sent');
+        expect((outcome as Error).message).not.toContain('WhatsApp refused it');
       });
 
       // What an earlier layout answers when it has nothing to say: the library read it as done.
@@ -297,7 +301,10 @@ describe('a group or profile write that WhatsApp answers with a status', () => {
     it('is a refusal for an account that may not set group properties', async () => {
       installPage({ admin: false });
 
-      expect(await outcomeOf(write)).toBeInstanceOf(EngineRefusedError);
+      const outcome = await outcomeOf(write);
+
+      expect(outcome).toBeInstanceOf(EngineRefusedError);
+      expect((outcome as Error).message).toContain('the page says this account may not change it, nothing was sent');
     });
 
     // Setting admins on a group whose link mode is open is two writes in the page, and the second can fail after the
@@ -324,8 +331,23 @@ describe('a group or profile write that WhatsApp answers with a status', () => {
     it.each(WRITES)('%s is a refusal when the page says the account may not set it', async (_name, write) => {
       const jobs = installPage({ canSetPicture: false });
 
-      expect(await outcomeOf(write)).toBeInstanceOf(EngineRefusedError);
+      const outcome = await outcomeOf(write);
+
+      expect(outcome).toBeInstanceOf(EngineRefusedError);
       expect(jobs.WAWebContactProfilePicThumbBridge.sendSetPicture).not.toHaveBeenCalled();
+      // WhatsApp was never asked, so the text must not say it refused or answered.
+      expect((outcome as Error).message).toContain('the page says this account may not change it, nothing was sent');
+      expect((outcome as Error).message).not.toMatch(/WhatsApp (refused|answered)/);
+    });
+
+    it.each(WRITES)('%s says WhatsApp refused it when WhatsApp did', async (_name, write) => {
+      installPage({ sendSetPicture: { rejects: statusError(403) } });
+
+      const outcome = await outcomeOf(write);
+
+      expect(outcome).toBeInstanceOf(EngineRefusedError);
+      expect((outcome as Error).message).toMatch(/WhatsApp (refused it|answered) \(?403\)?/);
+      expect((outcome as Error).message).not.toContain('the page says');
     });
 
     it.each(WRITES)('%s is a refusal when the request resolves with no success status', async (_name, write) => {

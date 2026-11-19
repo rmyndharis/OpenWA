@@ -14,8 +14,11 @@ export type PageWrite =
   | { kind: 'picture'; chatId: string; picture: MessageMedia }
   | { kind: 'property'; chatId: string; property: 'announcement' | 'restrict' | 'member_add_mode'; value: 0 | 1 };
 
-/** What the page answers: the status WhatsApp gave, or `'missing'` when it has no job to run the write with. */
-export type PageWriteAnswer = { status: number } | 'missing';
+/**
+ * What the page answers: the status WhatsApp gave, or `'missing'` when it has no job to run the write with. `local` marks
+ * a refusal the page decided on its own, from what it knows of the account, before anything was sent.
+ */
+export type PageWriteAnswer = { status: number; local?: true } | 'missing';
 
 /**
  * Run one group or profile write IN-PAGE through the WhatsApp Web job whatsapp-web.js calls for it, and answer the
@@ -25,7 +28,8 @@ export type PageWriteAnswer = { status: number } | 'missing';
  *
  * A status is answered however the build reports it: `ServerStatusCodeError` and its Mex subclass carry it as
  * `.status`, the property writes of the current build RESOLVE the response union instead (`SetPropertyResponse*`),
- * and the page refuses a write the account may not make with an `ActionError`, which is a 403. Any other answer of the
+ * and the page refuses a write the account may not make with an `ActionError`, which is a 403 that WhatsApp was never
+ * asked for (`local`). Any other answer of the
  * job is the library's own success, and any other failure is rethrown.
  *
  * Every lookup is guarded, since `require` throws for a module a build does not define, and a document with no
@@ -57,7 +61,7 @@ export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer>
 
   const createWid = call(find('WAWebWidFactory'), 'createWid');
   const getChat = call(w.WWebJS, 'getChat');
-  let run: (() => Promise<number>) | undefined;
+  let run: (() => Promise<{ status: number; local?: true }>) | undefined;
   if (createWid) {
     switch (write.kind) {
       case 'subject': {
@@ -65,7 +69,7 @@ export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer>
         if (set) {
           run = async () => {
             await set(createWid(write.chatId), write.subject);
-            return 200;
+            return { status: 200 };
           };
         }
         break;
@@ -82,7 +86,7 @@ export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer>
               newDescId: randomHex(8),
               prevDescId: chat.groupMetadata.descId,
             });
-            return 200;
+            return { status: 200 };
           };
         }
         break;
@@ -100,10 +104,10 @@ export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer>
             const entry = (known(write.chatId) || (await lookup(write.chatId))) as
               { canSet: () => boolean } | undefined;
             // The page's own copy of the picture says the account may not set it: a refusal, as the library reads it.
-            if (!entry?.canSet()) return 403;
+            if (!entry?.canSet()) return { status: 403, local: true };
             const res = (await send(createWid(write.chatId), thumbnail, profilePic)) as
               { status?: unknown } | undefined;
-            return typeof res?.status === 'number' ? res.status : 403;
+            return { status: typeof res?.status === 'number' ? res.status : 403 };
           };
         }
         break;
@@ -115,12 +119,12 @@ export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer>
             const chat = await getChat(write.chatId, { getAsModel: false });
             const response = (await set(chat, write.property, write.value)) as Union | undefined;
             if (response?.name === 'SetPropertyResponseClientError') {
-              return Number(response.value?.errorSetPropertyClientErrors?.value?.code) || 403;
+              return { status: Number(response.value?.errorSetPropertyClientErrors?.value?.code) || 403 };
             }
             if (response?.name === 'SetPropertyResponseServerError') {
-              return Number(response.value?.errorServerErrors?.value?.code) || 500;
+              return { status: Number(response.value?.errorServerErrors?.value?.code) || 500 };
             }
-            return 200;
+            return { status: 200 };
           };
         }
         break;
@@ -129,10 +133,10 @@ export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer>
   }
   if (!run) return 'missing';
   try {
-    return { status: await run() };
+    return await run();
   } catch (err) {
     const failure = err as { name?: unknown; status?: unknown } | undefined;
-    if (failure?.name === 'ActionError') return { status: 403 };
+    if (failure?.name === 'ActionError') return { status: 403, local: true };
     if (typeof failure?.name === 'string' && failure.name.endsWith('ServerStatusCodeError')) {
       return { status: typeof failure.status === 'number' ? failure.status : 403 };
     }
@@ -220,8 +224,8 @@ export interface WriteOutcome {
   request: string;
   /** What a rate limit or a server error leaves, as "changed nothing". */
   nothing: string;
-  /** The refusal, given the status WhatsApp refused with. */
-  refused: (status: number) => string;
+  /** The refusal, given the status WhatsApp refused with, or `local` when the page refused it without asking WhatsApp. */
+  refused: (status: number, local: boolean) => string;
 }
 
 /**
@@ -229,12 +233,12 @@ export interface WriteOutcome {
  * retryable failure (a 503), since a rate limit or a server error means nothing was applied and the same request may
  * pass a moment later; any other code is the refusal (a 403).
  */
-export function settleWriteStatus(status: number, outcome: WriteOutcome): void {
+export function settleWriteStatus(status: number, outcome: WriteOutcome, local = false): void {
   if (status >= 200 && status < 300) return;
   if (status === 423 || status === 429 || status >= 500) {
     throw new EngineTransportError(
       `WhatsApp answered ${status} to ${outcome.request} and ${outcome.nothing}. Retry after a pause.`,
     );
   }
-  throw new EngineRefusedError(outcome.refused(status));
+  throw new EngineRefusedError(outcome.refused(status, local));
 }

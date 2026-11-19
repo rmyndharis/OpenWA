@@ -119,11 +119,18 @@ export class WwebjsProfile {
         throw new EngineRefusedError(refusal);
       }
     } else {
-      settleWriteStatus(answer.status, {
-        request: 'the profile picture change',
-        nothing: 'changed nothing',
-        refused: status => `${refusal} (WhatsApp answered ${status})`,
-      });
+      settleWriteStatus(
+        answer.status,
+        {
+          request: 'the profile picture change',
+          nothing: 'changed nothing',
+          refused: (status, local) =>
+            local
+              ? `${refusal} (the page says this account may not change it, nothing was sent)`
+              : `${refusal} (WhatsApp answered ${status})`,
+        },
+        answer.local,
+      );
     }
     this.host.logger.log('Updated profile picture');
   }

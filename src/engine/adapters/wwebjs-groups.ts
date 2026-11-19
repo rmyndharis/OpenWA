@@ -565,11 +565,18 @@ export class WwebjsGroups {
       }
       return;
     }
-    settleWriteStatus(answer.status, {
-      request: what,
-      nothing: unchanged,
-      refused: status => `${refusal}: WhatsApp refused it (${status}), as when admin rights are required`,
-    });
+    settleWriteStatus(
+      answer.status,
+      {
+        request: what,
+        nothing: unchanged,
+        refused: (status, local) =>
+          local
+            ? `${refusal}: the page says this account may not change it, nothing was sent`
+            : `${refusal}: WhatsApp refused it (${status}), as when admin rights are required`,
+      },
+      answer.local,
+    );
   }
 
   async setGroupSubject(groupId: string, subject: string): Promise<void> {
