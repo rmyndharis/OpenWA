@@ -341,9 +341,15 @@ dead-letter row for the same delivery so a later redrive never double-delivers. 
 queue job up first. A job that is waiting, running or delayed, or a live re-queued copy of it, owns
 the delivery: the row keeps its payload and stays `pending` for the worker to settle, and the sweep
 looks at it again after fifteen minutes (it remembers up to 1000 such rows together with the
-unreadable ones below, and a restart forgets them), so a backlog of live jobs does not hold back the
-stranded rows behind it. A completed job settles the row with the `dispatched` mark and no second
-delivery. A job that failed with no live copy is not replayed: the row goes `failed` with a
+unreadable ones below, and a restart forgets them). Live jobs do not hold the sweep back: a
+pass that fills its batch is followed by one that goes on after its last row, oldest first, and any
+other pass is followed by one that starts again at the oldest row, so a stranded row behind N other
+pending rows older than the grace period is looked at within ceil((N + 1) /
+`INGRESS_RECONCILE_BATCH_SIZE`) passes whatever those rows' jobs are doing: with the defaults (a pass
+a minute), 16 minutes behind 760 live jobs and 101 minutes behind 5000, and a larger batch shortens
+it. A row whose job was lost after the walk had passed it waits for the next walk, which also takes
+in the rows that became old enough meanwhile. A completed job settles the row with the `dispatched`
+mark and no second delivery. A job that failed with no live copy is not replayed: the row goes `failed` with a
 dead-letter row guaranteed as above, so none is written while a copy can still deliver. A job that
 is gone (Redis restarted without its data, failed over to a replica that was behind, evicted it, or
 an operator removed it in the queue dashboard) is added again from the row under the original id,
@@ -356,9 +362,11 @@ empty; nothing logs it, and it stays `pending` until `INGRESS_DEDUP_RETENTION_DA
 `pending` row whose stored payload does not parse (again only imported or hand-edited history) is
 logged as `ingress_reconcile_row_unreadable` and left untouched: the sweep sets it aside for an hour
 (it remembers up to 1000 such rows, and a restart forgets them) and the retention hand-off skips it
-for the rest of its run. With more than about a thousand of them, the healthy stranded rows behind
-them are neither replayed nor dead-lettered until the unreadable rows are repaired or deleted in the
-database.
+for the rest of its run. The sweep goes on past them however many there are, so they never hold back
+the healthy stranded rows behind them, but past the 1000 it remembers it reads, and logs, the others
+again on every walk. The retention hand-off stops after ten batches of rows it could not settle, so
+with more than about a thousand of them it does not dead-letter the healthy rows behind them until
+the unreadable rows are repaired or deleted in the database.
 
 **The queue's Redis.** An acknowledged delivery is not held by Redis alone: its row keeps the payload
 until the delivery settles, so the reconciler can add a job that Redis lost. That is a repair, not
