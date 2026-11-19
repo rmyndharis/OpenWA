@@ -3818,6 +3818,21 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
     return { release, reached };
   }
 
+  /** Holds the table read of the next reload until `release` is called; `reached` settles once the read is out. */
+  const holdRead = () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const reached = new Promise<void>(resolve => (entered = resolve));
+    const find = repo.find.bind(repo) as (...args: unknown[]) => Promise<unknown>;
+    jest.spyOn(repo, 'find').mockImplementationOnce((async (...args: unknown[]) => {
+      entered();
+      await gate;
+      return find(...args);
+    }) as never);
+    return { release, reached };
+  };
+
   /** The lids reported after lid 333 push it out of a mirror of two. */
   const pushOut = async (): Promise<void> => {
     await store.remember('444', '628444', OWNER);
@@ -4331,21 +4346,6 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
   // A reload ends the marks made before its read, against the table it replaced. A write that fails while the read is out
   // makes its mark after that, for a lid the reload does not take from its snapshot: nothing else refuses the lid then.
   describe('when its write fails while a reload reads the table', () => {
-    /** Holds the table read of the next reload until `release` is called; `reached` settles once the read is out. */
-    const holdRead = () => {
-      let release!: () => void;
-      let entered!: () => void;
-      const gate = new Promise<void>(resolve => (release = resolve));
-      const reached = new Promise<void>(resolve => (entered = resolve));
-      const find = repo.find.bind(repo) as (...args: unknown[]) => Promise<unknown>;
-      jest.spyOn(repo, 'find').mockImplementationOnce((async (...args: unknown[]) => {
-        entered();
-        await gate;
-        return find(...args);
-      }) as never);
-      return { release, reached };
-    };
-
     describe.each([
       ['a re-map of the lid', 'upsert', () => store.remember('333', '628222', OWNER)],
       ['a revocation by a display lookup', 'update', () => store.rememberIfUnknown('333', '628222', OTHER)],
@@ -4393,6 +4393,349 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
 
         await answers('628222');
       });
+    });
+  });
+
+  // The marks are bounded like the mirror, and the mirror is not where they live: a sync of more lids than the bound, while
+  // the database is down, drops the oldest of them, and nothing else says what this node held for those lids.
+  describe('when more writes fail than there are marks', () => {
+    type Inner = {
+      droppedMarks?: Uint8Array;
+      failedPhones: Map<string, string>;
+      failedWrites: Set<string>;
+      lidToPhone: Map<string, string | null>;
+      pendingLookups: Set<string>;
+      recordDropped(lid: string): void;
+      markDropped(lid: string): boolean;
+    };
+    const inner = (): Inner => store as unknown as Inner;
+    const marks = (): number => inner().failedPhones.size;
+
+    /** What the last of the failing syncs below logged. */
+    let logged: string[] = [];
+    const forgotten = (): number => logged.filter(line => line.includes('Failed lid writes are remembered')).length;
+
+    /** Every report of these lids fails, as in a sync while the database is down; the database is back when this returns. */
+    const failReports = async (reports: Array<[string, string]>): Promise<void> => {
+      const upsert = jest.spyOn(repo, 'upsert').mockRejectedValue(new Error('connection lost'));
+      for (const [lid, phone] of reports) await expect(store.remember(lid, phone, OWNER)).resolves.toBe(false);
+      upsert.mockRestore();
+      logged = (warn.mock.calls as unknown[][]).map(call => String(call[0]));
+      warn.mockClear();
+    };
+
+    /** Every display lookup of these lids fails, as above. */
+    const failLookups = async (lookups: Array<[string, string]>): Promise<void> => {
+      const update = jest.spyOn(repo, 'update').mockRejectedValue(new Error('connection lost'));
+      for (const [lid, phone] of lookups) await expect(store.rememberIfUnknown(lid, phone, OTHER)).resolves.toBe(false);
+      update.mockRestore();
+      logged = (warn.mock.calls as unknown[][]).map(call => String(call[0]));
+      warn.mockClear();
+    };
+
+    const rowsOf = async (...pairs: Array<[string, string]>): Promise<void> => {
+      for (const [lid, phone] of pairs) await repo.insert({ lid, phone, sessionId: OWNER, isReported: true });
+    };
+
+    it('keeps refusing a lid whose mark was dropped, whichever phone another node re-maps it to', async () => {
+      await store.remember('333', '628222', OWNER); // lands
+      const upsert = jest.spyOn(repo, 'upsert').mockRejectedValue(new Error('connection lost'));
+      await expect(store.remember('333', '628333', OWNER)).resolves.toBe(false); // 628333 never reaches the table
+      for (const lid of ['601', '602']) await expect(store.remember(lid, `62${lid}`, OWNER)).resolves.toBe(false); // new lids, no row
+      upsert.mockRestore();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Failed lid writes are remembered'));
+      warn.mockClear();
+
+      expect(marks()).toBe(2); // 601 and 602: the mark of 333 went, and its entry with it
+      expect(inner().lidToPhone.has('333')).toBe(false);
+      await refused(['628222', '628333']);
+
+      await peerRemaps('628444'); // another node re-maps it
+      await refused(['628222', '628333', '628444']);
+    });
+
+    it('keeps refusing every lid whose re-map failed in a sync of more lids than the marks hold', async () => {
+      const lids = ['401', '402', '403', '404', '405'];
+      await rowsOf(...lids.map((lid): [string, string] => [lid, `62810${lid}`]));
+      await store.reload();
+      await failReports(lids.map((lid): [string, string] => [lid, `62820${lid}`]));
+
+      for (const lid of lids) {
+        expect(await store.findPhoneForLid(`${lid}@lid`)).toBeNull();
+        expect(await new ChatScopeService(store).allows({ allowedChats: [`62810${lid}@c.us`] }, `${lid}@lid`)).toBe(
+          false,
+        );
+      }
+      expect(marks()).toBe(2);
+    });
+
+    it('is not warmed back from the row it may have been refused for', async () => {
+      await failReports([
+        ['333', '628222'],
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+
+      expect(store.getCached('333')).toBeUndefined();
+      expect(inner().pendingLookups.has('333')).toBe(false); // nothing is read to warm it
+      await refused(['628111', '628222']);
+    });
+
+    it('is not warmed back by a read that began before its mark was dropped', async () => {
+      await failReports([['333', '628222']]);
+      await pushOut(); // the mark of 333 outlives its entry
+      const find = repo.findOne.bind(repo) as (...args: unknown[]) => Promise<unknown>;
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      const reached = new Promise<void>(resolve => (entered = resolve));
+      jest.spyOn(repo, 'findOne').mockImplementationOnce((async (...args: unknown[]) => {
+        entered();
+        await gate;
+        return find(...args);
+      }) as never);
+      store.getCached('333'); // the read that warms it is out
+      await reached;
+      await failReports([
+        ['601', '628601'],
+        ['602', '628602'],
+      ]); // the mark of 333 goes while it is
+
+      release();
+      const deadline = Date.now() + 5000;
+      while (inner().pendingLookups.has('333') && Date.now() < deadline) await new Promise(r => setTimeout(r, 5));
+
+      expect(store.getCached('333')).toBeUndefined();
+      await refused(['628111', '628222']);
+    });
+
+    it('refuses a lid kept in the mirror when its mark goes, and the lid for neither phone', async () => {
+      await failLookups([['333', '628777']]); // contradicts the stored 628111: its revocation is not stored
+      expect(inner().lidToPhone.has('333')).toBe(true);
+      await failLookups([
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+
+      expect(inner().failedPhones.has('333')).toBe(false);
+      expect(inner().lidToPhone.has('333')).toBe(false);
+      await refused(['628111', '628777']);
+    });
+
+    it('refuses the lid of a lookup that named the row it holds, once its mark went', async () => {
+      await failLookups([
+        ['333', '628111'], // names the row: nothing contradicts it, and the statement may still have revoked another node's
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+
+      await refused(['628111']);
+    });
+
+    it('answers the phone a report of the lid stored, and goes on answering it once the entry has left', async () => {
+      await failReports([
+        ['333', '628222'],
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+
+      await expect(store.remember('333', '628222', OWNER)).resolves.toBe(true);
+      await answers('628222');
+      await pushOut();
+      await answers('628222');
+    });
+
+    it('answers only the phone of a report of the lid under way, whatever its row says', async () => {
+      await failReports([
+        ['333', '628222'],
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+      const held = hold('upsert');
+      const report = store.remember('333', '628333', OWNER);
+      await held.reached;
+      await pushOut();
+
+      await refused(['628111', '628222', '628333']);
+
+      await peerRemaps('628333'); // another node names the phone this node is writing
+      await answers('628333');
+
+      held.release();
+      await report;
+      await answers('628333');
+    });
+
+    it('refuses the lid while a lookup or a negative of it is under way, neither being a report', async () => {
+      await failReports([
+        ['333', '628222'],
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+      const checking = hold('update'); // the statement of a lookup that names the row
+      const lookup = store.rememberIfUnknown('333', '628111', OTHER);
+      await checking.reached;
+
+      await refused(['628111', '628222']);
+
+      checking.release();
+      await lookup;
+      const clearing = hold('update'); // the statement of the negative
+      const negative = store.remember('333', null, OWNER);
+      await clearing.reached;
+
+      await refused(['628111', '628222']);
+
+      clearing.release();
+      await negative;
+    });
+
+    it('refuses the lid when the mark of its failed lookup goes while a write of it that came after is under way', async () => {
+      const repeat = hold('query'); // a report of the stored phone its owner reported before: one statement
+      const report = store.remember('333', '628111', OWNER);
+      await repeat.reached;
+      let reject!: (err: Error) => void;
+      const failing = new Promise<void>(resolve =>
+        jest.spyOn(repo, 'update').mockImplementationOnce(
+          () =>
+            new Promise((_, fail) => {
+              reject = fail;
+              resolve();
+            }),
+        ),
+      );
+      const lookup = store.rememberIfUnknown('333', '628111', OTHER); // names the row: nothing contradicts it
+      const clearing = hold('update'); // the negative's statement, which runs behind the lookup's
+      const negative = store.remember('333', null, OWNER);
+      repeat.release();
+      await report; // the row is what the report stored
+      await failing;
+      reject(new Error('connection lost'));
+      await expect(lookup).resolves.toBe(false);
+      warn.mockClear();
+      await failReports([
+        ['601', '628601'],
+        ['602', '628602'],
+      ]); // the mark of the lookup goes, and the negative is still being written
+      expect(inner().failedPhones.has('333')).toBe(false);
+
+      await refused(['628111']);
+
+      clearing.release();
+      await negative;
+    });
+
+    it('answers only the phone of the newest of two reports of the lid once the older has landed', async () => {
+      await failReports([
+        ['333', '628222'],
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+      const older = hold('upsert');
+      const newer = hold('upsert');
+      const reports = [store.remember('333', '628222', OWNER), store.remember('333', '628333', OWNER)];
+      await older.reached;
+      older.release();
+      await newer.reached; // the table names 628222 and 628333 is being written
+
+      expect(await repo.findOneBy({ lid: '333' })).toMatchObject({ phone: '628222' });
+      await refused(['628111', '628222', '628333']);
+
+      newer.release();
+      await Promise.all(reports);
+      await answers('628333');
+    });
+
+    it('answers the table for a lid no write of its own failed, while a sync of other lids fails past the bound', async () => {
+      await rowsOf(['777', '628777']);
+      await store.reload();
+      await failReports([
+        ['601', '628601'],
+        ['602', '628602'],
+        ['603', '628603'],
+        ['604', '628604'],
+      ]);
+      await failLookups([
+        ['605', '628605'],
+        ['606', '628606'],
+        ['607', '628607'],
+      ]);
+
+      expect(await store.findPhoneForLid('777@lid')).toBe('628777');
+      expect(await new ChatScopeService(store).allows({ allowedChats: ['628777@c.us'] }, '777@lid')).toBe(true);
+      expect(await store.findPhoneForLid('333@lid')).toBe('628111');
+    });
+
+    it('records nothing while the writes land, however many lids the sync holds', async () => {
+      for (const lid of ['601', '602', '603', '604', '605', '606']) await store.remember(lid, `62${lid}`, OWNER);
+      for (const lid of ['607', '608', '609']) await store.rememberIfUnknown(lid, `62${lid}`, OTHER);
+
+      expect(marks()).toBe(0);
+      expect(inner().droppedMarks).toBeUndefined();
+    });
+
+    it('holds marks and entries within their bounds, and the record in the size it started with', async () => {
+      const lids = Array.from({ length: 12 }, (_, i) => `7${String(i).padStart(2, '0')}`);
+      await failReports(lids.slice(0, 6).map((lid): [string, string] => [lid, `62${lid}`]));
+      expect(forgotten()).toBe(1); // once, however many marks went
+      await failLookups(lids.slice(6).map((lid): [string, string] => [lid, `62${lid}`]));
+
+      expect(marks()).toBe(2); // the cap of this mirror
+      expect(forgotten()).toBe(0); // the lookups: the warning is logged once a minute, and the reports logged it
+      expect(inner().lidToPhone.size).toBeLessThanOrEqual(2);
+      expect(inner().failedWrites.size).toBeLessThanOrEqual(2);
+      expect(inner().droppedMarks?.length).toBe(1 << 17);
+    });
+
+    it('keeps the lid of a mark dropped while the read of a reload was out refused after the reload', async () => {
+      const read = holdRead();
+      const reloading = store.reload();
+      await read.reached;
+      await failReports([
+        ['333', '628222'],
+        ['601', '628601'],
+        ['602', '628602'],
+      ]); // each is a lid whose write began while the read was out
+
+      read.release();
+      await reloading;
+
+      await refused(['628111', '628222']);
+    });
+
+    it('ends with a reload, which replaces the table and the marks with it', async () => {
+      await failReports([
+        ['333', '628222'],
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+      await refused(['628111', '628222']);
+
+      await store.reload();
+      await pushOut(); // the lid has no entry in the mirror, as when it was refused
+
+      await answers('628111');
+    });
+
+    it('also refuses a lid that shares the bit of a mark that was dropped, while it has no entry in the mirror', async () => {
+      inner().recordDropped('333');
+      // The record is a bit per hash of the lid, so some other lid names the same bit.
+      let twin = 0;
+      while (!inner().markDropped(`9${twin}`)) if (++twin > 50_000_000) throw new Error('no lid shares the bit');
+      const lid = `9${twin}`;
+      await rowsOf([lid, '628999']);
+      await store.reload(); // the lid is in the mirror, and the reload ended the record
+      inner().recordDropped('333');
+
+      expect(await store.findPhoneForLid(`${lid}@lid`)).toBe('628999'); // its entry vouches for the row
+
+      await pushOut();
+
+      expect(await store.findPhoneForLid(`${lid}@lid`)).toBeNull();
+
+      await store.reload();
+
+      expect(await store.findPhoneForLid(`${lid}@lid`)).toBe('628999');
     });
   });
 });
