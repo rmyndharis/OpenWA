@@ -674,8 +674,9 @@ already maps to another reported id (`phone_second_lid_reported`, a WARN row fil
 pairs the table already held are not reported, unless an id has left the gateway's mapping cache), messages
 (`message_sent`, `message_failed`), send-pacing enforcement (`send_pacing_blocked`, sampled to at
 most one row per session per minute; `send_breaker_tripped`, never sampled), webhook changes (`webhook_created`,
-`webhook_updated`, `webhook_deleted`; metadata carries the webhook id, the URL host, the events and, for an update, the
-names of the changed fields, never the secret, the headers or the URL path and query), webhook deliveries
+`webhook_updated`, `webhook_deleted`; metadata carries the webhook id, the URL host, the events, the `active` flag and,
+for an update, the names of the changed fields and, when the URL changed, the previous URL host, never the secret, the
+headers or the URL path and query), webhook deliveries
 (`webhook_triggered`, `webhook_failed`), the delivery-failure redrive (`webhook_deliveries_redriven`, one row per
 batch), rate-limit enforcement (`rate_limit_exceeded`, sampled to at
 most one row per subject+kind per minute), the queue dashboard (`queue_board_mutated`), integration
