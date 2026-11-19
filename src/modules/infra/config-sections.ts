@@ -149,9 +149,10 @@ export function applyDatabaseSection(
     if (dbBuiltIn) profiles.push('postgres');
     // null is what JSON makes of an emptied number input, and reads as absent like the other fields.
     if (database.poolSize !== undefined && database.poolSize !== null) {
-      if (!Number.isInteger(database.poolSize) || database.poolSize < 0) {
+      // A safe integer: a larger one is written in exponent form (`1e+21`), which the next boot refuses.
+      if (!Number.isSafeInteger(database.poolSize) || database.poolSize < 0) {
         throw new BadRequestException(
-          `database.poolSize must be a non-negative integer (got ${JSON.stringify(database.poolSize)})`,
+          `database.poolSize must be a non-negative integer of at most ${Number.MAX_SAFE_INTEGER} (got ${JSON.stringify(database.poolSize)})`,
         );
       }
       updates.DATABASE_POOL_SIZE = String(database.poolSize || 10);
