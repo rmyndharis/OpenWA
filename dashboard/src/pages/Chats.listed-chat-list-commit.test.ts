@@ -123,6 +123,10 @@ test('a list answer and a number check settling together never query the previou
     releaseCheck?.();
     for (let i = 0; i < 30; i++) await Promise.resolve();
   });
+  // The window under test closes when React commits the new list, which is when the first account's rows leave the
+  // page: wait for that, with a deadline, so the absence below is read after the commit and not before it. The pause
+  // that follows is for a late effect of that commit.
+  await rtl.waitFor(() => assert.equal(screen.queryByText('Lid 0'), null), { timeout: 30_000 });
   await new Promise(resolve => setTimeout(resolve, 300));
 
   const crossAccount = calls.filter(p =>
