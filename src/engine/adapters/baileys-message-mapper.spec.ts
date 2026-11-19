@@ -1675,6 +1675,8 @@ describe('what is no message of its own', () => {
       ['a stub type', merged(PIN, { stub: 2 })],
       ['a count above one, which may hold a text or a count of the chunk', merged(PIN, { count: 2 })],
       ['a count the chunk held, with a pin of the account after it', merged(PIN, { count: 3, fromMe: true })],
+      // A contact's text, then the account's own pin, in one flush: the one count is the text's, not the pin's.
+      ["the count of one a contact's text left beside a pin of the account", merged(PIN, { count: 1, fromMe: true })],
       ['no message', { ...merged(PIN), messages: [] }],
       ['no messages key', { id: CHAT_ID, conversationTimestamp: 1700000040, unreadCount: 3 }],
       ['a message with no content', { ...merged(PIN), messages: [{ message: { key: { id: 'X1' } } }] }],

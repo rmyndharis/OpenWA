@@ -379,6 +379,26 @@ test('a chat deleted on the phone is listed again, unread, when a pin and then a
   assert.equal((await listed(adapter)).unreadCount, 2);
 });
 
+// A contact's text and then a pin of the account, in one chunk: the chunk's one count is the text's, not the pin's, so the
+// chunk is left whole, and the text brings the deleted chat back.
+test('a chat deleted on the phone is listed again, unread, when a text from a contact and then a pin of the account are merged into one history chunk of it', async t => {
+  const { adapter, sock } = await withDeletedChat(t);
+  const at = now() + 5;
+  sock.ev.buffer();
+  sock.ev.emit('messaging-history.set', chunkOf(CHUNK_AT));
+  await deliverTogether(
+    sock,
+    [
+      wireMessage({ id: 'TEXT1', at, message: { conversation: 'hello again' } }),
+      wireMessage({ id: 'PIN1', at: at + 1, fromMe: true, message: pinOf() }),
+    ],
+    { flush: false },
+  );
+  sock.ev.flush();
+  await until(async () => (await listed(adapter)) !== undefined, 'the text to bring the chat back');
+  assert.equal((await listed(adapter)).unreadCount, 1);
+});
+
 // The one thing a merged chat cannot be cleaned of: its count is the chunk's count plus every update the library merged
 // into it, and nothing in the chat says how many of those were none of its own. This pins that limit.
 test('the count a pin adds to a history chunk of a chat stays in the chunk', async t => {
