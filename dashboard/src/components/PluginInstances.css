@@ -158,6 +158,16 @@
   resize: vertical;
 }
 
+/* The configuration is JSON: code, not text a person wrote. It reads left to right and flush left in every page,
+   whatever the first letter of a line is, as code and pre do. The second selector wins the rule that right-aligns
+   every field of an Arabic page. */
+.plugin-instances textarea.pi-json,
+[dir='rtl'] .plugin-instances textarea.pi-json {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: normal;
+}
+
 /* The dialog's input rule does not reach a textarea, so it states the focus the inputs beside it show. */
 .plugin-instances textarea:focus {
   outline: none;

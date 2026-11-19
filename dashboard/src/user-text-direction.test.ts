@@ -317,6 +317,17 @@ test('the check tells a field from the rest', () => {
   assert.ok(!targetsField('.mono', classes));
 });
 
+/** Fields that hold code, not text a person wrote: they read left to right in every page, as code and pre do. */
+const CODE_FIELDS = new Map<string, { selectors: readonly string[]; why: string }>([
+  [
+    'components/PluginInstances.css',
+    {
+      selectors: ['.plugin-instances textarea.pi-json', "[dir='rtl'] .plugin-instances textarea.pi-json"],
+      why: 'the JSON configuration of a plugin instance',
+    },
+  ],
+]);
+
 test('no stylesheet gives a typed-text field a unicode-bidi other than plaintext', () => {
   const classes = new Set(markup.filter(f => typesOf(f).some(type => TYPED_TEXT.has(type))).flatMap(f => f.classes));
   const offenders: string[] = [];
@@ -325,7 +336,8 @@ test('no stylesheet gives a typed-text field a unicode-bidi other than plaintext
       const value = decl(rule.body, 'unicode-bidi');
       if (value !== undefined && value !== 'plaintext')
         for (const selector of rule.selectors)
-          if (targetsField(selector, classes)) offenders.push(`${file}: ${selector} { unicode-bidi: ${value} }`);
+          if (targetsField(selector, classes) && !CODE_FIELDS.get(file)?.selectors.includes(selector))
+            offenders.push(`${file}: ${selector} { unicode-bidi: ${value} }`);
     }
   assert.deepEqual(offenders, []);
 });
@@ -354,4 +366,33 @@ test('the template preview is drawn by its own text over the code rule for <pre>
   assert.equal(decl(preview[0].body, 'unicode-bidi'), 'plaintext');
   assert.equal(decl(preview[0].body, 'text-align'), 'start');
   assert.ok(beats(specificity(selector), specificity("[dir='rtl'] pre")), `${selector} does not win`);
+});
+
+// A field that holds code keeps one layout in every page. Typed text takes its direction line by line, which draws a line
+// that starts with an Arabic string at the right edge of an English page, with its comma on the wrong side; under the
+// direction of an Arabic page the whole structure is mirrored. The exception names each field, wins the rule that
+// right-aligns the fields of an Arabic page on specificity, and is carried by the markup.
+test('a field that holds code reads left to right and flush left in every page', () => {
+  for (const [file, { selectors, why }] of CODE_FIELDS) {
+    for (const selector of selectors) {
+      const own = rulesOf(file, selector);
+      assert.equal(own.length, 1, `${file} no longer has ${selector} (${why})`);
+      assert.equal(decl(own[0].body, 'direction'), 'ltr', `${selector}: direction`);
+      assert.equal(decl(own[0].body, 'text-align'), 'left', `${selector}: text-align`);
+      assert.equal(decl(own[0].body, 'unicode-bidi'), 'normal', `${selector}: unicode-bidi`);
+    }
+    const rtl = selectors.find(selector => selector.startsWith("[dir='rtl']"));
+    assert.ok(rtl, `${file}: no rule for an Arabic page (${why})`);
+    for (const rule of ["[dir='rtl'] textarea", "[dir='rtl'] .modal-body textarea"])
+      assert.ok(beats(specificity(rtl), specificity(rule)), `${rtl} does not win ${rule}`);
+  }
+});
+
+test('both JSON configuration fields of a plugin instance carry the code field class', () => {
+  const fields = markup.filter(f => f.file === 'components/PluginInstances.tsx' && f.tag === 'textarea');
+  assert.equal(fields.length, 2, 'PluginInstances.tsx no longer has its two configuration fields');
+  assert.deepEqual(
+    fields.filter(f => !f.classes.includes('pi-json')).map(f => f.where),
+    [],
+  );
 });
