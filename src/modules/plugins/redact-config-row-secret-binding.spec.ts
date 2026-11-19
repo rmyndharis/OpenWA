@@ -23,7 +23,7 @@ const stored = {
 };
 
 const masked = (url: string): Record<string, unknown> => ({ url, token: SECRET_SENTINEL });
-// What the dashboard seeds for a row added in the form: a blank secret.
+// A row added in the form: an older dashboard seeded a blank secret, the current one sends no secret key.
 const added = (url: string): Record<string, unknown> => ({ url, token: '' });
 
 const save = (endpoints: Array<Record<string, unknown>>): Array<string | undefined> =>

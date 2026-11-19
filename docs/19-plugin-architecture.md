@@ -207,14 +207,20 @@ host.
 A `configSchema` field may set `secret: true` (e.g. an API key): the value is masked on read and
 preserved on an unchanged write. A write keeps the stored value for the mask and for an empty string, and
 removes it for an explicit `null`. In a list of rows with a secret column, a masked row is matched to its
-stored row by its other fields, so rows can be reordered, added and removed. A row whose other fields were
-edited, with its mask untouched, keeps the secret of the stored row at its position only in a save of the same
-length in which no row has moved. A row counts as moved when its other fields equal those of exactly one stored
-row and that row sits at another position. Removing a row ahead of a kept row and adding another moves the kept
-row, and so does reordering rows. In such a save, and in any save of another length, the payload cannot say
-which stored secret the edited row replaces, so it is saved without one and the secret is entered again. The
-generated form in the dashboard has no control to reorder rows, so only an API client, or a plugin's own config
-editor that reorders rows, sends the reordering form of this save.
+stored row by its other fields, so rows can be reordered, added and removed, and a stored secret is saved on one
+row at most. A row whose other fields were edited, with its mask untouched, keeps the secret of the stored row at
+its position only in a save of the same length in which no row has moved. A row counts as moved when none of the
+stored rows it can be, going by its other fields alone, sits at its position, whether its own secret is masked,
+typed over, cleared or left out. Removing a row ahead of a kept row and adding another moves the kept row, and so
+does reordering rows. In such a save, and in any save of another length, the payload cannot say which stored
+secret the edited row replaces, so it is saved without one and the secret is entered again.
+Rows that differ only by their secret cannot be told apart. While every one of them is still in the save they keep
+their secrets in order. When one was removed or edited, a row takes the secret of the stored row at its position
+only if that row is one of them and no row has moved. A row that has the fields of a stored row never takes the
+secret of a stored row with other fields, and when several rows carry the fields of a single stored row, its
+secret stays with the row at its position, or else the first. The generated form in the dashboard has no control
+to reorder rows, so only an API client, or a plugin's own config editor that reorders rows, sends the reordering
+form of this save.
 A per-session override and an integration instance's own config are
 overlaid on the base config, secret fields included, so a stored secret reaches every override that does
 not replace it. The exception is an override or instance that points a `net.allowConfigHosts` key at
