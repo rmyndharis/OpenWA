@@ -120,6 +120,36 @@ test('a chat marked unread (count -1) shows an unread badge without a number', (
   }
 });
 
+const isolated = (number: string) => `${String.fromCodePoint(0x2066)}${number}${String.fromCodePoint(0x2069)}`;
+
+test("a row's tooltip is its name, and the id of a chat that has none of its own", () => {
+  const row = (id: string, name: string, phone?: string): Chat => ({
+    ...chat(id, 0),
+    name,
+    ...(phone ? { phone } : {}),
+  });
+  const { container } = renderSidebar(
+    'chats',
+    [
+      row('15550001111@c.us', 'Alice'),
+      row('15550002222@c.us', ''),
+      row('262813461250072@lid', '', '15550006666'),
+      row('262813461250073@lid', '262813461250073'),
+    ],
+    { all: [], shown: [] },
+  );
+  const names = Array.from(container.querySelectorAll<HTMLElement>('.chat-item-name'));
+  assert.deepEqual(
+    names.map(name => [name.textContent, name.title]),
+    [
+      ['Alice', 'Alice'],
+      [isolated('+1 555 000 2222'), '15550002222@c.us'],
+      [isolated('+1 555 000 6666'), '262813461250072@lid'],
+      ['262813461250073', '262813461250073@lid'],
+    ],
+  );
+});
+
 test('a quick filter that leaves no chat says so, while an empty account still reads as having none', () => {
   const filtered = renderSidebar('chats', [], { all: [], shown: [] }, { filter: 'groups' });
   assert.equal(filtered.container.querySelector('.chats-list-empty')?.textContent, t('chats.noFilterResults'));

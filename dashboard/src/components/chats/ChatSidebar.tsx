@@ -19,7 +19,7 @@ import type { UseQueryResult } from '@tanstack/react-query';
 import type { Channel, Chat, ContactStatusGroup, Session } from '../../services/api';
 import { useRole } from '../../hooks/useRole';
 import { CHAT_LIST_FILTERS, type ChatListFilter } from '../../utils/chatFilters';
-import { chatTitle } from '../../utils/formatPhone';
+import { chatTitle, savedChatName } from '../../utils/formatPhone';
 import { onTabListKeyDown } from '../../utils/tabKeys';
 import { contactSnippet, isVCardBody } from '../../utils/vcard';
 import ChatAvatar from './ChatAvatar';
@@ -151,7 +151,8 @@ const ChatListRow = memo(
 
         <div className="chat-item-info">
           <div className="chat-item-top">
-            <span className="chat-item-name" title={chatTitle(chat)}>
+            {/* The tooltip adds what the text does not say: the id of a chat with no name of its own. */}
+            <span className="chat-item-name" title={savedChatName(chat) ? chatTitle(chat) : chat.id}>
               {chatTitle(chat)}
             </span>
             {chat.kind !== 'individual' && chat.kind !== 'unknown' && (
