@@ -69,7 +69,11 @@ function fixture(operation: Operation, stage?: Stage) {
     return value;
   };
   const chat = { fetchMessages: jest.fn(() => wait('messages', [message])) };
-  const client = { getChatById: jest.fn(() => wait('chat', chat)) };
+  // A build whose pin sender still takes positional arguments, so a pin and an unpin are the library's own call.
+  const client = {
+    getChatById: jest.fn(() => wait('chat', chat)),
+    pupPage: { evaluate: () => Promise.resolve('legacy') },
+  };
   let ready = true;
   const host = {
     ensureReady() {

@@ -6079,8 +6079,11 @@ describe('pinMessage / unpinMessage', () => {
     (adapter as unknown as { client: unknown }).client = client;
     return adapter;
   };
+  // A build whose pin sender still takes positional arguments, so a pin and an unpin are the library's own call (the
+  // sender that takes one options object is covered by wwebjs-message-pin-layout.spec.ts).
   const chatWith = (messages: unknown[]) => ({
     getChatById: jest.fn().mockResolvedValue({ fetchMessages: jest.fn().mockResolvedValue(messages) }),
+    pupPage: { evaluate: jest.fn().mockResolvedValue('legacy') },
   });
 
   it('pins a message found by _serialized id, passing the duration through', async () => {

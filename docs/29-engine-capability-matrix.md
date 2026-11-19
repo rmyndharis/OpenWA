@@ -1138,7 +1138,7 @@ adapter boundary — none silently stubs.
   additionally refuses an edit of a message the account did not send or of one with no text or caption
   to edit (a location, sticker, poll, contact card or audio), the two edits whatsapp-web.js also
   refuses. Past those guards they diverge. whatsapp-web.js reads a page-side verdict
-  (`message.edit()` resolves `null`, `message.pin()` resolves `false`) and raises a `403`; Baileys
+  (`message.edit()` resolves `null`; a pin the page's sender does not take is refused the same way) and raises a `403`; Baileys
   sends the edit or pin as an ordinary protocol message and is never told the outcome. So a pin
   refused because the account is not a group admin answers `403` on whatsapp-web.js and `200` on
   Baileys.
@@ -1209,6 +1209,16 @@ adapter boundary — none silently stubs.
   page with no such job runs the library's own `getInviteCode`, which reads the same module, so where that call fails
   for want of the job (the module answers `undefined`, lacks the call, or is not defined) the answer is `501`, before
   anything is asked of WhatsApp, where it was a bare `500`. A reload during the read is the retryable `409`.
+- **`pinMessage` / `unpinMessage` (wwjs) need a WhatsApp Web build whose pin sender the adapter can call.** whatsapp-web.js
+  calls `sendPinInChatMsg` of `WAWebSendPinMessageAction` with three positional arguments, which the builds up to
+  `2.3000.1050403604` (15 October 2026) declare; the later builds checked (from `2.3000.1052565782`, 1 November, to the
+  newest examined) take one options object instead, so the library's call died inside the page and both routes answered a
+  bare `500`. The adapter asks the page which shape the sender has, calls it the way the build takes it (the page's own
+  pin type and duration option, nothing of the page replaced), and leaves the call to the library on a build whose sender
+  still takes positional arguments. A build with neither shape, or without the pin type, the duration mapper or the message
+  collection, answers `501` before anything is sent. A send that did not go through is the `403` as before. The options
+  call follows what the page's own pin dialog sends and has been run offline against the page's modules, not yet on a
+  linked account.
 - **Group owner and group event ids (wwjs).** whatsapp-web.js folds a group's participant list to the phone
   dialect, but the group `owner` (`getGroupInfo`, `getGroupJoinInfo`) and the actor and participant ids of group
   events reach the adapter as WhatsApp Web holds them, which on a LID-addressed group is `<lid>@lid` even when the

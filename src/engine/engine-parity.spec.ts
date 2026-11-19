@@ -87,6 +87,10 @@ const CONDITIONAL_THROW_SITES: Readonly<Record<string, string>> = {
     'wwjs revokeGroupInviteCode is supported; it answers 501 only on a WhatsApp Web build that exports the invite reset job from neither WAWebGroupInviteJob nor WAWebGroupQueryJob',
   'getGroupInviteCode(no invite code job on this build)':
     'wwjs getGroupInviteCode is supported; it answers 501 only on a WhatsApp Web build that has no WAWebMexFetchGroupInviteCodeJob job, where whatsapp-web.js getInviteCode cannot read the code either',
+  'pinMessage(no compatible pin sender on this build)':
+    'wwjs pinMessage is supported; it answers 501 only on a WhatsApp Web build whose WAWebSendPinMessageAction.sendPinInChatMsg takes neither one options object nor the positional arguments whatsapp-web.js passes, or that lacks the enum, the option mapper or the message collection the call needs',
+  'unpinMessage(no compatible pin sender on this build)':
+    'wwjs unpinMessage is supported; it answers 501 only on a WhatsApp Web build whose WAWebSendPinMessageAction.sendPinInChatMsg takes neither one options object nor the positional arguments whatsapp-web.js passes, or that lacks the enum or the message collection the call needs',
   'setProfileStatus(no status setter on this build)':
     'wwjs setProfileStatus is supported; it answers 501 only on a WhatsApp Web build whose WAWebContactStatusBridge no longer exports setMyStatus, which Client.setStatus calls',
 };

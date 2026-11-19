@@ -43,6 +43,7 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { type WwebjsEngineHost, requireClient, withPageWrite } from './wwebjs-host';
+import { type EvaluatePage, type PinAnswer, pinInPage } from './wwebjs-page-writes';
 import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
@@ -1404,15 +1405,29 @@ export class WwebjsMessaging {
     this.host.logger.debug('Voted on poll', { chatId, pollMessageId, options: options.length });
   }
 
+  /**
+   * Pin or unpin a message in the 100-message window, through the page's own sender (see {@link pinInPage}): the
+   * library's `pin` and `unpin` call it with positional arguments, which only the builds before the sender took an
+   * options object answer. A build whose sender still takes them is the library's own call, as it always was.
+   */
+  private pinThroughPage(op: 'pinMessage' | 'unpinMessage', chatId: string, messageId: string, durationSeconds = 0) {
+    const pin = op === 'pinMessage';
+    return withPageWrite(this.host, op, async (): Promise<PinAnswer> => {
+      const message = await this.findInFetchWindow(chatId, messageId);
+      const { pupPage } = this.client() as unknown as { pupPage: EvaluatePage };
+      const answer = await pupPage.evaluate(pinInPage, message.id._serialized, pin, durationSeconds);
+      if (answer !== 'legacy') return answer;
+      return pin ? message.pin(durationSeconds) : message.unpin();
+    });
+  }
+
   async pinMessage(chatId: string, messageId: string, durationSeconds: number): Promise<void> {
     this.host.ensureReady();
-    // The page-side helper returns false rather than throwing for every refusal — a non-number
-    // duration, a message it cannot resolve, or a send WhatsApp rejected (Injected/Utils.js:1670).
-    // Surface that as a refusal instead of reporting a pin that never happened.
-    const pinned = await withPageWrite(this.host, 'pinMessage', async () => {
-      const message = await this.findInFetchWindow(chatId, messageId);
-      return message.pin(durationSeconds);
-    });
+    // The sender answers false for every refusal: a message it cannot resolve, a duration it has no option for, or a
+    // send WhatsApp did not take. Surface that as a refusal instead of reporting a pin that never happened.
+    const pinned = await this.pinThroughPage('pinMessage', chatId, messageId, durationSeconds);
+    // Nothing was sent: the build has no sender this adapter can call.
+    if (pinned === 'missing') throw new EngineNotSupportedError('pinMessage(no compatible pin sender on this build)');
     if (!pinned) {
       throw new EngineRefusedError(
         `the pin of message ${messageId} was rejected — in a group only admins may pin, and the duration must be 24h, 7d or 30d`,
@@ -1435,12 +1450,10 @@ export class WwebjsMessaging {
 
   async unpinMessage(chatId: string, messageId: string): Promise<void> {
     this.host.ensureReady();
-    // unpin() passes duration 0 itself, so the injected non-number guard cannot bite here; a false
-    // return means WhatsApp refused the unpin (e.g. not an admin).
-    const unpinned = await withPageWrite(this.host, 'unpinMessage', async () => {
-      const message = await this.findInFetchWindow(chatId, messageId);
-      return message.unpin();
-    });
+    // A false answer means WhatsApp did not take the unpin (e.g. not an admin).
+    const unpinned = await this.pinThroughPage('unpinMessage', chatId, messageId);
+    if (unpinned === 'missing')
+      throw new EngineNotSupportedError('unpinMessage(no compatible pin sender on this build)');
     if (!unpinned) {
       throw new EngineRefusedError(`the unpin of message ${messageId} was rejected — in a group only admins may unpin`);
     }

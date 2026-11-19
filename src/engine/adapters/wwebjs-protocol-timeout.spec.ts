@@ -635,15 +635,27 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
         h => messaging(h).votePoll(CHAT, MESSAGE, ['a']),
         e => ({ getChatById: resolved(chatWith({ vote: failing(e) })) }),
       ],
+      // A build whose pin sender still takes positional arguments: the library's own call.
       [
         'message pin',
         h => messaging(h).pinMessage(CHAT, MESSAGE, 86_400),
-        e => ({ getChatById: resolved(chatWith({ pin: failing(e) })) }),
+        e => ({ getChatById: resolved(chatWith({ pin: failing(e) })), pupPage: { evaluate: resolved('legacy') } }),
       ],
       [
         'message unpin',
         h => messaging(h).unpinMessage(CHAT, MESSAGE),
-        e => ({ getChatById: resolved(chatWith({ unpin: failing(e) })) }),
+        e => ({ getChatById: resolved(chatWith({ unpin: failing(e) })), pupPage: { evaluate: resolved('legacy') } }),
+      ],
+      // A build whose sender takes one options object: the call runs in the page.
+      [
+        'message pin, in the page',
+        h => messaging(h).pinMessage(CHAT, MESSAGE, 86_400),
+        e => ({ getChatById: resolved(chatWith({})), pupPage: { evaluate: failing(e) } }),
+      ],
+      [
+        'message unpin, in the page',
+        h => messaging(h).unpinMessage(CHAT, MESSAGE),
+        e => ({ getChatById: resolved(chatWith({})), pupPage: { evaluate: failing(e) } }),
       ],
       [
         'message star',

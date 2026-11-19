@@ -907,6 +907,12 @@ export class MessageController {
   @ApiResponse({ status: 404, description: 'Message not found in the chat' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({
+    status: 501,
+    description:
+      'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no pin sender this gateway can ' +
+      'call. Nothing was sent: the message is not pinned.',
+  })
+  @ApiResponse({
     status: 503,
     description:
       SEND_503 +
@@ -935,6 +941,12 @@ export class MessageController {
   })
   @ApiResponse({ status: 404, description: 'Message not found in the chat' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({
+    status: 501,
+    description:
+      'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no pin sender this gateway can ' +
+      'call. Nothing was sent: the pin is unchanged.',
+  })
   @ApiResponse({
     status: 503,
     description:

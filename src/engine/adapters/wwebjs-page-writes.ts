@@ -140,6 +140,80 @@ export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer>
   }
 }
 
+/**
+ * What the page answers to a pin or an unpin: whether WhatsApp took it, `'legacy'` when the build's sender still takes
+ * the positional arguments whatsapp-web.js passes (the caller then runs the library's own call), or `'missing'` when
+ * the build has no sender this can call.
+ */
+export type PinAnswer = boolean | 'legacy' | 'missing';
+
+/**
+ * Pin or unpin a message IN-PAGE through the page's own sender, called the way the running build takes it. whatsapp-web.js
+ * calls `WAWebSendPinMessageAction.sendPinInChatMsg(message, action, duration)`, which the builds up to 2.3000.1050403604
+ * declare (four positional parameters). The builds from 2.3000.1052565782 take ONE options object, `{ msg, pinType,
+ * pinExpiryDurationOption }`, so the library hands the message over as the options, and the sender dies reading the
+ * `id` of the undefined message before anything is sent; the library has also replaced `getPinExpiryDuration` by then
+ * and puts it back only after a send that worked.
+ *
+ * The shape is told by the sender's arity. One parameter is the options object, called as the page's own pin dialog
+ * calls it: the pin type and the option of the duration are the page's (`Message$PinInChatMessage$Type`,
+ * `getPinExpiryOption`), and nothing of the page is replaced. Three or more is the positional shape and answers
+ * `'legacy'`. Any other arity, or a build without the sender, the enum, the option mapper or the message collection,
+ * answers `'missing'` before anything was sent. The sender resolves the send result when WhatsApp took the pin, resolves
+ * nothing for a type it does not know, and throws a plain error when the send did not go through, which is the refusal
+ * the library read as `false`; a duration the page has no option for is the same refusal.
+ *
+ * Every lookup is guarded, since `require` throws for a module a build does not define and answers `undefined` for
+ * another; a document with no `require` at all is a page that is reloading, not a build without the sender, so that
+ * failure is let through. Self-contained, since Puppeteer ships it to the page as source.
+ */
+export async function pinInPage(messageId: string, pin: boolean, durationSeconds: number): Promise<PinAnswer> {
+  type Module = Record<string, unknown> | undefined;
+  type Call = (...args: unknown[]) => unknown;
+  type Messages = { get?: Call; getMessagesById?: Call } | undefined;
+  const w = window as unknown as { require: (m: string) => unknown };
+  const find = (name: string): Module => {
+    try {
+      return w.require(name) as Module;
+    } catch (err) {
+      if (typeof w.require !== 'function') throw err;
+      return undefined;
+    }
+  };
+  const call = (mod: Module, name: string): Call | undefined =>
+    typeof mod?.[name] === 'function' ? (mod[name] as Call).bind(mod) : undefined;
+
+  const send = call(find('WAWebSendPinMessageAction'), 'sendPinInChatMsg');
+  if (!send) return 'missing';
+  if (send.length >= 3) return 'legacy';
+  const types = find('WAWebProtobufsE2E.pb')?.Message$PinInChatMessage$Type as Record<string, unknown> | undefined;
+  const pinType = types?.[pin ? 'PIN_FOR_ALL' : 'UNPIN_FOR_ALL'];
+  const toOption = call(find('WAWebPinMsgConstants'), 'getPinExpiryOption');
+  const messages = find('WAWebCollections')?.Msg as Messages;
+  const getMessage = call(messages, 'get');
+  const findMessages = call(messages, 'getMessagesById');
+  if (send.length !== 1 || typeof pinType !== 'number' || (pin && !toOption) || !getMessage) return 'missing';
+
+  // The library's own lookup of the message: the collection first, then the page's store.
+  const message =
+    getMessage(messageId) ??
+    ((await findMessages?.([messageId])) as { messages?: unknown[] } | undefined)?.messages?.[0];
+  if (!message) return false;
+  try {
+    const sent = (await send({
+      msg: message,
+      pinType,
+      pinExpiryDurationOption: pin ? toOption?.(durationSeconds) : undefined,
+    })) as { messageSendResult?: unknown } | null | undefined;
+    return sent?.messageSendResult === 'OK';
+  } catch (err) {
+    if (/PinInChat send Error|Unexpeded pin expiry duration/.test(String((err as { message?: unknown })?.message))) {
+      return false;
+    }
+    throw err;
+  }
+}
+
 /** What a failed write says, with the wording each write gives its own refusal. */
 export interface WriteOutcome {
   /** What was asked of WhatsApp, as "the subject change for group G". */

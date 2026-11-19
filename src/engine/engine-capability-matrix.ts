@@ -272,7 +272,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      'wwjs Message.pin(duration) → boolean (index.d.ts); the injected helper returns false for a non-number duration and for an unknown message (Injected/Utils.js), so the adapter maps false → EngineRefusedError; baileys sendMessage(jid,{pin:key,type:PinInChat.Type.PIN_FOR_ALL,time}) (Types/Message.d.ts) — NOT chatModify({pin}), which pins the CHAT in the chat list',
+      'wwjs WAWebSendPinMessageAction.sendPinInChatMsg, run in the page by the adapter the way the build takes it: one options object {msg, pinType, pinExpiryDurationOption} on current builds, which Message.pin(duration) → boolean (index.d.ts) cannot call because it passes three positional arguments (Injected/Utils.js), and Message.pin itself on a build whose sender still takes them. A send that did not go through, an unknown message and a duration the page has no option for map to EngineRefusedError; a build with neither shape answers 501. baileys sendMessage(jid,{pin:key,type:PinInChat.Type.PIN_FOR_ALL,time}) (Types/Message.d.ts) — NOT chatModify({pin}), which pins the CHAT in the chat list',
   },
   probeLiveness: {
     wwjs: { status: 'supported' },
@@ -461,7 +461,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      'wwjs Message.unpin() → boolean (index.d.ts); it passes duration 0 explicitly (Message.js), so the injected non-number guard does not bite — false → EngineRefusedError; baileys sendMessage(jid,{pin:key,type:PinInChat.Type.UNPIN_FOR_ALL}) — `time` is ignored when unpinning',
+      'wwjs the same sender with the unpin type (UNPIN_FOR_ALL, no duration option), or Message.unpin() → boolean (index.d.ts) on a build whose sender still takes positional arguments (Injected/Utils.js); a send that did not go through → EngineRefusedError, a build with neither shape answers 501; baileys sendMessage(jid,{pin:key,type:PinInChat.Type.UNPIN_FOR_ALL}) — `time` is ignored when unpinning',
   },
   unsubscribeFromChannel: {
     wwjs: { status: 'supported' },
