@@ -71,20 +71,20 @@ from disk is user-installed and sandboxed.
   posted, in the order it was made, as each reply frees a slot, so a `Promise.all` over a long list of calls is
   answered in full. It is refused with a thrown `Error` only when 10,000 calls are already held, which only a
   loop that never yields reaches. The host's own bound of 32 calls in flight is unchanged: a slow verb past it is
-  refused there. A held call made in a hook handler keeps the hook chain of its dispatch while the handler runs, and the
-  host honours that chain only until the dispatch settles, so a held send (`ctx.messages.sendText`,
-  `ctx.messages.reply`, `ctx.conversations.send`) still waiting after its handler has returned is refused with the
-  thrown `Error`, as a call past the bound was before calls were held: posted then, it would fire the hooks of the send
-  outside the re-entrancy guard and dispatch the handler again (a loop of more than 64 sends nobody awaits). Any other
-  held call is posted as usual, and a handler that awaits its calls is still running when they are posted, so it loses
-  none. A plugin that logs at an ordinary rate never reaches the log limit, and one that awaits its calls one after
-  another never has a call held. Registration is deduplicated but not counted: `ctx.registerWebhook` tells the host
-  about a route once, `ctx.registerSearchProvider` once, and `ctx.registerHook` about an event once, then again only for
-  a handler whose priority is lower than every earlier one for that event, since the host runs the plugin's handlers for
-  an event from one entry, at the lowest priority asked for. A loop that registers new route names or ever lower
-  priorities posts on every pass, and the worker leaves that to the plugin's own code. Output these limits do not cover,
-  such as a message posted to the port directly, is outside the boundary like the other direct access described below. A
-  loop that only spins on its own thread is ended by the liveness check once a dispatch to the plugin times out.
+  refused there. A held call made in a hook handler keeps the hook chain of its dispatch only while the handler runs, so
+  a held send (`ctx.messages.sendText`, `ctx.messages.reply`, `ctx.conversations.send`) still waiting after its handler
+  has returned is refused with the thrown `Error`, as a call past the bound was before calls were held: posted then, it
+  would fire the hooks of the send outside the re-entrancy guard and dispatch the handler again (a loop of more than 64
+  sends nobody awaits). Any other held call is posted as usual, and a handler that awaits its calls is still running
+  when they are posted, so it loses none. A plugin that logs at an ordinary rate never reaches the log limit, and one
+  that awaits its calls one after another never has a call held. Registration is deduplicated but not counted:
+  `ctx.registerWebhook` tells the host about a route once, `ctx.registerSearchProvider` once, and `ctx.registerHook`
+  about an event once, then again only for a handler whose priority is lower than every earlier one for that event,
+  since the host runs the plugin's handlers for an event from one entry, at the lowest priority asked for. A loop that
+  registers new route names or ever lower priorities posts on every pass, and the worker leaves that to the plugin's own
+  code. Output these limits do not cover, such as a message posted to the port directly, is outside the boundary like
+  the other direct access described below. A loop that only spins on its own thread is ended by the liveness check once
+  a dispatch to the plugin times out.
 - **Memory-kind boundary.** The heap cap bounds the V8 heap only. `Buffer`/`ArrayBuffer` allocations
   are native memory outside `maxOldGenerationSizeMb`, and worker threads share the host's address
   space, so a plugin that accumulates Buffers grows host RSS until the container's memory limit
