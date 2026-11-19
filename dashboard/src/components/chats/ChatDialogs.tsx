@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
 import { Modal } from '../Modal';
 import type { Chat } from '../../services/api';
-import { chatTitle } from '../../utils/formatPhone';
+import { chatTitle, savedChatName } from '../../utils/formatPhone';
 
 export type MuteDuration = '8h' | '1w' | 'always';
 
@@ -85,8 +85,9 @@ export function SaveContactDialog({
   // A saved contact starts from its name, unless that is a push name (`~Max`) or the number itself. The verdict can
   // arrive after the dialog opened (the address book is read when the first menu opens), so until the operator types
   // the fields follow it; the first keystroke freezes both as they stand, and nothing is replaced after that.
-  const named = chat.name && !chat.name.startsWith('~') && /\D/.test(chat.name.replace(/[\s+()-]/g, ''));
-  const [first, ...rest] = saved && named ? chat.name.trim().split(/\s+/) : [''];
+  const name = savedChatName(chat);
+  const named = name && !name.startsWith('~') && /\D/.test(name.replace(/[\s+()-]/g, ''));
+  const [first, ...rest] = saved && named ? name.split(/\s+/) : [''];
   const [typed, setTyped] = useState<{ first: string; last: string } | null>(null);
   const firstName = typed ? typed.first : (first ?? '');
   const lastName = typed ? typed.last : rest.join(' ');

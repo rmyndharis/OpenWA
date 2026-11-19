@@ -4,6 +4,8 @@
 // enough for human-readable display. The raw JID is preserved separately in the UI for the
 // technical case where the exact id is needed.
 
+import { phoneQueryDigits } from './phone.ts';
+
 /**
  * Extract the local digits from a WhatsApp JID's user part. Returns null for anything that is
  * not a digits-only user JID (groups, LID privacy ids, status/broadcast/newsletter).
@@ -74,13 +76,40 @@ export function isolateNumber(number: string): string {
   return `${String.fromCodePoint(0x2066)}${number}${String.fromCodePoint(0x2069)}`;
 }
 
+export interface ChatLabel {
+  id: string;
+  name?: string;
+  /** Phone digits of a privacy-id chat, when the session can map it. */
+  phone?: string | null;
+}
+
 /**
- * What a chat is called on its row, in its menu and in a sentence: its name, else the formatted number of a phone id,
- * isolated left to right, else the digits of its id. A privacy id (@lid) is no phone number, so its digits are never
- * formatted as one.
+ * A saved name or a push name. The digits of the chat's own id are not one: a privacy id's, where WhatsApp shows the
+ * phone number, and a phone id's, which the engines list for a chat they have no name for. Nor is the mapped phone
+ * written as a number, with spaces, signs or direction marks around its digits; a name with other words is one.
  */
-export function chatTitle(chat: { id: string; name?: string }): string {
-  if (chat.name) return chat.name;
-  const phone = formatPhoneForDisplay(chat.id);
+export function savedChatName(chat: ChatLabel): string | undefined {
+  const name = chat.name?.trim();
+  if (!name) return undefined;
+  const [user, host] = chat.id.split('@');
+  const bare = user.split(':')[0];
+  if (host?.split(':')[0] === 'lid' && (name === bare || name === `${bare}@lid`)) return undefined;
+  // The id's own number, bare or with its suffix: the store lists the first, whatsapp-web.js the second.
+  const own = parsePhoneFromJid(chat.id);
+  if (own && parsePhoneFromJid(name) === own) return undefined;
+  const phone = chat.phone?.replace(/\D/g, '');
+  if (phone && phoneQueryDigits(name) === phone) return undefined;
+  return name;
+}
+
+/**
+ * What a chat is called on its row, in its menu and in a sentence: its name, else the formatted number of a phone id
+ * or of the phone a privacy id maps to, isolated left to right, else the digits of its id. A privacy id (@lid) is no
+ * phone number, so its own digits are never formatted as one.
+ */
+export function chatTitle(chat: ChatLabel): string {
+  const name = savedChatName(chat);
+  if (name) return name;
+  const phone = (chat.phone && formatPhoneForDisplay(chat.phone)) || formatPhoneForDisplay(chat.id);
   return phone ? isolateNumber(phone) : chat.id.split('@')[0];
 }

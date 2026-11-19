@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePhoneFromJid, formatPhoneForDisplay, isolateNumber, chatTitle } from './formatPhone.ts';
+import { parsePhoneFromJid, formatPhoneForDisplay, isolateNumber, chatTitle, savedChatName } from './formatPhone.ts';
 
 test('parsePhoneFromJid extracts digits from a personal @c.us JID', () => {
   assert.equal(parsePhoneFromJid('628123456789@c.us'), '628123456789');
@@ -100,4 +100,75 @@ test('chatTitle is the name, else the isolated number of a phone id, else the di
   // A privacy id and a group id are digits too, and no phone number.
   assert.equal(chatTitle({ id: '262813461250071@lid', name: '' }), '262813461250071');
   assert.equal(chatTitle({ id: '120363000000000001@g.us', name: '' }), '120363000000000001');
+  // The privacy id's own digits are not a name. The mapped phone is the title, formatted like any other number.
+  assert.equal(
+    chatTitle({ id: '262813461250071@lid', name: '262813461250071', phone: '15550006666' }),
+    isolateNumber('+1 555 000 6666'),
+  );
+  assert.equal(chatTitle({ id: '262813461250071@lid', name: 'Lia', phone: '15550006666' }), 'Lia');
+});
+
+// A privacy-id chat the session maps to a phone: that phone titles it, unless it has a name of its own.
+const LID = '262813461250072@lid';
+const PHONE = '15550006666';
+const mark = (code: number) => String.fromCodePoint(code);
+
+test('a name that holds the mapped phone among other words is a name, not the number', () => {
+  for (const name of ['Taxi 15550006666', 'Dr Smith +1 555 000 6666', '15550006666 Taxi', 'Mom (15550006666)']) {
+    assert.equal(savedChatName({ id: LID, name, phone: PHONE }), name);
+    assert.equal(chatTitle({ id: LID, name, phone: PHONE }), name);
+  }
+});
+
+test('a right-to-left name that holds the mapped phone keeps its name, marks included', () => {
+  for (const name of [
+    'سائق 15550006666',
+    `${mark(0x200f)}שלום 15550006666`,
+    `${mark(0x202b)}سائق${mark(0x202c)} +1 555 000 6666`,
+  ]) {
+    assert.equal(chatTitle({ id: LID, name, phone: PHONE }), name);
+  }
+});
+
+test('the mapped phone written as a number is no name, whatever spaces, signs or marks surround its digits', () => {
+  const arabicIndic = [...PHONE].map(digit => String.fromCharCode(0x0660 + Number(digit))).join('');
+  const written = [
+    PHONE,
+    ' +1 555 000 6666 ',
+    '+1 (555) 000-6666',
+    '+1.555.000.6666',
+    arabicIndic,
+    `${mark(0x202a)}+1 555 000 6666${mark(0x202c)}`,
+    `${mark(0x200f)}+1 555 000 6666`,
+    `${mark(0x200e)}+1 555 000 6666${mark(0x200e)}`,
+    `${mark(0x2066)}+1 555 000 6666${mark(0x2069)}`,
+  ];
+  for (const name of written) {
+    assert.equal(savedChatName({ id: LID, name, phone: PHONE }), undefined, name);
+    assert.equal(chatTitle({ id: LID, name, phone: PHONE }), isolateNumber('+1 555 000 6666'), name);
+  }
+  // Digits of another number, or no mapped phone to compare with, are a name.
+  assert.equal(savedChatName({ id: LID, name: '+1 555 000 7777', phone: PHONE }), '+1 555 000 7777');
+  assert.equal(savedChatName({ id: LID, name: '+1 555 000 6666' }), '+1 555 000 6666');
+});
+
+test('the digits of a phone id, bare or with a suffix, are no name, so the chat is titled by that number', () => {
+  for (const id of ['5491154759191@s.whatsapp.net', '5491154759191@c.us']) {
+    for (const name of ['5491154759191', '5491154759191@c.us', '5491154759191@s.whatsapp.net']) {
+      assert.equal(savedChatName({ id, name }), undefined, `${id} named ${name}`);
+      assert.equal(chatTitle({ id, name }), isolateNumber('+54 911 5475 9191'), `${id} named ${name}`);
+    }
+  }
+  // Other digits, another kind of id and words around the digits are names.
+  assert.equal(savedChatName({ id: '5491154759191@s.whatsapp.net', name: '5491154759100' }), '5491154759100');
+  assert.equal(savedChatName({ id: '5491154759191@s.whatsapp.net', name: 'Taxi 5491154759191' }), 'Taxi 5491154759191');
+  assert.equal(savedChatName({ id: '120363000000000001@g.us', name: '120363000000000001' }), '120363000000000001');
+  assert.equal(savedChatName({ id: '120363000000000001@g.us', name: 'Team' }), 'Team');
+  assert.equal(savedChatName({ id: LID, name: '5491154759191@c.us' }), '5491154759191@c.us');
+});
+
+test('a privacy id written as the name, bare or with its suffix, is no name', () => {
+  assert.equal(savedChatName({ id: LID, name: '262813461250072' }), undefined);
+  assert.equal(savedChatName({ id: LID, name: LID }), undefined);
+  assert.equal(savedChatName({ id: LID, name: 'Lia' }), 'Lia');
 });

@@ -19554,7 +19554,13 @@
           },
           "name": {
             "type": "string",
+            "description": "The chat's name, an empty string for a Baileys chat held under a privacy id (@lid) that has no saved name or push name, which a client titles by `phone`.",
             "example": "Alice"
+          },
+          "phone": {
+            "type": "string",
+            "description": "Phone digits of a 1:1 chat WhatsApp holds under a privacy id (@lid), when this session can map it. Absent for a phone-keyed chat and when the mapping is unknown. Not a display name: an unnamed chat is titled from these digits, and a saved name still wins.",
+            "example": "5491154759191"
           },
           "isGroup": {
             "type": "boolean",

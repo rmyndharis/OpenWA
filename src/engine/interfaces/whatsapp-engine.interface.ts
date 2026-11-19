@@ -603,6 +603,12 @@ export interface PaginatedProducts {
 export interface ChatSummary {
   id: string;
   name: string;
+  /**
+   * Phone digits of a 1:1 chat WhatsApp holds under a privacy id (`@lid`), when this session can map
+   * it. Absent for a phone-keyed chat (the number is the id) and when the mapping is unknown. The
+   * digits are not a display name: an unnamed chat is titled from them, and a saved name still wins.
+   */
+  phone?: string;
   isGroup: boolean;
   /** User-facing chat kind. `isGroup` is retained for back-compat; `kind` is the full discriminator. */
   kind: ChatKind;

@@ -253,6 +253,8 @@ export const CHAT_KINDS: readonly ChatKind[] = ['individual', 'group', 'channel'
 export interface Chat {
   id: string;
   name: string;
+  /** Phone digits when the chat is held under a privacy id and the session can map it. */
+  phone?: string;
   isGroup: boolean;
   kind: ChatKind;
   unreadCount: number;

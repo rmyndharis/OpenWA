@@ -30,7 +30,8 @@ afterEach(() => rtl.cleanup());
 
 const chat = (id: string, unreadCount: number): Chat => ({
   id,
-  name: id.split('@')[0],
+  // Not the bare digits of the id: the list titles a chat named so by its formatted number.
+  name: `Chat ${id.split('@')[0]}`,
   isGroup: false,
   kind: 'individual',
   unreadCount,
@@ -119,6 +120,36 @@ test('a chat marked unread (count -1) shows an unread badge without a number', (
   }
 });
 
+const isolated = (number: string) => `${String.fromCodePoint(0x2066)}${number}${String.fromCodePoint(0x2069)}`;
+
+test("a row's tooltip is its name, and the id of a chat that has none of its own", () => {
+  const row = (id: string, name: string, phone?: string): Chat => ({
+    ...chat(id, 0),
+    name,
+    ...(phone ? { phone } : {}),
+  });
+  const { container } = renderSidebar(
+    'chats',
+    [
+      row('15550001111@c.us', 'Alice'),
+      row('15550002222@c.us', ''),
+      row('262813461250072@lid', '', '15550006666'),
+      row('262813461250073@lid', '262813461250073'),
+    ],
+    { all: [], shown: [] },
+  );
+  const names = Array.from(container.querySelectorAll<HTMLElement>('.chat-item-name'));
+  assert.deepEqual(
+    names.map(name => [name.textContent, name.title]),
+    [
+      ['Alice', 'Alice'],
+      [isolated('+1 555 000 2222'), '15550002222@c.us'],
+      [isolated('+1 555 000 6666'), '262813461250072@lid'],
+      ['262813461250073', '262813461250073@lid'],
+    ],
+  );
+});
+
 test('a quick filter that leaves no chat says so, while an empty account still reads as having none', () => {
   const filtered = renderSidebar('chats', [], { all: [], shown: [] }, { filter: 'groups' });
   assert.equal(filtered.container.querySelector('.chats-list-empty')?.textContent, t('chats.noFilterResults'));
@@ -178,11 +209,11 @@ test("opening a row's menu closes any other, and the open one follows the page's
   const picked: boolean[] = [];
   const view = renderSidebar('chats', chats, noChannels, { rowActions: rowActionsOf(false, picked) });
   // Enter on a chevron is a click with no mousedown, so no press outside closes the menu opened first.
-  rtl.fireEvent.click(trigger('111111111'));
-  rtl.fireEvent.click(trigger('222222222'));
+  rtl.fireEvent.click(trigger('Chat 111111111'));
+  rtl.fireEvent.click(trigger('Chat 222222222'));
   assert.equal(popovers(view.container).length, 1, 'two row menus are open at once');
   assert.deepEqual(
-    [trigger('111111111').getAttribute('aria-expanded'), trigger('222222222').getAttribute('aria-expanded')],
+    [trigger('Chat 111111111').getAttribute('aria-expanded'), trigger('Chat 222222222').getAttribute('aria-expanded')],
     ['false', 'true'],
   );
 
@@ -194,9 +225,9 @@ test("opening a row's menu closes any other, and the open one follows the page's
   assert.equal(popovers(view.container).length, 0, 'picking an entry left the menu open');
 
   // The first row's menu opens on the page's current actions too, and its chevron closes it again.
-  rtl.fireEvent.click(trigger('111111111'));
+  rtl.fireEvent.click(trigger('Chat 111111111'));
   assert.ok(rtl.within(popovers(view.container)[0]).queryByRole('button', { name: rename }), 'Save is still offered');
-  rtl.fireEvent.click(trigger('111111111'));
+  rtl.fireEvent.click(trigger('Chat 111111111'));
   assert.equal(popovers(view.container).length, 0, 'the chevron did not close its menu');
 });
 
@@ -204,11 +235,11 @@ test('a row menu open when the list is swapped out is closed when the list comes
   const chats = [chat('111111111@c.us', 0)];
   const rowActions = rowActionsOf(false, []);
   const view = renderSidebar('chats', chats, noChannels, { rowActions });
-  rtl.fireEvent.click(trigger('111111111'));
+  rtl.fireEvent.click(trigger('Chat 111111111'));
   assert.equal(popovers(view.container).length, 1, 'the menu did not open');
 
   view.rerender(sidebarElement('channels', chats, noChannels, { rowActions }));
   view.rerender(sidebarElement('chats', chats, noChannels, { rowActions }));
   assert.equal(popovers(view.container).length, 0, 'the menu came back open with the list');
-  assert.equal(trigger('111111111').getAttribute('aria-expanded'), 'false');
+  assert.equal(trigger('Chat 111111111').getAttribute('aria-expanded'), 'false');
 });

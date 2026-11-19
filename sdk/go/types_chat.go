@@ -4,8 +4,11 @@ import "net/url"
 
 // ChatSummary is a chat-list entry.
 type ChatSummary struct {
-	ID              string      `json:"id"`
-	Name            string      `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Phone is the digits of a 1:1 chat WhatsApp holds under a privacy id, when the session can map
+	// it. Absent for a phone-keyed chat and when the mapping is unknown.
+	Phone           string      `json:"phone,omitempty"`
 	IsGroup         bool        `json:"isGroup"`
 	UnreadCount     int         `json:"unreadCount"`
 	LastMessage     string      `json:"lastMessage,omitempty"`

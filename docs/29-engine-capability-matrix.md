@@ -308,6 +308,8 @@ can stop reaching the gateway until the session is restarted.
 | `muteChat`          | ✅                  | ✅               | ✅           |
 | `pinChat`           | ✅                  | ✅               | ✅           |
 
+`getChats` fills `ChatSummary.phone`, the number a privacy-id chat maps to, on Baileys only. whatsapp-web.js lists none, and neither does its `getChatsByLabel`.
+
 ### 29.4.5 Contacts
 
 | Method                | Baileys adapter 🔧⁵ | wwjs adapter 🔧¹ | OpenWA REST |

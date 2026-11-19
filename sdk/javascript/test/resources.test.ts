@@ -419,6 +419,21 @@ describe('ChatsResource last-message metadata', () => {
   });
 });
 
+describe('ChatsResource phone of a privacy-id chat', () => {
+  it('keeps the phone the server lists and leaves a chat without one with none', async () => {
+    const t = new MockTransport().on('GET', /\/chats$/, {
+      body: [
+        { id: '262813461250072@lid', name: '', phone: '15550006666' },
+        { id: '15550001111@c.us', name: 'Alice' },
+      ],
+    });
+    const chats = await client(t).chats.list('s');
+    expect(chats[0].phone).toBe('15550006666');
+    expect(chats[0].name).toBe('');
+    expect(chats[1].phone).toBeUndefined();
+  });
+});
+
 describe('ChatsResource.clearMessages', () => {
   it('DELETEs the chat messages sub-resource', async () => {
     const t = new MockTransport().on('DELETE', /\/chats\/.+\/messages$/, { body: { success: true } });

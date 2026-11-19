@@ -10,7 +10,8 @@ import {
   type WebhookFilterOperator,
 } from '../services/api';
 import { filterValueLabel } from '../utils/enumLabels';
-import { normalizePhoneText } from '../utils/phone';
+import { chatTitle } from '../utils/formatPhone';
+import { normalizePhoneText, phoneQueryDigits } from '../utils/phone';
 import { MAX_FILTER_CONDITIONS, MAX_FILTER_TEXT_LENGTH } from '../utils/webhookFilters';
 import { isComposingKey } from '../utils/composition';
 import './FilterBuilder.css';
@@ -90,18 +91,30 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
 
   const suggestions = useMemo(() => {
     const query = text.trim().toLowerCase();
+    // A number typed as it is written, with its spaces, plus sign or parentheses, is compared by its digits.
+    const digits = phoneQueryDigits(text);
     const chosen = new Set(value);
     return (
       chats
         .filter(c => !chosen.has(c.id))
-        .filter(c => !query || c.name.toLowerCase().includes(query) || c.id.toLowerCase().includes(query))
+        .filter(
+          c =>
+            !query ||
+            c.name.toLowerCase().includes(query) ||
+            c.id.toLowerCase().includes(query) ||
+            (digits !== '' && (c.id.includes(digits) || c.phone?.includes(digits))),
+        )
         // The dropdown scrolls, so this only bounds how much of an account with up to 1000 chats is
         // rendered on every keystroke. Typing narrows the list further.
         .slice(0, 50)
     );
   }, [text, chats, value]);
 
-  const labelFor = (jid: string) => chats.find(c => c.id === jid)?.name ?? jid;
+  // A chat with no name (Baileys lists an unnamed privacy-id chat with `''`) is called by its number, as the list does.
+  const labelFor = (jid: string) => {
+    const chat = chats.find(c => c.id === jid);
+    return chat ? chatTitle(chat) : jid;
+  };
   const add = (jid: string) => {
     if (jid && !value.includes(jid)) onChange([...value, jid]);
     setText('');
@@ -172,7 +185,7 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
               onMouseDown={e => e.preventDefault()}
               onClick={() => add(c.id)}
             >
-              <span className="chips-suggestion-name">{c.name || c.id}</span>
+              <span className="chips-suggestion-name">{chatTitle(c)}</span>
               <span className="chips-suggestion-id">{c.id}</span>
             </button>
           ))}

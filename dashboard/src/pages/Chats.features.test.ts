@@ -777,6 +777,32 @@ test('an unnamed privacy-id chat is titled by the number it resolves to, and its
   await waitFor(() => assert.equal(title(), '+1 555 000 6666'));
 });
 
+test('a privacy id stored as the chat name is listed and titled by its phone, not by those digits', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const lid = '262813461250072@lid';
+  Object.assign(aliceNow, { id: lid, name: '262813461250072', phone: '15550006666' });
+  const { container } = renderPage();
+  const number = isolated('+1 555 000 6666');
+  fireEvent.click(await screen.findByText(number));
+  await waitFor(() =>
+    assert.equal(container.querySelector('.room-header .room-contact-name')?.textContent, '+1 555 000 6666'),
+  );
+  assert.equal(container.querySelector('.room-header .room-contact-phone'), null, 'the number is shown twice');
+});
+
+test('a privacy id stored as the chat name is replaced in the header once its phone resolves', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const lid = '262813461250072@lid';
+  Object.assign(aliceNow, { id: lid, name: '262813461250072' });
+  lidPhones[lid] = '15550006666';
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('262813461250072'));
+  await waitFor(() =>
+    assert.equal(container.querySelector('.room-header .room-contact-name')?.textContent, '+1 555 000 6666'),
+  );
+  assert.equal(container.querySelector('.room-header .room-contact-phone'), null, 'the number is shown twice');
+});
+
 // ── The number check answers a phone id, while a contact that moved to privacy-id addressing keeps its conversation
 // under its @lid: starting a chat with that number has to find it. ──
 

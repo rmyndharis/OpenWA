@@ -10,8 +10,22 @@ export class ChatSummaryDto {
   @ApiProperty({ example: '628111@c.us' })
   id!: string;
 
-  @ApiProperty({ example: 'Alice' })
+  @ApiProperty({
+    description:
+      "The chat's name, an empty string for a Baileys chat held under a privacy id (@lid) that has no saved name " +
+      'or push name, which a client titles by `phone`.',
+    example: 'Alice',
+  })
   name!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Phone digits of a 1:1 chat WhatsApp holds under a privacy id (@lid), when this session can map it. ' +
+      'Absent for a phone-keyed chat and when the mapping is unknown. Not a display name: an unnamed chat ' +
+      'is titled from these digits, and a saved name still wins.',
+    example: '5491154759191',
+  })
+  phone?: string;
 
   @ApiProperty({ description: 'Retained for back-compat; true for @g.us chats.', example: false })
   isGroup!: boolean;

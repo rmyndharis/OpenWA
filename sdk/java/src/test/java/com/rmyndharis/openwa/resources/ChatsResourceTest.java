@@ -45,6 +45,21 @@ class ChatsResourceTest {
     }
 
     @Test
+    void listDecodesOptionalPhoneOfAPrivacyIdChat() {
+        tx.respond(200, "[{\"id\":\"262813461250072@lid\",\"name\":\"\",\"phone\":\"15550006666\"},"
+            + "{\"id\":\"15550001111@c.us\",\"name\":\"Alice\"}]");
+        var chats = client.chats.list("s");
+        assertEquals("15550006666", chats.get(0).phone());
+        assertEquals("", chats.get(0).name());
+        assertNull(chats.get(1).phone());
+        // The 12-component constructor of 0.12.1 still builds a summary, without a phone.
+        var withType = new ChatSummary(
+            "id", "name", false, 0, "hi", 1L, null, false, false, false, null, MessageType.IMAGE);
+        assertEquals(MessageType.IMAGE, withType.lastMessageType());
+        assertNull(withType.phone());
+    }
+
+    @Test
     void listEncodesSessionId() {
         tx.respond(200, "[]");
         client.chats.list("a/b");

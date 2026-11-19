@@ -82,6 +82,28 @@ func TestChatSummaryDecodesOptionalLastMessageType(t *testing.T) {
 	}
 }
 
+func TestChatSummaryDecodesOptionalPhone(t *testing.T) {
+	var chats []ChatSummary
+	body := `[{"id":"262813461250072@lid","name":"","phone":"15550006666"},{"id":"15550001111@c.us","name":"Alice"}]`
+	if err := json.Unmarshal([]byte(body), &chats); err != nil {
+		t.Fatal(err)
+	}
+	if chats[0].Phone != "15550006666" || chats[0].Name != "" || chats[1].Phone != "" {
+		t.Fatalf("unexpected phones: %+v", chats)
+	}
+	wire, err := json.Marshal(chats[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var absent map[string]interface{}
+	if err := json.Unmarshal(wire, &absent); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := absent["phone"]; ok {
+		t.Fatal("absent phone must stay omitted")
+	}
+}
+
 func TestChatHistoryDecodesPollChoices(t *testing.T) {
 	var m ChatHistoryMessage
 	if err := json.Unmarshal([]byte(`{"poll":{"name":"Q","options":[" Park ","Beach"],"allowMultipleAnswers":true}}`), &m); err != nil {

@@ -30,7 +30,7 @@ import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
 import { useResolvedPhone, resolvedPhoneQuery, isResolvedPhoneHeld } from '../hooks/useResolvedPhone';
 import { keepsSameKey } from '../utils/authLifecycle';
-import { chatTitle, formatPhoneForDisplay } from '../utils/formatPhone';
+import { chatTitle, formatPhoneForDisplay, savedChatName } from '../utils/formatPhone';
 import {
   sessionApi,
   messageApi,
@@ -537,18 +537,22 @@ export function Chats() {
   // (notably @lid privacy ids, which are NOT phones and must never be formatted as one) resolve
   // the real number through the engine — cached a day, and only fired when local formatting failed.
   const activePhoneDisplay = activeChat ? formatPhoneForDisplay(activeChat.id) : null;
-  const needsPhoneResolution = Boolean(activeChat && activeChat.kind === 'individual' && !activePhoneDisplay);
+  const listedPhone = activeChat?.phone ? formatPhoneForDisplay(activeChat.phone) : null;
+  const needsPhoneResolution = Boolean(
+    activeChat && activeChat.kind === 'individual' && !activePhoneDisplay && !listedPhone,
+  );
   const resolvedPhoneQ = useResolvedPhone(
     needsPhoneResolution ? selectedSessionId || undefined : undefined,
     needsPhoneResolution ? activeChat?.id : undefined,
   );
   const activePhoneText =
-    activePhoneDisplay ?? (resolvedPhoneQ.data ? formatPhoneForDisplay(resolvedPhoneQ.data) : null);
+    activePhoneDisplay ?? listedPhone ?? (resolvedPhoneQ.data ? formatPhoneForDisplay(resolvedPhoneQ.data) : null);
   // An unnamed chat is titled by its number when one is known, never by the bare digits of its id (a @lid's are no
-  // phone). Shown, that number is isolated left to right, as it is under a name.
-  const activeChatTitle = activeChat ? activeChat.name || activePhoneText || activeChat.id.split('@')[0] : '';
+  // phone, and a name that is only those digits is not a name). Shown, that number is isolated left to right.
+  const named = activeChat ? savedChatName(activeChat) : undefined;
+  const activeChatTitle = activeChat ? named || activePhoneText || activeChat.id.split('@')[0] : '';
   const activeChatTitleText =
-    activeChat && !activeChat.name && activePhoneText ? <bdi dir="ltr">{activePhoneText}</bdi> : activeChatTitle;
+    activeChat && !named && activePhoneText ? <bdi dir="ltr">{activePhoneText}</bdi> : activeChatTitle;
 
   // The list loaders below reach the translator and the error toast through a ref, not as
   // dependencies: both change identity on a language switch, which re-ran the session load (it
@@ -2403,7 +2407,7 @@ export function Chats() {
                               @c.us ids, engine-resolved for @lid privacy ids (which are NOT phones and
                               must never be formatted as one). Only under a saved name: an unnamed chat's
                               title already is the number. The raw JID is in the contact panel. */}
-                          {activePhoneText && activeChat.name && (
+                          {activePhoneText && named && (
                             <span className="room-contact-phone" title={activePhoneText}>
                               <bdi dir="ltr">{activePhoneText}</bdi>
                             </span>
@@ -2662,7 +2666,7 @@ export function Chats() {
                 />
                 <h3>{activeChatTitleText}</h3>
                 {/* The number goes under a name only; an unnamed chat's title already is the number. */}
-                {(activeChat.name || !activePhoneText) && (
+                {(named || !activePhoneText) && (
                   <p className="contact-info-sub">
                     {activePhoneText ? (
                       <bdi dir="ltr">{activePhoneText}</bdi>

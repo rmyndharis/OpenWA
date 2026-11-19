@@ -521,11 +521,27 @@ Get active chats for a session, most-recent first (paginated).
     "archived": false,
     "pinned": false,
     "muted": false
+  },
+  {
+    "id": "262813461250072@lid",
+    "name": "",
+    "phone": "15550006666",
+    "isGroup": false,
+    "kind": "individual",
+    "unreadCount": 0,
+    "timestamp": 1719306001,
+    "lastMessage": "Hello",
+    "lastMessageType": "text",
+    "archived": false,
+    "pinned": false,
+    "muted": false
   }
 ]
 ```
 
 `lastMessageType` uses the same engine-neutral types as messages, such as `text`, `image`, `voice`, and `document`. It identifies media even when `lastMessage` has no caption. The field is omitted when the engine has no last message available; on Baileys it becomes available after history sync or a new message.
+
+On the Baileys engine a chat WhatsApp holds under a privacy id (`<digits>@lid`) that has no saved name or push name is listed with `name` `""`, where it carried the id's own digits, and with `phone`, the digits of the number the session maps the id to; a client titles such a row by its `phone`. The listing reads only the mapping the session has cached, as the first step of `GET /api/sessions/:sessionId/contacts/:contactId/phone` does, so a row has no `phone` while the session holds none, as in the first listing after a restart; that route then also reads the stored table and the library's own mapping. `phone` is display data: while a re-map of the id is being written it can differ from the mapping a key restricted to selected chats is checked against, and it never grants or limits access. whatsapp-web.js lists no `phone`, and neither do a label's chats (`GET /api/sessions/:sessionId/labels/:labelId/chats`).
 
 `archived`, `pinned` and `muted` are the read side of the `chats/archive`, `chats/pin` and
 `chats/mute` endpoints. `muted` is the verdict; `muteExpiration`, present only when `muted` is true,
@@ -4419,6 +4435,8 @@ Every chat carrying a label.
 **Auth:** API key · **Scope:** session-scoped · **Engines:** whatsapp-web.js only
 
 **Response** `200` — a bare array of `ChatSummary`, the same shape `GET /sessions/:sessionId/chats` returns.
+
+The rows carry no `phone`: a label's chats are read through whatsapp-web.js, which lists none.
 
 **Errors:** `400` session not started (also when the session does not exist) · `401` · `404` label or chat not found · `501` Baileys, which has no label query · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died or the command timed out, so nothing was read (retryable; says nothing about whether the label exists)
 
