@@ -19,12 +19,15 @@ import type { StatusStoreService } from '../status-store/status-store.service';
 import type { SessionLidResolver } from '../session/session-lid-resolver.service';
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 // Every outgoing row of one account names the same sender, whichever writer stored it: the REST send
 // path, or the own-send echo of a message composed on the linked phone. The `from` filter of the message
 // list matches a sender by its JID forms, so a row that names the account some other way drops out of it.
 // Runs on SQLite, and on the postgres:16 service when DATABASE_TYPE=postgres.
 describe('the sender stored on an outgoing row', () => {
+  // A wait here is a deadline, not a count of turns: the room is for a PostgreSQL round trip on a busy runner.
+  jest.setTimeout(60_000);
   const PHONE = '628123456789';
   const OWN_JID = `${PHONE}@c.us`;
   const CHAT = '628987654321@c.us';
@@ -43,9 +46,12 @@ describe('the sender stored on an outgoing row', () => {
     for (let i = 0; i < 25; i++) await new Promise(resolve => setImmediate(resolve));
     if (db.options.type === 'postgres') await pause(150);
   };
+  // The row of a message the projector stores in the background, waited for with a deadline.
+  const stored = (waMessageId: string): Promise<void> =>
+    waitUntil(async () => (await messages.findOneBy({ sessionId, waMessageId })) !== null);
   // Retries an assertion until it holds or the deadline passes. An ack is applied in the background (and one
   // that finds no row is retried once after ACK_RECONCILE_DELAY_MS), so a fixed wait can read the row first.
-  const eventually = async (assertion: () => Promise<void>, timeoutMs = 3000): Promise<void> => {
+  const eventually = async (assertion: () => Promise<void>, timeoutMs = 30_000): Promise<void> => {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       try {
@@ -143,7 +149,7 @@ describe('the sender stored on an outgoing row', () => {
       kind: 'individual',
     };
     projector.handleOwnSendEcho(sessionId, engine, phoneComposed);
-    await flush();
+    await stored('WA_FROM_PHONE');
     // Sent through the API: the REST send path stores it before the echo arrives.
     await sender.sendText(sessionId, { chatId: CHAT, text: 'sent through the API' });
   }
@@ -284,15 +290,15 @@ describe('the sender stored on an outgoing row', () => {
       ],
       [
         'after the echo is stored',
-        () => Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, echo)).then(flush),
+        () => Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, echo)).then(() => stored('WA_FORWARDED')),
       ],
     ])('stores the forwarded message itself when the engine answers %s', async (_when, deliverEcho) => {
       await storeSource(SOURCE_CHAT);
 
       await forwardWith(deliverEcho);
+      await stored('WA_FORWARDED');
       await flush();
       projector.handleMessageAck(sessionId, engine, 'WA_FORWARDED', 'delivered');
-      await flush();
 
       await eventually(async () =>
         expect(await forwardedRows()).toEqual([
@@ -315,18 +321,22 @@ describe('the sender stored on an outgoing row', () => {
       );
       const downloaded = { ...echo, media: { mimetype: 'image/jpeg', data: BYTES } };
 
-      await forwardWith(() => Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, downloaded)).then(flush));
+      await forwardWith(() =>
+        Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, downloaded)).then(() => stored('WA_FORWARDED')),
+      );
       await flush();
 
-      expect(await forwardedRows()).toEqual([
-        {
-          waMessageId: 'WA_FORWARDED',
-          type: 'image',
-          body: 'the caption',
-          status: MessageStatus.SENT,
-          metadata: { media: { mimetype: 'image/jpeg', data: BYTES } },
-        },
-      ]);
+      await eventually(async () =>
+        expect(await forwardedRows()).toEqual([
+          {
+            waMessageId: 'WA_FORWARDED',
+            type: 'image',
+            body: 'the caption',
+            status: MessageStatus.SENT,
+            metadata: { media: { mimetype: 'image/jpeg', data: BYTES } },
+          },
+        ]),
+      );
     });
 
     // The engine can forward a message the table holds no row for (pruned by retention, an ephemeral one that was not
@@ -342,15 +352,15 @@ describe('the sender stored on an outgoing row', () => {
       ],
       [
         'after the echo is stored',
-        () => Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, echo)).then(flush),
+        () => Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, echo)).then(() => stored('WA_FORWARDED')),
       ],
     ])(
       'stores what the echo carries when the source has no row and the engine answers %s',
       async (_when, deliverEcho) => {
         await forwardWith(deliverEcho);
+        await stored('WA_FORWARDED');
         await flush();
         projector.handleMessageAck(sessionId, engine, 'WA_FORWARDED', 'delivered');
-        await flush();
 
         await eventually(async () =>
           expect(await forwardedRows()).toEqual([
