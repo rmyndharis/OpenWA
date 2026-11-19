@@ -773,9 +773,11 @@ export class GroupController {
   @ApiResponse({
     status: 503,
     description:
-      INVITE_CODE_503 +
-      ' On whatsapp-web.js, the revoke is also answered 503 when WhatsApp answers it with a rate limit or a server ' +
-      'error (423, 429 or 5xx): the current code is unchanged, so retry after a pause.',
+      'On Baileys, WhatsApp did not answer the invite-code revocation in time, or rate-limited or timed it out ' +
+      '(code 429 or 408); retry after a pause. On whatsapp-web.js, only when WhatsApp answers the revoke with a rate ' +
+      'limit or a server error (423, 429 or 5xx): the current code is unchanged, so retry after a pause. On ' +
+      'whatsapp-web.js a protocol timeout or a page that died mid-call answers 500 instead, since the revoke may ' +
+      'already have rotated the code: read the current code before repeating it.',
   })
   @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
