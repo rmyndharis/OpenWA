@@ -253,6 +253,9 @@ describe('claims of one session that overlap on a node', () => {
     return runs;
   }
 
+  /** Each problem once, however many schedules met it: a failing walk would print one line per schedule. */
+  const problemsOf = (runs: Run[]): string[] => [...new Set(runs.flatMap(run => run.problems))];
+
   const summary = (runs: Run[]): string[] => [
     ...new Set(runs.flatMap(run => run.problems.concat(run.followUps === 1 ? [] : [`follow-up ran ${run.followUps}`]))),
   ];
@@ -306,7 +309,7 @@ describe('claims of one session that overlap on a node', () => {
     const runs = await walk(lapsedPeer, 2, false);
 
     expect(runs.length).toBeGreaterThan(80);
-    expect(runs.flatMap(run => run.problems)).toEqual([]);
+    expect(problemsOf(runs)).toEqual([]);
     for (const run of runs) expect([1, 2]).toContain(run.followUps);
   });
 
@@ -315,7 +318,7 @@ describe('claims of one session that overlap on a node', () => {
     async transactional => {
       const runs = await sample(lapsedPeer, 3, transactional, 150);
 
-      expect(runs.flatMap(run => run.problems)).toEqual([]);
+      expect(problemsOf(runs)).toEqual([]);
       for (const run of runs) expect(run.followUps).toBeGreaterThanOrEqual(1);
       if (transactional) expect(summary(runs)).toEqual([]);
     },
@@ -325,7 +328,7 @@ describe('claims of one session that overlap on a node', () => {
     for (const row of [freeRow, heldByNode]) {
       const runs = await walk(row, 2, true);
 
-      expect(runs.flatMap(run => run.problems)).toEqual([]);
+      expect(problemsOf(runs)).toEqual([]);
       expect(runs.map(run => run.followUps)).toEqual(runs.map(() => 0));
     }
   });
@@ -333,7 +336,7 @@ describe('claims of one session that overlap on a node', () => {
   it('follows up nothing and claims nothing while a live peer holds the row', async () => {
     const runs = await walk(livePeer, 2, true);
 
-    expect(runs.flatMap(run => run.problems)).toEqual([]);
+    expect(problemsOf(runs)).toEqual([]);
     expect(runs.map(run => run.followUps)).toEqual(runs.map(() => 0));
     expect(runs.map(run => run.onClaimed)).toEqual(runs.map(() => []));
   });
@@ -422,7 +425,7 @@ describe('claims of one session that overlap on a node', () => {
         const runs = await walk(heldByNode, 2, transactional);
 
         expect(runs.length).toBeGreaterThan(10);
-        expect(runs.flatMap(run => run.problems)).toEqual([]);
+        expect(problemsOf(runs)).toEqual([]);
       },
     );
 
@@ -432,7 +435,7 @@ describe('claims of one session that overlap on a node', () => {
         const runs = await walk(freeRow, 3, transactional);
 
         expect(runs.length).toBeGreaterThan(1000);
-        expect(runs.flatMap(run => run.problems)).toEqual([]);
+        expect(problemsOf(runs)).toEqual([]);
       },
       300_000,
     );
@@ -442,7 +445,7 @@ describe('claims of one session that overlap on a node', () => {
       async (_label, transactional) => {
         const runs = await sample(freeRow, 4, transactional, 200);
 
-        expect(runs.flatMap(run => run.problems)).toEqual([]);
+        expect(problemsOf(runs)).toEqual([]);
       },
       120_000,
     );
@@ -452,7 +455,7 @@ describe('claims of one session that overlap on a node', () => {
       async calls => {
         const runs = await sample(freeRow, calls, true, 200, askLikeStartOrDelete);
 
-        expect(runs.flatMap(run => run.problems)).toEqual([]);
+        expect(problemsOf(runs)).toEqual([]);
       },
       120_000,
     );
@@ -462,14 +465,14 @@ describe('claims of one session that overlap on a node', () => {
     it('answers every claim false in sampled schedules of three claims while a live peer holds the row', async () => {
       const runs = await sample(livePeer, 3, true, 200);
 
-      expect(runs.flatMap(run => run.problems)).toEqual([]);
+      expect(problemsOf(runs)).toEqual([]);
       expect(runs.map(run => run.onClaimed)).toEqual(runs.map(() => []));
     }, 120_000);
 
     it('answers every start or delete false in sampled schedules of three while a live peer holds the row', async () => {
       const runs = await sample(livePeer, 3, true, 200, askLikeStartOrDelete);
 
-      expect(runs.flatMap(run => run.problems)).toEqual([]);
+      expect(problemsOf(runs)).toEqual([]);
     }, 120_000);
   });
 });
