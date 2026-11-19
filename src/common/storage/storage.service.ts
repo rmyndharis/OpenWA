@@ -217,6 +217,25 @@ export class StorageService implements OnModuleDestroy {
       fs.mkdirSync(this.localPath, { recursive: true, mode: 0o700 });
     }
     ensurePrivateDir(this.localPath);
+    this.warnWhenLocalRootIsOpen();
+  }
+
+  /**
+   * ensurePrivateDir is best effort, so a root the gateway does not own (a volume or bind mount owned by another
+   * user) keeps its mode without a word, and files written earlier with a loose mode stay reachable through it. Say
+   * so once at boot, with what to do. Windows reports no POSIX modes, so there is nothing to read there.
+   */
+  private warnWhenLocalRootIsOpen(): void {
+    if (process.platform === 'win32') return;
+    const { mode, uid } = fs.statSync(this.localPath);
+    if ((mode & 0o077) === 0) return;
+    this.logger.warn(
+      `The local media directory '${path.resolve(this.localPath)}' has mode ` +
+        `${(mode & 0o7777).toString(8).padStart(4, '0')} and could not be made owner-only (0700): other users can ` +
+        `list it and read any file in it written with a loose mode. It is owned by uid ${uid} and the gateway runs ` +
+        `as uid ${process.getuid?.()}. Own the directory as the gateway's user (chown it, then restart), or restrict ` +
+        `it from outside: a stricter mode or ACL on the mount, or a parent directory only that user can enter.`,
+    );
   }
 
   onModuleDestroy(): void {
