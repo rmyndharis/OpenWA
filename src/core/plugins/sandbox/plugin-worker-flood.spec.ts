@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { WorkerThreadChannel } from './worker-thread-channel';
 import { PluginWorkerHost } from './plugin-worker-host';
-import { SANDBOX_LOG_MAX_PER_WINDOW, SANDBOX_MAX_PENDING_CAPS } from './protocol';
+import { SANDBOX_LOG_MAX_PER_WINDOW, SANDBOX_MAX_HELD_CAPS, SANDBOX_MAX_PENDING_CAPS } from './protocol';
 import { SANDBOX_LOG_MAX_LINES_PER_WINDOW } from './worker-log-limiter';
 
 const ROOT = path.resolve(__dirname, '../../../..');
@@ -25,12 +25,21 @@ const makeChannel = (): WorkerThreadChannel =>
     maxOldGenerationSizeMb: 256,
   });
 
+/** Polls until `condition` holds. It fails at the deadline, and counts neither loop turns nor a fixed sleep. */
+const waitFor = async (condition: () => boolean, what: string, timeoutMs = 30_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+};
+
 /**
  * A plugin whose loop never yields can post faster than the host's one thread can read: a MessagePort has no
  * back-pressure, so the backlog grows in native memory while every session and request waits behind it. The bound is
  * on what the worker posts, so what the host is handed is what these specs count. Nothing here reads the clock: the
  * loops run a fixed number of iterations inside onEnable, and the lifecycle result that follows the last iteration
- * arrives after every message the loop posted.
+ * arrives after every message the loop posted, and before the worker reads a single reply.
  */
 describe('a worker whose plugin loops without yielding', () => {
   jest.setTimeout(60000);
@@ -41,12 +50,15 @@ describe('a worker whose plugin loops without yielding', () => {
     options: {
       capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>;
       onLog?: (level: string, message: string, meta?: Record<string, unknown>) => void;
+      /** Runs once onEnable has returned, before the worker is ended. */
+      afterEnable?: () => void | Promise<void>;
     },
   ): Promise<void> => {
     const host = new PluginWorkerHost(makeChannel(), options.capDispatcher, undefined, undefined, options.onLog);
     try {
       await host.load(fixture, { pluginId: 'flood', config });
       await host.runLifecycle('onEnable');
+      await options.afterEnable?.();
     } finally {
       await host.terminate();
     }
@@ -97,21 +109,49 @@ describe('a worker whose plugin loops without yielding', () => {
   });
 
   describe('calling a capability without awaiting', () => {
-    it('hands the host no more capability calls than the worker leaves unanswered', async () => {
+    const CALLS = 20_000;
+
+    it('hands the host no more capability calls than the worker leaves unanswered while the loop runs', async () => {
       let dispatched = 0;
+      let whileLooping = -1;
       // No host in-flight bound: only the worker's own bound is in play.
       await run(
         CAP_FLOOD_FIXTURE,
-        { calls: 20_000 },
+        { calls: CALLS },
         {
           capDispatcher: () => {
             dispatched++;
             return Promise.resolve(null);
           },
+          // The loop yields only when it ends, so the worker reads no reply before its lifecycle result: what the
+          // host has been handed by now is what the loop posted.
+          afterEnable: () => {
+            whileLooping = dispatched;
+          },
         },
       );
 
-      expect(dispatched).toBe(SANDBOX_MAX_PENDING_CAPS);
+      expect(whileLooping).toBe(SANDBOX_MAX_PENDING_CAPS);
+    });
+
+    it('holds the rest back until replies free slots, and refuses only the calls past the held bound', async () => {
+      let dispatched = 0;
+      const accepted = SANDBOX_MAX_PENDING_CAPS + SANDBOX_MAX_HELD_CAPS;
+      await run(
+        CAP_FLOOD_FIXTURE,
+        { calls: CALLS },
+        {
+          capDispatcher: () => {
+            dispatched++;
+            return Promise.resolve(null);
+          },
+          afterEnable: () => waitFor(() => dispatched >= accepted, `${accepted} capability calls at the host`),
+        },
+      );
+
+      // The loop made more calls than that, so the rest were refused in the worker and never reached the host.
+      expect(CALLS).toBeGreaterThan(accepted);
+      expect(dispatched).toBe(accepted);
     });
   });
 });

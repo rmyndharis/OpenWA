@@ -1,33 +1,57 @@
-import { WorkerToHostMessage, HostToWorkerMessage, SANDBOX_MAX_PENDING_CAPS } from './protocol';
+import { WorkerToHostMessage, HostToWorkerMessage, SANDBOX_MAX_PENDING_CAPS, SANDBOX_MAX_HELD_CAPS } from './protocol';
 import { hookConfigStore } from './worker-hooks';
 import { ConversationSendEnvelope } from '../plugin.interfaces';
 import { HandoverState } from '../../../modules/integration/entities/conversation-mapping.entity';
 
+interface Waiter {
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+}
+
+interface Call {
+  verb: string;
+  args: unknown[];
+  inFlight?: string[];
+  waiter: Waiter;
+}
+
 /**
  * Worker-side correlation for capability calls. Each `call` posts a `cap` request and resolves when
  * the host's matching `cap-result` arrives. The mirror of the host's PluginWorkerHost correlation.
+ *
+ * At most SANDBOX_MAX_PENDING_CAPS calls are unanswered at once. A call made while that many are waiting
+ * is held, and posted in the order it was made as each reply frees a slot: a loop that does not await its
+ * calls then hands the host a bounded number of messages, and no call is refused until
+ * SANDBOX_MAX_HELD_CAPS are held.
  */
 export class WorkerCapabilityClient {
   private nextId = 1;
-  private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private readonly pending = new Map<number, Waiter>();
+  // Calls waiting for a slot, oldest first. Never non-empty while a slot is free: handleResult fills a slot at once.
+  private readonly held: Call[] = [];
 
   constructor(private readonly post: (message: WorkerToHostMessage) => void) {}
 
   call(verb: string, args: unknown[]): Promise<unknown> {
-    // The host refuses past its own in-flight bound, but each refused call is still a message it reads and answers on
-    // its one thread: a loop that does not await its calls would flood it, so the worker refuses first.
-    if (this.pending.size >= SANDBOX_MAX_PENDING_CAPS) {
-      return Promise.reject(
-        new Error(`capability call rejected: too many unanswered capability calls (limit ${SANDBOX_MAX_PENDING_CAPS})`),
-      );
-    }
-    const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      const inFlight = hookConfigStore.getStore()?.inFlight;
-      // Post before registering: an uncloneable arg throws here (rejecting this promise), and an entry
-      // registered first would never be removed, since no cap-result can come back for it.
-      this.post(inFlight ? { kind: 'cap', id, verb, args, inFlight } : { kind: 'cap', id, verb, args });
-      this.pending.set(id, { resolve, reject });
+      // Read now: a held call is posted from handleResult, which runs outside the hook dispatch that made it.
+      const call: Call = { verb, args, inFlight: hookConfigStore.getStore()?.inFlight, waiter: { resolve, reject } };
+      if (this.pending.size < SANDBOX_MAX_PENDING_CAPS) {
+        this.send(call);
+        return;
+      }
+      if (this.held.length >= SANDBOX_MAX_HELD_CAPS) {
+        reject(new Error(`capability call rejected: too many held capability calls (limit ${SANDBOX_MAX_HELD_CAPS})`));
+        return;
+      }
+      try {
+        // postMessage copies the args when it is called; a call posted later must send them as they are now.
+        // An uncloneable arg throws here, rejecting this call before it takes a place in the queue.
+        call.args = structuredClone(args);
+        this.held.push(call);
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -37,6 +61,20 @@ export class WorkerCapabilityClient {
     this.pending.delete(message.id);
     if (message.ok) waiter.resolve(message.result);
     else waiter.reject(new Error(message.error));
+    // The slot goes to the call that has waited longest. A call that cannot be posted takes none, so the next one tries.
+    while (this.held.length > 0 && this.pending.size < SANDBOX_MAX_PENDING_CAPS) this.send(this.held.shift()!);
+  }
+
+  private send({ verb, args, inFlight, waiter }: Call): void {
+    const id = this.nextId++;
+    try {
+      // Post before registering: an uncloneable arg throws here (rejecting this call alone), and an entry
+      // registered first would never be removed, since no cap-result can come back for it.
+      this.post(inFlight ? { kind: 'cap', id, verb, args, inFlight } : { kind: 'cap', id, verb, args });
+      this.pending.set(id, waiter);
+    } catch (error) {
+      waiter.reject(error);
+    }
   }
 }
 

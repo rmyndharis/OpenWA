@@ -37,11 +37,19 @@ export const SANDBOX_LOG_WINDOW_MS = 10000;
 export const SANDBOX_MAX_INFLIGHT_CAPS = 32;
 
 /**
- * Capability calls a worker leaves unanswered before it refuses the next one itself. Twice the host's bound, so a
- * call the host would run is never refused here, and a loop that does not await its calls stops posting: each
- * message past the host's bound is still read and answered on the host's one thread.
+ * Capability calls a worker leaves unanswered before it holds the next one back. Twice the host's bound, so the host's
+ * own bound is still the one a slow verb meets first. A loop that does not await its calls stops posting here: each
+ * message past the host's bound is still read and answered on the host's one thread, so a call past this waits in the
+ * worker until a reply frees a slot, in the order the plugin made the calls.
  */
 export const SANDBOX_MAX_PENDING_CAPS = SANDBOX_MAX_INFLIGHT_CAPS * 2;
+
+/**
+ * Capability calls a worker holds back at once, past SANDBOX_MAX_PENDING_CAPS. A loop that never yields fills this
+ * queue in the worker's own heap, and the call past it is refused, so the host is handed no more than
+ * SANDBOX_MAX_PENDING_CAPS messages while the loop runs.
+ */
+export const SANDBOX_MAX_HELD_CAPS = 10000;
 
 export type HostToWorkerMessage =
   | { kind: 'load'; mainPath: string; context?: SandboxStaticContext }
