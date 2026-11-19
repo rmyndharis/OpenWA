@@ -488,12 +488,12 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       return true;
     } catch (err) {
       writing.failed = true;
-      // The entry's own record of the revocation outlives the mirror entry and an overlapping lookup. The mark names no
-      // phone, so no row equals it, not even the one a failed report's mark would have admitted.
-      if (writing.revoking === lookup) {
-        setNewest(this.failedPhones, lid, '', this.maxCachedLids || Infinity);
-        if (this.lidToPhone.has(lid)) this.failedWrites.add(lid);
-      }
+      // The update revokes any reported row that names another phone, whatever the mirror holds: a row another node
+      // reported is revoked by the statement that landed, so a failed one marks the lid however it compared with the
+      // mirror. The mark names no phone, so no row equals it, not even the one a failed report's mark would have
+      // admitted.
+      setNewest(this.failedPhones, lid, '', this.maxCachedLids || Infinity);
+      if (this.lidToPhone.has(lid)) this.failedWrites.add(lid);
       this.warnWriteFailed(`Could not store lid mapping: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     } finally {

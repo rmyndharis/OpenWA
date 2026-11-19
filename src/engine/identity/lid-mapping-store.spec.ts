@@ -4199,27 +4199,59 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       await refused(['628111', '628222']);
     });
 
-    it('marks nothing when a lookup of the stored phone fails', async () => {
+    it('answers no phone when a lookup of the stored phone fails, until a report of the lid lands', async () => {
       jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
       await expect(store.rememberIfUnknown('333', '628111', OTHER)).resolves.toBe(false);
       warn.mockClear();
       await pushOut();
 
+      expect(evicted()).toBe(1);
+      await refused(['628111']);
+
+      await expect(store.remember('333', '628111', OWNER)).resolves.toBe(true);
       expect(evicted()).toBe(0);
       await answers('628111');
     });
 
-    it('marks nothing when a lookup of the phone a display-only row holds fails, so another node re-maps the lid', async () => {
-      await repo.update({ lid: '333' }, { isReported: false }); // 628111 is kept for display only
-      await store.reload();
+    // The statement revokes any reported row that names another phone than the lookup's, whatever the mirror holds: the
+    // row another node reported is revoked when the statement lands, so it is not answered when the statement fails.
+    describe.each([
+      ['a display-only row', false],
+      ['a reported row', true],
+    ] as const)('a lookup of the phone %s holds', (_row, isReported) => {
+      const remapped = async (): Promise<void> => {
+        await repo.update({ lid: '333' }, { isReported });
+        await store.reload();
+        await peerRemaps('628333'); // reported by another node, which this node's mirror has not seen
+      };
+
+      it('revokes the row another node reported when it lands', async () => {
+        await remapped();
+
+        await expect(store.rememberIfUnknown('333', '628111', OTHER)).resolves.toBe(true);
+
+        await refused(['628111', '628333']);
+      });
+
+      it('answers no phone when it fails, as it would have left the lid had it landed', async () => {
+        await remapped();
+        jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+
+        await expect(store.rememberIfUnknown('333', '628111', OTHER)).resolves.toBe(false);
+        warn.mockClear();
+
+        await refused(['628111', '628333']);
+      });
+    });
+
+    it('answers no phone when a lookup of a lid the mirror does not hold fails, and the table holds a reported row', async () => {
+      await pushOut(); // 333 is not in the mirror
       jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
-      await expect(store.rememberIfUnknown('333', '628111', OTHER)).resolves.toBe(false);
+
+      await expect(store.rememberIfUnknown('333', '628666', OTHER)).resolves.toBe(false);
       warn.mockClear();
-      expect(evicted()).toBe(0);
 
-      await peerRemaps('628333');
-
-      await answers('628333');
+      await refused(['628111', '628666']);
     });
 
     it('keeps refusing the lid when a lookup of the stored phone fails after the report that replaced it failed', async () => {
