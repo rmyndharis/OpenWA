@@ -1093,6 +1093,7 @@ class WebhookRedriveResult(TypedDict):
 
 class ChatSummary(TypedDict):
     id: Jid
+    # '' for a Baileys chat held under a privacy id that has no name of its own: title it by `phone`, when present.
     name: str
     # Phone digits of a privacy-id chat, when the session can map it.
     phone: NotRequired[str]
