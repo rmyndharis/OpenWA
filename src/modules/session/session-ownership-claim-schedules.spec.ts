@@ -15,11 +15,13 @@ interface Gate {
   release: () => void;
 }
 
-const labelOf = (sql: string): string => {
+const labelOf = (sql: string, params: unknown): string => {
   const text = sql.replace(/\s+/g, ' ');
   if (/^UPDATE/i.test(text)) {
     if (/"updatedAt" = "updatedAt"/.test(text)) return 'lock';
-    if (/"claimedAt"/.test(text) && /"nodeUrl"/.test(text)) return 'write';
+    // The claim sets the row's owner and the release clears it.
+    if (/"claimedAt"/.test(text) && /"nodeUrl"/.test(text))
+      return Array.isArray(params) && params[0] === null ? 'release' : 'write';
     return 'renew';
   }
   return /^SELECT/i.test(text) ? 'select' : text.split(' ')[0].toLowerCase();
@@ -36,7 +38,7 @@ function gateStatements(dataSource: DataSource) {
   const hold = (label: string, stage: Gate['stage']): Promise<void> =>
     new Promise<void>(release => gates.waiting.push({ label, stage, release }));
   proto.query = async function patched(this: unknown, ...args: unknown[]): Promise<unknown> {
-    const label = labelOf(String(args[0]));
+    const label = labelOf(String(args[0]), args[1]);
     if (!gates.enabled || gates.passThrough.has(label)) return original.apply(this, args);
     await hold(label, 'exec');
     const answer = await original.apply(this, args).then(
@@ -121,6 +123,16 @@ describe('claims of one session that overlap on a node', () => {
   type Ask = (node: SessionOwnershipService, id: string, onClaimed: (owns: () => boolean) => void) => Promise<boolean>;
   const claimAsk: Ask = (node, id, onClaimed) => node.claim(id, onClaimed);
 
+  /** What this node did with the session before the claims begin. */
+  interface Setup {
+    /** A claim of its own settled earlier, so the node holds the row in memory too. */
+    holds?: boolean;
+    /** Releases of the session that begin just before the claims: their statements are held like the claims'. */
+    releases?: number;
+    /** The releases are the one a node makes of everything it holds on its way down. */
+    shutdown?: boolean;
+  }
+
   /**
    * One schedule: `claims` claims begin together and `pick` chooses which held statement stage goes next. Returns what
    * the follow-up handler and the claims' callbacks saw, the schedule taken and the choices each step had.
@@ -131,6 +143,7 @@ describe('claims of one session that overlap on a node', () => {
     transactional: boolean,
     pick: (choices: Gate[], step: number) => number,
     ask: Ask = claimAsk,
+    setup: Setup = {},
   ): Promise<Run & { taken: number[]; choices: number[] }> {
     await sessions.clear();
     const node = new SessionOwnershipService(sessions, config('node-a'));
@@ -144,11 +157,21 @@ describe('claims of one session that overlap on a node', () => {
     }, transactional);
     const lost: string[][] = [];
     node.onLeaseLoss(ids => void lost.push(ids));
+    if (setup.holds) await node.claim(saved.id);
     const onClaimed: Array<{ label: string; owns: () => boolean }> = [];
     const answers: Claim[] = [];
+    const problems: string[] = [];
     held.gates.waiting = [];
     held.gates.passThrough = transactional ? new Set(['begin', 'commit', 'rollback']) : new Set();
     held.gates.enabled = true;
+    let releasing = setup.releases ?? 0;
+    for (let at = 0; at < (setup.releases ?? 0); at++) {
+      void (setup.shutdown ? node.releaseAll() : node.release(saved.id)).then(
+        () => void releasing--,
+        () => void (releasing--, problems.push('a release threw')),
+      );
+    }
+    const finished = (): boolean => releasing === 0 && answers.every(claim => claim.done);
     for (let at = 0; at < claims; at++) {
       const label = String.fromCharCode(65 + at);
       const claim: Claim = { label, done: false };
@@ -161,19 +184,18 @@ describe('claims of one session that overlap on a node', () => {
     const schedule: string[] = [];
     const taken: number[] = [];
     const choices: number[] = [];
-    const problems: string[] = [];
     for (let step = 0; step < 600; step++) {
       await settle();
       if (held.gates.waiting.length === 0) {
-        if (answers.every(claim => claim.done)) break;
-        // A claim with no statement held is waiting for the transaction another claim has open to end.
+        if (finished()) break;
+        // A claim with no statement held is waiting for the transaction another claim has open to end, or for a release.
         const deadline = Date.now() + 10_000;
-        while (held.gates.waiting.length === 0 && !answers.every(claim => claim.done) && Date.now() < deadline) {
+        while (held.gates.waiting.length === 0 && !finished() && Date.now() < deadline) {
           await new Promise(resolve => setTimeout(resolve, 2));
         }
         await settle();
         if (held.gates.waiting.length === 0) {
-          if (!answers.every(claim => claim.done)) problems.push('a claim never settled');
+          if (!finished()) problems.push('a claim or a release never settled');
           break;
         }
       }
@@ -197,6 +219,8 @@ describe('claims of one session that overlap on a node', () => {
     if (isOwned !== internals.claimGen.has(saved.id)) problems.push('owned and claimGen disagree');
     if (internals.latestClaim.size !== 0) problems.push('a claim in flight was left registered');
     if (isOwned && final.nodeId !== 'node-a') problems.push(`owned, but the row names ${final.nodeId}`);
+    if (isOwned && !(final.claimedAt && final.leaseExpiresAt && final.leaseExpiresAt.getTime() > Date.now()))
+      problems.push('owned, but the row carries no live claim');
     if (lost.length > 0) problems.push('a lease loss was reported');
     for (const { label, owns } of onClaimed) if (!owns()) problems.push(`the claim captured by ${label} reads as lost`);
     // Nothing but a peer's live lease makes a claim answer false, however many of them overlap.
@@ -205,6 +229,7 @@ describe('claims of one session that overlap on a node', () => {
       if (answer !== !peerHolds)
         problems.push(`claim ${label} answered ${answer} with ${peerHolds ? 'a' : 'no'} live peer`);
     }
+    if (claims > 0 && !peerHolds && !isOwned) problems.push('every claim answered true and this node holds nothing');
     return {
       schedule,
       followUps,
@@ -217,13 +242,23 @@ describe('claims of one session that overlap on a node', () => {
   }
 
   /** Every schedule of the claims, depth first: each step that had a choice is walked with every alternative. */
-  async function walk(row: () => Partial<Session>, claims: number, transactional: boolean): Promise<Run[]> {
+  async function walk(
+    row: () => Partial<Session>,
+    claims: number,
+    transactional: boolean,
+    setup: Setup = {},
+  ): Promise<Run[]> {
     const runs: Run[] = [];
     const pending: number[][] = [[]];
     while (pending.length > 0) {
       const prefix = pending.pop()!;
-      const run = await play(row(), claims, transactional, (_choices, step) =>
-        step < prefix.length ? prefix[step] : 0,
+      const run = await play(
+        row(),
+        claims,
+        transactional,
+        (_choices, step) => (step < prefix.length ? prefix[step] : 0),
+        claimAsk,
+        setup,
       );
       runs.push(run);
       for (let step = prefix.length; step < run.choices.length; step++) {
@@ -240,6 +275,7 @@ describe('claims of one session that overlap on a node', () => {
     transactional: boolean,
     count: number,
     ask: Ask = claimAsk,
+    setup: Setup = {},
   ) {
     let state = 1;
     const next = (bound: number): number => {
@@ -248,7 +284,7 @@ describe('claims of one session that overlap on a node', () => {
     };
     const runs: Run[] = [];
     for (let at = 0; at < count; at++) {
-      runs.push(await play(row(), claims, transactional, choices => next(choices.length), ask));
+      runs.push(await play(row(), claims, transactional, choices => next(choices.length), ask, setup));
     }
     return runs;
   }
@@ -474,5 +510,84 @@ describe('claims of one session that overlap on a node', () => {
 
       expect(problemsOf(runs)).toEqual([]);
     }, 120_000);
+  });
+
+  // A release clears the row this node holds, and a claim of this node writes that same owner: were the claim's write to
+  // land first, the release would clear the row of a claim the node holds. The claims below begin while the release is
+  // writing, so they wait for it, and in every schedule they end holding the row they wrote.
+  describe('claims that begin while a release of the session by this node is writing', () => {
+    const forms = [
+      ['the handler a running gateway registers', true],
+      ['a detached handler', false],
+    ] as const;
+    const rows = [
+      ['a free row', freeRow, {}],
+      ['a row this node holds, in memory and in the database', freeRow, { holds: true }],
+      ['a row only the database says this node holds', heldByNode, {}],
+    ] as const;
+    const cases = forms.flatMap(([formLabel, transactional]) =>
+      rows.map(([rowLabel, row, setup]) => [`${rowLabel}, with ${formLabel}`, row, setup, transactional] as const),
+    );
+
+    it.each(cases)(
+      'ends holding the row in every schedule of one release and one claim on %s',
+      async (_label, row, setup, transactional) => {
+        const runs = await walk(row, 1, transactional, { ...setup, releases: 1 });
+
+        expect(problemsOf(runs)).toEqual([]);
+      },
+      120_000,
+    );
+
+    it.each(cases)(
+      'ends holding the row in every schedule of one release and two claims on %s',
+      async (_label, row, setup, transactional) => {
+        const runs = await walk(row, 2, transactional, { ...setup, releases: 1 });
+
+        expect(problemsOf(runs)).toEqual([]);
+      },
+      300_000,
+    );
+
+    // Two stops of the session in a row each release: a claim waits for both, not only the last to begin.
+    it.each(cases)(
+      'ends holding the row in every schedule of two releases and one claim on %s',
+      async (_label, row, setup, transactional) => {
+        const runs = await walk(row, 1, transactional, { ...setup, releases: 2 });
+
+        expect(problemsOf(runs)).toEqual([]);
+      },
+      300_000,
+    );
+
+    // What a node does on its way down releases every claim it holds in one statement.
+    it.each(forms)(
+      'ends holding the row in every schedule of a shutdown release and one claim, with %s',
+      async (_label, transactional) => {
+        const runs = await walk(freeRow, 1, transactional, { holds: true, releases: 1, shutdown: true });
+
+        expect(problemsOf(runs)).toEqual([]);
+      },
+      120_000,
+    );
+
+    // The release takes the lapsed holder's row over, and follows that up; the claim then finds a row nobody holds.
+    it.each(forms)(
+      'follows up the takeover of a lapsed holder once when a release and a claim overlap, with %s',
+      async (_label, transactional) => {
+        const runs = await walk(lapsedPeer, 1, transactional, { releases: 1 });
+
+        expect(problemsOf(runs)).toEqual([]);
+        expect(runs.map(run => run.followUps)).toEqual(runs.map(() => 1));
+      },
+      120_000,
+    );
+
+    it('leaves the row of a live peer to it, and refuses every claim', async () => {
+      const runs = await walk(livePeer, 2, true, { releases: 1 });
+
+      expect(problemsOf(runs)).toEqual([]);
+      expect(runs.map(run => run.onClaimed)).toEqual(runs.map(() => []));
+    }, 300_000);
   });
 });

@@ -4659,6 +4659,153 @@ describe('requests for one session that overlap on a single node', () => {
     });
   });
 
+  // A stop, a logout, a force-kill and a start that failed each hand the claim back once their work is done. A request for
+  // the same session that begins while that release is still writing claims the row it is about to clear: the claim has
+  // to wait for the release, or its write lands first and the release clears the row of a claim this node holds. A delete
+  // then found its claim gone and answered 409, a start was refused as stopped or lost its engine at the next heartbeat,
+  // and no other node was involved. Every statement is held here and let through by the test, the release's last, so the
+  // request that began meanwhile writes before it wherever it can. SQLite only: a statement answers within the turn it is
+  // let through, which is what makes the order the test's.
+  (pg ? describe.skip : describe)('a request that begins while the claim is being handed back', () => {
+    interface Held {
+      release: boolean;
+      go: () => void;
+    }
+    const held: Held[] = [];
+    let holding = false;
+    let restore: (() => void) | undefined;
+
+    beforeEach(() => {
+      const runner = db.createQueryRunner();
+      const proto = Object.getPrototypeOf(runner) as { query: (...args: unknown[]) => Promise<unknown> };
+      void runner.release();
+      const query = proto.query;
+      proto.query = function gated(this: unknown, ...args: unknown[]): Promise<unknown> {
+        const sql = String(args[0]).replace(/\s+/g, ' ');
+        if (!holding || /^(BEGIN|START|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)/i.test(sql)) return query.apply(this, args);
+        // What hands a claim back writes no owner.
+        const release =
+          /^UPDATE "sessions" SET "nodeId" = \?/.test(sql) && Array.isArray(args[1]) && args[1][0] === null;
+        return new Promise<void>(go => held.push({ release, go })).then(() => query.apply(this, args));
+      };
+      restore = () => void (proto.query = query);
+    });
+
+    afterEach(() => {
+      holding = false;
+      for (const one of held.splice(0)) one.go();
+      restore?.();
+    });
+
+    const settle = async (): Promise<void> => {
+      for (let round = 0; round < 3; round++) await new Promise<void>(resolve => setImmediate(resolve));
+    };
+
+    /** Let statements through, any but a release first, then free the delete hooks, until `stop` holds. */
+    async function drive(stop: () => boolean, hooks: Array<{ release: () => void }> = []): Promise<void> {
+      let freed = 0;
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        await settle();
+        if (stop() || Date.now() >= deadline) break;
+        const at = held.findIndex(one => !one.release);
+        if (at >= 0 || held.length > 0) held.splice(Math.max(at, 0), 1)[0].go();
+        else if (freed < hooks.length) hooks[freed++].release();
+        else await new Promise(resolve => setTimeout(resolve, 2));
+      }
+      expect(stop()).toBe(true);
+    }
+
+    const outcome = (request: Promise<unknown>): { done: () => boolean; answer: () => Promise<unknown> } => {
+      let finished = false;
+      const answer = request.then(
+        () => 'done',
+        (error: unknown) => error,
+      );
+      void answer.then(() => (finished = true));
+      return { done: () => finished, answer: () => answer };
+    };
+
+    type Stack = ReturnType<typeof stack>;
+    /** The ways a claim is handed back: each starts the session if it has to, and answers the request that hands it back. */
+    const handBacks: Array<[string, (built: Stack, id: string) => Promise<() => Promise<unknown>>]> = [
+      [
+        'a stop',
+        async ({ service }, id) => {
+          await service.start(id, { explicit: true });
+          return () => service.stop(id);
+        },
+      ],
+      [
+        'a logout',
+        async ({ service }, id) => {
+          await service.start(id, { explicit: true });
+          return () => service.logout(id);
+        },
+      ],
+      [
+        'a force-kill',
+        async ({ service }, id) => {
+          await service.start(id, { explicit: true });
+          return () => service.forceKill(id);
+        },
+      ],
+      [
+        'a start the engine refused',
+        // Not retried: only a transient failure is, and a refusal answered as such is not one.
+        ({ service, factory }, id) => {
+          factory.create.mockImplementationOnce(() => ({
+            ...makeEngine(),
+            initialize: jest.fn().mockRejectedValue(new BadRequestException('engine refused')),
+          }));
+          return Promise.resolve(() => service.start(id, { explicit: true }));
+        },
+      ],
+    ];
+
+    it.each(handBacks)('does not refuse a delete that begins while %s hands the claim back', async (_label, begin) => {
+      const built = stack({ adoptionHandler: true, holdDeleteHook: true });
+      const { service, lifecycle, ownership, heldHooks, stopOrphans } = built;
+      const row = await seed();
+      const handBack = await begin(built, row.id);
+
+      holding = true;
+      const first = outcome(handBack());
+      await drive(() => held.some(one => one.release));
+      const second = outcome(service.delete(row.id));
+      await drive(() => first.done() && second.done(), heldHooks);
+      holding = false;
+
+      expect(await second.answer()).toBe('done');
+      expect(await sessions.countBy({ id: row.id })).toBe(0);
+      expect(ownership.ownedIds()).toEqual([]);
+      expect(stopOrphans).not.toHaveBeenCalled();
+      expect(leftoversOf(service, lifecycle, row.id)).toEqual({ stopMark: false, stopRequest: false });
+    });
+
+    it.each(handBacks)('does not refuse a start that begins while %s hands the claim back', async (_label, begin) => {
+      const built = stack({ adoptionHandler: true });
+      const { service, ownership, stopOrphans } = built;
+      const row = await seed();
+      const handBack = await begin(built, row.id);
+
+      holding = true;
+      const first = outcome(handBack());
+      await drive(() => held.some(one => one.release));
+      const second = outcome(service.start(row.id, { explicit: true }));
+      await drive(() => first.done() && second.done());
+      holding = false;
+
+      expect(await second.answer()).toBe('done');
+      // The heartbeat reads a row nobody holds as a claim a peer took, and would tear the engine down.
+      await ownership.renew();
+      expect(stopOrphans).not.toHaveBeenCalled();
+      expect(ownership.ownedIds()).toEqual([row.id]);
+      expect(service.getEngine(row.id)).toBeDefined();
+      expect((await sessions.findOneByOrFail({ id: row.id })).nodeId).toBe(NODE);
+    });
+  });
+
   // The other side of the same read: a row removed by someone else (an operator, an import that left the engines
   // running) while its engine runs here is a claim that really ended, and the heartbeat must still stop that engine.
   describe('a row removed by someone else while its engine runs here', () => {

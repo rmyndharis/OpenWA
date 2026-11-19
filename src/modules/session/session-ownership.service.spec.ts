@@ -312,6 +312,7 @@ describe('SessionOwnershipService', () => {
       const [one, two, three] = [await seed(), await seed(), await seed()];
       const nodeA = service('node-a');
       const claimGen = (nodeA as unknown as { claimGen: Map<string, number> }).claimGen;
+      const releasing = (nodeA as unknown as { releasing: Map<string, unknown> }).releasing;
       await nodeA.claim(one.id);
       await nodeA.claim(two.id);
       await nodeA.claim(three.id);
@@ -320,9 +321,32 @@ describe('SessionOwnershipService', () => {
       await sessions.update({ id: two.id }, { nodeId: 'node-b', leaseExpiresAt: new Date(Date.now() + 60_000) });
       await nodeA.renew();
       expect([...claimGen.keys()]).toEqual([three.id]);
+      expect(releasing.size).toBe(0);
 
       await nodeA.releaseAll();
       expect(claimGen.size).toBe(0);
+      expect(releasing.size).toBe(0);
+    });
+
+    // A claim that begins while a release is writing waits for it, so a release that failed must not keep it waiting.
+    it('lets a claim begin after a release that failed', async () => {
+      const session = await seed();
+      const nodeA = service('node-a');
+      const releasing = (nodeA as unknown as { releasing: Map<string, unknown> }).releasing;
+      await nodeA.claim(session.id);
+      const failing = jest.spyOn(sessions, 'createQueryBuilder').mockImplementationOnce(() => {
+        throw new Error('database down');
+      });
+
+      try {
+        await expect(nodeA.release(session.id)).rejects.toThrow('database down');
+      } finally {
+        failing.mockRestore();
+      }
+      await expect(nodeA.claim(session.id)).resolves.toBe(true);
+
+      expect(releasing.size).toBe(0);
+      expect((await sessions.findOneByOrFail({ id: session.id })).nodeId).toBe('node-a');
     });
   });
 

@@ -61,6 +61,11 @@ export class SessionOwnershipService {
    * is in flight take their generations in the order their replies arrive.
    */
   private readonly latestClaim = new Map<string, Promise<boolean>>();
+  /**
+   * The releases of a session that clear its row and have not ended, until they do. A claim written meanwhile names
+   * this node as the row it is about to clear does, so the release would clear the claim: claims wait for these.
+   */
+  private readonly releasing = new Map<string, Promise<unknown>>();
   /** Notified when a renewal proves this process no longer holds sessions it thought it did. */
   private onLeaseLost?: (sessionIds: string[]) => Promise<void> | void;
   /** Notified when this process takes a session over from a node whose lease lapsed. See onAdoption. */
@@ -151,10 +156,14 @@ export class SessionOwnershipService {
    * overlap never answers false, however many claims there are: false means a peer holds the row, the row is gone, or
    * a release or a loss ended the claim. A caller that must tell a peer from the others asks isHeldByOtherNode, and
    * asks again when none does.
+   *
+   * A claim does not begin while a release of the session by this node is writing (release, releaseAll): the claim's
+   * write could land first, and the release would then clear the row of a claim this node holds.
    */
   async claim(sessionId: string, onClaimed?: (ownsClaim: () => boolean) => void): Promise<boolean> {
     const own: OwnClaim = {};
     const claim = (async (): Promise<boolean> => {
+      for (let ending = this.releasing.get(sessionId); ending; ending = this.releasing.get(sessionId)) await ending;
       const result = await this.claimOnce(sessionId, own, onClaimed);
       if (result !== 'superseded') return result;
       // A release or a loss ended the claim, or the one that replaced it found a peer.
@@ -327,6 +336,9 @@ export class SessionOwnershipService {
    * it down: a row still naming the dead node reads as an abandoned orphan to the takeover sweep,
    * which would adopt and restart the session the operator just stopped. A LIVE foreign claim is
    * left alone — releasing that would strand a peer's running engine.
+   *
+   * Without a captured claim it ends the claim in memory at once and clears the row, and a claim of this node that
+   * begins before the row is clear waits for it (see claim()). With one it is fenced on that claim instead.
    */
   async release(sessionId: string, ownsClaim?: () => boolean): Promise<void> {
     if (ownsClaim) {
@@ -356,9 +368,13 @@ export class SessionOwnershipService {
       });
       return;
     }
-    const now = new Date();
     this.owned.delete(sessionId);
     this.claimGen.delete(sessionId);
+    await this.whileReleasing([sessionId], this.clearRow(sessionId, new Date()));
+  }
+
+  /** The statements of a release that captured no claim. */
+  private async clearRow(sessionId: string, now: Date): Promise<void> {
     const cleared = { nodeId: null, claimedAt: null, leaseExpiresAt: null, nodeUrl: null };
     // Its own claim first, in one statement as before. Only when that matched nothing is a lapsed
     // claim of another node cleared, and that is a takeover like a claim: the dead holder's
@@ -393,6 +409,27 @@ export class SessionOwnershipService {
   }
 
   /**
+   * Make the claims of these sessions that begin from now on wait for `release` (see claim()), and answer it once they
+   * no longer do. Called in the step that begins the release, so no claim can begin between the two.
+   */
+  private async whileReleasing(ids: string[], release: Promise<unknown>): Promise<void> {
+    const ended = release.then(
+      () => undefined,
+      () => undefined,
+    );
+    const tails = ids.map(id => {
+      // After the release still in flight, if any: a claim waits for all of them.
+      const tail: Promise<void> = Promise.all([this.releasing.get(id), ended]).then(() => {
+        if (this.releasing.get(id) === tail) this.releasing.delete(id);
+      });
+      this.releasing.set(id, tail);
+      return tail;
+    });
+    await Promise.all(tails);
+    await release;
+  }
+
+  /**
    * End this process's claim on a session whose row has just been removed, without touching the database. Left in
    * place, the next renew() reads the missing row as a claim a peer took and reports a loss that never happened.
    * Only the claim `ownsClaim` captured is ended: one a later claim of the same id replaced stays.
@@ -415,12 +452,13 @@ export class SessionOwnershipService {
       this.claimGen.delete(id);
     }
     if (ids.length === 0) return;
-    await this.sessions
+    const cleared = this.sessions
       .createQueryBuilder()
       .update(Session)
       .set({ nodeId: null, claimedAt: null, leaseExpiresAt: null, nodeUrl: null })
       .where({ id: In(ids), nodeId: this.nodeId })
       .execute();
+    await this.whileReleasing(ids, cleared);
     this.logger.log(`Released ${ids.length} session claim(s) on shutdown`, { nodeId: this.nodeId });
   }
 

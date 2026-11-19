@@ -236,6 +236,36 @@ second start reservation): a pair of the other kind, or a partner that has alrea
 false 409. Asking again a fixed number of times: it absorbs about as many overlapping claims as it asks, so three
 requests still answered it.
 
+### INV-12: A release of a session by this node and a claim of it by this node never overlap
+
+**Interleaving:** a stop, a logout, a force-kill or a start that failed hands its claim back. The release ends the
+claim in memory at once and clears the row where it names this node. A request for the same session that begins while
+that statement is still writing (a delete, a start) takes a new generation and writes the row, which names this node
+too. Were its write to land first, the release cleared the row of a claim this node holds: the delete's owner update
+matched nothing and answered 409 "no longer owned by this node", a start was refused as stopped or had its engine torn
+down by the next heartbeat, and a peer could take a session this node was about to run, with no other node in the
+deployment to blame. On PostgreSQL the two statements go out on different connections, so the order they land in is
+not the order the requests began in.
+**Defense:** the row is cleared before a claim of this node writes it.
+
+- `release()` without a captured claim and `releaseAll()` register themselves per session in the step that begins them
+  (`releasing`), and `claim()` waits for every release registered for its session before it reads its own state. The
+  registration ends with the release, failed or not. A release waits for no claim and nothing is held across an engine
+  start, so the wait cannot close a cycle. A claim that began before the release is the release's to end, as before.
+- The release a delete makes with its captured claim is fenced instead: under the row lock it checks that the claim it
+  captured still stands, and a start that reserved the session since makes it do nothing.
+
+**Pinned by:** `session-ownership-claim-schedules.spec.ts` (every schedule of one release, or two, or a shutdown
+release, and one claim or two, over a free row, a row this node holds in memory and in the database, and one only the
+database says it holds; a lapsed holder's row, whose takeover is followed up once; a live peer's, which refuses every
+claim), `session-ownership.service.spec.ts` (the bookkeeping after a release that failed) and `session-delete-claim.spec.ts`
+('a request that begins while the claim is being handed back': a delete and a start beside a stop, a logout, a
+force-kill and a start the engine refused).
+**The naive fixes that are wrong:** guarding the release statement on the lease or the time it knew. A heartbeat tick
+that began before the release extends the lease after it, so the guarded release matches nothing and leaves a claim no
+one renews, for a peer's takeover sweep to adopt a session the operator just stopped; and a time stamp is only as exact
+as the clock. Having the release wait for the claims in flight as well: each would then wait for the other.
+
 ---
 
 ## 31.2 Status-transition ownership
