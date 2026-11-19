@@ -190,5 +190,34 @@ describe('a group invite that WhatsApp answers with a status', () => {
       await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
       await expect(attempt).rejects.toThrow(/answered 500 to the preview of invite CODE/);
     });
+
+    // Only a 500 with an empty text is the shape that rule reads: any other status keeps what its status says.
+    it.each([408, 423, 429, 502, 503])(
+      'is still the retryable failure for the status %i with no text',
+      async status => {
+        previewFailing(statusError(status, 'ServerStatusCodeError', ''));
+
+        const attempt = adapterOnThatPage().getGroupJoinInfo('CODE');
+
+        await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
+        await expect(attempt).rejects.toThrow(new RegExp(`answered ${status} to the preview of invite CODE`));
+      },
+    );
+
+    // The text is read as written: whitespace, or no text at all, is a 500 that says something or nothing readable, and
+    // not the empty answer of the query. Pinned as the retryable failure, as every 500 that is not that exact shape.
+    it.each([
+      ['a text of only spaces', statusError(500, 'ServerStatusCodeError', '  ')],
+      ['a text of a newline', statusError(500, 'ServerStatusCodeError', '\n')],
+      ['no text property', { name: 'ServerStatusCodeError', status: 500 }],
+      ['a null text', { name: 'ServerStatusCodeError', status: 500, message: null }],
+    ])('is still the retryable failure for a 500 with %s', async (_case, error) => {
+      previewFailing(error as Error);
+
+      const attempt = adapterOnThatPage().getGroupJoinInfo('CODE');
+
+      await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
+      await expect(attempt).rejects.toThrow(/answered 500 to the preview of invite CODE/);
+    });
   });
 });

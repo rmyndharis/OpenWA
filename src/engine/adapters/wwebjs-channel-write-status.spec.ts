@@ -261,6 +261,26 @@ describe('a channel write that WhatsApp answers with a status', () => {
       await expect(call(adapterOnThatPage())).rejects.toBeInstanceOf(EngineRefusedError);
     });
 
+    // Matched by the exact text and status: what only contains the text, or has it with another space, case or prefix,
+    // is a real answer of the page and is the outcome that is unknown, as is the same text under another status.
+    it.each([
+      ['a text that contains it before more', `before ${message}`],
+      ['a text that contains it after more', `${message} after`],
+      ['a text with a trailing space', `${message} `],
+      ['a text with a leading space', ` ${message}`],
+      ['a text in another case', message.toUpperCase()],
+      ['a text behind the Mex IQ prefix', `MexIqError: ${message}`],
+    ])('is the unknown outcome for %s', async (_case, text) => {
+      await outcomeUnknown(statusError(status, 'ServerStatusCodeError', text));
+    });
+
+    it.each([408, 423, 429, 500, 503].filter(other => other !== status))(
+      'is the unknown outcome for the same text under the status %i',
+      async other => {
+        await outcomeUnknown(statusError(other, 'ServerStatusCodeError', message));
+      },
+    );
+
     // A real 500 that only mentions null is a failure like any other.
     it('is the unknown outcome for a real 500 that only mentions null', async () => {
       await outcomeUnknown(
