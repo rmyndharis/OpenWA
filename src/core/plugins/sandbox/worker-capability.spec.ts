@@ -3,6 +3,7 @@ import {
   SANDBOX_MAX_HELD_CAPS,
   SANDBOX_MAX_INFLIGHT_CAPS,
   SANDBOX_MAX_PENDING_CAPS,
+  SEND_CAP_VERBS,
   WorkerToHostMessage,
 } from './protocol';
 import { WorkerHookRegistry, hookConfigStore } from './worker-hooks';
@@ -426,5 +427,22 @@ describe('buildSandboxContext', () => {
 
     await ctx.storage.set('k', { a: 1 });
     expect(call).toHaveBeenCalledWith('storage.set', ['k', { a: 1 }]);
+  });
+
+  // A send fires the hooks of the send, so the worker refuses one that outlives its hook handler: a send verb missing
+  // from the set would be posted outside the re-entrancy guard, and a verb left in it after it is gone is dead.
+  it('names every verb of its message and conversation namespaces in SEND_CAP_VERBS, and no other', () => {
+    const verbs: string[] = [];
+    const call = (verb: string): Promise<unknown> => {
+      verbs.push(verb);
+      return Promise.resolve(null);
+    };
+    const ctx = buildSandboxContext({ call } as unknown as WorkerCapabilityClient);
+
+    for (const namespace of [ctx.messages, ctx.conversations])
+      for (const send of Object.values(namespace) as Array<(...args: unknown[]) => unknown>)
+        void send('s', 'c', 'q', 't');
+
+    expect([...verbs].sort()).toEqual([...SEND_CAP_VERBS].sort());
   });
 });
