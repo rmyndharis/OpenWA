@@ -246,6 +246,8 @@
   position: relative;
   width: 48px;
   height: 26px;
+  /* A row's long description takes the room; the track keeps its width so the knob stays inside it. */
+  flex-shrink: 0;
   cursor: pointer;
 }
 
