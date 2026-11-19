@@ -126,7 +126,9 @@ export async function readInviteCodeInPage(chatId: string): Promise<{ status: nu
     }
     // When WhatsApp answers with no code the job throws a plain error with no status: the same answer as a job that
     // resolves none, which the caller turns into the no-code refusal.
-    if (/\[MEX\]\[GROUP\][^\n]*invite code is null/.test(String(refusal?.message))) return { status: 200 };
+    if (typeof refusal?.message === 'string' && /\[MEX\]\[GROUP\][^\n]*invite code is null/.test(refusal.message)) {
+      return { status: 200 };
+    }
     throw err;
   }
 }

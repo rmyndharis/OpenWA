@@ -211,9 +211,8 @@ export async function pinInPage(messageId: string, pin: boolean, durationSeconds
     })) as { messageSendResult?: unknown } | null | undefined;
     return sent?.messageSendResult === 'OK';
   } catch (err) {
-    if (/PinInChat send Error|Unexpeded pin expiry duration/.test(String((err as { message?: unknown })?.message))) {
-      return false;
-    }
+    const message = (err as { message?: unknown } | undefined)?.message;
+    if (typeof message === 'string' && /PinInChat send Error|Unexpeded pin expiry duration/.test(message)) return false;
     throw err;
   }
 }
