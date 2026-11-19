@@ -54,6 +54,8 @@ const sentBy = (participant?: string, fromMe = false): { fromMe: boolean; partic
 // revoke of the status message. The store already hides a story once its 24 hours are up, as WhatsApp does; a story
 // its poster deleted has to leave the reads too, its media has to stop being served, and its file has to go.
 describe('a received status its poster deleted', () => {
+  // The waits below are deadlines of thirty seconds, which is more than a test may take by default.
+  jest.setTimeout(60_000);
   let dir: string;
   let db: DataSource;
   let storage: StorageService;
