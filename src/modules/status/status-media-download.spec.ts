@@ -37,6 +37,7 @@ import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { StorageService } from '../../common/storage/storage.service';
 import { StatusController } from './status.controller';
 import { StatusService } from './status.service';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 const { mockSend } = jest.requireMock<{ mockSend: jest.Mock }>('@aws-sdk/client-s3');
 
@@ -84,9 +85,9 @@ function get(port: number, route: string, opts: { abortAfterFirstChunk?: boolean
   });
 }
 
-const until = async (condition: () => boolean): Promise<void> => {
-  for (let i = 0; i < 100 && !condition(); i++) await new Promise(resolve => setTimeout(resolve, 10));
-};
+// A deadline of thirty seconds: a socket or a stream closes when the machine gets to it.
+jest.setTimeout(60_000);
+const until = (condition: () => boolean): Promise<void> => waitUntil(condition);
 
 describe('GET /sessions/:sessionId/status/:statusId/media', () => {
   const saved = { ...process.env };
