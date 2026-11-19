@@ -3,8 +3,11 @@ import { SANDBOX_LOG_MAX_PER_WINDOW, SANDBOX_LOG_WINDOW_MS } from './protocol';
 
 /**
  * The lines a window admits. The host's log relay counts every message it reads, the limiter's two notes included, and
- * drops past SANDBOX_LOG_MAX_PER_WINDOW in a window; two slots are kept for those notes, so that the messages of a
- * window never exceed what the relay admits and the note that reports the first drop is not itself dropped there.
+ * drops past SANDBOX_LOG_MAX_PER_WINDOW in a window; two slots are kept for those notes, so that the messages of one
+ * window of the limiter stay within one window of the relay and the note that reports the first drop is not itself
+ * dropped there. The two windows open on clocks of their own, the relay's at enable on the wall clock and the
+ * limiter's at the first line on the monotonic one, so a burst that straddles a boundary of the relay's window can
+ * still lose lines there; the relay counts them and logs the count.
  */
 export const SANDBOX_LOG_MAX_LINES_PER_WINDOW = SANDBOX_LOG_MAX_PER_WINDOW - 2;
 

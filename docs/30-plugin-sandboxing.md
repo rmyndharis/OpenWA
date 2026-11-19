@@ -64,10 +64,12 @@ from disk is user-installed and sandboxed.
   cap. The worker therefore limits the log lines and capability calls it posts. `ctx.logger.*` lines are
   limited to 198 per 10 s: the rest are dropped inside the worker, with one note at the first drop and a count
   with the first line after the window ends. The two notes bring a window to the 200 messages per 10 s that the
-  host's log relay admits as a backstop, so neither is refused there. At most 64 capability calls are unanswered
-  at once, twice the 32 concurrent calls the host runs. A call made while 64 are waiting is held in the worker
-  and posted, in the order it was made, as each reply frees a slot, so a `Promise.all` over a long list of calls
-  is answered in full. It is refused with a thrown `Error` only when 10,000 calls are already held, which only a
+  host's log relay admits as a backstop. The relay keeps windows of its own, opened when the plugin is enabled
+  and not when the worker's opens, so a burst that straddles a boundary of the relay's window can still lose
+  lines, or a note, there; the relay then logs how many it dropped. At most 64 capability calls are unanswered at
+  once, twice the 32 concurrent calls the host runs. A call made while 64 are waiting is held in the worker and
+  posted, in the order it was made, as each reply frees a slot, so a `Promise.all` over a long list of calls is
+  answered in full. It is refused with a thrown `Error` only when 10,000 calls are already held, which only a
   loop that never yields reaches. The host's own bound of 32 calls in flight is unchanged: a slow verb past it is
   refused there. A held call keeps the hook chain of the dispatch that made it, which the host honours only while
   that dispatch is in flight, so a call still held after its handler has returned (a loop of more than 64 calls
