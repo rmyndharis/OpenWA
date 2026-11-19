@@ -1,6 +1,7 @@
 import { DataSource, Repository } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { SessionOwnershipService } from './session-ownership.service';
+import { SessionService } from './session.service';
 
 /**
  * Claims of one session that overlap on a node, over a real SQLite database whose statements are held in two stages:
@@ -58,6 +59,7 @@ type Internals = { claimGen: Map<string, number>; latestClaim: Map<string, Promi
 interface Claim {
   label: string;
   done: boolean;
+  answer?: boolean | 'threw';
 }
 
 describe('claims of one session that overlap on a node', () => {
@@ -100,13 +102,24 @@ describe('claims of one session that overlap on a node', () => {
     claimedAt: new Date(),
     leaseExpiresAt: new Date(Date.now() + 60_000),
   });
+  const freeRow = (): Partial<Session> => ({});
+  const heldByNode = (): Partial<Session> => ({
+    nodeId: 'node-a',
+    claimedAt: new Date(),
+    leaseExpiresAt: new Date(Date.now() + 30_000),
+  });
 
   interface Run {
     schedule: string[];
     followUps: number;
     onClaimed: string[];
     problems: string[];
+    answers: Array<boolean | 'threw' | undefined>;
   }
+
+  /** What a claim asks of the node: the service's claim, or what a start and a delete make of it. */
+  type Ask = (node: SessionOwnershipService, id: string, onClaimed: (owns: () => boolean) => void) => Promise<boolean>;
+  const claimAsk: Ask = (node, id, onClaimed) => node.claim(id, onClaimed);
 
   /**
    * One schedule: `claims` claims begin together and `pick` chooses which held statement stage goes next. Returns what
@@ -117,6 +130,7 @@ describe('claims of one session that overlap on a node', () => {
     claims: number,
     transactional: boolean,
     pick: (choices: Gate[], step: number) => number,
+    ask: Ask = claimAsk,
   ): Promise<Run & { taken: number[]; choices: number[] }> {
     await sessions.clear();
     const node = new SessionOwnershipService(sessions, config('node-a'));
@@ -139,10 +153,10 @@ describe('claims of one session that overlap on a node', () => {
       const label = String.fromCharCode(65 + at);
       const claim: Claim = { label, done: false };
       answers.push(claim);
-      void node
-        .claim(saved.id, owns => onClaimed.push({ label, owns }))
-        .finally(() => void (claim.done = true))
-        .catch(() => undefined);
+      void ask(node, saved.id, owns => onClaimed.push({ label, owns })).then(
+        answer => void ((claim.answer = answer), (claim.done = true)),
+        () => void ((claim.answer = 'threw'), (claim.done = true)),
+      );
     }
     const schedule: string[] = [];
     const taken: number[] = [];
@@ -185,11 +199,18 @@ describe('claims of one session that overlap on a node', () => {
     if (isOwned && final.nodeId !== 'node-a') problems.push(`owned, but the row names ${final.nodeId}`);
     if (lost.length > 0) problems.push('a lease loss was reported');
     for (const { label, owns } of onClaimed) if (!owns()) problems.push(`the claim captured by ${label} reads as lost`);
+    // Nothing but a peer's live lease makes a claim answer false, however many of them overlap.
+    const peerHolds = row.nodeId != null && row.nodeId !== 'node-a' && row.leaseExpiresAt!.getTime() > Date.now();
+    for (const { label, answer } of answers) {
+      if (answer !== !peerHolds)
+        problems.push(`claim ${label} answered ${answer} with ${peerHolds ? 'a' : 'no'} live peer`);
+    }
     return {
       schedule,
       followUps,
       onClaimed: onClaimed.map(one => one.label),
       problems,
+      answers: answers.map(claim => claim.answer),
       taken,
       choices,
     };
@@ -213,7 +234,13 @@ describe('claims of one session that overlap on a node', () => {
   }
 
   /** Seeded schedules, for claim counts too large to walk. */
-  async function sample(row: () => Partial<Session>, claims: number, transactional: boolean, count: number) {
+  async function sample(
+    row: () => Partial<Session>,
+    claims: number,
+    transactional: boolean,
+    count: number,
+    ask: Ask = claimAsk,
+  ) {
     let state = 1;
     const next = (bound: number): number => {
       state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
@@ -221,7 +248,7 @@ describe('claims of one session that overlap on a node', () => {
     };
     const runs: Run[] = [];
     for (let at = 0; at < count; at++) {
-      runs.push(await play(row(), claims, transactional, choices => next(choices.length)));
+      runs.push(await play(row(), claims, transactional, choices => next(choices.length), ask));
     }
     return runs;
   }
@@ -295,14 +322,7 @@ describe('claims of one session that overlap on a node', () => {
   );
 
   it('follows up nothing when the row was free or held by the node', async () => {
-    for (const row of [
-      (): Partial<Session> => ({}),
-      (): Partial<Session> => ({
-        nodeId: 'node-a',
-        claimedAt: new Date(),
-        leaseExpiresAt: new Date(Date.now() + 30_000),
-      }),
-    ]) {
+    for (const row of [freeRow, heldByNode]) {
       const runs = await walk(row, 2, true);
 
       expect(runs.flatMap(run => run.problems)).toEqual([]);
@@ -316,5 +336,140 @@ describe('claims of one session that overlap on a node', () => {
     expect(runs.flatMap(run => run.problems)).toEqual([]);
     expect(runs.map(run => run.followUps)).toEqual(runs.map(() => 0));
     expect(runs.map(run => run.onClaimed)).toEqual(runs.map(() => []));
+  });
+
+  // A claim that a newer generation superseded answers for the claim that took it, and once that has settled for whether
+  // a claim of this node stands. Nothing but a peer's live lease makes a claim answer false, however many overlap: the
+  // answers of every schedule below are the ones a node alone gives, and so are the ones a start and a delete read.
+  describe('claims of one session that no other node contests', () => {
+    // What a start and a delete ask of the node: a claim, and when it misses without a peer holding the row, one more.
+    const startOrDelete = (
+      Object.create(SessionService.prototype) as {
+        claimUnlessHeldElsewhere: (
+          id: string,
+          ownership: SessionOwnershipService,
+          onClaimed: (owns: () => boolean) => void,
+        ) => Promise<boolean>;
+      }
+    ).claimUnlessHeldElsewhere;
+    const askLikeStartOrDelete: Ask = (node, id, onClaimed) =>
+      startOrDelete.call(Object.create(null), id, node, onClaimed);
+    const forms = [
+      ['the handler a running gateway registers', true],
+      ['a detached handler', false],
+    ] as const;
+
+    // A begins and takes generation 1. B and C begin while it is in flight and renew, both reading generation 1. B's
+    // reply comes first and misses, so B takes generation 2 and A is superseded. C's reply then finds the generation
+    // replaced by a claim that began before it: C did not take it, and answers for B, as A does.
+    it.each([
+      [
+        'the handler a running gateway registers',
+        true,
+        [
+          'renew:exec',
+          'renew:exec',
+          'lock:exec',
+          'renew:reply',
+          'renew:reply',
+          'lock:reply',
+          'select:exec',
+          'select:reply',
+          'lock:exec',
+          'lock:reply',
+          'select:exec',
+          'select:reply',
+          'write:exec',
+          'write:reply',
+        ],
+      ],
+      [
+        'a detached handler',
+        false,
+        [
+          'select:exec',
+          'renew:exec',
+          'renew:exec',
+          'renew:reply',
+          'select:reply',
+          'select:exec',
+          'select:reply',
+          'write:exec',
+          'write:reply',
+          'renew:reply',
+        ],
+      ],
+    ])(
+      'answers three claims true when the last to begin is superseded by the one before it, with %s',
+      async (_label, transactional, script) => {
+        const run = await play(freeRow(), 3, transactional, (choices, step) => {
+          const [label, stage] = (script[step] ?? ':').split(':');
+          return Math.max(
+            0,
+            choices.findIndex(gate => gate.label === label && gate.stage === stage),
+          );
+        });
+
+        expect(run.problems).toEqual([]);
+        expect(run.answers).toEqual([true, true, true]);
+        expect(run.onClaimed).toEqual(['B']);
+      },
+    );
+
+    it.each(forms)(
+      'answers every claim true in every schedule of two claims on a row the node holds, with %s',
+      async (_label, transactional) => {
+        const runs = await walk(heldByNode, 2, transactional);
+
+        expect(runs.length).toBeGreaterThan(10);
+        expect(runs.flatMap(run => run.problems)).toEqual([]);
+      },
+    );
+
+    it.each(forms)(
+      'answers every claim true in every schedule of three claims on a free row, with %s',
+      async (_label, transactional) => {
+        const runs = await walk(freeRow, 3, transactional);
+
+        expect(runs.length).toBeGreaterThan(1000);
+        expect(runs.flatMap(run => run.problems)).toEqual([]);
+      },
+      300_000,
+    );
+
+    it.each(forms)(
+      'answers every claim true in sampled schedules of four claims on a free row, with %s',
+      async (_label, transactional) => {
+        const runs = await sample(freeRow, 4, transactional, 200);
+
+        expect(runs.flatMap(run => run.problems)).toEqual([]);
+      },
+      120_000,
+    );
+
+    it.each([3, 4])(
+      'answers %i overlapping starts or deletes true in sampled schedules on a free row',
+      async calls => {
+        const runs = await sample(freeRow, calls, true, 200, askLikeStartOrDelete);
+
+        expect(runs.flatMap(run => run.problems)).toEqual([]);
+      },
+      120_000,
+    );
+
+    // The other side: a peer that holds the row on a live lease refuses every claim, and the check a start and a delete
+    // make confirms it, whatever the order of the statements.
+    it('answers every claim false in sampled schedules of three claims while a live peer holds the row', async () => {
+      const runs = await sample(livePeer, 3, true, 200);
+
+      expect(runs.flatMap(run => run.problems)).toEqual([]);
+      expect(runs.map(run => run.onClaimed)).toEqual(runs.map(() => []));
+    }, 120_000);
+
+    it('answers every start or delete false in sampled schedules of three while a live peer holds the row', async () => {
+      const runs = await sample(livePeer, 3, true, 200, askLikeStartOrDelete);
+
+      expect(runs.flatMap(run => run.problems)).toEqual([]);
+    }, 120_000);
   });
 });

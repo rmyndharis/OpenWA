@@ -4479,6 +4479,30 @@ describe('requests for one session that overlap on a single node', () => {
       expect(engines).toHaveLength(1);
     });
 
+    // Whatever order the claims of three requests reach their statements in, none of them reads as a peer.
+    it.each([
+      ['three starts', ['start', 'start', 'start']],
+      ['three deletes', ['delete', 'delete', 'delete']],
+      ['a start between two deletes', ['delete', 'start', 'delete']],
+      ['a delete between two starts', ['start', 'delete', 'start']],
+      ['a start and two deletes', ['start', 'delete', 'delete']],
+    ] as const)('answers %s issued together without a claim by another node', async (_label, requests) => {
+      const { service, lifecycle, ownership } = stack({ adoptionHandler: true });
+      const row = await seed();
+
+      const answers = await Promise.all(
+        requests.map(kind => answer(kind === 'start' ? service.start(row.id) : service.delete(row.id))),
+      );
+
+      for (const one of answers) if (one instanceof Error) expect(one.message).not.toContain('another node');
+      expect(kinds(answers)).toContain('done');
+      // Nothing is left claimed behind: a deleted session has no claim, and a started one the claim of its engine.
+      const left = await sessions.findOneBy({ id: row.id });
+      expect(ownership.ownedIds()).toEqual(left && service.getEngine(row.id) ? [row.id] : []);
+      expect(left?.nodeId ?? null).toBe(ownership.ownedIds().length > 0 ? NODE : null);
+      if (!left) expect(leftoversOf(service, lifecycle, row.id)).toEqual({ stopMark: false, stopRequest: false });
+    });
+
     it.each([
       ['with the transactional adoption handler a running gateway registers', true],
       ['without an adoption handler', false],

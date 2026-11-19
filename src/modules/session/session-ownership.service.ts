@@ -21,6 +21,12 @@ function leaseParam(at: Date): string | Date {
   return (DateTransformer.to(at) as string | Date | null) ?? at;
 }
 
+/** One call of claim(): its promise once it exists, and whether the attempt took a generation. */
+interface OwnClaim {
+  claim?: Promise<boolean>;
+  tookGeneration?: boolean;
+}
+
 /**
  * Who currently hosts each session's engine.
  *
@@ -49,7 +55,11 @@ export class SessionOwnershipService {
    */
   private readonly claimGen = new Map<string, number>();
   private claimSeq = 0;
-  /** The newest claim in flight per session, dropped once it settles: a claim a newer one superseded answers for it. */
+  /**
+   * The claim in flight that took a session's newest generation, dropped once it settles: a claim it superseded
+   * answers for it. Set when the generation is taken, not when the claim begins: two claims that renew while another
+   * is in flight take their generations in the order their replies arrive.
+   */
   private readonly latestClaim = new Map<string, Promise<boolean>>();
   /** Notified when a renewal proves this process no longer holds sessions it thought it did. */
   private onLeaseLost?: (sessionIds: string[]) => Promise<void> | void;
@@ -134,23 +144,28 @@ export class SessionOwnershipService {
    * first has already written its own `nodeId` and a future expiry. Deciding on the read alone
    * would let both pass.
    *
-   * Two claims of one session on this node overlap when two requests for it arrive within a few milliseconds. The
-   * later one takes the ownership, and the earlier one, which an older SQL reply must not let replace it, answers what
-   * the newest claim in flight does, and fails with its error. It answers false when a release or a loss ended its
-   * claim, or when the newer claim has already settled. False means this call claimed nothing, not that a peer holds
-   * the row: a caller that must tell the two apart asks isHeldByOtherNode, and asks again when none does.
+   * Claims of one session on this node overlap when requests for it arrive within a few milliseconds. A claim whose
+   * renewal missed takes a new generation, which an older SQL reply must not replace. The claims it supersedes answer
+   * what the claim that took the newest generation answers, and fail with its error: that claim, not the last to
+   * begin, since renewals reply in any order. Once it has settled they answer whether a claim of this node stands. So
+   * overlap never answers false, however many claims there are: false means a peer holds the row, the row is gone, or
+   * a release or a loss ended the claim. A caller that must tell a peer from the others asks isHeldByOtherNode, and
+   * asks again when none does.
    */
   async claim(sessionId: string, onClaimed?: (ownsClaim: () => boolean) => void): Promise<boolean> {
-    const own: { claim?: Promise<boolean> } = {};
+    const own: OwnClaim = {};
     const claim = (async (): Promise<boolean> => {
-      const result = await this.claimOnce(sessionId, onClaimed);
+      const result = await this.claimOnce(sessionId, own, onClaimed);
       if (result !== 'superseded') return result;
-      const newest = this.latestClaim.get(sessionId);
-      if (!newest || newest === own.claim || !this.claimGen.has(sessionId)) return false;
-      return newest;
+      // A release or a loss ended the claim, or the one that replaced it found a peer.
+      if (!this.claimGen.has(sessionId)) return false;
+      const holder = this.latestClaim.get(sessionId);
+      if (holder && holder !== own.claim) return holder;
+      // The claim that replaced it has settled, and stands.
+      return this.owned.has(sessionId);
     })();
     own.claim = claim;
-    this.latestClaim.set(sessionId, claim);
+    if (own.tookGeneration) this.latestClaim.set(sessionId, claim);
     const settled = (): void => {
       if (this.latestClaim.get(sessionId) === claim) this.latestClaim.delete(sessionId);
     };
@@ -161,6 +176,7 @@ export class SessionOwnershipService {
   /** One claim attempt: 'superseded' when a newer claim, a release or a loss replaced its generation meanwhile. */
   private async claimOnce(
     sessionId: string,
+    own: OwnClaim,
     onClaimed?: (ownsClaim: () => boolean) => void,
   ): Promise<boolean | 'superseded'> {
     const now = new Date();
@@ -194,6 +210,10 @@ export class SessionOwnershipService {
     // Allocate before the awaited write: an older SQL reply cannot replace a newer local ownership.
     const generation = ++this.claimSeq;
     this.claimGen.set(sessionId, generation);
+    own.tookGeneration = true;
+    // The claims this one supersedes answer for it. A claim that began on a free row has no promise yet: claim()
+    // registers it.
+    if (own.claim) this.latestClaim.set(sessionId, own.claim);
     let followUp = false;
     const claimed = await this.withAdoption(async (sessions, manager) => {
       // Keep the previous owner, transition and SQL cleanup in one row-locked transaction.

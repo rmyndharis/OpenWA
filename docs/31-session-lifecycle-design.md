@@ -198,26 +198,36 @@ for minutes; detaching from bootstrap means the API answers while engines warm.
 
 ### INV-11: Overlapping requests for one session on one node never read as a peer holding it
 
-**Interleaving:** two requests for one session (two starts, two deletes, a start and a delete) begin their
-claims within milliseconds. The later claim takes the generation; the earlier one, whose SQL reply must not
-replace it, answers `false` although no other node is involved (the newer claim settled first, or a release
-ended it). Read as "a live peer holds the session", that answered 409 "running on another node" with no other
-node in the deployment, left the request undone, and could leave the later request's claim behind for a peer's
-takeover sweep to adopt.
-**Defense:** `claim()` answers `false` when this call claimed nothing, which is not the same as a peer holding
-the session. `claimUnlessHeldElsewhere` (`session.service.ts`) leaves the 409 to a miss that `isHeldByOtherNode`
-confirms (another node on a live lease); otherwise it asks once more. That renews the hold of the request that
-replaced the claim (one generation shared by both, so the request that ends first leaves the claim to the one
-still running and the last one out releases it) or takes a row nobody holds.
+**Interleaving:** two or more requests for one session (starts and deletes) begin within milliseconds. Their
+claims overlap: the ones that renew while another claim is in flight take generations in the order their replies
+arrive, not the order they began in, and a claim whose generation was replaced must not let its older SQL reply
+replace the newer ownership. Read as "a live peer holds the session", a claim that answered `false` for that reason
+answered 409 "running on another node" with no other node in the deployment, left the request undone, and could
+leave a later request's claim behind for a peer's takeover sweep to adopt.
+**Defense:** only a peer's live lease makes that answer.
+
+- `claim()` answers a claim whose generation was replaced as the claim that took the newest generation (registered
+  when it takes the generation, not when it begins) and with its error, and once that claim has settled as whether a
+  claim of this node stands. A release or a loss that ended the claim answers `false`. Any number of overlapping
+  claims therefore answer `true` when no other node holds the row and none is ended by a release. They share the
+  newest generation, so the request that ends first leaves the claim to the ones still running and the last one out
+  releases it.
+- `claimUnlessHeldElsewhere` (`session.service.ts`) leaves the 409 of a start and a delete to a miss that
+  `isHeldByOtherNode` confirms (another node on a live lease); otherwise, the claim having been ended by a release,
+  it asks once more and writes the row nobody holds.
+
 A takeover of a lapsed holder is followed up by the claim whose write made it, before that claim reports itself
 superseded: the later claim reads this node as the previous holder and would not.
-**Pinned by:** `session-delete-claim.spec.ts` ('two claims of one session that overlap': a start and a delete in
-either order, two deletes, a live peer refusing every pair; the 'older claim SQL reply' cases for a claim lost
-and regained), `session.service.spec.ts` ('ownership release': the second ask and its refusals) and
-`session-ownership-claim-schedules.spec.ts` (every schedule of two claims over a lapsed holder).
-**The naive fix that is wrong:** guessing a self-overlap from request state (another delete not yet returned, a
-second start reservation). A pair of the other kind, or a partner that has already returned, still answered the
-false 409.
+**Pinned by:** `session-ownership-claim-schedules.spec.ts` (every schedule of two and three claims over a free row,
+a row this node holds and a lapsed holder's, sampled schedules of four, and of three and four starts or deletes as
+`claimUnlessHeldElsewhere` asks them; a live peer refusing all of them), `session-delete-claim.spec.ts` ('two
+claims of one session that overlap': a start and a delete in either order, two and three requests, a live peer
+refusing every pair; the 'older claim SQL reply' cases for a claim lost and regained) and
+`session.service.spec.ts` ('ownership release': the second ask and its refusals).
+**The naive fixes that are wrong:** guessing a self-overlap from request state (another delete not yet returned, a
+second start reservation): a pair of the other kind, or a partner that has already returned, still answered the
+false 409. Asking again a fixed number of times: it absorbs about as many overlapping claims as it asks, so three
+requests still answered it.
 
 ---
 

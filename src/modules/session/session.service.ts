@@ -798,10 +798,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   /**
-   * Claim the session for this node. A claim answers false for more than a peer holding the row: a claim of this node
-   * that a later one superseded and that settled first answers false too, as does one a release ended. Only the row
-   * says which, so a miss with no other node holding the row on a live lease is asked once more: the claim then renews
-   * the hold of the one that replaced it, or writes a row nobody holds. A peer that holds the row refuses at once.
+   * Claim the session for this node. A claim answers false for more than a peer holding the row: one that a release
+   * ended while it was in flight does too, and a missing row matches nothing. Only the row says which, so a miss with no
+   * other node holding the row on a live lease is asked once more: the claim then writes a row nobody holds. A peer
+   * that holds the row refuses at once. Claims of this node that overlap never answer false for that reason (see
+   * SessionOwnershipService.claim), however many requests there are.
    */
   private async claimUnlessHeldElsewhere(
     id: string,
