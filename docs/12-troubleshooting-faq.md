@@ -868,7 +868,7 @@ rm -rf node_modules/whatsapp-web.js && npm ci
 - Startup logs contain `The installed whatsapp-web.js is missing N of OpenWA's install-time patches: …`,
   or the same line naming `@whiskeysockets/baileys`
 - One capability fails while everything around it works: an unnamed `500` from a single route,
-  a status media send that never arrives, a group description that cannot be set, an app-state
+  a status media send that never arrives, an app-state
   resync that never settles
 - On Baileys, the process exits with `TypeError: terminated` some seconds after an
   `Inbound media download passed MEDIA_DOWNLOAD_TIMEOUT_MS` warning (the media-stream patch is missing)
