@@ -35,23 +35,7 @@ import { fileURLToPath } from 'node:url';
  * version to move to, the reachable path is understood, and the fix is upstream rather than ours.
  * `trees` lists the directories it applies to, as repository paths with `.` for the root.
  */
-export const ALLOWLIST = [
-  {
-    id: 'GHSA-fc5q-39xc-vjpf',
-    package: 'picomatch',
-    trees: ['.', 'dashboard', 'sdk/javascript'],
-    reason:
-      'ReDoS for a caller that compiles a glob an attacker supplies. It covers every published ' +
-      'version (<= 4.0.7), so there is nothing to move to. No glob here comes from outside the ' +
-      'repository: at runtime the root tree reaches picomatch only through typeorm > tinyglobby, ' +
-      'which expands the entity and migration globs written in src/app.module.ts and src/database; ' +
-      'every other path, and all of dashboard/ and sdk/javascript/, is build and test tooling ' +
-      '(jest, the Nest CLI, typescript-eslint, vite, vitest).',
-    removeWhen:
-      'picomatch publishes a version outside the advisory range and a tree resolves to it. That ' +
-      'tree then fails as stale: take it off `trees`, and remove the entry with the last one.',
-  },
-];
+export const ALLOWLIST = [];
 
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
