@@ -296,7 +296,9 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       this.phoneToLids.clear();
       this.seenBy.clear();
       this.failedWrites.clear();
-      this.failedPhones.clear();
+      // The marks that predate the read go with the table they were made against. A write that failed while the read was
+      // out made its own, for a lid that is not taken from the snapshot: that mark is all that refuses the lid then.
+      for (const lid of [...this.failedPhones.keys()]) if (!raced.has(lid)) this.failedPhones.delete(lid);
       for (const writing of this.unsettledWrites.values()) {
         delete writing.latestReport;
         delete writing.latestOperation;

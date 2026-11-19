@@ -4327,6 +4327,74 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       expect(evicted()).toBe(2); // the cap of this mirror
     });
   });
+
+  // A reload ends the marks made before its read, against the table it replaced. A write that fails while the read is out
+  // makes its mark after that, for a lid the reload does not take from its snapshot: nothing else refuses the lid then.
+  describe('when its write fails while a reload reads the table', () => {
+    /** Holds the table read of the next reload until `release` is called; `reached` settles once the read is out. */
+    const holdRead = () => {
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      const reached = new Promise<void>(resolve => (entered = resolve));
+      const find = repo.find.bind(repo) as (...args: unknown[]) => Promise<unknown>;
+      jest.spyOn(repo, 'find').mockImplementationOnce((async (...args: unknown[]) => {
+        entered();
+        await gate;
+        return find(...args);
+      }) as never);
+      return { release, reached };
+    };
+
+    describe.each([
+      ['a re-map of the lid', 'upsert', () => store.remember('333', '628222', OWNER)],
+      ['a revocation by a display lookup', 'update', () => store.rememberIfUnknown('333', '628222', OTHER)],
+    ] as const)('%s', (_write, method, start) => {
+      /** Fails the statement of the write once the read of a reload is out, and returns the reload and the read. */
+      const failWhileReading = async () => {
+        const read = holdRead();
+        const reloading = store.reload();
+        await read.reached;
+        let reject!: (err: Error) => void;
+        const entered = new Promise<void>(resolve =>
+          jest.spyOn(repo, method).mockImplementationOnce(
+            () =>
+              new Promise((_, fail) => {
+                reject = fail;
+                resolve();
+              }),
+          ),
+        );
+        const writing = start();
+        await entered;
+        reject(new Error('connection lost'));
+        await expect(writing).resolves.toBe(false);
+        warn.mockClear();
+        return { read, reloading };
+      };
+
+      it('keeps refusing the lid once the reload has ended, and the lid for neither phone', async () => {
+        const { read, reloading } = await failWhileReading();
+        await refused(['628111', '628222']); // while the read is out
+
+        read.release();
+        await reloading;
+
+        expect(await repo.findOneBy({ lid: '333' })).toMatchObject({ phone: '628111', isReported: true });
+        await refused(['628111', '628222']);
+      });
+
+      it('answers the table again once a report of the lid has landed', async () => {
+        const { read, reloading } = await failWhileReading();
+        read.release();
+        await reloading;
+
+        await expect(store.remember('333', '628222', OWNER)).resolves.toBe(true);
+
+        await answers('628222');
+      });
+    });
+  });
 });
 
 describe('LidMappingStoreService: the readers agree with the table once overlapping calls have settled', () => {
