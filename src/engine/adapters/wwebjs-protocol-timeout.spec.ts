@@ -457,8 +457,9 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
     const labels = (host: WwebjsEngineHost): WwebjsLabels => new WwebjsLabels(host);
     const messaging = (host: WwebjsEngineHost): WwebjsMessaging => new WwebjsMessaging(host);
 
-    // The group writes are sent in-page. A page that answers 'missing' has no job for it, so the write is the library's
-    // own call on the chat; a page that fails is the page call itself running out of budget.
+    // The group writes and the profile picture are sent in-page, and so is the invite code read: a page that fails is the
+    // page call itself running out of budget. A page that answers 'missing' has no job to read the code with, so that
+    // read is the library's own call on the chat.
     const noPageJob = (): Record<string, jest.Mock> =>
       ({ pupPage: { evaluate: resolved('missing') } }) as unknown as Record<string, jest.Mock>;
     const pageFailing = (error: Error): Record<string, jest.Mock> =>
@@ -480,11 +481,6 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
       ],
       [
         'profile picture',
-        h => new WwebjsProfile(h).setProfilePicture(PICTURE),
-        e => ({ setProfilePicture: failing(e) }),
-      ],
-      [
-        'profile picture, the page call',
         h => new WwebjsProfile(h).setProfilePicture(PICTURE),
         e =>
           ({
@@ -517,60 +513,30 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
       [
         'group subject',
         h => groups(h).setGroupSubject(GROUP, 'Subject'),
-        e => ({ getChatById: resolved(groupChat({ setSubject: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group subject, the page call',
-        h => groups(h).setGroupSubject(GROUP, 'Subject'),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
       [
         'group description',
-        h => groups(h).setGroupDescription(GROUP, 'About'),
-        e => ({ getChatById: resolved(groupChat({ setDescription: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group description, the page call',
         h => groups(h).setGroupDescription(GROUP, 'About'),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
       [
         'group announce setting',
         h => groups(h).setGroupMessagesAdminsOnly(GROUP, true),
-        e => ({ getChatById: resolved(groupChat({ setMessagesAdminsOnly: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group announce setting, the page call',
-        h => groups(h).setGroupMessagesAdminsOnly(GROUP, true),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
       [
         'group locked setting',
-        h => groups(h).setGroupInfoAdminsOnly(GROUP, true),
-        e => ({ getChatById: resolved(groupChat({ setInfoAdminsOnly: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group locked setting, the page call',
         h => groups(h).setGroupInfoAdminsOnly(GROUP, true),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
       [
         'group member add mode',
         h => groups(h).setGroupMemberAddMode(GROUP, 'admins'),
-        e => ({ getChatById: resolved(groupChat({ setAddMembersAdminsOnly: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group member add mode, the page call',
-        h => groups(h).setGroupMemberAddMode(GROUP, 'admins'),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
       [
         'group picture',
-        h => groups(h).setGroupPicture(GROUP, PICTURE),
-        e => ({ getChatById: resolved(groupChat({ setPicture: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group picture, the page call',
         h => groups(h).setGroupPicture(GROUP, PICTURE),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],

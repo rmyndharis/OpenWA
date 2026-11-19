@@ -86,6 +86,12 @@ export class ProfileController {
   })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
   @ApiResponse({
+    status: 501,
+    description:
+      'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to send the picture with. ' +
+      'Nothing was asked of WhatsApp: the picture is unchanged.',
+  })
+  @ApiResponse({
     status: 503,
     description:
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +

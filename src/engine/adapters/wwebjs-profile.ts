@@ -1,10 +1,12 @@
 import { type Client } from 'whatsapp-web.js';
 import { CallLinkType, MediaInput } from '../interfaces/whatsapp-engine.interface';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { toMessageMedia } from './wwebjs-messaging';
 import { type EvaluatePage, runWriteInPage, settleWriteStatus } from './wwebjs-page-writes';
 import { type WwebjsEngineHost, withPageWrite, reportPageDeath } from './wwebjs-host';
+import { PAGE_RELOADING_MESSAGE } from './wwebjs-lifecycle';
 
 /**
  * Whether the page's `WAWebContactStatusBridge` still exports `setMyStatus`, which `Client.setStatus` calls. The build
@@ -99,39 +101,37 @@ export class WwebjsProfile {
     this.host.ensureReady();
     const messageMedia = await toMessageMedia(media, this.host.config.proxy?.url);
     const client = this.client();
-    // The picture is sent in-page, so that WhatsApp's own status decides the answer: setProfilePicture resolves false
-    // for every status, and a rate limit or a server error, which changed nothing and may pass later, read as a refusal.
-    // An account with no id of its own, or a page that has no job to send it with, is the library's own call.
+    // The picture is sent in-page, so that WhatsApp's own status decides the answer: the library's setProfilePicture
+    // resolves false for every status, and a rate limit or a server error, which changed nothing and may pass later,
+    // read as a refusal. It is addressed by the id of the account itself, which a client that has not reported it yet
+    // does not have.
     const chatId = client.info?.wid?._serialized;
-    const answer = chatId
-      ? await withPageWrite(this.host, 'setProfilePicture', () =>
-          (client as unknown as { pupPage: EvaluatePage }).pupPage.evaluate(runWriteInPage, {
-            kind: 'picture',
-            chatId,
-            picture: messageMedia,
-          }),
-        )
-      : 'missing';
+    if (!chatId)
+      throw new EngineNotReadyError('The WhatsApp client has not reported its own account id yet. Retry shortly.');
+    const answer = await withPageWrite(this.host, 'setProfilePicture', () =>
+      (client as unknown as { pupPage: EvaluatePage }).pupPage.evaluate(runWriteInPage, {
+        kind: 'picture',
+        chatId,
+        picture: messageMedia,
+      }),
+    );
+    // Nothing was sent when the page cannot run the write: a page without whatsapp-web.js's helpers is reloading, and
+    // a build without the job has none to run. The library's own call needs the same modules, so it is not tried.
+    if (answer === 'no-helpers') throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
+    if (answer === 'missing') throw new EngineNotSupportedError('setProfilePicture(no write job on this build)');
     const refusal = 'the engine rejected the profile picture change';
-    if (answer === 'missing') {
-      // setProfilePicture resolves false (rather than throwing) when the upload is refused.
-      if (!(await withPageWrite(this.host, 'setProfilePicture', () => client.setProfilePicture(messageMedia)))) {
-        throw new EngineRefusedError(refusal);
-      }
-    } else {
-      settleWriteStatus(
-        answer.status,
-        {
-          request: 'the profile picture change',
-          nothing: 'changed nothing',
-          refused: (status, local) =>
-            local
-              ? `${refusal} (the page says this account may not change it, nothing was sent)`
-              : `${refusal} (WhatsApp answered ${status})`,
-        },
-        answer.local,
-      );
-    }
+    settleWriteStatus(
+      answer.status,
+      {
+        request: 'the profile picture change',
+        nothing: 'changed nothing',
+        refused: (status, local) =>
+          local
+            ? `${refusal} (the page says this account may not change it, nothing was sent)`
+            : `${refusal} (WhatsApp answered ${status})`,
+      },
+      answer.local,
+    );
     this.host.logger.log('Updated profile picture');
   }
 }

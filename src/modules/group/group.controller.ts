@@ -63,6 +63,12 @@ const WWJS_STATUS_503 =
   ' On whatsapp-web.js, also when WhatsApp answers the change with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
   'nothing was changed, so retry after a pause.';
 
+// A build of WhatsApp Web that has none of the jobs the page needs to send such a write cannot make it, and the library's
+// own call reads the same jobs, so the answer comes before anything is asked of WhatsApp.
+const WWJS_NO_WRITE_JOB_501 =
+  'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to send the change with. ' +
+  'Nothing was asked of WhatsApp: the group is unchanged.';
+
 // The invite code read is sent in the page the same way, so its status decides the answer too.
 const WWJS_INVITE_READ_503 =
   ' On whatsapp-web.js, also when WhatsApp answers the read with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
@@ -261,7 +267,13 @@ export class GroupController {
   })
   @ApiResponse({ status: 403, description: 'The engine refused the change (the account is not a group admin)' })
   @ApiResponse({ status: 404, description: 'Group not found' })
-  @ApiResponse({ status: 501, description: 'The active engine does not support a requested setting' })
+  @ApiResponse({
+    status: 501,
+    description:
+      'The active engine does not support a requested setting. On whatsapp-web.js, also answered when the WhatsApp ' +
+      'Web build the session runs has no job to apply `announce`, `locked` or `memberAddMode` with: nothing was asked ' +
+      'of WhatsApp for that setting.',
+  })
   @ApiResponse({
     status: 503,
     description:
@@ -528,6 +540,7 @@ export class GroupController {
   @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
+  @ApiResponse({ status: 501, description: WWJS_NO_WRITE_JOB_501 })
   async setSubject(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -557,6 +570,7 @@ export class GroupController {
   @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
+  @ApiResponse({ status: 501, description: WWJS_NO_WRITE_JOB_501 })
   async setDescription(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -697,6 +711,7 @@ export class GroupController {
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
+  @ApiResponse({ status: 501, description: WWJS_NO_WRITE_JOB_501 })
   async setPicture(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,

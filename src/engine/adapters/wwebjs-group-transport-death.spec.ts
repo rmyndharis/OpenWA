@@ -1,6 +1,5 @@
 import type { Client } from 'whatsapp-web.js';
 import { WwebjsGroups, readInviteCodeInPage, readInviteSenderInPage } from './wwebjs-groups';
-import { runWriteInPage } from './wwebjs-page-writes';
 import { createLogger } from '../../common/services/logger.service';
 import { type WwebjsEngineHost } from './wwebjs-host';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
@@ -84,17 +83,11 @@ describe('group writes classify a dead page', () => {
       info: {},
       getChatById:
         chat instanceof Promise ? jest.fn(() => chat) : jest.fn().mockResolvedValue({ isGroup: true, ...chat }),
-      // The page still has the library's invitation sender and no job for the group writes or the invite code, so a
-      // call tried through the chat is the library's own. A row about the page call overrides it.
+      // The page still has the library's invitation sender and no job for the invite code, so that read is the
+      // library's own call through the chat. A row about the page call overrides it.
       pupPage: {
         evaluate: jest.fn((fn: unknown) =>
-          Promise.resolve(
-            fn === readInviteSenderInPage
-              ? true
-              : fn === runWriteInPage || fn === readInviteCodeInPage
-                ? 'missing'
-                : undefined,
-          ),
+          Promise.resolve(fn === readInviteSenderInPage ? true : fn === readInviteCodeInPage ? 'missing' : undefined),
         ),
       },
       ...clientMethods,
@@ -111,15 +104,10 @@ describe('group writes classify a dead page', () => {
     return { groups: new WwebjsGroups(host), reportIfPageTransportError };
   }
 
-  // [public op, chat method it calls, invocation]
+  // [public op, chat method it calls, invocation]: what still runs the library's own call, which only the invite code
+  // read falls back to where the page has no job for it. The group writes are sent in-page (below).
   const CONVERGING: [string, string, (g: WwebjsGroups) => Promise<unknown>][] = [
     ['getGroupInviteCode', 'getInviteCode', g => g.getGroupInviteCode(GROUP)],
-    ['setGroupSubject', 'setSubject', g => g.setGroupSubject(GROUP, 's')],
-    ['setGroupDescription', 'setDescription', g => g.setGroupDescription(GROUP, 'd')],
-    ['setGroupMessagesAdminsOnly', 'setMessagesAdminsOnly', g => g.setGroupMessagesAdminsOnly(GROUP, true)],
-    ['setGroupInfoAdminsOnly', 'setInfoAdminsOnly', g => g.setGroupInfoAdminsOnly(GROUP, true)],
-    ['setGroupMemberAddMode', 'setAddMembersAdminsOnly', g => g.setGroupMemberAddMode(GROUP, 'admins')],
-    ['setGroupPicture', 'setPicture', g => g.setGroupPicture(GROUP, IMAGE)],
   ];
   const NON_CONVERGING_CHAT: [string, string, (g: WwebjsGroups) => Promise<unknown>][] = [
     ['leaveGroup', 'leave', g => g.leaveGroup(GROUP)],
@@ -134,14 +122,17 @@ describe('group writes classify a dead page', () => {
   ];
 
   // The group writes are sent in-page, where the page has the job, and converge when repeated.
-  const PAGE_WRITES: [string, (g: WwebjsGroups) => Promise<unknown>][] = [
+  const GROUP_WRITES: [string, (g: WwebjsGroups) => Promise<unknown>][] = [
     ['setGroupSubject', g => g.setGroupSubject(GROUP, 's')],
     ['setGroupDescription', g => g.setGroupDescription(GROUP, 'd')],
     ['setGroupMessagesAdminsOnly', g => g.setGroupMessagesAdminsOnly(GROUP, true)],
     ['setGroupInfoAdminsOnly', g => g.setGroupInfoAdminsOnly(GROUP, true)],
     ['setGroupMemberAddMode', g => g.setGroupMemberAddMode(GROUP, 'admins')],
     ['setGroupPicture', g => g.setGroupPicture(GROUP, IMAGE)],
-    // The invite code is read in-page too.
+  ];
+  // The invite code is read in-page too.
+  const PAGE_WRITES: [string, (g: WwebjsGroups) => Promise<unknown>][] = [
+    ...GROUP_WRITES,
     ['getGroupInviteCode', g => g.getGroupInviteCode(GROUP)],
   ];
 
@@ -159,7 +150,11 @@ describe('group writes classify a dead page', () => {
     g => g.deleteGroupPicture(GROUP),
   ];
 
-  it.each([...CONVERGING, ...NON_CONVERGING_CHAT, REVOKE, DELETE_PICTURE])(
+  const GROUP_WRITES_IN_PAGE = GROUP_WRITES.map(
+    ([op, run]): [string, string, (g: WwebjsGroups) => Promise<unknown>] => [op, 'pupPage.evaluate', run],
+  );
+
+  it.each([...CONVERGING, ...GROUP_WRITES_IN_PAGE, ...NON_CONVERGING_CHAT, REVOKE, DELETE_PICTURE])(
     '%s answers a dead page during the group lookup with 503 before calling %s',
     async (op, _method, run) => {
       const lookup = Promise.reject(transportError);

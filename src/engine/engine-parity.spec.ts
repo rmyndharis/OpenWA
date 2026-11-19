@@ -89,6 +89,20 @@ const CONDITIONAL_THROW_SITES: Readonly<Record<string, string>> = {
     'wwjs getGroupInviteCode is supported; it answers 501 only on a WhatsApp Web build that has no WAWebMexFetchGroupInviteCodeJob job, where whatsapp-web.js getInviteCode cannot read the code either',
   'deleteGroupPicture(no picture delete job on this build)':
     'wwjs deleteGroupPicture is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebContactProfilePicThumbBridge.requestDeletePicture or the WAWebWidFactory.createWid it takes its id from',
+  'setGroupSubject(no write job on this build)':
+    'wwjs setGroupSubject is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebWidFactory.createWid or WAWebGroupModifyInfoJob.setGroupSubject, which whatsapp-web.js setSubject reads as well',
+  'setGroupDescription(no write job on this build)':
+    'wwjs setGroupDescription is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebWidFactory.createWid, WARandomHex.randomHex or WAWebGroupModifyInfoJob.setGroupDescription, which whatsapp-web.js setDescription reads as well',
+  'setGroupPicture(no write job on this build)':
+    'wwjs setGroupPicture is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebWidFactory.createWid, the ProfilePicThumb collection or WAWebContactProfilePicThumbBridge.sendSetPicture, which whatsapp-web.js setPicture reads as well',
+  'setGroupMessagesAdminsOnly(no write job on this build)':
+    'wwjs setGroupMessagesAdminsOnly is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebWidFactory.createWid or WAWebSetPropertyGroupAction.setGroupProperty, which whatsapp-web.js setMessagesAdminsOnly reads as well',
+  'setGroupInfoAdminsOnly(no write job on this build)':
+    'wwjs setGroupInfoAdminsOnly is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebWidFactory.createWid or WAWebSetPropertyGroupAction.setGroupProperty, which whatsapp-web.js setInfoAdminsOnly reads as well',
+  'setGroupMemberAddMode(no write job on this build)':
+    'wwjs setGroupMemberAddMode is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebWidFactory.createWid or WAWebSetPropertyGroupAction.setGroupProperty, which whatsapp-web.js setAddMembersAdminsOnly reads as well',
+  'setProfilePicture(no write job on this build)':
+    'wwjs setProfilePicture is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebWidFactory.createWid, the ProfilePicThumb collection or WAWebContactProfilePicThumbBridge.sendSetPicture, which whatsapp-web.js setProfilePicture reads as well',
   'joinGroupViaInviteCode(no join job on this build)':
     'wwjs joinGroupViaInviteCode is supported; it answers 501 only on a WhatsApp Web build that has no WAWebGroupInviteJob.joinGroupViaInvite, which whatsapp-web.js acceptInvite calls',
   'pinMessage(no compatible pin sender on this build)':

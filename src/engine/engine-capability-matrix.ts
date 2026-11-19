@@ -359,7 +359,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      "wwjs GroupChat.setDescription(description) → boolean (index.d.ts; false → adapter throws EngineRefusedError) — depends on 🔧⁹ (scripts/patch-wwebjs-group-description.js): stock 1.34.8 calls the page's WAWebGroupModifyInfoJob.setGroupDescription positionally, but that job now takes a single options object {desc, groupWid, newDescId, prevDescId}, so widToGroupJid reads an undefined Wid and throws inside the page, reaching the caller as a bare 500. setGroupSubject in the same module is still positional and is unaffected. Patched call measured live on wwjs 1.34.7: set reads back, empty string clears. The adapter sends the same options-object call itself in the page and answers WhatsApp's status, so the patch matters only where the page has no job for it and the library's own call runs. baileys groupUpdateDescription(jid, description?) (Socket/groups.d.ts)",
+      'wwjs WAWebGroupModifyInfoJob.setGroupDescription({desc, groupWid, newDescId, prevDescId}), sent in-page by the adapter and answered by its status: 2xx success, 408/423/429/5xx a retryable 503, any other code EngineRefusedError, and a build without the job answers 501. Stock 1.34.8 GroupChat.setDescription() calls that job positionally, but the job now takes a single options object, so widToGroupJid reads an undefined Wid and throws inside the page, reaching the caller as a bare 500; scripts/patch-wwebjs-group-description.js (🔧⁹) repairs that library call, which the adapter does not make. setGroupSubject in the same module is still positional and is unaffected. The options-object call was measured live on wwjs 1.34.7: set reads back, empty string clears. baileys groupUpdateDescription(jid, description?) (Socket/groups.d.ts)',
   },
   setGroupEphemeral: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
@@ -377,31 +377,31 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      "wwjs GroupChat.setInfoAdminsOnly(adminsOnly?) (index.d.ts; sets groupMetadata.restrict, GroupChat.js); baileys groupSettingUpdate(jid, 'locked'|'unlocked') (Socket/groups.d.ts)",
+      "wwjs WAWebSetPropertyGroupAction.setGroupProperty(chat, 'restrict', 1|0), sent in-page by the adapter (the call GroupChat.setInfoAdminsOnly() makes), answered the same way as the announce setting, and a build without the job answers 501; baileys groupSettingUpdate(jid, 'locked'|'unlocked') (Socket/groups.d.ts)",
   },
   setGroupMemberAddMode: {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      "wwjs GroupChat.setAddMembersAdminsOnly(adminsOnly?) → boolean (index.d.ts; false → adapter throws EngineRefusedError); baileys groupMemberAddMode(jid,'admin_add'|'all_member_add') (Socket/groups.d.ts). NOT a groupSettingUpdate option on either engine. Read side disagrees between engines and with wwjs's own types: baileys GroupMetadata.memberAddMode is a boolean where true = all_member_add (Socket/groups.js), while wwjs stores WhatsApp's raw strings (GroupChat.js) despite index.d.ts declaring a boolean with the OPPOSITE sense — both are normalised to 'all'|'admins' at the adapter",
+      "wwjs WAWebSetPropertyGroupAction.setGroupProperty(chat, 'member_add_mode', 0|1), sent in-page by the adapter (the call GroupChat.setAddMembersAdminsOnly() makes), answered the same way as the announce setting, and a build without the job answers 501; baileys groupMemberAddMode(jid,'admin_add'|'all_member_add') (Socket/groups.d.ts). NOT a groupSettingUpdate option on either engine. Read side disagrees between engines and with wwjs's own types: baileys GroupMetadata.memberAddMode is a boolean where true = all_member_add (Socket/groups.js), while wwjs stores WhatsApp's raw strings (GroupChat.js) despite index.d.ts declaring a boolean with the OPPOSITE sense — both are normalised to 'all'|'admins' at the adapter",
   },
   setGroupMessagesAdminsOnly: {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      "wwjs GroupChat.setMessagesAdminsOnly(adminsOnly?) (index.d.ts; sets groupMetadata.announce, GroupChat.js); baileys groupSettingUpdate(jid, 'announcement'|'not_announcement') (Socket/groups.d.ts)",
+      "wwjs WAWebSetPropertyGroupAction.setGroupProperty(chat, 'announcement', 1|0), sent in-page by the adapter (the call GroupChat.setMessagesAdminsOnly() makes), answered by the response union it resolves or the status it rejects with: 2xx success, 408/423/429/5xx a retryable 503, any other code or the page's own refusal EngineRefusedError, and a build without the job answers 501; baileys groupSettingUpdate(jid, 'announcement'|'not_announcement') (Socket/groups.d.ts)",
   },
   setGroupPicture: {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      'wwjs GroupChat.setPicture(MessageMedia) → boolean (index.d.ts) — the GroupChat method, not Client.setProfilePicture which targets the own account; baileys updateProfilePicture(groupJid, WAMediaUpload) (Socket/groups.d.ts)',
+      'wwjs WAWebContactProfilePicThumbBridge.sendSetPicture(wid, thumbnail, picture) with the group id, sent in-page by the adapter (the call GroupChat.setPicture() makes, which reads every status as false), answered by its status: 2xx success, 408/423/429/5xx a retryable 503, any other code or a picture the page says the account may not set EngineRefusedError, and a build without the job answers 501; the own account is setProfilePicture; baileys updateProfilePicture(groupJid, WAMediaUpload) (Socket/groups.d.ts)',
   },
   setGroupSubject: {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      'wwjs GroupChat.setSubject(newSubject) → boolean (index.d.ts; false → adapter throws EngineRefusedError); baileys groupUpdateSubject(jid, subject) (Socket/groups.d.ts)',
+      'wwjs WAWebGroupModifyInfoJob.setGroupSubject(wid, subject), sent in-page by the adapter (the call GroupChat.setSubject() makes, which reads every status as false), answered by its status: 2xx success, 408/423/429/5xx a retryable 503, any other code EngineRefusedError, and a build without the job answers 501; baileys groupUpdateSubject(jid, subject) (Socket/groups.d.ts)',
   },
   setOnlinePresence: {
     wwjs: { status: 'supported' },
@@ -425,7 +425,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      'wwjs Client.setProfilePicture(MessageMedia) → boolean (index.d.ts; false → adapter throws); baileys updateProfilePicture(ownJid, WAMediaUpload) (Socket/chats.d.ts)',
+      'wwjs WAWebContactProfilePicThumbBridge.sendSetPicture(ownWid, thumbnail, picture), sent in-page by the adapter (the call Client.setProfilePicture() makes, which reads every status as false), answered by its status: 2xx success, 408/423/429/5xx a retryable 503, any other code or a picture the page says the account may not set EngineRefusedError, and a build without the job answers 501; baileys updateProfilePicture(ownJid, WAMediaUpload) (Socket/chats.d.ts)',
   },
   setProfileStatus: {
     wwjs: { status: 'supported' },

@@ -84,7 +84,10 @@ Key adapter facts:
   construction fails the gate outside the one `unsupported()` helper body, as does a literal that
   names no interface method), and a refusal
   that fires only under a runtime condition - `sendTextMessage` with `customPreview` on whatsapp-web.js, or
-  `revokeGroupInviteCode`, `getGroupInviteCode`, `joinGroupViaInviteCode`, `deleteGroupPicture`, `pinMessage`, `unpinMessage` and `setProfileStatus` on a WhatsApp Web build that lacks the call each one makes - is
+  `revokeGroupInviteCode`, `getGroupInviteCode`, `joinGroupViaInviteCode`, `deleteGroupPicture`, `pinMessage`, `unpinMessage`,
+  `setProfileStatus`, and the group and profile writes (`setGroupSubject`, `setGroupDescription`, `setGroupPicture`,
+  `setGroupMessagesAdminsOnly`, `setGroupInfoAdminsOnly`, `setGroupMemberAddMode`, `setProfilePicture`) on a WhatsApp Web
+  build that lacks the call each one makes - is
   pinned in the gate's conditional list instead of flipping the cell, because 'supported with a refused option'
   is not 'not-available'.
 - **Inbound events** flow the other way: each adapter normalizes library events into the neutral
@@ -181,7 +184,7 @@ class of rows (🔧¹⁰) and for 🔧¹³, stated in the table instead.
 | 🔧⁵ app-state resync bound  | No single row — keeps the Baileys socket's app-state resync from spinning (~1000 wasted 60s queries/day). Connection health under **every baileys cell**; the baileys column header carries `🔧⁵`.                                                                                                                                                                                                                                                                                                                                                       |
 | 🔧⁶ newsletter-create parse | `createChannel` on **baileys** — without it the call always answers 500 and leaks the channel it just created. Row-marked.                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 🔧⁷ participant arity       | `removeParticipants`, `promoteParticipants`, `demoteParticipants` on **wwjs**. Without it a request naming only non-members throws an arity assertion on removal, and promote/demote answer `200` for people WhatsApp never touched; the patch returns one boolean per REQUESTED id so the adapter reports a real per-participant outcome. Row-marked.                                                                                                                                                                                                   |
-| 🔧⁹ group description       | `setGroupDescription` on **wwjs**. Without it every call throws in the page and answers a bare `500`, so the capability is dead rather than degraded; `setGroupSubject` beside it is unaffected. The adapter now sends this write itself in the page, with the same options object (see the status note in 29.7), so the patch matters only to the library's own call, which the adapter falls back to where the page has no job for it. Row-marked.                                                                                                     |
+| 🔧⁹ group description       | No row. Without it every call of the library's own `GroupChat.setDescription` throws in the page and answers a bare `500`; `setGroupSubject` beside it is unaffected. The adapter sends the `setGroupDescription` write itself in the page, with the same options object (see the status note in 29.7), and does not call the library's method, so no cell rests on this patch.                                                                                                                                                                          |
 | 🔧¹⁰ media send repair      | Every **wwjs** media send built by `processMediaData`: `sendImageMessage`, `sendVideoMessage`, `sendAudioMessage` (voice notes included, through `ptt`), `sendDocumentMessage` and the media status posts. A sticker is built by `processStickerData`, which returns a new object rather than the media model. On the WhatsApp Web builds from 2026-09-17 the library's own id is clobbered by the media model and every such send answers a bare `500`, while text sends keep working. Not row-marked: it covers a whole class of rows rather than one. |
 | 🔧¹¹ send error capture     | No row. Every **wwjs** send that fails in the page reports what the page threw instead of `t: t`, but no cell's outcome depends on it: a send that works without the patch works the same way with it.                                                                                                                                                                                                                                                                                                                                                   |
 | 🔧¹² pairing refresh        | No row. Baileys linking by QR or pairing code: notification ACKs go out before login, retired registration secrets rotate and the current QR re-renders without spending a ref. Once a pairing code was requested (`creds.me` set) the QR timer stops, so running out of refs no longer ends that socket, as it does upstream. OpenWA ends it instead 5 minutes after the latest pairing request, and the session registers again with a new QR.                                                                                                         |
@@ -192,7 +195,7 @@ class of rows (🔧¹⁰) and for 🔧¹³, stated in the table instead.
 Rows that are ✅ on **both** engines where one side is patch-dependent: `initialize` (🔧⁴ wwjs),
 `sendTextMessage` (🔧³ wwjs), `postTextStatus` / `postImageStatus` / `postVideoStatus` /
 `postVoiceStatus` (🔧² wwjs), `removeParticipants` / `promoteParticipants` / `demoteParticipants`
-(🔧⁷ wwjs), `setGroupDescription` (🔧⁹ wwjs), `logout` /
+(🔧⁷ wwjs), `logout` /
 `destroy` (🔧¹³ wwjs), and every media send built from the media model (🔧¹⁰ wwjs). The last two carry
 no mark in the rows themselves and are recorded in the table above instead: 🔧¹⁰ because it covers a
 whole class of rows rather than one, 🔧¹³ simply because its row was never marked.
@@ -349,7 +352,7 @@ can stop reaching the gateway until the session is restarted.
 | `revokeGroupInviteCode`          | ✅                  | ✅               | ✅              |
 | `getGroupJoinInfo`               | ✅                  | ✅               | ✅              |
 | `setGroupSubject`                | ✅                  | ✅               | ✅              |
-| `setGroupDescription`            | ✅                  | ✅🔧⁹            | ✅              |
+| `setGroupDescription`            | ✅                  | ✅               | ✅              |
 | `setGroupPicture`                | ✅                  | ✅               | ✅              |
 | `deleteGroupPicture`             | ✅                  | ✅               | ✅              |
 | `setGroupMessagesAdminsOnly`     | ✅                  | ✅               | ✅              |
@@ -786,15 +789,15 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 
 **Profile & presence** (7)
 
-| Library method            | OpenWA exposure           |
-| ------------------------- | ------------------------- |
-| `deleteProfilePicture`    | ✅ `deleteProfilePicture` |
-| `getProfilePicUrl`        | ✅ `getProfilePicture`    |
-| `sendPresenceAvailable`   | ✅ `setOnlinePresence`    |
-| `sendPresenceUnavailable` | ✅ `setOnlinePresence`    |
-| `setDisplayName`          | ✅ `setProfileName`       |
-| `setProfilePicture`       | ✅ `setProfilePicture`    |
-| `setStatus`               | ✅ `setProfileStatus`     |
+| Library method            | OpenWA exposure                  |
+| ------------------------- | -------------------------------- |
+| `deleteProfilePicture`    | ✅ `deleteProfilePicture`        |
+| `getProfilePicUrl`        | ✅ `getProfilePicture`           |
+| `sendPresenceAvailable`   | ✅ `setOnlinePresence`           |
+| `sendPresenceUnavailable` | ✅ `setOnlinePresence`           |
+| `setDisplayName`          | ✅ `setProfileName`              |
+| `setProfilePicture`       | ❌ **not exposed** (run in-page) |
+| `setStatus`               | ✅ `setProfileStatus`            |
 
 **Misc** (1)
 
@@ -1131,8 +1134,8 @@ adapter boundary — none silently stubs.
   have applied the first), and any other code, or the page's own refusal of an account that may not make the change, is a
   `403`. The library reads every such status as `false`, which the adapter used to read as missing admin rights. The announce
   and locked jobs of the current build resolve a response (`SetPropertyResponse*`) where an earlier build rejected a
-  status, and the library reads a resolved response as success; the adapter reads the response. Where the page has
-  none of the jobs, the write is the library's own call, as before.
+  status, and the library reads a resolved response as success; the adapter reads the response. A page that cannot
+  run the write answers before anything is asked of WhatsApp (see the note on the write jobs below).
   The engines do not classify every status alike on these writes. `408` is a `503` on both. `429` is a `503` on both.
   `423` is a `503` on whatsapp-web.js and a `403` on Baileys, which maps `408` and `429` to a `503` and every other `4xx` to
   a `403`. A `5xx` is a `503` on whatsapp-web.js and is rethrown as it came on Baileys (a `500`). Baileys is left as it
@@ -1208,6 +1211,15 @@ adapter boundary — none silently stubs.
   `WAWebGroupQueryJob` on a build that still does (the library's own `revokeInvite` reads only the second). Both
   take the same group id and resolve the same `{code}`, and a refusal is the `403` as before. A build with neither
   answers `501` before anything is asked of WhatsApp, so the current code stays valid.
+- **The group and profile writes (wwjs) need a WhatsApp Web build that has the job each one sends.** The subject and
+  description go through `WAWebGroupModifyInfoJob` (the description also takes its id from `WARandomHex`), the group and
+  profile picture through `sendSetPicture` of `WAWebContactProfilePicThumbBridge`, and the announce, locked and member
+  add mode settings through `setGroupProperty` of `WAWebSetPropertyGroupAction`, all with the group or account id built by
+  `WAWebWidFactory`. A build without one answers `501` before anything is asked of WhatsApp. These writes used to fall
+  back to the library's own call, which reads the same modules, so there it died in the page with a `TypeError` and the
+  route answered a bare `500`. A page into which whatsapp-web.js has not installed its helpers (`window.WWebJS`, with
+  `getChat` for the description and the settings and `cropAndResizeImage` for a picture) is a page that is reloading, and
+  answers the retryable `409` whichever job it lacks. Every job exists on every build examined.
 - **`getGroupInviteCode` (wwjs) needs a WhatsApp Web build that has the invite code job.** The adapter reads
   `fetchMexGroupInviteCode` of `WAWebMexFetchGroupInviteCodeJob` in the page and answers by the status WhatsApp gives. A
   page with no such job runs the library's own `getInviteCode`, which reads the same module, so where that call fails
@@ -1271,9 +1283,8 @@ adapter sources — re-derive the same way when anything changes:
 
 - **116** interface methods → **232** adapter cells: **203 ✅** / **29 ❌** (2 adapter-gaps, 27
   library-limitations, 0 uncertain), spanning **28** methods.
-- Of the 203 ✅ cells, **10 wwjs cells carry an explicit patch dependency** (4 × 🔧² status send,
-  1 × 🔧³ channel link preview, 1 × 🔧⁴ ready-sync, 3 × 🔧⁷ participant arity, 1 × 🔧⁹ group
-  description) and one baileys cell
+- Of the 203 ✅ cells, **9 wwjs cells carry an explicit patch dependency** (4 × 🔧² status send,
+  1 × 🔧³ channel link preview, 1 × 🔧⁴ ready-sync, 3 × 🔧⁷ participant arity) and one baileys cell
   does (1 × 🔧⁶ newsletter-create parse); the whole wwjs column additionally
   depends on 🔧¹, the whole Baileys column on 🔧⁵ — so every row rests on a patch on each side,
   even though no row carries a row-level mark on both.
@@ -1282,8 +1293,8 @@ adapter sources — re-derive the same way when anything changes:
   (`probeLiveness`, `getPhoneNumber`, `getPushName`, `checkNumberExists`) are ⚙️ internal and have no route.
 - Full engine inventory (29.5), split by the exposure legend rather than lumped: Baileys **152**
   socket methods — 50 wired into interface methods, 5 internal wiring, 29 plumbing, **68 ❌ not
-  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 41 wired,
-  4 internal wiring, 1 class plumbing, **35 ❌ not exposed** (27 real capabilities + 8
+  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 40 wired,
+  4 internal wiring, 1 class plumbing, **36 ❌ not exposed** (28 real capabilities + 8
   session/transport settings that are not WhatsApp capabilities). The backlog is the ❌ rows minus
   those 8 settings; 🔩 plumbing is correctly never exposed.
 - Events: Baileys **34** (18 consumed / 16 dropped), wwjs **31** (18 consumed / 13 dropped).

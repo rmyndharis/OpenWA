@@ -124,8 +124,9 @@ const CASES: Case[] = [
     name: 'a profile picture upload',
     build: parked => {
       mediaFetchParked(parked);
-      const setProfilePicture = jest.fn();
-      return { client: { setProfilePicture }, unreached: setProfilePicture };
+      // The picture is sent in the page, under the id of the account itself.
+      const evaluate = jest.fn();
+      return { client: { info: { wid: found(CHAT) }, pupPage: { evaluate } }, unreached: evaluate };
     },
     run: adapter => adapter.setProfilePicture({ mimetype: 'image/png', data: MEDIA_URL }),
   },
@@ -154,9 +155,13 @@ const CASES: Case[] = [
   {
     name: 'a group subject change parked in the group lookup',
     build: parked => {
-      const setSubject = jest.fn();
-      const chat = { isGroup: true, setSubject };
-      return { client: { getChatById: () => parked.park().then(() => chat) }, unreached: setSubject };
+      // The write is sent in the page, right after the lookup.
+      const evaluate = jest.fn();
+      const chat = { isGroup: true };
+      return {
+        client: { getChatById: () => parked.park().then(() => chat), pupPage: { evaluate } },
+        unreached: evaluate,
+      };
     },
     run: adapter => adapter.setGroupSubject('120363@g.us', 'New subject'),
   },

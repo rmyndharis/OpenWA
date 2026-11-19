@@ -15,10 +15,12 @@ export type PageWrite =
   | { kind: 'property'; chatId: string; property: 'announcement' | 'restrict' | 'member_add_mode'; value: 0 | 1 };
 
 /**
- * What the page answers: the status WhatsApp gave, or `'missing'` when it has no job to run the write with. `local` marks
- * a refusal the page decided on its own, from what it knows of the account, before anything was sent.
+ * What the page answers: the status WhatsApp gave, `'missing'` when the build has no job to run the write with, or
+ * `'no-helpers'` when whatsapp-web.js has not installed its helpers (`window.WWebJS`) into the page, which is a page
+ * that is reloading. `local` marks a refusal the page decided on its own, from what it knows of the account, before
+ * anything was sent.
  */
-export type PageWriteAnswer = { status: number; local?: true } | 'missing';
+export type PageWriteAnswer = { status: number; local?: true } | 'missing' | 'no-helpers';
 
 /**
  * Run one group or profile write IN-PAGE through the WhatsApp Web job whatsapp-web.js calls for it, and answer the
@@ -33,9 +35,13 @@ export type PageWriteAnswer = { status: number; local?: true } | 'missing';
  * job is the library's own success, and any other failure is rethrown.
  *
  * Every lookup is guarded, since `require` throws for a module a build does not define, and a document with no
- * `require` at all is a page that is reloading, not a build without the job, so that failure is let through. A job or
- * helper the page lacks is answered `'missing'` before anything was sent, so the caller can run the library's own call
- * instead without a write going out twice. Self-contained, since Puppeteer ships it to the page as source.
+ * `require` at all is a page that is reloading, not a build without the job, so that failure is let through. Nothing
+ * is sent when the page cannot run the write. A page without the helper whatsapp-web.js installs for it (`getChat` for
+ * a description or a property, `cropAndResizeImage` for a picture, `window.WWebJS` itself for a subject) is answered
+ * `'no-helpers'`, and it is told first: a page that has not been re-injected cannot be judged on its jobs. Otherwise a
+ * job the build lacks, or the wid factory or random id it needs, is answered `'missing'`. The library's own call reads
+ * the same modules and helpers, so it could not do better and is not run. Self-contained, since Puppeteer ships it to
+ * the page as source.
  */
 export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer> {
   type Module = Record<string, unknown> | undefined;
@@ -61,6 +67,7 @@ export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer>
 
   const createWid = call(find('WAWebWidFactory'), 'createWid');
   const getChat = call(w.WWebJS, 'getChat');
+  const crop = call(w.WWebJS, 'cropAndResizeImage');
   let run: (() => Promise<{ status: number; local?: true }>) | undefined;
   if (createWid) {
     switch (write.kind) {
@@ -96,7 +103,6 @@ export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer>
         const known = call(thumbs, 'get');
         const lookup = call(thumbs, 'find');
         const send = call(find('WAWebContactProfilePicThumbBridge'), 'sendSetPicture');
-        const crop = call(w.WWebJS, 'cropAndResizeImage');
         if (known && lookup && send && crop) {
           run = async () => {
             const thumbnail = await crop(write.picture, { asDataUrl: true, mimetype: 'image/jpeg', size: 96 });
@@ -131,7 +137,10 @@ export async function runWriteInPage(write: PageWrite): Promise<PageWriteAnswer>
       }
     }
   }
-  if (!run) return 'missing';
+  if (!run) {
+    const helper = write.kind === 'picture' ? crop : write.kind === 'subject' ? w.WWebJS : getChat;
+    return helper ? 'missing' : 'no-helpers';
+  }
   try {
     return await run();
   } catch (err) {

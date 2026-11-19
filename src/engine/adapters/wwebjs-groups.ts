@@ -558,26 +558,24 @@ export class WwebjsGroups {
   /**
    * One write of the group settings, sent IN-PAGE so that WhatsApp's own status decides the answer: whatsapp-web.js
    * reads every status as `false`, which this adapter read as missing admin rights, so a rate limit or a server error
-   * (nothing was changed, the same request may pass later) was a 403. A page that lacks the job to send it with answers
-   * before anything was sent, and the write is then the library's own call, as it always was: `legacy` runs it and
-   * `refusal` words its `false`. Every write here converges when repeated. `unchanged` says what a rate limit or a
-   * server error left, for the write that can be applied in part.
+   * (nothing was changed, the same request may pass later) was a 403. A page that cannot run the write answers before
+   * anything was sent: a page without whatsapp-web.js's helpers is reloading, which is the retryable 409, and a build
+   * without the job is the 501 that `unsupported` builds (one per write, so that the parity gate reads each as a
+   * conditional refusal). The library's own call needs the same modules and helpers, so it is not tried. `refusal` words
+   * a refusal. Every write here converges when repeated. `unchanged` says what a rate limit or a server error left, for
+   * the write that can be applied in part.
    */
   private async write(
     op: string,
     request: PageWrite,
     what: string,
     refusal: string,
-    legacy: () => Promise<boolean>,
+    unsupported: () => EngineNotSupportedError,
     unchanged = 'changed nothing',
   ): Promise<void> {
     const answer = await withPageWrite(this.host, op, () => this.page().evaluate(runWriteInPage, request));
-    if (answer === 'missing') {
-      if (!(await withPageWrite(this.host, op, legacy))) {
-        throw new EngineRefusedError(`${refusal} — admin rights required`);
-      }
-      return;
-    }
+    if (answer === 'no-helpers') throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
+    if (answer === 'missing') throw unsupported();
     settleWriteStatus(
       answer.status,
       {
@@ -592,28 +590,27 @@ export class WwebjsGroups {
     );
   }
 
+  // Every setter below resolves the group first (the 404 and the not-ready 409 come from there) and then sends the
+  // write in the page: a refusal WhatsApp gives is its status, not a false that reads as a silent success.
   async setGroupSubject(groupId: string, subject: string): Promise<void> {
-    const chat = await this.requireGroupChat(groupId, 'setGroupSubject');
-    // GroupChat.setSubject resolves false when WA Web rejects the change (e.g. the account lacks
-    // admin rights; index.d.ts:1982) instead of throwing — surface the refusal, not a false success.
+    await this.requireGroupChat(groupId, 'setGroupSubject');
     await this.write(
       'setGroupSubject',
       { kind: 'subject', chatId: groupId, subject },
       `the subject change for group ${groupId}`,
       `Failed to set the subject for group ${groupId}`,
-      () => chat.setSubject(subject),
+      () => new EngineNotSupportedError('setGroupSubject(no write job on this build)'),
     );
   }
 
   async setGroupDescription(groupId: string, description: string): Promise<void> {
-    const chat = await this.requireGroupChat(groupId, 'setGroupDescription');
-    // Same discarded-boolean contract as setSubject (index.d.ts:1984).
+    await this.requireGroupChat(groupId, 'setGroupDescription');
     await this.write(
       'setGroupDescription',
       { kind: 'description', chatId: groupId, description },
       `the description change for group ${groupId}`,
       `Failed to set the description for group ${groupId}`,
-      () => chat.setDescription(description),
+      () => new EngineNotSupportedError('setGroupDescription(no write job on this build)'),
     );
   }
 
@@ -841,31 +838,29 @@ export class WwebjsGroups {
 
   // Set "only admins can send messages" (announce)
   async setGroupMessagesAdminsOnly(groupId: string, adminsOnly: boolean): Promise<void> {
-    const groupChat = await this.requireGroupChat(groupId, 'setGroupMessagesAdminsOnly');
-    // Resolves false instead of throwing when the account lacks admin rights (GroupChat.js:503) —
-    // surface that as an error rather than a silent no-op.
+    await this.requireGroupChat(groupId, 'setGroupMessagesAdminsOnly');
     await this.write(
       'setGroupMessagesAdminsOnly',
       { kind: 'property', chatId: groupId, property: 'announcement', value: adminsOnly ? 1 : 0 },
       `the messages-admins-only change for group ${groupId}`,
       `Failed to update the messages-admins-only setting for group ${groupId}`,
-      () => groupChat.setMessagesAdminsOnly(adminsOnly),
+      () => new EngineNotSupportedError('setGroupMessagesAdminsOnly(no write job on this build)'),
     );
   }
 
   async setGroupPicture(groupId: string, media: MediaInput): Promise<void> {
-    const groupChat = await this.requireGroupChat(groupId, 'setGroupPicture');
+    await this.requireGroupChat(groupId, 'setGroupPicture');
     // Loaded outside the page guard: a media fetch failing with "connection closed" is not a dead page.
     const picture = await toMessageMedia(media, this.host.config.proxy?.url);
-    // The fetch can outlast the session, and the chat writes through the client that read it.
+    // The fetch can outlast the session, and the write goes out through the client that read the group.
     this.host.ensureReady();
-    // GroupChat.setPicture, NOT Client.setProfilePicture — the latter targets the own account.
+    // The picture of the group, not of the own account (setProfilePicture).
     await this.write(
       'setGroupPicture',
       { kind: 'picture', chatId: groupId, picture },
       `the picture change for group ${groupId}`,
       `Failed to set the picture for group ${groupId}`,
-      () => groupChat.setPicture(picture),
+      () => new EngineNotSupportedError('setGroupPicture(no write job on this build)'),
     );
   }
 
@@ -889,17 +884,16 @@ export class WwebjsGroups {
     });
   }
 
-  // Set who may add participants. NOT a groupSettingUpdate option on either engine — wwjs has its
-  // own GroupChat setter, and it is inverted relative to our neutral vocabulary: adminsOnly=true
-  // means mode 'admins'.
+  // Set who may add participants: the property `member_add_mode` is 0 for admins only and 1 for every member. It is
+  // not a groupSettingUpdate option on either engine.
   async setGroupMemberAddMode(groupId: string, mode: GroupMemberAddMode): Promise<void> {
-    const groupChat = await this.requireGroupChat(groupId, 'setGroupMemberAddMode');
+    await this.requireGroupChat(groupId, 'setGroupMemberAddMode');
     await this.write(
       'setGroupMemberAddMode',
       { kind: 'property', chatId: groupId, property: 'member_add_mode', value: mode === 'admins' ? 0 : 1 },
       `the member-add-mode change for group ${groupId}`,
       `Failed to update the member-add-mode setting for group ${groupId}`,
-      () => groupChat.setAddMembersAdminsOnly(mode === 'admins'),
+      () => new EngineNotSupportedError('setGroupMemberAddMode(no write job on this build)'),
       // Setting admins on a group whose link mode is open is two writes in the page, and the second can fail after the
       // first was applied.
       'it may have been applied in part',
@@ -908,13 +902,13 @@ export class WwebjsGroups {
 
   // Set "only admins can edit group info" (locked/restrict)
   async setGroupInfoAdminsOnly(groupId: string, adminsOnly: boolean): Promise<void> {
-    const groupChat = await this.requireGroupChat(groupId, 'setGroupInfoAdminsOnly');
+    await this.requireGroupChat(groupId, 'setGroupInfoAdminsOnly');
     await this.write(
       'setGroupInfoAdminsOnly',
       { kind: 'property', chatId: groupId, property: 'restrict', value: adminsOnly ? 1 : 0 },
       `the info-admins-only change for group ${groupId}`,
       `Failed to update the info-admins-only setting for group ${groupId}`,
-      () => groupChat.setInfoAdminsOnly(adminsOnly),
+      () => new EngineNotSupportedError('setGroupInfoAdminsOnly(no write job on this build)'),
     );
   }
 
