@@ -9987,18 +9987,20 @@ describe('WhatsAppWebJsAdapter group join-info', () => {
     (adapter as unknown as { client: unknown }).client = client;
     return adapter;
   };
+  /** A client whose page answers the preview job with `info` and the 200 of a read that went through. */
+  const previewing = (info: unknown) => ({ pupPage: { evaluate: jest.fn().mockResolvedValue({ status: 200, info }) } });
 
   it('maps the full shape, taking the disclosed member count', async () => {
-    const getInviteInfo = jest.fn().mockResolvedValue({
+    const raw = {
       id: { _serialized: '120363@g.us' },
       subject: 'Team',
       desc: 'Internal',
       owner: { _serialized: '628111@c.us' },
       creation: 1700000000,
       size: 42,
-    });
+    };
 
-    await expect(readyAdapter({ getInviteInfo }).getGroupJoinInfo('ABC')).resolves.toEqual({
+    await expect(readyAdapter(previewing(raw)).getGroupJoinInfo('ABC')).resolves.toEqual({
       id: '120363@g.us',
       name: 'Team',
       description: 'Internal',
@@ -10011,17 +10013,15 @@ describe('WhatsAppWebJsAdapter group join-info', () => {
   // Absent fields must not become empty strings or zeroes: "created at the epoch" and "owned by
   // nobody" are claims, and this engine never promised to report them.
   it('omits everything the engine did not report', async () => {
-    const getInviteInfo = jest.fn().mockResolvedValue({ id: '120363@g.us', subject: 'Team' });
-
-    const info = await readyAdapter({ getInviteInfo }).getGroupJoinInfo('ABC');
+    const info = await readyAdapter(previewing({ id: '120363@g.us', subject: 'Team' })).getGroupJoinInfo('ABC');
 
     expect(info).toEqual({ id: '120363@g.us', name: 'Team' });
   });
 
   it('falls back to a participants array when no count is disclosed', async () => {
-    const getInviteInfo = jest.fn().mockResolvedValue({ id: 'g@g.us', subject: 'T', participants: [{}, {}, {}] });
+    const raw = { id: 'g@g.us', subject: 'T', participants: [{}, {}, {}] };
 
-    await expect(readyAdapter({ getInviteInfo }).getGroupJoinInfo('ABC')).resolves.toMatchObject({
+    await expect(readyAdapter(previewing(raw)).getGroupJoinInfo('ABC')).resolves.toMatchObject({
       participantCount: 3,
     });
   });
@@ -10029,9 +10029,7 @@ describe('WhatsAppWebJsAdapter group join-info', () => {
   // No id means there is no group to describe — the invite was refused, which is a 404 rather than a
   // half-populated success.
   it.each([{}, null, { subject: 'Team' }])('reports %p as not-found', async raw => {
-    const getInviteInfo = jest.fn().mockResolvedValue(raw);
-
-    await expect(readyAdapter({ getInviteInfo }).getGroupJoinInfo('ABC')).rejects.toBeInstanceOf(GroupNotFoundError);
+    await expect(readyAdapter(previewing(raw)).getGroupJoinInfo('ABC')).rejects.toBeInstanceOf(GroupNotFoundError);
   });
 });
 
@@ -10152,10 +10150,10 @@ describe('WhatsAppWebJsAdapter transport death is not a not-found', () => {
   const dead = (): Error => new Error('Protocol error (Runtime.callFunctionOn): Target closed');
 
   it('getGroupJoinInfo answers 503 for a dead page, 404 for a refused invite', async () => {
-    const transport = readyAdapter({ getInviteInfo: jest.fn().mockRejectedValue(dead()) });
+    const transport = readyAdapter({ pupPage: { evaluate: jest.fn().mockRejectedValue(dead()) } });
     await expect(transport.getGroupJoinInfo('CODE')).rejects.toBeInstanceOf(EngineTransportError);
 
-    const refused = readyAdapter({ getInviteInfo: jest.fn().mockRejectedValue(new Error('invite revoked')) });
+    const refused = readyAdapter({ pupPage: { evaluate: jest.fn().mockRejectedValue(new Error('invite revoked')) } });
     await expect(refused.getGroupJoinInfo('CODE')).rejects.toBeInstanceOf(GroupNotFoundError);
   });
 
@@ -10347,14 +10345,10 @@ describe('WhatsAppWebJsAdapter raw-id extraction hardening', () => {
   });
 
   it('getGroupJoinInfo reads id/owner via $1 on a renamed build instead of a false 404', async () => {
-    const getInviteInfo = jest.fn().mockResolvedValue({
-      id: { $1: '120363000@g.us' },
-      subject: 'G',
-      owner: { $1: '628111@c.us' },
-      size: 3,
-    });
+    const raw = { id: { $1: '120363000@g.us' }, subject: 'G', owner: { $1: '628111@c.us' }, size: 3 };
+    const evaluate = jest.fn().mockResolvedValue({ status: 200, info: raw });
 
-    const info = await readyAdapter({ getInviteInfo }).getGroupJoinInfo('CODE');
+    const info = await readyAdapter({ pupPage: { evaluate } }).getGroupJoinInfo('CODE');
 
     expect(info.id).toBe('120363000@g.us');
     expect(info.owner).toBe('628111@c.us');

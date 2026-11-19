@@ -146,9 +146,14 @@ export async function readInviteCodeInPage(chatId: string): Promise<{ status: nu
  * its response parser reads as an unexpected response (`UnexpectedJoinGroupViaInviteResponse`, with
  * `membershipApprovalMode` true when the response held the request): the invite was accepted as a request, and the
  * account has not joined. Puppeteer hands a page error over without its properties, so that is told apart here.
- * Any other rejection is rethrown.
+ *
+ * A refusal, a rate limit, a timeout and a server error reject `ServerStatusCodeError(status)`, which Puppeteer hands over
+ * without its status as well, so the status is answered here, as the invite code read answers it (a status-less error
+ * as 403). Any other rejection is rethrown.
  */
-export async function joinInviteInPage(inviteCode: string): Promise<{ gid?: string; requested?: true } | 'missing'> {
+export async function joinInviteInPage(
+  inviteCode: string,
+): Promise<{ gid?: string; requested?: true; status?: number } | 'missing'> {
   type Wid = { _serialized?: string; $1?: string };
   type JoinJob = { joinGroupViaInvite: (code: string) => Promise<{ gid?: Wid } | undefined> };
   const w = window as unknown as { require: (m: string) => unknown };
@@ -163,9 +168,34 @@ export async function joinInviteInPage(inviteCode: string): Promise<{ gid?: stri
     const res = await job.joinGroupViaInvite(inviteCode);
     return { gid: res?.gid?._serialized || res?.gid?.$1 };
   } catch (err) {
-    const failure = err as { name?: unknown; membershipApprovalMode?: unknown } | undefined;
+    const failure = err as { name?: unknown; membershipApprovalMode?: unknown; status?: unknown } | undefined;
     if (failure?.name === 'UnexpectedJoinGroupViaInviteResponse' && failure.membershipApprovalMode === true) {
       return { requested: true };
+    }
+    if (typeof failure?.name === 'string' && failure.name.endsWith('ServerStatusCodeError')) {
+      return { status: typeof failure.status === 'number' ? failure.status : 403 };
+    }
+    throw err;
+  }
+}
+
+/**
+ * The preview of the library's own `getInviteInfo`, run IN-PAGE with the status WhatsApp gave: `queryGroupInvite` of
+ * `WAWebGroupQueryJob`, called with the invite code as the library calls it, answering what it resolves. An invite
+ * WhatsApp refuses, a rate limit, a timeout and a server error all reject `ServerStatusCodeError(status)`, which
+ * Puppeteer hands over without its status, so all of them were the unknown invite. Like the library's call it does not
+ * look the job up: a page without it rejects as the library's call did, which the caller reads as no such invite, and a
+ * document with no `require` at all fails on it, the page that is reloading. Any rejection that is not a status is
+ * rethrown. Self-contained, since Puppeteer ships it to the page as source.
+ */
+export async function readInviteInfoInPage(inviteCode: string): Promise<{ status: number; info?: unknown }> {
+  const w = window as unknown as { require: (m: string) => { queryGroupInvite: (code: string) => Promise<unknown> } };
+  try {
+    return { status: 200, info: await w.require('WAWebGroupQueryJob').queryGroupInvite(inviteCode) };
+  } catch (err) {
+    const failure = err as { name?: unknown; status?: unknown } | undefined;
+    if (typeof failure?.name === 'string' && failure.name.endsWith('ServerStatusCodeError')) {
+      return { status: typeof failure.status === 'number' ? failure.status : 404 };
     }
     throw err;
   }
@@ -703,6 +733,9 @@ export class WwebjsGroups {
    * defensively and omitted when absent rather than defaulted into something that reads as fact.
    * The one thing that IS required is an id: without it there is no group to describe, which means
    * the invite was refused (invalid, expired or revoked) rather than that a field is missing.
+   *
+   * The preview is read in the page ({@link readInviteInfoInPage}), so that the status WhatsApp gave decides the answer:
+   * a timeout, a rate limit or a server error is a 503 where it was the unknown invite, and any other status is the 404.
    */
   async getGroupJoinInfo(inviteCode: string): Promise<GroupJoinInfo> {
     this.host.ensureReady();
@@ -715,14 +748,14 @@ export class WwebjsGroups {
       size?: number;
       participants?: unknown[];
     } | null;
-    // A refused invite (invalid, expired, revoked) rejects PAGE-SIDE inside WA Web's query job, and
-    // Client.getInviteInfo bare-forwards that rejection — unmapped it escapes as an opaque 500 for
-    // the endpoint's most common error input, which the route documents (and Baileys answers) as
-    // 404. The sibling joinGroupViaInviteCode maps the same cause; this is the read half.
-    let raw: RawInviteInfo;
+    // A refused invite (invalid, expired, revoked) rejects PAGE-SIDE inside WA Web's query job with the status WhatsApp
+    // gave, which the page function answers: a rejection that reached here unmapped escaped as an opaque 500 for the
+    // endpoint's most common error input, which the route documents (and Baileys answers) as 404. The sibling
+    // joinGroupViaInviteCode maps the same cause; this is the read half.
+    let answer: Awaited<ReturnType<typeof readInviteInfoInPage>>;
     const since = navigationsSeen(this.host);
     try {
-      raw = await this.client().getInviteInfo(inviteCode);
+      answer = await this.page().evaluate(readInviteInfoInPage, inviteCode);
     } catch (error) {
       // A dead page and a refused invite both land here; only the second is a 404. Folding a
       // transport death into "no such invite" sends operators debugging the wrong layer.
@@ -734,11 +767,22 @@ export class WwebjsGroups {
       if (isProtocolTimeout(error)) {
         throw new EngineTransportError(`WhatsApp Web did not answer the preview of invite ${inviteCode} in time`);
       }
-      this.host.logger.debug('getInviteInfo rejected; treating the invite as not found', {
+      this.host.logger.debug('The invite preview was rejected; treating the invite as not found', {
         error: error instanceof Error ? error.message : String(error),
       });
       throw new GroupNotFoundError(inviteCode);
     }
+    // A timeout, a rate limit or a server error read nothing, and the same code may pass a moment later: the retryable
+    // 503, as on Baileys. Any other status is the refused invite. Settled outside the try, which reads a failure of the
+    // call itself.
+    settleWriteStatus(answer.status, {
+      request: `the preview of invite ${inviteCode}`,
+      nothing: 'returned no group',
+      refused: () => {
+        throw new GroupNotFoundError(inviteCode);
+      },
+    });
+    const raw = answer.info as RawInviteInfo;
 
     // Raw page-context Wids: read `$1` before concluding absence (#747, the WA Web minifier
     // rename) — without the fallback a renamed build turns every VALID invite into a false 404.
@@ -797,6 +841,18 @@ export class WwebjsGroups {
       throw new BadRequestException(
         'could not join the group: it needs an admin to approve new members, and a request to join was sent',
       );
+    }
+    // WhatsApp answered the join with a status. A timeout, a rate limit or a server error joined nothing, and the same
+    // code may pass a moment later: the retryable 503, as on Baileys. Any other status is the refused invite, the 400.
+    if (answer?.status !== undefined) {
+      this.host.logger.warn('WhatsApp answered the group join with a status', { status: answer.status });
+      settleWriteStatus(answer.status, {
+        request: 'the group join',
+        nothing: 'joined nothing',
+        refused: () => {
+          throw new InvalidInviteCodeError();
+        },
+      });
     }
     const groupId = answer?.gid;
     if (!groupId) {

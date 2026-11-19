@@ -260,7 +260,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      'wwjs WAWebGroupInviteJob.joinGroupViaInvite(code), run in the page by the adapter the way Client.acceptInvite (index.d.ts; Client.js) calls it, answering res.gid._serialized or res.gid.$1; a build without the job answers 501, and a group that has an admin approve new members is told apart as a request sent; baileys groupAcceptInvite(code) → string|undefined (Socket/groups.d.ts) — undefined mapped to a thrown error',
+      'wwjs WAWebGroupInviteJob.joinGroupViaInvite(code), run in the page by the adapter the way Client.acceptInvite (index.d.ts; Client.js) calls it, answering res.gid._serialized or res.gid.$1; a build without the job answers 501, a group that has an admin approve new members is told apart as a request sent, and the status the job rejects with decides the rest (408/423/429/5xx a retryable 503, any other status the invalid invite); baileys groupAcceptInvite(code) → string|undefined (Socket/groups.d.ts) — undefined mapped to a thrown error',
   },
   pinChat: {
     wwjs: { status: 'supported' },

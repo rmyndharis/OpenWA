@@ -726,7 +726,7 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 | `createGroup`                    | ❌ not-available (29.6.2)           |
 | `getCommonGroups`                | ❌ **not exposed**                  |
 | `getGroupMembershipRequests`     | ✅ `getGroupMembershipRequests`     |
-| `getInviteInfo`                  | ✅ `getGroupJoinInfo`               |
+| `getInviteInfo`                  | ❌ **not exposed** (run in-page)    |
 | `rejectGroupMembershipRequests`  | ✅ `rejectGroupMembershipRequests`  |
 
 **Channels** (12)
@@ -1233,7 +1233,17 @@ adapter boundary — none silently stubs.
   link was reported as bad. A refused invite is still the `400`. A group that has an admin approve new members answers the
   join with a request, which the job reports as an unexpected response: the adapter tells it apart in the page and says
   that a request to join was sent and the account has not joined, still as a `400`, where it said the invite was
-  invalid. Baileys reads the same answer as no group id, so it still answers the invalid-invite text.
+  invalid. Baileys reads the same answer as no group id, so it still answers the invalid-invite text. The status the job
+  rejects with is read in the page too: a timeout, a rate limit or a server error (`408`, `423`, `429`, `5xx`) joined
+  nothing and is the retryable `503`, where every status was the `400`, and any other status is the `400`. Baileys
+  answers `503` for `408` and `429`, reads every other `4xx`, `423` included, as the invalid invite, and rethrows a `5xx`
+  as it came (a `500`).
+- **`getGroupJoinInfo` (wwjs) answers by WhatsApp's status.** The preview runs `queryGroupInvite` of `WAWebGroupQueryJob`
+  in the page, as `Client.getInviteInfo` calls it, so that the status the job rejects with decides the answer: a timeout,
+  a rate limit or a server error (`408`, `423`, `429`, `5xx`) is the retryable `503`, and any other status the `404` of an
+  unknown invite, where every rejection was the `404`. Baileys answers `503` for `408` and `429`, `404` for every other
+  `4xx`, and rethrows a `5xx` as it came (a `500`). The adapter does not look the job up first, as the library's call did
+  not: a page without it answers the `404`, and a build without the module breaks the group reads before this route.
 - **`deleteGroupPicture` and `deleteProfilePicture` (wwjs) need a WhatsApp Web build that has the picture delete job.**
   The adapter sends `requestDeletePicture` of `WAWebContactProfilePicThumbBridge` in the page, with the group id (or the
   account's own) built by `WAWebWidFactory`, and answers `501` where either is missing, before anything is asked of
@@ -1298,10 +1308,10 @@ adapter sources — re-derive the same way when anything changes:
   (`probeLiveness`, `getPhoneNumber`, `getPushName`, `checkNumberExists`) are ⚙️ internal and have no route.
 - Full engine inventory (29.5), split by the exposure legend rather than lumped: Baileys **152**
   socket methods — 50 wired into interface methods, 5 internal wiring, 29 plumbing, **68 ❌ not
-  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 39 wired,
-  4 internal wiring, 1 class plumbing, **37 ❌ not exposed** (26 real capabilities, 3 served in-page
+  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 38 wired,
+  4 internal wiring, 1 class plumbing, **38 ❌ not exposed** (26 real capabilities, 4 served in-page
   by an adapter page function, and 8 session/transport settings that are not WhatsApp capabilities).
-  The backlog is the ❌ rows minus those 3 and those 8 settings; 🔩 plumbing is correctly never exposed.
+  The backlog is the ❌ rows minus those 4 and those 8 settings; 🔩 plumbing is correctly never exposed.
 - Events: Baileys **34** (18 consumed / 16 dropped), wwjs **31** (18 consumed / 13 dropped).
 - **0** capabilities in 29.5.3: every capability with first-class symbols on both libraries is
   either wired or classified with evidence. Some are Baileys-only despite typed whatsapp-web.js

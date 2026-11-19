@@ -1,11 +1,18 @@
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
-import { deleteGroupPictureInPage, readInviteSenderInPage, revokeInviteInPage } from './wwebjs-groups';
+import {
+  deleteGroupPictureInPage,
+  joinInviteInPage,
+  readInviteCodeInPage,
+  readInviteInfoInPage,
+  readInviteSenderInPage,
+  revokeInviteInPage,
+} from './wwebjs-groups';
 import { readCurrentLid, readLeanContacts } from './wwebjs-contacts';
 import { readChatModels } from './wwebjs-chats';
 import { readLabelChatIds } from './wwebjs-labels';
 import { downloadMediaInPage } from './wwebjs-messaging';
 import { readStatusSetterInPage } from './wwebjs-profile';
-import { runWriteInPage } from './wwebjs-page-writes';
+import { pinInPage, runWriteInPage } from './wwebjs-page-writes';
 import { isNavigationError } from './wwebjs-lifecycle';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -51,6 +58,10 @@ describe('a page helper that lands on a document WhatsApp Web has not booted yet
   const HELPERS = [
     ['deleteGroupPictureInPage', deleteGroupPictureInPage, GROUP],
     ['revokeInviteInPage', revokeInviteInPage, GROUP],
+    ['readInviteCodeInPage', readInviteCodeInPage, GROUP],
+    ['readInviteInfoInPage', readInviteInfoInPage, 'CODE'],
+    ['joinInviteInPage', joinInviteInPage, 'CODE'],
+    ['pinInPage', pinInPage, 'M'],
     ['readInviteSenderInPage', readInviteSenderInPage, undefined],
     ['readStatusSetterInPage', readStatusSetterInPage, undefined],
     ['readLeanContacts', readLeanContacts, undefined],

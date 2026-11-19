@@ -220,7 +220,7 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
 
   const OPS: Record<string, [string, (host: WwebjsEngineHost) => Promise<unknown>]> = {
     getGroupInfo: ['getChatById', host => new WwebjsGroups(host).getGroupInfo('120363@g.us')],
-    getGroupJoinInfo: ['getInviteInfo', host => new WwebjsGroups(host).getGroupJoinInfo('AbCdEf')],
+    getGroupJoinInfo: ['pupPage.evaluate', host => new WwebjsGroups(host).getGroupJoinInfo('AbCdEf')],
     joinGroupViaInviteCode: ['pupPage.evaluate', host => new WwebjsGroups(host).joinGroupViaInviteCode('AbCdEf')],
     getChatsByLabel: ['getChatsByLabelId', host => new WwebjsLabels(host).getChatsByLabel('7')],
     getContactById: ['getContactById', host => new WwebjsContacts(host).getContactById('628@c.us')],

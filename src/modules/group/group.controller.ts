@@ -74,6 +74,15 @@ const WWJS_INVITE_READ_503 =
   ' On whatsapp-web.js, also when WhatsApp answers the read with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
   'no code was returned, so retry after a pause.';
 
+// The join and the preview of an invite are sent in the page too, so the status WhatsApp gave decides their answer: a
+// good invite is no longer read as a bad one when the request was only rate limited, timed out or failed.
+const WWJS_INVITE_JOIN_503 =
+  ' On whatsapp-web.js, also when WhatsApp answers the join with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
+  'the account joined nothing, so retry after a pause.';
+const WWJS_INVITE_PREVIEW_503 =
+  ' On whatsapp-web.js, also when WhatsApp answers the preview with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
+  'no group was returned, so retry after a pause.';
+
 // The subject, description and picture are the group's info: WhatsApp lets an admin edit them and, unless the group
 // restricts its info to admins, any member too. The settings and the invite routes below stay admin-only.
 const INFO_EDIT_403 =
@@ -160,7 +169,8 @@ export class GroupController {
     description:
       'WhatsApp did not answer within the request budget. Deliberately not folded into the 404 above — ' +
       'a query that never came back is not the same claim as a group that does not exist.' +
-      THROTTLED_503,
+      THROTTLED_503 +
+      WWJS_INVITE_PREVIEW_503,
   })
   @ApiResponse({ status: 400, description: 'Session not started, or no code supplied' })
   @ApiResponse({ status: 404, description: 'No such invite — invalid, expired or revoked' })
@@ -214,7 +224,8 @@ export class GroupController {
     description:
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
       'the gateway stopped waiting for a confirmation that never came.' +
-      THROTTLED_503,
+      THROTTLED_503 +
+      WWJS_INVITE_JOIN_503,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({
