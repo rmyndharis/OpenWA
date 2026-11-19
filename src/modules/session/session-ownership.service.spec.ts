@@ -81,6 +81,35 @@ describe('SessionOwnershipService', () => {
       await expect(node.claim(session.id)).resolves.toBe(true);
     });
 
+    // A delete fences its removal on the time the row was claimed that it read, so a claim of this node written after it
+    // read the row must not move that time. Claims of one session that overlap each take this path.
+    it('keeps the time this node took a row it already holds when it claims the row again', async () => {
+      const claimedAt = new Date(Date.now() - 120_000);
+      const session = await seed({ nodeId: 'node-a', claimedAt, leaseExpiresAt: new Date(Date.now() + 30_000) });
+
+      // A claim with no memory of the row takes the write path, as one that began while another was writing does.
+      await expect(service('node-a').claim(session.id)).resolves.toBe(true);
+
+      const stored = await sessions.findOneByOrFail({ id: session.id });
+      expect(stored.claimedAt).toEqual(claimedAt);
+      expect(stored.leaseExpiresAt!.getTime()).toBeGreaterThan(Date.now() + 30_000);
+    });
+
+    it.each([
+      ['nobody holds it', {}],
+      [
+        'a node whose lease lapsed holds it',
+        { nodeId: 'node-b', claimedAt: new Date(Date.now() - 120_000), leaseExpiresAt: new Date(Date.now() - 60_000) },
+      ],
+    ])('records when this node took a row that %s', async (_label, row) => {
+      const session = await seed(row);
+      const before = Date.now();
+
+      await expect(service('node-a').claim(session.id)).resolves.toBe(true);
+
+      expect((await sessions.findOneByOrFail({ id: session.id })).claimedAt!.getTime()).toBeGreaterThanOrEqual(before);
+    });
+
     // A process that dies without releasing must not strand its sessions forever.
     it('takes over once the holder’s lease has lapsed', async () => {
       const session = await seed({

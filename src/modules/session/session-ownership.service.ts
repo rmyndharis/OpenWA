@@ -241,7 +241,14 @@ export class SessionOwnershipService {
       const result = await sessions
         .createQueryBuilder()
         .update(Session)
-        .set({ nodeId: this.nodeId, claimedAt: now, leaseExpiresAt, nodeUrl: this.nodeUrl || null })
+        // When this node took the row. A claim that finds the row named by this node already, as overlapping claims
+        // of one session do, leaves it: a request that read it meanwhile (a delete) still holds the claim it read.
+        .set({
+          nodeId: this.nodeId,
+          claimedAt: () => 'CASE WHEN "nodeId" = :me THEN "claimedAt" ELSE :now END',
+          leaseExpiresAt,
+          nodeUrl: this.nodeUrl || null,
+        })
         .where('id = :id', { id: sessionId })
         .andWhere('("nodeId" IS NULL OR "nodeId" = :me OR "leaseExpiresAt" < :now)', {
           me: this.nodeId,

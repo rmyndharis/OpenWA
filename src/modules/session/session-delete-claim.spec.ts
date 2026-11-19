@@ -4659,6 +4659,32 @@ describe('requests for one session that overlap on a single node', () => {
     });
   });
 
+  // A delete reads the row once its claim has settled and fences the removal on the time the row was claimed that it
+  // read. A claim of this node that is still writing when the delete reads writes after it, and finds the row named by
+  // this node already: it must leave that time as it is, or the delete reads its own claim as lost.
+  it('removes a session when another claim of this node writes the row after the delete read it', async () => {
+    const { service, ownership, heldHooks } = stack({ holdDeleteHook: true });
+    const row = await seed();
+
+    const deleting = service.delete(row.id).then(
+      () => 'done',
+      (error: unknown) => error,
+    );
+    await until(() => heldHooks.length === 1);
+    const claimedAt = (await sessions.findOneByOrFail({ id: row.id })).claimedAt!;
+    // A claim with no memory of the row takes the write path, as one that began while the delete's was writing does.
+    const overlapping = new SessionOwnershipService(sessions, {
+      get: (key: string) => ({ 'session.nodeId': NODE, 'session.leaseTtlMs': 60_000 })[key],
+    } as never);
+    await until(() => Date.now() > claimedAt.getTime());
+    expect(await overlapping.claim(row.id)).toBe(true);
+    heldHooks[0].release();
+
+    expect(await deleting).toBe('done');
+    expect(await sessions.countBy({ id: row.id })).toBe(0);
+    expect(ownership.ownedIds()).toEqual([]);
+  });
+
   // A stop, a logout, a force-kill and a start that failed each hand the claim back once their work is done. A request for
   // the same session that begins while that release is still writing claims the row it is about to clear: the claim has
   // to wait for the release, or its write lands first and the release clears the row of a claim this node holds. A delete
