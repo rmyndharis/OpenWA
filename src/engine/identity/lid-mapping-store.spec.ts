@@ -4,6 +4,7 @@ import { LidMappingStoreService } from './lid-mapping-store.service';
 import { LidMapping } from './lid-mapping.entity';
 import { Session } from '../../modules/session/entities/session.entity';
 import { ChatScopeService } from '../../modules/auth/chat-scope.service';
+import { BaileysSessionStore } from '../adapters/baileys-session-store';
 
 /** A where-clause value: a literal, or a TypeORM `In([...])` FindOperator. */
 type Cond = string | FindOperator<unknown>;
@@ -319,9 +320,12 @@ describe('LidMappingStoreService — LRU cap', () => {
     await store.remember('lid-a', '620002'); // fails; the table keeps 620001
     await store.remember('lid-b', '620003'); // evicts lid-a
     store.getCached('lid-a'); // warms lid-a back from its row
-    for (let i = 0; i < 20 && store.getCached('lid-a') === undefined; i++) await new Promise(r => setImmediate(r));
-    expect(store.getCached('lid-a')).toBe('620001');
-    // The row is the phone this node was told the lid no longer has: no lookup answers it.
+    const mirror = (store as unknown as { lidToPhone: Map<string, string | null> }).lidToPhone;
+    for (let i = 0; i < 20 && mirror.get('lid-a') === undefined; i++) await new Promise(r => setImmediate(r));
+    expect(mirror.get('lid-a')).toBe('620001');
+    // The row is the phone this node was told the lid no longer has: no view and no lookup answers it.
+    expect(store.getCached('lid-a')).toBeNull();
+    expect(store.lidsForPhone('620001')).toEqual([]);
     expect(await store.findPhoneForLid('lid-a@lid')).toBeNull();
 
     repo.rows[0].phone = '620009'; // another node re-maps it: refused as while the entry is resident
@@ -3081,7 +3085,8 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
       repo.find.mockImplementation(read);
       for (const lid of ['901', '902', '903']) await store.remember(lid, `62800${lid}`, 's2');
       expect(store.getCached('222')).toBeUndefined(); // the miss reads the row back
-      await until(() => store.getCached('222') === '628777');
+      // The row is the number the failed report was to replace: the view leaves it out beside the mark.
+      await until(() => store.getCached('222') === null);
       await expect(store.remember('222', '628777', 's2')).resolves.toBe(true);
       await until(() => reports.length > 0);
 
@@ -4116,6 +4121,18 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       warn.mockClear();
     };
     const evicted = (): number => (store as unknown as { failedPhones: Map<string, string> }).failedPhones.size;
+    const mirrored = (): string | null | undefined =>
+      (store as unknown as { lidToPhone: Map<string, string | null> }).lidToPhone.get('333');
+
+    /** The row the failed report was to replace is read back into the mirror, beside the mark. */
+    const readBack = async (): Promise<void> => {
+      store.getCached('333'); // a miss: the row is warmed
+      // The warm is one table read: wait for it with a deadline, not for a count of event loop turns.
+      const deadline = Date.now() + 5000;
+      while (mirrored() === undefined && Date.now() < deadline) await new Promise(r => setTimeout(r, 5));
+      expect(mirrored()).toBe('628111');
+      expect(store.getCached('333')).toBeNull(); // no view returns the row the mark refuses
+    };
 
     it('answers no phone after later lids pushed the entry out, and the lid for neither phone', async () => {
       await failReport();
@@ -4128,13 +4145,103 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
     it('answers no phone after the entry was pushed out and warmed back from the row it distrusts', async () => {
       await failReport();
       await pushOut();
-      store.getCached('333');
-      // The warm is one table read: wait for it with a deadline, not for a count of event loop turns.
-      const deadline = Date.now() + 5000;
-      while (store.getCached('333') === undefined && Date.now() < deadline) await new Promise(r => setTimeout(r, 5));
-      expect(store.getCached('333')).toBe('628111');
+      await readBack();
 
       await refused(['628111', '628222']);
+    });
+
+    // The Baileys store scopes the twin keys of a chat with the synchronous views, and a deletion removes every one.
+    describe('and the synchronous views are read', () => {
+      const chatsOf = (): BaileysSessionStore => {
+        const chats = new BaileysSessionStore(store, 'sess');
+        chats.upsertChats([
+          { id: '628111@s.whatsapp.net', conversationTimestamp: 1000 },
+          { id: '333@lid', conversationTimestamp: 2000 },
+        ]);
+        return chats;
+      };
+      const listed = (chats: BaileysSessionStore): string[] => chats.listChats().map(chat => chat.id);
+
+      it('expands a deletion of the phone chat over the lid while no write of the lid failed', () => {
+        const chats = chatsOf();
+        expect(chats.chatTwins('628111@s.whatsapp.net')).toContain('333@lid');
+        expect(chats.chatTwins('333@lid')).toContain('628111@s.whatsapp.net');
+
+        chats.removeChats(['628111@s.whatsapp.net']);
+
+        expect(listed(chats)).toEqual([]);
+      });
+
+      it('leaves the lid out for the row warmed back beside the mark, and for the phone of the failed report', async () => {
+        await failReport();
+        await pushOut();
+        await readBack();
+
+        expect(store.resolveLid('333@lid')).toBeNull();
+        expect(store.lidsForPhone('628111')).toEqual([]);
+        expect(store.lidsForPhone('628222')).toEqual([]);
+      });
+
+      it('keeps the deletion of the chat of the replaced phone from reaching the chat of the lid', async () => {
+        await failReport();
+        await pushOut();
+        await readBack();
+        const chats = chatsOf();
+
+        expect(chats.chatTwins('628111@s.whatsapp.net')).not.toContain('333@lid');
+        chats.removeChats(['628111@s.whatsapp.net']);
+
+        expect(listed(chats)).toEqual(['333@lid']);
+      });
+
+      it('keeps the deletion of the chat of the lid from reaching the chat of the replaced phone', async () => {
+        await failReport();
+        await pushOut();
+        await readBack();
+        const chats = chatsOf();
+
+        expect(chats.chatTwins('333@lid')).not.toContain('628111@s.whatsapp.net');
+        chats.removeChats(['333@lid']);
+
+        expect(listed(chats)).toEqual(['628111@c.us']);
+      });
+
+      it('leaves the lid out for every phone while the empty mark stands', async () => {
+        await failReport();
+        await pushOut();
+        await readBack(); // the entry holds the row 628111, which the mark of the failed report refuses
+        jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+        // The mark held names another phone, so the lookup of the row's own phone leaves the empty mark.
+        await expect(store.rememberIfUnknown('333', '628111', OTHER)).resolves.toBe(false);
+        warn.mockClear();
+
+        expect(store.getCached('333')).toBeNull();
+        expect(store.resolveLid('333@lid')).toBeNull();
+        expect(store.lidsForPhone('628111')).toEqual([]);
+        await refused(['628111', '628222']);
+      });
+
+      it('keeps the lid for the phone of the report that failed while its entry is in the mirror', async () => {
+        await failReport(); // the entry holds 628222, which the mark names
+
+        expect(store.getCached('333')).toBe('628222');
+        expect(store.resolveLid('333@lid')).toBe('628222');
+        expect(store.lidsForPhone('628222')).toEqual(['333']);
+        expect(store.lidsForPhone('628111')).toEqual([]);
+        expect(chatsOf().chatTwins('628222@s.whatsapp.net')).toContain('333@lid');
+      });
+
+      it('answers the lid again once a report of it has landed', async () => {
+        await failReport();
+        await pushOut();
+        await readBack();
+
+        await expect(store.remember('333', '628222', OWNER)).resolves.toBe(true);
+
+        expect(store.getCached('333')).toBe('628222');
+        expect(store.resolveLid('333@lid')).toBe('628222');
+        expect(store.lidsForPhone('628222')).toEqual(['333']);
+      });
     });
 
     it('answers no phone when the entry left while the write was under way and the write then failed', async () => {
@@ -4394,10 +4501,7 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       const warmedBack = async (): Promise<void> => {
         await failReport();
         await pushOut();
-        store.getCached('333');
-        const deadline = Date.now() + 5000;
-        while (store.getCached('333') === undefined && Date.now() < deadline) await new Promise(r => setTimeout(r, 5));
-        expect(store.getCached('333')).toBe('628111');
+        await readBack();
         expect(evicted()).toBe(1);
       };
 
@@ -4432,10 +4536,7 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
         reject(new Error('connection lost'));
         await expect(report).resolves.toBe(false);
         warn.mockClear();
-        store.getCached('333');
-        const deadline = Date.now() + 5000;
-        while (store.getCached('333') === undefined && Date.now() < deadline) await new Promise(r => setTimeout(r, 5));
-        expect(store.getCached('333')).toBe('628111');
+        await readBack();
 
         unreadable();
 

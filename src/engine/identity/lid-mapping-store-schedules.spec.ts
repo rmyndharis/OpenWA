@@ -222,6 +222,13 @@ class Reference {
       : undefined;
   }
 
+  /** Why a failed write of the lid holds it against a row that names this phone, or '' when none does. */
+  heldAgainst(phone: string): string {
+    const named = new Set(this.lookups.filter(l => l.state === 'failed').map(l => this.calls[l.index].phone));
+    if (named.size > 1 || (named.size === 1 && !named.has(phone))) return 'a display lookup is failed';
+    return this.report?.state === 'failed' && phone !== this.report.phone ? 'a report is failed' : '';
+  }
+
   /** Why the lid must answer none, or '' when it may answer the row. */
   refusal(row: { phone: string | null; isReported: boolean } | null): string {
     if (!row || !row.isReported || row.phone === null) return 'the row names no phone';
@@ -435,6 +442,17 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
       const kept = down || peered || fillers.size > 0 ? undefined : reference.mustAnswerLookup(row);
       if (kept !== undefined && answer !== kept)
         unexpected(after, `the lid whose lookups of its own phone failed answers ${String(answer)}, not ${kept}`);
+      // The synchronous views scope what the Baileys store deletes and merges per phone, so they leave out an entry that
+      // a failed write holds against another phone, as the readers that await refuse a row. They are read only then: a
+      // read of the cache moves its entry in the LRU order, which the other checks leave alone.
+      const entry = inner.lidToPhone.get(LID);
+      const against = typeof entry === 'string' ? reference.heldAgainst(entry) : '';
+      if (typeof entry === 'string' && against !== '') {
+        if (store.getCached(LID) === entry) unexpected(after, `the cache answers ${entry} while ${against}`);
+        if (store.resolveLid(own) === entry) unexpected(after, `the lid resolves to ${entry} while ${against}`);
+        if (store.lidsForPhone(entry).includes(LID))
+          unexpected(after, `the lid is listed for ${entry} while ${against}`);
+      }
       // The synchronous view of the mirror only ever holds what the calls left there.
       if (!inner.lidToPhone.has(LID)) reference.held = undefined;
       if (held !== null && held !== reference.held)

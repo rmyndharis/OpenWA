@@ -110,16 +110,22 @@ function chunk<T>(items: T[], size = LID_QUERY_CHUNK): T[][] {
 export interface LidMappingStore {
   /**
    * Sync read from the in-memory cache: phone digits, `null` = known-unresolved, `undefined` = never
-   * seen. A miss is warmed from the persisted table in the background, so a later read can hit.
+   * seen. A miss is warmed from the persisted table in the background, so a later read can hit. An entry
+   * is judged as a stored row is: while this process holds a failed write of the lid against another
+   * phone, the entry is not returned.
    */
   getCached(lid: string): string | null | undefined;
   /**
    * Resolve any WA JID through the mirror: the phone digits for its user part, `null` when the lid
-   * is known-unresolved, unreported or never seen. This hot-cache view may lag another process;
-   * alias authorization and rule matching await the persisted reads below.
+   * is known-unresolved, unreported, never seen or held against its entry by a failed write. This
+   * hot-cache view may lag another process; alias authorization and rule matching await the persisted
+   * reads below.
    */
   resolveLid(jid: string): string | null;
-  /** Sync reverse lookup: the lids currently mapped to this phone (used by the message from-filter). */
+  /**
+   * Sync reverse lookup: the lids currently mapped to this phone, less those a failed write holds against
+   * it. The Baileys store scopes a chat's twin keys, and so what a chat deletion removes, with it.
+   */
   lidsForPhone(phone: string): string[];
   /** The phone the table holds for a lid JID, read from the database; null when none is stored. */
   findPhoneForLid?(jid: string): Promise<string | null>;
@@ -357,7 +363,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       const phone = this.lidToPhone.get(lid);
       this.lidToPhone.delete(lid);
       this.lidToPhone.set(lid, phone as string | null);
-      return phone;
+      return phone && this.markedOut(lid, phone) ? null : phone;
     }
     this.warmFromTable(lid);
     return undefined;
@@ -370,7 +376,19 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
 
   lidsForPhone(phone: string): string[] {
     const set = this.phoneToLids.get(phone);
-    return set ? [...set].filter(lid => !this.unreported.has(lid)) : [];
+    return set ? [...set].filter(lid => !this.unreported.has(lid) && !this.markedOut(lid, phone)) : [];
+  }
+
+  /**
+   * A failed write of the lid names another phone than its entry holds (the empty mark names none): the entry is the
+   * row a read warmed back, which the write was to replace, or one a conflicting lookup revoked. The synchronous views
+   * leave it out, as the readers that await judge a row, so what a caller scopes with them (the Baileys store
+   * expands a chat deletion and its state over them) never reaches a lid this process knows has moved. An entry that
+   * is the phone the mark names is this process's own, and stays.
+   */
+  private markedOut(lid: string, phone: string): boolean {
+    const mark = this.failedPhones.get(lid);
+    return mark !== undefined && mark !== phone;
   }
 
   /**
@@ -385,7 +403,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       return (await this.readLidsForPhones([phone]))[phone];
     } catch (err) {
       this.logger.warn(`Could not read lids for a phone: ${err instanceof Error ? err.message : String(err)}`);
-      return this.mirrorLids(phone);
+      return this.lidsForPhone(phone);
     }
   }
 
@@ -419,22 +437,18 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       return await this.readLidsForPhones(phones);
     } catch {
       // The table may not exist yet (migration pending); the cache is the best available answer.
-      return Object.fromEntries(phones.map(phone => [phone, this.mirrorLids(phone)]));
+      return Object.fromEntries(phones.map(phone => [phone, this.lidsForPhone(phone)]));
     }
   }
 
   /**
-   * What the mirror answers for a lid while the table cannot be read: its entry, judged as a row would be. A lid with
-   * a failed write has the table's row warmed back into the mirror beside its mark, and that row is the phone the
-   * write was to replace: the mirror is the best answer there is, but not one that the mark refuses.
+   * What the mirror answers for a lid, read without touching it: its entry, judged as a row would be. The synchronous
+   * views answer the same way ({@link markedOut}), and are what the readers that await fall back to while the table
+   * cannot be read: a lid with a failed write has the table's row warmed back into the mirror beside its mark, and
+   * that row is the phone the write was to replace, which the mark refuses.
    */
   private mirrorPhone(lid: string, held: string | null | undefined): string | null {
     return !held || this.unreported.has(lid) ? null : this.rowPhone(lid, held, true);
-  }
-
-  /** The lids the mirror maps to a phone while the table cannot be read, judged as {@link mirrorPhone} does. */
-  private mirrorLids(phone: string): string[] {
-    return this.lidsForPhone(phone).filter(lid => this.mirrorPhone(lid, phone) === phone);
   }
 
   /** Read only current table rows on success; a resident mapping cannot restore a deleted row. */
@@ -499,7 +513,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     } catch (err) {
       this.logger.warn(`Could not read the phone for a lid: ${err instanceof Error ? err.message : String(err)}`);
     }
-    return this.unreported.has(lid) ? null : this.mirrorPhone(lid, this.getCached(lid));
+    return this.resolveLid(lid);
   }
 
   /**
@@ -955,9 +969,9 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
    * next one hits. A table miss IS remembered, so an unmapped lid stops re-querying on every
    * lookup ({@link absentFromTable}), but only when nothing learned that lid in the meantime;
    * a read error is swallowed (the table may not exist yet), the same posture as reload().
-   * A lid with a failed-write mark is warmed too, with the row the write was to replace: the synchronous views then
-   * show that row, display and attribution only, and the readers that authorize judge the entry through
-   * {@link rowPhone}, where the mark outranks it, also when they fall back to the mirror ({@link mirrorPhone}).
+   * A lid with a failed-write mark is warmed too, with the row the write was to replace. The mark outranks that
+   * entry in every reader: the synchronous views leave it out ({@link markedOut}), and the readers that authorize
+   * judge it through {@link rowPhone}, also when they fall back to the mirror.
    */
   private warmFromTable(lid: string): void {
     if (!lid || this.pendingLookups.has(lid) || this.absentFromTable.has(lid) || this.markDropped(lid)) return;
