@@ -51,9 +51,11 @@ export function resolveIngressReconcilerOptions(env: NodeJS.ProcessEnv = process
  * use in reading it again soon. A full batch of them, oldest first, would otherwise head every sweep and no
  * healthy row behind them would ever be replayed. Two reasons: its stored payload could not be read, which is
  * looked at again after an hour; and its queue job is still live (waiting behind a backlog, running, delayed),
- * which the worker settles on its own and which only needs another look after a quarter of an hour, well inside
- * the hour a completed job is kept. Held in memory, not in the attempt budget: the row is not touched, so nothing
- * of its budget is spent, and it is looked at again after the wait or a restart.
+ * which the worker settles on its own and which only needs another look after a quarter of an hour. A completed
+ * job is kept for an hour or until 1000 newer ones have completed (removeOnComplete age and count), whichever comes
+ * first, so a look that comes later than that finds no job and the row is replayed. Held in memory, not in the
+ * attempt budget: the row is not touched, so nothing of its budget is spent, and it is looked at again after the
+ * wait or a restart.
  */
 const UNREADABLE_RETRY_MS = 60 * 60 * 1000;
 const LIVE_JOB_RETRY_MS = 15 * 60 * 1000;
