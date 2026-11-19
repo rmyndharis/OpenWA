@@ -7256,7 +7256,7 @@
             }
           },
           "403": {
-            "description": "The whatsapp-web.js engine refused the pin (in a group only admins may pin). The Baileys engine has no acceptance signal and answers 200. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The whatsapp-web.js engine refused the pin (in a group only admins may pin, or the chat is with a contact the account blocked). Also answered when WhatsApp Web reports the send as failed, which its sender says no more about, so a rate limit of the send reads the same. The Baileys engine has no acceptance signal and answers 200. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7296,7 +7296,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the request budget. The pin may or may not have been applied; a retry is safe, but it restarts the pin duration from the moment it succeeds.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the request budget. The pin may or may not have been applied; a retry is safe, but it restarts the pin duration from the moment it succeeds. Also answered on whatsapp-web.js when WhatsApp answers the read of the group in front of the send with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): nothing was sent.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7368,7 +7368,7 @@
             }
           },
           "403": {
-            "description": "The whatsapp-web.js engine refused the unpin (in a group only admins may unpin). The Baileys engine has no acceptance signal and answers 200. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The whatsapp-web.js engine refused the unpin (in a group only admins may unpin, or the chat is with a contact the account blocked). Also answered when WhatsApp Web reports the send as failed, which its sender says no more about, so a rate limit of the send reads the same. The Baileys engine has no acceptance signal and answers 200. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7408,7 +7408,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the request budget. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). The whatsapp-web.js page connection died mid-request, or WhatsApp Web did not answer within the request budget. The change may or may not have been applied; repeating the request is safe, since it converges on the same state. Also answered on whatsapp-web.js when WhatsApp answers the read of the group in front of the send with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): nothing was sent.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10105,7 +10105,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. Deliberately not folded into the 404 above — a query that never came back is not the same claim as a group that does not exist. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer within the request budget. Deliberately not folded into the 404 above — a query that never came back is not the same claim as a group that does not exist. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the preview with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): no group was returned, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10308,7 +10308,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the join with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): the account joined nothing, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12700,8 +12700,18 @@
               }
             }
           },
+          "501": {
+            "description": "On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to remove the picture with. Nothing was asked of WhatsApp: the picture is unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
-            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came.",
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came. On whatsapp-web.js, also when WhatsApp answers the removal with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): nothing was removed, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14163,7 +14173,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the request with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): nothing was changed, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14388,7 +14398,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the request with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): nothing was changed, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14500,7 +14510,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause. On whatsapp-web.js, also when WhatsApp answers the request with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): nothing was changed, so retry after a pause.",
             "content": {
               "application/json": {
                 "schema": {
