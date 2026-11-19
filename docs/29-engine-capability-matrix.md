@@ -1266,9 +1266,13 @@ adapter boundary — none silently stubs.
 - **`getGroupJoinInfo` (wwjs) answers by WhatsApp's status.** The preview runs `queryGroupInvite` of `WAWebGroupQueryJob`
   in the page, as `Client.getInviteInfo` calls it, so that the status the job rejects with decides the answer: a timeout,
   a rate limit or a server error (`408`, `423`, `429`, `5xx`) is the retryable `503`, and any other status the `404` of an
-  unknown invite, where every rejection was the `404`. Baileys answers `503` for `408` and `429`, `404` for every other
-  `4xx`, and rethrows a `5xx` as it came (a `500`). The adapter does not look the job up first, as the library's call did
-  not: a page without it answers the `404`, and a build without the module breaks the group reads before this route.
+  unknown invite, where every rejection was the `404`. The Mex job that a build runs in place of the IQ job makes up a
+  `500` with no text at all when its query answers no group and no error: that is no status WhatsApp sent but an answer
+  that holds no group, so it is the `404`, and a `500` with a text is the retryable `503`. Whether a revoked or unknown
+  link reaches the page as that answer has not been observed on a live account. Baileys answers `503` for `408` and
+  `429`, `404` for every other `4xx`, and
+  rethrows a `5xx` as it came (a `500`). The adapter does not look the job up first, as the library's call did not: a
+  page without it answers the `404`, and a build without the module breaks the group reads before this route.
 - **`deleteGroupPicture` and `deleteProfilePicture` (wwjs) need a WhatsApp Web build that has the picture delete job.**
   The adapter sends `requestDeletePicture` of `WAWebContactProfilePicThumbBridge` in the page, with the group id (or the
   account's own) built by `WAWebWidFactory`, and answers `501` where either is missing, before anything is asked of

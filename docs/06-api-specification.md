@@ -3544,7 +3544,7 @@ when WhatsApp discloses one. `id` and `name` are always present; every other fie
 rather than zeroed when the engine did not report it, because `whatsapp-web.js` returns an untyped
 object with no guaranteed shape and a defaulted `createdAt: 0` would read as "created at the epoch".
 
-**Errors:** `400` no code supplied, or session not started · `401` · `404` no such invite — invalid, expired, or revoked · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the preview with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): no group was returned, retry after a pause
+**Errors:** `400` no code supplied, or session not started · `401` · `404` no such invite — invalid, expired, or revoked · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause; on whatsapp-web.js, also when WhatsApp answers the preview with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): no group was returned, retry after a pause; a `500` that carries no text, which the page's job makes up when its query returns no group and no error, answers `404`
 
 #### POST /api/sessions/:sessionId/groups/join
 

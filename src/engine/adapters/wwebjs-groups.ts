@@ -189,16 +189,20 @@ export async function joinInviteInPage(
  * WhatsApp refuses, a rate limit, a timeout and a server error all reject `ServerStatusCodeError(status)`, which
  * Puppeteer hands over without its status, so all of them were the unknown invite. Like the library's call it does not
  * look the job up: a page without it rejects as the library's call did, which the caller reads as no such invite, and a
- * document with no `require` at all fails on it, the page that is reloading. Any rejection that is not a status is
- * rethrown. Self-contained, since Puppeteer ships it to the page as source.
+ * document with no `require` at all fails on it, the page that is reloading. The Mex job that a build runs in place of
+ * the IQ job makes up a 500 with no text at all when its query answers no group and no error. That is no status
+ * WhatsApp sent but an answer that holds no group, so it is the 404 of an unknown invite, where a 500 with a text is a
+ * failure to retry. Any rejection that is not a status is rethrown. Self-contained, since Puppeteer ships it to the
+ * page as source.
  */
 export async function readInviteInfoInPage(inviteCode: string): Promise<{ status: number; info?: unknown }> {
   const w = window as unknown as { require: (m: string) => { queryGroupInvite: (code: string) => Promise<unknown> } };
   try {
     return { status: 200, info: await w.require('WAWebGroupQueryJob').queryGroupInvite(inviteCode) };
   } catch (err) {
-    const failure = err as { name?: unknown; status?: unknown } | undefined;
+    const failure = err as { name?: unknown; status?: unknown; message?: unknown } | undefined;
     if (typeof failure?.name === 'string' && failure.name.endsWith('ServerStatusCodeError')) {
+      if (failure.status === 500 && failure.message === '') return { status: 404 };
       return { status: typeof failure.status === 'number' ? failure.status : 404 };
     }
     throw err;

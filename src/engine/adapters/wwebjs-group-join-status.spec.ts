@@ -30,8 +30,8 @@ describe('a group invite that WhatsApp answers with a status', () => {
     delete g.window;
   });
 
-  const statusError = (status: number, name = 'ServerStatusCodeError') =>
-    Object.assign(new Error(`status ${status}`), { name, status, statusCode: status });
+  const statusError = (status: number, name = 'ServerStatusCodeError', message = `status ${status}`) =>
+    Object.assign(new Error(message), { name, status, statusCode: status });
 
   const page = (modules: Record<string, unknown>) => {
     g.window = {
@@ -171,6 +171,24 @@ describe('a group invite that WhatsApp answers with a status', () => {
       page({ WAWebGroupQueryJob: { queryGroupInvite: jest.fn().mockResolvedValue({ subject: 'Team' }) } });
 
       await expect(adapterOnThatPage().getGroupJoinInfo('CODE')).rejects.toBeInstanceOf(GroupNotFoundError);
+    });
+
+    // The Mex job that a build runs for the preview makes up a 500 with no text at all when its query answers no group
+    // and no error: an answer that holds no group, so the 404 of an unknown invite and no failure to retry.
+    it('is the 404 of an unknown invite when the Mex job rejects a 500 with no text', async () => {
+      previewFailing(statusError(500, 'ServerStatusCodeError', ''));
+
+      await expect(adapterOnThatPage().getGroupJoinInfo('CODE')).rejects.toBeInstanceOf(GroupNotFoundError);
+    });
+
+    // A 500 that says anything is a failure like any other, and keeps the retryable 503.
+    it('is still the retryable failure for a 500 with a text', async () => {
+      previewFailing(statusError(500, 'ServerStatusCodeError', 'missing id in invite info participant'));
+
+      const attempt = adapterOnThatPage().getGroupJoinInfo('CODE');
+
+      await expect(attempt).rejects.toBeInstanceOf(EngineTransportError);
+      await expect(attempt).rejects.toThrow(/answered 500 to the preview of invite CODE/);
     });
   });
 });

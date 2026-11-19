@@ -81,7 +81,8 @@ const WWJS_INVITE_JOIN_503 =
   'the account joined nothing, so retry after a pause.';
 const WWJS_INVITE_PREVIEW_503 =
   ' On whatsapp-web.js, also when WhatsApp answers the preview with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
-  'no group was returned, so retry after a pause.';
+  'no group was returned, so retry after a pause. A 500 that carries no text, which the job in the page makes up when ' +
+  'its query returns no group and no error, answers 404.';
 
 // The subject, description and picture are the group's info: WhatsApp lets an admin edit them and, unless the group
 // restricts its info to admins, any member too. The settings and the invite routes below stay admin-only.
