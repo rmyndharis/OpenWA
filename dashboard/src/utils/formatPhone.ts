@@ -85,7 +85,7 @@ export interface ChatLabel {
 
 /**
  * A saved name or a push name. The digits of the chat's own id are not one: a privacy id's, where WhatsApp shows the
- * phone number, and a phone id's, which the Baileys store lists for a chat it has no name for. Nor is the mapped phone
+ * phone number, and a phone id's, which the engines list for a chat they have no name for. Nor is the mapped phone
  * written as a number, with spaces, signs or direction marks around its digits; a name with other words is one.
  */
 export function savedChatName(chat: ChatLabel): string | undefined {
@@ -94,7 +94,9 @@ export function savedChatName(chat: ChatLabel): string | undefined {
   const [user, host] = chat.id.split('@');
   const bare = user.split(':')[0];
   if (host?.split(':')[0] === 'lid' && (name === bare || name === `${bare}@lid`)) return undefined;
-  if (name === parsePhoneFromJid(chat.id)) return undefined;
+  // The id's own number, bare or with its suffix: the store lists the first, whatsapp-web.js the second.
+  const own = parsePhoneFromJid(chat.id);
+  if (own && parsePhoneFromJid(name) === own) return undefined;
   const phone = chat.phone?.replace(/\D/g, '');
   if (phone && phoneQueryDigits(name) === phone) return undefined;
   return name;

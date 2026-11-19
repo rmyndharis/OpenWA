@@ -58,6 +58,7 @@ for (const [what, target] of [
   ['the privacy id digits', chat(LID, '262813461250072')],
   ['the mapped phone written as a number', chat(LID, '+1 555 000 6666', '15550006666')],
   ['the digits of a phone id', chat('15550001111@s.whatsapp.net', '15550001111')],
+  ['the phone id itself', chat('15550001111@c.us', '15550001111@c.us')],
   ['a push name', chat('15550001111@c.us', '~Max')],
   ['a number', chat('15550001111@c.us', '+1 555 000 1111')],
 ] as const) {
