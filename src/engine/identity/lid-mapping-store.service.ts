@@ -25,7 +25,8 @@ const LID_QUERY_CHUNK = 500;
  * that has something to write (each inbound message that carries the lid, while its write keeps failing),
  * since a report held back would leave the table naming a number the contact no longer has; the warning is
  * what is bounded, to one in this interval for the whole store, with a count of the failures in between. A
- * dropped second-lid check and a failed second-lid read are logged the same way, each on its own.
+ * dropped second-lid check, a failed second-lid read and a failed-write mark the bound forgets are logged the same
+ * way, each on its own.
  */
 const LID_WRITE_WARN_MS = 60_000;
 
@@ -217,8 +218,10 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
    * {@link failedWrites} marks going out with the mirror entry (the cap, a reload) must not make the lid answer it
    * again. It outranks an entry warmed back from that row. Ended by a report of the lid that begins or lands, a
    * negative that clears the row and a reload, which replaces the table, except for the marks of lids written while its
-   * read was out. Bounded like the mirror, oldest first; the lid of a mark the bound drops goes on in
-   * {@link droppedMarks}.
+   * read was out. Bounded like the mirror (`LID_MAPPING_CACHE_MAX`), oldest first; the lid of a mark the bound drops
+   * goes on in {@link droppedMarks}. The mark of a failed lookup is not ended by another node's later report of the lid,
+   * as a lookup that landed would be: only this node's own report, a negative that clears the row or a reload ends it,
+   * and a row that names another phone than the lookup is refused until then.
    */
   private readonly failedPhones = new Map<string, string>();
   /**
@@ -1066,8 +1069,8 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     if (this.lidToPhone.has(dropped)) this.evict(dropped);
     this.warnAtMost(
       this.markDropWarning,
-      `Failed lid writes are remembered for ${this.maxCachedLids} lids at most: the oldest is forgotten, ` +
-        'and its lid answers no phone until it is reported again or the mapping reloads',
+      `Failed lid writes are remembered for ${this.maxCachedLids} lids at most (LID_MAPPING_CACHE_MAX): the oldest is ` +
+        'forgotten, and its lid answers no phone until it is reported again or the mapping reloads',
       'dropped',
     );
   }
