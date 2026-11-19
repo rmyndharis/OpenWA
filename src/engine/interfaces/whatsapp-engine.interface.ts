@@ -1621,13 +1621,13 @@ export interface ProfileCapability {
   setProfilePicture(media: MediaInput): Promise<void>;
 
   /**
-   * Remove the account's own profile picture. Resolves when the removal is acknowledged; deleting a
-   * picture that is not there is a no-op rather than an error, so the call is idempotent.
+   * Remove the account's own profile picture. Resolves when the removal is acknowledged. Every call
+   * sends the request, so a repeat answers what WhatsApp answers: the removal of an absent picture is
+   * observed to succeed for a group, and not yet for an account's own.
    *
-   * Only whatsapp-web.js can report a refusal, and only as an explicit `false` — its page helper
-   * also returns `undefined` when it did not attempt the delete at all, which is NOT a refusal.
-   * Baileys resolves void and has no refusal signal, so it reports success for any acknowledged
-   * write.
+   * whatsapp-web.js sends it in the page and answers by WhatsApp's status: a refusal, a rate limit or
+   * a server error (retryable), or no job to send it with on that WhatsApp Web build. Baileys
+   * resolves void and has no refusal signal, so it reports success for any acknowledged write.
    */
   deleteProfilePicture(): Promise<void>;
 }

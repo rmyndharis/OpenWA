@@ -296,4 +296,35 @@ describe('docs/06 matches the published contract', () => {
       ]);
     });
   });
+
+  // Removing the account's own picture sends the request on every call, and WhatsApp's answer to a repeat for an
+  // account with no picture has not been observed (it is for a group). The text must not promise a no-op.
+  describe('the removal of the own profile picture', () => {
+    const section = (): string => {
+      const doc = read('docs', '06-api-specification.md');
+      const start = doc.indexOf('\n#### DELETE /api/sessions/:sessionId/profile/picture\n');
+      if (start === -1) throw new Error('docs/06 has no section for the own picture removal');
+      const next = doc.indexOf('\n#### ', start + 1);
+      return doc.slice(start, next === -1 ? doc.length : next).replace(/\s+/g, ' ');
+    };
+
+    it('does not promise that a repeat answers 200', () => {
+      expect(section()).not.toMatch(/safe to repeat|also answers `200`/);
+    });
+
+    it('says a repeat answers what WhatsApp answers, and that the answer for an own account is not observed', () => {
+      expect(section()).toMatch(/a repeat sends the same request again and answers what WhatsApp answers/);
+      expect(section()).toMatch(/for an account's own picture has not been observed/);
+    });
+
+    it.each([
+      ['the service', ['src', 'modules', 'profile', 'profile.service.ts']],
+      ['the engine interface', ['src', 'engine', 'interfaces', 'whatsapp-engine.interface.ts']],
+    ])('is not called idempotent by %s', (_name, file) => {
+      const source = read(...file);
+      const start = source.indexOf('Remove the account');
+      expect(start).toBeGreaterThan(-1);
+      expect(source.slice(start, source.indexOf('deleteProfilePicture(', start))).not.toMatch(/idempotent|no-op/i);
+    });
+  });
 });

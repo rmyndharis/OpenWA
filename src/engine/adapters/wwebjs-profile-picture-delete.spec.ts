@@ -87,13 +87,16 @@ describe('removing the account profile picture on whatsapp-web.js', () => {
     expect(request.mock.calls).toEqual([[{ _serialized: OWN }]]);
   });
 
-  // The route is documented as safe to repeat: the repeat is the same request, and WhatsApp's 200 settles it again.
-  it('converges on a repeat, which is the same request again', async () => {
-    const request = installPage();
+  // A repeat is the same request again and nothing settles it locally, so it answers what WhatsApp answers: the answer
+  // for an account with no picture left has not been observed, and a refusal of it is the refusal.
+  it('sends the request again on a repeat and answers what WhatsApp answers each time', async () => {
+    const request = installPage({
+      request: jest.fn().mockResolvedValueOnce({ status: 200 }).mockRejectedValueOnce(statusError(403)),
+    });
     const { adapter } = adapterOnThatPage();
 
     await expect(adapter.deleteProfilePicture()).resolves.toBeUndefined();
-    await expect(adapter.deleteProfilePicture()).resolves.toBeUndefined();
+    await expect(adapter.deleteProfilePicture()).rejects.toBeInstanceOf(EngineRefusedError);
     expect(request).toHaveBeenCalledTimes(2);
   });
 

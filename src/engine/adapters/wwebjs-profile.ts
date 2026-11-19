@@ -85,8 +85,8 @@ export class WwebjsProfile {
     if (status === 'missing') {
       throw new EngineNotSupportedError('deleteProfilePicture(no picture delete job on this build)');
     }
-    // A repeat is the same request, and converges while WhatsApp answers 200 for an account with no picture left, as it
-    // does for a group with none.
+    // A repeat sends the same request again and answers what WhatsApp answers: a group with no picture left answers
+    // 200, and an account's own has not been observed to.
     settleWriteStatus(status, {
       request: 'the profile picture removal',
       nothing: 'removed nothing',
