@@ -21,8 +21,13 @@ export function markNothingSent<T>(error: T): T {
   return error;
 }
 
-/** Whether an error proves nothing was handed to WhatsApp: an EngineNotSentError, or one markNothingSent recorded. */
+/**
+ * Whether an error proves nothing was handed to WhatsApp: an EngineNotSentError, or one markNothingSent recorded. Not
+ * when markOutcomeUnknown recorded it: an adapter that saw an earlier attempt of the same send reach the page says the
+ * message may have gone out, and that outweighs what the class of the later failure would prove.
+ */
 export function provesNothingSent(error: unknown): boolean {
+  if (hasUnknownOutcome(error)) return false;
   return (
     error instanceof EngineNotSentError || (error !== null && typeof error === 'object' && raisedBeforeSend.has(error))
   );

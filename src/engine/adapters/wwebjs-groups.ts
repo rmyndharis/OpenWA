@@ -25,6 +25,7 @@ import {
   type WwebjsEngineHost,
   navigationsSeen,
   rethrowIfNavigation,
+  throwIfNavigatedSince,
   withPageWrite,
   reportPageDeath,
 } from './wwebjs-host';
@@ -183,18 +184,31 @@ export async function joinInviteInPage(
  * The preview of the library's own `getInviteInfo`, run IN-PAGE with the status WhatsApp gave: `queryGroupInvite` of
  * `WAWebGroupQueryJob`, called with the invite code as the library calls it, answering what it resolves. An invite
  * WhatsApp refuses, a rate limit, a timeout and a server error all reject `ServerStatusCodeError(status)`, which
- * Puppeteer hands over without its status, so all of them were the unknown invite. Like the library's call it does not
- * look the job up: a page without it rejects as the library's call did, which the caller reads as no such invite, and a
- * document with no `require` at all fails on it, the page that is reloading. The Mex job that a build runs in place of
- * the IQ job makes up a 500 with no text at all when its query answers no group and no error. That is no status
- * WhatsApp sent but an answer that holds no group, so it is the 404 of an unknown invite, where a 500 with a text is a
- * failure to retry. Any rejection that is not a status is rethrown. Self-contained, since Puppeteer ships it to the
- * page as source.
+ * Puppeteer hands over without its status, so all of them were the unknown invite. The library's call does not look the
+ * job up, so on a build whose module lost `queryGroupInvite` it died in the page with a TypeError, which was read as
+ * the unknown invite: every valid code was refused. From a page.evaluate Meta's `require` answers `undefined` for a
+ * module the page has not defined, and throws only inside a guard or before the page's error setup has run, so the
+ * lookup tests the answer and guards the throw; a build with no such job answers `'missing'` before anything was asked
+ * of WhatsApp. A document with no `require` at all is a page that is reloading, not a build without the job, and that
+ * failure is let through. The Mex job that a build runs in place of the IQ job makes up a 500 with no text at all when
+ * its query answers no group and no error. That is no status WhatsApp sent but an answer that holds no group, so it is
+ * the 404 of an unknown invite, where a 500 with a text is a failure to retry. Any rejection that is not a status is
+ * rethrown. Self-contained, since Puppeteer ships it to the page as source.
  */
-export async function readInviteInfoInPage(inviteCode: string): Promise<{ status: number; info?: unknown }> {
-  const w = window as unknown as { require: (m: string) => { queryGroupInvite: (code: string) => Promise<unknown> } };
+export async function readInviteInfoInPage(
+  inviteCode: string,
+): Promise<{ status: number; info?: unknown } | 'missing'> {
+  type PreviewJob = { queryGroupInvite: (code: string) => Promise<unknown> };
+  const w = window as unknown as { require: (m: string) => unknown };
+  let job: Partial<PreviewJob> | undefined;
   try {
-    return { status: 200, info: await w.require('WAWebGroupQueryJob').queryGroupInvite(inviteCode) };
+    job = w.require('WAWebGroupQueryJob') as Partial<PreviewJob> | undefined;
+  } catch (err) {
+    if (typeof w.require !== 'function') throw err;
+  }
+  if (typeof job?.queryGroupInvite !== 'function') return 'missing';
+  try {
+    return { status: 200, info: await job.queryGroupInvite(inviteCode) };
   } catch (err) {
     const failure = err as { name?: unknown; status?: unknown; message?: unknown } | undefined;
     if (typeof failure?.name === 'string' && failure.name.endsWith('ServerStatusCodeError')) {
@@ -289,8 +303,8 @@ export async function deleteGroupPictureInPage(chatId: string): Promise<number |
  * Normalise whatsapp-web.js's member-add-mode to the neutral vocabulary.
  *
  * Deliberately handles both encodings. The WA Web group model — and GroupChat.setAddMembersAdminsOnly
- * when it writes back (GroupChat.js:476) — use WhatsApp's `'admin_add'`/`'all_member_add'` strings,
- * but index.d.ts:890 declares the field `boolean` with `true` meaning "only admins", the OPPOSITE
+ * when it writes back (GroupChat.js) — use WhatsApp's `'admin_add'`/`'all_member_add'` strings,
+ * but index.d.ts declares the field `boolean` with `true` meaning "only admins", the OPPOSITE
  * sense to Baileys' boolean. Reading it as a plain boolean would therefore be wrong on both engines
  * for different reasons, so each shape is decoded explicitly and anything unrecognised is reported
  * as unknown rather than guessed.
@@ -376,11 +390,11 @@ export class WwebjsGroups {
           isSuperAdmin: Boolean(p.isSuperAdmin),
         }));
 
-      // GroupChat.createdAt is a getter returning a Date (GroupChat.js:36), which serialises as an
+      // GroupChat.createdAt is a getter returning a Date (GroupChat.js), which serialises as an
       // ISO string; the contract is Unix seconds, so read the raw metadata field instead.
       const creation = (groupChat.groupMetadata as { creation?: unknown } | undefined)?.creation;
       // GroupChat has no isAnnounce, and WA Web overwrites isReadOnly with the announce SETTING
-      // (Injected/Utils.js:1005), which tells an admin of an announce-only group they cannot post.
+      // (`WWebJS.getChatModel` in Injected/Utils.js), which tells an admin of an announce-only group they cannot post.
       // Derive both from the metadata, as the Baileys mapper does.
       const announce = Boolean(groupChat.groupMetadata?.announce);
       const selfWid = readWid(this.client().info?.wid);
@@ -429,7 +443,7 @@ export class WwebjsGroups {
    * `Promise<CreateGroupResult | string>` (`index.d.ts`).
    *
    * Its page body reaches a WhatsApp Web internal that no longer exposes `findImpl`
-   * (`Client.js:2325`, inside the injected evaluate). Measured against a live session on two
+   * (inside the evaluate of `Client.createGroup`). Measured against a live session on two
    * different WhatsApp Web builds — `2.3000.1044858477-alpha` auto-resolved from the registry, and
    * `2.3000.1044770897-alpha` pinned explicitly — with identical results:
    * `TypeError: this.findImpl is not a function`, reaching the caller as a bare 500. Bare and
@@ -465,16 +479,16 @@ export class WwebjsGroups {
         : chat.addParticipants(participantIds, { autoSendInviteV4: false }),
     );
     // whatsapp-web.js reports a batch-level refusal (no admin rights, empty group) by RESOLVING a
-    // plain reason string (GroupChat.js:106-107,128-130) instead of throwing — surface it as a
+    // plain reason string (GroupChat.js) instead of throwing — surface it as a
     // refusal, not a success.
     if (typeof raw === 'string') {
       throw new EngineRefusedError(raw);
     }
     // Per-participant outcome: code 200 = added; 403 invite-only / 404 not registered / 408
-    // recently left / 409 already a member / 419 group full (GroupChat.js:102-116).
+    // recently left / 409 already a member / 419 group full (GroupChat.js).
     const results: ParticipantOperationResult[] = Object.entries(raw ?? {}).map(([id, r]) => {
       // A 403 with isInviteV4Sent is not a failure: wwebjs already delivered the private group
-      // invite (GroupChat.js:203-240). Report it as success-with-invite — otherwise an all-invite
+      // invite (GroupChat.js). Report it as success-with-invite — otherwise an all-invite
       // batch throws "failed for all" (HTTP 403) even though every participant was reached.
       const inviteSent = r.code === 403 && r.isInviteV4Sent === true;
       return {
@@ -503,7 +517,7 @@ export class WwebjsGroups {
 
   /**
    * whatsapp-web.js resolves each requested id against the group's OWN participant collection and
-   * silently drops what it cannot find (GroupChat.js:289), then resolves `{status: 200}` for the
+   * silently drops what it cannot find (GroupChat.js), then resolves `{status: 200}` for the
    * whole batch. Reporting that as one success per requested participant claimed removals WhatsApp
    * never performed, and an all-dropped batch reached a request builder that asserts at least one
    * child — surfacing as an unnamed `500` (#1220).
@@ -700,6 +714,7 @@ export class WwebjsGroups {
 
   async revokeGroupInviteCode(groupId: string): Promise<string> {
     await this.requireGroupChat(groupId, 'revokeGroupInviteCode');
+    const since = navigationsSeen(this.host);
     const answer = await reportPageDeath(this.host, 'revokeGroupInviteCode', () =>
       this.page().evaluate(revokeInviteInPage, groupId),
     ).catch((error: unknown) => {
@@ -709,8 +724,10 @@ export class WwebjsGroups {
       if (isMissingRequireError(error)) throw new EnginePageReloadingError();
       throw error;
     });
-    // A build with no job to reset a code: nothing was asked of WhatsApp, so this is no refusal and no failure.
+    // A build with no job to reset a code: nothing was asked of WhatsApp, so this is no refusal and no failure. A
+    // document a reload has just opened finds no job either, and that is the retryable 409.
     if (answer === 'missing') {
+      throwIfNavigatedSince(this.host, since);
       throw new EngineNotSupportedError('revokeGroupInviteCode(no reset job on this build)');
     }
     // A status answer means WhatsApp refused it and rotated nothing, so a repeat converges: the 503 is safe here, where
@@ -740,6 +757,7 @@ export class WwebjsGroups {
    *
    * The preview is read in the page ({@link readInviteInfoInPage}), so that the status WhatsApp gave decides the answer:
    * a timeout, a rate limit or a server error is a 503 where it was the unknown invite, and any other status is the 404.
+   * A build whose job module has no preview call is the 501, and the code is not judged.
    */
   async getGroupJoinInfo(inviteCode: string): Promise<GroupJoinInfo> {
     this.host.ensureReady();
@@ -775,6 +793,12 @@ export class WwebjsGroups {
         error: error instanceof Error ? error.message : String(error),
       });
       throw new GroupNotFoundError(inviteCode);
+    }
+    // A build with no job to preview with: nothing was asked of WhatsApp, so the code was not judged and this is no
+    // unknown invite. A document a reload has just opened finds no job either, and that is the retryable 409.
+    if (answer === 'missing') {
+      throwIfNavigatedSince(this.host, since);
+      throw new EngineNotSupportedError('getGroupJoinInfo(no invite preview job on this build)');
     }
     // A timeout, a rate limit or a server error read nothing, and the same code may pass a moment later: the retryable
     // 503, as on Baileys. Any other status is the refused invite. Settled outside the try, which reads a failure of the
@@ -815,6 +839,7 @@ export class WwebjsGroups {
     // group's id (`res.gid._serialized || res.gid.$1`) - already the neutral `<id>@g.us` dialect. A gid-less result is
     // the same client-facing outcome as a thrown refusal: no such invite (400, not a 500).
     let answer: Awaited<ReturnType<typeof joinInviteInPage>> | undefined;
+    const since = navigationsSeen(this.host);
     try {
       answer = await this.page().evaluate(joinInviteInPage, inviteCode);
     } catch (error) {
@@ -830,14 +855,17 @@ export class WwebjsGroups {
       if (isProtocolTimeout(error)) {
         throw new EngineTransportError('WhatsApp Web did not answer the group invite acceptance in time');
       }
-      // A reload cut the call: the same unknown outcome, and not a refused invite either.
-      if (isNavigationError(error)) {
+      // A reload cut the call: the same unknown outcome, and not a refused invite either. A navigation stamped
+      // during the call counts whatever the failure says, as for every other call that a reload lands on.
+      if (isNavigationError(error, navigationsSeen(this.host) !== since)) {
         throw new EngineTransportError('WhatsApp Web reloaded its page during the group invite acceptance');
       }
       this.host.logger.warn(`Failed to accept group invite: ${String(error)}`);
     }
-    // A build with no job to join with: nothing was asked of WhatsApp, so this is no refused invite and no failure.
+    // A build with no job to join with: nothing was asked of WhatsApp, so this is no refused invite and no failure. A
+    // document a reload has just opened finds no job either, and that is the retryable 409.
     if (answer === 'missing') {
+      throwIfNavigatedSince(this.host, since);
       throw new EngineNotSupportedError('joinGroupViaInviteCode(no join job on this build)');
     }
     // The group has an admin approve new members: WhatsApp took the invite as a request to join, so the invite is good.
@@ -934,12 +962,16 @@ export class WwebjsGroups {
 
   async deleteGroupPicture(groupId: string): Promise<void> {
     await this.requireGroupChat(groupId, 'deleteGroupPicture');
+    const since = navigationsSeen(this.host);
     const status = await withPageWrite(this.host, 'deleteGroupPicture', () =>
       this.page().evaluate(deleteGroupPictureInPage, groupId),
     );
-    // A build with no job to send the delete: nothing was asked of WhatsApp, so this is no refusal and no failure.
-    if (status === 'missing')
+    // A build with no job to send the delete: nothing was asked of WhatsApp, so this is no refusal and no failure. A
+    // document a reload has just opened finds no job either, and that is the retryable 409.
+    if (status === 'missing') {
+      throwIfNavigatedSince(this.host, since);
       throw new EngineNotSupportedError('deleteGroupPicture(no picture delete job on this build)');
+    }
     this.host.logger.debug('WhatsApp answered the group picture delete', { groupId, status });
     // WhatsApp answers 200 for a group with no picture as for one it removed, so a repeat converges. A rate limit or
     // a server error deleted nothing, and the same request may pass later.
@@ -1072,7 +1104,7 @@ export class WwebjsGroups {
     // {requesterId, error?, message} per requester; requesterId is a page-context value that can
     // arrive as a string or a wid object (both #747 spellings), so it goes through readWid too.
     // "No error field" is NOT sufficient for success: the page util's non-success RPC branch pushes
-    // {requesterId, message: 'ServerStatusCodeError'} with no code at all (Injected/Utils.js:1637-1648).
+    // {requesterId, message: 'ServerStatusCodeError'} with no code at all (`WWebJS.membershipRequestAction` in Injected/Utils.js).
     const results: ParticipantOperationResult[] = (raw ?? []).map(entry => {
       const e = entry as unknown as { requesterId?: SerializedWid | string | null; error?: number; message?: string };
       return {

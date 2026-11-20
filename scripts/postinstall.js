@@ -1,7 +1,7 @@
 /**
  * Post-install hook (npm `postinstall`).
  *
- * Fifteen conditional steps, each skipped when its target is absent so the hook is a no-op where the
+ * Sixteen conditional steps, each skipped when its target is absent so the hook is a no-op where the
  * piece is missing (the Docker builder stage copies package*.json long before any source):
  *
  *   1. `npm ci` inside dashboard/ when dashboard/ exists — the dashboard carries its own lockfile and
@@ -32,7 +32,7 @@
  *  10. `node scripts/patch-baileys-appstate.js --best-effort` when present, the app-state resync
  *      bound, gated the same way.
  *  11. `node scripts/patch-baileys-newsletter-create.js --best-effort` when present, the
- *      newsletter-create parse fix. Steps 10-14 are the Baileys patches. Every patcher runs whenever
+ *      newsletter-create parse fix. Steps 10-15 are the Baileys patches. Every patcher runs whenever
  *      its script is present, whatever ENGINE_TYPE is set to.
  *
  *  12. `node scripts/patch-baileys-pairing.js --best-effort` when present, preserving pre-login
@@ -42,7 +42,9 @@
  *  14. `node scripts/patch-baileys-status-ack.js --best-effort` when present, decoding and
  *      acknowledging the top-level `<status>` stanza, so its status is delivered and the server stops
  *      ending the stream over it.
- *  15. `node scripts/patch-wwebjs-puppeteer.js` when present. Browser teardown must use the
+ *  15. `node scripts/patch-baileys-event-buffer.js --best-effort` when present, so the library's
+ *      event buffer keeps every group update, history sync lid to phone pair and RSVP it holds.
+ *  16. `node scripts/patch-wwebjs-puppeteer.js` when present. Browser teardown must use the
  *      connected getter required by Puppeteer 25; an unknown source shape aborts the install.
  *
  * Structured like scripts/patch-wwebjs-201832.js: pure planning + injectable spawn, so the spec
@@ -203,6 +205,15 @@ function planSteps(root, env = process.env) {
       name: 'Baileys status stanza ack (scripts/patch-baileys-status-ack.js --best-effort)',
       command: process.execPath,
       args: [baileysStatusAckPatcher, '--best-effort'],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
+  }
+  const baileysEventBufferPatcher = path.join(root, 'scripts', 'patch-baileys-event-buffer.js');
+  if (fs.existsSync(baileysEventBufferPatcher)) {
+    steps.push({
+      name: 'Baileys event buffer merges (scripts/patch-baileys-event-buffer.js --best-effort)',
+      command: process.execPath,
+      args: [baileysEventBufferPatcher, '--best-effort'],
       options: { stdio: 'inherit', cwd: root, env: cleanEnv },
     });
   }

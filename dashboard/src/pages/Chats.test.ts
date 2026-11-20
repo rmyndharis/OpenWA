@@ -175,6 +175,15 @@ const PAGED_OLDEST = Array.from({ length: 20 }, (_, i) =>
 let olderPageGate: Promise<void> | null = null;
 // When true, an older-page request (any offset but 0) answers 500 instead of a page.
 let olderPageFails = false;
+// The status the stored read of the first chat's thread answers, 200 for its rows.
+let storedReadStatus = 200;
+// How long a refused stored read of the first chat waits before it answers, and how long the engine history read of a
+// whatsapp-web.js thread takes: a failure that comes after the read of the chat is due.
+let storedReadDelayMs = 0;
+let historyDelayMs = 0;
+// The status the first page of Carol's thread answers, and a gate that holds that answer open.
+let carolFirstStatus = 200;
+let carolFirstGate: Promise<void> | null = null;
 // Rows Carol's older page serves after the fixture rows (oldest last, as the gateway orders them).
 let olderPageExtra: ChatMessage[] = [];
 
@@ -349,6 +358,12 @@ function installFetchStub(): void {
       const query = new URLSearchParams(path.slice(path.indexOf('?') + 1));
       if (query.get('chatId') === CHAT_2.id) {
         const isFirstPage = Number(query.get('offset')) === 0;
+        if (isFirstPage && carolFirstStatus !== 200) {
+          // The status the request was made under, whenever its answer comes.
+          const status = carolFirstStatus;
+          const refused = () => jsonResponse({ message: 'refused' }, status);
+          return carolFirstGate ? carolFirstGate.then(refused) : Promise.resolve(refused());
+        }
         if (!isFirstPage && olderPageFails) return Promise.resolve(jsonResponse({ message: 'boom' }, 500));
         const messages = isFirstPage ? PAGED_NEWEST : [...PAGED_OLDEST, ...olderPageExtra];
         // `total` deliberately does NOT equal the 120 rows actually served (PAGED_NEWEST.length +
@@ -361,6 +376,12 @@ function installFetchStub(): void {
         const answer = () => jsonResponse({ messages, total: 500 });
         const gate = isFirstPage ? null : olderPageGate;
         return gate ? gate.then(answer) : Promise.resolve(answer());
+      }
+      if (storedReadStatus !== 200) {
+        const refused = () => jsonResponse({ message: 'refused' }, storedReadStatus);
+        return storedReadDelayMs
+          ? new Promise<Response>(resolve => setTimeout(() => resolve(refused()), storedReadDelayMs))
+          : Promise.resolve(refused());
       }
       const rows = firstPageOverride ?? [DB_MESSAGE, OMITTED_MEDIA_MESSAGE, OMITTED_MEDIA_MESSAGE_2, ...firstPageExtra];
       const firstPage = () =>
@@ -377,7 +398,9 @@ function installFetchStub(): void {
       return gate ? gate.then(bytes) : Promise.resolve(bytes());
     }
     if (method === 'GET' && /\/messages\/[^/]+\/history/.test(path)) {
-      return Promise.resolve(jsonResponse(historyExtra));
+      return historyDelayMs
+        ? new Promise<Response>(resolve => setTimeout(() => resolve(jsonResponse(historyExtra)), historyDelayMs))
+        : Promise.resolve(jsonResponse(historyExtra));
     }
     if (method === 'GET' && path === `/api/sessions/${SESSION.id}/status`) {
       return Promise.resolve(jsonResponse({ statuses }));
@@ -480,6 +503,11 @@ afterEach(async () => {
   sendImageId = 'wamid.out.image';
   sendImageFails = false;
   olderPageFails = false;
+  storedReadStatus = 200;
+  storedReadDelayMs = 0;
+  historyDelayMs = 0;
+  carolFirstStatus = 200;
+  carolFirstGate = null;
   olderPageExtra = [];
   chatsResponder = null;
   for (const id of Object.keys(lidPhones)) delete lidPhones[id];
@@ -1333,6 +1361,146 @@ test('a writer key opening a chat clears its unread badge', async () => {
   fireEvent.click(await screen.findByText('Alice'));
   await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
   await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages'), 'opening the chat kept its badge'));
+});
+
+// A thread that fails to load shows nothing, so the chat was not read: its messages were not seen.
+test('a chat whose thread fails to load is not marked read and keeps its unread badge', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  storedReadStatus = 503;
+  renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
+  // Past the quiet window of the read, with the retry of the thread done.
+  await new Promise(resolve => setTimeout(resolve, 1_500));
+  assert.ok(!findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`), 'a chat that showed no message was read');
+  await waitFor(() =>
+    assert.ok(screen.queryByLabelText('2 unread messages'), 'the badge of an unseen chat was cleared'),
+  );
+});
+
+test('a chat whose thread failed to load is read once a later load of it succeeds', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  storedReadStatus = 503;
+  const { container } = renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
+  await new Promise(resolve => setTimeout(resolve, 1_500));
+  assert.ok(!findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`));
+
+  // The gateway answers again and the thread is asked for again, which is all that reaches the read: no tab was hidden,
+  // so the read of a hidden tab does not go out here.
+  storedReadStatus = 200;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  await waitFor(
+    () =>
+      assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`), 1, 'the chat was not read once'),
+    { timeout: 3_000 },
+  );
+  await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages'), 'the badge stayed after the read'));
+});
+
+// A thread whose load is still running when the read of the chat is due has shown nothing yet, and may fail after it.
+test('a chat is not read while its thread is still loading, and the badge comes back when it then fails', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  storedReadStatus = 503;
+  storedReadDelayMs = 1_200;
+  renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
+  await new Promise(resolve => setTimeout(resolve, 1_500));
+  assert.ok(!findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`), 'a chat that showed no message was read');
+  await waitFor(() =>
+    assert.ok(screen.queryByLabelText('2 unread messages'), 'the badge of an unseen chat stayed cleared'),
+  );
+});
+
+test('a whatsapp-web.js chat is not read while its engine history is still loading', async () => {
+  const { screen, fireEvent } = rtl;
+  engineType = 'whatsapp-web.js';
+  window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
+  storedReadStatus = 503;
+  historyDelayMs = 1_200;
+  renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
+  await new Promise(resolve => setTimeout(resolve, 1_500));
+  assert.equal(
+    countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`),
+    0,
+    'a chat that showed no message was read',
+  );
+});
+
+test('a chat left before its thread showed is unread again, and is not read', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  // The thread of the first chat is held open until the end of the test.
+  let release!: () => void;
+  firstPageGate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages'), 'opening the chat kept its badge'));
+
+  // Leave for another chat while the thread of the first is still loading: its read falls due after that.
+  fireEvent.click(await screen.findByText('Carol'));
+  await waitFor(
+    () => assert.ok(screen.queryByLabelText('2 unread messages'), 'the unseen chat stayed read in the list'),
+    {
+      timeout: 5_000,
+    },
+  );
+  // Carol's thread loaded, so hers is read; the one that never showed is not.
+  await new Promise(resolve => setTimeout(resolve, 1_200));
+  const readOfAlice = fetchCalls.filter(
+    call =>
+      call.method === 'POST' &&
+      call.path === `/api/sessions/${SESSION.id}/chats/read` &&
+      (call.body as { chatId?: string } | undefined)?.chatId === CHAT.id,
+  );
+  assert.equal(readOfAlice.length, 0, 'a chat that showed no message was read');
+  release();
+});
+
+// A refresh that fails after the thread has shown is not a thread that never loaded: what was read stays read.
+test('an empty thread that was read does not get its unread badge back when a refresh of it fails', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  firstPageOverride = [];
+  renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`), 1), {
+    timeout: 3_000,
+  });
+  await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages')));
+
+  // A reconnect invalidates the thread, and its stored read is refused this time.
+  storedReadStatus = 503;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.ok(!screen.queryByLabelText('2 unread messages'), 'the badge of a chat already read came back');
+  storedReadStatus = 200;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  await new Promise(resolve => setTimeout(resolve, 600));
+  assert.ok(!screen.queryByLabelText('2 unread messages'), 'the badge came back after a later refresh');
+  assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`), 1, 'the chat was read again');
 });
 
 test('a chat whose newest message has no text does not claim to have no messages', async () => {
@@ -3807,6 +3975,102 @@ test('a failed older-page fetch does not blank an already-loaded thread', async 
     assert.match(inline!.textContent ?? '', /couldn.t load older messages/i);
     assert.ok(inline!.classList.contains('failed'), 'the failure is styled to stay at the top of the thread');
   });
+});
+
+// A refresh that fails after a reconnect leaves the newest page stale. Scrolling up asks for an older page, which a thread
+// with none, or too short to scroll, cannot do, so the strip itself is the retry; a thread with an older page also
+// retries by scrolling up, and a retry that is already running is not started again.
+test('a failed refresh of a thread with no older page is retried by pressing the strip', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  // 50 rows: one short page, so there is no older page.
+  firstPageOverride = Array.from({ length: 50 }, (_, i) => ({
+    ...DB_MESSAGE,
+    id: `short-${i}`,
+    waMessageId: `wamid.short.${i}`,
+    body: `short row ${i}`,
+    timestamp: 1_700_000_000 + (50 - i),
+    createdAt: new Date((1_700_000_000 + (50 - i)) * 1000).toISOString(),
+  }));
+  const { container } = renderChats();
+  await screen.findByText(SESSION.name);
+  fireEvent.click(await screen.findByText('Alice'));
+  const thread = container.querySelector('.room-messages') as HTMLElement;
+  await within(thread).findByText('short row 0');
+
+  storedReadStatus = 503;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  const strip = await waitFor(() => {
+    const found = thread.querySelector('button.messages-loading-older.failed.retry') as HTMLButtonElement | null;
+    assert.ok(found, 'a failed refresh shows a strip that can be pressed');
+    return found;
+  });
+  assert.match(strip.textContent ?? '', /couldn.t refresh the messages/i);
+  assert.doesNotMatch(strip.textContent ?? '', /scroll up/i, 'a refresh is not retried by scrolling');
+
+  storedReadStatus = 200;
+  resetFetchCalls();
+  fireEvent.click(strip);
+  await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older.failed') === null, 'the failure stayed'));
+  const firstPageReads = fetchCalls.filter(
+    call =>
+      call.method === 'GET' &&
+      call.path.startsWith(`/api/sessions/${SESSION.id}/messages?chatId=${encodeURIComponent(CHAT.id)}`),
+  );
+  assert.equal(firstPageReads.length, 1, 'the strip asked for the newest page once');
+});
+
+test('a failed refresh of a thread with an older page is also retried by scrolling up, and by the strip', async () => {
+  const { fireEvent, waitFor } = rtl;
+  const { container } = renderChats();
+  const thread = await openPagedChat(container);
+  carolFirstStatus = 503;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  await waitFor(() => assert.ok(thread.querySelector('button.messages-loading-older.failed.retry'), 'the strip shows'));
+
+  carolFirstStatus = 200;
+  resetFetchCalls();
+  makeScrollable(thread, 0);
+  fireEvent.scroll(thread);
+  await waitFor(() => assert.equal(countFetchCalls('GET', pagedMessagesPath(0)), 1), { timeout: 3_000 });
+  await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older.failed') === null));
+});
+
+test('a refresh retry that is already running is not started again by the next scroll or press', async () => {
+  const { fireEvent, waitFor } = rtl;
+  const { container } = renderChats();
+  const thread = await openPagedChat(container);
+  carolFirstStatus = 503;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  const strip = await waitFor(() => {
+    const found = thread.querySelector('button.messages-loading-older.failed.retry') as HTMLButtonElement | null;
+    assert.ok(found, 'the strip shows');
+    return found;
+  });
+  // The retry is held open, as a slow gateway would.
+  let release!: () => void;
+  carolFirstGate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  resetFetchCalls();
+  makeScrollable(thread, 60);
+  fireEvent.scroll(thread);
+  await waitFor(() => assert.equal(countFetchCalls('GET', pagedMessagesPath(0)), 1));
+  (thread as unknown as { scrollTop: number }).scrollTop = 30;
+  fireEvent.scroll(thread);
+  (thread as unknown as { scrollTop: number }).scrollTop = 5;
+  fireEvent.scroll(thread);
+  fireEvent.click(strip);
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(countFetchCalls('GET', pagedMessagesPath(0)), 1, 'a running retry was restarted');
+  assert.equal(strip.disabled, true, 'the strip stays pressed while the retry runs');
+  // The retry that was running is refused too, and the strip is pressable again; the next press loads the thread.
+  carolFirstGate = null;
+  release();
+  const pressable = () => thread.querySelector('button.messages-loading-older.failed.retry:not(:disabled)');
+  await waitFor(() => assert.ok(pressable() !== null, 'the strip stayed pressed after the retry failed'));
+  carolFirstStatus = 200;
+  fireEvent.click(pressable() as HTMLButtonElement);
+  await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older.failed') === null));
 });
 
 test('a delivery ack reaches a message held by an older page', async () => {

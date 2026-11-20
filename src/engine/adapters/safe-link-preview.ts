@@ -1,6 +1,10 @@
 import type { Response } from 'undici';
 import { withSafeFetch } from '../../common/security/ssrf-guard';
 import { urlFetchProxy } from '../../common/security/proxy-dispatcher';
+import {
+  CUSTOM_PREVIEW_DESCRIPTION_MAX_LENGTH,
+  CUSTOM_PREVIEW_TITLE_MAX_LENGTH,
+} from '../../modules/message/dto/send-message.dto';
 
 /**
  * The link-preview payload WhatsApp accepts, in Baileys' own field names.
@@ -18,13 +22,23 @@ export interface SafeUrlInfo {
 }
 
 /**
+ * `text` cut to `max` UTF-16 units, as the caps of a preview a caller supplies count them, without leaving the first
+ * half of a surrogate pair at the end.
+ */
+function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const last = text.charCodeAt(max - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+}
+
+/**
  * Generate a link preview WITHOUT the library's own generator.
  *
  * Baileys ships one, but it delegates to `link-preview-js`, which carries an unfixed SSRF advisory
  * (GHSA-4gp8-rjrq-ch6q — "IPv6 and internal loopback attacks", CWE-918, no patched release). The
  * input here is attacker-influenced — a URL pasted into a message causes this server to make a
  * request — so that generator is never reached: Baileys spreads the caller's send options last
- * (messages-send.js:1086), so passing this as `getUrlInfo` there wins over its hardcoded one.
+ * (messages-send.js), so passing this as `getUrlInfo` there wins over its hardcoded one.
  *
  * `withSafeFetch` validates the destination and then PINS a direct or SOCKS-proxied connection to the
  * vetted addresses, so a hostname that resolves publicly once and to `127.0.0.1` a moment later cannot
@@ -88,8 +102,11 @@ export async function generateSafeLinkPreview(
           'canonical-url': url,
           // WhatsApp requires a title. When the page has none, the hostname is used — it is a fact
           // about the URL rather than an invention, and it is what a reader would call the site.
-          title: title ? decodeEntities(title) : new URL(url).hostname,
-          ...(description ? { description: decodeEntities(description) } : {}),
+          // The page chooses the text, so it is held to the lengths a preview a caller supplies may have.
+          title: clip(title ? decodeEntities(title) : new URL(url).hostname, CUSTOM_PREVIEW_TITLE_MAX_LENGTH),
+          ...(description
+            ? { description: clip(decodeEntities(description), CUSTOM_PREVIEW_DESCRIPTION_MAX_LENGTH) }
+            : {}),
         };
       },
       // The fetched URL comes from the message text, so it is caller-supplied the same way a media

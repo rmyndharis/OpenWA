@@ -54,6 +54,19 @@ describe('webhook DTO event validation', () => {
     expect(await errorsFor(UpdateWebhookDto, { filters: null })).toHaveLength(0);
   });
 
+  // The secret column is nullable and the service stores null for both spellings of "clear it", so both are accepted
+  // and the published text names both; a secret under the floor is still refused.
+  it('UpdateWebhookDto: clears the secret with an empty string or null, and the schema says so', async () => {
+    expect(await errorsFor(UpdateWebhookDto, { secret: '' })).toHaveLength(0);
+    expect(await errorsFor(UpdateWebhookDto, { secret: null })).toHaveLength(0);
+    expect((await errorsFor(UpdateWebhookDto, { secret: 'short' })).map(e => e.property)).toEqual(['secret']);
+
+    const meta = Reflect.getMetadata('swagger/apiModelProperties', UpdateWebhookDto.prototype, 'secret') as {
+      description?: string;
+    };
+    expect(meta.description).toContain('an empty string or null to clear it');
+  });
+
   // WebhookService.update applies filters only when the field is present, so an update that omits it
   // keeps the stored filter. The published schema must not offer omission as a way to clear one.
   it('UpdateWebhookDto: documents that an omitted filters keeps the stored one', () => {

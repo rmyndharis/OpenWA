@@ -4484,6 +4484,28 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       await answers('628333');
     });
 
+    // The entry leaves the mirror while the negative's statement is under way: the negative has cleared the row all the
+    // same, so the mark that guarded the row it replaced ends with it and the lid answers what the table holds.
+    describe.each([
+      ['later lids pushed its entry out of the mirror', pushOut],
+      ['a reload left its entry out of the mirror', () => store.reload()],
+    ] as const)('and %s while its statement is under way', (_state, leave) => {
+      it('answers the table again once the negative has cleared the row', async () => {
+        await failReport();
+        const clearing = hold('update');
+        const negative = store.remember('333', null, OWNER);
+        await clearing.reached;
+        await leave();
+        clearing.release();
+        await expect(negative).resolves.toBe(true);
+        expect((await repo.findOneBy({ lid: '333' }))?.phone).toBeNull();
+        await peerRemaps('628333');
+
+        expect(evicted()).toBe(0);
+        await answers('628333');
+      });
+    });
+
     it('answers the table after a reload, which replaces it', async () => {
       await failReport();
       await pushOut();
@@ -4805,6 +4827,120 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       await answers('628222');
       await pushOut();
       await answers('628222');
+    });
+
+    /** A sync of five lids while the database is down: the marks of 401, 402 and 403 go, those of 404 and 405 stay. */
+    const failFive = async (): Promise<void> => {
+      const lids = ['401', '402', '403', '404', '405'];
+      await rowsOf(...lids.map((lid): [string, string] => [lid, `62810${lid}`]));
+      await store.reload();
+      await failReports(lids.map((lid): [string, string] => [lid, `62820${lid}`]));
+      expect([...inner().failedPhones.keys()]).toEqual(['404', '405']);
+    };
+    const reportAgain = async (...lids: string[]): Promise<void> => {
+      for (const lid of lids) await expect(store.remember(lid, `62820${lid}`, OWNER)).resolves.toBe(true);
+    };
+    /** The phone the lid answers, and whether a key limited to the phone its report stored reaches it. */
+    const answersFor = async (lid: string): Promise<{ phone: string | null; fence: boolean }> => ({
+      phone: await store.findPhoneForLid(`${lid}@lid`),
+      fence: await new ChatScopeService(store).allows({ allowedChats: [`62820${lid}@c.us`] }, `${lid}@lid`),
+    });
+
+    it('keeps the marks of the failed writes, and warns of none, while lids whose marks went are reported again', async () => {
+      await failFive();
+      const later = performance.now() + 61_000; // past the one-a-minute throttle of the warnings
+      (store as unknown as { now: () => number }).now = () => later;
+
+      await reportAgain('401', '402');
+
+      expect([...inner().failedPhones.keys()]).toEqual(['404', '405']); // a landed report is no failed write
+      expect(warn).not.toHaveBeenCalled();
+      expect(await answersFor('401')).toEqual({ phone: '62820401', fence: true });
+      expect(await answersFor('402')).toEqual({ phone: '62820402', fence: true });
+      expect(await store.findPhoneForLid('404@lid')).toBeNull();
+    });
+
+    it('keeps answering a lid reported again after its mark went, while later writes of other lids fail past the bound', async () => {
+      await failFive();
+      await reportAgain('401');
+
+      await failReports([
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+
+      expect(inner().lidToPhone.has('401')).toBe(false);
+      expect(await answersFor('401')).toEqual({ phone: '62820401', fence: true });
+    });
+
+    it('answers the phone another node maps a lid to after a report of it landed, once its mark went', async () => {
+      await failReports([
+        ['333', '628222'],
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+      await expect(store.remember('333', '628222', OWNER)).resolves.toBe(true);
+      await answers('628222');
+
+      await peerRemaps('628444');
+
+      await answers('628444');
+    });
+
+    it('warms a lid reported again after its mark went back into the mirror once its entry has left', async () => {
+      await failReports([
+        ['333', '628222'],
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+      await expect(store.remember('333', '628222', OWNER)).resolves.toBe(true);
+      await pushOut();
+
+      expect(store.getCached('333')).toBeUndefined(); // a miss: its row is read
+      const deadline = Date.now() + 5000;
+      while (!inner().lidToPhone.has('333') && Date.now() < deadline) await new Promise(r => setTimeout(r, 5));
+
+      expect(store.getCached('333')).toBe('628222');
+      expect(store.lidsForPhone('628222')).toEqual(['333']);
+    });
+
+    it('refuses a lid reported again once the mark of a later failed write of it goes too', async () => {
+      await failReports([
+        ['333', '628222'],
+        ['601', '628601'],
+        ['602', '628602'],
+      ]);
+      await expect(store.remember('333', '628222', OWNER)).resolves.toBe(true);
+
+      await failReports([
+        ['333', '628333'],
+        ['603', '628603'],
+        ['604', '628604'],
+      ]);
+
+      await refused(['628222', '628333']);
+      await peerRemaps('628444');
+      await refused(['628222', '628333', '628444']);
+    });
+
+    // Past the bound the lid reported again least lately is forgotten again: it answers no phone once its entry has
+    // left, until it is reported again or the mapping reloads.
+    it('keeps the lids reported again most lately past the bound, and refuses the oldest once its entry has left', async () => {
+      await failFive();
+      await reportAgain('401', '402', '401', '403'); // 401 again: 402 is now the oldest
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Lids reported again after their failed write'));
+      warn.mockClear();
+      await pushOut(); // no entry is left for any of them
+
+      expect(await answersFor('401')).toEqual({ phone: '62820401', fence: true });
+      expect(await answersFor('403')).toEqual({ phone: '62820403', fence: true });
+      expect(await answersFor('402')).toEqual({ phone: null, fence: false });
+
+      await reportAgain('402');
+      warn.mockClear(); // 401 goes in its turn
+
+      expect(await answersFor('402')).toEqual({ phone: '62820402', fence: true });
     });
 
     it('answers only the phone of a report of the lid under way, whatever its row says', async () => {

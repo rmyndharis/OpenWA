@@ -299,12 +299,45 @@ describe('the unread count and mark of one record while the replay of a mark-rea
     const store = new BaileysSessionStore();
     store.addLidMappings([{ lid: LID, pn: PHONE }]);
     upsert(store, { unreadCount: 2 });
+    upsert(store, { unreadCount: 1, conversationTimestamp: 1_700_000_000 }, LID);
     store.expectReadEcho(PHONE);
     upsert(store, { unreadCount: 0 }, LID);
     expect(cellOf(store, LID)).toBe('u=0 mc=F');
     expect(cellOf(store)).toBe('u=2 mc=F');
     upsert(store, { unreadCount: 0 });
     expect(cellOf(store)).toBe('u=2 mc=F');
+  });
+
+  // A count synced under the other spelling of a chat that has a record under one only goes to that record, by the
+  // same rules as one synced under its own: it names no time and no message, so it is no chat of its own.
+  describe('a count synced under the other spelling of the chat', () => {
+    const twinStore = (): BaileysSessionStore => {
+      const store = new BaileysSessionStore();
+      store.addLidMappings([{ lid: LID, pn: PHONE }]);
+      return store;
+    };
+
+    it('reads the chat', () => {
+      const store = twinStore();
+      upsert(store, { unreadCount: 3 });
+      upsert(store, { unreadCount: 0 }, LID);
+      expect([cellOf(store), cellOf(store, LID)]).toEqual(['u=0 mc=F', 'none']);
+    });
+
+    it('keeps the mark set by hand that a count replaces', () => {
+      const store = twinStore();
+      upsert(store, { unreadCount: -1 });
+      upsert(store, { unreadCount: 1 }, LID);
+      expect([cellOf(store), cellOf(store, LID)]).toEqual(['u=1 mc=T', 'none']);
+    });
+
+    it('is taken for the replay of a write keyed to its own spelling', () => {
+      const store = twinStore();
+      upsert(store, { unreadCount: 2 });
+      store.expectReadEcho(LID);
+      upsert(store, { unreadCount: 0 }, LID);
+      expect([cellOf(store), cellOf(store, LID)]).toEqual(['u=2 mc=F', 'none']);
+    });
   });
 
   it('forgets what it awaits when the socket that held the replay is replaced', () => {

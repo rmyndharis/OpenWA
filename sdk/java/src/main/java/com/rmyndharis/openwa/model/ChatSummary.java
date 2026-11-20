@@ -26,7 +26,10 @@ public record ChatSummary(
     /** Epoch milliseconds the mute ends, null unless muted; 0 means indefinitely. */
     Long muteExpiration,
     MessageType lastMessageType,
-    /** Phone digits of a privacy-id chat, null when the chat is phone-keyed or the mapping is unknown. */
+    /**
+     * Baileys only; null on whatsapp-web.js. Phone digits of a privacy-id chat, null when the chat is
+     * phone-keyed or the mapping is unknown.
+     */
     String phone) {
 
     /** Construct a chat summary without last-message type metadata or a resolved phone. */

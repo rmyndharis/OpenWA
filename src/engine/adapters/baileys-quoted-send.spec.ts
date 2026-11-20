@@ -5,7 +5,7 @@ import { createLogger } from '../../common/services/logger.service';
 
 /**
  * Baileys quotes by full stored message, not by id: `MiscMessageGenerationOptions.quoted` is a
- * `WAMessage` (Types/Message.d.ts:246), and the contextInfo is attached after content generation
+ * `WAMessage` (Types/Message.d.ts), and the contextInfo is attached after content generation
  * with no per-content-type branch (Utils/messages.js), so every send kind can carry one.
  *
  * The adapter can therefore only quote a message it has already persisted. That store dependency is

@@ -8,7 +8,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { type Dispatcher } from 'undici';
 import type * as BaileysLib from '@whiskeysockets/baileys';
-import type { Chat, WASocket } from '@whiskeysockets/baileys';
+import type { CacheStore, Chat, WAMessage, WASocket } from '@whiskeysockets/baileys';
 import type { ILogger } from '@whiskeysockets/baileys/lib/Utils/logger.js';
 import {
   type ConnectionCloseStage,
@@ -32,7 +32,15 @@ import {
 } from '../terminal-engine-failure';
 import { differentWaIds, keyChatIds, type BaileysEvents } from './baileys-events';
 import type { BaileysHistory } from './baileys-history';
-import { withoutMergedNonContentMessage, withoutNonContentMessage } from './baileys-message-mapper';
+import {
+  countedChatId,
+  countedMessageKind,
+  mayCountSeveralNonContent,
+  mayHoldOnlyNonContent,
+  withoutMergedNonContentMessage,
+  withoutNonContentMessage,
+  withoutNonContentOnlyFlush,
+} from './baileys-message-mapper';
 import { SESSION_STORE_MAP_CAP_DEFAULT, type BaileysSessionStore } from './baileys-session-store';
 import { ownAccountIds } from './baileys-stored-chat-previews.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
@@ -149,6 +157,57 @@ export function createProxyAgent(proxyUrl: string, connectTimeoutMs = PROXY_CONN
     return agent;
   }
   throw new Error(`Unsupported proxy protocol for the baileys engine: ${protocol}`);
+}
+
+/** How long a Signal key stays in memory in front of the key files: the default of Baileys' own cache. */
+const SIGNAL_KEY_CACHE_TTL_MS = 5 * 60_000;
+
+/** The key cache as this module makes it: a Baileys CacheStore whose calls all answer at once. */
+export interface KeyCache extends CacheStore {
+  readonly size: number;
+  get<T>(key: string): T | undefined;
+  set<T>(key: string, value: T): boolean;
+  del(key: string): boolean;
+  flushAll(): void;
+}
+
+/**
+ * The cache behind `makeCacheableSignalKeyStore`, one for each socket. Without one, Baileys builds a NodeCache whose
+ * interval timer only its own close() clears, and nothing here can reach it, so every connect, reconnect and session
+ * start left a cache and a ten-minute timer alive for the life of the process. This one holds no timer: an entry
+ * expires when it is read or when another is written, and the cache is garbage once the socket that holds it is.
+ */
+export function createKeyCache(ttlMs: number = SIGNAL_KEY_CACHE_TTL_MS, now: () => number = Date.now): KeyCache {
+  const entries = new Map<string, { value: unknown; expiresAt: number }>();
+  return {
+    get size() {
+      return entries.size;
+    },
+    get<T>(key: string): T | undefined {
+      const entry = entries.get(key);
+      if (!entry) return undefined;
+      if (entry.expiresAt <= now()) {
+        entries.delete(key);
+        return undefined;
+      }
+      return entry.value as T;
+    },
+    set<T>(key: string, value: T): boolean {
+      // Every entry lives the same time, so keeping the Map in the order of writing keeps the expired ones in front.
+      entries.delete(key);
+      const at = now();
+      for (const [oldKey, { expiresAt }] of entries) {
+        if (expiresAt > at) break;
+        entries.delete(oldKey);
+      }
+      entries.set(key, { value, expiresAt: at + ttlMs });
+      return true;
+    },
+    del: (key: string): boolean => entries.delete(key),
+    flushAll(): void {
+      entries.clear();
+    },
+  };
 }
 
 /** What the close branch reports about one socket; `loggingIn` is false for a registration. */
@@ -447,8 +506,8 @@ export class BaileysLifecycle {
     // PreKey handshake on the very next send (visible as repeated "Closing session" log spam and
     // the recipient stuck on "waiting for this message" until a slow WhatsApp-side retry rescues
     // it). makeCacheableSignalKeyStore keeps the just-written state visible in memory immediately,
-    // regardless of disk I/O timing.
-    state.keys = b.makeCacheableSignalKeyStore(state.keys, baileysLogger);
+    // regardless of disk I/O timing. The cache is this socket's own and holds no timer (see createKeyCache).
+    state.keys = b.makeCacheableSignalKeyStore(state.keys, baileysLogger, createKeyCache());
 
     // C2: resurrect-after-stop guard — if disconnect/logout/destroy ran during the awaits above,
     // bail now so we don't create a live socket for a session that was intentionally stopped.
@@ -659,7 +718,10 @@ export class BaileysLifecycle {
       }
     });
     sock.ev.on('connection.update', update => this.handleConnectionUpdate(update));
-    sock.ev.on('messages.upsert', event => this.host.handleMessagesUpsert(event));
+    sock.ev.on('messages.upsert', event => {
+      this.countHeldFlushMessages(event.messages);
+      this.host.handleMessagesUpsert(event);
+    });
     sock.ev.on('messages.update', updates => this.host.handleMessagesUpdate(updates));
     sock.ev.on('message-receipt.update', updates => this.host.handleMessageReceiptUpdate(updates));
     sock.ev.on('contacts.upsert', contacts => {
@@ -676,7 +738,7 @@ export class BaileysLifecycle {
         event: 'upsert',
         count: chats?.length ?? 0,
       });
-      this.host.upsertChats(this.withoutMergedNonContent(chats));
+      this.upsertMergedChats(chats);
     });
     sock.ev.on('chats.update', updates => {
       this.host.logger.debug('Baileys chats event', {
@@ -691,17 +753,14 @@ export class BaileysLifecycle {
         if (Object.hasOwn(update, 'ephemeralExpiration')) this.groupMetadata.invalidate(update.id);
       }
       // A message that is none of its own leaves the chat as it was: its count stays out, and so does its time, which
-      // would bring back a chat WhatsApp deleted. A count taken out may be the one the library summed the replay of the
-      // session's own read into, and upsertChats never sees it, so it ends the wait for that replay here.
-      this.host.upsertChats(
-        (updates ?? []).flatMap(update => {
-          const kept = withoutNonContentMessage(update, this.loadedLib);
-          if (update.id && Object.hasOwn(update, 'unreadCount') && !(kept && Object.hasOwn(kept, 'unreadCount'))) {
-            this.host.endReadEcho?.(update.id);
-          }
-          return kept ?? [];
-        }),
-      );
+      // would bring back a chat WhatsApp deleted. An update that does not count exactly one message waits for the
+      // messages of its flush, which say whether the chat holds a message of its own (see settleHeldChats).
+      const now: Partial<Chat>[] = [];
+      for (const update of updates ?? []) {
+        if (mayHoldOnlyNonContent(update, this.loadedLib)) this.hold(update, false);
+        else now.push(update);
+      }
+      this.applyChatUpdates(now, update => withoutNonContentMessage(update, this.loadedLib));
     });
     sock.ev.on('chats.delete', ids => {
       this.host.logger.debug('Baileys chats event', {
@@ -742,7 +801,7 @@ export class BaileysLifecycle {
           name: undefined,
         })),
       );
-      this.host.upsertChats(this.withoutMergedNonContent(history.chats));
+      this.upsertMergedChats(history.chats);
       this.host.addLidMappings(history.lidPnMappings ?? []);
       void this.host
         .captureHistoryMessages(history.messages ?? [])
@@ -769,12 +828,113 @@ export class BaileysLifecycle {
   }
 
   /**
+   * The chat updates and chunks of one flush that end in a message that is none of its own from a contact and whose
+   * count is not that of one message. The library's event buffer adds the counts of a flush, lowers the sum for a
+   * message read elsewhere, and emits its chat updates before its messages, so such a chat cannot say whether it holds a
+   * message of its own until the messages have been seen: it is held, and settled in the microtask that follows the
+   * flush, which runs after all of its events.
+   */
+  private heldChats: Array<{ chat: Partial<Chat>; merged: boolean }> = [];
+  private settleScheduled = false;
+  /** What the library's unread count took the messages of that flush for, per chat. */
+  private countedInFlush = new Map<string, { content: number; noContent: number }>();
+
+  private countHeldFlushMessages(messages: WAMessage[] | undefined): void {
+    const lib = this.loadedLib;
+    if (this.heldChats.length === 0 || !lib) return;
+    for (const message of messages ?? []) {
+      const kind = countedMessageKind(message, lib);
+      const chatId = countedChatId(message.key, lib);
+      if (!kind || !chatId) continue;
+      const counts = this.countedInFlush.get(chatId) ?? { content: 0, noContent: 0 };
+      counts[kind]++;
+      this.countedInFlush.set(chatId, counts);
+    }
+  }
+
+  /**
+   * The held chats, once their flush has been seen. A flush that counted no message of its own for a chat, and at least
+   * one that is none of its own, left the chat with none: a live update loses its message and time, and the count the
+   * messages explain (see {@link withoutNonContentOnlyFlush}); a chunk is filtered as a single such message is when its
+   * count is exactly the number of them, since the count of a chunk is its own plus theirs. Any other keeps what the
+   * library gave it, as before: the flush holds a message of its own, or the count says the chat does.
+   */
+  private settleHeldChats(): void {
+    const held = this.heldChats;
+    const counted = this.countedInFlush;
+    this.heldChats = [];
+    this.countedInFlush = new Map();
+    this.settleScheduled = false;
+    const lib = this.loadedLib;
+    const noContentOnly = (chat: Partial<Chat>): number => {
+      const counts = chat.id ? counted.get(chat.id) : undefined;
+      return counts && counts.content === 0 ? counts.noContent : 0;
+    };
+    // The library emits the chunks and upserts of a flush before its updates, and so they are applied.
+    this.host.upsertChats(
+      held
+        .filter(h => h.merged)
+        .map(h => {
+          const noContent = noContentOnly(h.chat);
+          return withoutMergedNonContentMessage(h.chat, lib, noContent === h.chat.unreadCount ? noContent : 1);
+        }),
+    );
+    this.applyChatUpdates(
+      held.filter(h => !h.merged).map(h => h.chat),
+      update => {
+        const noContent = noContentOnly(update);
+        return noContent > 0 ? withoutNonContentOnlyFlush(update, lib, noContent) : update;
+      },
+    );
+  }
+
+  /** Hold a chat that may hold only messages of no content until the messages of its flush have been seen. */
+  private hold(chat: Partial<Chat>, merged: boolean): void {
+    this.heldChats.push({ chat, merged });
+    if (this.settleScheduled) return;
+    this.settleScheduled = true;
+    queueMicrotask(() => {
+      try {
+        this.settleHeldChats();
+      } catch (error) {
+        // No caller is left to throw to: a refused write is logged, as the event handlers' own are.
+        this.host.logger.warn('Could not apply the chats of a flush', { error: String(error) });
+      }
+    });
+  }
+
+  /**
+   * Hand chat updates to the store as `settle` leaves them, without what a last message that is none of its own put
+   * in them. A count taken out may be the one the library summed the replay of the session's own read into, and
+   * upsertChats never sees it, so it ends the wait for that replay here.
+   */
+  private applyChatUpdates(
+    updates: Partial<Chat>[],
+    settle: (update: Partial<Chat>) => Partial<Chat> | undefined,
+  ): void {
+    this.host.upsertChats(
+      updates.flatMap(update => {
+        const kept = settle(update);
+        if (update.id && Object.hasOwn(update, 'unreadCount') && !(kept && Object.hasOwn(kept, 'unreadCount'))) {
+          this.host.endReadEcho?.(update.id);
+        }
+        return kept ?? [];
+      }),
+    );
+  }
+
+  /**
    * The chats of a history chunk or an upsert, as the library's event buffer hands them over: one that a chat update
    * was merged into carries that update's last message and time, which a message that is none of its own must not
    * leave on the chat (see {@link withoutMergedNonContentMessage}).
    */
-  private withoutMergedNonContent(chats: Partial<Chat>[] | undefined): Partial<Chat>[] {
-    return (chats ?? []).map(chat => withoutMergedNonContentMessage(chat, this.loadedLib));
+  private upsertMergedChats(chats: Partial<Chat>[] | undefined): void {
+    const now: Partial<Chat>[] = [];
+    for (const chat of chats ?? []) {
+      if (mayCountSeveralNonContent(chat, this.loadedLib)) this.hold(chat, true);
+      else now.push(withoutMergedNonContentMessage(chat, this.loadedLib));
+    }
+    this.host.upsertChats(now);
   }
 
   /**

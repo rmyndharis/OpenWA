@@ -89,7 +89,7 @@ describe('BaileysStatus addresses a status revoke to the status recipients', () 
     expect(sendMessage).toHaveBeenLastCalledWith(
       'status@broadcast',
       { delete: { remoteJid: 'status@broadcast', fromMe: true, id: 'STATUS-1', participant: '628999@s.whatsapp.net' } },
-      { statusJidList: ['628111@s.whatsapp.net', '628222@s.whatsapp.net'] },
+      { statusJidList: ['628111@s.whatsapp.net', '628222@s.whatsapp.net'], upload: expect.any(Function) as unknown },
     );
   });
 

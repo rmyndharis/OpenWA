@@ -2,9 +2,9 @@ import { z } from 'zod';
 import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import type { AutomationRulesService } from '../../../modules/automation/automation-rules.service';
 import { AutomationRuleResponseDto } from '../../../modules/automation/dto/automation-rule.dto';
-import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
+import { defineTool, sessionIdSchema, type AnyToolDescriptor } from '../tool-descriptor';
 
-const sessionId = z.string().min(1).describe('Session UUID (the session id, not the name)');
+const sessionId = sessionIdSchema;
 
 export function automationTools(automation: AutomationRulesService): AnyToolDescriptor[] {
   return [

@@ -49,7 +49,8 @@
     "refresh": "Muat ulang",
     "errorGeneric": "Terjadi kesalahan",
     "unknownError": "Kesalahan tidak diketahui",
-    "retry": "Coba lagi"
+    "retry": "Coba lagi",
+    "copyFailed": "Tidak dapat menyalin ke papan klip"
   },
   "theme": {
     "light": "Terang",
@@ -98,6 +99,8 @@
     "loadingOlderMessages": "Memuat pesan lama...",
     "loadOlderMessagesError": "Gagal memuat pesan lama. Gulir ke atas untuk mencoba lagi.",
     "loadOlderMessagesRetryHint": "Gulir ke atas untuk mencoba lagi.",
+    "refreshMessagesError": "Gagal menyegarkan pesan. Ketuk untuk mencoba lagi.",
+    "refreshMessagesRetryHint": "Ketuk untuk mencoba lagi.",
     "noMessagesInChat": "Belum ada pesan. Kirim pesan pertama untuk memulai!",
     "downloadDocument": "Unduh dokumen",
     "actions": {
@@ -231,7 +234,6 @@
     "moreActions": "Tindakan lainnya",
     "copyChatId": "Salin ID obrolan",
     "chatIdCopied": "ID obrolan disalin",
-    "copyFailed": "Tidak dapat menyalin ke papan klip",
     "closeChat": "Tutup obrolan",
     "phone": "Nomor telepon",
     "chatId": "ID obrolan",
@@ -627,7 +629,7 @@
     "filters": {
       "title": "Filter (opsional)",
       "hint": "Hanya terpicu jika semua kondisi cocok. Berlaku untuk kejadian pesan.",
-      "incomplete": "Beri nilai pada setiap kondisi filter, dan gunakan paling banyak 20 kondisi, 100 nilai per kondisi, dan 1000 karakter teks.",
+      "incomplete": "Beri nilai pada setiap kondisi filter, dan gunakan paling banyak 20 kondisi, 100 nilai per kondisi, 128 karakter per ID, dan 1000 karakter teks.",
       "badge": "{{count}} filter",
       "badge_other": "{{count}} filter",
       "addCondition": "Tambah kondisi",
@@ -843,8 +845,8 @@
     "confirm": {
       "deleteTitle": "Hapus Kunci API",
       "revokeTitle": "Cabut Kunci API",
-      "deleteMessage": "Yakin ingin menghapus permanen <strong>{{name}}</strong>? Tindakan ini tidak dapat dibatalkan.",
-      "revokeMessage": "Yakin ingin mencabut <strong>{{name}}</strong>? Kunci ini tidak akan berfungsi lagi.",
+      "deleteMessage": "Yakin ingin menghapus permanen <name/>? Tindakan ini tidak dapat dibatalkan.",
+      "revokeMessage": "Yakin ingin mencabut <name/>? Kunci ini tidak akan berfungsi lagi.",
       "signedIn": "Anda masuk ke dasbor ini menggunakan kunci ini. Mencabut atau menghapusnya akan membuat Anda keluar.",
       "delete": "Hapus",
       "revoke": "Cabut"
@@ -1146,6 +1148,7 @@
       "reason409": "Sesi tidak terhubung",
       "reason429": "Batas permintaan gateway tercapai",
       "reason503": "WhatsApp tidak merespons pemeriksaan",
+      "reasonReloading": "WhatsApp Web sedang memuat ulang halamannya",
       "reasonOther": "Gateway menolak pemeriksaan",
       "partial": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",
       "partial_other": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",

@@ -98,7 +98,9 @@ export class SessionResponseDto {
       'alone does not imply it: a `disconnected` session keeps its engine for the duration of an automatic ' +
       'reconnect backoff, while a session stopped through `POST /sessions/:sessionId/stop` carries the same ' +
       'status with no engine. On the node running the session, `true` means `stop`, `logout` and ' +
-      '`force-kill` can act and `start` answers 400; `false` means the reverse. For a session another node ' +
+      '`force-kill` can act and `start` answers 400; `false` means `start` can act and `logout` and `force-kill` ' +
+      'answer 400, while `stop` still answers 200 and records the stop, so the session stays down across a ' +
+      'restart until the next start. For a session another node ' +
       'runs, request routing (NODE_URL set on every node) forwards the lifecycle routes to that node, where ' +
       'they act; without routing, only that node can act on it, and any other node answers 409 to `start` ' +
       'and `stop` and 400 to `logout` and `force-kill`. Derived per request from live state, so it is never ' +

@@ -79,7 +79,7 @@ export function isolateNumber(number: string): string {
 export interface ChatLabel {
   id: string;
   name?: string;
-  /** Phone digits of a privacy-id chat, when the session can map it. */
+  /** Baileys only: phone digits of a privacy-id chat, when the session can map it. */
   phone?: string | null;
 }
 

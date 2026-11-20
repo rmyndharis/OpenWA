@@ -90,7 +90,7 @@ export class WwebjsCalls {
 
   /**
    * Not available on this engine, despite `Call.reject()` existing and being typed `Promise<void>`
-   * (`index.d.ts:2417`).
+   * (`index.d.ts`).
    *
    * Measured live on 2026-09-17 on OpenWA 0.23.4 with WhatsApp Web `2.3000.1047471845-alpha`: the
    * reject resolved and OpenWA logged the call as auto-rejected, but the caller's phone kept ringing

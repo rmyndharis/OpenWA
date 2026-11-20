@@ -8,7 +8,7 @@ import { WwebjsLifecycle } from './wwebjs-lifecycle';
 /**
  * A failed lookup must not be reported as a negative result.
  *
- * `Client.getProfilePicUrl` (Client.js:2156-2170) runs in the page and catches
+ * `Client.getProfilePicUrl` runs in the page and catches
  * `ServerStatusCodeError` **itself**, resolving `undefined` — that is the entire "no picture, or
  * hidden by privacy" verdict. Every other error is rethrown. So on this engine the legitimate
  * negative never arrives as a throw, and a `catch → return null` can only ever turn a genuine

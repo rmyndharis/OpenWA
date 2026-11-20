@@ -176,7 +176,19 @@ export function handleToolError(error: unknown): CallToolResult {
     // The machine-readable code a REST answer carries (IDEMPOTENCY_KEY_IN_PROGRESS), which an agent branches on.
     // Bounded like the message: it is a short token in every exception that sets one.
     const code = typeof body?.['code'] === 'string' ? body['code'].slice(0, 64) : undefined;
-    return jsonToolResult({ success: false, name: error.name, message, ...(code ? { code } : {}) }, true);
+    // The interval a REST answer names for a retry (the page reload 409, the send pacing 429): how long to wait.
+    const wait = body?.['retryAfterSeconds'];
+    const retryAfterSeconds = typeof wait === 'number' && Number.isFinite(wait) && wait >= 0 ? wait : undefined;
+    return jsonToolResult(
+      {
+        success: false,
+        name: error.name,
+        message,
+        ...(code ? { code } : {}),
+        ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+      },
+      true,
+    );
   }
   if (error instanceof Error) {
     logger.error(clipText(String(error.message), TOOL_ERROR_TEXT_MAX_CHARS), clipStack(error));

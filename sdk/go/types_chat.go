@@ -8,8 +8,8 @@ type ChatSummary struct {
 	// Name is "" for a Baileys chat held under a privacy id that has no name of its own: title it by Phone, when
 	// present.
 	Name string `json:"name"`
-	// Phone is the digits of a 1:1 chat WhatsApp holds under a privacy id, when the session can map
-	// it. Absent for a phone-keyed chat and when the mapping is unknown.
+	// Phone is Baileys only; whatsapp-web.js sends none. The digits of a 1:1 chat WhatsApp holds under a privacy
+	// id, when the session can map it. Absent for a phone-keyed chat and when the mapping is unknown.
 	Phone           string      `json:"phone,omitempty"`
 	IsGroup         bool        `json:"isGroup"`
 	UnreadCount     int         `json:"unreadCount"`

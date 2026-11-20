@@ -246,6 +246,10 @@ characters (under `MCP_MAX_RESULT_BYTES` the cap above cuts it): a
 template `vars` name sent with a value that is not a string comes back in the answer, as long as the
 caller made it. That text is not logged.
 
+A tool error carries the `code` its REST answer has, and its `retryAfterSeconds` when the answer has one: the
+`409` `ENGINE_PAGE_RELOADING` of a whatsapp-web.js session whose page is reloading, and the `429`
+`SEND_PACING_LIMITED`.
+
 ### Retrying a send
 
 Each send tool (`MessageSendText`, `MessageSendImage`, `MessageSendVideo`, `MessageSendAudio`,
@@ -369,7 +373,7 @@ defineTool({
   description: 'Get one session by its UUID, including connection status.',
   tier: 'read',
   sessionScoped: true,
-  inputSchema: z.object({ sessionId: z.string().min(1).describe('Session UUID') }),
+  inputSchema: z.object({ sessionId: sessionIdSchema }),
   handler: input =>
     session.findOne(input.sessionId).then(s => SessionResponseDto.fromEntity(s, session.engineLoaded(s))),
 }),
@@ -384,8 +388,9 @@ Guidelines:
   `requiredRole` as the REST route it mirrors: the webhook and automation-rule reads,
   `GroupGetInviteCode` and `ContactCheckNumber` sit at OPERATOR because their REST routes do.
 - Leave `title` unset unless the name split into words reads badly.
-- Use `sessionScoped: true` and a non-empty `sessionId` field for any per-session tool so
-  the scope check applies.
+- Use `sessionScoped: true` and `sessionIdSchema` (exported by `src/core/agent-tools/tool-descriptor.ts`)
+  for the `sessionId` field of any per-session tool, so the scope check applies and the id is bounded as
+  the REST routes bound it: letters, digits and hyphens, at most 128 characters.
 - A snapshot test (`tool-registry.spec.ts`) locks the public tool-name set; update it
   intentionally when the surface changes.
 

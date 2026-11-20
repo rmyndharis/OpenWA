@@ -153,14 +153,22 @@ describe('the patchers this repository actually ships', () => {
 });
 
 describe('unappliedPatchesMessage', () => {
-  it('names the library, the count, every patcher and a command that fixes one', () => {
+  it('names the library, the count, every patcher and a command for each', () => {
     const message = unappliedPatchesMessage('wwebjs', ['patch-wwebjs-media-id', 'patch-wwebjs-status']);
 
     expect(message).toContain('whatsapp-web.js');
     expect(message).toContain('missing 2');
     expect(message).toContain('patch-wwebjs-media-id, patch-wwebjs-status');
     expect(message).toContain('node scripts/patch-wwebjs-media-id.js');
+    expect(message).toContain('node scripts/patch-wwebjs-status.js');
     expect(message).toContain('docs/12-troubleshooting-faq.md');
+  });
+
+  it('offers the reinstall only for the cause it fixes, and says a refused shape needs more', () => {
+    const message = unappliedPatchesMessage('baileys', ['patch-baileys-appstate']);
+
+    expect(message).toMatch(/When it ran with --ignore-scripts, apply them with[\s\S]*?reinstall with `npm install`/);
+    expect(message).toMatch(/refused a source shape[^.]*is not fixed by either/);
   });
 
   it('names the Baileys package for the baileys family', () => {

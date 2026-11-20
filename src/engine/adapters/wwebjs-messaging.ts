@@ -43,7 +43,13 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { EnginePageReloadingError } from '../../common/errors/engine-page-reloading.error';
 import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
-import { type WwebjsEngineHost, requireClient, withPageWrite } from './wwebjs-host';
+import {
+  type WwebjsEngineHost,
+  navigationsSeen,
+  requireClient,
+  throwIfNavigatedSince,
+  withPageWrite,
+} from './wwebjs-host';
 import { type EvaluatePage, type PinAnswer, pinInPage, settleWriteStatus } from './wwebjs-page-writes';
 import { isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
@@ -269,6 +275,15 @@ export function isQuoteUnresolvedError(err: unknown): boolean {
   return err instanceof Error && err.message.includes('Could not get the quoted message');
 }
 
+/** What fluent-ffmpeg throws when the ffmpeg of this host cannot run: not found, not startable, killed, no webp muxer. */
+const FFMPEG_UNUSABLE =
+  /^(?:Cannot find ffmpeg$|spawn .+ E[A-Z]+$|ffmpeg was killed with signal |Output formats? .+ not available$)/;
+/** What fluent-ffmpeg throws when ffmpeg ran and refused: it exited with an error, or the declared type is no format it reads. */
+const FFMPEG_REFUSED = /^(?:ffmpeg exited with code \d+|Input formats? .+ not available$)/;
+/** ffmpeg's own words when its build takes none of the options whatsapp-web.js passes, or cannot open its output. */
+const FFMPEG_OWN_OPTIONS =
+  /Unrecognized option|Error splitting the argument list|Unknown encoder|Error opening output file/;
+
 /**
  * Build a MessageMedia from a MediaInput (URL → fetched, base64/Buffer → wrapped).
  *
@@ -335,9 +350,9 @@ export async function toMessageMedia(
  * Build the `MessageResult` for a send from whatever whatsapp-web.js hands back.
  *
  * `client.sendMessage()` can RESOLVE with `undefined` instead of throwing, and it collapses two
- * opposite outcomes into that one value (`Client.js:1558`): the chat could not be resolved so nothing
- * was sent (`if (!chat) return null`, `Client.js:1539`), or the message went out and only its id could
- * not be read back (`Msg.get` miss, `Injected/Utils.js:585`). Nothing here can tell those apart, so an
+ * opposite outcomes into that one value (the end of `Client.sendMessage`): the chat could not be resolved so nothing
+ * was sent (`if (!chat) return null` in `Client.sendMessage`), or the message went out and only its id could
+ * not be read back (`Msg.get` miss, `WWebJS.sendMessage` in `Injected/Utils.js`). Nothing here can tell those apart, so an
  * absent message is reported as a failed send: a false negative is visible and retryable, while
  * claiming delivery for a message that never left is not recoverable. wwebjs's own typings hide the
  * case entirely — `index.d.ts` declares `Promise<Message>`, so `strict` never flagged these reads.
@@ -407,6 +422,21 @@ function afterAttempt<T>(error: T): T | EngineNotReadyError {
 }
 
 /**
+ * Throw `answer` as the plain not-ready 409 of an attempt that a page reload cut short, and return for any other
+ * failure. The attempt may have left the page, so the answer says the outcome is unknown instead of telling the
+ * client to ask again (markOutcomeUnknown: a keyed send keeps its `Idempotency-Key`, a paced one its admission), and
+ * as a 4xx it does not feed the send breaker, which a reload says nothing about. `since` is {@link navigationsSeen}
+ * where the attempt started. A failure counts as the reload as `rethrowIfNavigation` (./wwebjs-host) reads it: the
+ * navigation text, or any other failure of a call a navigation was stamped during, but not a dead page, an error this
+ * application built or a failure captured inside the page.
+ */
+export function throwIfCutByReload(host: WwebjsEngineHost, error: unknown, since: number, answer: string): void {
+  if (isNavigationError(error, navigationsSeen(host) !== since) && !host.isPageTransportError(error)) {
+    throw markOutcomeUnknown(new EngineNotReadyError(answer));
+  }
+}
+
+/**
  * Messaging operations extracted from WhatsAppWebJsAdapter: the send paths (with the @c.us -> @lid
  * resolution cache), reactions, history, delete and edit. The adapter keeps the public methods as
  * thin forwarders and injects the shared host surface (./wwebjs-host) via closures, so the delegate
@@ -457,13 +487,16 @@ export class WwebjsMessaging {
    * rethrows unchanged. Not for the send itself, whose failure leaves the outcome unknown.
    */
   private async readBeforeSend<T>(context: string, read: () => Promise<T>): Promise<T> {
+    const since = navigationsSeen(this.host);
     try {
       return await read();
     } catch (error) {
       this.host.reportIfPageTransportError(error, context);
       this.ensureReadyToSend();
-      // A reload that cut the read short is the retryable 409 every other call gets for it, and nothing was sent.
-      if (isNavigationError(error)) throw markNothingSent(new EnginePageReloadingError());
+      // A reload that cut the read short, by what the failure says or by a navigation stamped while it ran, is the
+      // retryable 409 every other call gets for it, and nothing was sent.
+      if (isNavigationError(error, navigationsSeen(this.host) !== since) && !this.host.isPageTransportError(error))
+        throw markNothingSent(new EnginePageReloadingError());
       if (isProtocolTimeout(error))
         throw new EngineNotSentError(`WhatsApp Web did not answer the ${context} read in time`);
       throw error;
@@ -567,8 +600,8 @@ export class WwebjsMessaging {
   /**
    * The send options that attach a quote, or nothing at all when the caller asked for none.
    *
-   * `ignoreQuoteErrors` defaults to TRUE in the library (documented at Client.js:1383, applied at
-   * :1480): with it left alone an id whatsapp-web.js cannot resolve sends the message ANYWAY,
+   * `ignoreQuoteErrors` defaults to TRUE in the library (documented and applied in
+   * `Client.sendMessage`): with it left alone an id whatsapp-web.js cannot resolve sends the message ANYWAY,
    * unquoted, and reports success. A caller who asked for a reply and received a loose message has
    * no signal that anything went wrong, so this opts out and lets the failure surface.
    *
@@ -596,7 +629,8 @@ export class WwebjsMessaging {
    * The answers given once the first attempt failed with `No LID for user` (a not-ready 409, the unreachable
    * recipient, a quote the retry cannot resolve) carry markOutcomeUnknown: the page can throw after the message is
    * on the wire, so none of them proves the message stayed off it. An answer given before that attempt still
-   * carries markNothingSent.
+   * carries markNothingSent. An attempt that a page reload cut short, the first or the retry, answers
+   * {@link PAGE_RELOADED_DURING_SEND_MESSAGE} the same way (see {@link throwIfCutByReload}).
    *
    * `quotedMessageId` gets the same treatment for the same reason. Opting out of `ignoreQuoteErrors`
    * makes an id the page cannot resolve throw, but it throws a bare Error, and two things follow from
@@ -618,12 +652,16 @@ export class WwebjsMessaging {
     // unresolved id. The reply and forward legs send through the Message's own client, which the host's
     // readiness check on getClient never sees, so a send must not leave for a closing page from here.
     this.ensureReadyToSend();
+    const since = navigationsSeen(this.host);
     try {
       return await send(to);
     } catch (err) {
       // A transport-level failure means the page/browser is gone — report it as a death signal.
       // No-op for ordinary send errors; the retry/throw behavior below is unchanged.
       this.host.reportIfPageTransportError(err, 'sendMessage');
+      // A reload that cut the attempt comes first: the page it opened holds neither the quoted message nor the id
+      // mapping, so what failed on it is not the quote or the stale id it reads as, and the message may be out.
+      throwIfCutByReload(this.host, err, since, PAGE_RELOADED_DURING_SEND_MESSAGE);
       // Before the LID branch: an unresolvable quote is neither stale-id nor transport, and
       // re-resolving the recipient would not make the quoted message appear. The page refuses it before
       // it builds the message, and this is the first attempt, so nothing was sent.
@@ -653,11 +691,13 @@ export class WwebjsMessaging {
         staleId: to,
         freshId: fresh,
       });
+      const retrySince = navigationsSeen(this.host);
       try {
         return await send(fresh);
       } catch (retryErr) {
         // The page can die during the retry as well; report it exactly as the first attempt does.
         this.host.reportIfPageTransportError(retryErr, 'sendMessage');
+        throwIfCutByReload(this.host, retryErr, retrySince, PAGE_RELOADED_DURING_SEND_MESSAGE);
         // Same remap as the first attempt. Re-resolving the RECIPIENT says nothing about the quoted
         // message, so a send that reaches the page on the fresh id and only then fails on the quote
         // is the same caller fault — without this it would be a 500 on the retry where the identical
@@ -686,10 +726,10 @@ export class WwebjsMessaging {
     // that form (neutralMentions). Omit the options object entirely when none are given to keep today's send behavior.
     //
     // Only an explicit `false` is forwarded. whatsapp-web.js reads the flag as
-    // `linkPreview === false ? undefined : true` (Client.js:1458), so passing `true` is identical to
+    // `linkPreview === false ? undefined : true` (in Client.sendMessage), so passing `true` is identical to
     // passing nothing — sending it anyway would add an options object to every plain send for no
     // change in behaviour.
-    // whatsapp-web.js takes a BOOLEAN only (index.d.ts:1547) — there is no way to hand it title,
+    // whatsapp-web.js takes a BOOLEAN only (index.d.ts) — there is no way to hand it title,
     // description or a thumbnail. Silently dropping the caller's preview would send a message that
     // looks nothing like what they asked for, so it refuses instead.
     if (options?.customPreview) {
@@ -823,7 +863,7 @@ export class WwebjsMessaging {
     this.ensureReadyToSend();
     // Sticker has its own send path (sendMediaAsSticker), not the sendMediaMessage funnel, but it
     // hits the same channel crash: for a channel wwjs drops the sticker form and runs processMediaData
-    // with sendToChannel, which still ends at msg.avParams() (Utils.js:518). Guard it too (#673).
+    // with sendToChannel, which still ends at msg.avParams() (in `WWebJS.sendMessage`). Guard it too (#673).
     this.host.ensureNotChannelRecipient(chatId);
     ensureSendable(chatId, 'sticker');
     // Keep the fetched content-type for a remote URL: here the mimetype selects the conversion, and
@@ -841,19 +881,59 @@ export class WwebjsMessaging {
       );
     }
 
+    // The library converts a video with the ffmpeg of this host, inside sendMessage and before it calls the page.
+    // It exports nothing to run that apart from the send, so a failure of it is told by what it throws. A retry
+    // after "No LID for user" follows an attempt that reached the page, so it proves nothing about the message.
+    let attempts = 0;
     const msg = await this.sendResolved(
       chatId,
-      to =>
-        this.client().sendMessage(to, messageMedia, {
-          sendMediaAsSticker: true,
-          ...this.quoteOptions(media.quotedMessageId),
-          // Same options bag every other media send uses, so the library tags a sticker exactly as it
-          // tags an image. Omitted when empty to leave an untagged sticker call unchanged.
-          ...(media.mentions?.length ? { mentions: neutralMentions(media.mentions) } : {}),
-        }),
+      to => {
+        const retry = attempts++ > 0;
+        return this.client()
+          .sendMessage(to, messageMedia, {
+            sendMediaAsSticker: true,
+            ...this.quoteOptions(media.quotedMessageId),
+            // Same options bag every other media send uses, so the library tags a sticker exactly as it
+            // tags an image. Omitted when empty to leave an untagged sticker call unchanged.
+            ...(media.mentions?.length ? { mentions: neutralMentions(media.mentions) } : {}),
+          })
+          .catch((error: unknown) => {
+            const conversion = this.videoStickerConversionFailure(error);
+            if (!conversion) throw error;
+            throw retry ? markOutcomeUnknown(conversion) : markNothingSent(conversion);
+          });
+      },
       media.quotedMessageId,
     );
     return toMessageResult(msg);
+  }
+
+  /**
+   * What a failed ffmpeg conversion of a video sticker answers, or `undefined` for an error that is not one. The
+   * conversion runs before whatsapp-web.js calls the page, so its failure says nothing about the account or the message
+   * and must not count toward the send breaker. ffmpeg refusing the video (corrupt, an unsupported codec, a declared
+   * type it has no format for) is the caller's 400. A host with no ffmpeg, one that cannot start it, or one whose build
+   * takes none of the options the library passes (an ffmpeg that no longer reads `-vsync`) is a 503, and the reason
+   * goes to the log. The match is on the text of fluent-ffmpeg and of ffmpeg, so a host fault worded differently
+   * answers 400 until its words are added here.
+   */
+  private videoStickerConversionFailure(error: unknown): Error | undefined {
+    // Read the message by shape: an error that Node's own child_process raised can come from another realm.
+    const message = (error as { message?: unknown } | null | undefined)?.message;
+    if (typeof message !== 'string') return undefined;
+    const refused = FFMPEG_REFUSED.test(message);
+    if (!refused && !FFMPEG_UNUSABLE.test(message)) return undefined;
+    if (refused && !FFMPEG_OWN_OPTIONS.test(message)) {
+      return new BadRequestException(`The video could not be converted to a sticker: ${message.slice(0, 300)}`);
+    }
+    this.host.logger.warn('ffmpeg could not convert a video sticker on this host', {
+      sessionId: this.host.config.sessionId,
+      reason: message.slice(0, 500),
+    });
+    return new EngineNotSentError(
+      'The ffmpeg of this host could not convert the video to a sticker, so nothing was sent. The reason is in the ' +
+        'gateway log; a video sticker needs a working ffmpeg on the host.',
+    );
   }
 
   async sendPollMessage(chatId: string, poll: PollInput): Promise<MessageResult> {
@@ -1415,7 +1495,7 @@ export class WwebjsMessaging {
       });
     } catch (error) {
       // vote() throws a BARE STRING (not an Error) when the target is not a poll creation message
-      // (Message.js:1010). Left alone that surfaces as an opaque 500; it is a client mistake, so
+      // (Message.js). Left alone that surfaces as an opaque 500; it is a client mistake, so
       // map it to a 400. Anything that is a real Error is a genuine engine fault and propagates.
       if (typeof error === 'string') {
         throw new BadRequestException(`Message ${pollMessageId} is not a poll: ${error}`);
@@ -1433,9 +1513,12 @@ export class WwebjsMessaging {
   private pinThroughPage(op: 'pinMessage' | 'unpinMessage', chatId: string, messageId: string, durationSeconds = 0) {
     const pin = op === 'pinMessage';
     return withPageWrite(this.host, op, async (): Promise<PinAnswer> => {
+      const since = navigationsSeen(this.host);
       const message = await this.findInFetchWindow(chatId, messageId);
       const { pupPage } = this.client() as unknown as { pupPage: EvaluatePage };
       const answer = await pupPage.evaluate(pinInPage, message.id._serialized, pin, durationSeconds);
+      // A document a reload has just opened has no sender either: that is the retryable 409, not a build without one.
+      if (answer === 'missing') throwIfNavigatedSince(this.host, since);
       if (answer !== 'legacy') return answer;
       return pin ? message.pin(durationSeconds) : message.unpin();
     });
@@ -1482,7 +1565,7 @@ export class WwebjsMessaging {
   async starMessage(chatId: string, messageId: string, star: boolean): Promise<void> {
     this.host.ensureReady();
     // Both resolve void, and the page-side helper silently does nothing when canStarMsg() refuses
-    // the message (Message.js:672-712). There is no signal to map, so a star that WhatsApp declined
+    // the message (Message.js). There is no signal to map, so a star that WhatsApp declined
     // is indistinguishable from one it accepted — documented rather than faked into a refusal.
     await withPageWrite(this.host, 'starMessage', async () => {
       const message = await this.findInFetchWindow(chatId, messageId);

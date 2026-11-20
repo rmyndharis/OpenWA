@@ -1073,10 +1073,13 @@ export interface CreateWebhookRequest {
 }
 
 /**
- * Every field is a partial update. `secret: ''` and `headers: {}` are the documented "clear it"
+ * Every field is a partial update. `secret: ''` (or `null`) and `headers: {}` are the documented "clear it"
  * values; any other secret is still held to the 16-character minimum.
  */
-export type UpdateWebhookRequest = Partial<CreateWebhookRequest> & { active?: boolean };
+export type UpdateWebhookRequest = Omit<Partial<CreateWebhookRequest>, 'secret'> & {
+  secret?: string | null;
+  active?: boolean;
+};
 
 export interface WebhookResponse {
   id: string;
@@ -1166,8 +1169,8 @@ export interface ChatSummary {
    */
   name: string;
   /**
-   * Phone digits of a 1:1 chat WhatsApp holds under a privacy id (`@lid`), when the session can map
-   * it. Absent for a phone-keyed chat and when the mapping is unknown.
+   * Baileys only; whatsapp-web.js sends none. Phone digits of a 1:1 chat WhatsApp holds under a privacy id
+   * (`@lid`), when the session can map it. Absent for a phone-keyed chat and when the mapping is unknown.
    */
   phone?: string;
   isGroup: boolean;

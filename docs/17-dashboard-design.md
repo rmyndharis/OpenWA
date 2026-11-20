@@ -98,7 +98,7 @@ rule does not cover or that the test has not classified, and when a stylesheet g
 The audit log table gives each of its six columns a floor and shares the rest, so it fits a laptop window from about
 1100px beside the open sidebar; a session, key or address that is still too long ends in an ellipsis and keeps its
 whole value in the cell's title. Between 769px and that width the table scrolls sideways, and from 768px down it
-becomes cards. The API keys table, which needs between about 1180px and 1450px depending on the keys and the
+becomes cards. The API keys table, which needs between about 1180px and 1500px depending on the keys and the
 language, pins its row actions to the inline end of its container, so they stay in reach at any width; the Last used
 column scrolls into view beside them.
 

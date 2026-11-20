@@ -51,7 +51,8 @@
     "refresh": "Aggiorna",
     "errorGeneric": "Si è verificato un errore",
     "unknownError": "Errore sconosciuto",
-    "retry": "Riprova"
+    "retry": "Riprova",
+    "copyFailed": "Impossibile copiare negli appunti"
   },
   "theme": {
     "light": "Chiaro",
@@ -101,6 +102,8 @@
     "loadingOlderMessages": "Caricamento messaggi precedenti...",
     "loadOlderMessagesError": "Impossibile caricare i messaggi precedenti. Scorri verso l’alto per riprovare.",
     "loadOlderMessagesRetryHint": "Scorri verso l’alto per riprovare.",
+    "refreshMessagesError": "Impossibile aggiornare i messaggi. Tocca per riprovare.",
+    "refreshMessagesRetryHint": "Tocca per riprovare.",
     "noMessagesInChat": "Ancora nessun messaggio. Invia il primo messaggio per iniziare!",
     "downloadDocument": "Scarica documento",
     "actions": {
@@ -236,7 +239,6 @@
     "moreActions": "Altre azioni",
     "copyChatId": "Copia ID chat",
     "chatIdCopied": "ID chat copiato",
-    "copyFailed": "Impossibile copiare negli appunti",
     "closeChat": "Chiudi chat",
     "phone": "Numero di telefono",
     "chatId": "ID chat",
@@ -632,7 +634,7 @@
     "filters": {
       "title": "Filtri (opzionale)",
       "hint": "Attiva solo quando tutte le condizioni corrispondono. Si applica agli eventi dei messaggi.",
-      "incomplete": "Assegna un valore a ogni condizione di filtro e usa al massimo 20 condizioni, 100 valori per condizione e 1000 caratteri di testo.",
+      "incomplete": "Assegna un valore a ogni condizione di filtro e usa al massimo 20 condizioni, 100 valori per condizione, 128 caratteri per ID e 1000 caratteri di testo.",
       "badge": "{{count}} filtro",
       "badge_other": "{{count}} filtri",
       "badge_many": "{{count}} filtri",
@@ -849,8 +851,8 @@
     "confirm": {
       "deleteTitle": "Elimina Chiave API",
       "revokeTitle": "Revoca Chiave API",
-      "deleteMessage": "Sei sicuro di voler eliminare permanentemente <strong>{{name}}</strong>? Questa azione non può essere annullata.",
-      "revokeMessage": "Sei sicuro di voler revocare <strong>{{name}}</strong>? Smetterà di funzionare.",
+      "deleteMessage": "Sei sicuro di voler eliminare permanentemente <name/>? Questa azione non può essere annullata.",
+      "revokeMessage": "Sei sicuro di voler revocare <name/>? Smetterà di funzionare.",
       "signedIn": "Questa dashboard ha effettuato l'accesso con questa chiave. Revocarla o eliminarla ti disconnetterà.",
       "delete": "Elimina",
       "revoke": "Revoca"
@@ -1153,6 +1155,7 @@
       "reason409": "La sessione non è connessa",
       "reason429": "È stato raggiunto il limite di richieste del gateway",
       "reason503": "WhatsApp non ha risposto a una verifica",
+      "reasonReloading": "WhatsApp Web sta ricaricando la sua pagina",
       "reasonOther": "Il gateway ha rifiutato una verifica",
       "partial": "{{reason}} (HTTP {{status}}). Verifica interrotta al numero {{attempted}} di {{total}}; {{count}} numero non è stato inviato. Riprova più tardi.",
       "partial_other": "{{reason}} (HTTP {{status}}). Verifica interrotta al numero {{attempted}} di {{total}}; {{count}} numeri non sono stati inviati. Riprova più tardi.",

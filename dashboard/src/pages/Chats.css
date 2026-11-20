@@ -2085,6 +2085,30 @@
   display: none;
 }
 
+/* A failed refresh is retried by pressing the strip: scrolling up asks for an older page, and a thread with none, or too
+   short to scroll, has nothing to ask. The strip is then a button with the pill's own look: the browser's font and
+   appearance are put aside, and it takes the pointer events the other strips leave to the bubbles under them. */
+.chats-page .messages-loading-older.failed.retry {
+  appearance: none;
+  font-family: inherit;
+  line-height: 1.25;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.chats-page .messages-loading-older.failed.retry:hover:not(:disabled) {
+  border-color: var(--chat-accent);
+}
+
+.chats-page .messages-loading-older.failed.retry:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.chats-page .messages-loading-older.failed.retry:disabled {
+  cursor: progress;
+}
+
 /* In a thread of 17rem of content or less, two lines may not hold the whole sentence, and only the retry
    instruction is shown. The width queried is the content box of the thread: its client width, which leaves
    out a scrollbar, less its inline padding. The longest sentence, the German one, needs 308px of client

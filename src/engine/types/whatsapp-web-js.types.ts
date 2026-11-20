@@ -49,8 +49,8 @@ export interface GroupMetadataRaw {
   creation?: number;
   /**
    * Who may add participants. Typed loosely on purpose: whatsapp-web.js declares this `boolean`
-   * (index.d.ts:890, documented as "true = only admins") but actually writes WhatsApp's raw strings
-   * `'admin_add'`/`'all_member_add'` (GroupChat.js:476), and the WA Web model it is read from uses
+   * (index.d.ts, documented as "true = only admins") but actually writes WhatsApp's raw strings
+   * `'admin_add'`/`'all_member_add'` (GroupChat.js), and the WA Web model it is read from uses
    * the strings too. Accepting both keeps the adapter honest about what can arrive.
    */
   memberAddMode?: string | boolean;
@@ -91,7 +91,7 @@ export interface GroupChat extends Omit<Chat, 'isReadOnly' | 'getLabels'> {
   setMessagesAdminsOnly(adminsOnly?: boolean): Promise<boolean>;
   /** Resolves false when the account lacks admin rights (does not throw). */
   setInfoAdminsOnly(adminsOnly?: boolean): Promise<boolean>;
-  /** Only admins may add participants when true (index.d.ts:2205). */
+  /** Only admins may add participants when true (index.d.ts). */
   setAddMembersAdminsOnly(adminsOnly?: boolean): Promise<boolean>;
   /** Resolves false when the account lacks admin rights (does not throw). */
   setPicture(media: unknown): Promise<boolean>;
@@ -128,29 +128,13 @@ export interface BusinessClient extends Omit<
 > {
   getLabels(): Promise<Array<{ id: string; name: string; hexColor: string }>>;
   /** Chats carrying a label. whatsapp-web.js has the read but exposes no label create/update/delete. */
-  getChatsByLabelId(labelId: string): Promise<
-    Array<
-      | {
-          id?: { _serialized?: string };
-          name?: string;
-          isGroup?: boolean;
-          unreadCount?: number;
-          timestamp?: number;
-          archived?: boolean;
-          pinned?: boolean;
-          isMuted?: boolean;
-          muteExpiration?: number;
-          lastMessage?: { type: string };
-        }
-      | undefined
-    >
-  >;
+  getChatsByLabelId(labelId: string): Promise<Array<Chat | undefined>>;
   getChannels(): Promise<WwjsChannelData[]>;
   /** Takes a channel ID (`…@newsletter`), NOT an invite code; resolves true only on success. */
   subscribeToChannel(channelId: string): Promise<boolean>;
   /**
    * Resolves a RESULT OBJECT on success and an error STRING on failure — it does not throw
-   * (Client.js:2474-2510), so callers must narrow before using it.
+   * (Client.createChannel), so callers must narrow before using it.
    */
   createChannel(
     title: string,

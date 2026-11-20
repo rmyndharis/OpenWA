@@ -351,8 +351,10 @@ const INGRESS_ROUTE_SEGMENT = /^[^/\\?#%\x00-\x1f\x7f\p{Cs}]+$/u;
  * match, that a declared `toleranceSec` is a finite number > 0 (a replay window of zero or less, or
  * NaN, would make the tolerance check a no-op), that `dedupOn` is 'header' or 'body', that a
  * declared ack is a final status (200-599) with a string body and header names and values Node can
- * write, and that no route declares `signature.scheme: 'none'` unless the operator has explicitly
- * opted in via `ALLOW_UNSIGNED_INGRESS=true`. A `none`-scheme route is a fully-unauthenticated `@Public()`
+ * write, that `ingress` is a list and an hmac-sha256 `contentTemplate` a string (the load-time warnings
+ * iterate the list and call string methods on the template), and that no route declares
+ * `signature.scheme: 'none'` unless the operator has explicitly opted in via
+ * `ALLOW_UNSIGNED_INGRESS=true`. A `none`-scheme route is a fully-unauthenticated `@Public()`
  * endpoint — once an instance is provisioned, anyone who can reach the host can POST a forged
  * payload that triggers outbound WhatsApp sends. Rejecting it at load (rather than only warning)
  * keeps that surface from lighting up silently. A manifest with no `ingress` entries is a no-op.
@@ -360,6 +362,12 @@ const INGRESS_ROUTE_SEGMENT = /^[^/\\?#%\x00-\x1f\x7f\p{Cs}]+$/u;
  * written, and from PluginLoaderService.loadPlugin, so a package already on disk is refused at load time.
  */
 export function validateIngressManifest(manifest: PluginManifest, allowUnsignedIngress = false): void {
+  // Before the shortcut below: an object, a boolean, a number or an empty string has no length to count, so it would
+  // pass as "no ingress declared" and then fail in the load-time warnings or when the plugin is enabled.
+  const declared: unknown = manifest.ingress;
+  if (declared !== undefined && declared !== null && !Array.isArray(declared)) {
+    throw new Error(`Plugin ${manifest.id}: ingress must be a list of routes`);
+  }
   if (!manifest.ingress?.length) return; // no ingress declared → nothing to validate
   const declaredMajor = Number.parseInt((manifest.sdkVersion ?? '1').split('.')[0], 10);
   if (!Number.isFinite(declaredMajor) || declaredMajor !== SUPPORTED_SDK_MAJOR) {
@@ -407,6 +415,38 @@ export function validateIngressManifest(manifest: PluginManifest, allowUnsignedI
         `Plugin ${manifest.id}: route '${r.route}' signature.encoding must be 'hex' or 'base64' ` +
           `(got '${String(signature.encoding)}')`,
       );
+    }
+    // warnUnsignedTimestampRoutes calls `.includes` on an hmac-sha256 template and the verifier calls `.replace`, which
+    // only a string has: an array passes the first and fails every delivery at the second.
+    const template: unknown = signature.contentTemplate;
+    if (
+      signature.scheme === 'hmac-sha256' &&
+      template !== undefined &&
+      template !== null &&
+      typeof template !== 'string'
+    ) {
+      throw new Error(`Plugin ${manifest.id}: route '${r.route}' signature.contentTemplate must be a string`);
+    }
+    // The delivery path lower-cases these names to read the request headers, so one that is not a string throws on every
+    // delivery: after it was stored, for conversationId.header, which leaves a row no sweep can replay. Absent and null
+    // stay absent. A scheme that never reads the signature headers (standard-webhooks fixes its own, none verifies
+    // nothing) is not held to them.
+    const readsSignatureHeaders = signature.scheme === 'hmac-sha256' || signature.scheme === 'shared-secret';
+    const headerFields: Array<[field: string, value: unknown]> = [
+      ...(readsSignatureHeaders
+        ? ([
+            ['signature.header', signature.header],
+            ['signature.timestampHeader', signature.timestampHeader],
+          ] as Array<[string, unknown]>)
+        : []),
+      ['signature.dedupHeader', signature.dedupHeader],
+      ['dedupHeader', (r as { dedupHeader?: unknown }).dedupHeader],
+      ['conversationId.header', (r.conversationId as { header?: unknown } | null | undefined)?.header],
+    ];
+    for (const [field, value] of headerFields) {
+      if (value !== undefined && value !== null && typeof value !== 'string') {
+        throw new Error(`Plugin ${manifest.id}: route '${r.route}' ${field} must be a string`);
+      }
     }
     if (r.signature.scheme === 'none' && !allowUnsignedIngress) {
       throw new Error(
@@ -512,8 +552,9 @@ export function warnUnauthenticatedIngressRoutes(
  * route (which binds neither body nor time). The dedup header is not covered by the credential, so a
  * copy sent with a different header value is accepted as new. `dedupOn: 'body'` silences it.
  *
- * Warn-only (SDK v1 is additive within a major; a load-time rejection would break already-installed
- * manifests). Called from PluginLoaderService.loadPlugin.
+ * Warn-only: a route that binds no timestamp works, it is only easier to replay, and SDK v1 is additive within a major,
+ * so rejecting it at load would break installed manifests. A manifest of the wrong shape is another matter, and is
+ * refused by {@link validateIngressManifest}. Called from PluginLoaderService.loadPlugin.
  */
 export function warnUnsignedTimestampRoutes(
   manifest: PluginManifest,

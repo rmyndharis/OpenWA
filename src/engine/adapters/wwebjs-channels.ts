@@ -2,6 +2,7 @@ import { MessageTypes, type Client } from 'whatsapp-web.js';
 import { Channel, ChannelMessage } from '../interfaces/whatsapp-engine.interface';
 import { BusinessClient, WwjsChannelData, readWid } from '../types/whatsapp-web-js.types';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { EnginePageReloadingError } from '../../common/errors/engine-page-reloading.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
@@ -28,10 +29,16 @@ export type ChannelWrite = 'delete' | 'mute' | 'unmute' | 'unsubscribe';
  * outcome, never as one that changed nothing: the Mex client sends a delete or a mute again on a 429 or a 500 (four
  * attempts in all) and only the error of the last attempt surfaces, it makes a 500 of its own of any send that fails
  * (a socket that dropped after the request left), and an unsubscription is one request whose reply may not have come.
- * Like the library's calls it does not look the jobs up, so a page without one rejects as the library's call did. Any
- * other rejection is rethrown. Self-contained, since Puppeteer ships it to the page as source.
+ * Like the library's calls it does not look the jobs up, so a page without one rejects as the library's call did. The
+ * channel is read through the helper whatsapp-web.js installs (`window.WWebJS.getChat`), which a document that has
+ * `require` and not the helpers has not got: that page is reloading, and it answers `'no-helpers'` before anything is
+ * asked of WhatsApp, as the group writes do. Any other rejection is rethrown. Self-contained, since Puppeteer ships it
+ * to the page as source.
  */
-export async function runChannelWriteInPage(write: ChannelWrite, channelId: string): Promise<{ status: number }> {
+export async function runChannelWriteInPage(
+  write: ChannelWrite,
+  channelId: string,
+): Promise<{ status: number } | 'no-helpers'> {
   type NewsletterChat = { newsletterMetadata?: { membershipType?: unknown } } | null;
   const w = window as unknown as {
     require(m: 'WAWebNewsletterDeleteAction'): { deleteNewsletterAction: (channel: unknown) => Promise<unknown> };
@@ -47,7 +54,7 @@ export async function runChannelWriteInPage(write: ChannelWrite, channelId: stri
       MUTED_STATE: unknown;
       UNMUTED_STATE: unknown;
     };
-    WWebJS: { getChat: (id: string, options: { getAsModel: boolean }) => Promise<NewsletterChat> };
+    WWebJS?: { getChat?: (id: string, options: { getAsModel: boolean }) => Promise<NewsletterChat> };
   };
   try {
     if (write === 'mute' || write === 'unmute') {
@@ -63,7 +70,9 @@ export async function runChannelWriteInPage(write: ChannelWrite, channelId: stri
     // reload, and not on the helper the library installs.
     const deleter = write === 'delete' ? w.require('WAWebNewsletterDeleteAction') : undefined;
     const leaver = write === 'unsubscribe' ? w.require('WAWebNewsletterUnsubscribeAction') : undefined;
-    const channel = await w.WWebJS.getChat(channelId, { getAsModel: false });
+    const helpers = w.WWebJS;
+    if (typeof helpers?.getChat !== 'function') return 'no-helpers';
+    const channel = await helpers.getChat(channelId, { getAsModel: false });
     if (!channel) return { status: 403 };
     // Dispatched on the write, so that a page without the job dies on it, as the library's call did, and never answers 200.
     if (write === 'delete') {
@@ -140,7 +149,7 @@ export class WwebjsChannels {
    *
    * whatsapp-web.js signals failure by RETURNING A STRING ('CreateChannelError: …') rather than
    * throwing — both when channel creation is disabled for the account and when the server refuses
-   * (Client.js:2474-2510). Left unchecked that string would be treated as a successful result and
+   * (Client.createChannel). Left unchecked that string would be treated as a successful result and
    * mapped into a Channel with undefined everything, so it is turned into a refusal here.
    */
   async createChannel(name: string, description?: string): Promise<Channel> {
@@ -175,10 +184,10 @@ export class WwebjsChannels {
 
   /**
    * Not available on this engine, despite `Client.demoteChannelAdmin` existing and being typed
-   * `Promise<boolean>` (`index.d.ts:35`).
+   * `Promise<boolean>` (`index.d.ts`).
    *
    * The page body calls `window.require('WAWebDemoteNewsletterAdminAction').demoteNewsletterAdmin`
-   * (`Client.js:1907-1925`), and WhatsApp Web no longer provides that function. Measured against a
+   * (inside `Client.demoteChannelAdmin`), and WhatsApp Web no longer provides that function. Measured against a
    * live session on Web `2.3000.1044824727-alpha` with no version pin: the call rejects with
    * `TypeError: window.require(...).demoteNewsletterAdmin is not a function`, which reached the
    * caller as a bare 500.
@@ -203,7 +212,7 @@ export class WwebjsChannels {
 
   /**
    * Not available on this engine, despite `Client.transferChannelOwnership` existing and being typed
-   * `Promise<boolean>` (`index.d.ts:375`).
+   * `Promise<boolean>` (`index.d.ts`).
    *
    * `WAWebChangeNewsletterOwnerAction.changeNewsletterOwnerAction` is present — unlike the demote
    * path — but on WhatsApp Web `2.3000.1044824727-alpha` it rejects every call with
@@ -244,9 +253,12 @@ export class WwebjsChannels {
     request: string,
     refusal: string,
   ): Promise<void> {
-    const { status } = await withPageWrite(this.host, op, () =>
+    const answer = await withPageWrite(this.host, op, () =>
       (this.client() as unknown as { pupPage: EvaluatePage }).pupPage.evaluate(runChannelWriteInPage, write, channelId),
     );
+    // A page without whatsapp-web.js's helpers is reloading, and nothing was asked of WhatsApp: the retryable 409.
+    if (answer === 'no-helpers') throw new EnginePageReloadingError();
+    const { status } = answer;
     if (status >= 200 && status < 300) return;
     if (isRetryableStatus(status)) {
       throw new EngineTransportError(
@@ -312,11 +324,11 @@ export class WwebjsChannels {
   }
 
   // whatsapp-web.js `Client.subscribeToChannel(channelId)` takes a channel ID and resolves a
-  // boolean (index.d.ts:71; Client.js:2533) — the interface contract here is subscribe-by-INVITE-CODE
+  // boolean (index.d.ts, Client.subscribeToChannel) — the interface contract here is subscribe-by-INVITE-CODE
   // returning the subscribed Channel. The old wiring passed the invite code straight in and mapped
   // the returned boolean as if it were a Channel, fabricating `{ id: "undefined" }`: a reported
   // success that never subscribed anything. A real wiring is the two-step
-  // `getChannelByInviteCode(inviteCode)` (Client.js:1707) → `subscribeToChannel(channel.id)` flow;
+  // `getChannelByInviteCode(inviteCode)` → `subscribeToChannel(channel.id)` flow;
   // until that is verified against a live session, an honest 501 beats a phantom success.
   // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars
   async subscribeToChannel(_inviteCode: string): Promise<Channel> {
@@ -353,7 +365,7 @@ export class WwebjsChannels {
       throw new ChannelNotFoundError(channelId);
     }
     // wwebjs Channel.fetchMessages only honors a limit > 0: its load-earlier loop AND the final
-    // splice are both gated on `searchOptions.limit > 0` (Channel.js:352), so a 0/negative/NaN
+    // splice are both gated on `searchOptions.limit > 0` (Channel.js), so a 0/negative/NaN
     // limit fails OPEN and returns every loaded message. Substitute the default instead.
     const safeLimit = Number.isFinite(limit) && limit >= 1 ? Math.trunc(limit) : 50;
     const messages = await this.withPage('getChannelMessages', () => channel.fetchMessages({ limit: safeLimit }));

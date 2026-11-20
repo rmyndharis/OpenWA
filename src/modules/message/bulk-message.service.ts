@@ -45,7 +45,7 @@ import { HookManager } from '../../core/hooks';
 import { assertBase64LengthWithinMediaCap, assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
 import { stripBatchMediaPayloads } from './batch-media.util';
 import { logSsrfRefusal } from '../../common/media/client-facing-ssrf-error';
-import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
+import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE, urlCarriesCredentials } from '../../common/security/ssrf-guard';
 import { renderedLength, renderTemplate, TemplateRenderError } from '../../common/utils/template-render';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
@@ -967,8 +967,14 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     // Checked here rather than on the DTO because `variables` may supply the whole URL: before
     // rendering, a value holding a placeholder is left to the per-item check, which sees the rendered
     // (and plugin-rewritten) URL.
-    if (!(beforeRender && typeof media.url === 'string' && media.url.includes('{')) && !isMediaUrl(media.url)) {
-      throw new BadRequestException(`content.${type}.url must be an absolute http(s) URL`);
+    if (!(beforeRender && typeof media.url === 'string' && media.url.includes('{'))) {
+      if (!isMediaUrl(media.url)) {
+        throw new BadRequestException(`content.${type}.url must be an absolute http(s) URL`);
+      }
+      // The loader refuses it as well, but only item by item once the batch is accepted.
+      if (urlCarriesCredentials(media.url)) {
+        throw new BadRequestException(`content.${type}.url must not contain credentials (userinfo)`);
+      }
     }
   }
 

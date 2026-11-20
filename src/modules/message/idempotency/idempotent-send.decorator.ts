@@ -11,9 +11,11 @@ export const IDEMPOTENCY_KEY_HEADER_DESCRIPTION =
   'Errors from an engine send keep it taken whatever their HTTP status, including 409, unless the engine ' +
   'proves that nothing was sent: a transport failure or a not-ready 409 before the message was handed over ' +
   '(the session not ready, WhatsApp Web reloading its page, or a Baileys connection replaced or stopped ' +
-  'meanwhile), a WhatsApp rate limit, media it could not fetch, or, on Baileys, a sticker or preview image ' +
-  'it could not read, a recipient WhatsApp reports as not registered, or a quoted or forwarded message it ' +
-  'does not hold or holds under another chat.';
+  'meanwhile), a WhatsApp rate limit, media it could not fetch, a sticker it could not read or convert (on ' +
+  'whatsapp-web.js, one that is neither an image nor a video, or a video its host could not convert), a ' +
+  'quoted, replied-to or forwarded message it does not hold (on Baileys, or holds under another chat), a ' +
+  'send the engine cannot make (a 501), or, on Baileys, a preview image it could not read, a media upload ' +
+  "that WhatsApp's media host refused, or a recipient WhatsApp reports as not registered.";
 
 /**
  * Marks a send route as accepting the opt-in `Idempotency-Key` header: wires the interceptor and

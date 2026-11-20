@@ -683,8 +683,9 @@ once, so the session stops instead of being silently unlinked by WhatsApp about 
 > minutes later and the device disappears from the phone's Linked devices list. That miss is not
 > silent: when the watcher finds a visible dialog it cannot match, it logs a warning
 > (`action: onboarding_dialog_unrecognized`) carrying the dialog's heading and button labels, including
-> the label to add, minutes before the unlink would happen. Copy that label as printed: a multi-word
-> label works, and whitespace runs compare as one space. Because that path wipes the stored
+> the label to add, minutes before the unlink would happen. An icon with no text prints under its icon
+> name, so the lists can read `ic-close` beside `Continuar`: the label to add is the word, not the icon.
+> Copy that label as printed: a multi-word label works, and whitespace runs compare as one space. Because that path wipes the stored
 > credentials, the automatic reconnect comes back with a fresh QR on its own, so the session is
 > usually already sitting at `qr_ready` rather than needing a manual start. Acknowledge the modal once
 > in a browser signed in as that account, then scan the QR. It does not recur — the modal is shown
@@ -781,20 +782,20 @@ times out on slow first boot_ above).
 
 **Symptoms:**
 
-- API returns 200 but message not delivered
-- "Message send failed" errors
-- Messages stuck in queue
+- API returns `201` but the message is not delivered (`201` means accepted, not delivered; see "Send response" in the API reference)
+- A send fails inside the engine: the gateway logs `Send failed in the engine (<type>)` for an unclassified fault, a WhatsApp rate limit or a WhatsApp refusal (a validation refusal, a not-ready `409`, a `501`, a `503` other than a WhatsApp rate limit, and any failure raised before the message was handed to WhatsApp, such as a Baileys media upload the media host refused, log nothing)
+- A bulk batch stays in `processing`
 
 **Diagnostic:**
 
 ```bash
-# Check message history
+# Read what the gateway stored for the chat (works on both engines)
 curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions/{sessionId}/messages/{chatId}/history
+  "http://localhost:2785/api/sessions/{sessionId}/messages?chatId={chatId}"
 
-# Check queue / infra status (ADMIN)
+# Read a bulk batch: its status and the counters of its last checkpoint
 curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/infra/status
+  http://localhost:2785/api/sessions/{sessionId}/messages/batch/{batchId}
 
 # Rate limiting is env-configured, per route and client IP; there is no per-session rate-limit endpoint
 ```
@@ -849,12 +850,16 @@ about two more minutes.
 **Fix:** Retry on this `409`. Its body carries `code` `ENGINE_PAGE_RELOADING`, which tells it from
 every other conflict, and `retryAfterSeconds`, the interval to ask again at (5 seconds); keep asking
 for up to 5 minutes. A send it refuses was not handed to WhatsApp Web, so nothing was sent and its
-`Idempotency-Key` is freed. The one exception is a send whose first attempt had already run when the
-reload began: it answers a plain `409` that says the message may or may not have been sent, with no
-`code`, and keeps its key, so a retry with that key answers `409` `IDEMPOTENCY_OUTCOME_UNKNOWN`. A
-window that does not end, or that opens again and again, shows in the log as `could not re-inject` or
-as repeated `Page navigated` lines: see "Startup logs say install-time patches are missing" below and
-"Frequent Disconnections" above.
+`Idempotency-Key` is freed. The one exception is a send whose first attempt was running, or had run,
+when the reload began: it answers a plain `409` that says the message may or may not have been sent,
+with no `code`, and keeps its key, so a retry with that key answers `409`
+`IDEMPOTENCY_OUTCOME_UNKNOWN`. A status post that the reload cut short answers the same kind of
+`409`, saying the post may or may not have been published: check your status before posting it
+again. A window that does not end, or that opens again and again, shows in the log as
+`could not re-inject` or as repeated `Page navigated` lines: see "Startup logs say install-time
+patches are missing" below and "Frequent Disconnections" above. A warning `onboarding_dialog_unrecognized`
+next to the `Page navigated` line means WhatsApp's "What's new" screen is open in a language the gateway does
+not recognise: see "Session stuck at `action_required`" above.
 
 ### Issue: Sends return 500 "engine returned no message", and chats or media fail with `r: r`
 
@@ -909,7 +914,7 @@ rm -rf node_modules/whatsapp-web.js && npm ci
   `<status>` stanzas (the status-ack patch is missing, or is the 0.30.1 revision, which only
   acknowledged them)
 
-**Cause:** OpenWA applies fourteen exact source transforms to its engine libraries at install time
+**Cause:** OpenWA applies fifteen exact source transforms to its engine libraries at install time
 (docs/29 §29.3). The Docker image runs them without `--best-effort`, so a source shape a patcher
 cannot recognise fails the image build. Source installs run the Puppeteer compatibility transform
 without best-effort too, because browser teardown depends on it. The other transforms use
@@ -1304,8 +1309,12 @@ DATABASE_STATEMENT_TIMEOUT_MS=30000   # server-side per-query cap (default 30000
 **Solutions:**
 
 ```bash
-# Check for long-running queries (default SQLite file; override with DATABASE_NAME)
-sqlite3 ./data/openwa.sqlite ".timeout 30000"
+# SQLite has no list of running queries. Name the process that holds the file instead (default SQLite file; override
+# with DATABASE_NAME). On a host:
+lsof ./data/openwa.sqlite
+# In the container, which has ps but neither lsof nor fuser: look for a second sqlite3 session or a running
+# scripts/backup.sh
+docker exec <container> ps aux
 
 # Check WAL mode
 sqlite3 ./data/openwa.sqlite "PRAGMA journal_mode;"

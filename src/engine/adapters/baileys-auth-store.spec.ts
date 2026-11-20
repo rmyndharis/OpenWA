@@ -186,13 +186,17 @@ describe('engine library smoke export list', () => {
   const used = [.../const used = \[([^\]]*)\]/.exec(script)![1].matchAll(/'([^']+)'/g)].map(m => m[1]);
 
   const dir = path.join(root, 'src', 'engine');
-  const code = fs
+  const libDir = path.join(root, 'node_modules', '@whiskeysockets', 'baileys', 'lib');
+  const sources = fs
     .readdirSync(dir, { recursive: true, encoding: 'utf8' })
     .filter(f => f.endsWith('.ts') && !f.endsWith('.spec.ts'))
-    .map(f => fs.readFileSync(path.join(dir, f), 'utf8'))
-    .join('\n')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*\/\/.*$/gm, '');
+    .map(f =>
+      fs
+        .readFileSync(path.join(dir, f), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, ''),
+    );
+  const code = sources.join('\n');
 
   it('covers every export the engine code picks from the module', () => {
     const picked = [...code.matchAll(/Pick<typeof BaileysLib, ([^>]+)>/g)].flatMap(m =>
@@ -200,6 +204,34 @@ describe('engine library smoke export list', () => {
     );
     expect(picked).toEqual(expect.arrayContaining(['initAuthCreds', 'extractMessageContent']));
     expect(used).toEqual(expect.arrayContaining(picked));
+  });
+
+  // A function the adapter calls on the loaded module is read only when a message of its kind arrives, and a catch
+  // around the call hides its absence, so the smoke import is the one place that would see it gone.
+  it('covers every function the engine code calls on the loaded module', () => {
+    const called = new Set<string>();
+    for (const source of sources) {
+      // The module reaches the code as a parameter annotated with its type, or as the answer of loadLib().
+      const variables = [
+        ...[...source.matchAll(/\b(\w+): typeof BaileysLib\b/g)].map(m => m[1]),
+        ...[...source.matchAll(/\b(?:const|let) (\w+) = await [\w.]*loadLib\(\)/g)].map(m => m[1]),
+      ];
+      for (const variable of variables) {
+        for (const [, name] of source.matchAll(new RegExp(`\\b${variable}\\.([A-Za-z_]\\w*)\\(`, 'g')))
+          called.add(name);
+      }
+    }
+    expect([...called]).toEqual(
+      expect.arrayContaining(['decryptPollVote', 'normalizeMessageContent', 'prepareWAMessageMedia']),
+    );
+    // Only a name the library declares as an export: another variable named like the module's may call array methods.
+    const declarations = fs
+      .readdirSync(libDir, { recursive: true, encoding: 'utf8' })
+      .filter(f => f.endsWith('.d.ts'))
+      .map(f => fs.readFileSync(path.join(libDir, f), 'utf8'));
+    const declared = (name: string): boolean =>
+      declarations.some(text => new RegExp(`\\bexport declare (?:const|function|class) ${name}\\b`).test(text));
+    expect([...called].filter(name => declared(name) && !used.includes(name))).toEqual([]);
   });
 
   it('lists only exports the engine code still uses', () => {

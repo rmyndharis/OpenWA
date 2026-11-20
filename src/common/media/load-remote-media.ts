@@ -1,6 +1,6 @@
 import { BadRequestException, HttpException, PayloadTooLargeException } from '@nestjs/common';
 import { EngineNotSentError, markNothingSent } from '../errors/engine-not-sent.error';
-import { SsrfBlockedError, withSafeFetch } from '../security/ssrf-guard';
+import { SsrfBlockedError, urlCarriesCredentials, withSafeFetch } from '../security/ssrf-guard';
 import { urlFetchProxy } from '../security/proxy-dispatcher';
 import { createLogger } from '../services/logger.service';
 import { positiveIntFromEnv } from '../utils/env-int';
@@ -17,20 +17,6 @@ const DEFAULT_MEDIA_TIMEOUT_MS = 30_000;
  * 50 MiB media default would let one text send pull a video-sized body into memory.
  */
 export const LINK_PREVIEW_THUMBNAIL_MAX_BYTES = 5 * 1024 * 1024;
-
-/**
- * Whether a URL carries a user name or password: the exact condition undici refuses to build a request for,
- * with a TypeError no mapping below recognises. An empty userinfo (`http://@host/`) is accepted by undici, and
- * an unparsable URL is left to the SSRF guard, which names it.
- */
-function carriesCredentials(url: string): boolean {
-  try {
-    const { username, password } = new URL(url);
-    return username !== '' || password !== '';
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Fetch remote media as a Buffer for sending, with an SSRF host guard, a byte cap, and a timeout.
@@ -79,7 +65,7 @@ export async function loadRemoteMediaBuffer(
   );
   const timeoutMs = positiveIntFromEnv('MEDIA_DOWNLOAD_TIMEOUT_MS', DEFAULT_MEDIA_TIMEOUT_MS);
 
-  if (carriesCredentials(url)) {
+  if (urlCarriesCredentials(url)) {
     throw markNothingSent(new BadRequestException('Media URL must not contain credentials (userinfo)'));
   }
 

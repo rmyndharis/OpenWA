@@ -215,6 +215,7 @@ function SecretField({
         disabled={disabled || !value}
         onClick={async () => {
           if (await copyToClipboard(value)) toast.success(t('webhooks.auth.secretCopied'));
+          else toast.error(t('common.copyFailed'));
         }}
       >
         {t('webhooks.auth.copySecret')}
@@ -553,7 +554,7 @@ export function Webhooks() {
             <span className="hint error" role="status">
               {t(
                 'webhooks.filters.incomplete',
-                'Give every filter condition a value, and use at most 20 conditions, 100 values per condition and 1000 characters of text.',
+                'Give every filter condition a value, and use at most 20 conditions, 100 values per condition, 128 characters per ID and 1000 characters of text.',
               )}
             </span>
           )}
@@ -647,7 +648,7 @@ export function Webhooks() {
             <span className="hint error" role="status">
               {t(
                 'webhooks.filters.incomplete',
-                'Give every filter condition a value, and use at most 20 conditions, 100 values per condition and 1000 characters of text.',
+                'Give every filter condition a value, and use at most 20 conditions, 100 values per condition, 128 characters per ID and 1000 characters of text.',
               )}
             </span>
           )}

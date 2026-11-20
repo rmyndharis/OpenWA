@@ -105,6 +105,8 @@ const CONDITIONAL_THROW_SITES: Readonly<Record<string, string>> = {
     'wwjs setGroupMemberAddMode is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebWidFactory.createWid or WAWebSetPropertyGroupAction.setGroupProperty, which whatsapp-web.js setAddMembersAdminsOnly reads as well',
   'setProfilePicture(no write job on this build)':
     'wwjs setProfilePicture is supported; it answers 501 only on a WhatsApp Web build that lacks WAWebWidFactory.createWid, the ProfilePicThumb collection or WAWebContactProfilePicThumbBridge.sendSetPicture, which whatsapp-web.js setProfilePicture reads as well',
+  'getGroupJoinInfo(no invite preview job on this build)':
+    'wwjs getGroupJoinInfo is supported; it answers 501 only on a WhatsApp Web build whose WAWebGroupQueryJob has no queryGroupInvite, which whatsapp-web.js getInviteInfo calls',
   'joinGroupViaInviteCode(no join job on this build)':
     'wwjs joinGroupViaInviteCode is supported; it answers 501 only on a WhatsApp Web build that has no WAWebGroupInviteJob.joinGroupViaInvite, which whatsapp-web.js acceptInvite calls',
   'pinMessage(no compatible pin sender on this build)':

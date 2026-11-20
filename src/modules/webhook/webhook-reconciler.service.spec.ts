@@ -296,17 +296,46 @@ describe('WebhookReconcilerService', () => {
   });
 
   it('moves its cursor past rows a page read could not return, instead of reading them again', async () => {
-    // A page made only of rows whose stored payload is unreadable returns nothing, but it was scanned.
-    outbox.findStale.mockImplementationOnce((_cutoff, _limit, _after, onScanned?: (lastId: string) => void) => {
-      onScanned?.('row-9');
-      return Promise.resolve([]);
-    });
+    // A page made only of rows whose stored payload is unreadable returns nothing, but it was scanned, and it filled
+    // its batch: more rows may lie behind it.
+    outbox.findStale.mockImplementationOnce(
+      (_cutoff, _limit, _after, onScanned?: (lastId: string, covered: number) => void) => {
+        onScanned?.('row-9', OPTS.batchSize);
+        return Promise.resolve([]);
+      },
+    );
 
     await service.sweep(OPTS);
     expect(outbox.findStale).toHaveBeenCalledTimes(1);
 
     await service.sweep(OPTS);
     expect((outbox.findStale.mock.calls as unknown[][])[1][2]).toBe('row-9');
+  });
+
+  it('starts the next pass at the oldest row when a page did not fill its batch', async () => {
+    outbox.findStale.mockImplementationOnce(
+      (_cutoff, _limit, _after, onScanned?: (lastId: string, covered: number) => void) => {
+        onScanned?.('row-3', 3); // three unreadable rows and the end of the stale rows
+        return Promise.resolve([]);
+      },
+    );
+
+    await service.sweep(OPTS);
+    await service.sweep(OPTS);
+
+    expect((outbox.findStale.mock.calls as unknown[][])[1][2]).toBeUndefined();
+  });
+
+  it('keeps its cursor behind a page of readable rows that filled the batch, and drops it behind one that did not', async () => {
+    const page = (size: number) => Array.from({ length: size }, (_, index) => row({ id: `row-${index}` }));
+    outbox.findStale.mockResolvedValueOnce(page(OPTS.batchSize)).mockResolvedValueOnce(page(OPTS.batchSize - 1));
+
+    await service.sweep(OPTS);
+    await service.sweep(OPTS);
+    await service.sweep(OPTS);
+
+    const afters = (outbox.findStale.mock.calls as unknown[][]).map(call => call[2]);
+    expect(afters).toEqual([undefined, `row-${OPTS.batchSize - 1}`, undefined]);
   });
 
   it('never stacks a second pass on top of a slow one', async () => {

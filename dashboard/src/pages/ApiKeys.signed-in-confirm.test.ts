@@ -6,6 +6,7 @@ import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { decl, readRules } from '../test-helpers/css-rules.ts';
 
 let rtl: typeof import('@testing-library/react');
 let ApiKeys: (typeof import('./ApiKeys.tsx'))['ApiKeys'];
@@ -22,6 +23,8 @@ const signedInKey = {
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 const otherKey = { ...signedInKey, id: 'key-2', name: 'support-bot', keyPrefix: 'owa_k2cd' };
+/** The keys the list answers; a test sets its own and afterEach restores these two. */
+let keys: Array<typeof signedInKey> = [signedInKey, otherKey];
 
 const SIGNED_IN_NOTE = 'This dashboard is signed in with this key. Revoking or deleting it signs you out.';
 
@@ -30,7 +33,7 @@ before(async () => {
   await installJsdomGlobals();
   globalThis.fetch = ((input: RequestInfo | URL): Promise<Response> => {
     const path = String(input).replace(/^https?:\/\/[^/]+/, '');
-    const body = path === '/api/auth/api-keys' ? [signedInKey, otherKey] : path === '/api/sessions' ? [] : {};
+    const body = path === '/api/auth/api-keys' ? keys : path === '/api/sessions' ? [] : {};
     return Promise.resolve(
       new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
@@ -43,14 +46,15 @@ before(async () => {
 });
 
 afterEach(() => {
+  keys = [signedInKey, otherKey];
   rtl.cleanup();
   queryClient?.clear();
   queryClient = undefined;
   window.sessionStorage.removeItem('openwa_api_key');
 });
 
-/** The confirmation dialog `action` opens on the row of the key called `name`, the dashboard signed in with billing-bot. */
-async function openConfirm(action: 'Revoke' | 'Delete', name: string): Promise<HTMLElement> {
+/** The page listing `keys`, the dashboard signed in with billing-bot, once the row of the key called `name` is there. */
+async function renderKeys(name: string): Promise<void> {
   window.sessionStorage.setItem('openwa_api_key', 'owa_k1abXXXXYYYYZZZZ');
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   rtl.render(
@@ -61,6 +65,11 @@ async function openConfirm(action: 'Revoke' | 'Delete', name: string): Promise<H
     ),
   );
   await rtl.screen.findByText(name);
+}
+
+/** The confirmation dialog `action` opens on the row of the key called `name`, the dashboard signed in with billing-bot. */
+async function openConfirm(action: 'Revoke' | 'Delete', name: string): Promise<HTMLElement> {
+  await renderKeys(name);
   const row = rtl.screen.getByText(name).closest('tr') as HTMLElement;
   rtl.fireEvent.click(rtl.within(row).getByTitle(action));
   return rtl.screen.findByRole('dialog');
@@ -81,3 +90,38 @@ for (const action of ['Revoke', 'Delete'] as const) {
     assert.equal(rtl.within(dialog).getByText(otherKey.name).tagName, 'STRONG');
   });
 }
+
+// The note is a paragraph of its own under the confirmation sentence, which sets no margin below it: the amber box
+// started on the sentence's last line.
+test('the sign-out note keeps a gap from the sentence above it', () => {
+  const rules = readRules(new URL('./ApiKeys.css', import.meta.url));
+  const gap = rules
+    .filter(r => r.selectors.some(s => s.endsWith('.confirm-message + .key-signed-in-warning')))
+    .map(r => decl(r.body, 'margin-top'));
+  assert.deepEqual(gap, ['1rem']);
+});
+
+// The name of a key is free text. Written as a placeholder in a translated sentence it was interpolated a second time,
+// so a name that holds {{name}} came back as the name inside the name.
+for (const action of ['Revoke', 'Delete'] as const) {
+  test(`the ${action} confirmation shows a key name that holds braces exactly as it was typed`, async () => {
+    const name = 'A {{name}} B {{- name}}';
+    keys = [{ ...signedInKey, id: 'key-3', name, keyPrefix: 'owa_k3ef' }, signedInKey];
+
+    const dialog = await openConfirm(action, name);
+
+    assert.equal(rtl.within(dialog).getByText(name).tagName, 'STRONG');
+    assert.equal((dialog.textContent ?? '').split(name).length - 1, 1, 'the name is shown once');
+  });
+}
+
+// The list carries only the prefix of a key and the Key column masks the rest with asterisks. The bootstrap key seeded
+// from API_MASTER_KEY has a marker where a prefix would be, which is no key text to mask.
+test('the Key column masks a key prefix but shows the master key marker as it is', async () => {
+  keys = [{ ...signedInKey, id: 'key-m', name: 'bootstrap', keyPrefix: '(master key)' }, signedInKey];
+
+  await renderKeys('bootstrap');
+
+  const cells = [...document.querySelectorAll('.key-cell code')].map(cell => cell.textContent);
+  assert.deepEqual(cells, ['(master key)', 'owa_k1ab****']);
+});

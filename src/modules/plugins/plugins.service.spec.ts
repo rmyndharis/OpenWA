@@ -1197,6 +1197,157 @@ describe('PluginsService — recovering a plugin whose code went missing', () =>
     write.mockRestore();
   });
 
+  describe('when a later entry of a reinstall fails to write', () => {
+    // A name over the 255-byte limit fails the write on every filesystem, after the entries before it were written.
+    const TOO_LONG = `${'z'.repeat(300)}.txt`;
+    const pkgWith = (files: Array<[string, string]>): Buffer => {
+      const z = new AdmZip();
+      z.addFile('manifest.json', Buffer.from(JSON.stringify(manifest)));
+      z.addFile('index.js', Buffer.from('module.exports = class {};'));
+      for (const [name, content] of files) z.addFile(name, Buffer.from(content));
+      return z.toBuffer();
+    };
+    const listing = (): string[] => fs.readdirSync(path.join(pluginsDir, 'svc-plg')).sort();
+
+    it('puts back a stored file that the package also ships', () => {
+      const { service, storage } = orphan();
+      fs.writeFileSync(path.join(pluginsDir, 'svc-plg', 'other.json'), '{"keep":true}');
+      const before = listing();
+
+      expect(() =>
+        service.install({
+          buffer: pkgWith([
+            ['key-abc.json', '{"shippedByPackage":true}'],
+            [TOO_LONG, 'x'],
+          ]),
+        }),
+      ).toThrow(BadRequestException);
+
+      // The replaced file has its bytes back, the files the install created are gone, the rest was never touched.
+      expect(listing()).toEqual(before);
+      expect(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'key-abc.json'), 'utf8')).toBe('{"lastId":"msg-42"}');
+      expect(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'other.json'), 'utf8')).toBe('{"keep":true}');
+      expect(storage.getPluginConfig('svc-plg')).toEqual({ token: 'keep-me' });
+    });
+
+    it('removes a subdirectory the failed install created', () => {
+      const { service } = orphan();
+
+      expect(() =>
+        service.install({
+          buffer: pkgWith([
+            ['lib/deep/x.txt', 'x'],
+            [TOO_LONG, 'x'],
+          ]),
+        }),
+      ).toThrow(BadRequestException);
+
+      expect(listing()).toEqual(['key-abc.json']);
+    });
+
+    it('removes the directories a mkdir created before it failed', () => {
+      const { service } = orphan();
+
+      // mkdir creates "docs" and then fails on the component past the 255-byte name limit.
+      expect(() => service.install({ buffer: pkgWith([[`docs/${'z'.repeat(300)}/readme.txt`, 'x']]) })).toThrow(
+        BadRequestException,
+      );
+
+      expect(listing()).toEqual(['key-abc.json']);
+    });
+
+    it('removes a new file whose write failed midway', () => {
+      const { service } = orphan();
+      const write = fs.writeFileSync;
+      // The write of a new file leaves part of it behind, as a full disk does, and then fails.
+      const spy = jest.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+        if (String(file).endsWith('fresh.js')) {
+          write(file, 'module.exp');
+          throw new Error('disk full');
+        }
+        write(file, data, options);
+      });
+
+      try {
+        expect(() => service.install({ buffer: pkgWith([['fresh.js', 'module.exports = 1;']]) })).toThrow(
+          /Failed to install plugin: disk full/,
+        );
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(listing()).toEqual(['key-abc.json']);
+    });
+
+    it('puts back a stored file whose replacement failed midway', () => {
+      const { service } = orphan();
+      const write = fs.writeFileSync;
+      // The write of the stored file's replacement empties it, as a full disk does, and then fails.
+      const spy = jest.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+        if (String(file).endsWith('key-abc.json') && Buffer.isBuffer(data) && data.toString().includes('shipped')) {
+          write(file, '');
+          throw new Error('disk full');
+        }
+        write(file, data, options);
+      });
+
+      try {
+        expect(() => service.install({ buffer: pkgWith([['key-abc.json', '{"shippedByPackage":true}']]) })).toThrow(
+          /Failed to install plugin: disk full/,
+        );
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'key-abc.json'), 'utf8')).toBe('{"lastId":"msg-42"}');
+      expect(listing()).toEqual(['key-abc.json']);
+    });
+
+    it('puts back the files of the version the reinstall was replacing', () => {
+      const { service } = orphan();
+      fs.writeFileSync(path.join(pluginsDir, 'svc-plg', 'index.js'), 'previous version');
+
+      expect(() => service.install({ buffer: pkgWith([[TOO_LONG, 'x']]) })).toThrow(BadRequestException);
+
+      expect(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'index.js'), 'utf8')).toBe('previous version');
+      expect(listing()).toEqual(['index.js', 'key-abc.json']);
+    });
+
+    it('keeps a stored file the package does not ship, as before', () => {
+      const { service } = orphan();
+
+      expect(() => service.install({ buffer: pkgWith([[TOO_LONG, 'x']]) })).toThrow(BadRequestException);
+
+      expect(listing()).toEqual(['key-abc.json']);
+      expect(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'key-abc.json'), 'utf8')).toContain('msg-42');
+    });
+
+    it('still answers why the install failed when a replaced file cannot be put back', () => {
+      const { service } = orphan();
+      const write = fs.writeFileSync;
+      const spy = jest.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+        // Only the undo writes the stored bytes back; every write of the install itself carries package bytes.
+        if (Buffer.isBuffer(data) && data.toString() === '{"lastId":"msg-42"}') throw new Error('disk full');
+        write(file, data, options);
+      });
+
+      try {
+        expect(() =>
+          service.install({
+            buffer: pkgWith([
+              ['key-abc.json', '{"shippedByPackage":true}'],
+              [TOO_LONG, 'x'],
+            ]),
+          }),
+        ).toThrow(/Failed to install plugin: .*ENAMETOOLONG/);
+      } finally {
+        spy.mockRestore();
+      }
+      // The files created by the install are still removed.
+      expect(listing()).toEqual(['key-abc.json']);
+    });
+  });
+
   it('answers a conflict, not a crash, when a package entry path is occupied by a directory', () => {
     // The write fails with EISDIR, and the rollback's `rmSync(..., { force: true })` fails the same
     // way — `force` suppresses ENOENT, not EISDIR — so without care the second throw escapes the

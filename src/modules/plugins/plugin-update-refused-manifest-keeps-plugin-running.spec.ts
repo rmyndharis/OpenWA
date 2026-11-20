@@ -51,7 +51,7 @@ const packageOf = (version: string, extra: Record<string, unknown> = {}): Buffer
   return zip.toBuffer();
 };
 
-const route = (signature: { scheme: string }): Record<string, unknown> => ({
+const route = (signature: Record<string, unknown>): Record<string, unknown> => ({
   route: 'hook',
   mode: 'async',
   verify: 'core',
@@ -76,6 +76,18 @@ const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
     'an ingress declaration without the permission for it',
     { permissions: [], ingress: [route({ scheme: 'shared-secret' })] },
     /missing the 'webhook:ingress' permission/,
+  ],
+  [
+    'an ingress written as one route instead of a list',
+    { ingress: route({ scheme: 'shared-secret' }) },
+    /Plugin demo: ingress must be a list of routes/,
+  ],
+  ['an ingress written as true', { ingress: true }, /Plugin demo: ingress must be a list of routes/],
+  ['an ingress written as a number', { ingress: 7 }, /Plugin demo: ingress must be a list of routes/],
+  [
+    'an hmac route whose contentTemplate is not a string',
+    { ingress: [route({ scheme: 'hmac-sha256', header: 'x-sig', contentTemplate: 5 })] },
+    /route 'hook' signature\.contentTemplate must be a string/,
   ],
 ];
 

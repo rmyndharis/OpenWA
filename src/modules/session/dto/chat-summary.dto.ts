@@ -20,9 +20,9 @@ export class ChatSummaryDto {
 
   @ApiPropertyOptional({
     description:
-      'Phone digits of a 1:1 chat WhatsApp holds under a privacy id (@lid), when this session can map it. ' +
-      'Absent for a phone-keyed chat and when the mapping is unknown. Not a display name: an unnamed chat ' +
-      'is titled from these digits, and a saved name still wins.',
+      'Baileys only; whatsapp-web.js lists none. Phone digits of a 1:1 chat WhatsApp holds under a privacy id ' +
+      '(@lid), when this session can map it. Absent for a phone-keyed chat and when the mapping is unknown. ' +
+      'Not a display name: an unnamed chat is titled from these digits, and a saved name still wins.',
     example: '5491154759191',
   })
   phone?: string;

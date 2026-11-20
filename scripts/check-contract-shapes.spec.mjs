@@ -114,7 +114,7 @@ test('comparePair flags a widened union and an enum mismatch at token level', ()
   };
   const diffs = comparePair('Sample', hand, 'SampleDto', schemas.SampleDto, schemas);
   assert.ok(diffs.some(d => d.includes('"direction": hand string, contract enum(["incoming","outgoing"])')));
-  assert.ok(diffs.some(d => d.includes('"count": hand number|null, contract number')));
+  assert.ok(diffs.some(d => d.includes('"count": hand number|null, contract integer')));
 });
 
 test('comparePair flags a primitive widened to a union of primitives', () => {
@@ -127,7 +127,112 @@ test('comparePair flags a primitive widened to a union of primitives', () => {
   };
   const diffs = comparePair('Sample', hand, 'SampleDto', schemas.SampleDto, schemas);
   assert.ok(diffs.some(d => d.includes('"id": hand union(number,string), contract string')));
-  assert.ok(diffs.some(d => d.includes('"count": hand union(int,str), contract number')));
+  assert.ok(diffs.some(d => d.includes('"count": hand union(int,str), contract integer')));
+});
+
+// A contract integer is a whole number: JavaScript's one number type and every integer kind carry it, and a float kind
+// does not (the gateway answers 400 for a fraction where a field is validated as an integer). A contract number takes
+// every kind. Each case parses a declaration in the style of its client, so the kind maps are held to the rule too.
+const field = schema => ({ type: 'object', required: ['n'], properties: { n: schema } });
+const declare = {
+  typescript: type => parseHandTypes(`export interface S {\n  n: ${type};\n}\n`).S,
+  python: type => parsePythonTypes(`class S(TypedDict):\n    n: ${type}\n`).S,
+  go: type => parseGoTypes([`type S struct {\n\tN ${type} \`json:"n"\`\n}\n`]).S,
+  java: type => parseJavaTypes([`public record S(${type} n) {}`]).S,
+};
+const diffsOf = (client, type, schema) =>
+  comparePair('S', declare[client](type), 'SDto', field(schema), {}, client !== 'java');
+const WHOLE = [
+  ['typescript', 'number'],
+  ['python', 'int'],
+  ['go', 'int'],
+  ['go', 'int64'],
+  ['java', 'int'],
+  ['java', 'long'],
+  ['java', 'Integer'],
+  ['java', 'Long'],
+];
+const FRACTIONAL = [
+  ['python', 'float'],
+  ['go', 'float64'],
+  ['java', 'double'],
+  ['java', 'Double'],
+];
+
+for (const [client, type] of [...WHOLE, ...FRACTIONAL]) {
+  test(`a contract number takes ${client} ${type}`, () => {
+    assert.deepEqual(diffsOf(client, type, { type: 'number' }), []);
+  });
+}
+
+for (const [client, type] of WHOLE) {
+  test(`a contract integer takes ${client} ${type}`, () => {
+    assert.deepEqual(diffsOf(client, type, { type: 'integer' }), []);
+  });
+}
+
+for (const [client, type] of FRACTIONAL) {
+  test(`a contract integer refuses ${client} ${type}, which admits a fraction`, () => {
+    assert.deepEqual(diffsOf(client, type, { type: 'integer' }), ['"n": hand float, contract integer']);
+  });
+}
+
+test('the integer rule holds through a null arm and an array', () => {
+  const nullable = { type: 'integer', nullable: true };
+  assert.deepEqual(diffsOf('python', 'Optional[int]', nullable), []);
+  assert.deepEqual(diffsOf('python', 'Optional[float]', nullable), ['"n": hand float|null, contract integer|null']);
+  assert.deepEqual(diffsOf('go', '*int64', nullable), []);
+  assert.deepEqual(diffsOf('go', '*float64', nullable), ['"n": hand float|null, contract integer|null']);
+  assert.deepEqual(diffsOf('java', 'Long', nullable), []);
+  assert.deepEqual(diffsOf('java', 'Double', nullable), ['"n": hand float, contract integer']);
+  const list = { type: 'array', items: { type: 'integer' } };
+  assert.deepEqual(diffsOf('typescript', 'number[]', list), []);
+  assert.deepEqual(diffsOf('python', 'list[int]', list), []);
+  assert.deepEqual(diffsOf('python', 'list[float]', list), ['"n": hand array<float>, contract array<integer>']);
+  assert.deepEqual(diffsOf('go', '[]float64', list), ['"n": hand array<float>, contract array<integer>']);
+});
+
+// A client that deliberately types one field as a float for an integer contract (FLOAT_FOR_INTEGER) keeps every other
+// field of that pair compared: listing the whole pair as names-only dropped the vocabulary of its other field too.
+test('a listed float field accepts the float and leaves the rest of its pair compared', () => {
+  const schema = {
+    type: 'object',
+    required: ['type', 'startTime'],
+    properties: { type: { type: 'string', enum: ['video', 'voice'] }, startTime: { type: 'integer' } },
+  };
+  const hand = parseGoTypes([
+    'type S struct {\n\tType string `json:"type"`\n\tStartTime float64 `json:"startTime"`\n}\n',
+  ]).S;
+  assert.deepEqual(comparePair('S', hand, 'SDto', schema, {}, true, false, ['startTime']), [
+    '"type": hand string, contract enum(["video","voice"])',
+  ]);
+  assert.deepEqual(comparePair('S', hand, 'SDto', schema, {}, true, false), [
+    '"type": hand string, contract enum(["video","voice"])',
+    '"startTime": hand float, contract integer',
+  ]);
+});
+
+test('a float field that is not listed still fails, and only an integer contract takes the allowance', () => {
+  const schema = { type: 'object', required: ['n'], properties: { n: { type: 'integer' } } };
+  const hand = parseGoTypes(['type S struct {\n\tN float64 `json:"n"`\n}\n']).S;
+  assert.deepEqual(comparePair('S', hand, 'SDto', schema, {}, true, false, ['other']), [
+    '"n": hand float, contract integer',
+  ]);
+  const text = { type: 'object', required: ['n'], properties: { n: { type: 'string' } } };
+  assert.deepEqual(comparePair('S', hand, 'SDto', text, {}, true, false, ['n']), ['"n": hand float, contract string']);
+});
+
+test('the Java numeric enum rescue takes a scalar number and not a list of them', () => {
+  const schema = { type: 'number', enum: [86400, 604800] };
+  assert.deepEqual(diffsOf('java', 'Integer', schema), []);
+  assert.equal(diffsOf('java', 'List<Integer>', schema).length, 1);
+});
+
+test('an absent-or-null Go pointer takes an integer contract only as an integer kind', () => {
+  const schema = { type: 'object', properties: { n: { type: 'integer', nullable: true } } };
+  const go = type => parseGoTypes([`type S struct {\n\tN *${type} \`json:"n,omitempty"\`\n}\n`]).S;
+  assert.deepEqual(comparePair('S', go('int64'), 'SDto', schema, {}), []);
+  assert.deepEqual(comparePair('S', go('float64'), 'SDto', schema, {}), ['"n": hand float, contract integer|null']);
 });
 
 test('comparePair fails a field whose hand type it cannot read instead of skipping it', () => {
@@ -192,7 +297,8 @@ test('schemaToken honors the OpenAPI 3.0 sibling nullable flag', () => {
   const nullableSchema = { type: 'string', nullable: true };
   assert.equal(schemaToken(nullableSchema, {}), 'string|null');
   assert.equal(schemaToken({ type: 'string' }, {}), 'string');
-  assert.equal(schemaToken({ type: 'integer', nullable: true }, {}), 'number|null');
+  assert.equal(schemaToken({ type: 'integer', nullable: true }, {}), 'integer|null');
+  assert.equal(schemaToken({ type: 'number' }, {}), 'number');
 });
 
 test('parseHandTypes resolves `extends` — inherited fields are not "missing"', () => {
@@ -276,7 +382,7 @@ test('parseJavaTypes: javadoc between components must not drop fields', () => {
   const src = 'public record Sample(\n    String id,\n    /** documented */\n    Long count) {}\n';
   const types = parseJavaTypes([src]);
   assert.deepEqual(Object.keys(types.Sample), ['id', 'count']);
-  assert.equal(types.Sample.count.token, 'number');
+  assert.equal(types.Sample.count.token, 'integer');
 });
 
 test('parsePythonTypes: a Literal of bare numbers is an enum, not an unreadable token', () => {
@@ -430,13 +536,13 @@ test('parseJavaTypes: a generic carrying a comma is one component, not two', () 
   assert.equal(s.config.token, 'dict');
 });
 
-test('parseJavaTypes: boxed numerics reduce to number rather than their class name', () => {
+test('parseJavaTypes: boxed numerics reduce to their kind rather than their class name', () => {
   // `Double` fell through to the bare class name, which is not a simple token, so comparePair
   // skipped the field: a Double component against a string contract reported nothing.
   const s = parseJavaTypes(['public record Sample(Double a, Float b, Short c, Byte d) {}']).Sample;
   assert.deepEqual(
     Object.values(s).map(v => v.token),
-    ['number', 'number', 'number', 'number'],
+    ['float', 'float', 'integer', 'integer'],
   );
   const schema = { type: 'object', required: ['a'], properties: { a: { type: 'string' } } };
   assert.equal(comparePair('Sample', { a: s.a }, 'Dto', schema, {}, false).length, 1);
@@ -627,6 +733,26 @@ function runGateOnCopy({
 function editSource(source, from, to) {
   assert.ok(source.includes(from), `the gate source no longer contains ${JSON.stringify(from)}: move this anchor`);
   return source.replace(from, to);
+}
+
+/** The Go struct with the JSON name of one field changed, failing loudly when the struct or the field has moved. */
+function renameWireField(source, type, from, to) {
+  const start = source.indexOf(`type ${type} struct {`);
+  assert.ok(start >= 0, `${type} is not in this Go source any more`);
+  const end = source.indexOf('\n}', start);
+  const body = source.slice(start, end);
+  assert.ok(body.includes(`json:"${from}`), `${type} has no wire field ${from} any more`);
+  return source.slice(0, start) + body.replace(`json:"${from}`, `json:"${to}`) + source.slice(end);
+}
+
+/** The TypeScript interface with one member renamed, failing loudly when the interface or the member has moved. */
+function renameTsField(source, type, from, to) {
+  const start = source.indexOf(`export interface ${type} {`);
+  assert.ok(start >= 0, `${type} is not in this source any more`);
+  const end = source.indexOf('\n}', start);
+  const body = source.slice(start, end);
+  assert.ok(new RegExp(`\\n  ${from}\\??:`).test(body), `${type} has no member ${from} any more`);
+  return source.slice(0, start) + body.replace(new RegExp(`\\n  ${from}(\\??):`), `\n  ${to}$1:`) + source.slice(end);
 }
 
 /** One more exposed route, answering a payload that no client maps. */
@@ -836,6 +962,50 @@ test('the gate refuses a mapping whose size differs from its floor', () => {
     /\d+ mapped pairs for sdk\/java \(model\/\*\.java\), above its floor of \d+: raise the floor/,
   );
 });
+
+// A pair excluded for a field type that is deliberately loose still has its field names compared: a renamed field in
+// it fails the run, which listing the whole pair as excluded let through.
+for (const [what, run] of [
+  [
+    'a Go create webhook request',
+    () =>
+      runGateOnCopy({
+        sdk: { 'sdk/go/types_webhook.go': s => renameWireField(s, 'CreateWebhookRequest', 'url', 'uri') },
+      }),
+  ],
+  [
+    'a Go update webhook request',
+    () =>
+      runGateOnCopy({
+        sdk: { 'sdk/go/types_webhook.go': s => renameWireField(s, 'UpdateWebhookRequest', 'url', 'uri') },
+      }),
+  ],
+  [
+    'a Go webhook response',
+    () =>
+      runGateOnCopy({ sdk: { 'sdk/go/types_webhook.go': s => renameWireField(s, 'WebhookResponse', 'url', 'uri') } }),
+  ],
+  [
+    'a Go membership request action request',
+    () =>
+      runGateOnCopy({
+        sdk: {
+          'sdk/go/types_group.go': s => renameWireField(s, 'MembershipRequestActionRequest', 'participants', 'members'),
+        },
+      }),
+  ],
+  ['a dashboard webhook', () => runGateOnCopy({ dashboardTypes: api => renameTsField(api, 'Webhook', 'url', 'uri') })],
+  [
+    'a dashboard session',
+    () => runGateOnCopy({ dashboardTypes: api => renameTsField(api, 'Session', 'name', 'title') }),
+  ],
+]) {
+  test(`a renamed field of ${what} fails the gate`, () => {
+    const result = run();
+    assert.equal(result.status, 1, result.output);
+    assert.match(result.output, /(uri|members|title)/);
+  });
+}
 
 test('the gate refuses a NAMES_ONLY entry whose pair is not excluded', () => {
   // An entry left behind after a pair is retyped and un-excluded would keep the weaker name-only comparison.

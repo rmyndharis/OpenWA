@@ -187,6 +187,128 @@ describe('validateIngressManifest', () => {
   });
 });
 
+describe('validateIngressManifest: a declaration the load-time warnings cannot read', () => {
+  // warnUnauthenticatedIngressRoutes iterates `ingress` and warnUnsignedTimestampRoutes calls `includes` on an hmac-sha256
+  // template, so the loader refused some of these by throwing from a warning, with an engine text and no field named, and an
+  // update had already stopped the running plugin by then. The rest loaded and then failed, an empty string when the plugin
+  // was enabled and an array template at every delivery. All are refused up front, naming the field.
+  const withIngress = (ingress: unknown) => ({ ...baseManifest(), ingress }) as never;
+  const withTemplate = (contentTemplate: unknown, scheme = 'hmac-sha256') =>
+    manifestWithRoute({ signature: { scheme, header: 'X-Sig', contentTemplate } });
+
+  it.each([
+    ['one route instead of a list', baseManifest().ingress[0]],
+    ['an empty object', {}],
+    ['true', true],
+    ['false', false],
+    ['zero', 0],
+    ['a positive number', 7],
+    ['a negative number', -1],
+    ['an empty string', ''],
+    ['a string', 'chatwoot'],
+  ])('refuses ingress written as %s, naming the field', (_label, ingress) => {
+    expect(() => validateIngressManifest(withIngress(ingress))).toThrow(
+      'Plugin chatwoot: ingress must be a list of routes',
+    );
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['null', null],
+    ['an empty list', []],
+  ])('still accepts ingress written as %s', (_label, ingress) => {
+    expect(() => validateIngressManifest(withIngress(ingress))).not.toThrow();
+  });
+
+  it.each([5, 0, true, false, {}, { template: '{rawBody}' }, ['{rawBody}'], []])(
+    'refuses an hmac-sha256 contentTemplate of %p, naming the route and the field',
+    contentTemplate => {
+      expect(() => validateIngressManifest(withTemplate(contentTemplate))).toThrow(
+        "Plugin p: route 'r' signature.contentTemplate must be a string",
+      );
+    },
+  );
+
+  it.each([
+    ['a template with tokens', '{timestamp}.{rawBody}'],
+    ['an empty template', ''],
+    ['an absent template', undefined],
+    ['a null template', null],
+  ])('accepts an hmac-sha256 route with %s', (_label, contentTemplate) => {
+    expect(() => validateIngressManifest(withTemplate(contentTemplate))).not.toThrow();
+  });
+
+  it.each(['shared-secret', 'standard-webhooks'])('does not read contentTemplate on a %s route', scheme => {
+    expect(() => validateIngressManifest(withTemplate(5, scheme))).not.toThrow();
+  });
+
+  // The delivery path lower-cases these names to read the request headers, so a non-string one fails every delivery with
+  // a TypeError: for conversationId.header only after the delivery was stored, which leaves a row no sweep can replay.
+  it.each([
+    ['signature.header', { signature: { scheme: 'hmac-sha256', header: 5 } }],
+    ['signature.header', { signature: { scheme: 'shared-secret', header: 5 } }],
+    ['signature.timestampHeader', { signature: { scheme: 'hmac-sha256', header: 'X-Sig', timestampHeader: 5 } }],
+    ['signature.dedupHeader', { signature: { scheme: 'hmac-sha256', header: 'X-Sig', dedupHeader: 5 } }],
+    ['dedupHeader', { dedupHeader: ['X-Delivery'] }],
+    ['conversationId.header', { conversationId: { header: 5 } }],
+  ])('refuses a route whose %s is not a string, naming the route and the field', (field, overrides) => {
+    const base = { signature: { scheme: 'hmac-sha256', header: 'X-Sig' } };
+    expect(() => validateIngressManifest(manifestWithRoute({ ...base, ...overrides }))).toThrow(
+      `Plugin p: route 'r' ${field} must be a string`,
+    );
+  });
+
+  it('accepts string and absent header names, and does not hold a scheme to the headers it never reads', () => {
+    const named = { signature: { scheme: 'hmac-sha256', header: 'X-Sig', timestampHeader: 'X-Ts', dedupHeader: null } };
+    for (const overrides of [
+      named,
+      { ...named, dedupHeader: 'X-Delivery', conversationId: { header: 'X-Conversation' } },
+      { signature: { scheme: 'standard-webhooks', header: 5, timestampHeader: 5, dedupHeader: 'webhook-id' } },
+      { signature: { scheme: 'none', header: 5 } },
+    ]) {
+      expect(() => validateIngressManifest(manifestWithRoute(overrides), true)).not.toThrow();
+    }
+  });
+
+  // Seeded, so a failure names the same declaration on every run. Whatever the validator accepts, the loader's warnings
+  // must be able to read.
+  it('accepts no declaration the load-time warnings then throw on', () => {
+    let seed = 1;
+    const next = (): number => {
+      seed = (seed + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(seed ^ (seed >>> 15), seed | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const junk: unknown[] = [undefined, null, 0, 7, -1, true, false, '', 'x', [], {}, [1], { a: 1 }];
+    const pick = <T>(xs: T[]): T => xs[Math.floor(next() * xs.length)];
+    const warn = { warn: () => undefined };
+    let accepted = 0;
+    for (let i = 0; i < 4000; i++) {
+      const signature: Record<string, unknown> = {
+        scheme: pick(['hmac-sha256', 'shared-secret', 'standard-webhooks']),
+      };
+      for (const key of ['header', 'timestampHeader', 'contentTemplate', 'dedupHeader']) {
+        if (next() < 0.4) signature[key] = pick(junk);
+      }
+      const route: Record<string, unknown> = { route: 'hook', signature: next() < 0.9 ? signature : pick(junk) };
+      const ingress = pick([[route], [route], route, pick(junk), [route, null]]);
+      const manifest = JSON.parse(
+        JSON.stringify({ id: 'p', permissions: ['webhook:ingress'], ingress: ingress ?? null }),
+      ) as never;
+      try {
+        validateIngressManifest(manifest);
+      } catch {
+        continue;
+      }
+      accepted++;
+      expect(() => warnUnauthenticatedIngressRoutes(manifest, warn)).not.toThrow();
+      expect(() => warnUnsignedTimestampRoutes(manifest, warn)).not.toThrow();
+    }
+    expect(accepted).toBeGreaterThan(500); // a vacuous loop would pass too
+  });
+});
+
 describe('validateIngressManifest: signature.scheme "none" opt-in gate', () => {
   // A none-scheme route is an unauthenticated @Public endpoint that can trigger WhatsApp sends.
   // It must be rejected at load unless the operator explicitly opted in via ALLOW_UNSIGNED_INGRESS.

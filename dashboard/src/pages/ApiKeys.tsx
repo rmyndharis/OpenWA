@@ -395,7 +395,7 @@ export function ApiKeys() {
     if (await copyToClipboard(text)) {
       setCopied(id);
       setTimeout(() => setCopied(null), 2000);
-    }
+    } else toast.error(t('common.copyFailed'));
   };
 
   const columns = useMemo(
@@ -411,7 +411,8 @@ export function ApiKeys() {
           // The list carries only the prefix: the full key exists once, in the post-creation modal.
           cell: info => (
             <span className="key-cell">
-              <code>{info.getValue()}****</code>
+              {/* The bootstrap key seeded from API_MASTER_KEY carries a marker, not a prefix: nothing to mask. */}
+              <code>{info.getValue() === MASTER_KEY_PREFIX ? info.getValue() : `${info.getValue()}****`}</code>
             </span>
           ),
         }),
@@ -837,13 +838,11 @@ export function ApiKeys() {
               i18nKey={
                 confirmAction.type === 'delete' ? 'apiKeys.confirm.deleteMessage' : 'apiKeys.confirm.revokeMessage'
               }
-              values={{ name: confirmAction.name }}
-              components={{ strong: <strong /> }}
-              // The key's name is free text. Without escaping, a name carrying markup became elements of the
-              // message: a styled tag handed React a string for `style`, which throws and took the whole page
-              // down. Escaped on interpolation and decoded again by Trans for display, it stays the text it was
+              // The key's name is free text, so it is a child of the message and not a value interpolated into it:
+              // as a value it was interpolated a second time (a name that held braces came back inside itself) and,
+              // unescaped, markup in it became elements of the message. As a child it is always the text it was
               // typed as.
-              tOptions={{ interpolation: { escapeValue: true } }}
+              components={{ name: <strong>{confirmAction.name}</strong> }}
             />
           </p>
           {/* Revoking or deleting the key this dashboard is signed in with ends the session at its next request. */}

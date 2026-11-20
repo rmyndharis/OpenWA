@@ -3,6 +3,7 @@ import type * as BaileysLib from '@whiskeysockets/baileys';
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
+  WAMediaUploadFunction,
   WAMessage,
   WAMessageKey,
   WASocket,
@@ -43,7 +44,12 @@ import { MessageNotFoundError } from '../../common/errors/message-not-found.erro
 import { type createLogger } from '../../common/services/logger.service';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
-import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
+import {
+  EngineNotSentError,
+  markNothingSent,
+  markOutcomeUnknown,
+  provesNothingSent,
+} from '../../common/errors/engine-not-sent.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, guardLookup, withQueryDeadline } from './baileys-query-deadline';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
@@ -117,7 +123,7 @@ function isWebpBuffer(data: Buffer): boolean {
  *
  * Baileys stamps the label unconditionally — `prepareWAMessageMedia` applies
  * `if (!uploadData.mimetype) uploadData.mimetype = MIMETYPE_MAP[mediaType]` with
- * `MIMETYPE_MAP.sticker = 'image/webp'` (Utils/messages.js:18, 86-88) — and transcodes nothing. So
+ * `MIMETYPE_MAP.sticker = 'image/webp'` (Utils/messages.js) — and transcodes nothing. So
  * a PNG handed over here is published as a stickerMessage whose declared type contradicts its bytes,
  * and the send still reports success. whatsapp-web.js has no such gap: `sendMediaAsSticker: true`
  * routes through `Util.formatToWebpSticker`, which converts `image/*` and throws for anything else.
@@ -321,6 +327,29 @@ export async function resolveMediaBuffer(
 const CONNECTION_CLOSED = 428;
 
 /**
+ * What a send answers 409 when its socket was replaced or stopped while the message was being written. The frame may
+ * already be on the wire, so unlike the refusal of a send that sent nothing, it does not say to send it again.
+ */
+export const CONNECTION_LOST_DURING_SEND_MESSAGE =
+  'The WhatsApp connection was replaced or stopped while the message was being sent, and it may or may not have ' +
+  'been sent. Check the chat before sending it again.';
+
+/** The same window for a status post, which is written to status@broadcast and takes no idempotency key. */
+export const CONNECTION_LOST_DURING_STATUS_POST =
+  'The WhatsApp connection was replaced or stopped while the status was being posted, and it may or may not have ' +
+  'been published. Check your status before posting it again.';
+
+/** The same window for the revoke of a status. */
+export const CONNECTION_LOST_DURING_STATUS_REVOKE =
+  'The WhatsApp connection was replaced or stopped while the status was being revoked, and it may or may not have ' +
+  'been removed. Check your status before deleting it again.';
+
+/** The same window for a reaction to a message, an edit, a delete or a pin, which is a change to a message. */
+export const CONNECTION_LOST_DURING_MESSAGE_CHANGE =
+  'The WhatsApp connection was replaced or stopped while the change was being written, and it may or may not have ' +
+  'been applied. Check the chat before repeating it.';
+
+/**
  * Give a WhatsApp throttle or timeout answer (WA code 429 or 408) its retryable 503 instead of letting
  * the raw Boom surface as a 500. `sendMessage` awaits several IQs before it relays the message (group
  * roster, devices, sessions) and nothing after the relay awaits a result, so a numeric code here is a
@@ -342,6 +371,24 @@ export function mapSendRefusal(error: unknown): unknown {
     return new EngineNotSentError('The WhatsApp connection closed before the message was sent');
   }
   return error;
+}
+
+/**
+ * The `upload` option of a send. Baileys awaits the upload while it builds the message, before `relayMessage` hands
+ * anything to WhatsApp, and it spreads the caller's options last, so this stands in for its own. A failure of it (the
+ * media host refusing every attempt) therefore sent nothing, and the error carries markNothingSent: a keyed send frees
+ * its Idempotency-Key, a paced one gives its admission back, and the send breaker does not count it. The send's refusal
+ * mapping still runs on the error, so a throttle or a closed connection answers as it does anywhere else and a timeout
+ * of the media query stays unproven, as one of any other query does.
+ */
+export function uploadBeforeRelay(sock: WASocket): WAMediaUploadFunction {
+  return async (filePath, options) => {
+    try {
+      return await sock.waUploadToServer(filePath, options);
+    } catch (error) {
+      throw markNothingSent(error);
+    }
+  };
 }
 
 export class BaileysMessaging {
@@ -449,7 +496,7 @@ export class BaileysMessaging {
   ): Promise<MessageResult> {
     const socket = this.ensureReadyToSend();
     const jid = await this.toDeliverableJid(chatId, socket);
-    // Baileys spreads the caller's options LAST (messages-send.js:1086), so `getUrlInfo` here
+    // Baileys spreads the caller's options LAST (messages-send.js), so `getUrlInfo` here
     // replaces its hardcoded one — which delegates to a package carrying an unfixed SSRF advisory
     // (see safe-link-preview.ts). Passed on every text send so that generator is never reachable,
     // not only when a preview was asked for.
@@ -461,7 +508,7 @@ export class BaileysMessaging {
       ...((await this.quoteOption(sendOptions?.quotedMessageId, socket)) ?? {}),
     };
     // `linkPreview: null` is Baileys' explicit "no preview": with the key absent it instead calls the
-    // configured generator (Utils/messages.js:279-281), which for us means a blocking outbound fetch
+    // configured generator (Utils/messages.js), which for us means a blocking outbound fetch
     // of every URL in the text (up to 3s each, no cache) before the message can go out.
     //
     // Previews are therefore OPT-IN on this engine: only `linkPreview: true` leaves the key absent.
@@ -1028,9 +1075,8 @@ export class BaileysMessaging {
    * Fold the chat's known disappearing-messages timer into Baileys' send options so outbound messages
    * honor the chat's ephemeral setting (#473). Returns `options` unchanged when no positive timer is
    * cached: omitting `ephemeralExpiration` reproduces today's behavior (Baileys' send guard is truthy),
-   * so an unknown / boot-window / stale-empty cache never forces a message to disappear. Returning
-   * `undefined` keeps the send a 2-arg call, identical to before. React/delete/status do not route
-   * through here, so they are excluded by construction (reactions are NOT excluded by Baileys' guard).
+   * so an unknown / boot-window / stale-empty cache never forces a message to disappear. React/delete/status do
+   * not route through here, so they are excluded by construction (reactions are NOT excluded by Baileys' guard).
    */
   private withEphemeral(
     chatId: string,
@@ -1063,8 +1109,7 @@ export class BaileysMessaging {
 
   /**
    * Options carrying the vetted generator, so the library's own is never selected. Added only for
-   * text-bearing content: media sends never reach the generator, and leaving their options untouched
-   * keeps the two-argument sendMessage call they already make.
+   * text-bearing content: media sends never reach the generator.
    */
   private previewSafeOptions(content: AnyMessageContent, options?: MiscMessageGenerationOptions) {
     if (!('text' in content)) return options;
@@ -1172,12 +1217,26 @@ export class BaileysMessaging {
     const message = typeof content === 'function' ? await content() : content;
     this.sock(sock);
     const mediaUploadTimeoutMs = this.uploadTimeoutMs();
-    const sendOptions = mediaUploadTimeoutMs ? { ...options, mediaUploadTimeoutMs } : options;
+    const sendOptions = {
+      ...options,
+      upload: uploadBeforeRelay(sock),
+      ...(mediaUploadTimeoutMs ? { mediaUploadTimeoutMs } : {}),
+    };
     let sent: WAMessage | undefined;
     try {
-      sent = sendOptions ? await sock.sendMessage(jid, message, sendOptions) : await sock.sendMessage(jid, message);
+      sent = await sock.sendMessage(jid, message, sendOptions);
     } catch (error) {
-      if (this.host.getSocketOrNull() !== sock) throw markOutcomeUnknown(new EngineNotReadyError());
+      // An upload that failed on a socket since replaced or stopped still sent nothing: the write was never reached.
+      if (this.host.getSocketOrNull() !== sock)
+        throw provesNothingSent(error)
+          ? markNothingSent(new EngineNotReadyError())
+          : markOutcomeUnknown(
+              new EngineNotReadyError(
+                'react' in message || 'delete' in message || 'edit' in message || 'pin' in message
+                  ? CONNECTION_LOST_DURING_MESSAGE_CHANGE
+                  : CONNECTION_LOST_DURING_SEND_MESSAGE,
+              ),
+            );
       throw mapSendRefusal(error);
     }
     // Mutations are announced by their library echo; no local callback replaces it.

@@ -40,6 +40,7 @@ export function NumberCheckProvider({ children }: { children: ReactNode }) {
 
     const results: CheckResultItem[] = [];
     let refusedWith: number | undefined;
+    let refusedCode: string | undefined;
 
     for (let i = 0; i < numbers.length; i++) {
       if (runIdRef.current !== runId) return;
@@ -79,6 +80,8 @@ export function NumberCheckProvider({ children }: { children: ReactNode }) {
         if (isGatewayRefusal(err) || status === 403) {
           // A rejected fetch carries no status: the gateway never answered.
           refusedWith = status ?? 0;
+          const code = (err as { code?: unknown }).code;
+          refusedCode = typeof code === 'string' ? code : undefined;
           update({ progress: { current: i + 1, total: numbers.length } });
           break;
         }
@@ -96,7 +99,9 @@ export function NumberCheckProvider({ children }: { children: ReactNode }) {
     if (runIdRef.current !== runId) return;
     runningRef.current = false;
     const stopped =
-      refusedWith === undefined ? null : { status: refusedWith, attempted: results.length, total: numbers.length };
+      refusedWith === undefined
+        ? null
+        : { status: refusedWith, code: refusedCode, attempted: results.length, total: numbers.length };
     update({ running: false, session: '', stopped });
     if (stopped) {
       toast.error(t('numberChecker.bulk.stoppedTitle'), batchStopMessage(t, stopped));

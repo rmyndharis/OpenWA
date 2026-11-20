@@ -442,6 +442,28 @@ test('a template with placeholders is held until the draft changes, and the comp
   assert.equal(sent[0].body.text, filled);
 });
 
+// The hold stands for the text that would go out, and a send trims its text: a space or a line break around the
+// inserted template edits nothing of it.
+test('a template with whitespace around it is held like the template itself', async () => {
+  templates = [PEDIDO];
+  renderComposer();
+  await typeSlash('/pedido', /\/pedido/);
+  rtl.fireEvent.keyDown(field(), { key: 'Enter' });
+  await rtl.waitFor(() => assert.equal(field().value, PEDIDO_TEXT));
+  for (const padded of [`${PEDIDO_TEXT} `, `${PEDIDO_TEXT}\n`, `  ${PEDIDO_TEXT}\n\n`]) {
+    rtl.fireEvent.change(field(), { target: { value: padded } });
+    assert.equal(composerStatus(), NEEDS_VARIABLES, JSON.stringify(padded));
+    assert.equal(sendButton().disabled, true, JSON.stringify(padded));
+    rtl.fireEvent.keyDown(field(), { key: 'Enter' });
+    rtl.fireEvent.submit(document.querySelector('.input-form') as HTMLFormElement);
+    await flush();
+    assert.equal(sent.length, 0, `placeholders went out unfilled: ${JSON.stringify(sent[0]?.body.text)}`);
+  }
+  // A word added to the text is an edit again.
+  rtl.fireEvent.change(field(), { target: { value: `${PEDIDO_TEXT} ok` } });
+  assert.equal(sendButton().disabled, false);
+});
+
 // The hold is read from the draft: the composer is mounted anew when a room is opened again, with the draft the
 // room kept, and that draft is as much an unfilled template as it was before the room closed.
 test('a kept draft that is still a template with its placeholders is held when its room is opened again', async () => {

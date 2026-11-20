@@ -49,7 +49,8 @@
     "refresh": "Yenile",
     "errorGeneric": "Bir hata oluştu",
     "unknownError": "Bilinmeyen hata",
-    "retry": "Yeniden Dene"
+    "retry": "Yeniden Dene",
+    "copyFailed": "Panoya kopyalanamadı"
   },
   "theme": {
     "light": "Açık",
@@ -98,6 +99,8 @@
     "loadingOlderMessages": "Daha eski mesajlar yükleniyor...",
     "loadOlderMessagesError": "Daha eski mesajlar yüklenemedi. Tekrar denemek için yukarı kaydırın.",
     "loadOlderMessagesRetryHint": "Tekrar denemek için yukarı kaydırın.",
+    "refreshMessagesError": "Mesajlar yenilenemedi. Tekrar denemek için dokunun.",
+    "refreshMessagesRetryHint": "Tekrar denemek için dokunun.",
     "noMessagesInChat": "Henüz mesaj yok. Başlamak için ilk mesajı gönderin!",
     "downloadDocument": "Belgeyi indir",
     "actions": {
@@ -231,7 +234,6 @@
     "moreActions": "Diğer işlemler",
     "copyChatId": "Sohbet kimliğini kopyala",
     "chatIdCopied": "Sohbet kimliği kopyalandı",
-    "copyFailed": "Panoya kopyalanamadı",
     "closeChat": "Sohbeti kapat",
     "phone": "Telefon numarası",
     "chatId": "Sohbet kimliği",
@@ -627,7 +629,7 @@
     "filters": {
       "title": "Filtreler (isteğe bağlı)",
       "hint": "Yalnızca tüm koşullar eşleştiğinde tetiklenir. Mesaj olayları için geçerlidir.",
-      "incomplete": "Her filtre koşuluna bir değer verin ve en fazla 20 koşul, koşul başına 100 değer ve 1000 karakter metin kullanın.",
+      "incomplete": "Her filtre koşuluna bir değer verin ve en fazla 20 koşul, koşul başına 100 değer, kimlik başına 128 karakter ve 1000 karakter metin kullanın.",
       "badge": "{{count}} filtre",
       "badge_other": "{{count}} filtre",
       "addCondition": "Koşul ekle",
@@ -843,8 +845,8 @@
     "confirm": {
       "deleteTitle": "API Anahtarını Sil",
       "revokeTitle": "API Anahtarını Geçersiz Kıl",
-      "deleteMessage": "<strong>{{name}}</strong> anahtarını kalıcı olarak silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.",
-      "revokeMessage": "<strong>{{name}}</strong> anahtarını geçersiz kılmak istediğinizden emin misiniz? Artık çalışmayacaktır.",
+      "deleteMessage": "<name/> anahtarını kalıcı olarak silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.",
+      "revokeMessage": "<name/> anahtarını geçersiz kılmak istediğinizden emin misiniz? Artık çalışmayacaktır.",
       "signedIn": "Bu panel bu anahtarla oturum açtı. Anahtarı geçersiz kılmak veya silmek oturumunuzu kapatır.",
       "delete": "Sil",
       "revoke": "Geçersiz Kıl"
@@ -1146,6 +1148,7 @@
       "reason409": "Oturum bağlı değil",
       "reason429": "Ağ geçidinin hız sınırına ulaşıldı",
       "reason503": "WhatsApp bir sorguya yanıt vermedi",
+      "reasonReloading": "WhatsApp Web sayfasını yeniden yüklüyor",
       "reasonOther": "Ağ geçidi bir sorguyu reddetti",
       "partial": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",
       "partial_other": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",

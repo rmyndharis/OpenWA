@@ -29,6 +29,8 @@ import {
 } from './support/baileys-session.mjs';
 
 const now = () => Math.floor(Date.now() / 1000);
+/** The adapter settles a chat that may hold only messages of no content in the microtask that follows its flush. */
+const settled = () => new Promise(resolve => setImmediate(resolve));
 const target = { id: 'OLD1', remoteJid: PEER, fromMe: false };
 const sealed = { encPayload: Buffer.alloc(32, 1), encIv: Buffer.alloc(12, 2) };
 const pinOf = () => ({
@@ -144,6 +146,134 @@ test('a chat deleted on the phone is listed again when a text message and a pin 
   assert.equal((await listed(adapter)).unreadCount, 2, 'the library counts both and the filter leaves the sum alone');
 });
 
+// Several messages of no content for one chat in one flush, as the offline queue delivers them after a reconnect: the
+// library adds their counts, and emits the chat update before the messages, so the adapter settles the update with the
+// messages of the flush. Only messages of no content in the flush, as many as the count: the update holds none of its own.
+const pinAt = (id, at) => wireMessage({ id, at, message: pinOf() });
+const reactionAt = (id, at) =>
+  wireMessage({ id, at, message: { encReactionMessage: { targetMessageKey: target, ...sealed } } });
+
+test('a chat the session does not know is not listed when two pins arrive in one flush', async t => {
+  const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore() });
+  const at = now() + 5;
+  await deliverTogether(sock, [pinAt('P1', at), pinAt('P2', at + 1)]);
+  assert.deepEqual(await adapter.getChats(), []);
+});
+
+test('a chat deleted on the phone stays out of the chat list when a pin and an encrypted reaction arrive in one flush', async t => {
+  const { adapter, sock } = await withDeletedChat(t);
+  const at = now() + 5;
+  await deliverTogether(sock, [pinAt('P1', at), reactionAt('R1', at + 1), pinAt('P2', at + 2)]);
+  assert.deepEqual(await adapter.getChats(), []);
+  assert.equal(typeof adapter.sessionStore.chatDeletedAt(CHAT), 'number', 'the deletion mark is kept');
+});
+
+test('a chat the session knows is listed as it was when two pins arrive in one flush', async t => {
+  const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore() });
+  await deliver(sock, wireMessage({ id: 'OLD1', at: now() - 3600, message: { conversation: 'an old message' } }));
+  await until(async () => (await listed(adapter))?.lastMessage === 'an old message', 'the old message to be listed');
+  const before = await listed(adapter);
+  const at = now() + 5;
+  await deliverTogether(sock, [pinAt('P1', at), pinAt('P2', at + 1)]);
+  assert.deepEqual(await listed(adapter), before);
+});
+
+// The library lowers the sum of a flush for a message the account read on another device (the count is gone when it
+// reaches zero) and replaces it for an unread mark. The chat still holds no message of its own: the pins do not date it.
+test('a chat deleted on the phone stays out of the chat list when the account read one of three pins in one flush', async t => {
+  const { adapter, sock } = await withDeletedChat(t);
+  const at = now() + 5;
+  const first = pinAt('P1', at);
+  await deliverTogether(sock, [first, pinAt('P2', at + 1), pinAt('P3', at + 2)], { flush: false });
+  sock.ev.emit('messages.update', [{ key: first.key, update: { status: 4 } }]);
+  sock.ev.flush();
+  await settled();
+  assert.deepEqual(await adapter.getChats(), []);
+});
+
+test('a chat deleted on the phone stays out of the chat list when the account read its only pin in the same flush', async t => {
+  const { adapter, sock } = await withDeletedChat(t);
+  const at = now() + 5;
+  const only = pinAt('P1', at);
+  await deliverTogether(sock, [only], { flush: false });
+  sock.ev.emit('messages.update', [{ key: only.key, update: { status: 4 } }]);
+  sock.ev.flush();
+  await settled();
+  assert.deepEqual(await adapter.getChats(), []);
+});
+
+test('a chat deleted on the phone stays out of the chat list when an unread mark follows two pins in one flush', async t => {
+  const { adapter, sock } = await withDeletedChat(t);
+  const at = now() + 5;
+  await deliverTogether(sock, [pinAt('P1', at), pinAt('P2', at + 1)], { flush: false });
+  sock.ev.emit('chats.update', [{ id: PEER, unreadCount: -1 }]);
+  sock.ev.flush();
+  await settled();
+  assert.deepEqual(await adapter.getChats(), []);
+});
+
+test('a chat the session knows keeps its time and takes an unread mark that follows two pins in one flush', async t => {
+  const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore() });
+  await deliver(sock, wireMessage({ id: 'OLD1', at: now() - 3600, message: { conversation: 'an old message' } }));
+  await until(async () => (await listed(adapter))?.lastMessage === 'an old message', 'the old message to be listed');
+  const before = await listed(adapter);
+  const at = now() + 5;
+  await deliverTogether(sock, [pinAt('P1', at), pinAt('P2', at + 1)], { flush: false });
+  sock.ev.emit('chats.update', [{ id: PEER, unreadCount: -1 }]);
+  sock.ev.flush();
+  await settled();
+  const after = await listed(adapter);
+  assert.equal(after.timestamp, before.timestamp, 'the pins do not date the chat');
+  assert.equal(after.lastMessage, before.lastMessage);
+  assert.equal(after.unreadCount, -1, 'the mark set on the phone is listed');
+});
+
+// A read synced from the phone in the same flush as pins: the library adds its zero to their count, so the update is
+// that of the pins alone and the read is not seen. The chat keeps the count it had until the next read.
+test('a read synced from the phone in the same flush as two pins is not seen', async t => {
+  const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore() });
+  for (const [i, id] of ['U1', 'U2', 'U3', 'U4'].entries()) {
+    await deliver(sock, wireMessage({ id, at: now() - 3600 + i, message: { conversation: 'unread ' + i } }));
+  }
+  await until(async () => (await listed(adapter))?.lastMessage === 'unread 3', 'the texts to be listed');
+  const before = (await listed(adapter)).unreadCount;
+  assert.ok(before > 0, 'the chat is listed unread');
+  const at = now() + 5;
+  await deliverTogether(sock, [pinAt('P1', at), pinAt('P2', at + 1)], { flush: false });
+  sock.ev.emit('chats.update', [{ id: PEER, unreadCount: 0 }]);
+  sock.ev.flush();
+  await settled();
+  assert.equal((await listed(adapter)).unreadCount, before);
+});
+
+// Controls: a message of its own in the same flush may be one of the counted, so the update stays whole.
+test('a chat deleted on the phone is listed again when two pins and a text message arrive in one flush', async t => {
+  const { adapter, sock } = await withDeletedChat(t);
+  const at = now() + 5;
+  await deliverTogether(sock, [
+    pinAt('P1', at),
+    wireMessage({ id: 'TEXT1', at: at + 1, message: { conversation: 'hello again' } }),
+    pinAt('P2', at + 2),
+  ]);
+  assert.equal(
+    (await listed(adapter)).unreadCount,
+    3,
+    'the library counts all three and the filter leaves the sum alone',
+  );
+});
+
+test('a chat deleted on the phone stays out of the chat list when two pins and a plain reaction arrive in one flush', async t => {
+  const { adapter, sock } = await withDeletedChat(t);
+  const at = now() + 5;
+  const reaction = { reactionMessage: { key: { ...target, fromMe: true }, text: String.fromCodePoint(0x1f44d) } };
+  await deliverTogether(sock, [
+    pinAt('P1', at),
+    wireMessage({ id: 'R1', at: at + 1, message: reaction }),
+    pinAt('P2', at + 2),
+  ]);
+  assert.deepEqual(await adapter.getChats(), []);
+});
+
 test('a chat deleted on the phone is listed again when the account sends a text message and a pin in one flush', async t => {
   const { adapter, sock } = await withDeletedChat(t);
   const at = now() + 5;
@@ -234,6 +364,7 @@ async function mergedIntoChunk(sock, wm, { chunkAt, unreadCount = 0, messageFirs
   sock.ev.emit('messaging-history.set', chunkOf(chunkAt, unreadCount));
   if (!messageFirst) await deliverTogether(sock, [wm], { flush: false });
   sock.ev.flush();
+  await settled();
 }
 
 const MERGES = [
@@ -270,6 +401,36 @@ for (const [label, message] of NO_MESSAGE_OF_ITS_OWN) {
     assert.equal((await listed(adapter)).timestamp, CHUNK_AT, 'the chunk keeps its own time');
   });
 }
+
+// Two such messages merged into the same chunk: the chunk then counts both, and the flush's messages say they are all it counts.
+for (const [when, merge] of MERGES) {
+  test(`a chat deleted on the phone stays out of the chat list when two pins from a contact are merged into a history chunk of it, arriving ${when}`, async t => {
+    const { adapter, sock } = await withDeletedChat(t);
+    const at = now() + 5;
+    sock.ev.buffer();
+    if (merge.messageFirst) await deliverTogether(sock, [pinAt('P1', at), pinAt('P2', at + 1)], { flush: false });
+    sock.ev.emit('messaging-history.set', chunkOf(merge.chunkAt));
+    if (!merge.messageFirst) await deliverTogether(sock, [pinAt('P1', at), pinAt('P2', at + 1)], { flush: false });
+    sock.ev.flush();
+    await settled();
+    assert.deepEqual(await adapter.getChats(), []);
+    assert.equal(typeof adapter.sessionStore.chatDeletedAt(CHAT), 'number', 'the deletion mark is kept');
+  });
+}
+
+test('a chat the session knows keeps its time and its last message when two pins from a contact are merged into a history chunk of it', async t => {
+  const { adapter, sock } = await startSession(t, { chatStateStore: new FakeChatStateStore() });
+  sock.ev.emit('chats.update', [{ id: PEER, conversationTimestamp: SEEN_AT, unreadCount: 0 }]);
+  const at = now() + 5;
+  sock.ev.buffer();
+  sock.ev.emit('messaging-history.set', chunkOf(CHUNK_AT));
+  await deliverTogether(sock, [pinAt('P1', at), pinAt('P2', at + 1)], { flush: false });
+  sock.ev.flush();
+  await settled();
+  const chat = await listed(adapter);
+  assert.equal(chat.timestamp, SEEN_AT, 'the time of the pins is not the chat time');
+  assert.equal(chat.lastMessage, undefined);
+});
 
 // A first-sync chunk (or a history fetch) of a chat the session holds nothing else of: the chunk's time is that of its last
 // message, which is none of its own, and it is the only time the phone gave the chat. It is listed with it, without a preview.
@@ -357,6 +518,7 @@ test('a chat deleted on the phone is listed again, unread, when a text and then 
     { flush: false },
   );
   sock.ev.flush();
+  await settled();
   await until(async () => (await listed(adapter)) !== undefined, 'the text to bring the chat back');
   assert.equal((await listed(adapter)).unreadCount, 2, 'the library counts both and the filter leaves the sum alone');
 });
@@ -375,6 +537,7 @@ test('a chat deleted on the phone is listed again, unread, when a pin and then a
     { flush: false },
   );
   sock.ev.flush();
+  await settled();
   await until(async () => (await listed(adapter)) !== undefined, 'the text to bring the chat back');
   assert.equal((await listed(adapter)).unreadCount, 2);
 });
@@ -395,6 +558,7 @@ test('a chat deleted on the phone is listed again, unread, when a text from a co
     { flush: false },
   );
   sock.ev.flush();
+  await settled();
   await until(async () => (await listed(adapter)) !== undefined, 'the text to bring the chat back');
   assert.equal((await listed(adapter)).unreadCount, 1);
 });
@@ -417,8 +581,10 @@ for (const sameFlush of [true, false]) {
     if (sameFlush) {
       sock.ev.emit('chats.delete', [PEER]);
       sock.ev.flush();
+      await settled();
     } else {
       sock.ev.flush();
+      await settled();
       await until(async () => (await listed(adapter)) !== undefined, 'the history chat to be listed');
       sock.ev.emit('chats.delete', [PEER]);
     }
@@ -427,6 +593,7 @@ for (const sameFlush of [true, false]) {
     sock.ev.buffer();
     sock.ev.emit('messaging-history.set', chunkOf(SEEN_AT + 100, 2));
     sock.ev.flush();
+    await settled();
     assert.equal(await listed(adapter), undefined, 'a later chunk of the history does not bring it back');
     await deliver(sock, wireMessage({ id: 'PIN1', at: now() + 2, message: pinOf() }));
     assert.equal(await listed(adapter), undefined, 'a contact pin does not bring it back');

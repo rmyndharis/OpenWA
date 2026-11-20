@@ -271,7 +271,13 @@ export class BatchProgressDto {
 }
 
 export class BatchMessageErrorDto {
-  @ApiProperty({ description: 'Machine-readable failure code.', example: 'RECIPIENT_UNREACHABLE' })
+  @ApiProperty({
+    description:
+      'Machine-readable failure code: `SEND_FAILED` when the engine refused or failed the send (a recipient WhatsApp ' +
+      'does not know included), `SEND_BLOCKED` when the media URL was refused by the SSRF guard, and ' +
+      '`SEND_PACING_LIMITED` when send pacing refused the send.',
+    example: 'SEND_FAILED',
+  })
   code!: string;
 
   @ApiProperty({ example: 'The number is not registered on WhatsApp' })
@@ -336,6 +342,11 @@ export class BatchCancelResponseDto {
   @ApiProperty({ enum: BatchStatus, example: BatchStatus.CANCELLED })
   status!: BatchStatus;
 
-  @ApiProperty({ type: BatchProgressDto })
+  @ApiProperty({
+    type: BatchProgressDto,
+    description:
+      'The counters of the last saved checkpoint. A recipient whose send is running when the batch is cancelled may ' +
+      'still be delivered, and then counts as sent in `GET batch/{batchId}`.',
+  })
   progress!: BatchProgressDto;
 }

@@ -49,7 +49,8 @@
     "refresh": "刷新",
     "errorGeneric": "发生错误",
     "unknownError": "未知错误",
-    "retry": "重试"
+    "retry": "重试",
+    "copyFailed": "无法复制到剪贴板"
   },
   "theme": {
     "light": "浅色",
@@ -98,6 +99,8 @@
     "loadingOlderMessages": "正在加载更早的消息...",
     "loadOlderMessagesError": "无法加载更早的消息。向上滚动重试。",
     "loadOlderMessagesRetryHint": "向上滚动重试。",
+    "refreshMessagesError": "无法刷新消息。点按重试。",
+    "refreshMessagesRetryHint": "点按重试。",
     "noMessagesInChat": "暂无消息。发送第一条消息即可开始！",
     "downloadDocument": "下载文档",
     "actions": {
@@ -231,7 +234,6 @@
     "moreActions": "更多操作",
     "copyChatId": "复制聊天 ID",
     "chatIdCopied": "已复制聊天 ID",
-    "copyFailed": "无法复制到剪贴板",
     "closeChat": "关闭聊天",
     "phone": "电话号码",
     "chatId": "聊天 ID",
@@ -627,7 +629,7 @@
     "filters": {
       "title": "筛选条件（可选）",
       "hint": "仅当所有条件都匹配时才触发。适用于消息事件。",
-      "incomplete": "请为每个筛选条件填写值，且条件最多 20 个、每个条件最多 100 个值、文本最多 1000 个字符。",
+      "incomplete": "请为每个筛选条件填写值，且条件最多 20 个、每个条件最多 100 个值、每个 ID 最多 128 个字符、文本最多 1000 个字符。",
       "badge": "{{count}} 个筛选条件",
       "badge_other": "{{count}} 个筛选条件",
       "addCondition": "添加条件",
@@ -843,8 +845,8 @@
     "confirm": {
       "deleteTitle": "删除 API 密钥",
       "revokeTitle": "撤销 API 密钥",
-      "deleteMessage": "确定要永久删除 <strong>{{name}}</strong> 吗？此操作无法撤销。",
-      "revokeMessage": "确定要撤销 <strong>{{name}}</strong> 吗？它将不再可用。",
+      "deleteMessage": "确定要永久删除 <name/> 吗？此操作无法撤销。",
+      "revokeMessage": "确定要撤销 <name/> 吗？它将不再可用。",
       "signedIn": "此仪表板正使用该密钥登录。撤销或删除该密钥会使你退出登录。",
       "delete": "删除",
       "revoke": "撤销"
@@ -1146,6 +1148,7 @@
       "reason409": "会话未连接",
       "reason429": "已达到网关的速率限制",
       "reason503": "WhatsApp 未响应查询",
+      "reasonReloading": "WhatsApp Web 正在重新加载页面",
       "reasonOther": "网关拒绝了一次查询",
       "partial": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 个号码处停止（共 {{total}} 个），其余 {{count}} 个号码未查询。请稍后重试。",
       "partial_other": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 个号码处停止（共 {{total}} 个），其余 {{count}} 个号码未查询。请稍后重试。",

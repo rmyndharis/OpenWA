@@ -212,6 +212,36 @@ export async function listChats(host: WwebjsEngineHost, context: string): Promis
 }
 
 /**
+ * The neutral summary of one chat that carries a serialized id. The chat list and the chats of a label are the same
+ * rows (docs/06), so both are built here and a field is never added to one and forgotten in the other.
+ */
+export function summarizeChat(chat: Chat, id: string): ChatSummary {
+  const lastMessage =
+    chat.lastMessage && !isNotice(chat.lastMessage) && !isUnlistedContentless(chat.lastMessage)
+      ? chat.lastMessage
+      : undefined;
+
+  return {
+    id,
+    name: chat.name || id,
+    isGroup: Boolean(chat.isGroup),
+    kind: chatKind(id),
+    unreadCount: chat.unreadCount || 0,
+    timestamp: chat.timestamp || 0,
+    // A location message's body is the base64 map thumbnail; don't surface it as the chat preview.
+    lastMessage:
+      lastMessage?.type === MessageTypes.LOCATION ? '📍' : (lastMessage && wwebjsBody(lastMessage)) || undefined,
+    lastMessageType: lastMessage ? mapWwebjsMessageType(lastMessage.type) : undefined,
+    archived: Boolean(chat.archived),
+    pinned: Boolean(chat.pinned),
+    // Chat.isMuted is the current verdict; muteExpiration is wwjs epoch SECONDS with -1 = forever.
+    muted: Boolean(chat.isMuted),
+    // Expose the expiry as ms (0 = indefinite), present only when muted, per ChatSummary.
+    muteExpiration: chat.isMuted ? ((chat.muteExpiration ?? 0) > 0 ? (chat.muteExpiration ?? 0) * 1000 : 0) : undefined,
+  };
+}
+
+/**
  * Chat-list operations extracted from WhatsAppWebJsAdapter. The adapter keeps the public methods as
  * thin forwarders and injects the shared host surface (./wwebjs-host) via closures, so the delegate
  * never touches lifecycle state directly. Presence (sendChatState) resolves the recipient through
@@ -244,34 +274,7 @@ export class WwebjsChats {
         skipped++;
         continue;
       }
-
-      const lastMessage =
-        chat.lastMessage && !isNotice(chat.lastMessage) && !isUnlistedContentless(chat.lastMessage)
-          ? chat.lastMessage
-          : undefined;
-
-      summaries.push({
-        id,
-        name: chat.name || id,
-        isGroup: Boolean(chat.isGroup),
-        kind: chatKind(id),
-        unreadCount: chat.unreadCount || 0,
-        timestamp: chat.timestamp || 0,
-        // A location message's body is the base64 map thumbnail; don't surface it as the chat preview.
-        lastMessage:
-          lastMessage?.type === MessageTypes.LOCATION ? '📍' : (lastMessage && wwebjsBody(lastMessage)) || undefined,
-        lastMessageType: lastMessage ? mapWwebjsMessageType(lastMessage.type) : undefined,
-        archived: Boolean(chat.archived),
-        pinned: Boolean(chat.pinned),
-        // Chat.isMuted is the current verdict; muteExpiration is wwjs epoch SECONDS with -1 = forever.
-        muted: Boolean(chat.isMuted),
-        // Expose the expiry as ms (0 = indefinite), present only when muted, per ChatSummary.
-        muteExpiration: chat.isMuted
-          ? (chat.muteExpiration ?? 0) > 0
-            ? (chat.muteExpiration ?? 0) * 1000
-            : 0
-          : undefined,
-      });
+      summaries.push(summarizeChat(chat, id));
     }
 
     if (skipped > 0) {
@@ -327,7 +330,7 @@ export class WwebjsChats {
       //
       // Their return value is deliberately DISCARDED. Despite looking like a success flag they
       // resolve the chat's NEW ARCHIVE STATE, hard-coded: archiveChat always returns true and
-      // unarchiveChat always returns false (Client.js:2009-2031, "Changes and returns the archive
+      // unarchiveChat always returns false (Client.archiveChat and Client.unarchiveChat, "Changes and returns the archive
       // state of the Chat"). Surfacing that as `success` reports every successful UNARCHIVE as
       // success:false — which this API's contract defines as "the engine declined to act".
       //
@@ -402,6 +405,13 @@ export class WwebjsChats {
 
   async muteChat(chatId: string, muteUntil: number | null): Promise<void> {
     this.host.ensureReady();
+    if (isChannelJid(chatId)) {
+      // A channel resolves to a wwebjs `Channel`, whose mute is a structure of its own with no end date: the page's chat
+      // mute of it rejects with a TypeError, a bare 500 for the mute and the unmute alike. Say where a channel is muted.
+      throw new BadRequestException(
+        `Chat ${chatId} is a channel: mute or unmute it through the channel route, not the chat route`,
+      );
+    }
     await this.requireResolvableChat(chatId);
     if (muteUntil === null) {
       await this.chatWrite('muteChat', () => this.client().unmuteChat(chatId));
@@ -421,13 +431,13 @@ export class WwebjsChats {
     if (!pin) {
       // unpinChat resolves the chat's NEW pin state, which is `false` for every successful unpin —
       // both on its early-out for an already-unpinned chat and after actually unpinning
-      // (Client.js:2073-2084). Forwarding it would report every success as a refusal, the same trap
+      // (Client.unpinChat). Forwarding it would report every success as a refusal, the same trap
       // archiveChat documents. Discard it: an unpin that did not throw succeeded.
       await this.chatWrite('pinChat', () => this.client().unpinChat(chatId));
       return true;
     }
     // In this direction the return value IS information. WhatsApp caps pinned chats at three
-    // (MAX_PIN_COUNT, Client.js:2054-2063) and the page returns false without pinning once that is
+    // (MAX_PIN_COUNT in Client.pinChat) and the page returns false without pinning once that is
     // met, so a false here is a real refusal the caller needs to see.
     return await this.chatWrite('pinChat', () => this.client().pinChat(chatId));
   }

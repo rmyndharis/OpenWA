@@ -102,6 +102,41 @@ describe('WwebjsChats.getChats chat state', () => {
   });
 });
 
+// docs/06 gives the chats of a label the shape of the chat list, so one chat reads the same through both, last
+// message included.
+describe('a label chat row against the chat list row', () => {
+  const textMessage = { type: 'chat', body: 'See you tomorrow', id: { _serialized: 'true_628123@c.us_A1' } };
+  const location = { type: 'location', body: 'iVBORw0KGgo=', id: { _serialized: 'true_628123@c.us_A2' } };
+
+  it.each([
+    ['a text message', textMessage],
+    ['a location', location],
+    ['no last message', undefined],
+  ])('is the same row for %s', async (_label, lastMessage) => {
+    const raw = { ...RAW, lastMessage, isMuted: true, muteExpiration: 1_786_003_600 };
+    const list = new WwebjsChats(
+      makeHost({ pupPage: { evaluate: jest.fn().mockResolvedValue([toPageModel(raw)]) } }),
+      {} as unknown as WwebjsMessaging,
+    );
+    const byLabel = new WwebjsLabels(makeHost({ getChatsByLabelId: jest.fn().mockResolvedValue([raw]) }));
+
+    const fromLabel = (await byLabel.getChatsByLabel('1'))[0];
+
+    expect(fromLabel).toEqual((await list.getChats())[0]);
+  });
+
+  it('carries the text of the last message, which the label read dropped', async () => {
+    const byLabel = new WwebjsLabels(
+      makeHost({ getChatsByLabelId: jest.fn().mockResolvedValue([{ ...RAW, lastMessage: textMessage }]) }),
+    );
+
+    expect((await byLabel.getChatsByLabel('1'))[0]).toMatchObject({
+      lastMessage: 'See you tomorrow',
+      lastMessageType: 'text',
+    });
+  });
+});
+
 describe('WwebjsLabels.getChatsByLabel chat state', () => {
   const listWith = async (over: Record<string, unknown>) => {
     const client = { getChatsByLabelId: jest.fn().mockResolvedValue([{ ...RAW, ...over }]) };

@@ -425,6 +425,8 @@ Writes accept keys of at most 184 UTF-8 bytes, keeping their encoded filenames w
 
 A key that is spelled like another key's encoded filename (`key-Zm9v` for `foo`) is not read as a legacy key, so it neither returns nor deletes that other key's value. `list()` returns only keys that `get` and `delete` accept.
 
+A plugin's own `manifest.json` and `package.json` are never legacy keys: not under the keys `manifest` and `package` (or `./manifest`) on any filesystem, and, where the filesystem reports file identities, not under any other spelling that reaches the same file (`Manifest` on a case-insensitive filesystem): `get` answers `null` and `delete` leaves the file. Every other legacy key reads and deletes as before.
+
 ## 19.5 Hook System
 
 ### Hook Lifecycle

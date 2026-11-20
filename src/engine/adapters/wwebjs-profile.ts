@@ -7,7 +7,13 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
 import { toMessageMedia } from './wwebjs-messaging';
 import { deleteGroupPictureInPage } from './wwebjs-groups';
 import { type EvaluatePage, runWriteInPage, settleWriteStatus } from './wwebjs-page-writes';
-import { type WwebjsEngineHost, withPageWrite, reportPageDeath } from './wwebjs-host';
+import {
+  type WwebjsEngineHost,
+  navigationsSeen,
+  throwIfNavigatedSince,
+  withPageWrite,
+  reportPageDeath,
+} from './wwebjs-host';
 
 /**
  * Whether the page's `WAWebContactStatusBridge` still exports `setMyStatus`, which `Client.setStatus` calls. The build
@@ -78,11 +84,14 @@ export class WwebjsProfile {
     // The request is sent in-page, so that WhatsApp's own status decides the answer: the library's deleteProfilePicture
     // resolves false for every status, and a rate limit or a server error, which removed nothing and may pass later,
     // read as a refusal. The request is the one that removes a group's picture, addressed by the id of the account.
+    const since = navigationsSeen(this.host);
     const status = await withPageWrite(this.host, 'deleteProfilePicture', () =>
       (this.client() as unknown as { pupPage: EvaluatePage }).pupPage.evaluate(deleteGroupPictureInPage, chatId),
     );
-    // A build without the job: nothing was asked of WhatsApp, so this is neither a refusal nor a failure to retry.
+    // A build without the job: nothing was asked of WhatsApp, so this is neither a refusal nor a failure to retry. A
+    // document a reload has just opened finds no job either, and that is the retryable 409.
     if (status === 'missing') {
+      throwIfNavigatedSince(this.host, since);
       throw new EngineNotSupportedError('deleteProfilePicture(no picture delete job on this build)');
     }
     // A repeat sends the same request again and answers what WhatsApp answers: a group with no picture left answers
@@ -110,8 +119,11 @@ export class WwebjsProfile {
     const client = this.client();
     const page = (client as unknown as { pupPage: { evaluate: <T>(fn: () => T) => Promise<T> } }).pupPage;
     await withPageWrite(this.host, 'setProfileStatus', async () => {
-      // A build with no setter: nothing is asked of WhatsApp, so this is neither a refusal nor a failure to retry.
+      const since = navigationsSeen(this.host);
+      // A build with no setter: nothing is asked of WhatsApp, so this is neither a refusal nor a failure to retry. A
+      // document a reload has just opened has none either, and that is the retryable 409.
       if (!(await page.evaluate(readStatusSetterInPage))) {
+        throwIfNavigatedSince(this.host, since);
         throw new EngineNotSupportedError('setProfileStatus(no status setter on this build)');
       }
       await client.setStatus(status);

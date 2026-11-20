@@ -923,7 +923,7 @@ export function Infrastructure() {
                               t('infrastructure.redis.bullMqUrlCopied'),
                               t('infrastructure.redis.bullMqUrlHint'),
                             );
-                          }
+                          } else toast.error(t('common.copyFailed'));
                         });
                       }}
                     >

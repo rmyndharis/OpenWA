@@ -180,6 +180,11 @@ describe('a custom link preview image on a Baileys text send', () => {
       expect.anything(),
       expect.not.objectContaining({ mediaUploadTimeoutMs: expect.anything() as unknown }),
     );
-    expect(sock.sendMessage.mock.calls[1]).toHaveLength(2);
+    expect(sock.sendMessage).toHaveBeenNthCalledWith(
+      2,
+      '628123456789@s.whatsapp.net',
+      expect.anything(),
+      expect.not.objectContaining({ mediaUploadTimeoutMs: expect.anything() as unknown }),
+    );
   });
 });

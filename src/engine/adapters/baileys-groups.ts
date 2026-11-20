@@ -45,13 +45,13 @@ export interface BaileysGroupsHost {
  * WA error code of a SERVER-refused Baileys query, or undefined for a transport/local failure.
  *
  * A numeric `data` is the whole discriminator, and it is sufficient: `query()` runs
- * `assertNodeErrorFree(result)` before it returns (Socket/socket.js:133-135), and that throws
- * `new Boom(text, { data: +errNode.attrs.code })` (WABinary/generic-utils.js:57). So every refusal
+ * `assertNodeErrorFree(result)` before it returns (Socket/socket.js), and that throws
+ * `new Boom(text, { data: +errNode.attrs.code })` (WABinary/generic-utils.js). So every refusal
  * that can reach a caller through `query()` already carries its WA code as a number.
  *
  * There used to be a second branch reading `output.statusCode` whenever `data !== undefined`,
  * meant for `extractGroupMetadata`'s error-node throw (Socket/groups.js). It did the opposite of
- * its purpose: Boom's constructor destructures `data = null` (@hapi/boom lib/index.js:77), so NO
+ * its purpose: Boom's constructor destructures `data = null` (@hapi/boom lib/index.js), so NO
  * Boom ever has `data === undefined` and the guard was always true. Every transport Boom therefore
  * matched — `Boom('Connection Closed', { statusCode: 428 })` returned 428, inside the 4xx window,
  * so a dead socket was reported as `403 admin rights or permissions may be missing`. The branch was
@@ -289,7 +289,7 @@ export class BaileysGroups {
 
   /**
    * Baileys `groupParticipantsUpdate` resolves a per-participant `[{status, jid}]` array where
-   * `status` is the server's error attr or '200' (Socket/groups.js:153-155) — discarding it turned
+   * `status` is the server's error attr or '200' (Socket/groups.js) — discarding it turned
    * every not-admin/not-registered/already-member refusal into a reported success. Map the entries
    * verbatim; THROW only when the operation failed for every requested participant (a refusal of
    * the operation itself → HTTP 403) or the server returned no outcome at all.
@@ -616,7 +616,7 @@ export class BaileysGroups {
 
   /**
    * `groupRequestParticipantsUpdate` resolves the same per-jid `[{status, jid}]` shape as the
-   * participant writes (status is the server's error attr or '200', Socket/groups.js:116-139), and
+   * participant writes (status is the server's error attr or '200', Socket/groups.js), and
    * the same guards apply — but only when the caller NAMED requesters. Baileys has no act-on-all
    * form, so an omitted list enumerates the pending queue first; an empty queue is a legitimate
    * no-op that resolves [], not a refusal.

@@ -716,8 +716,9 @@ export class WwebjsLifecycle {
    * Reset between a failed first init attempt and its single retry (#1081). Deliberately NOT
    * beginClientTeardown(): that would latch tearingDown (the adapter is single-use after teardown)
    * and write DISCONNECTED, whose disconnectReported latch permanently drops the retry's
-   * qr/authenticated events. The reconcile clear matters most: the patched hasSynced level-check can
-   * fire AUTHENTICATED before the navigation-killed evaluate rejects initialize(), leaving attempt
+   * qr/authenticated events. The reconcile clear matters most: whatsapp-web.js 1.34.8 fires its post-auth
+   * callback once on the hasSynced level as well, so AUTHENTICATED can fire before the navigation-killed
+   * evaluate rejects initialize(), leaving attempt
    * 1's 90s deadline live — its non-bridge branch deletes credentials (recoverFromStuckAuth), which
    * must never run underneath a retry that is about to succeed.
    *

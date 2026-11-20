@@ -8,6 +8,8 @@ import {
   resolveSafeFetchTarget,
   pinnedLookup,
   withSafeFetch,
+  urlCarriesCredentials,
+  URL_CREDENTIALS_MESSAGE,
 } from './ssrf-guard';
 import * as dnsPromises from 'dns/promises';
 import { getEventListeners } from 'node:events';
@@ -276,6 +278,29 @@ describe('resolveSafeFetchTarget', () => {
   }, 1000);
 });
 
+describe('urlCarriesCredentials', () => {
+  it.each([
+    'https://ops:s3cr3t@example.com/',
+    'https://ops@example.com/',
+    'http://:s3cr3t@example.com/',
+    // Unparsable, but the refusal of the guard or of undici would name it, userinfo included.
+    'http://ops:s3cr3t@exa mple.com/',
+    'https://s3cr3t@example.com:99999/',
+    'http://:s3cr3t@example.com:abc/',
+  ])('is true for %s', url => expect(urlCarriesCredentials(url)).toBe(true));
+
+  // undici accepts an empty userinfo, and an unparsable URL with none is left to the guard, which names it.
+  it.each([
+    'http://@example.com/',
+    'https://example.com/a@b',
+    'https://example.com/?u=a:b@c',
+    'http://@exa mple.com/',
+    'http://exa mple.com/a@b',
+    'not a url',
+    '',
+  ])('is false for %p', url => expect(urlCarriesCredentials(url)).toBe(false));
+});
+
 describe('withSafeFetch (guarded + pinned fetch)', () => {
   afterEach(() => {
     (undiciFetch as jest.Mock).mockReset();
@@ -286,6 +311,31 @@ describe('withSafeFetch (guarded + pinned fetch)', () => {
     await expect(withSafeFetch('http://127.0.0.1/hook', {}, use, { guard: true })).rejects.toThrow(SsrfBlockedError);
     expect(use).not.toHaveBeenCalled();
   });
+
+  // undici refuses such a URL with a text that repeats it, credentials included, and the callers carry the text of
+  // any failure into a response body or a stored delivery failure.
+  it.each([
+    ['guarded', { guard: true }],
+    ['unguarded', { guard: false }],
+    ['download', { guard: true, followRedirects: true }],
+  ] as const)(
+    'refuses a URL with a user name or a password before any fetch, %s, naming none of it',
+    async (_mode, opts) => {
+      const use = jest.fn();
+      for (const url of [
+        'https://ops:s3cr3t@93.184.216.34/hook',
+        'https://s3cr3t@93.184.216.34/hook',
+        'https://ops:s3cr3t@93.184.216.34:99999/hook',
+      ]) {
+        const error: unknown = await withSafeFetch(url, {}, use, opts).catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toBe(URL_CREDENTIALS_MESSAGE);
+        expect((error as Error).message).not.toContain('s3cr3t');
+      }
+      expect(use).not.toHaveBeenCalled();
+      expect(undiciFetch).not.toHaveBeenCalled();
+    },
+  );
 
   it('pins the connection by passing a dispatcher to fetch for a hostname target', async () => {
     // The security property: for a DNS hostname the connection MUST go through a pinned dispatcher,

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import { nextReconnectState } from '../utils/reconnectState';
 import { applyIncomingToChatList, promoteChatWithSnippet } from '../utils/chatList';
@@ -73,6 +73,8 @@ import {
   updateCachedMessages,
   cachedSessionThreads,
   flattenMessagePages,
+  loadMoreOfThread,
+  refreshFailed,
   type MessagesData,
 } from '../hooks/useChatMessages';
 import { useChannelMessages } from '../hooks/useChannelMessages';
@@ -105,6 +107,16 @@ const MARK_READ_DEBOUNCE_MS = 750;
 // Most messages the gateway takes in one read (MarkChatReadDto).
 const MARK_READ_MESSAGE_IDS_MAX = 100;
 const readKey = (sessionId: string, chatId: string) => `${sessionId}\u0000${chatId}`;
+
+/**
+ * Whether a chat's thread has loaded nothing so far, whether its load is still running or has failed: nobody has seen
+ * what a read of the chat would acknowledge, so the read waits for the thread (see the effect on its state). A load
+ * that is still running may fail after the read would have gone out, which is why it counts as unseen too.
+ */
+function threadUnseen(queryClient: QueryClient, sessionId: string, chatId: string): boolean {
+  const state = queryClient.getQueryState(messagesQueryKey(sessionId, chatId));
+  return state !== undefined && state.data === undefined;
+}
 
 /** `drafts` with `text` as the draft of the thread `key`, or with none for it when the text is empty. */
 function withDraft(drafts: Record<string, string>, key: string, text: string): Record<string, string> {
@@ -386,6 +398,10 @@ export function Chats() {
     isError: messagesError,
     hasNextPage: hasMoreMessages,
     isFetchingNextPage: loadingOlderMessages,
+    isRefetchError: threadRefreshError,
+    isFetchNextPageError: olderPageError,
+    isFetching: fetchingMessages,
+    refetch: refetchMessages,
     fetchNextPage,
   } = useChatMessages(
     selectedSessionId,
@@ -515,9 +531,16 @@ export function Chats() {
   );
 
   const handleLoadOlderMessages = useCallback(() => {
-    onOlderMessagesRequested();
-    void fetchNextPage();
-  }, [fetchNextPage, onOlderMessagesRequested]);
+    const query = {
+      isRefetchError: threadRefreshError,
+      isFetchNextPageError: olderPageError,
+      refetch: refetchMessages,
+      fetchNextPage,
+    };
+    // A failed refresh is retried as a refresh, which prepends nothing: the scroll anchor of an older page is not asked.
+    if (!refreshFailed(query)) onOlderMessagesRequested();
+    void loadMoreOfThread(query);
+  }, [threadRefreshError, olderPageError, refetchMessages, fetchNextPage, onOlderMessagesRequested]);
 
   // Batch profile-picture fetch for the visible chat list — ONE request for the whole sidebar
   // (per-row queries burst the per-IP throttle into 429s). Sorted-key cached 1h; rows fall back
@@ -645,6 +668,15 @@ export function Chats() {
       if (listedSessionRef.current !== selectedSessionId) return;
       rememberPatch(chatId, { unreadCount: 0 });
       setChats(prev => prev.map(c => (c.id === chatId ? { ...c, unreadCount: 0 } : c)));
+    },
+    [rememberPatch, selectedSessionId],
+  );
+  // The row of a chat that was cleared on opening, back with the count it had: its thread never showed, so it was not read.
+  const markRowUnread = useCallback(
+    (chatId: string, unreadCount: number) => {
+      if (listedSessionRef.current !== selectedSessionId) return;
+      rememberPatch(chatId, { unreadCount });
+      setChats(prev => prev.map(c => (c.id === chatId ? { ...c, unreadCount } : c)));
     },
     [rememberPatch, selectedSessionId],
   );
@@ -798,6 +830,14 @@ export function Chats() {
   const [readsInFlight] = useState(() => new Map<string, Promise<void>>());
   const [keptUnread] = useState(() => new Set<string>());
   const [withheldReads] = useState(() => new Set<string>());
+  // The unread count each chat had when it was opened, for the row that comes back if its thread never shows.
+  const [unreadAtOpen] = useState(() => new Map<string, number>());
+  // The chat on screen, by its session, which a read that falls due later asks whether its chat was left (see the
+  // layout effect that keeps it), and the chats it found left with their thread unseen, whose rows come back unread
+  // in an effect, for the tick that says there are some.
+  const [shown] = useState(() => new Map<string, string>());
+  const [leftUnseen] = useState(() => new Set<string>());
+  const [leftUnseenTick, setLeftUnseenTick] = useState(0);
   // Baileys acknowledges the messages a read names, and without any only the newest one it holds. A read names the
   // incoming messages of the thread that an earlier read has not acknowledged (the ones it named, per chat).
   const [acknowledged] = useState(() => new Map<string, Set<string>>());
@@ -807,8 +847,14 @@ export function Chats() {
     () =>
       createTrailingCoalescer<string>(chatId => {
         const key = readKey(selectedSessionId, chatId);
-        if (document.visibilityState === 'hidden') {
+        const unseen = threadUnseen(queryClient, selectedSessionId, chatId);
+        if (document.visibilityState === 'hidden' || unseen) {
           withheldReads.add(key);
+          // A chat left before its thread showed was not read: its row, cleared when it was opened, is unread again.
+          if (unseen && shown.get(selectedSessionId) !== chatId && unreadAtOpen.has(key)) {
+            leftUnseen.add(key);
+            setLeftUnseenTick(tick => tick + 1);
+          }
           return;
         }
         let named: string[] = [];
@@ -839,7 +885,19 @@ export function Chats() {
           if (readsInFlight.get(key) === read) readsInFlight.delete(key);
         });
       }, MARK_READ_DEBOUNCE_MS),
-    [selectedSessionId, t, showWarningToast, readsInFlight, withheldReads, acknowledged, engineType, queryClient],
+    [
+      selectedSessionId,
+      t,
+      showWarningToast,
+      readsInFlight,
+      withheldReads,
+      unreadAtOpen,
+      shown,
+      leftUnseen,
+      acknowledged,
+      engineType,
+      queryClient,
+    ],
   );
 
   // Flush pending trailing calls on unmount / session switch: the mark-as-read POST is
@@ -879,6 +937,8 @@ export function Chats() {
     chatsOwnerRef.current = listedSession;
     activeChatIdRef.current = activeChat?.id;
     selectedSessionRef.current = selectedSessionId;
+    shown.clear();
+    if (activeChat) shown.set(selectedSessionId, activeChat.id);
   });
   // A request that settles after the page is left no longer finds the chat open, so its follow-ups
   // (the reconnect mark-as-read) do nothing.
@@ -1430,12 +1490,45 @@ export function Chats() {
     markChatRead(activeChat.id);
     // A read-only key sends no mark-as-read, so the chat stays unread on the gateway; clearing the
     // badge here would only have the next chat-list load bring it back.
-    if (canWrite) markRowRead(activeChat.id);
+    if (canWrite) {
+      const unread = chatsRef.current.find(c => c.id === activeChat.id)?.unreadCount ?? 0;
+      unreadAtOpen.set(readKey(selectedSessionId, activeChat.id), unread);
+      markRowRead(activeChat.id);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChat?.id, markChatRead, canWrite]);
 
-  // On Baileys the read of an opened chat falls due before its thread has loaded, so it names no message. Once
-  // the thread is there the chat is read again, naming what it holds (the coalescer merges the two when close).
+  // The rows of the chats whose read fell due after they were left with their thread unseen come back unread: nobody
+  // saw what they hold. The ones of another session are left to its own list, which asks the gateway.
+  useEffect(() => {
+    for (const key of leftUnseen) {
+      const [sessionId, chatId] = key.split('\u0000');
+      const unread = unreadAtOpen.get(key) ?? 0;
+      if (sessionId === selectedSessionId && unread > 0) markRowUnread(chatId, unread);
+    }
+    leftUnseen.clear();
+  }, [leftUnseenTick, leftUnseen, unreadAtOpen, selectedSessionId, markRowUnread]);
+
+  // A thread that has loaded nothing shows nothing, so the chat cleared on open was not read: a thread that fails to load
+  // brings its badge back, and the read that was withheld while it loaded goes out, with the badge cleared again, once a
+  // later load of the thread succeeds. A refresh that fails after the thread showed leaves what was read as it is.
+  useEffect(() => {
+    if (!activeChat || !canWrite || loadingMessages) return;
+    const key = readKey(selectedSessionId, activeChat.id);
+    if (messagesError && threadUnseen(queryClient, selectedSessionId, activeChat.id)) {
+      const opened = unreadAtOpen.get(key) ?? 0;
+      if (opened > 0) markRowUnread(activeChat.id, opened);
+      return;
+    }
+    if (messagesError || !withheldReads.delete(key)) return;
+    markChatRead(activeChat.id);
+    markRowRead(activeChat.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChat?.id, loadingMessages, messagesError, canWrite]);
+
+  // On Baileys a read names the incoming messages of the thread. The read of an opened chat waits for its thread
+  // (see threadUnseen), so it names what the thread holds; once the thread is there the chat is read again, which the
+  // coalescer merges with the read that waited when the two are close.
   useEffect(() => {
     if (activeChat && engineType === 'baileys' && !loadingMessages && messages.length > 0) {
       markChatRead(activeChat.id);
@@ -2092,7 +2185,7 @@ export function Chats() {
     if (!activeChat) return;
     // The house helper: over plain HTTP on a LAN address navigator.clipboard does not exist.
     if (await copyToClipboard(activeChat.id)) showSuccessToast(t('chats.chatIdCopied'));
-    else showErrorToast(t('chats.copyFailed'));
+    else showErrorToast(t('common.copyFailed'));
   };
 
   // The overflow menu closes on a press outside it, on Escape, and with the chat it belongs to. Escape
@@ -2504,6 +2597,11 @@ export function Chats() {
                   messagesContainerRef={messagesContainerRef}
                   hasMoreMessages={Boolean(hasMoreMessages)}
                   loadingOlderMessages={loadingOlderMessages}
+                  refreshFailed={refreshFailed({
+                    isRefetchError: threadRefreshError,
+                    isFetchNextPageError: olderPageError,
+                  })}
+                  refreshing={fetchingMessages}
                   onLoadOlderMessages={handleLoadOlderMessages}
                   onMediaLoad={onMediaLoad}
                   measureMedia={measureMedia}

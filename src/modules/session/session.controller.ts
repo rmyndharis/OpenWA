@@ -311,8 +311,9 @@ export class SessionController {
   @ApiResponse({
     status: 503,
     description:
-      'The session could not be read, checked or claimed for the delete because the database did not answer ' +
-      '(nothing is deleted), or, on SQLite, another database transaction stayed open for 10 s before a delete ' +
+      'The session could not be read, checked, claimed or recorded for the delete because the database did not ' +
+      'answer (nothing is deleted; a delete whose record the database did not confirm may have been recorded, and ' +
+      'repeating it is safe), or, on SQLite, another database transaction stayed open for 10 s before a delete ' +
       'transaction (no further rows are removed). Retry the delete.',
   })
   async delete(@Param('sessionId', SessionIdPipe) id: string): Promise<void> {
@@ -414,8 +415,9 @@ export class SessionController {
   @ApiResponse({
     status: 503,
     description:
-      'The database did not answer the check of whether another node holds the session, so nothing was ' +
-      'stopped. Retry the stop.',
+      'The database did not answer the read of the session, the check of whether another node holds it or the ' +
+      'write that records the stop, so nothing was stopped. A stop whose record the database did not confirm may ' +
+      'have been recorded, and repeating it is safe. Retry the stop.',
   })
   async stop(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.stop(id);
@@ -491,6 +493,10 @@ export class SessionController {
       "body carries `code: 'SESSION_LOGOUT_INCOMPLETE'`; `phone` is cleared and no success audit " +
       'is written. Start the session again and retry the logout.',
   })
+  @ApiResponse({
+    status: 503,
+    description: 'The database did not answer the read of the session, so nothing was logged out. Retry the logout.',
+  })
   async logout(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.logout(id);
     await this.auditService.logInfo(AuditAction.SESSION_LOGGED_OUT, {
@@ -519,6 +525,10 @@ export class SessionController {
       'threw or timed out, so the engine process may still be running). The body carries ' +
       "`code: 'SESSION_FORCE_KILL_INCOMPLETE'`; the status is settled to `disconnected` and no " +
       'success audit is written. Restart the node to reap a leaked process.',
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'The database did not answer the read of the session, so nothing was killed. Retry the force-kill.',
   })
   async forceKill(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.forceKill(id);
@@ -926,8 +936,8 @@ export class SessionController {
   @ApiResponse({
     status: 400,
     description:
-      `${SESSION_NOT_STARTED_400} Also an invalid chatId / muteUntil, or a chatId the whatsapp-web.js engine ` +
-      'cannot resolve. The Baileys engine answers `success: true` for a chat it has never seen, and `400` for a ' +
+      `${SESSION_NOT_STARTED_400} Also an invalid chatId / muteUntil, a channel id on the whatsapp-web.js engine (a ` +
+      'channel is muted through its own route), or a chatId that engine cannot resolve. The Baileys engine answers `success: true` for a chat it has never seen, and `400` for a ' +
       'phone chatId held under a LID that neither the stored mapping nor a WhatsApp lookup pairs.',
   })
   @ApiResponse({ status: 404, description: 'Session not found' })

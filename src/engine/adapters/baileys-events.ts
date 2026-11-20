@@ -470,10 +470,12 @@ export class BaileysEvents {
   private readonly messageChanges = new KeyedMutationQueue();
   private changesPreparing = 0;
   private preparationRoom?: { ready: Promise<void>; release: () => void };
-  private retirePreparations!: () => void;
-  private preparationsRetired = new Promise<void>(resolve => {
-    this.retirePreparations = resolve;
-  });
+  /**
+   * What fenceStoredWrites runs to end the preparations still under way, one entry per preparation until it has
+   * ended. Each settles the promises that preparation waits on itself: racing them against a promise the adapter
+   * keeps for good would leave a reaction on it for every change, for as long as the account stays linked.
+   */
+  private readonly preparationRetirements = new Set<() => void>();
 
   private static readonly CHANGES_PARKED_LIMIT = 64;
 
@@ -532,11 +534,10 @@ export class BaileysEvents {
   /** Drop the store writes of every message that arrived before now; call before wiping the store. */
   fenceStoredWrites(): void {
     this.storeGeneration++;
-    const retire = this.retirePreparations;
-    this.preparationsRetired = new Promise<void>(resolve => {
-      this.retirePreparations = resolve;
-    });
-    retire();
+    const retirements = [...this.preparationRetirements];
+    this.preparationRetirements.clear();
+    for (const retire of retirements) retire();
+    this.wakePreparationWaiters();
   }
 
   /** Whether a delete for everyone of this message was accepted (see deletedForEveryone). */
@@ -1130,7 +1131,6 @@ export class BaileysEvents {
     work: (releasePreparation: () => void) => Promise<void>,
   ): Promise<void> {
     if (opts.generation !== this.storeGeneration) return;
-    const retired = this.preparationsRetired;
     if (!messageId) {
       if (opts.generation === this.storeGeneration) await work(() => undefined);
       return;
@@ -1144,7 +1144,7 @@ export class BaileysEvents {
         });
         this.preparationRoom = { ready, release };
       }
-      await Promise.race([this.preparationRoom.ready, retired]);
+      await this.preparationRoom.ready;
       if (opts.generation !== this.storeGeneration) return;
     }
     this.changesPreparing++;
@@ -1163,16 +1163,29 @@ export class BaileysEvents {
         if (opts.generation === this.storeGeneration) await work(releasePreparation);
       })().then(finish, fail);
       try {
-        await Promise.race([preparing, released, retired]);
+        await Promise.race([preparing, released]);
       } finally {
         this.changesPreparing--;
-        const room = this.preparationRoom;
-        this.preparationRoom = undefined;
-        room?.release();
+        this.wakePreparationWaiters();
       }
     });
-    const settled = Promise.race([done, retired]);
-    await (opts.yieldSlot ? opts.yieldSlot(() => settled) : settled);
+    const retire = (): void => {
+      releasePreparation();
+      finish();
+    };
+    this.preparationRetirements.add(retire);
+    try {
+      await (opts.yieldSlot ? opts.yieldSlot(() => done) : done);
+    } finally {
+      this.preparationRetirements.delete(retire);
+    }
+  }
+
+  /** Wake the arrivals waiting for room; each looks again for room, and whether its store was fenced meanwhile. */
+  private wakePreparationWaiters(): void {
+    const room = this.preparationRoom;
+    this.preparationRoom = undefined;
+    room?.release();
   }
 
   private async processMessageChange(
@@ -2335,7 +2348,7 @@ export class BaileysEvents {
    * on). Only action 'created' maps to the neutral join_request kind — the wwebjs event has no
    * revoke/reject counterpart, so only the shared signal is surfaced. Upstream scope caveat: rc14
    * emits this event only from the NON_ADMIN_ADD stub (172); the direct self-request stub (144) is
-   * unhandled with an upstream TODO (Utils/process-message.js:569), so an invite-link self-request
+   * unhandled with an upstream TODO (Utils/process-message.js), so an invite-link self-request
    * may produce no event on this engine — the REST list endpoint still sees it. The pn twins are
    * preferred over lids for the same reason as everywhere else. The event carries no timestamp, so
    * it is stamped at receipt.
@@ -2377,7 +2390,7 @@ export class BaileysEvents {
    * the wwebjs adapter, which emits uninterpretable updates the same way rather than dropping them.
    *
    * The same event also carries FULL metadata snapshots: groupFetchAllParticipating() emits its
-   * entire result set through it (Socket/groups.js:56 `sock.ev.emit('groups.update', ...)`), and
+   * entire result set through it (Socket/groups.js `sock.ev.emit('groups.update', ...)`), and
    * this adapter calls that on every connect (hydrateNames) and every REST getGroups(). Real deltas
    * (Utils/process-message.js emitGroupUpdate) carry only `{id, ...oneChangedField, author?}`;
    * snapshots are recognized by their full-metadata markers (participants/creation/subjectTime/
@@ -2449,7 +2462,7 @@ export class BaileysEvents {
         continue;
       }
       // Baileys replays offers for calls missed while disconnected with offline: true
-      // (Socket/messages-recv.js:1458 `offline: !!attrs.offline`; WACallEvent.offline is
+      // (Socket/messages-recv.js `offline: !!attrs.offline`; WACallEvent.offline is
       // non-optional). Those calls are long dead — emitting call.received (and, with
       // autoRejectCalls, rejecting a stale call) would be wrong, so drop them before caching.
       if (call.offline) {

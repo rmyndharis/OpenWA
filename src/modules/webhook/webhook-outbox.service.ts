@@ -4,9 +4,16 @@ import { And, In, IsNull, LessThan, Not, QueryDeepPartialEntity, Raw, Repository
 import { WebhookOutboxEvent, WebhookOutboxState } from './entities/webhook-outbox-event.entity';
 import { createLogger } from '../../common/services/logger.service';
 import { pruneInBatches } from '../../common/utils/batched-prune';
-import { isUniqueViolation } from '../../common/utils/db-errors';
+import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
 
 const DEFAULT_OUTBOX_RETENTION_DAYS = 7;
+
+/**
+ * How long a stranded delivery whose stored payload cannot be read is left out of the page reads, as the ingress sweep
+ * does with its own. Held in memory: the row is not touched, and it is read again after the wait or a restart.
+ */
+export const OUTBOX_UNREADABLE_RETRY_MS = 60 * 60 * 1000;
+const UNREADABLE_MAX = 1000;
 
 /** What a replay needs to redispatch one delivery without deriving a new idempotency key. */
 export interface ReplayableDelivery {
@@ -33,6 +40,8 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookOutboxService');
   private pruneTimer?: ReturnType<typeof setInterval>;
   private stopped = false;
+  // Row id to the time it may be read again, for rows whose stored payload could not be read.
+  private readonly unreadableUntil = new Map<string, number>();
 
   constructor(
     @InjectRepository(WebhookOutboxEvent, 'data')
@@ -150,16 +159,19 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
    * A stored payload that does not parse (an imported or hand-edited row on SQLite, where it is text)
    * fails the read of every page it sits in, so no row behind it would ever be replayed. When the page
    * read fails it is read again row by row, an unreadable row is logged and skipped, and `onScanned`
-   * receives the last id the page covered so a caller's cursor passes the unreadable rows too.
+   * receives the last id the page covered and how many ids it covered, so a caller's cursor passes the unreadable
+   * rows too, and can tell a page that filled its batch from one that reached the end. A row whose payload cannot be
+   * read stays out of the pages for {@link OUTBOX_UNREADABLE_RETRY_MS}, so it costs one read and one log line per wait
+   * and not one per pass.
    */
   async findStale(
     olderThan: Date,
     limit: number,
     afterId?: string,
-    onScanned?: (lastId: string) => void,
+    onScanned?: (lastId: string, covered: number) => void,
   ): Promise<ReplayableDelivery[]> {
     const pending = { state: In(['pending', 'queued']), payload: Not(IsNull()), createdAt: LessThan(olderThan) };
-    const where = afterId
+    const stale = afterId
       ? {
           ...pending,
           // Compare in SQL so PostgreSQL's sub-millisecond timestamps are never rounded through Date.
@@ -173,6 +185,8 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
           ),
         }
       : pending;
+    const unreadable = this.unreadableIds(Date.now());
+    const where = unreadable.length ? { ...stale, id: Not(In(unreadable)) } : stale;
     const order = { createdAt: 'ASC', id: 'ASC' } as const;
     let rows: WebhookOutboxEvent[];
     try {
@@ -194,10 +208,15 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
             rowError instanceof Error ? rowError.message : String(rowError),
             { id, action: 'webhook_outbox_row_unreadable' },
           );
+          // Only a payload that does not parse is left out. A read that failed because the database said "not now" is
+          // read again by the next pass. A SyntaxError is told by its class: its text quotes the start of the payload.
+          if ((rowError instanceof Error && rowError.name === 'SyntaxError') || !isTransientDbError(rowError)) {
+            this.leaveOut(id, Date.now());
+          }
         }
       }
       const last = ids.at(-1);
-      if (last) onScanned?.(last.id);
+      if (last) onScanned?.(last.id, ids.length);
     }
     // A pending row always carries its payload; the guard is for a row whose payload was retired by
     // a concurrent close between the query and this read.
@@ -214,6 +233,24 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
         deliveryId: r.deliveryId,
         state: r.state,
       }));
+  }
+
+  /** Ids of the rows to leave out of a page; forgets those whose time to be read again came. */
+  private unreadableIds(now: number): string[] {
+    for (const [id, until] of this.unreadableUntil) {
+      if (until <= now) this.unreadableUntil.delete(id);
+    }
+    return [...this.unreadableUntil.keys()];
+  }
+
+  private leaveOut(id: string, now: number): void {
+    this.unreadableUntil.delete(id);
+    this.unreadableUntil.set(id, now + OUTBOX_UNREADABLE_RETRY_MS);
+    // Oldest first, as the map keeps insertion order; a store with more of them than this is not one to leave alone,
+    // and the oldest are read again.
+    while (this.unreadableUntil.size > UNREADABLE_MAX) {
+      this.unreadableUntil.delete(this.unreadableUntil.keys().next().value as string);
+    }
   }
 
   /**

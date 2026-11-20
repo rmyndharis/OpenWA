@@ -51,7 +51,8 @@
     "unknownError": "Error desconocido",
     "showApiKey": "Mostrar clave API",
     "hideApiKey": "Ocultar clave API",
-    "retry": "Reintentar"
+    "retry": "Reintentar",
+    "copyFailed": "No se pudo copiar al portapapeles"
   },
   "theme": {
     "light": "Claro",
@@ -101,6 +102,8 @@
     "loadingOlderMessages": "Cargando mensajes anteriores...",
     "loadOlderMessagesError": "No se pudieron cargar los mensajes anteriores. Desplázate hacia arriba para reintentar.",
     "loadOlderMessagesRetryHint": "Desplázate hacia arriba para reintentar.",
+    "refreshMessagesError": "No se pudieron actualizar los mensajes. Toca para reintentar.",
+    "refreshMessagesRetryHint": "Toca para reintentar.",
     "noMessagesInChat": "Aún no hay mensajes. ¡Envía el primero para empezar!",
     "downloadDocument": "Descargar documento",
     "actions": {
@@ -236,7 +239,6 @@
     "moreActions": "Más acciones",
     "copyChatId": "Copiar ID del chat",
     "chatIdCopied": "ID del chat copiado",
-    "copyFailed": "No se pudo copiar al portapapeles",
     "closeChat": "Cerrar chat",
     "phone": "Número de teléfono",
     "chatId": "ID del chat",
@@ -632,7 +634,7 @@
     "filters": {
       "title": "Filtros (opcional)",
       "hint": "Activar solo cuando se cumplan todas las condiciones. Se aplica a eventos de mensajes.",
-      "incomplete": "Asigna un valor a cada condición de filtro y usa como máximo 20 condiciones, 100 valores por condición y 1000 caracteres de texto.",
+      "incomplete": "Asigna un valor a cada condición de filtro y usa como máximo 20 condiciones, 100 valores por condición, 128 caracteres por ID y 1000 caracteres de texto.",
       "badge": "{{count}} filtro",
       "badge_other": "{{count}} filtros",
       "badge_many": "{{count}} filtros",
@@ -799,8 +801,8 @@
     "confirm": {
       "deleteTitle": "Eliminar clave API",
       "revokeTitle": "Revocar clave API",
-      "deleteMessage": "¿Seguro que quieres eliminar permanentemente <strong>{{name}}</strong>? Esta acción no se puede deshacer.",
-      "revokeMessage": "¿Seguro que quieres revocar <strong>{{name}}</strong>? Dejará de funcionar.",
+      "deleteMessage": "¿Seguro que quieres eliminar permanentemente <name/>? Esta acción no se puede deshacer.",
+      "revokeMessage": "¿Seguro que quieres revocar <name/>? Dejará de funcionar.",
       "signedIn": "Este panel ha iniciado sesión con esta clave. Si la revocas o la eliminas, se cerrará tu sesión.",
       "delete": "Eliminar",
       "revoke": "Revocar"
@@ -1153,6 +1155,7 @@
       "reason409": "La sesión no está conectada",
       "reason429": "Se alcanzó el límite de solicitudes de la puerta de enlace",
       "reason503": "WhatsApp no respondió a una consulta",
+      "reasonReloading": "WhatsApp Web está recargando su página",
       "reasonOther": "La puerta de enlace rechazó una consulta",
       "partial": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} número no se envió. Inténtalo de nuevo más tarde.",
       "partial_other": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} números no se enviaron. Inténtalo de nuevo más tarde.",

@@ -44,6 +44,8 @@ const SHOWN: readonly Entry[] = [
   ['pages/Logs.css', '.logs-page .api-key', 'the key an audit entry names', FIT],
   ['pages/Logs.css', '.logs-page .timestamp', 'the time of an audit entry', { width: 'fit-content' }],
   ['pages/Plugins.css', '.plugins-page .plugin-name', 'the name of a plugin'],
+  ['pages/MessageTester.css', '.message-tester .group-picker-option span', 'a group name in the picker'],
+  ['pages/Sessions.css', '.sessions-page .info-value.error-text', 'the last error of a session card'],
   ['pages/Plugins.css', '.plugins-page .plugin-description', 'the description of a plugin', FIT],
   [
     'pages/Plugins.css',

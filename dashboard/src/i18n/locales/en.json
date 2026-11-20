@@ -49,7 +49,8 @@
     "refresh": "Refresh",
     "errorGeneric": "An error occurred",
     "unknownError": "Unknown error",
-    "retry": "Retry"
+    "retry": "Retry",
+    "copyFailed": "Could not copy to clipboard"
   },
   "theme": {
     "light": "Light",
@@ -98,6 +99,8 @@
     "loadingOlderMessages": "Loading older messages...",
     "loadOlderMessagesError": "Couldn't load older messages. Scroll up to retry.",
     "loadOlderMessagesRetryHint": "Scroll up to retry.",
+    "refreshMessagesError": "Couldn't refresh the messages. Tap to retry.",
+    "refreshMessagesRetryHint": "Tap to retry.",
     "noMessagesInChat": "No messages yet. Send the first message to get started!",
     "downloadDocument": "Download document",
     "actions": {
@@ -231,7 +234,6 @@
     "moreActions": "More actions",
     "copyChatId": "Copy chat ID",
     "chatIdCopied": "Chat ID copied",
-    "copyFailed": "Could not copy to clipboard",
     "closeChat": "Close chat",
     "phone": "Phone number",
     "chatId": "Chat ID",
@@ -627,7 +629,7 @@
     "filters": {
       "title": "Filters (optional)",
       "hint": "Only fire when all conditions match. Applies to message events.",
-      "incomplete": "Give every filter condition a value, and use at most 20 conditions, 100 values per condition and 1000 characters of text.",
+      "incomplete": "Give every filter condition a value, and use at most 20 conditions, 100 values per condition, 128 characters per ID and 1000 characters of text.",
       "badge": "{{count}} filter",
       "badge_other": "{{count}} filters",
       "addCondition": "Add condition",
@@ -843,8 +845,8 @@
     "confirm": {
       "deleteTitle": "Delete API Key",
       "revokeTitle": "Revoke API Key",
-      "deleteMessage": "Are you sure you want to permanently delete <strong>{{name}}</strong>? This action cannot be undone.",
-      "revokeMessage": "Are you sure you want to revoke <strong>{{name}}</strong>? It will no longer work.",
+      "deleteMessage": "Are you sure you want to permanently delete <name/>? This action cannot be undone.",
+      "revokeMessage": "Are you sure you want to revoke <name/>? It will no longer work.",
       "signedIn": "This dashboard is signed in with this key. Revoking or deleting it signs you out.",
       "delete": "Delete",
       "revoke": "Revoke"
@@ -1146,6 +1148,7 @@
       "reason409": "The session is not connected",
       "reason429": "The gateway rate limit was reached",
       "reason503": "WhatsApp did not answer a lookup",
+      "reasonReloading": "WhatsApp Web is reloading its page",
       "reasonOther": "The gateway refused a lookup",
       "partial": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} number was not sent. Try again later.",
       "partial_other": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} numbers were not sent. Try again later.",

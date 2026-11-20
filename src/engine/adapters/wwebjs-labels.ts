@@ -1,17 +1,15 @@
 import { NotFoundException } from '@nestjs/common';
 import { type Chat, type Client } from 'whatsapp-web.js';
-import { mapWwebjsMessageType } from './message-mapper';
 import { Label, ChatSummary } from '../interfaces/whatsapp-engine.interface';
 import { GroupChat, BusinessClient, readWid } from '../types/whatsapp-web-js.types';
-import { isChannelJid, chatKind } from '../identity/wa-id';
+import { isChannelJid } from '../identity/wa-id';
 import { ChatLabelsUnsupportedError } from '../../common/errors/chat-labels-unsupported.error';
 import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { type WwebjsEngineHost, navigationsSeen, rethrowIfNavigation, withPageWrite } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
-import { isPageInvariant, readChats, recoverGroupChatById } from './wwebjs-chats';
-import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
+import { isPageInvariant, readChats, recoverGroupChatById, summarizeChat } from './wwebjs-chats';
 
 /** The labels on a chat, read IN-PAGE as window.WWebJS.getChatLabels reads them without refreshing group metadata. */
 export async function readLocalChatLabels(chatId: string): Promise<Label[] | null> {
@@ -114,29 +112,8 @@ export class WwebjsLabels {
       // for chats that no longer resolve (Client.js getChatsByLabelId → ChatFactory) — the whole
       // entry, not just the id, so the optional chain must start at the entry itself.
       const id = chat?.id?._serialized;
-      if (!id) continue;
-      summaries.push({
-        id,
-        name: chat.name || id,
-        isGroup: Boolean(chat.isGroup),
-        kind: chatKind(id),
-        unreadCount: chat.unreadCount || 0,
-        timestamp: chat.timestamp || 0,
-        // As getChats: an entry nobody sent is not the chat's last message.
-        lastMessageType:
-          chat.lastMessage && !isNotice(chat.lastMessage) && !isUnlistedContentless(chat.lastMessage)
-            ? mapWwebjsMessageType(chat.lastMessage.type)
-            : undefined,
-        archived: Boolean(chat.archived),
-        pinned: Boolean(chat.pinned),
-        muted: Boolean(chat.isMuted),
-        // wwjs muteExpiration is epoch SECONDS with -1 = forever; expose ms (0 = indefinite), muted only.
-        muteExpiration: chat.isMuted
-          ? (chat.muteExpiration ?? 0) > 0
-            ? (chat.muteExpiration ?? 0) * 1000
-            : 0
-          : undefined,
-      });
+      if (!chat || !id) continue;
+      summaries.push(summarizeChat(chat, id));
     }
     return summaries;
   }

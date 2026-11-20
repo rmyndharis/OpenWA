@@ -1106,6 +1106,8 @@ export class InfraDataService {
 
         await queryRunner.commitTransaction();
         committed = true;
+        // The replace removed these sessions without a delete, so what this process keeps for them goes here.
+        for (const { id } of retired) this.sessionService?.forgetSession(id);
 
         // Runtime reconciliation, part 2 (post-commit): the in-memory lid->phone mirror was warmed from
         // the OLD lid_mappings rows and is write-through only, so the just-restored table would never

@@ -23,8 +23,8 @@ const NORMALIZED_ID_MARKER = /_normalizeId\(|\.\$1/;
 
 export const BACKPORT_MISSING_MESSAGE =
   'The installed whatsapp-web.js is missing the message-id backport this build requires. On current ' +
-  'WhatsApp Web builds every send will fail with "the engine returned no message" — even when the ' +
-  'message is delivered — and chat and media reads will fail with "r: r". The install skipped the ' +
+  'WhatsApp Web builds every send will fail with "the engine returned no message", even when the ' +
+  'message is delivered, and chat and media reads will fail with "r: r". The install skipped the ' +
   'patch, usually because neither the `patch` binary nor git was available. Apply it with ' +
   '`node scripts/patch-wwebjs-201832.js` (or reinstall with `npm install`) and restart. ' +
   'See docs/12-troubleshooting-faq.md.';

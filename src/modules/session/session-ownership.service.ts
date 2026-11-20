@@ -290,7 +290,6 @@ export class SessionOwnershipService {
       // Reconcile an existing claim through the heartbeat's loss checks, preserving a successful overlap.
       if (this.owned.has(sessionId)) await this.renew();
       else this.claimGen.delete(sessionId);
-      this.logger.warn('Session is held by another node', { sessionId, nodeId: this.nodeId });
     }
     return claimed;
   }

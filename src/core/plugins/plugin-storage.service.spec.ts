@@ -161,6 +161,83 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
     expect(JSON.parse(fs.readFileSync(packagePath, 'utf8'))).toEqual({ name: pluginId });
   });
 
+  // The legacy file is the key plus ".json" resolved as a path, so the guard asks whether that path names the package
+  // file itself and not how the key is spelled. "./manifest" always does. A case-insensitive filesystem also reaches it
+  // as "Manifest", and APFS as a spelling with a long s (U+017F) or, for package.json, a Kelvin sign (U+212A); on a
+  // case-sensitive one those are files of their own, and legacy keys that read and delete as before. The test asks the
+  // filesystem which it is, so each run covers the branch its filesystem takes.
+  it.each([
+    ['manifest', './manifest'],
+    ['manifest', './/manifest'],
+    ['manifest', 'Manifest'],
+    ['manifest', 'MANIFEST'],
+    ['manifest', 'manife\u017Ft'],
+    ['package', './package'],
+    ['package', './/package'],
+    ['package', 'Package'],
+    ['package', 'pac\u212Aage'],
+  ])('keeps %s.json out of reach of the key %p where the key names that file', async (name, key) => {
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    const own = path.join(pluginDataDir, `${name}.json`);
+    fs.writeFileSync(own, JSON.stringify({ code: name }));
+    const target = path.join(pluginDataDir, `${key}.json`);
+    const sameName = fs.existsSync(target) && fs.statSync(target).ino === fs.statSync(own).ino;
+
+    if (sameName) {
+      // The key reaches the package file: it is never a legacy key.
+      expect(await storage.get(key)).toBeNull();
+      await storage.delete(key);
+      expect(JSON.parse(fs.readFileSync(own, 'utf8'))).toEqual({ code: name });
+      // It is still an ordinary storage key: it stores and reads back through its encoded file.
+      await storage.set(key, { state: true });
+      expect(await storage.get(key)).toEqual({ state: true });
+      expect(JSON.parse(fs.readFileSync(own, 'utf8'))).toEqual({ code: name });
+    } else {
+      // A file of its own: a legacy key, read and deleted as before, and the package file is not touched.
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, JSON.stringify({ old: key }));
+      expect(await storage.get(key)).toEqual({ old: key });
+      await storage.delete(key);
+      expect(fs.existsSync(target)).toBe(false);
+      expect(JSON.parse(fs.readFileSync(own, 'utf8'))).toEqual({ code: name });
+    }
+  });
+
+  // A filesystem may report no file id (a zero, as some network and FUSE mounts do), which leaves nothing to compare:
+  // the keys that name the package files exactly are still never legacy keys.
+  it('keeps manifest.json and package.json out of reach of their exact names on a filesystem that reports no file id', async () => {
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    const own = {
+      manifest: path.join(pluginDataDir, 'manifest.json'),
+      package: path.join(pluginDataDir, 'package.json'),
+    };
+    fs.writeFileSync(own.manifest, JSON.stringify({ id: pluginId }));
+    fs.writeFileSync(own.package, JSON.stringify({ name: pluginId }));
+    const real = fs.statSync;
+    jest.spyOn(fs, 'statSync').mockImplementation((target: fs.PathLike, options?: fs.StatSyncOptions) => {
+      const stat = real(target, options) as unknown as fs.BigIntStats;
+      return options && 'bigint' in options && options.bigint ? Object.assign(stat, { ino: 0n }) : stat;
+    });
+
+    for (const key of ['manifest', 'package', './manifest', './/package']) {
+      expect(await storage.get(key)).toBeNull();
+      await storage.delete(key);
+    }
+
+    expect(JSON.parse(fs.readFileSync(own.manifest, 'utf8'))).toEqual({ id: pluginId });
+    expect(JSON.parse(fs.readFileSync(own.package, 'utf8'))).toEqual({ name: pluginId });
+  });
+
+  it('still reads and deletes a legacy key that only resembles a package file', async () => {
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    for (const key of ['manifests', 'manifest-old', 'package-lock']) {
+      fs.writeFileSync(path.join(pluginDataDir, `${key}.json`), JSON.stringify({ old: key }));
+      expect(await storage.get(key)).toEqual({ old: key });
+      await storage.delete(key);
+      expect(fs.existsSync(path.join(pluginDataDir, `${key}.json`))).toBe(false);
+    }
+  });
+
   it('lists no package file as a key when storage shares the package directory', async () => {
     // By default <dataDir>/plugins/<id> is both the installed package and ctx.storage, so a
     // clear-all loop over list() must not reach the package's own root JSON files.

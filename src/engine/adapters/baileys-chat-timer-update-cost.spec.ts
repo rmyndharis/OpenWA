@@ -57,14 +57,28 @@ describe('Baileys chat timer update cost', () => {
     expect(store.getEphemeralExpiration(phone(60))).toBeUndefined();
   });
 
-  it('does not walk the lid mappings for a batch that carries no timer', () => {
+  it('does not walk the lid mappings for a batch that carries no timer and dates every chat', () => {
     const { store, walks } = storeWithMappings(20);
     store.upsertChats([
       { id: phone(1), conversationTimestamp: 1_800_000_000 },
-      { id: lid(2), name: 'Ada' },
+      { id: lid(2), name: 'Ada', conversationTimestamp: 1_800_000_000 },
     ]);
 
     expect(walks).not.toHaveBeenCalled();
+  });
+
+  // An app-state sync names a chat's pin, mute or archive under the spelling WhatsApp indexes it by, with no time: each
+  // looks for the chat under its other spelling, and a first sync can carry thousands.
+  it('walks the lid mappings once for a whole batch of states that name no time', () => {
+    const { store, walks } = storeWithMappings(100);
+    store.upsertChats(
+      Array.from({ length: 50 }, (_, i) => ({ id: i % 2 ? phone(i) : lid(i), conversationTimestamp: 1 })),
+    );
+    walks.mockClear();
+    store.upsertChats(Array.from({ length: 50 }, (_, i) => ({ id: i % 2 ? lid(i) : phone(i), pinned: 1_800_000_000 })));
+
+    expect(walks).toHaveBeenCalledTimes(1);
+    expect(store.listChats().map(chat => chat.pinned)).toEqual(Array.from({ length: 50 }, () => true));
   });
 
   it("keeps each holder's timer apart when one batch carries both chats of a phone mapped to two lids", () => {

@@ -1765,6 +1765,39 @@ function threadWithOlderPageOut(start: number, props: Partial<ComponentProps<typ
   return { ...rendered, requests, scroller, fail };
 }
 
+// A failed refresh of a thread that has pages is retried by pressing the strip, since scrolling up asks for an older page.
+test('the strip of a failed refresh is a button that retries it, and is disabled while the retry runs', () => {
+  let presses = 0;
+  const { container, rerenderProps } = renderThread('operator', [PROMPT], CHAT, {
+    messagesError: true,
+    refreshFailed: true,
+    refreshing: false,
+    onLoadOlderMessages: () => {
+      presses += 1;
+    },
+  });
+  const strip = () => container.querySelector<HTMLButtonElement>('button.messages-loading-older.failed.retry');
+  assert.ok(strip(), 'a failed refresh shows a strip that can be pressed');
+  assert.match(strip()?.textContent ?? '', /refresh the messages/i);
+  assert.ok(!/scroll up/i.test(strip()?.textContent ?? ''), 'a refresh is not retried by scrolling');
+  assert.equal(strip()?.disabled, false);
+
+  rtl.fireEvent.click(strip() as HTMLButtonElement);
+  assert.equal(presses, 1);
+
+  rerenderProps({ refreshing: true });
+  assert.equal(strip()?.disabled, true);
+  assert.equal(strip()?.getAttribute('aria-busy'), 'true');
+  rtl.fireEvent.click(strip() as HTMLButtonElement);
+  assert.equal(presses, 1, 'a retry that is running is not asked for again');
+});
+
+test('the strip of a failed older page is not a button, and a loading older page shows its spinner', () => {
+  const failed = renderThread('operator', [PROMPT], CHAT, { messagesError: true, refreshFailed: false });
+  assert.ok(failed.container.querySelector('.messages-loading-older.failed'));
+  assert.equal(failed.container.querySelector('button.messages-loading-older') === null, true);
+});
+
 test('a failure that lands with the reader at the top moves the thread one pixel, and asks for no page', () => {
   const { requests, scroller, fail } = threadWithOlderPageOut(0);
   fail();

@@ -593,7 +593,7 @@ test('replacing headers sends the whole map, and no rows sends an empty map', as
 });
 
 const FILTERS_HINT =
-  'Give every filter condition a value, and use at most 20 conditions, 100 values per condition and 1000 characters of text.';
+  'Give every filter condition a value, and use at most 20 conditions, 100 values per condition, 128 characters per ID and 1000 characters of text.';
 
 // FilterBuilder starts a condition as "sender is" with no contact, and the gateway refuses an empty
 // value list and more than 20 conditions. Either would come back as raw English in a toast.

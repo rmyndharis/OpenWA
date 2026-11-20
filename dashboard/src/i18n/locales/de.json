@@ -49,7 +49,8 @@
     "refresh": "Aktualisieren",
     "errorGeneric": "Ein Fehler ist aufgetreten",
     "unknownError": "Unbekannter Fehler",
-    "retry": "Erneut versuchen"
+    "retry": "Erneut versuchen",
+    "copyFailed": "Kopieren in die Zwischenablage fehlgeschlagen"
   },
   "theme": {
     "light": "Hell",
@@ -98,6 +99,8 @@
     "loadingOlderMessages": "Ältere Nachrichten werden geladen...",
     "loadOlderMessagesError": "Ältere Nachrichten konnten nicht geladen werden. Zum erneuten Versuch nach oben scrollen.",
     "loadOlderMessagesRetryHint": "Zum erneuten Versuch nach oben scrollen.",
+    "refreshMessagesError": "Nachrichten konnten nicht aktualisiert werden. Zum erneuten Versuch tippen.",
+    "refreshMessagesRetryHint": "Zum erneuten Versuch tippen.",
     "noMessagesInChat": "Noch keine Nachrichten. Sende die erste Nachricht, um zu beginnen!",
     "downloadDocument": "Dokument herunterladen",
     "actions": {
@@ -231,7 +234,6 @@
     "moreActions": "Weitere Aktionen",
     "copyChatId": "Chat-ID kopieren",
     "chatIdCopied": "Chat-ID kopiert",
-    "copyFailed": "Kopieren in die Zwischenablage fehlgeschlagen",
     "closeChat": "Chat schließen",
     "phone": "Telefonnummer",
     "chatId": "Chat-ID",
@@ -627,7 +629,7 @@
     "filters": {
       "title": "Filter (optional)",
       "hint": "Wird nur ausgelöst, wenn alle Bedingungen erfüllt sind. Gilt für Nachrichtenereignisse.",
-      "incomplete": "Gib jeder Filterbedingung einen Wert und verwende höchstens 20 Bedingungen, 100 Werte pro Bedingung und 1000 Zeichen Text.",
+      "incomplete": "Gib jeder Filterbedingung einen Wert und verwende höchstens 20 Bedingungen, 100 Werte pro Bedingung, 128 Zeichen pro ID und 1000 Zeichen Text.",
       "badge": "{{count}} Filter",
       "badge_other": "{{count}} Filter",
       "addCondition": "Bedingung hinzufügen",
@@ -843,8 +845,8 @@
     "confirm": {
       "deleteTitle": "API-Schlüssel löschen",
       "revokeTitle": "API-Schlüssel widerrufen",
-      "deleteMessage": "Möchtest du <strong>{{name}}</strong> wirklich dauerhaft löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
-      "revokeMessage": "Möchtest du <strong>{{name}}</strong> wirklich widerrufen? Der Schlüssel funktioniert anschließend nicht mehr.",
+      "deleteMessage": "Möchtest du <name/> wirklich dauerhaft löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
+      "revokeMessage": "Möchtest du <name/> wirklich widerrufen? Der Schlüssel funktioniert anschließend nicht mehr.",
       "signedIn": "Dieses Dashboard ist mit diesem Schlüssel angemeldet. Wenn du ihn widerrufst oder löschst, wirst du abgemeldet.",
       "delete": "Löschen",
       "revoke": "Widerrufen"
@@ -1146,6 +1148,7 @@
       "reason409": "Die Sitzung ist nicht verbunden",
       "reason429": "Das Anfragelimit des Gateways wurde erreicht",
       "reason503": "WhatsApp hat eine Abfrage nicht beantwortet",
+      "reasonReloading": "WhatsApp Web lädt seine Seite neu",
       "reasonOther": "Das Gateway hat eine Abfrage abgelehnt",
       "partial": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummer wurde nicht geprüft. Versuche es später erneut.",
       "partial_other": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummern wurden nicht geprüft. Versuche es später erneut.",

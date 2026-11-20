@@ -44,6 +44,25 @@ function hasPluginPackages(dir: string): boolean {
   }
 }
 
+/** Whether the symbolic link at `p` leads to a directory (a dangling link, or one to a file, does not). */
+function isLinkToDirectory(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `dir` holds the package of plugin `pluginId`: a manifest.json that names that id. */
+function holdsPackageOf(dir: string, pluginId: string): boolean {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf-8')) as { id?: unknown } | null;
+    return manifest?.id === pluginId;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The boot-scan half of the plugin runtime: find plugin packages on disk (the configured plugins dir
  * plus the legacy compatibility tree), validate each manifest against the install contract, and
@@ -165,6 +184,16 @@ export class PluginPackageScanner {
       // Skip non-directories and dot-prefixed dirs (e.g. a crash-leftover `.<id>.bak` update backup or
       // `.<id>.new` staging tree), so a half-finished update can't be re-loaded as a duplicate-id
       // plugin on the next boot. recoverInterruptedUpdates has already reconciled them by this point.
+      // A symbolic link is not a directory to Dirent, so a plugin directory that is a link lands here too: it is
+      // not followed, and without a line in the log the plugin would just not appear.
+      if (entry.isSymbolicLink() && !entry.name.startsWith('.') && isLinkToDirectory(path.join(dir, entry.name))) {
+        this.logger.warn(
+          `Skipped ${entry.name}: it is a symbolic link, and a plugin directory is not followed through one. ` +
+            `Put the package itself in ${path.join(dir, entry.name)} (a copy or a bind mount).`,
+          { pluginPath: path.join(dir, entry.name), action: 'plugin_symlink_skipped' },
+        );
+        continue;
+      }
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
 
       // Already loaded by an earlier scan. Only reachable through the legacy-directory compatibility
@@ -279,9 +308,15 @@ export class PluginPackageScanner {
       if (!match) continue;
       const pluginId = match[1];
       const leftover = path.join(dir, entry.name);
+      const isStaging = entry.name === pluginUpdateStagingDirName(pluginId);
+      // The dot-name proves nothing: an operator's own `.cache.bak` fits it, and would be renamed or deleted below.
+      // Only a tree that holds the package of that plugin is an update leftover; any other is left as it is. A
+      // staging tree a crash cut short may not hold its manifest yet, so the registry entry of an installed plugin
+      // vouches for that one.
+      if (!holdsPackageOf(leftover, pluginId) && !(isStaging && this.pluginStorage.getPluginEntry(pluginId))) continue;
       const liveDir = path.join(dir, pluginId);
       try {
-        if (entry.name === pluginUpdateStagingDirName(pluginId)) {
+        if (isStaging) {
           fs.rmSync(leftover, { recursive: true, force: true });
           this.logger.warn(`Dropped stale update staging for plugin ${pluginId}`, {
             pluginId,

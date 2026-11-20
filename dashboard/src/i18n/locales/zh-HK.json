@@ -49,7 +49,8 @@
     "refresh": "重新整理",
     "errorGeneric": "發生錯誤",
     "unknownError": "未知錯誤",
-    "retry": "重試"
+    "retry": "重試",
+    "copyFailed": "無法複製到剪貼簿"
   },
   "theme": {
     "light": "淺色",
@@ -98,6 +99,8 @@
     "loadingOlderMessages": "正在載入較舊的訊息...",
     "loadOlderMessagesError": "無法載入較舊的訊息。向上捲動重試。",
     "loadOlderMessagesRetryHint": "向上捲動重試。",
+    "refreshMessagesError": "無法重新整理訊息。輕按重試。",
+    "refreshMessagesRetryHint": "輕按重試。",
     "noMessagesInChat": "尚無訊息。傳送第一則訊息即可開始！",
     "downloadDocument": "下載文件",
     "actions": {
@@ -231,7 +234,6 @@
     "moreActions": "更多操作",
     "copyChatId": "複製聊天 ID",
     "chatIdCopied": "已複製聊天 ID",
-    "copyFailed": "無法複製到剪貼簿",
     "closeChat": "關閉聊天",
     "phone": "電話號碼",
     "chatId": "聊天 ID",
@@ -627,7 +629,7 @@
     "filters": {
       "title": "篩選條件（選填）",
       "hint": "僅當所有條件都符合時才觸發。適用於訊息事件。",
-      "incomplete": "請為每個篩選條件填寫值，且條件最多 20 個、每個條件最多 100 個值、文字最多 1000 個字元。",
+      "incomplete": "請為每個篩選條件填寫值，且條件最多 20 個、每個條件最多 100 個值、每個 ID 最多 128 個字元、文字最多 1000 個字元。",
       "badge": "{{count}} 個篩選條件",
       "badge_other": "{{count}} 個篩選條件",
       "addCondition": "新增條件",
@@ -843,8 +845,8 @@
     "confirm": {
       "deleteTitle": "刪除 API 金鑰",
       "revokeTitle": "撤銷 API 金鑰",
-      "deleteMessage": "確定要永久刪除 <strong>{{name}}</strong> 嗎？此操作無法復原。",
-      "revokeMessage": "確定要撤銷 <strong>{{name}}</strong> 嗎？它將無法再使用。",
+      "deleteMessage": "確定要永久刪除 <name/> 嗎？此操作無法復原。",
+      "revokeMessage": "確定要撤銷 <name/> 嗎？它將無法再使用。",
       "signedIn": "此控制台正以此金鑰登入。撤銷或刪除此金鑰會令你登出。",
       "delete": "刪除",
       "revoke": "撤銷"
@@ -1146,6 +1148,7 @@
       "reason409": "工作階段未連線",
       "reason429": "已達到閘道的速率限制",
       "reason503": "WhatsApp 沒有回應查詢",
+      "reasonReloading": "WhatsApp Web 正在重新載入頁面",
       "reasonOther": "閘道拒絕了一次查詢",
       "partial": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 個號碼處停止（共 {{total}} 個），其餘 {{count}} 個號碼未查詢。請稍後再試。",
       "partial_other": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 個號碼處停止（共 {{total}} 個），其餘 {{count}} 個號碼未查詢。請稍後再試。",

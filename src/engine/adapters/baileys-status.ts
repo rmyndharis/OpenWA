@@ -1,10 +1,17 @@
 import type { AnyMessageContent, WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { MediaInput, StatusPostOptions, StatusResult } from '../interfaces/whatsapp-engine.interface';
 import { BadRequestException } from '@nestjs/common';
-import { mapSendRefusal, resolveMediaBuffer } from './baileys-messaging';
+import {
+  CONNECTION_LOST_DURING_STATUS_POST,
+  CONNECTION_LOST_DURING_STATUS_REVOKE,
+  mapSendRefusal,
+  resolveMediaBuffer,
+  uploadBeforeRelay,
+} from './baileys-messaging';
 import { describeAudio, describeVideo } from './baileys-audio-probe';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { markNothingSent, markOutcomeUnknown, provesNothingSent } from '../../common/errors/engine-not-sent.error';
 import { BAILEYS_QUERY_BUDGET_MS } from './baileys-query-deadline';
 
 /** How long WhatsApp keeps a status up. */
@@ -47,20 +54,28 @@ export class BaileysStatus {
 
   /**
    * Send to `status@broadcast`. A send that fails after a stop or logout has torn its socket down is
-   * not ready (409), as a chat send is; a failure on a socket still in place propagates. A proxied
+   * not ready (409), as a chat send is, and says what `lost` says about the post or the revoke; a failure on a socket
+   * still in place propagates. A proxied
    * session's media upload gets a deadline, as a chat send's does (BaileysMessaging.uploadTimeoutMs).
    */
   private async sendStatus(
     content: AnyMessageContent,
     options: Parameters<WASocket['sendMessage']>[2],
     expected?: WASocket,
+    lost = CONNECTION_LOST_DURING_STATUS_POST,
   ): Promise<WAMessage | undefined> {
     const sock = this.sock(expected);
     const deadline = this.host.sessionProxyUrl() ? { mediaUploadTimeoutMs: BAILEYS_QUERY_BUDGET_MS } : {};
+    // The library takes this option and its type does not list it, so it goes through a variable.
+    const sendOptions = { ...options, ...deadline, upload: uploadBeforeRelay(sock) };
     try {
-      return await sock.sendMessage('status@broadcast', content, { ...options, ...deadline });
+      return await sock.sendMessage('status@broadcast', content, sendOptions);
     } catch (error) {
-      if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
+      // As a chat send: the write may already be on the wire, unless the failure proves it was never reached.
+      if (this.host.getSocketOrNull() !== sock)
+        throw provesNothingSent(error)
+          ? markNothingSent(new EngineNotReadyError())
+          : markOutcomeUnknown(new EngineNotReadyError(lost));
       throw mapSendRefusal(error);
     }
   }
@@ -144,6 +159,8 @@ export class BaileysStatus {
         },
       },
       { statusJidList: audience.jids },
+      undefined,
+      CONNECTION_LOST_DURING_STATUS_REVOKE,
     );
     this.host.rememberOwnSend(sent?.key?.id);
   }

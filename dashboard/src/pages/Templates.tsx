@@ -229,7 +229,7 @@ export function Templates() {
   const copyName = async (name: string) => {
     if (await copyToClipboard(name)) {
       toast.success(t('templates.toasts.copied'));
-    }
+    } else toast.error(t('common.copyFailed'));
   };
 
   if (loadingSessions) {

@@ -176,6 +176,12 @@ export class GroupController {
   @ApiResponse({ status: 400, description: 'Session not started, or no code supplied' })
   @ApiResponse({ status: 404, description: 'No such invite — invalid, expired or revoked' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({
+    status: 501,
+    description:
+      'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to preview an invite with. ' +
+      'Nothing was asked of WhatsApp: the invite code is not judged.',
+  })
   async joinInfo(@Param('sessionId') sessionId: string, @Query('code') code: string) {
     return this.groupService.getGroupJoinInfo(sessionId, code);
   }

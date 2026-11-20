@@ -467,9 +467,12 @@ OPENWA_GENERATED_ENV="${DATA_DIR:-./data}/.env.generated"
 openwa_env() {
   local LC_ALL=C v re="^([[:space:]]|$OPENWA_BLANK)*\$"
   v="$(printenv "$1" 2>/dev/null || true)"
-  if [ "$1" != PLUGINS_DIR ] && [ "$1" != DATABASE_URL ] && [[ $v =~ $re ]]; then v=""; fi
+  if ! openwa_env_as_written "$1" && [[ $v =~ $re ]]; then v=""; fi
   printf '%s' "$v"
 }
+
+# openwa_env_as_written <key> - whether the app leaves a blank value of <key> alone: PLUGINS_DIR and DATABASE_URL.
+openwa_env_as_written() { [ "$1" = PLUGINS_DIR ] || [ "$1" = DATABASE_URL ]; }
 
 # openwa_resolve <key> <default> [path] - the application's precedence: environment, then ./.env,
 # then $OPENWA_GENERATED_ENV, then the built-in default. Requires DATA_DIR to be set before sourcing.
@@ -487,6 +490,12 @@ openwa_resolve() {
   current="$(openwa_env "$key")"
   if [ -n "$current" ]; then
     printf '%s' "$current"
+    return 0
+  fi
+  # A key the app does not clear that is exported empty is set: dotenv keeps it and the app reads its default
+  # (PLUGINS_DIR || default), so the files below do not supply it. Only printenv's status tells set from unset here.
+  if openwa_env_as_written "$key" && printenv "$key" >/dev/null 2>&1; then
+    printf '%s' "$fallback"
     return 0
   fi
   # The first layer that sets the key ends the lookup, even with a blank value: dotenv sets a blank

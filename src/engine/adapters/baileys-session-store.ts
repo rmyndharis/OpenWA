@@ -349,12 +349,14 @@ export class BaileysSessionStore {
       const merged: BaileysContact = { id: existing.id };
       this.assignDefined(merged, existing);
       this.assignDefined(merged, { ...r, id });
-      // A history chunk titles a privacy-id chat by the id's own digits when it has no name: that is no name, and it
-      // replaces none the contact already holds, whichever of the three fields it came in.
+      // A history chunk titles a privacy-id chat by the id's own digits when it has no name: that is no name, so it is
+      // stored as none and replaces none the contact already holds, whichever of the three fields it came in.
       for (const field of ['name', 'verifiedName', 'notify'] as const) {
-        const held = existing[field];
         const incoming = r[field];
-        if (held && incoming && this.isLidIdentityLabel(id, incoming)) merged[field] = held;
+        if (!incoming || !this.isLidIdentityLabel(id, incoming)) continue;
+        const held = existing[field];
+        if (held === undefined) delete merged[field];
+        else merged[field] = held;
       }
       this.contacts.set(id, merged);
       // Capture a lid->phone pair from the merged record (lid + phone can arrive in separate updates).
@@ -427,9 +429,10 @@ export class BaileysSessionStore {
   }
 
   upsertChats(records: Partial<Chat>[] = []): void {
-    // A phone's twins come from a walk of every lid mapping, and a history chunk can carry thousands of chats
-    // with a timer: their timer keys read one index of the mappings, built for the batch (the loop adds none).
-    const lidIndex = records.some(c => Object.hasOwn(c, 'ephemeralExpiration')) ? this.lidKeysByPhone() : undefined;
+    // A phone's twins come from a walk of every lid mapping, and a history chunk or an app-state sync can carry thousands
+    // of chats with a timer or a state alone: their twins read one index of the mappings, built once for the batch (the
+    // loop adds none).
+    let lidIndex = records.some(c => Object.hasOwn(c, 'ephemeralExpiration')) ? this.lidKeysByPhone() : undefined;
     for (const record of records) {
       const r = this.withoutStaleTimer(record, lidIndex);
       if (!r.id) {
@@ -457,16 +460,23 @@ export class BaileysSessionStore {
       const messageTime = droppedMessageTime(record);
       const dated =
         messageTime !== undefined && !this.holdsTime(r.id, lidIndex) ? { ...r, conversationTimestamp: messageTime } : r;
-      // Baileys adds this pair to the update of a counted message, and to a plain reaction to the account's own
-      // message, when the account unarchives on a new message. It names no time and no message, so it proves no
-      // chat: a record under a spelling of the id that has none would be a second row at the epoch, also for a chat
-      // held under the other spelling. Whatever state it carries still goes to a chat that has a persisted row, which
-      // a contact's message unarchives as it always has.
-      if (unarchivesOnly(dated) && !this.chats.has(r.id)) {
+      // An update that names no time and no message proves no chat: a pin, mute, archive, read mark or timer synced
+      // under the other spelling of a chat listed under one would be a second row at the epoch, so it goes to that
+      // chat. The pair Baileys adds to the update of a counted message, and to a plain reaction to the account's own
+      // message, when the account unarchives on a new message, creates no record for a chat listed under no spelling;
+      // whatever state it carries still goes to a chat that has a persisted row, which a contact's message unarchives.
+      const namesNoChat =
+        !this.chats.has(r.id) &&
+        !this.toUnixSeconds(dated.conversationTimestamp) &&
+        !dated.messages?.length &&
+        Object.keys(dated).some(field => field !== 'id' && field !== 'conditional');
+      if (namesNoChat) lidIndex ??= this.lidKeysByPhone();
+      const key = namesNoChat ? (this.listedTwin(r.id, lidIndex) ?? (unarchivesOnly(dated) ? undefined : r.id)) : r.id;
+      if (!key) {
         this.persistChatState(r.id, dated);
         continue;
       }
-      const existing: StoredChat = this.chats.get(r.id) ?? { id: r.id };
+      const existing: StoredChat = this.chats.get(key) ?? { id: key };
       const applied = this.withoutReadEcho(dated, existing);
       // A count that replaces a mark set by hand leaves the mark on the account: the record remembers it, so the
       // read that covers the message undoes the mark as well. Any other count the update carries (a read or a mark
@@ -476,10 +486,27 @@ export class BaileysSessionStore {
       const markCovered = Object.hasOwn(applied, 'unreadCount')
         ? (applied.unreadCount ?? 0) > 0 && ((existing.unreadCount ?? 0) < 0 || existing.markCovered === true)
         : existing.markCovered;
-      this.chats.set(r.id, { ...existing, ...applied, ...(markCovered === undefined ? {} : { markCovered }) });
+      this.chats.set(key, { ...existing, ...applied, id: key, ...(markCovered === undefined ? {} : { markCovered }) });
       this.persistChatState(r.id, applied);
       this.applyChatTimer(r.id, applied, lidIndex);
     }
+  }
+
+  /**
+   * The other spelling a chat is listed under ({@link listChats}): its most recently active record, else one with a
+   * preview, else the state key of a persisted state. A phone mapped to more than one lid is no one chat's
+   * ({@link timerKeys}).
+   */
+  private listedTwin(chatId: string, lidIndex?: Map<string, string[]>): string | undefined {
+    const twins = [...this.timerKeys(chatId, lidIndex)].filter(key => key !== chatId);
+    const time = (key: string) => this.toUnixSeconds(this.chats.get(key)?.conversationTimestamp);
+    const state = this.stateKey(chatId);
+    const persisted = state !== chatId && this.sessionId && this.chatStateStore?.get(this.sessionId, state);
+    return (
+      twins.filter(key => this.chats.has(key)).sort((a, b) => time(b) - time(a))[0] ??
+      twins.find(key => this.lastMessages.has(key) || this.storedPreviews.has(key)) ??
+      (persisted ? state : undefined)
+    );
   }
 
   /** Whether a record of the chat, under any spelling of it, carries a time. A recorded message dates the listing itself. */
@@ -1112,10 +1139,13 @@ export class BaileysSessionStore {
     }
     // A new engine starts with no chats (see the class comment), but a chat with a persisted state is
     // known to exist, unless the row marks its deletion. So it is listed before its next message arrives.
+    // The row sits under the chat's state key, the phone of a chat that can be listed under its lid, whose
+    // row reads it: listed under any spelling, the chat takes no second row for it.
     if (this.chatStateStore && this.sessionId) {
       for (const chatId of this.chatStateStore.chatIds(this.sessionId)) {
         const id = this.toNeutralJid(chatId);
-        if (!byId.has(id)) byId.set(id, [{ id: chatId }]);
+        if (byId.has(id) || this.chatTwins(chatId, lidIndex).some(key => byId.has(this.toNeutralJid(key)))) continue;
+        byId.set(id, [{ id: chatId }]);
       }
     }
     return [...byId].flatMap(([id, records]) => this.toNeutralChat(id, records, previews.get(id), lidIndex) ?? []);

@@ -23,8 +23,8 @@ class ChatsResource
 
     /**
      * Entries include lastMessageType when the engine knows the last message kind. On Baileys, `name` is `''` for
-     * a chat held under a privacy id (`@lid`) that has no name of its own; `phone`, when present, is the number
-     * to show.
+     * a chat held under a privacy id (`@lid`) that has no name of its own; `phone` (Baileys only; whatsapp-web.js
+     * sends none), when present, is the number to show.
      *
      * @param array<string,mixed> $query
      * @return array<int,array<string,mixed>>

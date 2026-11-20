@@ -61,6 +61,7 @@ const FOCUS_CUES: [string, string[]][] = [
       '.chats-page .search-clear:focus-visible',
       '.chats-page .new-group-name:focus',
       '.chats-page .message-bubble-container:focus-visible',
+      '.chats-page .messages-loading-older.failed.retry:focus-visible',
       '.chats-page .message-input-pill:focus-within',
       '.chats-page .status-compose-modal textarea:focus',
       '.chats-page .status-compose-modal input:focus',

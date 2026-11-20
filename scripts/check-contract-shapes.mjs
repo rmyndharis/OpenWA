@@ -37,6 +37,11 @@
  * loudly instead of being skipped (the vacuous-pass failure mode), and the run refuses to gate
  * fewer than 8 pairs per client for the same reason (the dashboard's mappable surface is smaller than the SDK's; exclusions are explicit and counted either way).
  *
+ * The contract keeps `integer` apart from `number`. A whole-number hand type (Python int, the Go int kinds, Java
+ * int, long, Integer and Long) and JavaScript's one `number` conform to an integer; a fractional one (Python float,
+ * Go float64, Java double and Double) does not, since the gateway answers 400 for a fraction where the field is
+ * validated as an integer. A contract `number` takes every numeric kind.
+ *
  * Not read by the hand parser: the members of a type alias written as an object literal or an
  * intersection (`type X = { ... }`, `A & B`), and of an array of inline objects. A field typed through
  * one of them is held to presence and optionality, and the members behind it are not compared.
@@ -48,10 +53,10 @@
  *
  * An excluded pair listed in NAMES_ONLY is still compared by field NAME in both directions (not by
  * optionality or token), so a renamed or dropped field in it fails the run. Those are the Go and Java
- * response types whose field TYPES are deliberately looser than the contract: a plain string where the
+ * types, and the dashboard types that model client state, whose field TYPES are deliberately looser than the contract: a plain string where the
  * contract lists a vocabulary keeps a value the server adds later decodable and callers' string
- * handling compiling, and a defined type or a changed pointer would be a source break for a
- * published client. Only a pair whose every other field conforms belongs there; one that cannot be
+ * handling compiling, and a defined type, a changed pointer or a changed numeric kind would be a source
+ * break for a published client. Only a pair whose every other field conforms belongs there; one that cannot be
  * read as wire fields at all (a hand-written MarshalJSON, a client-side flag) stays whole-excluded.
  *
  * A mapping only gates the types somebody remembered to list, so a new DTO used to ship ungated by
@@ -289,8 +294,29 @@ const EXCLUDED = {
  * EXCLUDED: the run fails on one that is not, so a retyped pair cannot keep the weaker comparison.
  */
 const NAMES_ONLY = {
-  'sdk/go': ['ContactRecord', 'GroupPictureResponse', 'GroupSettings', 'StatusRecord', 'AuthValidateResponse'],
+  'sdk/go': [
+    'ContactRecord',
+    'GroupPictureResponse',
+    'GroupSettings',
+    'StatusRecord',
+    'AuthValidateResponse',
+    'CreateWebhookRequest',
+    'UpdateWebhookRequest',
+    'WebhookResponse',
+    'MembershipRequestActionRequest',
+  ],
   'sdk/java': ['GroupSettings', 'StatusRecord', 'AuthValidateResponse'],
+  'dashboard/src/services/api.ts': ['Webhook', 'Session'],
+};
+
+/**
+ * Fields a client types as a float where the contract says integer (the gateway answers 400 for a fraction), because an
+ * integer type would break callers that pass a float. Only the listed field accepts the float kind: the rest of its pair
+ * stays fully compared, which listing the whole pair in EXCLUDED did not leave. Keyed by client, then hand type name.
+ */
+const FLOAT_FOR_INTEGER = {
+  'sdk/go': { CreateCallLinkRequest: ['startTime'] },
+  'sdk/java': { CreateCallLinkRequest: ['startTime'] },
 };
 
 const ACK_SHAPE =
@@ -958,9 +984,7 @@ function baseSchemaToken(node, schemas, depth = 0) {
     );
     return `object(${props.sort().join(',')})`;
   }
-  const t = node.type ?? 'any';
-  if (t === 'integer') return 'number';
-  return t;
+  return node.type ?? 'any';
 }
 
 /** Splits an object(...) token back into { field: { optional, token } } for field-level diffing. */
@@ -1008,9 +1032,23 @@ export function parseObjectToken(token) {
  *  above all, on every client at once. So does a null arm after an enum or an array: a nullable
  *  field was skipped, and with it the vocabulary of SessionProxy.proxyType. */
 function isSimpleToken(token) {
-  return /^(string|number|boolean|unknown|any)(\|null)?$|^enum\(\[[\s\S]*\]\)(\|null)?$|^array<((string|number|boolean)(\|null)?|enum\(\[[\s\S]*\]\))>(\|null)?$/.test(
+  return /^(string|number|integer|float|boolean|unknown|any)(\|null)?$|^enum\(\[[\s\S]*\]\)(\|null)?$|^array<((string|number|integer|float|boolean)(\|null)?|enum\(\[[\s\S]*\]\))>(\|null)?$/.test(
     token,
   );
+}
+
+/**
+ * Whether a hand token conforms to a contract token. Equal tokens do. Beyond that only the numeric kinds differ: a
+ * contract `number` takes every kind, and a contract `integer` takes an integer kind and JavaScript's `number` but
+ * never a float. The wrapper around the kind (an array, a null arm) must be the same on both sides.
+ */
+const NUMERIC_KIND = /^(array<)?(number|integer|float)((?:\|null)?>?(?:\|null)?)$/;
+function tokensAgree(hand, contract) {
+  if (hand === contract) return true;
+  const h = NUMERIC_KIND.exec(hand);
+  const c = NUMERIC_KIND.exec(contract);
+  if (!h || !c || h[1] !== c[1] || h[3] !== c[3]) return false;
+  return c[2] === 'number' || (c[2] === 'integer' && h[2] !== 'float');
 }
 
 function resolveObjectSchema(node, schemas) {
@@ -1036,6 +1074,7 @@ export function comparePair(
   schemas,
   compareOptionality = true,
   namesOnly = false,
+  floatFields = [],
 ) {
   const diffs = [];
   const ctx = memberContext.get(handMembers);
@@ -1067,6 +1106,7 @@ export function comparePair(
           schemas,
           compareOptionality,
           namesOnly,
+          floatFields,
         )) {
           diffs.push(`${field}.${subDiff}`);
         }
@@ -1090,14 +1130,22 @@ export function comparePair(
         // enums and keep comparing by presence.
         const enumMembers = /^enum\((\[[\s\S]*\])\)$/.exec(contract)?.[1];
         const members = enumMembers ? JSON.parse(enumMembers) : [];
-        if (hand === 'number' && members.length > 0 && members.every(value => typeof value === 'number')) {
+        // A scalar only: a list of integers is no stand-in for a scalar enum.
+        if (
+          /^(number|integer|float)$/.test(hand) &&
+          members.length > 0 &&
+          members.every(value => typeof value === 'number')
+        ) {
           hand = contract;
         }
       }
-      const absorbs = handInfo.absorbsNull && contract === `${hand}|null`;
+      // The one field a client deliberately types as a float for an integer contract (see FLOAT_FOR_INTEGER).
+      if (floatFields.includes(field) && /^float(\|null)?$/.test(hand))
+        contract = contract.replace(/^integer/, 'float');
+      const absorbs = handInfo.absorbsNull && tokensAgree(`${hand}|null`, contract);
       // Any other hand token is drift. One no parser could reduce (an alias that is not exported, an enum, a
       // type outside the known kinds) fails too: skipping it left the field uncompared while the run passed.
-      if (hand !== contract && !absorbs) {
+      if (!tokensAgree(hand, contract) && !absorbs) {
         const read = isSimpleToken(hand) || /^(?:union\(|object\(|array<|dict$|object$)/.test(hand);
         diffs.push(
           read
@@ -1282,7 +1330,8 @@ function pythonToken(text, resolve, depth = 0) {
   }
   const base = (() => {
     if (t === 'str') return 'string';
-    if (t === 'int' || t === 'float') return 'number';
+    if (t === 'int') return 'integer';
+    if (t === 'float') return 'float';
     if (t === 'bool') return 'boolean';
     if (t === 'Any') return 'any';
     if (t === 'list' || t === 'List') return 'unknown';
@@ -1326,9 +1375,9 @@ export function parseGoTypes(sources) {
   // A time.Time marshals to an RFC 3339 string.
   const kindMap = {
     string: 'string',
-    int: 'number',
-    int64: 'number',
-    float64: 'number',
+    int: 'integer',
+    int64: 'integer',
+    float64: 'float',
     bool: 'boolean',
     any: 'any',
     'time.Time': 'string',
@@ -1411,23 +1460,23 @@ export function parseJavaTypes(sources) {
   const records = {};
   const primMap = {
     String: 'string',
-    int: 'number',
-    long: 'number',
-    double: 'number',
-    float: 'number',
+    int: 'integer',
+    long: 'integer',
+    double: 'float',
+    float: 'float',
     boolean: 'boolean',
-    Integer: 'number',
-    Long: 'number',
+    Integer: 'integer',
+    Long: 'integer',
     // The boxed numerics as a family: a component typed `Double` resolved to the bare class name,
     // which is not a simple token, so its type went uncompared while the field counted as present.
-    Double: 'number',
-    Float: 'number',
-    Short: 'number',
-    Byte: 'number',
+    Double: 'float',
+    Float: 'float',
+    Short: 'integer',
+    Byte: 'integer',
     Boolean: 'boolean',
     JsonObject: 'any',
     Object: 'any',
-    BigDecimal: 'number',
+    BigDecimal: 'float',
     Instant: 'string',
     LocalDate: 'string',
   };
@@ -1682,6 +1731,7 @@ if (isDirectRun) {
       excluded: EXCLUDED['sdk/go'] ?? {},
       namesOnly: NAMES_ONLY['sdk/go'] ?? [],
       floor: MINIMUM_MAPPED['sdk/go'],
+      floatFields: FLOAT_FOR_INTEGER['sdk/go'],
       compareOptionality: true,
       sdk: true,
     },
@@ -1692,6 +1742,7 @@ if (isDirectRun) {
       excluded: EXCLUDED['sdk/java'] ?? {},
       namesOnly: NAMES_ONLY['sdk/java'] ?? [],
       floor: MINIMUM_MAPPED['sdk/java'],
+      floatFields: FLOAT_FOR_INTEGER['sdk/java'],
       compareOptionality: false,
       sdk: true,
     },
@@ -1732,7 +1783,16 @@ if (isDirectRun) {
         }
         fileCompared++;
         compared++;
-        const diffs = comparePair(handName, hand, schemaName, schema, schemas, client.compareOptionality, namesOnly);
+        const diffs = comparePair(
+          handName,
+          hand,
+          schemaName,
+          schema,
+          schemas,
+          client.compareOptionality,
+          namesOnly,
+          client.floatFields?.[handName],
+        );
         if (diffs.length) {
           fileResults.push(`  ${handName} ↔ ${schemaName}:`, ...diffs.map(d => `    ${d}`));
           failures++;

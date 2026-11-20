@@ -255,6 +255,38 @@ describe('handleToolError code', () => {
 
     expect(body.code).toBe('x'.repeat(64));
   });
+
+  // The interval a REST answer names (the page reload 409, the send pacing 429) is how long an agent should wait.
+  it('carries the retryAfterSeconds of an HTTP error that has one, beside its code', () => {
+    const error = new ConflictException({
+      statusCode: 409,
+      error: 'Conflict',
+      message: 'WhatsApp Web is reloading its page.',
+      code: 'ENGINE_PAGE_RELOADING',
+      retryAfterSeconds: 5,
+    });
+
+    expect(answer(error)).toEqual({
+      success: false,
+      name: 'ConflictException',
+      message: 'WhatsApp Web is reloading its page.',
+      code: 'ENGINE_PAGE_RELOADING',
+      retryAfterSeconds: 5,
+    });
+  });
+
+  it('carries a retryAfterSeconds of zero', () => {
+    expect(answer(new ConflictException({ message: 'wait', retryAfterSeconds: 0 })).retryAfterSeconds).toBe(0);
+  });
+
+  it.each(['5', -1, Number.NaN, Number.POSITIVE_INFINITY, null, undefined, {}])(
+    'adds no retryAfterSeconds when the error carries %p',
+    retryAfterSeconds => {
+      const body = answer(new ConflictException({ message: 'wait', retryAfterSeconds }));
+
+      expect(body).not.toHaveProperty('retryAfterSeconds');
+    },
+  );
 });
 
 describe('smartToolResult with MCP_MAX_RESULT_BYTES (an opt-in cap that makes every result text)', () => {

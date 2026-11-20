@@ -42,6 +42,12 @@
   min-width: 0;
 }
 
+/* The wrapper of the name and version is a flex item, which will not shrink below its content, so a long name was
+   clipped by the card with no ellipsis. */
+.plugins-page .plugin-info > div:not(.plugin-icon-wrapper) {
+  min-width: 0;
+}
+
 .plugins-page .plugin-icon-wrapper {
   width: 42px;
   height: 42px;

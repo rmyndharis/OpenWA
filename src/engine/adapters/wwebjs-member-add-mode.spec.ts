@@ -9,11 +9,11 @@ import type { GroupMetadata } from '@whiskeysockets/baileys';
  * each encoding to the neutral value it must produce.
  *
  *  - whatsapp-web.js runtime: WhatsApp's raw strings 'admin_add' / 'all_member_add'
- *    (GroupChat.js:476, and the WA Web group model it reads from).
+ *    (GroupChat.js, and the WA Web group model it reads from).
  *  - whatsapp-web.js types:   `boolean`, documented as "true = only admins can add"
- *    (index.d.ts:885-890) — not what the runtime actually stores, but decoded anyway.
+ *    (index.d.ts) — not what the runtime actually stores, but decoded anyway.
  *  - Baileys:                 `boolean` where TRUE means all_member_add — the OPPOSITE sense
- *    (Socket/groups.js:304).
+ *    (Socket/groups.js).
  */
 describe('member-add-mode normalisation across engines', () => {
   describe('whatsapp-web.js', () => {

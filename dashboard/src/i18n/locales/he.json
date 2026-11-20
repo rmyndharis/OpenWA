@@ -53,7 +53,8 @@
     "refresh": "רענון",
     "errorGeneric": "אירעה שגיאה",
     "unknownError": "שגיאה לא ידועה",
-    "retry": "נסה שוב"
+    "retry": "נסה שוב",
+    "copyFailed": "ההעתקה ללוח נכשלה"
   },
   "theme": {
     "light": "בהיר",
@@ -104,6 +105,8 @@
     "loadingOlderMessages": "טוען הודעות ישנות יותר...",
     "loadOlderMessagesError": "טעינת ההודעות הישנות נכשלה. גלול למעלה כדי לנסות שוב.",
     "loadOlderMessagesRetryHint": "גלול למעלה כדי לנסות שוב.",
+    "refreshMessagesError": "רענון ההודעות נכשל. הקש כדי לנסות שוב.",
+    "refreshMessagesRetryHint": "הקש כדי לנסות שוב.",
     "noMessagesInChat": "אין הודעות עדיין. שלח את ההודעה הראשונה כדי להתחיל!",
     "downloadDocument": "הורדת מסמך",
     "actions": {
@@ -242,7 +245,6 @@
     "moreActions": "פעולות נוספות",
     "copyChatId": "העתקת מזהה הצ׳אט",
     "chatIdCopied": "מזהה הצ׳אט הועתק",
-    "copyFailed": "ההעתקה ללוח נכשלה",
     "closeChat": "סגירת הצ׳אט",
     "phone": "מספר טלפון",
     "chatId": "מזהה צ׳אט",
@@ -642,7 +644,7 @@
       "badge_two": "שני מסננים",
       "title": "מסננים (אופציונלי)",
       "hint": "הפעלה רק כאשר כל התנאים מתקיימים. חל על אירועי הודעות.",
-      "incomplete": "יש לתת ערך לכל תנאי סינון ולהשתמש בעד 20 תנאים, עד 100 ערכים לכל תנאי ועד 1000 תווי טקסט.",
+      "incomplete": "יש לתת ערך לכל תנאי סינון ולהשתמש בעד 20 תנאים, עד 100 ערכים לכל תנאי, עד 128 תווים לכל מזהה ועד 1000 תווי טקסט.",
       "addCondition": "הוספת תנאי",
       "removeCondition": "הסרת תנאי",
       "removeValue": "הסרת {{value}}",
@@ -856,8 +858,8 @@
     "confirm": {
       "deleteTitle": "מחיקת מפתח API",
       "revokeTitle": "שלילת מפתח API",
-      "deleteMessage": "האם למחוק לצמיתות את <strong>{{name}}</strong>? לא ניתן לשחזר פעולה זו.",
-      "revokeMessage": "האם לשלול את <strong>{{name}}</strong>? המפתח יפסיק לפעול.",
+      "deleteMessage": "האם למחוק לצמיתות את <name/>? לא ניתן לשחזר פעולה זו.",
+      "revokeMessage": "האם לשלול את <name/>? המפתח יפסיק לפעול.",
       "signedIn": "לוח הבקרה הזה מחובר עם המפתח הזה. שלילה או מחיקה שלו ינתקו אתכם.",
       "delete": "מחיקה",
       "revoke": "שלילה"
@@ -1161,6 +1163,7 @@
       "reason409": "ה-Session אינו מחובר",
       "reason429": "מגבלת הקצב של השער מוצתה",
       "reason503": "WhatsApp לא השיב לשאילתה",
+      "reasonReloading": "WhatsApp Web טוען מחדש את הדף שלו",
       "reasonOther": "השער סירב לשאילתה",
       "partial": "{{reason}} (HTTP {{status}}). הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}; {{count}} מספר לא נשלח. יש לנסות שוב מאוחר יותר.",
       "partial_many": "{{reason}} (HTTP {{status}}). הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}; {{count}} מספרים לא נשלחו. יש לנסות שוב מאוחר יותר.",

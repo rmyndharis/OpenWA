@@ -1185,7 +1185,10 @@ describe('A session deleted on one node while a peer shares the database', () =>
       return update.call(this, where, patch);
     });
 
-    await expect(a.service.delete(id)).rejects.toThrow('connection reset');
+    // The database did not answer the write, and nothing had been removed: the retryable 503.
+    const error = await a.service.delete(id).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as Error).message).toContain('nothing was deleted');
 
     expect(a.service.getEngine(id)).toBe(a.engines[0]);
     expect(a.engines[0].forceDestroy).not.toHaveBeenCalled();
@@ -1259,7 +1262,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
       await stopping;
       read.resolve();
 
-      await expect(deleting).rejects.toThrow('connection reset');
+      await expect(deleting).rejects.toBeInstanceOf(ServiceUnavailableException);
 
       expect((await sessions.findOneByOrFail({ id })).desiredState).toBe('stopped');
     },
@@ -1281,7 +1284,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
     await a.service.stop(id);
     read.resolve();
 
-    await expect(deleting).rejects.toThrow('connection reset');
+    await expect(deleting).rejects.toBeInstanceOf(ServiceUnavailableException);
 
     expect((await sessions.findOneByOrFail({ id })).desiredState).toBe('stopped');
   });
@@ -1312,7 +1315,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
     await landed.promise;
     read.resolve();
 
-    await expect(deleting).rejects.toThrow('connection reset');
+    await expect(deleting).rejects.toBeInstanceOf(ServiceUnavailableException);
     answer.resolve();
     await stopping;
 
@@ -1339,8 +1342,8 @@ describe('A session deleted on one node while a peer shares the database', () =>
   it.each([
     ['a force-kill with no engine to kill', 'kill-refused', 'BadRequestException'],
     ['a force-kill that cannot record its stop', 'kill-write', 'ok'],
-    ['a stop whose row read fails', 'stop-read', 'Error'],
-    ['a stop that cannot record itself', 'stop-write', 'Error'],
+    ['a stop whose row read fails', 'stop-read', 'ServiceUnavailableException'],
+    ['a stop that cannot record itself', 'stop-write', 'ServiceUnavailableException'],
   ])('takes its stop back when %s overlaps it', async (_case, other, answer) => {
     const id = await seed({ status: SessionStatus.DISCONNECTED });
     if (other === 'kill-write') await a.service.start(id, { explicit: true });

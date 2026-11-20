@@ -9,6 +9,7 @@ import {
   loadRemoteMedia,
   extractWwebjsCall,
   wwebjsAckToDeliveryStatus,
+  PAGE_RELOADED_DURING_SEND_MESSAGE,
 } from './wwebjs-messaging';
 import { isSupportedProxyUrl, buildProxyLaunchConfig } from './wwebjs-proxy';
 import { LoggerService } from '../../common/services/logger.service';
@@ -477,7 +478,8 @@ describe('WhatsAppWebJsAdapter initialize() retry on a navigation-killed first i
     jest.useFakeTimers();
     clientInitSpy
       .mockImplementationOnce(function (this: Client) {
-        // The patched hasSynced level-check can fire AUTHENTICATED before the killed evaluate
+        // whatsapp-web.js 1.34.8 fires its post-auth callback once on the hasSynced level as well, so
+        // AUTHENTICATED can fire before the killed evaluate
         // rejects initialize() — attempt 1 then leaves a live 90s reconcile deadline behind, whose
         // non-bridge branch DELETES credentials (recoverFromStuckAuth). The retry must clear it.
         this.emit('authenticated');
@@ -1858,7 +1860,7 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
 
     it("reports a successful UNARCHIVE as true, ignoring the library's new-state return value", async () => {
       // Client.unarchiveChat resolves the chat's new archive state — hard-coded FALSE
-      // (Client.js:2023-2031) — not a success flag. Passing it through reported every successful
+      // (in Client.unarchiveChat) — not a success flag. Passing it through reported every successful
       // unarchive as success:false, which this API documents as "the engine declined to act".
       const archiveChat = jest.fn().mockResolvedValue(true);
       const unarchiveChat = jest.fn().mockResolvedValue(false);
@@ -4931,7 +4933,7 @@ describe('WhatsAppWebJsAdapter group notifications (group_join / group_leave / g
   it('maps group_membership_request to a join_request GroupEvent, with the author as the requester', () => {
     const { onGroupEvent, client } = wireGroupHandler();
 
-    // Upstream documents chatId/author/timestamp for this event (Client.js:633-641); a
+    // Upstream documents chatId/author/timestamp for this event (the `group_membership_request` event of Client.js); a
     // self-request carries no recipients, so the author IS the user asking to join.
     client.emit('group_membership_request', {
       id: { _serialized: 'NOTIF_REQ' },
@@ -6088,7 +6090,7 @@ describe('votePoll', () => {
   });
 
   it('maps the BARE STRING throw on a non-poll target to a 400, not an opaque 500', async () => {
-    // Message.js:1010 throws a plain string, which would otherwise escape as an unhandled
+    // Message.js throws a plain string, which would otherwise escape as an unhandled
     // non-Error and surface as a 500 for what is really a client mistake.
     const vote = jest.fn().mockRejectedValue('Invalid usage! Can only be used with a pollCreation message');
     const adapter = ready(chatWith([{ id: { _serialized: 'M1' }, vote }]));
@@ -6890,7 +6892,7 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
  * The send contract when whatsapp-web.js cannot hand back a usable message (#757).
  *
  * `Client.sendMessage` RESOLVES with `undefined` rather than throwing, collapsing two opposite outcomes
- * into one value (`Client.js:1558`), and its typings claim `Promise<Message>` — so nothing upstream of
+ * into one value (the end of `Client.sendMessage`), and its typings claim `Promise<Message>` — so nothing upstream of
  * these tests catches a regression here.
  */
 describe('WhatsAppWebJsAdapter send-result contract', () => {
@@ -7017,7 +7019,7 @@ describe('WhatsAppWebJsAdapter createGroup (not available on this engine)', () =
 
   // The library's own method is typed and present, so the only thing that shows it cannot work is a
   // live call: its injected evaluate reaches a WhatsApp Web internal with no `findImpl`
-  // (`Client.js:2325`), which reached callers as a bare 500. Measured on two builds — one
+  // (in `Client.createGroup`), which reached callers as a bare 500. Measured on two builds — one
   // auto-resolved, one pinned — so this is a library limitation, not registry pin drift.
   it('throws EngineNotSupportedError instead of calling the library', async () => {
     const createGroup = jest.fn();
@@ -7467,12 +7469,12 @@ describe('WhatsAppWebJsAdapter navigation re-inject grace (#1081)', () => {
       expect(onDisconnected).not.toHaveBeenCalled();
     });
 
-    it('keeps the session ready when a send dies that way', async () => {
+    it('answers a send that dies that way as one that may have gone out, and keeps the session ready', async () => {
       const { adapter, onDisconnected, navigateLater } = wire({
         sendMessage: jest.fn().mockRejectedValue(new Error(IN_FLIGHT)),
       });
 
-      await expect(adapter.sendTextMessage(GROUP, 'hi')).rejects.toThrow(IN_FLIGHT);
+      await expect(adapter.sendTextMessage(GROUP, 'hi')).rejects.toThrow(PAGE_RELOADED_DURING_SEND_MESSAGE);
       await navigateLater();
 
       expect(adapter.getStatus()).toBe(EngineStatus.READY);
@@ -8932,7 +8934,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
 
     it('getProfilePicture maps undefined — the library\'s only "no picture" channel — to null', async () => {
       // `Client.getProfilePicUrl` catches ServerStatusCodeError INSIDE the page and resolves
-      // `undefined` (Client.js:2163-2164), then ends `return profilePic ? profilePic.eurl :
+      // `undefined` (in Client.getProfilePicUrl), then ends `return profilePic ? profilePic.eurl :
       // undefined`. So the no-picture verdict reaches us as a VALUE and never as a rejection.
       const adapter = readyAdapter({ getProfilePicUrl: jest.fn().mockResolvedValue(undefined) });
       await expect(adapter.getProfilePicture('12345@c.us')).resolves.toBeNull();
@@ -9043,13 +9045,55 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         expect(adapter.getStatus()).toBe(EngineStatus.READY);
         expect(onActionRequired).not.toHaveBeenCalled();
 
-        // Fifth click on a modal that is still there — the click is not landing, a human must act.
+        // The fifth click may be the one that dismisses the last screen of a flow, which is only known when the
+        // next probe finds the modal gone, so it does not trip yet.
+        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
+        await jest.advanceTimersByTimeAsync(5100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
+
+        // A sixth click on a modal that survived five: the click is not landing, a human must act.
         evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
         await jest.advanceTimersByTimeAsync(5100);
 
         expect(adapter.getStatus()).toBe(EngineStatus.ACTION_REQUIRED);
         expect(onActionRequired).toHaveBeenCalledTimes(1);
-        expect(onActionRequired).toHaveBeenCalledWith(expect.stringMatching(/onboarding modal/i));
+        expect(onActionRequired).toHaveBeenCalledWith(expect.stringMatching(/onboarding modal after 5 attempts/i));
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    // A flow of five screens is five clicks that each land. The probe after the last one finds the modal gone, and
+    // what was clicked before is not held against a modal that shows up again later.
+    it('does not fall back for clicks that landed: the count restarts once the modal is gone', async () => {
+      jest.useFakeTimers();
+      try {
+        const { adapter, evaluate, onActionRequired } = promoteToReady();
+        (adapter as unknown as { client: EventEmitter }).client.emit('authenticated');
+        await jest.advanceTimersByTimeAsync(2100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+
+        const tick = async (probe: ModalProbe): Promise<void> => {
+          evaluate.mockResolvedValueOnce(probe);
+          await jest.advanceTimersByTimeAsync(5100);
+        };
+        const click: ModalProbe = { modalPresent: true, dismissed: true };
+        const gone: ModalProbe = { modalPresent: false, dismissed: false };
+
+        for (let i = 0; i < 5; i++) await tick(click);
+        await tick(gone);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
+
+        // Five more clicks after it was gone are a new run, not the sixth to ninth of one.
+        for (let i = 0; i < 5; i++) await tick(click);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
+
+        await tick(click);
+        expect(adapter.getStatus()).toBe(EngineStatus.ACTION_REQUIRED);
+        expect(onActionRequired).toHaveBeenCalledTimes(1);
       } finally {
         jest.useRealTimers();
       }
@@ -9166,8 +9210,8 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         (client as EventEmitter).emit('authenticated');
         await jest.advanceTimersByTimeAsync(2100);
 
-        // Drive it to the fallback the only way that reaches it: clicks that keep failing to land.
-        for (let i = 0; i < 5; i++) {
+        // Drive it to the fallback the only way that reaches it: a modal that survives five clicks and is clicked again.
+        for (let i = 0; i < 6; i++) {
           evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
           await jest.advanceTimersByTimeAsync(5100);
         }
@@ -9190,7 +9234,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
 
         (client as EventEmitter).emit('authenticated');
         await jest.advanceTimersByTimeAsync(2100);
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 6; i++) {
           evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
           await jest.advanceTimersByTimeAsync(5100);
         }
@@ -10126,7 +10170,7 @@ describe('WhatsAppWebJsAdapter group join-info', () => {
   });
 });
 
-// whatsapp-web.js reads the flag as `linkPreview === false ? undefined : true` (Client.js:1458), so
+// whatsapp-web.js reads the flag as `linkPreview === false ? undefined : true` (in Client.sendMessage), so
 // only an explicit false is worth forwarding — and forwarding it is what actually suppresses.
 describe('WhatsAppWebJsAdapter link preview', () => {
   const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {

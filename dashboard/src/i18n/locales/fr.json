@@ -51,7 +51,8 @@
     "refresh": "Actualiser",
     "errorGeneric": "Une erreur est survenue",
     "unknownError": "Erreur inconnue",
-    "retry": "Réessayer"
+    "retry": "Réessayer",
+    "copyFailed": "Impossible de copier dans le presse-papiers"
   },
   "theme": {
     "light": "Clair",
@@ -101,6 +102,8 @@
     "loadingOlderMessages": "Chargement des messages plus anciens...",
     "loadOlderMessagesError": "Impossible de charger les messages plus anciens. Faites défiler vers le haut pour réessayer.",
     "loadOlderMessagesRetryHint": "Faites défiler vers le haut pour réessayer.",
+    "refreshMessagesError": "Impossible d'actualiser les messages. Touchez pour réessayer.",
+    "refreshMessagesRetryHint": "Touchez pour réessayer.",
     "noMessagesInChat": "Aucun message pour le moment. Envoyez le premier message pour commencer !",
     "downloadDocument": "Télécharger le document",
     "actions": {
@@ -236,7 +239,6 @@
     "moreActions": "Plus d’actions",
     "copyChatId": "Copier l’ID de la discussion",
     "chatIdCopied": "ID de la discussion copié",
-    "copyFailed": "Impossible de copier dans le presse-papiers",
     "closeChat": "Fermer la discussion",
     "phone": "Numéro de téléphone",
     "chatId": "ID de la discussion",
@@ -632,7 +634,7 @@
     "filters": {
       "title": "Filtres (facultatif)",
       "hint": "Déclencher uniquement lorsque toutes les conditions sont remplies. S'applique aux événements de message.",
-      "incomplete": "Attribuez une valeur à chaque condition de filtre et utilisez au plus 20 conditions, 100 valeurs par condition et 1000 caractères de texte.",
+      "incomplete": "Attribuez une valeur à chaque condition de filtre et utilisez au plus 20 conditions, 100 valeurs par condition, 128 caractères par identifiant et 1000 caractères de texte.",
       "badge": "{{count}} filtre",
       "badge_other": "{{count}} filtres",
       "badge_many": "{{count}} filtres",
@@ -849,8 +851,8 @@
     "confirm": {
       "deleteTitle": "Supprimer la clé API",
       "revokeTitle": "Révoquer la clé API",
-      "deleteMessage": "Êtes-vous sûr de vouloir supprimer définitivement <strong>{{name}}</strong> ? Cette action est irréversible.",
-      "revokeMessage": "Êtes-vous sûr de vouloir révoquer <strong>{{name}}</strong> ? Elle ne fonctionnera plus.",
+      "deleteMessage": "Êtes-vous sûr de vouloir supprimer définitivement <name/> ? Cette action est irréversible.",
+      "revokeMessage": "Êtes-vous sûr de vouloir révoquer <name/> ? Elle ne fonctionnera plus.",
       "signedIn": "Ce tableau de bord est connecté avec cette clé. La révoquer ou la supprimer vous déconnectera.",
       "delete": "Supprimer",
       "revoke": "Révoquer"
@@ -1153,6 +1155,7 @@
       "reason409": "La session n'est pas connectée",
       "reason429": "La limite de requêtes de la passerelle a été atteinte",
       "reason503": "WhatsApp n'a pas répondu à une requête",
+      "reasonReloading": "WhatsApp Web recharge sa page",
       "reasonOther": "La passerelle a refusé une requête",
       "partial": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéro n'a pas été vérifié. Réessayez plus tard.",
       "partial_other": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéros n'ont pas été vérifiés. Réessayez plus tard.",
