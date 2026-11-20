@@ -150,13 +150,14 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
    * A stored payload that does not parse (an imported or hand-edited row on SQLite, where it is text)
    * fails the read of every page it sits in, so no row behind it would ever be replayed. When the page
    * read fails it is read again row by row, an unreadable row is logged and skipped, and `onScanned`
-   * receives the last id the page covered so a caller's cursor passes the unreadable rows too.
+   * receives the last id the page covered and how many ids it covered, so a caller's cursor passes the unreadable
+   * rows too, and can tell a page that filled its batch from one that reached the end.
    */
   async findStale(
     olderThan: Date,
     limit: number,
     afterId?: string,
-    onScanned?: (lastId: string) => void,
+    onScanned?: (lastId: string, covered: number) => void,
   ): Promise<ReplayableDelivery[]> {
     const pending = { state: In(['pending', 'queued']), payload: Not(IsNull()), createdAt: LessThan(olderThan) };
     const where = afterId
@@ -197,7 +198,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
         }
       }
       const last = ids.at(-1);
-      if (last) onScanned?.(last.id);
+      if (last) onScanned?.(last.id, ids.length);
     }
     // A pending row always carries its payload; the guard is for a row whose payload was retired by
     // a concurrent close between the query and this read.
