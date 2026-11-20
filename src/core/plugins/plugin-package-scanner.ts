@@ -44,6 +44,16 @@ function hasPluginPackages(dir: string): boolean {
   }
 }
 
+/** Whether `dir` holds the package of plugin `pluginId`: a manifest.json that names that id. */
+function holdsPackageOf(dir: string, pluginId: string): boolean {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf-8')) as { id?: unknown } | null;
+    return manifest?.id === pluginId;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The boot-scan half of the plugin runtime: find plugin packages on disk (the configured plugins dir
  * plus the legacy compatibility tree), validate each manifest against the install contract, and
@@ -279,9 +289,15 @@ export class PluginPackageScanner {
       if (!match) continue;
       const pluginId = match[1];
       const leftover = path.join(dir, entry.name);
+      const isStaging = entry.name === pluginUpdateStagingDirName(pluginId);
+      // The dot-name proves nothing: an operator's own `.cache.bak` fits it, and would be renamed or deleted below.
+      // Only a tree that holds the package of that plugin is an update leftover; any other is left as it is. A
+      // staging tree a crash cut short may not hold its manifest yet, so the registry entry of an installed plugin
+      // vouches for that one.
+      if (!holdsPackageOf(leftover, pluginId) && !(isStaging && this.pluginStorage.getPluginEntry(pluginId))) continue;
       const liveDir = path.join(dir, pluginId);
       try {
-        if (entry.name === pluginUpdateStagingDirName(pluginId)) {
+        if (isStaging) {
           fs.rmSync(leftover, { recursive: true, force: true });
           this.logger.warn(`Dropped stale update staging for plugin ${pluginId}`, {
             pluginId,

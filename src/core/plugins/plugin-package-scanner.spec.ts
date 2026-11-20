@@ -332,6 +332,7 @@ describe('PluginPackageScanner — interrupted-update recovery at boot', () => {
   let pluginsDir: string;
   let scanner: PluginPackageScanner;
   let plugins: Map<string, PluginInstance>;
+  let storage: PluginStorageService;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-uprec-'));
@@ -340,7 +341,8 @@ describe('PluginPackageScanner — interrupted-update recovery at boot', () => {
     const config = {
       get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
     } as unknown as ConfigService;
-    ({ scanner, plugins } = bootScanner(config, new PluginStorageService(config), pluginsDir));
+    storage = new PluginStorageService(config);
+    ({ scanner, plugins } = bootScanner(config, storage, pluginsDir));
   });
   afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -398,5 +400,82 @@ describe('PluginPackageScanner — interrupted-update recovery at boot', () => {
 
     expect(fs.existsSync(path.join(pluginsDir, '.gitkeep.d'))).toBe(true);
     expect(plugins.get('svc-plg')).toBeDefined();
+  });
+
+  // The dot-name alone does not make a directory an update leftover: an operator can keep a `.cache.bak` of their own
+  // in this directory, and it was renamed to `cache` (no live directory) or deleted (one beside it) at boot.
+  it.each([
+    ['a backup with no live directory', ['.cache.bak']],
+    ['a backup beside a directory of the same name', ['.cache.bak', 'cache']],
+    ['a staging directory', ['.cache.new']],
+    ['a staging directory beside a directory of the same name', ['.cache.new', 'cache']],
+  ])('leaves %s alone when it holds no plugin', (_label, names) => {
+    for (const name of names) {
+      fs.mkdirSync(path.join(pluginsDir, name));
+      fs.writeFileSync(path.join(pluginsDir, name, 'notes.txt'), name);
+    }
+
+    scanner.scanAtBoot();
+
+    expect(fs.readdirSync(pluginsDir).sort()).toEqual([...names].sort());
+    for (const name of names) expect(fs.readFileSync(path.join(pluginsDir, name, 'notes.txt'), 'utf8')).toBe(name);
+  });
+
+  // A crash while the package is being staged can leave a tree that has not got to its manifest.json. The registry
+  // entry of an installed plugin vouches for its staging name; a directory of that shape for no installed plugin
+  // is the `.cache.new` case above.
+  it('drops a staging tree cut short before its manifest was written, for an installed plugin', () => {
+    writePluginTree('svc-plg', 'svc-plg');
+    fs.mkdirSync(path.join(pluginsDir, '.svc-plg.new'));
+    fs.writeFileSync(path.join(pluginsDir, '.svc-plg.new', 'index.js'), 'module.exports = class {};');
+    storage.setPluginEntry({
+      id: 'svc-plg',
+      type: 'extension',
+      name: 'svc-plg',
+      version: '1.0.0',
+      status: PluginStatus.INSTALLED,
+      config: {},
+      builtIn: false,
+      installedAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
+
+    scanner.scanAtBoot();
+
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.new'))).toBe(false);
+    expect(plugins.get('svc-plg')?.manifest.version).toBe('1.0.0');
+  });
+
+  it('does not let the registry vouch for a backup that holds no manifest', () => {
+    fs.mkdirSync(path.join(pluginsDir, '.svc-plg.bak'));
+    fs.writeFileSync(path.join(pluginsDir, '.svc-plg.bak', 'notes.txt'), 'operator data');
+    storage.setPluginEntry({
+      id: 'svc-plg',
+      type: 'extension',
+      name: 'svc-plg',
+      version: '1.0.0',
+      status: PluginStatus.INSTALLED,
+      config: {},
+      builtIn: false,
+      installedAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
+
+    scanner.scanAtBoot();
+
+    expect(fs.readFileSync(path.join(pluginsDir, '.svc-plg.bak', 'notes.txt'), 'utf8')).toBe('operator data');
+    expect(fs.existsSync(path.join(pluginsDir, 'svc-plg'))).toBe(false);
+  });
+
+  it('leaves a leftover alone when the plugin its manifest names is another one', () => {
+    writePluginTree('svc-plg', 'svc-plg');
+    writePluginTree('.svc-plg.bak', 'someone-else'); // a copy of a different plugin
+    writePluginTree('.svc-plg.new', 'someone-else', '2.0.0');
+
+    scanner.scanAtBoot();
+
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak', 'manifest.json'))).toBe(true);
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.new', 'manifest.json'))).toBe(true);
+    expect(plugins.get('svc-plg')?.manifest.version).toBe('1.0.0');
   });
 });
