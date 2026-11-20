@@ -189,8 +189,9 @@ describe('validateIngressManifest', () => {
 
 describe('validateIngressManifest: a declaration the load-time warnings cannot read', () => {
   // warnUnauthenticatedIngressRoutes iterates `ingress` and warnUnsignedTimestampRoutes calls `includes` on an hmac-sha256
-  // template, so the loader refused these by throwing from a warning, with an engine text and no field named. An update had
-  // already stopped the running plugin by then. They are refused up front, and nothing the loader accepts stops loading.
+  // template, so the loader refused some of these by throwing from a warning, with an engine text and no field named, and an
+  // update had already stopped the running plugin by then. The rest loaded and then failed, an empty string when the plugin
+  // was enabled and an array template at every delivery. All are refused up front, naming the field.
   const withIngress = (ingress: unknown) => ({ ...baseManifest(), ingress }) as never;
   const withTemplate = (contentTemplate: unknown, scheme = 'hmac-sha256') =>
     manifestWithRoute({ signature: { scheme, header: 'X-Sig', contentTemplate } });
@@ -203,6 +204,8 @@ describe('validateIngressManifest: a declaration the load-time warnings cannot r
     ['zero', 0],
     ['a positive number', 7],
     ['a negative number', -1],
+    ['an empty string', ''],
+    ['a string', 'chatwoot'],
   ])('refuses ingress written as %s, naming the field', (_label, ingress) => {
     expect(() => validateIngressManifest(withIngress(ingress))).toThrow(
       'Plugin chatwoot: ingress must be a list of routes',
@@ -213,16 +216,11 @@ describe('validateIngressManifest: a declaration the load-time warnings cannot r
     ['absent', undefined],
     ['null', null],
     ['an empty list', []],
-    ['an empty string', ''],
   ])('still accepts ingress written as %s', (_label, ingress) => {
     expect(() => validateIngressManifest(withIngress(ingress))).not.toThrow();
   });
 
-  it('still refuses a non-empty string, as the route checks always did', () => {
-    expect(() => validateIngressManifest(withIngress('chatwoot'))).toThrow(/duplicate or empty ingress route/);
-  });
-
-  it.each([5, 0, true, false, {}, { template: '{rawBody}' }])(
+  it.each([5, 0, true, false, {}, { template: '{rawBody}' }, ['{rawBody}'], []])(
     'refuses an hmac-sha256 contentTemplate of %p, naming the route and the field',
     contentTemplate => {
       expect(() => validateIngressManifest(withTemplate(contentTemplate))).toThrow(
@@ -236,8 +234,6 @@ describe('validateIngressManifest: a declaration the load-time warnings cannot r
     ['an empty template', ''],
     ['an absent template', undefined],
     ['a null template', null],
-    // Loads today (an array has `includes`), so it is not a new refusal.
-    ['an array', ['{rawBody}']],
   ])('accepts an hmac-sha256 route with %s', (_label, contentTemplate) => {
     expect(() => validateIngressManifest(withTemplate(contentTemplate))).not.toThrow();
   });

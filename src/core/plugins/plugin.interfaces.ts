@@ -362,11 +362,10 @@ const INGRESS_ROUTE_SEGMENT = /^[^/\\?#%\x00-\x1f\x7f\p{Cs}]+$/u;
  * written, and from PluginLoaderService.loadPlugin, so a package already on disk is refused at load time.
  */
 export function validateIngressManifest(manifest: PluginManifest, allowUnsignedIngress = false): void {
-  // Before the shortcut below: an object, a boolean or a number has no length, so it would pass as "no ingress
-  // declared" and then fail in the load-time warnings. A string is left to the checks below: an empty one declares
-  // no route, and any other is refused there.
+  // Before the shortcut below: an object, a boolean, a number or an empty string has no length to count, so it would
+  // pass as "no ingress declared" and then fail in the load-time warnings or when the plugin is enabled.
   const declared: unknown = manifest.ingress;
-  if (declared !== undefined && declared !== null && typeof declared !== 'string' && !Array.isArray(declared)) {
+  if (declared !== undefined && declared !== null && !Array.isArray(declared)) {
     throw new Error(`Plugin ${manifest.id}: ingress must be a list of routes`);
   }
   if (!manifest.ingress?.length) return; // no ingress declared → nothing to validate
@@ -417,15 +416,14 @@ export function validateIngressManifest(manifest: PluginManifest, allowUnsignedI
           `(got '${String(signature.encoding)}')`,
       );
     }
-    // warnUnsignedTimestampRoutes calls `.includes` on an hmac-sha256 template, which throws for a number, a boolean
-    // or an object. An array has `includes` and loads today, so it is not refused here.
+    // warnUnsignedTimestampRoutes calls `.includes` on an hmac-sha256 template and the verifier calls `.replace`, which
+    // only a string has: an array passes the first and fails every delivery at the second.
     const template: unknown = signature.contentTemplate;
     if (
       signature.scheme === 'hmac-sha256' &&
       template !== undefined &&
       template !== null &&
-      typeof template !== 'string' &&
-      !Array.isArray(template)
+      typeof template !== 'string'
     ) {
       throw new Error(`Plugin ${manifest.id}: route '${r.route}' signature.contentTemplate must be a string`);
     }
