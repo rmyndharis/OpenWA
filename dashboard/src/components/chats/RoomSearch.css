@@ -148,9 +148,14 @@
 
 .chats-page .room-search-hit-snippet {
   font-size: 0.875rem;
+  /* Two lines, as the sidebar search gives its snippet: it is a window around the match, so the match sits in the
+     middle of it, and a single line cut at the width of a narrow room pane cut the match off first. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   /* Message text somebody else wrote: cut by its own direction, so a Latin snippet in an Arabic page keeps its start.
      Its box is as wide as the text, so the text stays at the start edge the page puts it, under the date, and not at
      the other edge of the stretched row (see .global-search-hit-snippet). */
