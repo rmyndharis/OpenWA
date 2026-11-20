@@ -790,7 +790,7 @@ export interface PollVoteEvent {
  *    (action 'created' only — the wwebjs event has no revoke/reject counterpart, so only
  *    the shared signal is surfaced; rc14 itself emits the event only for non-admin-add
  *    requests — the direct self-request stub 144 is unhandled upstream, marked TODO at
- *    Utils/process-message.js:569 — so an invite-link self-request may not fire on Baileys).
+ *    Utils/process-message.js — so an invite-link self-request may not fire on Baileys).
  * All ids are in the neutral dialect (`@g.us` / `@c.us`; a lid stays `<id>@lid` when the
  * lid->phone mapping is unknown).
  */
@@ -1359,7 +1359,7 @@ export interface MessageOperationsCapability {
 
   /**
    * Cast a vote on a poll. `options` are the option TEXTS, not ids: whatsapp-web.js matches by name
-   * (`Message.js:1027-1031`), and no engine surfaces a stable per-option id through this interface,
+   * (`Message.js`), and no engine surfaces a stable per-option id through this interface,
    * so a caller has nothing else to name an option by. Pass every option that should end up
    * selected — the list replaces the current selection rather than adding to it, and an empty array
    * clears the vote.

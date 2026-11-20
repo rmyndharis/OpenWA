@@ -303,8 +303,8 @@ export async function deleteGroupPictureInPage(chatId: string): Promise<number |
  * Normalise whatsapp-web.js's member-add-mode to the neutral vocabulary.
  *
  * Deliberately handles both encodings. The WA Web group model — and GroupChat.setAddMembersAdminsOnly
- * when it writes back (GroupChat.js:476) — use WhatsApp's `'admin_add'`/`'all_member_add'` strings,
- * but index.d.ts:890 declares the field `boolean` with `true` meaning "only admins", the OPPOSITE
+ * when it writes back (GroupChat.js) — use WhatsApp's `'admin_add'`/`'all_member_add'` strings,
+ * but index.d.ts declares the field `boolean` with `true` meaning "only admins", the OPPOSITE
  * sense to Baileys' boolean. Reading it as a plain boolean would therefore be wrong on both engines
  * for different reasons, so each shape is decoded explicitly and anything unrecognised is reported
  * as unknown rather than guessed.
@@ -390,11 +390,11 @@ export class WwebjsGroups {
           isSuperAdmin: Boolean(p.isSuperAdmin),
         }));
 
-      // GroupChat.createdAt is a getter returning a Date (GroupChat.js:36), which serialises as an
+      // GroupChat.createdAt is a getter returning a Date (GroupChat.js), which serialises as an
       // ISO string; the contract is Unix seconds, so read the raw metadata field instead.
       const creation = (groupChat.groupMetadata as { creation?: unknown } | undefined)?.creation;
       // GroupChat has no isAnnounce, and WA Web overwrites isReadOnly with the announce SETTING
-      // (Injected/Utils.js:1005), which tells an admin of an announce-only group they cannot post.
+      // (`WWebJS.getChatModel` in Injected/Utils.js), which tells an admin of an announce-only group they cannot post.
       // Derive both from the metadata, as the Baileys mapper does.
       const announce = Boolean(groupChat.groupMetadata?.announce);
       const selfWid = readWid(this.client().info?.wid);
@@ -443,7 +443,7 @@ export class WwebjsGroups {
    * `Promise<CreateGroupResult | string>` (`index.d.ts`).
    *
    * Its page body reaches a WhatsApp Web internal that no longer exposes `findImpl`
-   * (`Client.js:2325`, inside the injected evaluate). Measured against a live session on two
+   * (inside the evaluate of `Client.createGroup`). Measured against a live session on two
    * different WhatsApp Web builds — `2.3000.1044858477-alpha` auto-resolved from the registry, and
    * `2.3000.1044770897-alpha` pinned explicitly — with identical results:
    * `TypeError: this.findImpl is not a function`, reaching the caller as a bare 500. Bare and
@@ -479,16 +479,16 @@ export class WwebjsGroups {
         : chat.addParticipants(participantIds, { autoSendInviteV4: false }),
     );
     // whatsapp-web.js reports a batch-level refusal (no admin rights, empty group) by RESOLVING a
-    // plain reason string (GroupChat.js:106-107,128-130) instead of throwing — surface it as a
+    // plain reason string (GroupChat.js) instead of throwing — surface it as a
     // refusal, not a success.
     if (typeof raw === 'string') {
       throw new EngineRefusedError(raw);
     }
     // Per-participant outcome: code 200 = added; 403 invite-only / 404 not registered / 408
-    // recently left / 409 already a member / 419 group full (GroupChat.js:102-116).
+    // recently left / 409 already a member / 419 group full (GroupChat.js).
     const results: ParticipantOperationResult[] = Object.entries(raw ?? {}).map(([id, r]) => {
       // A 403 with isInviteV4Sent is not a failure: wwebjs already delivered the private group
-      // invite (GroupChat.js:203-240). Report it as success-with-invite — otherwise an all-invite
+      // invite (GroupChat.js). Report it as success-with-invite — otherwise an all-invite
       // batch throws "failed for all" (HTTP 403) even though every participant was reached.
       const inviteSent = r.code === 403 && r.isInviteV4Sent === true;
       return {
@@ -517,7 +517,7 @@ export class WwebjsGroups {
 
   /**
    * whatsapp-web.js resolves each requested id against the group's OWN participant collection and
-   * silently drops what it cannot find (GroupChat.js:289), then resolves `{status: 200}` for the
+   * silently drops what it cannot find (GroupChat.js), then resolves `{status: 200}` for the
    * whole batch. Reporting that as one success per requested participant claimed removals WhatsApp
    * never performed, and an all-dropped batch reached a request builder that asserts at least one
    * child — surfacing as an unnamed `500` (#1220).
@@ -1103,7 +1103,7 @@ export class WwebjsGroups {
     // {requesterId, error?, message} per requester; requesterId is a page-context value that can
     // arrive as a string or a wid object (both #747 spellings), so it goes through readWid too.
     // "No error field" is NOT sufficient for success: the page util's non-success RPC branch pushes
-    // {requesterId, message: 'ServerStatusCodeError'} with no code at all (Injected/Utils.js:1637-1648).
+    // {requesterId, message: 'ServerStatusCodeError'} with no code at all (`WWebJS.membershipRequestAction` in Injected/Utils.js).
     const results: ParticipantOperationResult[] = (raw ?? []).map(entry => {
       const e = entry as unknown as { requesterId?: SerializedWid | string | null; error?: number; message?: string };
       return {

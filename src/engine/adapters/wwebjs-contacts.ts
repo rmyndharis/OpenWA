@@ -352,7 +352,7 @@ export class WwebjsContacts {
 
   async upsertContact(contactId: string, firstName: string, lastName = ''): Promise<void> {
     this.host.ensureReady();
-    // wwjs addresses the addressbook entry by PHONE NUMBER, not JID (Client.js:3266). lastName is
+    // wwjs addresses the addressbook entry by PHONE NUMBER, not JID (Client.saveOrEditAddressbookContact). lastName is
     // positional and required there, so an absent one is passed as an empty string rather than
     // undefined, which would land in the page-side payload as the literal string "undefined".
     // syncToAddressbook is left at its default (false): writing to the device addressbook is a

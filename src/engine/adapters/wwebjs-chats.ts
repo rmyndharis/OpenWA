@@ -330,7 +330,7 @@ export class WwebjsChats {
       //
       // Their return value is deliberately DISCARDED. Despite looking like a success flag they
       // resolve the chat's NEW ARCHIVE STATE, hard-coded: archiveChat always returns true and
-      // unarchiveChat always returns false (Client.js:2009-2031, "Changes and returns the archive
+      // unarchiveChat always returns false (Client.archiveChat and Client.unarchiveChat, "Changes and returns the archive
       // state of the Chat"). Surfacing that as `success` reports every successful UNARCHIVE as
       // success:false — which this API's contract defines as "the engine declined to act".
       //
@@ -424,13 +424,13 @@ export class WwebjsChats {
     if (!pin) {
       // unpinChat resolves the chat's NEW pin state, which is `false` for every successful unpin —
       // both on its early-out for an already-unpinned chat and after actually unpinning
-      // (Client.js:2073-2084). Forwarding it would report every success as a refusal, the same trap
+      // (Client.unpinChat). Forwarding it would report every success as a refusal, the same trap
       // archiveChat documents. Discard it: an unpin that did not throw succeeded.
       await this.chatWrite('pinChat', () => this.client().unpinChat(chatId));
       return true;
     }
     // In this direction the return value IS information. WhatsApp caps pinned chats at three
-    // (MAX_PIN_COUNT, Client.js:2054-2063) and the page returns false without pinning once that is
+    // (MAX_PIN_COUNT in Client.pinChat) and the page returns false without pinning once that is
     // met, so a false here is a real refusal the caller needs to see.
     return await this.chatWrite('pinChat', () => this.client().pinChat(chatId));
   }

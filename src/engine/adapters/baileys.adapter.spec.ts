@@ -211,7 +211,7 @@ jest.mock('@whiskeysockets/baileys', () => ({
         Type: { REVOKE: 0, MESSAGE_EDIT: 14 },
       },
     },
-    // namespace proto.PinInChat { enum Type } — WAProto/index.d.ts:10355-10361
+    // namespace proto.PinInChat { enum Type } — WAProto/index.d.ts
     PinInChat: { Type: { UNKNOWN_TYPE: 0, PIN_FOR_ALL: 1, UNPIN_FOR_ALL: 2 } },
   },
 }));
@@ -6283,7 +6283,7 @@ describe('BaileysAdapter group management', () => {
     const adapter = await ready();
     expect((await adapter.getGroupInfo('123-456@g.us'))?.id).toBe('123-456@g.us');
     // Baileys carries a server refusal as Boom with the numeric WA code on `data`
-    // (assertNodeErrorFree, WABinary/generic-utils.js:57).
+    // (assertNodeErrorFree, WABinary/generic-utils.js).
     fakeSock.groupMetadata.mockRejectedValueOnce(Object.assign(new Error('item-not-found'), { data: 404 }));
     expect(await adapter.getGroupInfo('x@g.us')).toBeNull();
     fakeSock.groupMetadata.mockRejectedValueOnce(Object.assign(new Error('not-authorized'), { data: 401 }));
@@ -7066,7 +7066,7 @@ describe('BaileysAdapter group events (group-participants.update / groups.update
   it('skips full-metadata snapshots (groupFetchAllParticipating emits them via the same event)', async () => {
     const { onGroupEvent } = await readyWithGroupEvents();
 
-    // The extractGroupMetadata shape emitted by groupFetchAllParticipating (Socket/groups.js:56) —
+    // The extractGroupMetadata shape emitted by groupFetchAllParticipating (Socket/groups.js) —
     // fired on every connect (hydrateNames) and every REST getGroups(). Treating it as a delta
     // would flood consumers with bogus group.update webhooks on each reconnect / GET /groups.
     fakeSock.fire('groups.update', [
@@ -7376,7 +7376,7 @@ describe('BaileysAdapter call events (call offer) + rejectCall', () => {
     const { adapter, onCall } = await readyWithCallEvents();
 
     // Baileys replays offers for calls missed while offline with offline: true
-    // (messages-recv.js:1458); the call is long dead, so rejecting it later must 404.
+    // (messages-recv.js); the call is long dead, so rejecting it later must 404.
     fakeSock.fire('call', [offer({ offline: true })]);
 
     expect(onCall).not.toHaveBeenCalled();

@@ -144,7 +144,7 @@ describe('WwebjsGroups membership requests', () => {
   ])('%ss a bare phone number after qualifying it, like every other participant write', async (_action, method) => {
     // GroupService.assertAddressableParticipants blesses a bare number, and the three other
     // participant paths in this file qualify it before the engine sees it. Unqualified it reaches
-    // the page's `requesterIds.map(createWid)` (Injected/Utils.js:1540-1542), which upstream never
+    // the page's `requesterIds.map(createWid)` (in `WWebJS.membershipRequestAction`), which upstream never
     // does itself — Client.js appends '@c.us' before its own createWid calls — so the caller got an
     // undiagnosable 500 on whatsapp-web.js for input that succeeds on Baileys.
     const { groups, client } = makeWwebjsGroups();
@@ -160,7 +160,7 @@ describe('WwebjsGroups membership requests', () => {
 
   it('reports the code-less ServerStatusCodeError entry as a FAILURE, not a success', async () => {
     // The page util's non-success RPC branch pushes {requesterId, message: 'ServerStatusCodeError'}
-    // with NO error code (Injected/Utils.js:1637-1648) — reading "no error field" as success would
+    // with NO error code (in `WWebJS.membershipRequestAction`) — reading "no error field" as success would
     // sell a server failure as an approval.
     const { groups, client } = makeWwebjsGroups();
     client.approveGroupMembershipRequests.mockResolvedValue([

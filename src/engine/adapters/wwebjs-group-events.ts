@@ -113,7 +113,7 @@ function handleGroupNotification(
     };
     if (kind === 'join_request' && payload.participantIds.length === 0) {
       // A self-request carries no recipients: the author IS the user asking to join
-      // (Client.js:633-641 documents chatId/author/timestamp for this event). A request naming
+      // (the `group_membership_request` event of Client.js documents chatId/author/timestamp). A request naming
       // nobody at all is unactionable and dropped.
       if (!payload.actorId) {
         return;

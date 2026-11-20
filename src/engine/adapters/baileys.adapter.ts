@@ -652,7 +652,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return this.unsupported('getMessageReceipts');
   }
 
-  // Baileys exposes label WRITES only — chats.d.ts:69-73 has addLabel/addChatLabel/removeChatLabel
+  // Baileys exposes label WRITES only — chats.d.ts has addLabel/addChatLabel/removeChatLabel
   // and no query of any kind, and Types/Label.d.ts is types-only. Listing the chats on a label would
   // mean maintaining an app-state cache fed by the label-association sync events, which is a
   // separate piece of work from this one and is tracked as such.
@@ -736,7 +736,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
    * That is why the id is caller-supplied rather than returned.
    *
    * The `jid` Baileys asks for is unused on this patch: `chatModifyToPatch` builds the index from
-   * `['label_edit', id]` and never reads it (Utils/chat-utils.js:579-593). The account's own jid is
+   * `['label_edit', id]` and never reads it (Utils/chat-utils.js). The account's own jid is
    * passed because the call demands one, not because it addresses anything.
    */
   async upsertLabel(label: LabelInput): Promise<void> {

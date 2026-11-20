@@ -38,7 +38,7 @@ function clip(text: string, max: number): string {
  * (GHSA-4gp8-rjrq-ch6q — "IPv6 and internal loopback attacks", CWE-918, no patched release). The
  * input here is attacker-influenced — a URL pasted into a message causes this server to make a
  * request — so that generator is never reached: Baileys spreads the caller's send options last
- * (messages-send.js:1086), so passing this as `getUrlInfo` there wins over its hardcoded one.
+ * (messages-send.js), so passing this as `getUrlInfo` there wins over its hardcoded one.
  *
  * `withSafeFetch` validates the destination and then PINS a direct or SOCKS-proxied connection to the
  * vetted addresses, so a hostname that resolves publicly once and to `127.0.0.1` a moment later cannot

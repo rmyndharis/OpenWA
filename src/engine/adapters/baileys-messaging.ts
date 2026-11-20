@@ -123,7 +123,7 @@ function isWebpBuffer(data: Buffer): boolean {
  *
  * Baileys stamps the label unconditionally — `prepareWAMessageMedia` applies
  * `if (!uploadData.mimetype) uploadData.mimetype = MIMETYPE_MAP[mediaType]` with
- * `MIMETYPE_MAP.sticker = 'image/webp'` (Utils/messages.js:18, 86-88) — and transcodes nothing. So
+ * `MIMETYPE_MAP.sticker = 'image/webp'` (Utils/messages.js) — and transcodes nothing. So
  * a PNG handed over here is published as a stickerMessage whose declared type contradicts its bytes,
  * and the send still reports success. whatsapp-web.js has no such gap: `sendMediaAsSticker: true`
  * routes through `Util.formatToWebpSticker`, which converts `image/*` and throws for anything else.
@@ -481,7 +481,7 @@ export class BaileysMessaging {
   ): Promise<MessageResult> {
     const socket = this.ensureReadyToSend();
     const jid = await this.toDeliverableJid(chatId, socket);
-    // Baileys spreads the caller's options LAST (messages-send.js:1086), so `getUrlInfo` here
+    // Baileys spreads the caller's options LAST (messages-send.js), so `getUrlInfo` here
     // replaces its hardcoded one — which delegates to a package carrying an unfixed SSRF advisory
     // (see safe-link-preview.ts). Passed on every text send so that generator is never reachable,
     // not only when a preview was asked for.
@@ -493,7 +493,7 @@ export class BaileysMessaging {
       ...((await this.quoteOption(sendOptions?.quotedMessageId, socket)) ?? {}),
     };
     // `linkPreview: null` is Baileys' explicit "no preview": with the key absent it instead calls the
-    // configured generator (Utils/messages.js:279-281), which for us means a blocking outbound fetch
+    // configured generator (Utils/messages.js), which for us means a blocking outbound fetch
     // of every URL in the text (up to 3s each, no cache) before the message can go out.
     //
     // Previews are therefore OPT-IN on this engine: only `linkPreview: true` leaves the key absent.

@@ -6,12 +6,12 @@ import { type WwebjsEngineHost } from './wwebjs-host';
 
 /**
  * whatsapp-web.js attaches a quote as a plain send option, orthogonal to the content kind:
- * `quotedMessageId` is copied into `internalOptions` (Client.js:1475) BEFORE the content-kind
+ * `quotedMessageId` is copied into `internalOptions` (in `Client.sendMessage`) BEFORE the content-kind
  * dispatch that moves the payload into `.media` / `.location` / `.poll` / `.contactCard`, so a quote
  * never competes with what is being sent.
  *
  * The reason these tests assert `ignoreQuoteErrors: false` rather than just the id: the library
- * default is TRUE (Client.js:1383 documents `[ignoreQuoteErrors = true]`, applied at :1480), which
+ * default is TRUE (`Client.sendMessage` documents `[ignoreQuoteErrors = true]` and applies it), which
  * makes an unresolvable quote send the message ANYWAY, unquoted, and report success. A caller who
  * asked for a reply and got a loose message with a 201 has no way to detect it. Opting out turns
  * that into an error the caller can see.

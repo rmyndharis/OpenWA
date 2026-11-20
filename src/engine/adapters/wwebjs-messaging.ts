@@ -350,9 +350,9 @@ export async function toMessageMedia(
  * Build the `MessageResult` for a send from whatever whatsapp-web.js hands back.
  *
  * `client.sendMessage()` can RESOLVE with `undefined` instead of throwing, and it collapses two
- * opposite outcomes into that one value (`Client.js:1558`): the chat could not be resolved so nothing
- * was sent (`if (!chat) return null`, `Client.js:1539`), or the message went out and only its id could
- * not be read back (`Msg.get` miss, `Injected/Utils.js:585`). Nothing here can tell those apart, so an
+ * opposite outcomes into that one value (the end of `Client.sendMessage`): the chat could not be resolved so nothing
+ * was sent (`if (!chat) return null` in `Client.sendMessage`), or the message went out and only its id could
+ * not be read back (`Msg.get` miss, `WWebJS.sendMessage` in `Injected/Utils.js`). Nothing here can tell those apart, so an
  * absent message is reported as a failed send: a false negative is visible and retryable, while
  * claiming delivery for a message that never left is not recoverable. wwebjs's own typings hide the
  * case entirely — `index.d.ts` declares `Promise<Message>`, so `strict` never flagged these reads.
@@ -597,8 +597,8 @@ export class WwebjsMessaging {
   /**
    * The send options that attach a quote, or nothing at all when the caller asked for none.
    *
-   * `ignoreQuoteErrors` defaults to TRUE in the library (documented at Client.js:1383, applied at
-   * :1480): with it left alone an id whatsapp-web.js cannot resolve sends the message ANYWAY,
+   * `ignoreQuoteErrors` defaults to TRUE in the library (documented and applied in
+   * `Client.sendMessage`): with it left alone an id whatsapp-web.js cannot resolve sends the message ANYWAY,
    * unquoted, and reports success. A caller who asked for a reply and received a loose message has
    * no signal that anything went wrong, so this opts out and lets the failure surface.
    *
@@ -723,10 +723,10 @@ export class WwebjsMessaging {
     // that form (neutralMentions). Omit the options object entirely when none are given to keep today's send behavior.
     //
     // Only an explicit `false` is forwarded. whatsapp-web.js reads the flag as
-    // `linkPreview === false ? undefined : true` (Client.js:1458), so passing `true` is identical to
+    // `linkPreview === false ? undefined : true` (in Client.sendMessage), so passing `true` is identical to
     // passing nothing — sending it anyway would add an options object to every plain send for no
     // change in behaviour.
-    // whatsapp-web.js takes a BOOLEAN only (index.d.ts:1547) — there is no way to hand it title,
+    // whatsapp-web.js takes a BOOLEAN only (index.d.ts) — there is no way to hand it title,
     // description or a thumbnail. Silently dropping the caller's preview would send a message that
     // looks nothing like what they asked for, so it refuses instead.
     if (options?.customPreview) {
@@ -860,7 +860,7 @@ export class WwebjsMessaging {
     this.ensureReadyToSend();
     // Sticker has its own send path (sendMediaAsSticker), not the sendMediaMessage funnel, but it
     // hits the same channel crash: for a channel wwjs drops the sticker form and runs processMediaData
-    // with sendToChannel, which still ends at msg.avParams() (Utils.js:518). Guard it too (#673).
+    // with sendToChannel, which still ends at msg.avParams() (in `WWebJS.sendMessage`). Guard it too (#673).
     this.host.ensureNotChannelRecipient(chatId);
     ensureSendable(chatId, 'sticker');
     // Keep the fetched content-type for a remote URL: here the mimetype selects the conversion, and
@@ -1492,7 +1492,7 @@ export class WwebjsMessaging {
       });
     } catch (error) {
       // vote() throws a BARE STRING (not an Error) when the target is not a poll creation message
-      // (Message.js:1010). Left alone that surfaces as an opaque 500; it is a client mistake, so
+      // (Message.js). Left alone that surfaces as an opaque 500; it is a client mistake, so
       // map it to a 400. Anything that is a real Error is a genuine engine fault and propagates.
       if (typeof error === 'string') {
         throw new BadRequestException(`Message ${pollMessageId} is not a poll: ${error}`);
@@ -1562,7 +1562,7 @@ export class WwebjsMessaging {
   async starMessage(chatId: string, messageId: string, star: boolean): Promise<void> {
     this.host.ensureReady();
     // Both resolve void, and the page-side helper silently does nothing when canStarMsg() refuses
-    // the message (Message.js:672-712). There is no signal to map, so a star that WhatsApp declined
+    // the message (Message.js). There is no signal to map, so a star that WhatsApp declined
     // is indistinguishable from one it accepted — documented rather than faked into a refusal.
     await withPageWrite(this.host, 'starMessage', async () => {
       const message = await this.findInFetchWindow(chatId, messageId);

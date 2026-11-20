@@ -149,7 +149,7 @@ export class WwebjsChannels {
    *
    * whatsapp-web.js signals failure by RETURNING A STRING ('CreateChannelError: …') rather than
    * throwing — both when channel creation is disabled for the account and when the server refuses
-   * (Client.js:2474-2510). Left unchecked that string would be treated as a successful result and
+   * (Client.createChannel). Left unchecked that string would be treated as a successful result and
    * mapped into a Channel with undefined everything, so it is turned into a refusal here.
    */
   async createChannel(name: string, description?: string): Promise<Channel> {
@@ -184,10 +184,10 @@ export class WwebjsChannels {
 
   /**
    * Not available on this engine, despite `Client.demoteChannelAdmin` existing and being typed
-   * `Promise<boolean>` (`index.d.ts:35`).
+   * `Promise<boolean>` (`index.d.ts`).
    *
    * The page body calls `window.require('WAWebDemoteNewsletterAdminAction').demoteNewsletterAdmin`
-   * (`Client.js:1907-1925`), and WhatsApp Web no longer provides that function. Measured against a
+   * (inside `Client.demoteChannelAdmin`), and WhatsApp Web no longer provides that function. Measured against a
    * live session on Web `2.3000.1044824727-alpha` with no version pin: the call rejects with
    * `TypeError: window.require(...).demoteNewsletterAdmin is not a function`, which reached the
    * caller as a bare 500.
@@ -212,7 +212,7 @@ export class WwebjsChannels {
 
   /**
    * Not available on this engine, despite `Client.transferChannelOwnership` existing and being typed
-   * `Promise<boolean>` (`index.d.ts:375`).
+   * `Promise<boolean>` (`index.d.ts`).
    *
    * `WAWebChangeNewsletterOwnerAction.changeNewsletterOwnerAction` is present — unlike the demote
    * path — but on WhatsApp Web `2.3000.1044824727-alpha` it rejects every call with
@@ -324,11 +324,11 @@ export class WwebjsChannels {
   }
 
   // whatsapp-web.js `Client.subscribeToChannel(channelId)` takes a channel ID and resolves a
-  // boolean (index.d.ts:71; Client.js:2533) — the interface contract here is subscribe-by-INVITE-CODE
+  // boolean (index.d.ts, Client.subscribeToChannel) — the interface contract here is subscribe-by-INVITE-CODE
   // returning the subscribed Channel. The old wiring passed the invite code straight in and mapped
   // the returned boolean as if it were a Channel, fabricating `{ id: "undefined" }`: a reported
   // success that never subscribed anything. A real wiring is the two-step
-  // `getChannelByInviteCode(inviteCode)` (Client.js:1707) → `subscribeToChannel(channel.id)` flow;
+  // `getChannelByInviteCode(inviteCode)` → `subscribeToChannel(channel.id)` flow;
   // until that is verified against a live session, an honest 501 beats a phantom success.
   // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars
   async subscribeToChannel(_inviteCode: string): Promise<Channel> {
@@ -365,7 +365,7 @@ export class WwebjsChannels {
       throw new ChannelNotFoundError(channelId);
     }
     // wwebjs Channel.fetchMessages only honors a limit > 0: its load-earlier loop AND the final
-    // splice are both gated on `searchOptions.limit > 0` (Channel.js:352), so a 0/negative/NaN
+    // splice are both gated on `searchOptions.limit > 0` (Channel.js), so a 0/negative/NaN
     // limit fails OPEN and returns every loaded message. Substitute the default instead.
     const safeLimit = Number.isFinite(limit) && limit >= 1 ? Math.trunc(limit) : 50;
     const messages = await this.withPage('getChannelMessages', () => channel.fetchMessages({ limit: safeLimit }));

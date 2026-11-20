@@ -13,7 +13,7 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
  *
  * The whole difficulty is the return value, and it is the same trap `archiveChat` already carries:
  * whatsapp-web.js's `pinChat`/`unpinChat` resolve the chat's NEW PIN STATE, not a success flag
- * (`Client.js:2046-2084`). `unpinChat` therefore returns `false` on every successful unpin — both
+ * (`Client.pinChat` and `Client.unpinChat`). `unpinChat` therefore returns `false` on every successful unpin — both
  * on its early-out for an already-unpinned chat and after actually unpinning. Forwarding that
  * verbatim would report every successful unpin as "the engine declined".
  *

@@ -5,8 +5,8 @@ import { type WwebjsEngineHost } from './wwebjs-host';
 
 /**
  * getGroupInfo reads a whatsapp-web.js GroupChat, whose accessors do not match the neutral contract:
- * `createdAt` is a getter returning a Date (GroupChat.js:36), there is no `isAnnounce` at all, and
- * `isReadOnly` is overwritten with the group's announce setting (Injected/Utils.js:1005). These pin the
+ * `createdAt` is a getter returning a Date (GroupChat#createdAt), there is no `isAnnounce` at all, and
+ * `isReadOnly` is overwritten with the group's announce setting (`WWebJS.getChatModel` in Injected/Utils.js). These pin the
  * fields to what the Baileys mapper reports for the same group.
  */
 const logger = createLogger('wwebjs-group-info.spec');
