@@ -8,7 +8,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { type Dispatcher } from 'undici';
 import type * as BaileysLib from '@whiskeysockets/baileys';
-import type { Chat, WASocket } from '@whiskeysockets/baileys';
+import type { CacheStore, Chat, WASocket } from '@whiskeysockets/baileys';
 import type { ILogger } from '@whiskeysockets/baileys/lib/Utils/logger.js';
 import {
   type ConnectionCloseStage,
@@ -149,6 +149,57 @@ export function createProxyAgent(proxyUrl: string, connectTimeoutMs = PROXY_CONN
     return agent;
   }
   throw new Error(`Unsupported proxy protocol for the baileys engine: ${protocol}`);
+}
+
+/** How long a Signal key stays in memory in front of the key files: the default of Baileys' own cache. */
+const SIGNAL_KEY_CACHE_TTL_MS = 5 * 60_000;
+
+/** The key cache as this module makes it: a Baileys CacheStore whose calls all answer at once. */
+export interface KeyCache extends CacheStore {
+  readonly size: number;
+  get<T>(key: string): T | undefined;
+  set<T>(key: string, value: T): boolean;
+  del(key: string): boolean;
+  flushAll(): void;
+}
+
+/**
+ * The cache behind `makeCacheableSignalKeyStore`, one for each socket. Without one, Baileys builds a NodeCache whose
+ * interval timer only its own close() clears, and nothing here can reach it, so every connect, reconnect and session
+ * start left a cache and a ten-minute timer alive for the life of the process. This one holds no timer: an entry
+ * expires when it is read or when another is written, and the cache is garbage once the socket that holds it is.
+ */
+export function createKeyCache(ttlMs: number = SIGNAL_KEY_CACHE_TTL_MS, now: () => number = Date.now): KeyCache {
+  const entries = new Map<string, { value: unknown; expiresAt: number }>();
+  return {
+    get size() {
+      return entries.size;
+    },
+    get<T>(key: string): T | undefined {
+      const entry = entries.get(key);
+      if (!entry) return undefined;
+      if (entry.expiresAt <= now()) {
+        entries.delete(key);
+        return undefined;
+      }
+      return entry.value as T;
+    },
+    set<T>(key: string, value: T): boolean {
+      // Every entry lives the same time, so keeping the Map in the order of writing keeps the expired ones in front.
+      entries.delete(key);
+      const at = now();
+      for (const [oldKey, { expiresAt }] of entries) {
+        if (expiresAt > at) break;
+        entries.delete(oldKey);
+      }
+      entries.set(key, { value, expiresAt: at + ttlMs });
+      return true;
+    },
+    del: (key: string): boolean => entries.delete(key),
+    flushAll(): void {
+      entries.clear();
+    },
+  };
 }
 
 /** What the close branch reports about one socket; `loggingIn` is false for a registration. */
@@ -447,8 +498,8 @@ export class BaileysLifecycle {
     // PreKey handshake on the very next send (visible as repeated "Closing session" log spam and
     // the recipient stuck on "waiting for this message" until a slow WhatsApp-side retry rescues
     // it). makeCacheableSignalKeyStore keeps the just-written state visible in memory immediately,
-    // regardless of disk I/O timing.
-    state.keys = b.makeCacheableSignalKeyStore(state.keys, baileysLogger);
+    // regardless of disk I/O timing. The cache is this socket's own and holds no timer (see createKeyCache).
+    state.keys = b.makeCacheableSignalKeyStore(state.keys, baileysLogger, createKeyCache());
 
     // C2: resurrect-after-stop guard — if disconnect/logout/destroy ran during the awaits above,
     // bail now so we don't create a live socket for a session that was intentionally stopped.
