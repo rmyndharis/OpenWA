@@ -211,12 +211,19 @@ describe('engine library smoke export list', () => {
   it('covers every function the engine code calls on the loaded module', () => {
     const called = new Set<string>();
     for (const source of sources) {
-      for (const [, variable] of source.matchAll(/\b(\w+): typeof BaileysLib\b/g)) {
+      // The module reaches the code as a parameter annotated with its type, or as the answer of loadLib().
+      const variables = [
+        ...[...source.matchAll(/\b(\w+): typeof BaileysLib\b/g)].map(m => m[1]),
+        ...[...source.matchAll(/\b(?:const|let) (\w+) = await [\w.]*loadLib\(\)/g)].map(m => m[1]),
+      ];
+      for (const variable of variables) {
         for (const [, name] of source.matchAll(new RegExp(`\\b${variable}\\.([A-Za-z_]\\w*)\\(`, 'g')))
           called.add(name);
       }
     }
-    expect([...called]).toEqual(expect.arrayContaining(['decryptPollVote', 'normalizeMessageContent']));
+    expect([...called]).toEqual(
+      expect.arrayContaining(['decryptPollVote', 'normalizeMessageContent', 'prepareWAMessageMedia']),
+    );
     // Only a name the library declares as an export: another variable named like the module's may call array methods.
     const declarations = fs
       .readdirSync(libDir, { recursive: true, encoding: 'utf8' })
