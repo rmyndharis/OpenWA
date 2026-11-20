@@ -2028,6 +2028,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return new Set([...this.engineLifecycle.startSlotHolders(), ...this.startReservations.keys()]);
   }
 
+  /** Drop what this process keeps in memory for a session an infra import removed. See SessionEngineLifecycle. */
+  forgetSession(id: string): void {
+    this.engineLifecycle.forgetSession(id);
+  }
+
   /**
    * Stop engines for session ids whose DB row is about to be replaced by an infra import.
    * Owned by the lifecycle service; see SessionEngineLifecycle.stopOrphanEngines(). A stop request

@@ -55,6 +55,7 @@ describe('import-data and the writes of the sessions it removes', () => {
       for (const id of ids) engines.delete(id);
       return Promise.resolve({ stopped: ids, notRunning: [], failed: [] });
     },
+    forgetSession: jest.fn(),
   };
   const cfg = { get: (key: string, fallback?: unknown) => (key === 'dataDatabase.type' ? 'sqlite' : fallback) };
   const newService = (ownership?: object) =>
@@ -124,6 +125,7 @@ describe('import-data and the writes of the sessions it removes', () => {
   };
 
   beforeEach(async () => {
+    sessionService.forgetSession.mockClear();
     process.env.SIMULATE_TYPING = 'false';
     engine.sendTextMessage.mockReset().mockResolvedValue({ id: 'sent-1', timestamp: 1 });
     engine.sendImageMessage.mockReset().mockResolvedValue({ id: 'sent-2', timestamp: 1 });
@@ -186,6 +188,26 @@ describe('import-data and the writes of the sessions it removes', () => {
     delete process.env.SIMULATE_TYPING;
     jest.restoreAllMocks();
     await ds.destroy();
+  });
+
+  // A restriction with no expiry kept for a removed session would hold the restricted-sessions gauge up for good.
+  it.each([
+    ['a running session it stops', true],
+    ['a stopped session', false],
+  ])('forgets what this process keeps for %s once the removal commits', async (_case, running) => {
+    if (!running) engines.delete('s1');
+
+    const res = await importNow({ stopOrphans: running });
+
+    expect(res.imported).toBe(true);
+    expect(sessionService.forgetSession.mock.calls).toEqual([['s1']]);
+  });
+
+  it('forgets nothing for an import that does not commit', async () => {
+    const res = await importNow({ stopOrphans: true }, withBadRow());
+
+    expect(res.imported).toBe(false);
+    expect(sessionService.forgetSession).not.toHaveBeenCalled();
   });
 
   it('waits for a message insert in flight before replacing the session that owns it', async () => {

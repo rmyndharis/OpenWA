@@ -1192,28 +1192,34 @@ export class SessionEngineControls {
         this.stoppingSessions.deleteStamped(id, ownMark);
         if (hooks.mark !== undefined) this.stoppingSessions.deleteStamped(id, hooks.mark);
       }
-      if (parentDeleted) {
-        this.broadcaster.clear(id);
-        // Drop the FAILED-reason entry too: it's keyed by a now-deleted UUID that can never be read
-        // again, so leaving it would grow the map without bound across create/fail/delete churn.
-        this.sessionErrors.clear(id);
-        // Same unbounded-growth argument for the restriction entry, and the gauge it feeds must not
-        // keep counting an account whose session no longer exists.
-        this.sessionRestrictions.clear(id);
-        // Presence is per-connection state that the deleted session can never receive again, and it
-        // is keyed by an id that will never be read.
-        this.presence.clear(id);
-        // The stuck-auth recovery budget is keyed by id; a committed delete frees it (and a recreated
-        // session under the same name gets a fresh UUID + fresh budget). Left only on a committed
-        // delete so a failed/409 delete — the session still exists — keeps the budget intact.
-        this.stuckAuthRecoveryUsed.delete(id);
-        this.host.forgetBindingEpoch?.(id);
-      }
+      if (parentDeleted) this.forgetSession(id);
       // NOTE: pendingTeardowns is intentionally NOT cleared here. It is keyed by session NAME and
       // its entries self-remove on settlement (identity-checked). A delete that refused at either
       // fence MUST leave the entry in place — the name is still reserved against the live remover —
       // and a delete that succeeded already saw both fences pass, so no live remover exists.
     }
+  }
+
+  /**
+   * Drop what this process keeps in memory for a session whose row is gone: by a committed delete, or by an infra import
+   * that replaced the table without it. Never for a session that still exists.
+   */
+  forgetSession(id: string): void {
+    this.broadcaster.clear(id);
+    // Drop the FAILED-reason entry too: it's keyed by a now-deleted UUID that can never be read
+    // again, so leaving it would grow the map without bound across create/fail/delete churn.
+    this.sessionErrors.clear(id);
+    // Same unbounded-growth argument for the restriction entry, and the gauge it feeds must not
+    // keep counting an account whose session no longer exists.
+    this.sessionRestrictions.clear(id);
+    // Presence is per-connection state that the deleted session can never receive again, and it
+    // is keyed by an id that will never be read.
+    this.presence.clear(id);
+    // The stuck-auth recovery budget is keyed by id; a committed delete frees it (and a recreated
+    // session under the same name gets a fresh UUID + fresh budget). Left only on a committed
+    // delete so a failed/409 delete (the session still exists) keeps the budget intact.
+    this.stuckAuthRecoveryUsed.delete(id);
+    this.host.forgetBindingEpoch?.(id);
   }
 
   /**

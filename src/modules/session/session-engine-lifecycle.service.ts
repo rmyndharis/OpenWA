@@ -527,6 +527,11 @@ export class SessionEngineLifecycle {
     return this.controls.delete(id, hooks);
   }
 
+  /** Delegate: SessionEngineControls.forgetSession. */
+  forgetSession(id: string): void {
+    this.controls.forgetSession(id);
+  }
+
   /** Delegate: SessionEngineControls.holdDelete. */
   holdDelete(id: string): () => void {
     return this.controls.holdDelete(id);
