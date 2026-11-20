@@ -160,6 +160,9 @@
 }
 
 .sessions-page .info-value.error-text {
+  /* The text is the gateway's, in English, and the row is cut at its end: drawn in its own direction an Arabic or
+     Hebrew page cuts its start instead. */
+  unicode-bidi: plaintext;
   color: var(--error-text);
   font-weight: 500;
   max-width: 60%;
