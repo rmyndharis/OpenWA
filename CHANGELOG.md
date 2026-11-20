@@ -68,7 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plugins: the boot scan logs a warning when a plugin directory is a symbolic link, which it does not follow, where it skipped it without a line in the log.
 - MCP: a tool's `sessionId` takes letters, digits and hyphens, at most 128 characters, as the REST routes do, where any string reached the lookup and was echoed whole into the not-found answer.
 - Webhooks: the OpenAPI schema and the Python and JavaScript SDK types of the update request declare that a `null` `secret` clears it, as the route has always accepted.
-- Dashboard: a whatsapp-web.js chat whose stored-message read is refused for a reason that may pass (no answer, a timeout, a limit, the gateway down) shows a failed load with a retry, where it showed the engine history alone as the whole thread until a reconnect.
+- Dashboard: a whatsapp-web.js chat whose stored-message read is refused for a reason that may pass (no answer, a timeout, a limit, the gateway down) shows a failed load, which loads again when the chat is opened again or the window is focused, where it showed the engine history alone as the whole thread until a reconnect.
+- Dashboard: after a failed refresh of a loaded thread, the strip is a button that refreshes the newest page, where the retry it offered fetched an older page, which ended the failure and left the messages of the gap missing.
+- Dashboard: a chat is read once its thread has shown, where opening it sent the read at once: while the thread loads or after it fails the chat stays unread, its badge comes back when the thread fails or the chat is left before it showed, and the read goes out when the thread loads.
+- Dashboard: the Message Tester keeps a gap between a result label and a value that wraps.
 - Dashboard: the Number Checker names the WhatsApp Web page reload when a stopped run carries `ENGINE_PAGE_RELOADING`, where it said the session is not connected.
 - Dashboard: the webhook form counts a chat id entry over 128 characters as incomplete and says so, where Save sent it and the gateway answered a bare `400`, and a webhook stored with one could not be saved.
 - Dashboard: a long group name or an unbroken token in a failed send no longer widens the Message Tester past a phone screen, and a long plugin name ends with an ellipsis on a plugin card.
