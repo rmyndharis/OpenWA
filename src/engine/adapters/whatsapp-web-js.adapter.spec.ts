@@ -9,6 +9,7 @@ import {
   loadRemoteMedia,
   extractWwebjsCall,
   wwebjsAckToDeliveryStatus,
+  PAGE_RELOADED_DURING_SEND_MESSAGE,
 } from './wwebjs-messaging';
 import { isSupportedProxyUrl, buildProxyLaunchConfig } from './wwebjs-proxy';
 import { LoggerService } from '../../common/services/logger.service';
@@ -7468,12 +7469,12 @@ describe('WhatsAppWebJsAdapter navigation re-inject grace (#1081)', () => {
       expect(onDisconnected).not.toHaveBeenCalled();
     });
 
-    it('keeps the session ready when a send dies that way', async () => {
+    it('answers a send that dies that way as one that may have gone out, and keeps the session ready', async () => {
       const { adapter, onDisconnected, navigateLater } = wire({
         sendMessage: jest.fn().mockRejectedValue(new Error(IN_FLIGHT)),
       });
 
-      await expect(adapter.sendTextMessage(GROUP, 'hi')).rejects.toThrow(IN_FLIGHT);
+      await expect(adapter.sendTextMessage(GROUP, 'hi')).rejects.toThrow(PAGE_RELOADED_DURING_SEND_MESSAGE);
       await navigateLater();
 
       expect(adapter.getStatus()).toBe(EngineStatus.READY);

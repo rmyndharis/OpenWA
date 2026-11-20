@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, HttpException, NotFoundException } from '@nestjs/common';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
 import { type WwebjsEngineHost, withPage, withPageWrite } from './wwebjs-host';
 import {
@@ -21,6 +21,7 @@ import { readStatusSetterInPage } from './wwebjs-profile';
 import { runWriteInPage } from './wwebjs-page-writes';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { hasUnknownOutcome } from '../../common/errors/engine-not-sent.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
@@ -35,7 +36,9 @@ import { createLogger } from '../../common/services/logger.service';
  * bare 500, or a 404 where a catch folds a failed lookup into "not found", where a reload answers the retryable 409.
  * A call that was cut by a navigation stamped after it began is read as that reload, whatever its text, for the reads
  * and the writes that converge when repeated, and for the group lookup in front of a write, which is a read that
- * applied nothing. A send and the other writes whose repeat could duplicate keep their answer.
+ * applied nothing. A send or a status post is read as the reload too, but its repeat could duplicate, so it answers
+ * the plain 409 that says it may or may not have gone out, never the retryable one. The other writes whose repeat
+ * could duplicate keep their answer.
  */
 describe('a call that a page navigation lands on', () => {
   const GROUP = '120363000000000001@g.us';
@@ -413,14 +416,6 @@ describe('a call that a page navigation lands on', () => {
         },
         /^Cannot read properties of undefined/,
       ],
-      [
-        'a text message',
-        w => {
-          w.client.sendMessage = w.fail('sendMessage');
-          return w.adapter.sendTextMessage(GROUP, 'hello');
-        },
-        /^Cannot read properties of undefined/,
-      ],
     ];
 
     it.each(PRESERVED)('%s', async (_name, route, message) => {
@@ -428,6 +423,54 @@ describe('a call that a page navigation lands on', () => {
 
       await expect(call).rejects.toBeInstanceOf(TypeError);
       await expect(call).rejects.toMatchObject({ message: expect.stringMatching(message) as unknown });
+    });
+  });
+
+  describe('answers a send or a status post with the 409 that says it may have gone out', () => {
+    const SENT = /^WhatsApp Web reloaded its page while the message was being sent, and it may or may not/;
+    const POSTED = /^WhatsApp Web reloaded its page while the status was being posted, and it may or may not/;
+    const UNKNOWN: Array<[string, (w: Wire) => Promise<unknown>, RegExp]> = [
+      [
+        'a text message',
+        w => {
+          w.client.sendMessage = w.fail('sendMessage');
+          return w.adapter.sendTextMessage(GROUP, 'hello');
+        },
+        SENT,
+      ],
+      [
+        'a text status',
+        w => {
+          w.client.sendMessage = w.fail('sendMessage');
+          return w.adapter.postTextStatus('hello', {});
+        },
+        POSTED,
+      ],
+      [
+        'an image status',
+        w => {
+          w.client.sendMessage = w.fail('sendMessage');
+          return w.adapter.postImageStatus({ mimetype: 'image/png', data: 'aGk=' }, {});
+        },
+        POSTED,
+      ],
+    ];
+
+    it.each(UNKNOWN)('%s', async (_name, route, message) => {
+      const error: unknown = await route(wire(true)).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(EngineNotReadyError);
+      // No code and no interval: a client is not told to ask again.
+      expect((error as HttpException).getResponse()).toEqual({
+        statusCode: 409,
+        error: 'Conflict',
+        message: expect.stringMatching(message) as unknown,
+      });
+      expect(hasUnknownOutcome(error)).toBe(true);
+    });
+
+    it.each(UNKNOWN)('%s: with no navigation stamped the answer is unchanged', async (_name, route) => {
+      await expect(route(wire(false))).rejects.toBeInstanceOf(TypeError);
     });
   });
 

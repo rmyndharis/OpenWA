@@ -123,7 +123,7 @@ describe('a video sticker that the ffmpeg conversion of whatsapp-web.js fails on
   // Known-negative controls: what is not a conversion failure keeps the answer and the accounting it had.
   it.each([
     ['a plain engine error', new Error('boom')],
-    ['an error of the page', new Error('Execution context was destroyed, most likely because of a navigation.')],
+    ['an error of the page', new Error('Evaluation failed: TypeError: x is not a function')],
     ['a message that only mentions ffmpeg', new Error('the engine said ffmpeg exited with code 1')],
   ])('leaves %s alone', async (_case, thrown) => {
     const error = await failureOf(build(jest.fn().mockRejectedValue(thrown)).sendStickerMessage(PHONE, video()));

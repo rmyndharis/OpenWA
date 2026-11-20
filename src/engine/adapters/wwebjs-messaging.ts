@@ -422,6 +422,21 @@ function afterAttempt<T>(error: T): T | EngineNotReadyError {
 }
 
 /**
+ * Throw `answer` as the plain not-ready 409 of an attempt that a page reload cut short, and return for any other
+ * failure. The attempt may have left the page, so the answer says the outcome is unknown instead of telling the
+ * client to ask again (markOutcomeUnknown: a keyed send keeps its `Idempotency-Key`, a paced one its admission), and
+ * as a 4xx it does not feed the send breaker, which a reload says nothing about. `since` is {@link navigationsSeen}
+ * where the attempt started. A failure counts as the reload as `rethrowIfNavigation` (./wwebjs-host) reads it: the
+ * navigation text, or any other failure of a call a navigation was stamped during, but not a dead page, an error this
+ * application built or a failure captured inside the page.
+ */
+export function throwIfCutByReload(host: WwebjsEngineHost, error: unknown, since: number, answer: string): void {
+  if (isNavigationError(error, navigationsSeen(host) !== since) && !host.isPageTransportError(error)) {
+    throw markOutcomeUnknown(new EngineNotReadyError(answer));
+  }
+}
+
+/**
  * Messaging operations extracted from WhatsAppWebJsAdapter: the send paths (with the @c.us -> @lid
  * resolution cache), reactions, history, delete and edit. The adapter keeps the public methods as
  * thin forwarders and injects the shared host surface (./wwebjs-host) via closures, so the delegate
@@ -611,7 +626,8 @@ export class WwebjsMessaging {
    * The answers given once the first attempt failed with `No LID for user` (a not-ready 409, the unreachable
    * recipient, a quote the retry cannot resolve) carry markOutcomeUnknown: the page can throw after the message is
    * on the wire, so none of them proves the message stayed off it. An answer given before that attempt still
-   * carries markNothingSent.
+   * carries markNothingSent. An attempt that a page reload cut short, the first or the retry, answers
+   * {@link PAGE_RELOADED_DURING_SEND_MESSAGE} the same way (see {@link throwIfCutByReload}).
    *
    * `quotedMessageId` gets the same treatment for the same reason. Opting out of `ignoreQuoteErrors`
    * makes an id the page cannot resolve throw, but it throws a bare Error, and two things follow from
@@ -633,12 +649,16 @@ export class WwebjsMessaging {
     // unresolved id. The reply and forward legs send through the Message's own client, which the host's
     // readiness check on getClient never sees, so a send must not leave for a closing page from here.
     this.ensureReadyToSend();
+    const since = navigationsSeen(this.host);
     try {
       return await send(to);
     } catch (err) {
       // A transport-level failure means the page/browser is gone — report it as a death signal.
       // No-op for ordinary send errors; the retry/throw behavior below is unchanged.
       this.host.reportIfPageTransportError(err, 'sendMessage');
+      // A reload that cut the attempt comes first: the page it opened holds neither the quoted message nor the id
+      // mapping, so what failed on it is not the quote or the stale id it reads as, and the message may be out.
+      throwIfCutByReload(this.host, err, since, PAGE_RELOADED_DURING_SEND_MESSAGE);
       // Before the LID branch: an unresolvable quote is neither stale-id nor transport, and
       // re-resolving the recipient would not make the quoted message appear. The page refuses it before
       // it builds the message, and this is the first attempt, so nothing was sent.
@@ -668,11 +688,13 @@ export class WwebjsMessaging {
         staleId: to,
         freshId: fresh,
       });
+      const retrySince = navigationsSeen(this.host);
       try {
         return await send(fresh);
       } catch (retryErr) {
         // The page can die during the retry as well; report it exactly as the first attempt does.
         this.host.reportIfPageTransportError(retryErr, 'sendMessage');
+        throwIfCutByReload(this.host, retryErr, retrySince, PAGE_RELOADED_DURING_SEND_MESSAGE);
         // Same remap as the first attempt. Re-resolving the RECIPIENT says nothing about the quoted
         // message, so a send that reaches the page on the fresh id and only then fails on the quote
         // is the same caller fault — without this it would be a 500 on the retry where the identical

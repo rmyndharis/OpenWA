@@ -9,9 +9,9 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
-import { toMessageMedia } from './wwebjs-messaging';
+import { throwIfCutByReload, toMessageMedia } from './wwebjs-messaging';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
-import { type WwebjsEngineHost, requireClient, withPageWrite, reportPageDeath } from './wwebjs-host';
+import { type WwebjsEngineHost, navigationsSeen, requireClient, withPageWrite, reportPageDeath } from './wwebjs-host';
 import { noteVideoLoadTimeout } from './wwebjs-video-load-timeout';
 
 /**
@@ -47,6 +47,14 @@ export function toStatusResult(msg: Message | undefined): StatusResult {
     expiresAt: new Date(ts.getTime() + 24 * 3_600_000),
   };
 }
+
+/**
+ * What a status post answers 409 when WhatsApp Web reloaded its page while the post was running. The post may have
+ * been published, so unlike the reload refusal of a request that posted nothing, it does not say to post it again.
+ */
+export const PAGE_RELOADED_DURING_STATUS_POST =
+  'WhatsApp Web reloaded its page while the status was being posted, and it may or may not have been posted. ' +
+  'Check your status before posting it again.';
 
 /**
  * Status/Stories operations extracted from WhatsAppWebJsAdapter. The adapter keeps the public
@@ -150,6 +158,20 @@ export class WwebjsStatus {
     return statuses;
   }
 
+  /**
+   * {@link reportPageDeath} for a status post, which also answers a post that a page reload cut short as
+   * {@link PAGE_RELOADED_DURING_STATUS_POST} (see throwIfCutByReload). The death is reported first, as before.
+   */
+  private async postOnPage<T>(context: string, post: () => Promise<T>): Promise<T> {
+    const since = navigationsSeen(this.host);
+    try {
+      return await reportPageDeath(this.host, context, post);
+    } catch (error) {
+      throwIfCutByReload(this.host, error, since, PAGE_RELOADED_DURING_STATUS_POST);
+      throw error;
+    }
+  }
+
   private warnedStatusRecipients = false;
 
   async postTextStatus(text: string, options: StatusPostOptions): Promise<StatusResult> {
@@ -159,8 +181,8 @@ export class WwebjsStatus {
     // (Client.js maps options.extra → page extraOptions → sendStatusTextMsgAction in Utils.js).
     // backgroundColor is a #RRGGBB hex; font is the fontStyle index 0-7.
     // Non-idempotent: report a dead page and keep the 500 (a failure WhatsApp Web threw in the page
-    // gains its reason). See reportPageDeath.
-    const msg = await reportPageDeath(this.host, 'postTextStatus', () =>
+    // gains its reason). See reportPageDeath and postOnPage.
+    const msg = await this.postOnPage('postTextStatus', () =>
       this.client().sendMessage('status@broadcast', text, {
         extra: {
           ...(options.backgroundColor !== undefined ? { backgroundColor: options.backgroundColor } : {}),
@@ -196,8 +218,8 @@ export class WwebjsStatus {
     this.host.ensureReady();
     this.warnStatusRecipientsOnce(options);
     const messageMedia = await toMessageMedia(media, this.host.config.proxy?.url, { fallbackType });
-    // Non-idempotent: a replayed post would publish the status twice. See reportPageDeath.
-    const msg = await reportPageDeath(this.host, 'postMediaStatus', () =>
+    // Non-idempotent: a replayed post would publish the status twice. See reportPageDeath and postOnPage.
+    const msg = await this.postOnPage('postMediaStatus', () =>
       this.client().sendMessage('status@broadcast', messageMedia, {
         ...(options.caption !== undefined ? { caption: options.caption } : {}),
         ...extra,
