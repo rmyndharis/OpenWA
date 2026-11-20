@@ -279,16 +279,26 @@ describe('resolveSafeFetchTarget', () => {
 });
 
 describe('urlCarriesCredentials', () => {
-  it.each(['https://ops:s3cr3t@example.com/', 'https://ops@example.com/', 'http://:s3cr3t@example.com/'])(
-    'is true for %s',
-    url => expect(urlCarriesCredentials(url)).toBe(true),
-  );
+  it.each([
+    'https://ops:s3cr3t@example.com/',
+    'https://ops@example.com/',
+    'http://:s3cr3t@example.com/',
+    // Unparsable, but the refusal of the guard or of undici would name it, userinfo included.
+    'http://ops:s3cr3t@exa mple.com/',
+    'https://s3cr3t@example.com:99999/',
+    'http://:s3cr3t@example.com:abc/',
+  ])('is true for %s', url => expect(urlCarriesCredentials(url)).toBe(true));
 
-  // undici accepts an empty userinfo, and an unparsable URL is left to the guard, which names it.
-  it.each(['http://@example.com/', 'https://example.com/a@b', 'https://example.com/?u=a:b@c', 'not a url', ''])(
-    'is false for %p',
-    url => expect(urlCarriesCredentials(url)).toBe(false),
-  );
+  // undici accepts an empty userinfo, and an unparsable URL with none is left to the guard, which names it.
+  it.each([
+    'http://@example.com/',
+    'https://example.com/a@b',
+    'https://example.com/?u=a:b@c',
+    'http://@exa mple.com/',
+    'http://exa mple.com/a@b',
+    'not a url',
+    '',
+  ])('is false for %p', url => expect(urlCarriesCredentials(url)).toBe(false));
 });
 
 describe('withSafeFetch (guarded + pinned fetch)', () => {
@@ -312,7 +322,11 @@ describe('withSafeFetch (guarded + pinned fetch)', () => {
     'refuses a URL with a user name or a password before any fetch, %s, naming none of it',
     async (_mode, opts) => {
       const use = jest.fn();
-      for (const url of ['https://ops:s3cr3t@93.184.216.34/hook', 'https://s3cr3t@93.184.216.34/hook']) {
+      for (const url of [
+        'https://ops:s3cr3t@93.184.216.34/hook',
+        'https://s3cr3t@93.184.216.34/hook',
+        'https://ops:s3cr3t@93.184.216.34:99999/hook',
+      ]) {
         const error: unknown = await withSafeFetch(url, {}, use, opts).catch((caught: unknown) => caught);
         expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).toBe(URL_CREDENTIALS_MESSAGE);

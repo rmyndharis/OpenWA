@@ -29,14 +29,16 @@ export const URL_CREDENTIALS_MESSAGE = 'URL must not contain credentials (userin
 /**
  * Whether a URL carries a user name or a password: the exact condition undici refuses to build a request for, with a
  * TypeError whose text repeats the URL, credentials included. An empty userinfo (`http://@host/`) is accepted by
- * undici, and an unparsable URL is left to the guard, which names it.
+ * undici. An unparsable URL is read by hand, because the guard and undici name it in their refusal too: one with a
+ * userinfo counts, and one with none is left to the guard.
  */
 export function urlCarriesCredentials(url: string): boolean {
   try {
     const { username, password } = new URL(url);
     return username !== '' || password !== '';
   } catch {
-    return false;
+    const userinfo = /^[a-z][a-z0-9+.-]*:\/\/([^/\\?#]*)@/i.exec(url)?.[1] ?? '';
+    return userinfo !== '' && userinfo !== ':';
   }
 }
 
