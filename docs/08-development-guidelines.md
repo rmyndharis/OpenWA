@@ -561,6 +561,7 @@ HTTP code with no filter involved:
 | `EngineNotSupportedError`                                                                                           | `NotImplementedException`      | 501    |
 | `ChannelMediaNotSupportedError`                                                                                     | `NotImplementedException`      | 501    |
 | `EngineNotReadyError`                                                                                               | `ConflictException`            | 409    |
+| `EnginePageReloadingError`                                                                                          | `EngineNotReadyError`          | 409    |
 | `EngineRefusedError`                                                                                                | `ForbiddenException`           | 403    |
 | `EngineTransportError`                                                                                              | `ServiceUnavailableException`  | 503    |
 | `ChatLabelsUnsupportedError`                                                                                        | `UnprocessableEntityException` | 422    |
@@ -569,6 +570,9 @@ HTTP code with no filter involved:
 | `EnginePageError`                                                                                                   | `InternalServerErrorException` | 500    |
 | `RecipientLookupUnansweredError`                                                                                    | `EnginePageError`              | 500    |
 | `EngineNotSentError` / `EngineThrottledError`                                                                       | `EngineTransportError`         | 503    |
+
+`EnginePageReloadingError` is the not-ready `409` a whatsapp-web.js request gets while WhatsApp Web reloads its page; its
+body carries `code` `ENGINE_PAGE_RELOADING` and `retryAfterSeconds`, and the request is safe to repeat.
 
 `src/common/errors/` holds the full set; `LidNotMappedError` there is the one plain `Error`, which engines
 throw for a caller to catch, and it carries no status. Add a new one only when the condition is
