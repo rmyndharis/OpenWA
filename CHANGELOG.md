@@ -49,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Baileys: a pin, mute, archive, read mark or timer change synced under the other spelling (lid or phone) of a chat shows on its row instead of a second row at the epoch.
 - Baileys: a lid-keyed chat with a pinned, muted or archived state no longer lists a second row under its phone.
 - Baileys: a contact whose only name is its privacy id's digits no longer reports them as its push name or saved name in contact reads, the contact list or a status's poster name.
+- whatsapp-web.js: `POST /api/sessions/{sessionId}/messages/send-sticker` answers `400` for a video ffmpeg refuses and `503` when the host ffmpeg is missing or cannot run, where both were a `500` that counted toward the session send breaker and kept the `Idempotency-Key`.
+- whatsapp-web.js: `GET /api/sessions/{sessionId}/groups/join-info` answers `501` on a WhatsApp Web build with no invite preview job, where every code, valid ones included, was the `404` of an unknown invite.
+- whatsapp-web.js: an invite revoke, group join, group or own picture delete, About text change or pin that a page reload lands on answers the retryable `409` with `code` `ENGINE_PAGE_RELOADING`, where it answered a `501` that said the build had no job.
+- whatsapp-web.js: deleting a channel or unsubscribing from one on a page that has not installed the library helpers answers the retryable `409`, where it was a bare `500`.
 - Baileys: a poll vote on the account's own broadcast-list poll is reported only when it arrives in a 1:1 chat, as documented; a vote from a group, the list or the status chat was reported too.
 - Baileys: with `STORE_EPHEMERAL_MESSAGES=false`, a message received in a disappearing chat leaves no copy in `baileys_stored_messages` and no text as the chat's `lastMessage`, and its media is not downloaded, where its content stayed in the database, in backups and in the chat list (see Upgrade notes).
 - Overlapping updates of one privacy id's phone mapping are written in the order they were made; the older one could land last and stay in `lid_mappings`, on a PostgreSQL pool or when both were made in the same turn.
