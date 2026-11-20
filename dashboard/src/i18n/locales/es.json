@@ -51,7 +51,8 @@
     "unknownError": "Error desconocido",
     "showApiKey": "Mostrar clave API",
     "hideApiKey": "Ocultar clave API",
-    "retry": "Reintentar"
+    "retry": "Reintentar",
+    "copyFailed": "No se pudo copiar al portapapeles"
   },
   "theme": {
     "light": "Claro",
@@ -236,7 +237,6 @@
     "moreActions": "Más acciones",
     "copyChatId": "Copiar ID del chat",
     "chatIdCopied": "ID del chat copiado",
-    "copyFailed": "No se pudo copiar al portapapeles",
     "closeChat": "Cerrar chat",
     "phone": "Número de teléfono",
     "chatId": "ID del chat",

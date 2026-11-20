@@ -51,7 +51,8 @@
     "refresh": "Actualiser",
     "errorGeneric": "Une erreur est survenue",
     "unknownError": "Erreur inconnue",
-    "retry": "Réessayer"
+    "retry": "Réessayer",
+    "copyFailed": "Impossible de copier dans le presse-papiers"
   },
   "theme": {
     "light": "Clair",
@@ -236,7 +237,6 @@
     "moreActions": "Plus d’actions",
     "copyChatId": "Copier l’ID de la discussion",
     "chatIdCopied": "ID de la discussion copié",
-    "copyFailed": "Impossible de copier dans le presse-papiers",
     "closeChat": "Fermer la discussion",
     "phone": "Numéro de téléphone",
     "chatId": "ID de la discussion",

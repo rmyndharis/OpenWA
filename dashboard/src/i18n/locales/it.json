@@ -51,7 +51,8 @@
     "refresh": "Aggiorna",
     "errorGeneric": "Si è verificato un errore",
     "unknownError": "Errore sconosciuto",
-    "retry": "Riprova"
+    "retry": "Riprova",
+    "copyFailed": "Impossibile copiare negli appunti"
   },
   "theme": {
     "light": "Chiaro",
@@ -236,7 +237,6 @@
     "moreActions": "Altre azioni",
     "copyChatId": "Copia ID chat",
     "chatIdCopied": "ID chat copiato",
-    "copyFailed": "Impossibile copiare negli appunti",
     "closeChat": "Chiudi chat",
     "phone": "Numero di telefono",
     "chatId": "ID chat",

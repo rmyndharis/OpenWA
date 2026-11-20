@@ -49,7 +49,8 @@
     "refresh": "刷新",
     "errorGeneric": "发生错误",
     "unknownError": "未知错误",
-    "retry": "重试"
+    "retry": "重试",
+    "copyFailed": "无法复制到剪贴板"
   },
   "theme": {
     "light": "浅色",
@@ -231,7 +232,6 @@
     "moreActions": "更多操作",
     "copyChatId": "复制聊天 ID",
     "chatIdCopied": "已复制聊天 ID",
-    "copyFailed": "无法复制到剪贴板",
     "closeChat": "关闭聊天",
     "phone": "电话号码",
     "chatId": "聊天 ID",

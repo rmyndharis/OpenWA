@@ -53,7 +53,8 @@
     "refresh": "רענון",
     "errorGeneric": "אירעה שגיאה",
     "unknownError": "שגיאה לא ידועה",
-    "retry": "נסה שוב"
+    "retry": "נסה שוב",
+    "copyFailed": "ההעתקה ללוח נכשלה"
   },
   "theme": {
     "light": "בהיר",
@@ -242,7 +243,6 @@
     "moreActions": "פעולות נוספות",
     "copyChatId": "העתקת מזהה הצ׳אט",
     "chatIdCopied": "מזהה הצ׳אט הועתק",
-    "copyFailed": "ההעתקה ללוח נכשלה",
     "closeChat": "סגירת הצ׳אט",
     "phone": "מספר טלפון",
     "chatId": "מזהה צ׳אט",

@@ -49,7 +49,8 @@
     "refresh": "새로고침",
     "errorGeneric": "오류가 발생했습니다",
     "unknownError": "알 수 없는 오류",
-    "retry": "다시 시도"
+    "retry": "다시 시도",
+    "copyFailed": "클립보드에 복사할 수 없습니다"
   },
   "theme": {
     "light": "라이트",
@@ -231,7 +232,6 @@
     "moreActions": "추가 작업",
     "copyChatId": "채팅 ID 복사",
     "chatIdCopied": "채팅 ID가 복사되었습니다",
-    "copyFailed": "클립보드에 복사할 수 없습니다",
     "closeChat": "채팅 닫기",
     "phone": "전화번호",
     "chatId": "채팅 ID",

@@ -395,7 +395,7 @@ export function ApiKeys() {
     if (await copyToClipboard(text)) {
       setCopied(id);
       setTimeout(() => setCopied(null), 2000);
-    }
+    } else toast.error(t('common.copyFailed'));
   };
 
   const columns = useMemo(

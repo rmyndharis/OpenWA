@@ -2092,7 +2092,7 @@ export function Chats() {
     if (!activeChat) return;
     // The house helper: over plain HTTP on a LAN address navigator.clipboard does not exist.
     if (await copyToClipboard(activeChat.id)) showSuccessToast(t('chats.chatIdCopied'));
-    else showErrorToast(t('chats.copyFailed'));
+    else showErrorToast(t('common.copyFailed'));
   };
 
   // The overflow menu closes on a press outside it, on Escape, and with the chat it belongs to. Escape

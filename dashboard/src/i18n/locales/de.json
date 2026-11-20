@@ -49,7 +49,8 @@
     "refresh": "Aktualisieren",
     "errorGeneric": "Ein Fehler ist aufgetreten",
     "unknownError": "Unbekannter Fehler",
-    "retry": "Erneut versuchen"
+    "retry": "Erneut versuchen",
+    "copyFailed": "Kopieren in die Zwischenablage fehlgeschlagen"
   },
   "theme": {
     "light": "Hell",
@@ -231,7 +232,6 @@
     "moreActions": "Weitere Aktionen",
     "copyChatId": "Chat-ID kopieren",
     "chatIdCopied": "Chat-ID kopiert",
-    "copyFailed": "Kopieren in die Zwischenablage fehlgeschlagen",
     "closeChat": "Chat schließen",
     "phone": "Telefonnummer",
     "chatId": "Chat-ID",

@@ -49,7 +49,8 @@
     "refresh": "Refresh",
     "errorGeneric": "An error occurred",
     "unknownError": "Unknown error",
-    "retry": "Retry"
+    "retry": "Retry",
+    "copyFailed": "Could not copy to clipboard"
   },
   "theme": {
     "light": "Light",
@@ -231,7 +232,6 @@
     "moreActions": "More actions",
     "copyChatId": "Copy chat ID",
     "chatIdCopied": "Chat ID copied",
-    "copyFailed": "Could not copy to clipboard",
     "closeChat": "Close chat",
     "phone": "Phone number",
     "chatId": "Chat ID",

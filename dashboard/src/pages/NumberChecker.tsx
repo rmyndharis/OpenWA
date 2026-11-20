@@ -249,7 +249,7 @@ export function NumberChecker() {
     if (await copyToClipboard(id)) {
       setCopiedId(true);
       setTimeout(() => setCopiedId(false), 2000);
-    }
+    } else toast.error(t('common.copyFailed'));
   };
 
   // Perform batch check

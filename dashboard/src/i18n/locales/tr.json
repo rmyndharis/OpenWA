@@ -49,7 +49,8 @@
     "refresh": "Yenile",
     "errorGeneric": "Bir hata oluştu",
     "unknownError": "Bilinmeyen hata",
-    "retry": "Yeniden Dene"
+    "retry": "Yeniden Dene",
+    "copyFailed": "Panoya kopyalanamadı"
   },
   "theme": {
     "light": "Açık",
@@ -231,7 +232,6 @@
     "moreActions": "Diğer işlemler",
     "copyChatId": "Sohbet kimliğini kopyala",
     "chatIdCopied": "Sohbet kimliği kopyalandı",
-    "copyFailed": "Panoya kopyalanamadı",
     "closeChat": "Sohbeti kapat",
     "phone": "Telefon numarası",
     "chatId": "Sohbet kimliği",

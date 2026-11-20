@@ -215,6 +215,7 @@ function SecretField({
         disabled={disabled || !value}
         onClick={async () => {
           if (await copyToClipboard(value)) toast.success(t('webhooks.auth.secretCopied'));
+          else toast.error(t('common.copyFailed'));
         }}
       >
         {t('webhooks.auth.copySecret')}
