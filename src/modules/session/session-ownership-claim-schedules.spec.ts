@@ -150,6 +150,7 @@ describe('claims of one session that overlap on a node', () => {
     setup: Setup = {},
   ): Promise<Run & { taken: number[]; choices: number[] }> {
     await sessions.clear();
+    warn.mockClear(); // a refused claim logs on every schedule, and the spy keeps each call
     const node = new SessionOwnershipService(sessions, config('node-a'));
     const saved = await sessions.save(
       sessions.create({ name: 'overlap', status: SessionStatus.READY, config: {}, ...row }),

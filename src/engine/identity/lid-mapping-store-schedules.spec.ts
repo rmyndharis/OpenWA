@@ -244,6 +244,9 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
   const savedCap = process.env.LID_MAPPING_CACHE_MAX;
   let ds: DataSource;
   let slow: Repository<LidMapping>;
+  // A spy keeps every call it saw and what each returned, with the store that awaited it: a walk of tens of thousands of
+  // schedules held about a gigabyte of finished stores, so each schedule clears them.
+  const slowSpies: jest.SpyInstance[] = [];
   let gated = false;
   let failingFillers = false;
   /** The table cannot be read: every read of the store fails, and the readers answer from the mirror. */
@@ -302,29 +305,33 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
     slow = new Repository(LidMapping, ds.manager);
     const find = (slow.find as (...args: unknown[]) => Promise<unknown>).bind(slow);
     const findOne = (slow.findOne as (...args: unknown[]) => Promise<unknown>).bind(slow);
-    jest
-      .spyOn(slow, 'findOne')
-      .mockImplementation(((...args: unknown[]) =>
-        down ? Promise.reject(new Error('the database is down')) : findOne(...args)) as never);
-    jest.spyOn(slow, 'find').mockImplementation(((...args: unknown[]) => {
-      if (down) return Promise.reject(new Error('the database is down'));
-      if (!holdRead) return find(...args);
-      holdRead = false;
-      return new Promise((resolve, reject) => {
-        read.release = () => void find(...args).then(resolve, reject);
-      });
-    }) as never);
+    slowSpies.push(
+      jest
+        .spyOn(slow, 'findOne')
+        .mockImplementation(((...args: unknown[]) =>
+          down ? Promise.reject(new Error('the database is down')) : findOne(...args)) as never),
+      jest.spyOn(slow, 'find').mockImplementation(((...args: unknown[]) => {
+        if (down) return Promise.reject(new Error('the database is down'));
+        if (!holdRead) return find(...args);
+        holdRead = false;
+        return new Promise((resolve, reject) => {
+          read.release = () => void find(...args).then(resolve, reject);
+        });
+      }) as never),
+    );
     for (const method of ['update', 'upsert', 'query'] as const) {
       const real = (slow[method] as (...args: unknown[]) => Promise<unknown>).bind(slow);
-      jest.spyOn(slow, method).mockImplementation(((...args: unknown[]) => {
-        const lid = lidOf(args);
-        // The other lids of the script write at once, and fail while the database is down.
-        if (lid && FILLER_LIDS.has(lid) && gated)
-          return failingFillers ? Promise.reject(new Error('connection lost')) : real(...args);
-        return gated
-          ? new Promise((resolve, reject) => parked.push({ method, run: () => real(...args), resolve, reject }))
-          : real(...args);
-      }) as never);
+      slowSpies.push(
+        jest.spyOn(slow, method).mockImplementation(((...args: unknown[]) => {
+          const lid = lidOf(args);
+          // The other lids of the script write at once, and fail while the database is down.
+          if (lid && FILLER_LIDS.has(lid) && gated)
+            return failingFillers ? Promise.reject(new Error('connection lost')) : real(...args);
+          return gated
+            ? new Promise((resolve, reject) => parked.push({ method, run: () => real(...args), resolve, reject }))
+            : real(...args);
+        }) as never),
+      );
     }
   });
 
@@ -630,6 +637,7 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
         unexpected('everything landed', `with no failure the lid answers ${String(answer)}, not ${String(want)}`);
     }
     store.onModuleDestroy();
+    for (const spy of slowSpies) spy.mockClear();
     return problems;
   };
 
