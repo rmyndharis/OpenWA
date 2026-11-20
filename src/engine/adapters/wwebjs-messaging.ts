@@ -275,6 +275,15 @@ export function isQuoteUnresolvedError(err: unknown): boolean {
   return err instanceof Error && err.message.includes('Could not get the quoted message');
 }
 
+/** What fluent-ffmpeg throws when the ffmpeg of this host cannot run: not found, not startable, killed, no webp muxer. */
+const FFMPEG_UNUSABLE =
+  /^(?:Cannot find ffmpeg$|spawn .+ E[A-Z]+$|ffmpeg was killed with signal |Output formats? .+ not available$)/;
+/** What fluent-ffmpeg throws when ffmpeg ran and refused: it exited with an error, or the declared type is no format it reads. */
+const FFMPEG_REFUSED = /^(?:ffmpeg exited with code \d+|Input formats? .+ not available$)/;
+/** ffmpeg's own words when its build takes none of the options whatsapp-web.js passes, or cannot open its output. */
+const FFMPEG_OWN_OPTIONS =
+  /Unrecognized option|Error splitting the argument list|Unknown encoder|Error opening output file/;
+
 /**
  * Build a MessageMedia from a MediaInput (URL → fetched, base64/Buffer → wrapped).
  *
@@ -847,19 +856,59 @@ export class WwebjsMessaging {
       );
     }
 
+    // The library converts a video with the ffmpeg of this host, inside sendMessage and before it calls the page.
+    // It exports nothing to run that apart from the send, so a failure of it is told by what it throws. A retry
+    // after "No LID for user" follows an attempt that reached the page, so it proves nothing about the message.
+    let attempts = 0;
     const msg = await this.sendResolved(
       chatId,
-      to =>
-        this.client().sendMessage(to, messageMedia, {
-          sendMediaAsSticker: true,
-          ...this.quoteOptions(media.quotedMessageId),
-          // Same options bag every other media send uses, so the library tags a sticker exactly as it
-          // tags an image. Omitted when empty to leave an untagged sticker call unchanged.
-          ...(media.mentions?.length ? { mentions: neutralMentions(media.mentions) } : {}),
-        }),
+      to => {
+        const retry = attempts++ > 0;
+        return this.client()
+          .sendMessage(to, messageMedia, {
+            sendMediaAsSticker: true,
+            ...this.quoteOptions(media.quotedMessageId),
+            // Same options bag every other media send uses, so the library tags a sticker exactly as it
+            // tags an image. Omitted when empty to leave an untagged sticker call unchanged.
+            ...(media.mentions?.length ? { mentions: neutralMentions(media.mentions) } : {}),
+          })
+          .catch((error: unknown) => {
+            const conversion = this.videoStickerConversionFailure(error);
+            if (!conversion) throw error;
+            throw retry ? markOutcomeUnknown(conversion) : markNothingSent(conversion);
+          });
+      },
       media.quotedMessageId,
     );
     return toMessageResult(msg);
+  }
+
+  /**
+   * What a failed ffmpeg conversion of a video sticker answers, or `undefined` for an error that is not one. The
+   * conversion runs before whatsapp-web.js calls the page, so its failure says nothing about the account or the message
+   * and must not count toward the send breaker. ffmpeg refusing the video (corrupt, an unsupported codec, a declared
+   * type it has no format for) is the caller's 400. A host with no ffmpeg, one that cannot start it, or one whose build
+   * takes none of the options the library passes (an ffmpeg that no longer reads `-vsync`) is a 503, and the reason
+   * goes to the log. The match is on the text of fluent-ffmpeg and of ffmpeg, so a host fault worded differently
+   * answers 400 until its words are added here.
+   */
+  private videoStickerConversionFailure(error: unknown): Error | undefined {
+    // Read the message by shape: an error that Node's own child_process raised can come from another realm.
+    const message = (error as { message?: unknown } | null | undefined)?.message;
+    if (typeof message !== 'string') return undefined;
+    const refused = FFMPEG_REFUSED.test(message);
+    if (!refused && !FFMPEG_UNUSABLE.test(message)) return undefined;
+    if (refused && !FFMPEG_OWN_OPTIONS.test(message)) {
+      return new BadRequestException(`The video could not be converted to a sticker: ${message.slice(0, 300)}`);
+    }
+    this.host.logger.warn('ffmpeg could not convert a video sticker on this host', {
+      sessionId: this.host.config.sessionId,
+      reason: message.slice(0, 500),
+    });
+    return new EngineNotSentError(
+      'The ffmpeg of this host could not convert the video to a sticker, so nothing was sent. The reason is in the ' +
+        'gateway log; a video sticker needs a working ffmpeg on the host.',
+    );
   }
 
   async sendPollMessage(chatId: string, poll: PollInput): Promise<MessageResult> {
