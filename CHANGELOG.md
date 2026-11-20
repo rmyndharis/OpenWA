@@ -68,6 +68,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plugins: the boot scan logs a warning when a plugin directory is a symbolic link, which it does not follow, where it skipped it without a line in the log.
 - MCP: a tool's `sessionId` takes letters, digits and hyphens, at most 128 characters, as the REST routes do, where any string reached the lookup and was echoed whole into the not-found answer.
 - Webhooks: the OpenAPI schema and the Python and JavaScript SDK types of the update request declare that a `null` `secret` clears it, as the route has always accepted.
+- Dashboard: a whatsapp-web.js chat whose stored-message read is refused for a reason that may pass (no answer, a timeout, a limit, the gateway down) shows a failed load with a retry, where it showed the engine history alone as the whole thread until a reconnect.
+- Dashboard: the Number Checker names the WhatsApp Web page reload when a stopped run carries `ENGINE_PAGE_RELOADING`, where it said the session is not connected.
+- Dashboard: the webhook form counts a chat id entry over 128 characters as incomplete and says so, where Save sent it and the gateway answered a bare `400`, and a webhook stored with one could not be saved.
+- Dashboard: a long group name or an unbroken token in a failed send no longer widens the Message Tester past a phone screen, and a long plugin name ends with an ellipsis on a plugin card.
+- Dashboard: the error row of a session card keeps the start of the message in Arabic and Hebrew, where the end was kept and the start cut.
+- Dashboard: the plugin instance, webhook secret, template name, API key, Number Checker and BullMQ URL copy buttons show a failure toast when neither clipboard path works, as the chat id button does, where they did nothing.
+- whatsapp-web.js: a start no longer waits on a `ps` or a stale lock removal that never returns, such as one stuck on a hung volume; each gets five seconds.
+- whatsapp-web.js: the onboarding fallback moves a session to `action_required` on the click that follows five clicks which left the modal in place, where a flow of five screens that each landed tripped it on the fifth.
+- whatsapp-web.js: the chats of a label carry `lastMessage`, as the chat list does.
+- The startup line for missing install-time patches gives a command for each patch and offers a reinstall only for an install that ran with `--ignore-scripts`.
 - Drop the restriction, error, presence and claim state of sessions an infra data import removes, so the restricted-sessions gauge stops counting them and no false lost-claim warning follows.
 - `backup.sh` and `restore.sh` read a `PLUGINS_DIR` exported empty as the app does, as unset to its default directory, where they took the directory `./.env` named.
 - Baileys: a poll vote on the account's own broadcast-list poll is reported only when it arrives in a 1:1 chat, as documented; a vote from a group, the list or the status chat was reported too.
@@ -189,6 +199,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Say in the security design that a host other users can log in to should run the gateway with `TMPDIR` set to a directory only its user can enter, since the engine libraries stage the media of an upload in the temporary directory.
 - Say in the API reference that, while the database cannot be read, the chat match of a chat-restricted key falls back to the gateway's in-memory mappings, which do not see a mapping another gateway node has changed since.
 - Say in the API reference and the troubleshooting guide how long the whatsapp-web.js page reload `409` can last, that no event marks its end, and how to retry on it (#2139).
+- Correct the migration guide: the 0.15.0 reload row no longer says to wait for a `ready` event that nothing announces, and the import troubleshooting rows describe the shipped import, which replaces everything, restores in a fixed order and rolls back whole.
 
 ### Dependencies
 
