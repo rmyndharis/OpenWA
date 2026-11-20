@@ -1166,8 +1166,10 @@ adapter boundary — none silently stubs.
   words (`xwa2_newsletter_delete_v2 is null`, `unexpected-null-mex-response`, `unexpected_mex_mutation_response`),
   which is how WhatsApp can refuse an account that may not make the change. None is a status WhatsApp sent or a failure
   to retry, so all are the `403` too, matched by their exact text and status. A page without one of the jobs dies on it
-  as the library's call did, and answers a bare `500`. Baileys maps `408` and `429` to a `503` and every other `4xx` to
-  a `403`, and rethrows a `5xx` as it came.
+  as the library's call did, and answers a bare `500`. The delete and the unsubscription read the channel through the
+  helpers whatsapp-web.js installs in the page (`window.WWebJS`): a page that has `require` and not those helpers is
+  reloading, and answers the retryable `409` before anything is asked of WhatsApp. Baileys maps `408` and `429` to a
+  `503` and every other `4xx` to a `403`, and rethrows a `5xx` as it came.
 - **`editMessage` / `pinMessage` / `unpinMessage` refusals (baileys).** Both engines refuse what they
   can judge locally: the target must be addressable inside the given chat, and the Baileys adapter
   additionally refuses an edit of a message the account did not send or of one with no text or caption

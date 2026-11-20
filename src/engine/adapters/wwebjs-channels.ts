@@ -2,6 +2,7 @@ import { MessageTypes, type Client } from 'whatsapp-web.js';
 import { Channel, ChannelMessage } from '../interfaces/whatsapp-engine.interface';
 import { BusinessClient, WwjsChannelData, readWid } from '../types/whatsapp-web-js.types';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { EnginePageReloadingError } from '../../common/errors/engine-page-reloading.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
@@ -28,10 +29,16 @@ export type ChannelWrite = 'delete' | 'mute' | 'unmute' | 'unsubscribe';
  * outcome, never as one that changed nothing: the Mex client sends a delete or a mute again on a 429 or a 500 (four
  * attempts in all) and only the error of the last attempt surfaces, it makes a 500 of its own of any send that fails
  * (a socket that dropped after the request left), and an unsubscription is one request whose reply may not have come.
- * Like the library's calls it does not look the jobs up, so a page without one rejects as the library's call did. Any
- * other rejection is rethrown. Self-contained, since Puppeteer ships it to the page as source.
+ * Like the library's calls it does not look the jobs up, so a page without one rejects as the library's call did. The
+ * channel is read through the helper whatsapp-web.js installs (`window.WWebJS.getChat`), which a document that has
+ * `require` and not the helpers has not got: that page is reloading, and it answers `'no-helpers'` before anything is
+ * asked of WhatsApp, as the group writes do. Any other rejection is rethrown. Self-contained, since Puppeteer ships it
+ * to the page as source.
  */
-export async function runChannelWriteInPage(write: ChannelWrite, channelId: string): Promise<{ status: number }> {
+export async function runChannelWriteInPage(
+  write: ChannelWrite,
+  channelId: string,
+): Promise<{ status: number } | 'no-helpers'> {
   type NewsletterChat = { newsletterMetadata?: { membershipType?: unknown } } | null;
   const w = window as unknown as {
     require(m: 'WAWebNewsletterDeleteAction'): { deleteNewsletterAction: (channel: unknown) => Promise<unknown> };
@@ -47,7 +54,7 @@ export async function runChannelWriteInPage(write: ChannelWrite, channelId: stri
       MUTED_STATE: unknown;
       UNMUTED_STATE: unknown;
     };
-    WWebJS: { getChat: (id: string, options: { getAsModel: boolean }) => Promise<NewsletterChat> };
+    WWebJS?: { getChat?: (id: string, options: { getAsModel: boolean }) => Promise<NewsletterChat> };
   };
   try {
     if (write === 'mute' || write === 'unmute') {
@@ -63,7 +70,9 @@ export async function runChannelWriteInPage(write: ChannelWrite, channelId: stri
     // reload, and not on the helper the library installs.
     const deleter = write === 'delete' ? w.require('WAWebNewsletterDeleteAction') : undefined;
     const leaver = write === 'unsubscribe' ? w.require('WAWebNewsletterUnsubscribeAction') : undefined;
-    const channel = await w.WWebJS.getChat(channelId, { getAsModel: false });
+    const helpers = w.WWebJS;
+    if (typeof helpers?.getChat !== 'function') return 'no-helpers';
+    const channel = await helpers.getChat(channelId, { getAsModel: false });
     if (!channel) return { status: 403 };
     // Dispatched on the write, so that a page without the job dies on it, as the library's call did, and never answers 200.
     if (write === 'delete') {
@@ -244,9 +253,12 @@ export class WwebjsChannels {
     request: string,
     refusal: string,
   ): Promise<void> {
-    const { status } = await withPageWrite(this.host, op, () =>
+    const answer = await withPageWrite(this.host, op, () =>
       (this.client() as unknown as { pupPage: EvaluatePage }).pupPage.evaluate(runChannelWriteInPage, write, channelId),
     );
+    // A page without whatsapp-web.js's helpers is reloading, and nothing was asked of WhatsApp: the retryable 409.
+    if (answer === 'no-helpers') throw new EnginePageReloadingError();
+    const { status } = answer;
     if (status >= 200 && status < 300) return;
     if (isRetryableStatus(status)) {
       throw new EngineTransportError(
