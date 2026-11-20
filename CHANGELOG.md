@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - whatsapp-web.js: `GET /api/sessions/{sessionId}/groups/join-info` answers `501` on a WhatsApp Web build with no invite preview job, where every code, valid ones included, was the `404` of an unknown invite.
 - whatsapp-web.js: an invite revoke, group join, group or own picture delete, About text change or pin that a page reload lands on answers the retryable `409` with `code` `ENGINE_PAGE_RELOADING`, where it answered a `501` that said the build had no job.
 - whatsapp-web.js: deleting a channel or unsubscribing from one on a page that has not installed the library helpers answers the retryable `409`, where it was a bare `500`.
+- Baileys: a reaction, edit, delete or poll vote no longer keeps about 1 KB of memory until the account is unlinked.
+- Answer `503`, not `500`, when the database drops the row read a stop or delete makes, or the check its stop record makes after a missed write; nothing was stopped or deleted.
+- Log that another node holds a session only when a live peer does, not on every start or delete of a missing session.
+- Drop the restriction, error, presence and claim state of sessions an infra data import removes, so the restricted-sessions gauge stops counting them and no false lost-claim warning follows.
 - Baileys: a poll vote on the account's own broadcast-list poll is reported only when it arrives in a 1:1 chat, as documented; a vote from a group, the list or the status chat was reported too.
 - Baileys: with `STORE_EPHEMERAL_MESSAGES=false`, a message received in a disappearing chat leaves no copy in `baileys_stored_messages` and no text as the chat's `lastMessage`, and its media is not downloaded, where its content stayed in the database, in backups and in the chat list (see Upgrade notes).
 - Overlapping updates of one privacy id's phone mapping are written in the order they were made; the older one could land last and stay in `lid_mappings`, on a PostgreSQL pool or when both were made in the same turn.
