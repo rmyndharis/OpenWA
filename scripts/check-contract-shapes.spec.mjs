@@ -114,7 +114,7 @@ test('comparePair flags a widened union and an enum mismatch at token level', ()
   };
   const diffs = comparePair('Sample', hand, 'SampleDto', schemas.SampleDto, schemas);
   assert.ok(diffs.some(d => d.includes('"direction": hand string, contract enum(["incoming","outgoing"])')));
-  assert.ok(diffs.some(d => d.includes('"count": hand number|null, contract number')));
+  assert.ok(diffs.some(d => d.includes('"count": hand number|null, contract integer')));
 });
 
 test('comparePair flags a primitive widened to a union of primitives', () => {
@@ -127,7 +127,76 @@ test('comparePair flags a primitive widened to a union of primitives', () => {
   };
   const diffs = comparePair('Sample', hand, 'SampleDto', schemas.SampleDto, schemas);
   assert.ok(diffs.some(d => d.includes('"id": hand union(number,string), contract string')));
-  assert.ok(diffs.some(d => d.includes('"count": hand union(int,str), contract number')));
+  assert.ok(diffs.some(d => d.includes('"count": hand union(int,str), contract integer')));
+});
+
+// A contract integer is a whole number: JavaScript's one number type and every integer kind carry it, and a float kind
+// does not (the gateway answers 400 for a fraction where a field is validated as an integer). A contract number takes
+// every kind. Each case parses a declaration in the style of its client, so the kind maps are held to the rule too.
+const field = schema => ({ type: 'object', required: ['n'], properties: { n: schema } });
+const declare = {
+  typescript: type => parseHandTypes(`export interface S {\n  n: ${type};\n}\n`).S,
+  python: type => parsePythonTypes(`class S(TypedDict):\n    n: ${type}\n`).S,
+  go: type => parseGoTypes([`type S struct {\n\tN ${type} \`json:"n"\`\n}\n`]).S,
+  java: type => parseJavaTypes([`public record S(${type} n) {}`]).S,
+};
+const diffsOf = (client, type, schema) =>
+  comparePair('S', declare[client](type), 'SDto', field(schema), {}, client !== 'java');
+const WHOLE = [
+  ['typescript', 'number'],
+  ['python', 'int'],
+  ['go', 'int'],
+  ['go', 'int64'],
+  ['java', 'int'],
+  ['java', 'long'],
+  ['java', 'Integer'],
+  ['java', 'Long'],
+];
+const FRACTIONAL = [
+  ['python', 'float'],
+  ['go', 'float64'],
+  ['java', 'double'],
+  ['java', 'Double'],
+];
+
+for (const [client, type] of [...WHOLE, ...FRACTIONAL]) {
+  test(`a contract number takes ${client} ${type}`, () => {
+    assert.deepEqual(diffsOf(client, type, { type: 'number' }), []);
+  });
+}
+
+for (const [client, type] of WHOLE) {
+  test(`a contract integer takes ${client} ${type}`, () => {
+    assert.deepEqual(diffsOf(client, type, { type: 'integer' }), []);
+  });
+}
+
+for (const [client, type] of FRACTIONAL) {
+  test(`a contract integer refuses ${client} ${type}, which admits a fraction`, () => {
+    assert.deepEqual(diffsOf(client, type, { type: 'integer' }), ['"n": hand float, contract integer']);
+  });
+}
+
+test('the integer rule holds through a null arm and an array', () => {
+  const nullable = { type: 'integer', nullable: true };
+  assert.deepEqual(diffsOf('python', 'Optional[int]', nullable), []);
+  assert.deepEqual(diffsOf('python', 'Optional[float]', nullable), ['"n": hand float|null, contract integer|null']);
+  assert.deepEqual(diffsOf('go', '*int64', nullable), []);
+  assert.deepEqual(diffsOf('go', '*float64', nullable), ['"n": hand float|null, contract integer|null']);
+  assert.deepEqual(diffsOf('java', 'Long', nullable), []);
+  assert.deepEqual(diffsOf('java', 'Double', nullable), ['"n": hand float, contract integer']);
+  const list = { type: 'array', items: { type: 'integer' } };
+  assert.deepEqual(diffsOf('typescript', 'number[]', list), []);
+  assert.deepEqual(diffsOf('python', 'list[int]', list), []);
+  assert.deepEqual(diffsOf('python', 'list[float]', list), ['"n": hand array<float>, contract array<integer>']);
+  assert.deepEqual(diffsOf('go', '[]float64', list), ['"n": hand array<float>, contract array<integer>']);
+});
+
+test('an absent-or-null Go pointer takes an integer contract only as an integer kind', () => {
+  const schema = { type: 'object', properties: { n: { type: 'integer', nullable: true } } };
+  const go = type => parseGoTypes([`type S struct {\n\tN *${type} \`json:"n,omitempty"\`\n}\n`]).S;
+  assert.deepEqual(comparePair('S', go('int64'), 'SDto', schema, {}), []);
+  assert.deepEqual(comparePair('S', go('float64'), 'SDto', schema, {}), ['"n": hand float, contract integer|null']);
 });
 
 test('comparePair fails a field whose hand type it cannot read instead of skipping it', () => {
@@ -192,7 +261,8 @@ test('schemaToken honors the OpenAPI 3.0 sibling nullable flag', () => {
   const nullableSchema = { type: 'string', nullable: true };
   assert.equal(schemaToken(nullableSchema, {}), 'string|null');
   assert.equal(schemaToken({ type: 'string' }, {}), 'string');
-  assert.equal(schemaToken({ type: 'integer', nullable: true }, {}), 'number|null');
+  assert.equal(schemaToken({ type: 'integer', nullable: true }, {}), 'integer|null');
+  assert.equal(schemaToken({ type: 'number' }, {}), 'number');
 });
 
 test('parseHandTypes resolves `extends` — inherited fields are not "missing"', () => {
@@ -276,7 +346,7 @@ test('parseJavaTypes: javadoc between components must not drop fields', () => {
   const src = 'public record Sample(\n    String id,\n    /** documented */\n    Long count) {}\n';
   const types = parseJavaTypes([src]);
   assert.deepEqual(Object.keys(types.Sample), ['id', 'count']);
-  assert.equal(types.Sample.count.token, 'number');
+  assert.equal(types.Sample.count.token, 'integer');
 });
 
 test('parsePythonTypes: a Literal of bare numbers is an enum, not an unreadable token', () => {
@@ -430,13 +500,13 @@ test('parseJavaTypes: a generic carrying a comma is one component, not two', () 
   assert.equal(s.config.token, 'dict');
 });
 
-test('parseJavaTypes: boxed numerics reduce to number rather than their class name', () => {
+test('parseJavaTypes: boxed numerics reduce to their kind rather than their class name', () => {
   // `Double` fell through to the bare class name, which is not a simple token, so comparePair
   // skipped the field: a Double component against a string contract reported nothing.
   const s = parseJavaTypes(['public record Sample(Double a, Float b, Short c, Byte d) {}']).Sample;
   assert.deepEqual(
     Object.values(s).map(v => v.token),
-    ['number', 'number', 'number', 'number'],
+    ['float', 'float', 'integer', 'integer'],
   );
   const schema = { type: 'object', required: ['a'], properties: { a: { type: 'string' } } };
   assert.equal(comparePair('Sample', { a: s.a }, 'Dto', schema, {}, false).length, 1);
