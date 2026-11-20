@@ -781,20 +781,20 @@ times out on slow first boot_ above).
 
 **Symptoms:**
 
-- API returns 200 but message not delivered
-- "Message send failed" errors
-- Messages stuck in queue
+- API returns `201` but the message is not delivered (`201` means accepted, not delivered; see "Send response" in the API reference)
+- A send fails inside the engine: the gateway logs `Send failed in the engine (<type>)` for an unclassified fault, a WhatsApp rate limit or a WhatsApp refusal (a validation refusal, a not-ready `409` or a `501` logs nothing)
+- A bulk batch stays in `processing`
 
 **Diagnostic:**
 
 ```bash
-# Check message history
+# Read what the gateway stored for the chat (works on both engines)
 curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions/{sessionId}/messages/{chatId}/history
+  "http://localhost:2785/api/sessions/{sessionId}/messages?chatId={chatId}"
 
-# Check queue / infra status (ADMIN)
+# Read a bulk batch: its status and the counters of its last checkpoint
 curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/infra/status
+  http://localhost:2785/api/sessions/{sessionId}/messages/batch/{batchId}
 
 # Rate limiting is env-configured, per route and client IP; there is no per-session rate-limit endpoint
 ```
