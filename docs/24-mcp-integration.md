@@ -246,6 +246,10 @@ characters (under `MCP_MAX_RESULT_BYTES` the cap above cuts it): a
 template `vars` name sent with a value that is not a string comes back in the answer, as long as the
 caller made it. That text is not logged.
 
+A tool error carries the `code` its REST answer has, and its `retryAfterSeconds` when the answer has one: the
+`409` `ENGINE_PAGE_RELOADING` of a whatsapp-web.js session whose page is reloading, and the `429`
+`SEND_PACING_LIMITED`.
+
 ### Retrying a send
 
 Each send tool (`MessageSendText`, `MessageSendImage`, `MessageSendVideo`, `MessageSendAudio`,

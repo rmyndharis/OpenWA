@@ -131,6 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - whatsapp-web.js: a send or forward that met a page reload after its first attempt had run answers a `409` that says the message may or may not have been sent, where it said to retry; a forward refused there keeps its send pacing admission, as it keeps its `Idempotency-Key`.
 - whatsapp-web.js: a session promoted to `ready` after its `ready` event was missed no longer answers the page reload `409` for up to a minute when WhatsApp Web had navigated while it authenticated; the promotion closes the window the probe has just found the helpers through, unless another navigation landed meanwhile (#2139).
 - Webhooks: a recovery pass that does not fill its batch starts again at the oldest stale delivery, so one whose queue job was lost is replayed while newer stale deliveries keep arriving, where it waited for that backlog to clear.
+- MCP: a tool error carries `retryAfterSeconds` beside its `code` when the REST answer has one (`ENGINE_PAGE_RELOADING`, `SEND_PACING_LIMITED`), where only the code came through.
 
 ### Documentation
 
