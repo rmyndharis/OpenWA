@@ -58,11 +58,22 @@ function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: 
 
 const ENCODED_KEY_PREFIX = 'key-';
 
+/** The package files of a plugin that keep its state apart from its code when both share a directory. */
+const PACKAGE_FILES = ['manifest.json', 'package.json'];
+
 /**
- * The package files of a plugin that keep its state apart from its code when both share a directory, upper-cased
- * for the comparison in resolveLegacyKeyPath.
+ * Whether two paths name one file: the same device and file id. False when either does not exist, or when the
+ * filesystem gives no file id (zero), which would make every pair look alike.
  */
-const PACKAGE_FILES = new Set(['MANIFEST.JSON', 'PACKAGE.JSON']);
+function sameFile(a: string, b: string): boolean {
+  try {
+    const x = fs.statSync(a, { bigint: true });
+    const y = fs.statSync(b, { bigint: true });
+    return x.ino !== 0n && x.dev === y.dev && x.ino === y.ino;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * A lone UTF-16 surrogate (text cut by `slice` inside an emoji) has no UTF-8 form: encodeStorageKey writes U+FFFD for
@@ -486,11 +497,16 @@ export class PluginStorageService {
       const legacyPath = path.join(pluginDataDir, fileName);
       // manifest.json and package.json are package-owned files when package code and state share a directory. They
       // must never be treated as legacy plugin storage (or get/delete/set migration can read or remove code). Judged
-      // on the file the key lands on, not on how it is spelled: "./manifest" is that file too, and so is "Manifest"
-      // on a case-insensitive filesystem, or a spelling with a long s or a Kelvin sign on one that also folds
-      // those (APFS), so the name is normalized and upper-cased as the installer does for archive paths.
-      const landsOn = path.relative(pluginDataDir, legacyPath).normalize('NFC').toUpperCase();
-      return PACKAGE_FILES.has(landsOn) ? null : legacyPath;
+      // on the file the key reaches, not on how it is spelled: "./manifest" is that file, and so is "Manifest" on a
+      // case-insensitive filesystem, or a spelling with a long s or a Kelvin sign on one that also folds those (APFS),
+      // while on a case-sensitive one "Manifest.json" is a file of its own and stays a legacy key.
+      return PACKAGE_FILES.some(name => {
+        const packagePath = path.join(pluginDataDir, name);
+        // The exact path needs no file id, which a filesystem may not report (see sameFile).
+        return legacyPath === packagePath || sameFile(legacyPath, packagePath);
+      })
+        ? null
+        : legacyPath;
     };
 
     return {
