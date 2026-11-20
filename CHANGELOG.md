@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Answer `503`, not `500`, when the database drops the row read a stop or delete makes, or the check its stop record makes after a missed write; nothing was stopped or deleted.
 - Log that another node holds a session only when a live peer does, not on every start or delete of a missing session.
 - Drop the restriction, error, presence and claim state of sessions an infra data import removes, so the restricted-sessions gauge stops counting them and no false lost-claim warning follows.
+- `backup.sh` and `restore.sh` read a `PLUGINS_DIR` exported empty as the app does, as unset to its default directory, where they took the directory `./.env` named.
 - Baileys: a poll vote on the account's own broadcast-list poll is reported only when it arrives in a 1:1 chat, as documented; a vote from a group, the list or the status chat was reported too.
 - Baileys: with `STORE_EPHEMERAL_MESSAGES=false`, a message received in a disappearing chat leaves no copy in `baileys_stored_messages` and no text as the chat's `lastMessage`, and its media is not downloaded, where its content stayed in the database, in backups and in the chat list (see Upgrade notes).
 - Overlapping updates of one privacy id's phone mapping are written in the order they were made; the older one could land last and stay in `lid_mappings`, on a PostgreSQL pool or when both were made in the same turn.
@@ -150,6 +151,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Say in the OpenAPI `ErrorResponse.code` description that `POST /api/infra/restart` answers `409` with `RESTART_DATABASE_NOT_STARTED` or `RESTART_ALREADY_RUNNING`.
+- Say in the OpenAPI document, the engine interface and the five clients that `ChatSummary.phone` is Baileys only: whatsapp-web.js lists none and lists an unnamed privacy-id chat under its id.
+- Say in the `engineLoaded` description of the session response that `stop` still answers `200` and records the stop while no engine is loaded, where `logout` and `force-kill` answer `400`.
 - Say in the API reference and the OpenAPI text of the routes that reach an engine that a send whose first attempt had already run answers a `409` with no `code`, which says the message may or may not have been sent, where they called every such `409` a refusal before WhatsApp that is safe to retry.
 - Say in the `limit` description of the MCP tools that answer a bare list (`SessionFindAll`, `SessionGetChats`, `ContactFindAll`, `GroupFindAll`, `WebhooksList`) that a call returns at most 1000 rows, also when `limit` is omitted, so a full page may not be the whole list.
 - Correct the 0.27.0 rollback hazard in the migration guide: run `migration:revert:prod` until `migration:show:prod` lists `AddChatStateDeletedAt1791700000000` as pending; it said once, which since 0.28.0 only drops the status media index.
