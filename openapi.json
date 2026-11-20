@@ -1421,7 +1421,7 @@
             }
           },
           "503": {
-            "description": "The database did not answer the check of whether another node holds the session, so nothing was stopped. Retry the stop.",
+            "description": "The database did not answer the read of the session or the check of whether another node holds it, so nothing was stopped. Retry the stop.",
             "content": {
               "application/json": {
                 "schema": {

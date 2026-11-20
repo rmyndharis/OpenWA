@@ -414,8 +414,8 @@ export class SessionController {
   @ApiResponse({
     status: 503,
     description:
-      'The database did not answer the check of whether another node holds the session, so nothing was ' +
-      'stopped. Retry the stop.',
+      'The database did not answer the read of the session or the check of whether another node holds it, so ' +
+      'nothing was stopped. Retry the stop.',
   })
   async stop(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.stop(id);
