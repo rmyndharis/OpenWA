@@ -621,7 +621,10 @@ describe('a group or profile write that WhatsApp answers with a status', () => {
         );
 
         expect(outcome).toBeInstanceOf(EngineNotReadyError);
-        expect((outcome as Error).message).toBe(PAGE_RELOADING_MESSAGE);
+        expect(outcome).toMatchObject({
+          message: PAGE_RELOADING_MESSAGE,
+          response: { code: 'ENGINE_PAGE_RELOADING', retryAfterSeconds: 5 },
+        });
         expectNothingAsked(jobs, adapter);
       });
     });

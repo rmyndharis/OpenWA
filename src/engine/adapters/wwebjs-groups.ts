@@ -14,6 +14,7 @@ import {
 import { GroupChat, GroupMetadataRaw, SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { toParticipantWid } from '../identity/wa-id';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EnginePageReloadingError } from '../../common/errors/engine-page-reloading.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -27,12 +28,7 @@ import {
   withPageWrite,
   reportPageDeath,
 } from './wwebjs-host';
-import {
-  PAGE_RELOADING_MESSAGE,
-  isMissingRequireError,
-  isNavigationError,
-  isProtocolTimeout,
-} from './wwebjs-lifecycle';
+import { isMissingRequireError, isNavigationError, isProtocolTimeout } from './wwebjs-lifecycle';
 import { listChats, recoverGroupChatById } from './wwebjs-chats';
 import { type EvaluatePage, type PageWrite, runWriteInPage, settleWriteStatus } from './wwebjs-page-writes';
 
@@ -620,7 +616,7 @@ export class WwebjsGroups {
     unchanged = 'changed nothing',
   ): Promise<void> {
     const answer = await withPageWrite(this.host, op, () => this.page().evaluate(runWriteInPage, request));
-    if (answer === 'no-helpers') throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
+    if (answer === 'no-helpers') throw new EnginePageReloadingError();
     if (answer === 'missing') throw unsupported();
     settleWriteStatus(
       answer.status,
@@ -710,7 +706,7 @@ export class WwebjsGroups {
       // The page function reads `require` first, so a document that has none ends it before anything was asked of
       // WhatsApp: the one failure here that proves the code was not rotated, and so the retryable 409. Every other
       // failure, a navigation that cut the call included, leaves the outcome unknown and keeps the raw error.
-      if (isMissingRequireError(error)) throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
+      if (isMissingRequireError(error)) throw new EnginePageReloadingError();
       throw error;
     });
     // A build with no job to reset a code: nothing was asked of WhatsApp, so this is no refusal and no failure.

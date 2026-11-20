@@ -11,7 +11,10 @@ import { ConflictException } from '@nestjs/common';
  * "session not connected" error instead of a generic 500 Internal Server Error.
  */
 export class EngineNotReadyError extends ConflictException {
-  constructor(message = 'Session is not connected. The WhatsApp client is not ready.') {
-    super(message);
+  /** `response` is the message, or the whole body of a subclass that carries more than the default three fields. */
+  constructor(
+    response: string | Record<string, unknown> = 'Session is not connected. The WhatsApp client is not ready.',
+  ) {
+    super(response);
   }
 }

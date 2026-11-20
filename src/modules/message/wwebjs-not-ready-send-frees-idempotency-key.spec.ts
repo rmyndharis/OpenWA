@@ -17,6 +17,8 @@ import { SendIdempotencyKey } from './entities/send-idempotency-key.entity';
 import { SendIdempotencyService } from './idempotency/send-idempotency.service';
 import { SendIdempotencyInterceptor } from './idempotency/send-idempotency.interceptor';
 import { WhatsAppWebJsAdapter } from '../../engine/adapters/whatsapp-web-js.adapter';
+import { PAGE_RELOADED_DURING_SEND_MESSAGE } from '../../engine/adapters/wwebjs-messaging';
+import { hasUnknownOutcome } from '../../common/errors/engine-not-sent.error';
 import {
   NAVIGATION_REINJECT_GRACE_MS,
   PAGE_RELOADING_MESSAGE,
@@ -171,9 +173,14 @@ describe('a keyed whatsapp-web.js send refused with the not-ready 409', () => {
     const error = await failure();
 
     expect(error).toBeInstanceOf(HttpException);
-    expect({ status: (error as HttpException).getStatus(), message: (error as Error).message }).toEqual({
-      status: 409,
+    expect((error as HttpException).getStatus()).toBe(409);
+    // What the client reads: the code that tells this conflict from the others, and the interval to ask again at.
+    expect((error as HttpException).getResponse()).toEqual({
+      statusCode: 409,
+      error: 'Conflict',
       message: PAGE_RELOADING_MESSAGE,
+      code: 'ENGINE_PAGE_RELOADING',
+      retryAfterSeconds: 5,
     });
     expect(client.sendMessage).not.toHaveBeenCalled();
     expect(await keyState()).toBe('absent');
@@ -302,5 +309,56 @@ describe('a keyed whatsapp-web.js send refused with the not-ready 409', () => {
     expect((error as HttpException).getStatus()).toBe(409);
     expect(forwardCopy).toHaveBeenCalledTimes(1);
     expect(await keyState()).toBe('failed');
+    // A copy may have been forwarded, so a paced send keeps its admission as the keyed send keeps its key.
+    expect(hasUnknownOutcome(error)).toBe(true);
+  });
+
+  // The reload refusal tells a client to ask again, which is right for a request that sent nothing. Once an attempt has
+  // run, the same reload says only that the page went away under a message that may be out: the answer carries no code
+  // and no interval, and the key stays taken.
+  describe('when WhatsApp Web reloads its page after a first attempt has run', () => {
+    const IN_FLIGHT = 'Protocol error (Runtime.callFunctionOn): Execution context was destroyed.';
+    const expectOutcomeUnknown = async (error: unknown): Promise<void> => {
+      expect((error as HttpException).getStatus()).toBe(409);
+      expect((error as HttpException).getResponse()).toEqual({
+        statusCode: 409,
+        error: 'Conflict',
+        message: PAGE_RELOADED_DURING_SEND_MESSAGE,
+      });
+      expect(hasUnknownOutcome(error)).toBe(true);
+      expect(await keyState()).toBe('failed');
+      // The retry with the same key is told the first one may have been sent, where a freed key would send it again.
+      await expect(withKey(sendText(PHONE))).rejects.toMatchObject({
+        response: { code: 'IDEMPOTENCY_OUTCOME_UNKNOWN' },
+      });
+    };
+
+    it('answers a send that met the reload once its recipient was re-resolved without the code and the interval', async () => {
+      client.sendMessage.mockRejectedValue(new Error('No LID for user'));
+      client.getNumberId
+        .mockImplementationOnce((number: string) => Promise.resolve({ _serialized: number }))
+        .mockImplementationOnce(() => {
+          reload();
+          return Promise.resolve({ _serialized: LID });
+        });
+
+      const error = await failure(sendText(PHONE));
+
+      expect(client.sendMessage).toHaveBeenCalledTimes(1);
+      await expectOutcomeUnknown(error);
+    });
+
+    it('answers a send whose re-resolution the reload cut short the same way', async () => {
+      client.sendMessage.mockRejectedValue(new Error('No LID for user'));
+      client.getNumberId
+        .mockImplementationOnce((number: string) => Promise.resolve({ _serialized: number }))
+        // The call dies with the navigation error before the page tells of its navigation.
+        .mockImplementationOnce(() => Promise.reject(new Error(IN_FLIGHT)));
+
+      const error = await failure(sendText(PHONE));
+
+      expect(client.sendMessage).toHaveBeenCalledTimes(1);
+      await expectOutcomeUnknown(error);
+    });
   });
 });

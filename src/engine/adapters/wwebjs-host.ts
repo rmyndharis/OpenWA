@@ -6,9 +6,10 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { type createLogger } from '../../common/services/logger.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EnginePageReloadingError } from '../../common/errors/engine-page-reloading.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { type WhatsAppWebJsConfig } from './whatsapp-web-js.adapter';
-import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
+import { isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 
 /**
  * Shared host surface for the delegates extracted from WhatsAppWebJsAdapter (./wwebjs-groups,
@@ -80,7 +81,7 @@ export function rethrowIfNavigation(host: WwebjsEngineHost, error: unknown, sinc
   // The lifecycle never reads a navigation-shaped error as a dead page, so with it this is the navigation test alone;
   // a host that does read one as dead keeps it a death. A page that really died reports through the death listeners.
   if (isNavigationError(error, navigationsSeen(host) !== since) && !host.isPageTransportError(error))
-    throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
+    throw new EnginePageReloadingError();
 }
 
 /**

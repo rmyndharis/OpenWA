@@ -124,6 +124,7 @@ const ERROR_RESPONSE: SchemaObject = {
         'SESSION_STOP_INCOMPLETE, SESSION_LOGOUT_INCOMPLETE and SESSION_FORCE_KILL_INCOMPLETE (502), ' +
         'SEND_PACING_LIMITED (429), ' +
         'ENGINE_PAGE_ERROR (500, whatsapp-web.js: WhatsApp Web threw inside the page during a send or status post), ' +
+        'ENGINE_PAGE_RELOADING (409, whatsapp-web.js: WhatsApp Web is reloading its page and the request was not carried out), ' +
         'IMPORT_ALREADY_RUNNING, EXPORT_IN_PROGRESS, IMPORT_WOULD_ORPHAN_ENGINES and IMPORT_NESTED_TRANSACTION (409), ' +
         'IDEMPOTENCY_KEY_INVALID (400), IDEMPOTENCY_KEY_REUSED (422), ' +
         'IDEMPOTENCY_KEY_IN_PROGRESS and IDEMPOTENCY_OUTCOME_UNKNOWN (409), ' +
@@ -131,7 +132,9 @@ const ERROR_RESPONSE: SchemaObject = {
     },
     retryAfterSeconds: {
       type: 'integer',
-      description: 'With SEND_PACING_LIMITED: seconds until the session accepts sends again.',
+      description:
+        'With SEND_PACING_LIMITED: seconds until the session accepts sends again. ' +
+        'With ENGINE_PAGE_RELOADING: the interval, in seconds, to ask again at until the page is back.',
     },
     validOptions: {
       type: 'array',

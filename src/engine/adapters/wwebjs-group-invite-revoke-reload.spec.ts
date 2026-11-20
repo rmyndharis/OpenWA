@@ -41,7 +41,10 @@ describe('the invite code revoke on a page that is reloading', () => {
     const call = adapter.revokeGroupInviteCode(GROUP);
 
     await expect(call).rejects.toBeInstanceOf(EngineNotReadyError);
-    await expect(call).rejects.toMatchObject({ message: PAGE_RELOADING_MESSAGE });
+    await expect(call).rejects.toMatchObject({
+      message: PAGE_RELOADING_MESSAGE,
+      response: { code: 'ENGINE_PAGE_RELOADING', retryAfterSeconds: 5 },
+    });
   });
 
   it.each([

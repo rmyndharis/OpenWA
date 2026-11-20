@@ -51,7 +51,10 @@ describe('the question about the invitation sender before an add', () => {
     const call = adapter.addParticipants(GROUP, ['628111@c.us']);
 
     await expect(call).rejects.toBeInstanceOf(EngineNotReadyError);
-    await expect(call).rejects.toMatchObject({ message: PAGE_RELOADING_MESSAGE });
+    await expect(call).rejects.toMatchObject({
+      message: PAGE_RELOADING_MESSAGE,
+      response: { code: 'ENGINE_PAGE_RELOADING', retryAfterSeconds: 5 },
+    });
     expect(addParticipants).not.toHaveBeenCalled();
   });
 

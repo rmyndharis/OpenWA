@@ -846,12 +846,15 @@ navigation and 180 seconds per reload, and a page that is still without `whatsap
 keeps answering it until the liveness watchdog treats the session as disconnected and reconnects it,
 about two more minutes.
 
-**Fix:** Retry on this `409`, for example every 5 seconds for up to 5 minutes. A send it refuses was
-not handed to WhatsApp Web, so nothing was sent and its `Idempotency-Key` is freed. The one exception
-is a send whose first attempt had already run when the reload began: it keeps its key, and a retry
-answers `409` `IDEMPOTENCY_OUTCOME_UNKNOWN`. A window that does not end, or that opens again and
-again, shows in the log as `could not re-inject` or as repeated `Page navigated` lines: see "Startup
-logs say install-time patches are missing" below and "Frequent Disconnections" above.
+**Fix:** Retry on this `409`. Its body carries `code` `ENGINE_PAGE_RELOADING`, which tells it from
+every other conflict, and `retryAfterSeconds`, the interval to ask again at (5 seconds); keep asking
+for up to 5 minutes. A send it refuses was not handed to WhatsApp Web, so nothing was sent and its
+`Idempotency-Key` is freed. The one exception is a send whose first attempt had already run when the
+reload began: it answers a plain `409` that says the message may or may not have been sent, with no
+`code`, and keeps its key, so a retry with that key answers `409` `IDEMPOTENCY_OUTCOME_UNKNOWN`. A
+window that does not end, or that opens again and again, shows in the log as `could not re-inject` or
+as repeated `Page navigated` lines: see "Startup logs say install-time patches are missing" below and
+"Frequent Disconnections" above.
 
 ### Issue: Sends return 500 "engine returned no message", and chats or media fail with `r: r`
 

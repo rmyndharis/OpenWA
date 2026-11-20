@@ -7382,7 +7382,10 @@ describe('WhatsAppWebJsAdapter navigation re-inject grace (#1081)', () => {
       });
 
       await expect(adapter.getNumberId('628123456789')).rejects.toEqual(
-        expect.objectContaining({ message: PAGE_RELOADING_MESSAGE }),
+        expect.objectContaining({
+          message: PAGE_RELOADING_MESSAGE,
+          response: expect.objectContaining({ code: 'ENGINE_PAGE_RELOADING', retryAfterSeconds: 5 }) as unknown,
+        }),
       );
       await navigateLater();
 
@@ -7408,7 +7411,12 @@ describe('WhatsAppWebJsAdapter navigation re-inject grace (#1081)', () => {
       });
 
       const error = await adapter.replyToMessage(GROUP, 'Q1', 'hi').catch((e: unknown) => e);
-      expect(error).toEqual(expect.objectContaining({ message: PAGE_RELOADING_MESSAGE }));
+      expect(error).toEqual(
+        expect.objectContaining({
+          message: PAGE_RELOADING_MESSAGE,
+          response: expect.objectContaining({ code: 'ENGINE_PAGE_RELOADING', retryAfterSeconds: 5 }) as unknown,
+        }),
+      );
       // Nothing was sent, so a keyed send frees its key for the retry the 409 asks for.
       expect(provesNothingSent(error)).toBe(true);
       await navigateLater();

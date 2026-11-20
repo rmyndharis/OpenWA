@@ -102,6 +102,7 @@ A few refusals add a stable machine-readable `code`, so a client can branch with
 | `SESSION_FORCE_KILL_INCOMPLETE` | `502`  | The engine did not confirm the force-kill; its process may still be running                                                                   |
 | `SEND_PACING_LIMITED`           | `429`  | Send pacing refused the send; the body also carries `retryAfterSeconds`                                                                       |
 | `ENGINE_PAGE_ERROR`             | `500`  | whatsapp-web.js: WhatsApp Web rejected the operation in the page; the body also carries `pageError` and, when the page could read it, `build` |
+| `ENGINE_PAGE_RELOADING`         | `409`  | whatsapp-web.js: WhatsApp Web is reloading its page and the request was not carried out; the body also carries `retryAfterSeconds`            |
 | `RESTART_DATABASE_NOT_STARTED`  | `409`  | The built-in PostgreSQL the restart starts did not start; nothing was stopped, and a configuration saved since boot was put back              |
 | `RESTART_ALREADY_RUNNING`       | `409`  | Another restart request is running, or the server is already restarting                                                                       |
 | `IMPORT_ALREADY_RUNNING`        | `409`  | Another data import is in progress                                                                                                            |
@@ -556,7 +557,7 @@ On the Baileys engine the list is rebuilt after a restart from the messages the 
 
 On the Baileys engine a chat deleted on WhatsApp (on the phone or through `chats/delete`) is left out until a newer message re-creates it, and the deletion is dated by the gateway's clock when it arrives, whereas a message carries WhatsApp's server second, so a message whose second is earlier than that date (the gateway's clock running ahead, or a deletion made on the phone reaching the gateway late) counts as older and the chat stays hidden until a message dated after the deletion arrives.
 
-**Errors:** `400` session not started · `401` · `403` · `404` session not found · `409` session not connected (also answered while WhatsApp Web reloads its page and the engine re-injects, which takes seconds on most reloads and can take a few minutes; retry every few seconds) · `503` page connection died mid-read, or the command timed out
+**Errors:** `400` session not started · `401` · `403` · `404` session not found · `409` session not connected (also answered, with `code` `ENGINE_PAGE_RELOADING` and `retryAfterSeconds`, while WhatsApp Web reloads its page and the engine re-injects, which takes seconds on most reloads and can take a few minutes; ask again at that interval) · `503` page connection died mid-read, or the command timed out
 
 #### GET /api/sessions/stats/overview
 
