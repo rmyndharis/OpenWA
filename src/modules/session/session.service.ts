@@ -2028,8 +2028,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return new Set([...this.engineLifecycle.startSlotHolders(), ...this.startReservations.keys()]);
   }
 
-  /** Drop what this process keeps in memory for a session an infra import removed. See SessionEngineLifecycle. */
+  /**
+   * Drop what this process keeps in memory for a session an infra import removed. Its claim too: left in place, the
+   * next heartbeat reads the missing row as a claim a peer took and reports a loss that never happened.
+   */
   forgetSession(id: string): void {
+    this.ownership?.forget(id);
     this.engineLifecycle.forgetSession(id);
   }
 
