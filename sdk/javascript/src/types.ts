@@ -1166,8 +1166,8 @@ export interface ChatSummary {
    */
   name: string;
   /**
-   * Phone digits of a 1:1 chat WhatsApp holds under a privacy id (`@lid`), when the session can map
-   * it. Absent for a phone-keyed chat and when the mapping is unknown.
+   * Baileys only; whatsapp-web.js sends none. Phone digits of a 1:1 chat WhatsApp holds under a privacy id
+   * (`@lid`), when the session can map it. Absent for a phone-keyed chat and when the mapping is unknown.
    */
   phone?: string;
   isGroup: boolean;

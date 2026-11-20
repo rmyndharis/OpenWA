@@ -311,7 +311,7 @@ can stop reaching the gateway until the session is restarted.
 | `muteChat`          | ✅                  | ✅               | ✅           |
 | `pinChat`           | ✅                  | ✅               | ✅           |
 
-`getChats` fills `ChatSummary.phone`, the number a privacy-id chat maps to, on Baileys only. whatsapp-web.js lists none, and neither does its `getChatsByLabel`.
+`getChats` fills `ChatSummary.phone`, the number a privacy-id chat maps to, on Baileys only. whatsapp-web.js lists none, and neither does its `getChatsByLabel`. Both whatsapp-web.js reads list a chat the page gives no title under its own id as `name`, which for a chat held under a privacy id is `<digits>@lid`, where Baileys lists `""`; a `name` equal to the id is no name.
 
 ### 29.4.5 Contacts
 
