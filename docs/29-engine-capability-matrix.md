@@ -1084,7 +1084,8 @@ adapter boundary — none silently stubs.
   through the gateway stayed listed as unread. The value is what Baileys last reported for the chat, an
   increment and not a running total: a chat whose unread messages arrived one at a time is listed with
   `1`. Baileys also counts a contact's encrypted edit or reaction, a pin, a keep-in-chat toggle, an album header, an
-  event RSVP and an encrypted comment as a received message; one that arrives on its own does not raise the count,
+  event RSVP, an encrypted comment and a lone fast-ratchet sender-key distribution as a received message; one that
+  arrives on its own does not raise the count,
   lists no chat the session holds no record of, and is no message that brings back a chat WhatsApp deleted, as a message
   of its own does. Such a message that arrives while Baileys holds a history chunk of the chat (a new link's first sync or
   a history fetch) or an upsert of it is merged into that chunk. When the chunk then counts only that message (a count of
