@@ -56,6 +56,26 @@ function mayPass(reason: unknown): boolean {
 }
 
 /**
+ * Ask for more of a thread: the retry the strip above a thread offers. A refresh of a loaded thread that failed (a
+ * reconnect invalidates it and its stored read was refused) leaves the newest page stale, and an older page that landed
+ * after it would end that error and the invalidation with it, so the newest page would never be asked for again and the
+ * messages of the gap would stay missing: the retry is the refresh then. A failed older page is retried as an older page.
+ */
+export function loadMoreOfThread(
+  query: Pick<
+    UseInfiniteQueryResult<ChatMessageView[], Error>,
+    'isRefetchError' | 'isFetchNextPageError' | 'refetch' | 'fetchNextPage'
+  >,
+): Promise<unknown> {
+  return refreshFailed(query) ? query.refetch() : query.fetchNextPage();
+}
+
+/** Whether the strip's retry is a refresh: the thread has pages, and the failure was not an older page's. */
+export function refreshFailed(query: Pick<UseInfiniteQueryResult, 'isRefetchError' | 'isFetchNextPageError'>): boolean {
+  return query.isRefetchError && !query.isFetchNextPageError;
+}
+
+/**
  * Fetch a chat's messages a page at a time, newest page first, cached at staleTime: Infinity;
  * realtime updates flow through useChatMessagesActions, not refetches.
  *

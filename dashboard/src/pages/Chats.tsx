@@ -73,6 +73,8 @@ import {
   updateCachedMessages,
   cachedSessionThreads,
   flattenMessagePages,
+  loadMoreOfThread,
+  refreshFailed,
   type MessagesData,
 } from '../hooks/useChatMessages';
 import { useChannelMessages } from '../hooks/useChannelMessages';
@@ -386,6 +388,9 @@ export function Chats() {
     isError: messagesError,
     hasNextPage: hasMoreMessages,
     isFetchingNextPage: loadingOlderMessages,
+    isRefetchError: threadRefreshError,
+    isFetchNextPageError: olderPageError,
+    refetch: refetchMessages,
     fetchNextPage,
   } = useChatMessages(
     selectedSessionId,
@@ -515,9 +520,16 @@ export function Chats() {
   );
 
   const handleLoadOlderMessages = useCallback(() => {
-    onOlderMessagesRequested();
-    void fetchNextPage();
-  }, [fetchNextPage, onOlderMessagesRequested]);
+    const query = {
+      isRefetchError: threadRefreshError,
+      isFetchNextPageError: olderPageError,
+      refetch: refetchMessages,
+      fetchNextPage,
+    };
+    // A failed refresh is retried as a refresh, which prepends nothing: the scroll anchor of an older page is not asked.
+    if (!refreshFailed(query)) onOlderMessagesRequested();
+    void loadMoreOfThread(query);
+  }, [threadRefreshError, olderPageError, refetchMessages, fetchNextPage, onOlderMessagesRequested]);
 
   // Batch profile-picture fetch for the visible chat list — ONE request for the whole sidebar
   // (per-row queries burst the per-IP throttle into 429s). Sorted-key cached 1h; rows fall back
