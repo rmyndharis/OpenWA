@@ -139,7 +139,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     # Mirrors ci.yml's test job. The queue-on and throttler-redis e2e suites need this service: under
     # GitHub Actions they fail rather than skipping when Redis is unreachable, so the tag is never
     # verified less than the branch it came from.

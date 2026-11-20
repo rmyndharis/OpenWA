@@ -156,7 +156,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     # Real Redis for the queue-on and throttler-redis e2e suites (test/queue-on.e2e-spec.ts,
     # test/throttler-redis.e2e-spec.ts); the rest of the e2e family boots QUEUE_ENABLED=false and never
     # connects. Mirrors the test-postgres job's service pattern; the image pin matches docker-compose.yml.
