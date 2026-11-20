@@ -6,8 +6,8 @@ import type { ChatScopeService } from '../../modules/auth/chat-scope.service';
 
 /**
  * A session id taken by a tool, bounded as the REST routes bound it (SessionIdPipe): letters, digits and hyphens, at
- * most MAX_SESSION_ID_LENGTH characters. The tools call the services directly, so the pipe never runs, and an id of
- * any other shape would be echoed whole into the not-found answer and the logs.
+ * most MAX_SESSION_ID_LENGTH characters. The tools call the services directly, so the pipe never runs, and any other
+ * id would reach the lookup, which has to cut what it quotes in its not-found answer.
  */
 export const sessionIdSchema = z
   .string()

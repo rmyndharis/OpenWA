@@ -345,8 +345,9 @@ describe('MCP tool chat ids take the shape the REST bodies require', () => {
 
 /**
  * The REST routes take a session id of letters, digits and hyphens, at most 128 characters (SessionIdPipe), and the
- * tools call the services directly, so the pipe never runs. Left as any string, an id of a megabyte was echoed whole
- * into the not-found answer and the log. Each tool that names a session accepts and refuses exactly the ids the
+ * tools call the services directly, so the pipe never runs. Left as any string, an id of a megabyte reached the
+ * lookup, and only the cut of the not-found answer bounded what it quoted. Each tool that names a session accepts
+ * and refuses exactly the ids the
  * pipe does, a restored id included (those are not UUIDs).
  */
 describe('MCP tool session ids take the shape the REST routes require', () => {

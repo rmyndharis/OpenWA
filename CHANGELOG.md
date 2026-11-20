@@ -65,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plugins: a reinstall into the surviving plugin directory that fails after an entry replaced a stored file puts that file back, where the rollback deleted it.
 - Plugins: the boot scan no longer renames or deletes a dot-directory such as `.cache.bak` or `.tmp.new` in the plugins directory unless it holds that plugin's package, where it treated it as an interrupted update's leftover.
 - Plugins: the boot scan logs a warning when a plugin directory is a symbolic link, which it does not follow, where it skipped it without a line in the log.
-- MCP: a tool's `sessionId` takes letters, digits and hyphens, at most 128 characters, as the REST routes do, where any string reached the lookup and was echoed whole into the not-found answer.
+- MCP: a tool's `sessionId` takes letters, digits and hyphens, at most 128 characters, as the REST routes do, where any non-empty string reached the lookup.
 - Webhooks: the OpenAPI schema and the Python and JavaScript SDK types of the update request declare that a `null` `secret` clears it, as the route has always accepted.
 - Dashboard: a whatsapp-web.js chat whose stored-message read is refused for a reason that may pass (no answer, a timeout, a limit, the gateway down) shows a failed load, which loads again when the chat is opened again or the window is focused, where it showed the engine history alone as the whole thread until a reconnect.
 - Dashboard: after a failed refresh of a loaded thread, the strip is a button that refreshes the newest page, where the retry it offered fetched an older page, which ended the failure and left the messages of the gap missing.
