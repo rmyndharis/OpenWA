@@ -3,6 +3,34 @@ import { Session, SessionStatus } from './entities/session.entity';
 import { SessionOwnershipService } from './session-ownership.service';
 import { SessionService } from './session.service';
 
+// A claim that follows a takeover up in a transaction of its own waits for the shared SQLite connection to have none
+// open, and the real wait looks again every 5 ms. Real time then decided at which step a waiting claim showed its next
+// statement: a schedule replayed on a slower run than the one that recorded it met another set of held statements, and
+// asked for one that was not there. Here the wait looks again on every turn of the event loop, so the claim that has
+// waited longest goes on first, in every run and at any speed.
+jest.mock('../../common/utils/shared-connection', () => {
+  const actual = jest.requireActual<typeof import('../../common/utils/shared-connection')>(
+    '../../common/utils/shared-connection',
+  );
+  const nextTurn = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+  return {
+    ...actual,
+    awaitNoOpenTransaction: async (dataSource: DataSource): Promise<boolean> => {
+      const connection = (dataSource.driver as { databaseConnection?: { inTransaction?: unknown } }).databaseConnection;
+      const settleBy = Date.now() + actual.FOREIGN_TRANSACTION_WAIT_MS;
+      await nextTurn();
+      while (connection?.inTransaction === true) {
+        if (Date.now() >= settleBy) return false;
+        await nextTurn();
+      }
+      return true;
+    },
+  };
+});
+
+// A walk of thousands of schedules takes seconds on a quiet machine and many times that on a shared runner.
+jest.setTimeout(300_000);
+
 /**
  * Claims of one session that overlap on a node, over a real SQLite database whose statements are held in two stages:
  * when a statement executes and when its caller sees the answer. A schedule is the order in which the held stages are
@@ -35,8 +63,14 @@ function gateStatements(dataSource: DataSource) {
   void runner.release();
   const original = proto.query;
   const gates = { enabled: false, waiting: [] as Gate[], passThrough: new Set<string>() };
+  // Held only while a schedule runs: a statement that began under one that has ended goes straight through.
   const hold = (label: string, stage: Gate['stage']): Promise<void> =>
-    new Promise<void>(release => gates.waiting.push({ label, stage, release }));
+    gates.enabled ? new Promise<void>(release => gates.waiting.push({ label, stage, release })) : Promise.resolve();
+  /** End the schedule: nothing more is held, and what is held goes through. */
+  const end = (): void => {
+    gates.enabled = false;
+    for (const gate of gates.waiting.splice(0)) gate.release();
+  };
   proto.query = async function patched(this: unknown, ...args: unknown[]): Promise<unknown> {
     const label = labelOf(String(args[0]), args[1]);
     if (!gates.enabled || gates.passThrough.has(label)) return original.apply(this, args);
@@ -49,7 +83,7 @@ function gateStatements(dataSource: DataSource) {
     if ('error' in answer) throw answer.error;
     return answer.value;
   };
-  return { gates, restore: (): void => void (proto.query = original) };
+  return { gates, end, restore: (): void => void (proto.query = original) };
 }
 
 const settle = async (rounds = 3): Promise<void> => {
@@ -89,6 +123,23 @@ describe('claims of one session that overlap on a node', () => {
     held.restore();
     warn.mockRestore();
     await dataSource.destroy();
+  });
+
+  // The claims and releases a schedule began. A schedule that ends early (a failed check, the test's time limit) leaves
+  // them parked on held statements; left there, they held the first statement of the next schedule for good, and every
+  // test after it waited out its time limit. Each test ends its schedule and waits for what it began.
+  const underWay = new Set<Promise<unknown>>();
+  let testNumber = 0;
+
+  afterEach(async () => {
+    testNumber++;
+    held.end();
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      Promise.allSettled([...underWay]),
+      new Promise(resolve => (timer = setTimeout(resolve, 15_000))),
+    ]);
+    clearTimeout(timer);
   });
 
   const config = (nodeId: string) =>
@@ -139,7 +190,9 @@ describe('claims of one session that overlap on a node', () => {
 
   /**
    * One schedule: `claims` claims begin together and `pick` chooses which held statement stage goes next. Returns what
-   * the follow-up handler and the claims' callbacks saw, the schedule taken and the choices each step had.
+   * the follow-up handler and the claims' callbacks saw, the schedule taken and the choices each step had. A schedule
+   * that cannot go on (a step that asks for a statement that is not held, a claim that never settles) throws with the
+   * steps it took, and whatever ends it, nothing stays held.
    */
   async function play(
     row: Partial<Session>,
@@ -149,11 +202,23 @@ describe('claims of one session that overlap on a node', () => {
     ask: Ask = claimAsk,
     setup: Setup = {},
   ): Promise<Run & { taken: number[]; choices: number[] }> {
-    await sessions.clear();
+    // The walk of a test that ran out of time goes on after it: it ends at its next step, before it touches the gates
+    // the next test uses.
+    const mine = testNumber;
+    const during = async <T>(wait: Promise<T>): Promise<T> => {
+      const value = await wait;
+      if (mine !== testNumber) throw new Error('the test that walked this schedule has ended');
+      return value;
+    };
+    const began = (op: Promise<unknown>): void => {
+      underWay.add(op);
+      void op.then(() => underWay.delete(op));
+    };
+    await during(sessions.clear());
     warn.mockClear(); // a refused claim logs on every schedule, and the spy keeps each call
     const node = new SessionOwnershipService(sessions, config('node-a'));
-    const saved = await sessions.save(
-      sessions.create({ name: 'overlap', status: SessionStatus.READY, config: {}, ...row }),
+    const saved = await during(
+      sessions.save(sessions.create({ name: 'overlap', status: SessionStatus.READY, config: {}, ...row })),
     );
     let followUps = 0;
     node.onAdoption(() => {
@@ -162,88 +227,98 @@ describe('claims of one session that overlap on a node', () => {
     }, transactional);
     const lost: string[][] = [];
     node.onLeaseLoss(ids => void lost.push(ids));
-    if (setup.holds) await node.claim(saved.id);
+    if (setup.holds) await during(node.claim(saved.id));
     const onClaimed: Array<{ label: string; owns: () => boolean }> = [];
     const answers: Claim[] = [];
     const problems: string[] = [];
-    held.gates.waiting = [];
-    held.gates.passThrough = transactional ? new Set(['begin', 'commit', 'rollback']) : new Set();
-    held.gates.enabled = true;
-    let releasing = setup.releases ?? 0;
-    const startReleases = (): void => {
-      for (let at = 0; at < (setup.releases ?? 0); at++) {
-        void (setup.shutdown ? node.releaseAll() : node.release(saved.id)).then(
-          () => void releasing--,
-          () => void (releasing--, problems.push('a release threw')),
-        );
-      }
-    };
-    const startClaim = (at: number): void => {
-      const label = String.fromCharCode(65 + at);
-      const claim: Claim = { label, done: false };
-      answers.push(claim);
-      void ask(node, saved.id, owns => onClaimed.push({ label, owns })).then(
-        answer => void ((claim.answer = answer), (claim.done = true)),
-        () => void ((claim.answer = 'threw'), (claim.done = true)),
-      );
-    };
-    // What begins later in the schedule: when its turn comes, or at once when no statement is held to let through.
-    const later: Array<{ due: (step: number) => boolean; start: () => void }> = [];
-    const finished = (): boolean => releasing === 0 && later.length === 0 && answers.every(claim => claim.done);
-    if (setup.releaseAt === undefined) startReleases();
-    else later.push({ due: step => step >= setup.releaseAt!, start: startReleases });
-    for (let at = 0; at < claims; at++) {
-      if (at === claims - 1 && setup.lastClaimWhenReleasing !== undefined) {
-        later.push({ due: () => releasing <= setup.lastClaimWhenReleasing!, start: () => startClaim(at) });
-      } else startClaim(at);
-    }
     const schedule: string[] = [];
     const taken: number[] = [];
     const choices: number[] = [];
-    for (let step = 0; step < 600; step++) {
-      await settle();
-      for (
-        let next = later.findIndex(op => op.due(step) || held.gates.waiting.length === 0);
-        next >= 0;
-        next = later.findIndex(op => op.due(step) || held.gates.waiting.length === 0)
-      ) {
-        later.splice(next, 1)[0].start();
-        await settle();
-      }
-      if (held.gates.waiting.length === 0) {
-        if (finished()) break;
-        // A claim with no statement held is waiting for the transaction another claim has open to end, or for a release.
-        const deadline = Date.now() + 10_000;
-        while (held.gates.waiting.length === 0 && !finished() && Date.now() < deadline) {
-          await new Promise(resolve => setTimeout(resolve, 2));
+    const stopped = (why: string): Error => new Error(`${why} after [${schedule.join(' ')}]`);
+    held.gates.waiting = [];
+    held.gates.passThrough = transactional ? new Set(['begin', 'commit', 'rollback']) : new Set();
+    held.gates.enabled = true;
+    try {
+      let releasing = setup.releases ?? 0;
+      const startReleases = (): void => {
+        for (let at = 0; at < (setup.releases ?? 0); at++) {
+          began(
+            (setup.shutdown ? node.releaseAll() : node.release(saved.id)).then(
+              () => void releasing--,
+              () => void (releasing--, problems.push('a release threw')),
+            ),
+          );
         }
-        await settle();
+      };
+      const startClaim = (at: number): void => {
+        const label = String.fromCharCode(65 + at);
+        const claim: Claim = { label, done: false };
+        answers.push(claim);
+        began(
+          ask(node, saved.id, owns => onClaimed.push({ label, owns })).then(
+            answer => void ((claim.answer = answer), (claim.done = true)),
+            () => void ((claim.answer = 'threw'), (claim.done = true)),
+          ),
+        );
+      };
+      // What begins later in the schedule: when its turn comes, or at once when no statement is held to let through.
+      const later: Array<{ due: (step: number) => boolean; start: () => void }> = [];
+      const finished = (): boolean => releasing === 0 && later.length === 0 && answers.every(claim => claim.done);
+      if (setup.releaseAt === undefined) startReleases();
+      else later.push({ due: step => step >= setup.releaseAt!, start: startReleases });
+      for (let at = 0; at < claims; at++) {
+        if (at === claims - 1 && setup.lastClaimWhenReleasing !== undefined) {
+          later.push({ due: () => releasing <= setup.lastClaimWhenReleasing!, start: () => startClaim(at) });
+        } else startClaim(at);
+      }
+      for (let step = 0; ; step++) {
+        if (step === 600) throw stopped('the schedule did not end in 600 steps');
+        await during(settle());
+        for (
+          let next = later.findIndex(op => op.due(step) || held.gates.waiting.length === 0);
+          next >= 0;
+          next = later.findIndex(op => op.due(step) || held.gates.waiting.length === 0)
+        ) {
+          later.splice(next, 1)[0].start();
+          await during(settle());
+        }
         if (held.gates.waiting.length === 0) {
-          if (!finished()) problems.push('a claim or a release never settled');
-          break;
+          if (finished()) break;
+          // A claim with no statement held is on its way to its next one: it shows within a few turns.
+          const deadline = Date.now() + 10_000;
+          while (held.gates.waiting.length === 0 && !finished() && Date.now() < deadline) {
+            await during(new Promise(resolve => setTimeout(resolve, 2)));
+          }
+          await during(settle());
+          if (held.gates.waiting.length === 0) {
+            if (finished()) break;
+            throw stopped('a claim or a release never settled');
+          }
         }
+        const at = pick(held.gates.waiting, step, { releasing });
+        if (at < 0) {
+          // The schedule lets nothing through yet: what is under way elsewhere shows its next statement shortly.
+          await during(new Promise(resolve => setTimeout(resolve, 2)));
+          continue;
+        }
+        if (at >= held.gates.waiting.length) {
+          const here = held.gates.waiting.map(gate => `${gate.label}:${gate.stage}`).join(' ');
+          throw stopped(`step ${step} asked for statement ${at} of the ${held.gates.waiting.length} held [${here}]`);
+        }
+        choices.push(held.gates.waiting.length);
+        taken.push(at);
+        const [gate] = held.gates.waiting.splice(at, 1);
+        schedule.push(`${gate.label}:${gate.stage}`);
+        gate.release();
       }
-      const at = pick(held.gates.waiting, step, { releasing });
-      if (at < 0) {
-        // The schedule lets nothing through yet: what is under way elsewhere shows its next statement shortly.
-        await new Promise(resolve => setTimeout(resolve, 2));
-        continue;
-      }
-      choices.push(held.gates.waiting.length);
-      taken.push(at);
-      const [gate] = held.gates.waiting.splice(at, 1);
-      schedule.push(`${gate.label}:${gate.stage}`);
-      gate.release();
+      await during(settle());
+    } finally {
+      // Whatever ended the schedule, nothing stays held. A later test's gates are not this schedule's to end.
+      if (mine === testNumber) held.end();
     }
-    while (held.gates.waiting.length > 0) {
-      held.gates.waiting.shift()!.release();
-      await settle();
-    }
-    await settle();
-    held.gates.enabled = false;
 
     const internals = node as unknown as Internals;
-    const final = await sessions.findOneByOrFail({ id: saved.id });
+    const final = await during(sessions.findOneByOrFail({ id: saved.id }));
     const isOwned = internals.owned.has(saved.id);
     if (isOwned !== internals.claimGen.has(saved.id)) problems.push('owned and claimGen disagree');
     if (internals.latestClaim.size !== 0) problems.push('a claim in flight was left registered');
