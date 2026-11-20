@@ -44,6 +44,15 @@ function hasPluginPackages(dir: string): boolean {
   }
 }
 
+/** Whether the symbolic link at `p` leads to a directory (a dangling link, or one to a file, does not). */
+function isLinkToDirectory(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** Whether `dir` holds the package of plugin `pluginId`: a manifest.json that names that id. */
 function holdsPackageOf(dir: string, pluginId: string): boolean {
   try {
@@ -175,6 +184,16 @@ export class PluginPackageScanner {
       // Skip non-directories and dot-prefixed dirs (e.g. a crash-leftover `.<id>.bak` update backup or
       // `.<id>.new` staging tree), so a half-finished update can't be re-loaded as a duplicate-id
       // plugin on the next boot. recoverInterruptedUpdates has already reconciled them by this point.
+      // A symbolic link is not a directory to Dirent, so a plugin directory that is a link lands here too: it is
+      // not followed, and without a line in the log the plugin would just not appear.
+      if (entry.isSymbolicLink() && !entry.name.startsWith('.') && isLinkToDirectory(path.join(dir, entry.name))) {
+        this.logger.warn(
+          `Skipped ${entry.name}: it is a symbolic link, and a plugin directory is not followed through one. ` +
+            `Put the package itself in ${path.join(dir, entry.name)} (a copy or a bind mount).`,
+          { pluginPath: path.join(dir, entry.name), action: 'plugin_symlink_skipped' },
+        );
+        continue;
+      }
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
 
       // Already loaded by an earlier scan. Only reachable through the legacy-directory compatibility

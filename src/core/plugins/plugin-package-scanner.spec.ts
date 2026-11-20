@@ -479,3 +479,71 @@ describe('PluginPackageScanner — interrupted-update recovery at boot', () => {
     expect(plugins.get('svc-plg')?.manifest.version).toBe('1.0.0');
   });
 });
+
+describe('PluginPackageScanner: a plugin directory that is a symbolic link', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let logger: { log: jest.Mock; warn: jest.Mock; error: jest.Mock; debug: jest.Mock };
+  let plugins: Map<string, PluginInstance>;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-symlink-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
+    plugins = new Map();
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const writePackage = (dir: string, id: string): void => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify({ id, name: id, version: '1.0.0', type: 'extension', main: 'index.js' }),
+    );
+    fs.writeFileSync(path.join(dir, 'index.js'), 'module.exports = class {};');
+  };
+  const scan = (): void => {
+    const config = {
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+    new PluginPackageScanner(
+      logger as unknown as ReturnType<typeof createLogger>,
+      config,
+      new PluginStorageService(config),
+      pluginsDir,
+      null,
+      plugins,
+    ).scanAtBoot();
+  };
+  const warnings = (): string[] => (logger.warn.mock.calls as unknown[][]).map(call => String(call[0]));
+
+  // A link is not a directory to the directory listing, so such a plugin was skipped without a word in the log.
+  it('is not loaded, and the log names the link', () => {
+    writePackage(path.join(tmpDir, 'elsewhere', 'linked-plg'), 'linked-plg');
+    fs.symlinkSync(path.join(tmpDir, 'elsewhere', 'linked-plg'), path.join(pluginsDir, 'linked-plg'));
+    writePackage(path.join(pluginsDir, 'real-plg'), 'real-plg');
+
+    scan();
+
+    expect([...plugins.keys()]).toEqual(['real-plg']);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Skipped linked-plg: it is a symbolic link'),
+      expect.objectContaining({ action: 'plugin_symlink_skipped', pluginPath: path.join(pluginsDir, 'linked-plg') }),
+    );
+    expect(warnings().filter(w => w.includes('symbolic link'))).toHaveLength(1);
+  });
+
+  it('says nothing about a link to a file, a dangling link or a dot-named link', () => {
+    fs.writeFileSync(path.join(tmpDir, 'notes.txt'), 'notes');
+    fs.symlinkSync(path.join(tmpDir, 'notes.txt'), path.join(pluginsDir, 'notes.txt'));
+    fs.symlinkSync(path.join(tmpDir, 'gone'), path.join(pluginsDir, 'dangling'));
+    fs.mkdirSync(path.join(tmpDir, 'elsewhere'));
+    fs.symlinkSync(path.join(tmpDir, 'elsewhere'), path.join(pluginsDir, '.hidden'));
+
+    scan();
+
+    expect(warnings().filter(w => w.includes('symbolic link'))).toEqual([]);
+    expect(plugins.size).toBe(0);
+  });
+});
