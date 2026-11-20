@@ -19428,7 +19428,7 @@
           },
           "engineLoaded": {
             "type": "boolean",
-            "description": "Whether the gateway currently holds a live engine for this session: an engine in the answering process or, in a multi-node deployment, a live claim by the node running the session. `status` alone does not imply it: a `disconnected` session keeps its engine for the duration of an automatic reconnect backoff, while a session stopped through `POST /sessions/:sessionId/stop` carries the same status with no engine. On the node running the session, `true` means `stop`, `logout` and `force-kill` can act and `start` answers 400; `false` means the reverse. For a session another node runs, request routing (NODE_URL set on every node) forwards the lifecycle routes to that node, where they act; without routing, only that node can act on it, and any other node answers 409 to `start` and `stop` and 400 to `logout` and `force-kill`. Derived per request from live state, so it is never persisted and never historical.",
+            "description": "Whether the gateway currently holds a live engine for this session: an engine in the answering process or, in a multi-node deployment, a live claim by the node running the session. `status` alone does not imply it: a `disconnected` session keeps its engine for the duration of an automatic reconnect backoff, while a session stopped through `POST /sessions/:sessionId/stop` carries the same status with no engine. On the node running the session, `true` means `stop`, `logout` and `force-kill` can act and `start` answers 400; `false` means `start` can act and `logout` and `force-kill` answer 400, while `stop` still answers 200 and records the stop, so the session stays down across a restart until the next start. For a session another node runs, request routing (NODE_URL set on every node) forwards the lifecycle routes to that node, where they act; without routing, only that node can act on it, and any other node answers 409 to `start` and `stop` and 400 to `logout` and `force-kill`. Derived per request from live state, so it is never persisted and never historical.",
             "example": true
           }
         },
@@ -19659,7 +19659,7 @@
           },
           "phone": {
             "type": "string",
-            "description": "Phone digits of a 1:1 chat WhatsApp holds under a privacy id (@lid), when this session can map it. Absent for a phone-keyed chat and when the mapping is unknown. Not a display name: an unnamed chat is titled from these digits, and a saved name still wins.",
+            "description": "Baileys only; whatsapp-web.js lists none. Phone digits of a 1:1 chat WhatsApp holds under a privacy id (@lid), when this session can map it. Absent for a phone-keyed chat and when the mapping is unknown. Not a display name: an unnamed chat is titled from these digits, and a saved name still wins.",
             "example": "5491154759191"
           },
           "isGroup": {
@@ -26609,7 +26609,7 @@
           },
           "code": {
             "type": "string",
-            "description": "A stable machine-readable reason, on some errors only: SESSION_NAME_TEARDOWN_PENDING (409), SESSION_STOP_INCOMPLETE, SESSION_LOGOUT_INCOMPLETE and SESSION_FORCE_KILL_INCOMPLETE (502), SEND_PACING_LIMITED (429), ENGINE_PAGE_ERROR (500, whatsapp-web.js: WhatsApp Web threw inside the page during a send or status post), ENGINE_PAGE_RELOADING (409, whatsapp-web.js: WhatsApp Web is reloading its page; the request is safe to repeat), IMPORT_ALREADY_RUNNING, EXPORT_IN_PROGRESS, IMPORT_WOULD_ORPHAN_ENGINES and IMPORT_NESTED_TRANSACTION (409), IDEMPOTENCY_KEY_INVALID (400), IDEMPOTENCY_KEY_REUSED (422), IDEMPOTENCY_KEY_IN_PROGRESS and IDEMPOTENCY_OUTCOME_UNKNOWN (409), POLL_OPTION_NOT_FOUND (400, whatsapp-web.js vote-poll)."
+            "description": "A stable machine-readable reason, on some errors only: SESSION_NAME_TEARDOWN_PENDING (409), SESSION_STOP_INCOMPLETE, SESSION_LOGOUT_INCOMPLETE and SESSION_FORCE_KILL_INCOMPLETE (502), SEND_PACING_LIMITED (429), ENGINE_PAGE_ERROR (500, whatsapp-web.js: WhatsApp Web threw inside the page during a send or status post), ENGINE_PAGE_RELOADING (409, whatsapp-web.js: WhatsApp Web is reloading its page; the request is safe to repeat, except that a repeated channel delete or unsubscription that the first attempt had already applied answers 403), IMPORT_ALREADY_RUNNING, EXPORT_IN_PROGRESS, IMPORT_WOULD_ORPHAN_ENGINES, IMPORT_NESTED_TRANSACTION, RESTART_DATABASE_NOT_STARTED and RESTART_ALREADY_RUNNING (409), IDEMPOTENCY_KEY_INVALID (400), IDEMPOTENCY_KEY_REUSED (422), IDEMPOTENCY_KEY_IN_PROGRESS and IDEMPOTENCY_OUTCOME_UNKNOWN (409), POLL_OPTION_NOT_FOUND (400, whatsapp-web.js vote-poll)."
           },
           "retryAfterSeconds": {
             "type": "integer",

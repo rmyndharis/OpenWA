@@ -124,7 +124,7 @@ const ERROR_RESPONSE: SchemaObject = {
         'SESSION_STOP_INCOMPLETE, SESSION_LOGOUT_INCOMPLETE and SESSION_FORCE_KILL_INCOMPLETE (502), ' +
         'SEND_PACING_LIMITED (429), ' +
         'ENGINE_PAGE_ERROR (500, whatsapp-web.js: WhatsApp Web threw inside the page during a send or status post), ' +
-        'ENGINE_PAGE_RELOADING (409, whatsapp-web.js: WhatsApp Web is reloading its page; the request is safe to repeat), ' +
+        'ENGINE_PAGE_RELOADING (409, whatsapp-web.js: WhatsApp Web is reloading its page; the request is safe to repeat, except that a repeated channel delete or unsubscription that the first attempt had already applied answers 403), ' +
         'IMPORT_ALREADY_RUNNING, EXPORT_IN_PROGRESS, IMPORT_WOULD_ORPHAN_ENGINES, IMPORT_NESTED_TRANSACTION, ' +
         'RESTART_DATABASE_NOT_STARTED and RESTART_ALREADY_RUNNING (409), ' +
         'IDEMPOTENCY_KEY_INVALID (400), IDEMPOTENCY_KEY_REUSED (422), ' +
