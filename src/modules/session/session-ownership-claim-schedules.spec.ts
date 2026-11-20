@@ -2,6 +2,7 @@ import { DataSource, Repository } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { SessionOwnershipService } from './session-ownership.service';
 import { SessionService } from './session.service';
+import { createLogger } from '../../common/services/logger.service';
 
 // A claim that follows a takeover up in a transaction of its own waits for the shared SQLite connection to have none
 // open, and the real wait looks again every 5 ms. Real time then decided at which step a waiting claim showed its next
@@ -106,7 +107,7 @@ describe('claims of one session that overlap on a node', () => {
   let warn: jest.SpyInstance;
 
   beforeAll(async () => {
-    // Every refused claim of a walk logs that another node holds the session.
+    // Every start or delete a live peer refuses logs that another node holds the session.
     warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     dataSource = new DataSource({
       type: 'better-sqlite3',
@@ -496,7 +497,7 @@ describe('claims of one session that overlap on a node', () => {
       }
     ).claimUnlessHeldElsewhere;
     const askLikeStartOrDelete: Ask = (node, id, onClaimed) =>
-      startOrDelete.call(Object.create(null), id, node, onClaimed);
+      startOrDelete.call({ logger: createLogger('SessionService') }, id, node, onClaimed);
     const forms = [
       ['the handler a running gateway registers', true],
       ['a detached handler', false],

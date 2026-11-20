@@ -819,7 +819,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   ): Promise<boolean> {
     const claim = (): Promise<boolean> => (onClaimed ? ownership.claim(id, onClaimed) : ownership.claim(id));
     if (await claim()) return true;
-    if (await ownership.isHeldByOtherNode(id)) return false;
+    if (await ownership.isHeldByOtherNode(id)) {
+      // Said only here: a claim also misses a row that is gone, and a start or delete of it answers 404.
+      this.logger.warn('Session is held by another node', { sessionId: id, nodeId: ownership.nodeId });
+      return false;
+    }
     return claim();
   }
 
