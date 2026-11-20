@@ -3550,19 +3550,21 @@ test('a message that arrives later is the only one the next read names', async (
   assert.deepEqual(readBodies(CHAT.id), [{ chatId: CHAT.id, messageIds: ['wamid.live.1'] }]);
 });
 
-test('a thread that loads after the opening read is read again with its ids', async () => {
+test('a thread that loads after the opening read fell due is read once it has loaded, with its ids', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   aliceThread = [threadRow(1), threadRow(2)];
   const release = hold('thread');
   renderPage();
   fireEvent.click(await screen.findByText('Alice'));
-  // The opening read is due before the thread has come, so it names nothing.
-  await waitFor(() => assert.deepEqual(readBodies(CHAT.id), [{ chatId: CHAT.id }]), { timeout: 3_000 });
+  // The opening read is due before the thread has come, and the thread has shown nothing yet, which a read would
+  // acknowledge: it waits.
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  assert.deepEqual(readBodies(CHAT.id), [], 'a chat that showed no message was read');
 
   release();
   await screen.findByText('message 2');
-  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 2), { timeout: 3_000 });
-  assert.deepEqual(readBodies(CHAT.id).at(-1), { chatId: CHAT.id, messageIds: ['wamid.in.1', 'wamid.in.2'] });
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1), { timeout: 3_000 });
+  assert.deepEqual(readBodies(CHAT.id), [{ chatId: CHAT.id, messageIds: ['wamid.in.1', 'wamid.in.2'] }]);
 });
 
 test('on whatsapp-web.js the read names no message, since the engine reads the whole chat', async () => {

@@ -175,6 +175,12 @@ const PAGED_OLDEST = Array.from({ length: 20 }, (_, i) =>
 let olderPageGate: Promise<void> | null = null;
 // When true, an older-page request (any offset but 0) answers 500 instead of a page.
 let olderPageFails = false;
+// The status the stored read of the first chat's thread answers, 200 for its rows.
+let storedReadStatus = 200;
+// How long a refused stored read of the first chat waits before it answers, and how long the engine history read of a
+// whatsapp-web.js thread takes: a failure that comes after the read of the chat is due.
+let storedReadDelayMs = 0;
+let historyDelayMs = 0;
 // Rows Carol's older page serves after the fixture rows (oldest last, as the gateway orders them).
 let olderPageExtra: ChatMessage[] = [];
 
@@ -362,6 +368,12 @@ function installFetchStub(): void {
         const gate = isFirstPage ? null : olderPageGate;
         return gate ? gate.then(answer) : Promise.resolve(answer());
       }
+      if (storedReadStatus !== 200) {
+        const refused = () => jsonResponse({ message: 'refused' }, storedReadStatus);
+        return storedReadDelayMs
+          ? new Promise<Response>(resolve => setTimeout(() => resolve(refused()), storedReadDelayMs))
+          : Promise.resolve(refused());
+      }
       const rows = firstPageOverride ?? [DB_MESSAGE, OMITTED_MEDIA_MESSAGE, OMITTED_MEDIA_MESSAGE_2, ...firstPageExtra];
       const firstPage = () =>
         jsonResponse({
@@ -377,7 +389,9 @@ function installFetchStub(): void {
       return gate ? gate.then(bytes) : Promise.resolve(bytes());
     }
     if (method === 'GET' && /\/messages\/[^/]+\/history/.test(path)) {
-      return Promise.resolve(jsonResponse(historyExtra));
+      return historyDelayMs
+        ? new Promise<Response>(resolve => setTimeout(() => resolve(jsonResponse(historyExtra)), historyDelayMs))
+        : Promise.resolve(jsonResponse(historyExtra));
     }
     if (method === 'GET' && path === `/api/sessions/${SESSION.id}/status`) {
       return Promise.resolve(jsonResponse({ statuses }));
@@ -480,6 +494,9 @@ afterEach(async () => {
   sendImageId = 'wamid.out.image';
   sendImageFails = false;
   olderPageFails = false;
+  storedReadStatus = 200;
+  storedReadDelayMs = 0;
+  historyDelayMs = 0;
   olderPageExtra = [];
   chatsResponder = null;
   for (const id of Object.keys(lidPhones)) delete lidPhones[id];
@@ -1333,6 +1350,146 @@ test('a writer key opening a chat clears its unread badge', async () => {
   fireEvent.click(await screen.findByText('Alice'));
   await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
   await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages'), 'opening the chat kept its badge'));
+});
+
+// A thread that fails to load shows nothing, so the chat was not read: its messages were not seen.
+test('a chat whose thread fails to load is not marked read and keeps its unread badge', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  storedReadStatus = 503;
+  renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
+  // Past the quiet window of the read, with the retry of the thread done.
+  await new Promise(resolve => setTimeout(resolve, 1_500));
+  assert.ok(!findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`), 'a chat that showed no message was read');
+  await waitFor(() =>
+    assert.ok(screen.queryByLabelText('2 unread messages'), 'the badge of an unseen chat was cleared'),
+  );
+});
+
+test('a chat whose thread failed to load is read once a later load of it succeeds', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  storedReadStatus = 503;
+  const { container } = renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
+  await new Promise(resolve => setTimeout(resolve, 1_500));
+  assert.ok(!findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`));
+
+  // The gateway answers again and the thread is asked for again, which is all that reaches the read: no tab was hidden,
+  // so the read of a hidden tab does not go out here.
+  storedReadStatus = 200;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  await waitFor(
+    () =>
+      assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`), 1, 'the chat was not read once'),
+    { timeout: 3_000 },
+  );
+  await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages'), 'the badge stayed after the read'));
+});
+
+// A thread whose load is still running when the read of the chat is due has shown nothing yet, and may fail after it.
+test('a chat is not read while its thread is still loading, and the badge comes back when it then fails', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  storedReadStatus = 503;
+  storedReadDelayMs = 1_200;
+  renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
+  await new Promise(resolve => setTimeout(resolve, 1_500));
+  assert.ok(!findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`), 'a chat that showed no message was read');
+  await waitFor(() =>
+    assert.ok(screen.queryByLabelText('2 unread messages'), 'the badge of an unseen chat stayed cleared'),
+  );
+});
+
+test('a whatsapp-web.js chat is not read while its engine history is still loading', async () => {
+  const { screen, fireEvent } = rtl;
+  engineType = 'whatsapp-web.js';
+  window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
+  storedReadStatus = 503;
+  historyDelayMs = 1_200;
+  renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
+  await new Promise(resolve => setTimeout(resolve, 1_500));
+  assert.equal(
+    countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`),
+    0,
+    'a chat that showed no message was read',
+  );
+});
+
+test('a chat left before its thread showed is unread again, and is not read', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  // The thread of the first chat is held open until the end of the test.
+  let release!: () => void;
+  firstPageGate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages'), 'opening the chat kept its badge'));
+
+  // Leave for another chat while the thread of the first is still loading: its read falls due after that.
+  fireEvent.click(await screen.findByText('Carol'));
+  await waitFor(
+    () => assert.ok(screen.queryByLabelText('2 unread messages'), 'the unseen chat stayed read in the list'),
+    {
+      timeout: 5_000,
+    },
+  );
+  // Carol's thread loaded, so hers is read; the one that never showed is not.
+  await new Promise(resolve => setTimeout(resolve, 1_200));
+  const readOfAlice = fetchCalls.filter(
+    call =>
+      call.method === 'POST' &&
+      call.path === `/api/sessions/${SESSION.id}/chats/read` &&
+      (call.body as { chatId?: string } | undefined)?.chatId === CHAT.id,
+  );
+  assert.equal(readOfAlice.length, 0, 'a chat that showed no message was read');
+  release();
+});
+
+// A refresh that fails after the thread has shown is not a thread that never loaded: what was read stays read.
+test('an empty thread that was read does not get its unread badge back when a refresh of it fails', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  firstPageOverride = [];
+  renderChats();
+  await screen.findByText(SESSION.name);
+  resetFetchCalls();
+  assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`), 1), {
+    timeout: 3_000,
+  });
+  await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages')));
+
+  // A reconnect invalidates the thread, and its stored read is refused this time.
+  storedReadStatus = 503;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.ok(!screen.queryByLabelText('2 unread messages'), 'the badge of a chat already read came back');
+  storedReadStatus = 200;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  await new Promise(resolve => setTimeout(resolve, 600));
+  assert.ok(!screen.queryByLabelText('2 unread messages'), 'the badge came back after a later refresh');
+  assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`), 1, 'the chat was read again');
 });
 
 test('a chat whose newest message has no text does not claim to have no messages', async () => {
