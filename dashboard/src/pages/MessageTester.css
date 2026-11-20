@@ -176,6 +176,8 @@
 .message-tester .detail-row {
   display: flex;
   justify-content: space-between;
+  /* A value that wraps (a long error text) must not run into its label. */
+  gap: 1rem;
   padding: 0.625rem 0;
   border-bottom: 1px solid var(--border);
 }
@@ -490,10 +492,6 @@
   margin-top: 0.5rem;
   font-size: 0.8125rem;
   color: var(--text-secondary);
-}
-
-.message-tester .detail-row.group-failures {
-  gap: 1rem;
 }
 
 .message-tester .detail-row.group-failures ul {
