@@ -1075,9 +1075,8 @@ export class BaileysMessaging {
    * Fold the chat's known disappearing-messages timer into Baileys' send options so outbound messages
    * honor the chat's ephemeral setting (#473). Returns `options` unchanged when no positive timer is
    * cached: omitting `ephemeralExpiration` reproduces today's behavior (Baileys' send guard is truthy),
-   * so an unknown / boot-window / stale-empty cache never forces a message to disappear. Returning
-   * `undefined` keeps the send a 2-arg call, identical to before. React/delete/status do not route
-   * through here, so they are excluded by construction (reactions are NOT excluded by Baileys' guard).
+   * so an unknown / boot-window / stale-empty cache never forces a message to disappear. React/delete/status do
+   * not route through here, so they are excluded by construction (reactions are NOT excluded by Baileys' guard).
    */
   private withEphemeral(
     chatId: string,

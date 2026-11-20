@@ -338,7 +338,7 @@ const safeSendOptions = (): unknown =>
   expect.objectContaining({ getUrlInfo: expect.any(Function) as unknown }) as unknown;
 
 /** The upload option every send hands the library, so a failed upload is known to have sent nothing. */
-const uploadOption = (): unknown => expect.objectContaining({ upload: expect.any(Function) as unknown }) as unknown;
+const uploadOption = (): unknown => ({ upload: expect.any(Function) as unknown });
 
 function firstEditedMessage(callback: jest.Mock): EditedMessage {
   const calls = callback.mock.calls as Array<[EditedMessage]>;

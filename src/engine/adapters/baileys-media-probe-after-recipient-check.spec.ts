@@ -37,7 +37,7 @@ describe('Baileys media probes run only for a send that passed its own checks', 
   const video = { data: Buffer.from('video'), mimetype: 'video/mp4' };
   const voiceNote = { data: Buffer.from('audio'), mimetype: 'audio/ogg', ptt: true };
   const unregistered = (jid = '628123456789@s.whatsapp.net') => [{ jid, exists: false }];
-  const uploads = (): unknown => expect.objectContaining({ upload: expect.any(Function) as unknown }) as unknown;
+  const uploads = (): unknown => ({ upload: expect.any(Function) as unknown });
 
   const failureOf = (promise: Promise<unknown>): Promise<unknown> =>
     promise.then(
