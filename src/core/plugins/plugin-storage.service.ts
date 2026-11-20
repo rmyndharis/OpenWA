@@ -59,6 +59,12 @@ function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: 
 const ENCODED_KEY_PREFIX = 'key-';
 
 /**
+ * The package files of a plugin that keep its state apart from its code when both share a directory, upper-cased
+ * for the comparison in resolveLegacyKeyPath.
+ */
+const PACKAGE_FILES = new Set(['MANIFEST.JSON', 'PACKAGE.JSON']);
+
+/**
  * A lone UTF-16 surrogate (text cut by `slice` inside an emoji) has no UTF-8 form: encodeStorageKey writes U+FFFD for
  * it, so two keys that differ only there would share one file. A key that holds one is refused like any unsafe key.
  */
@@ -473,13 +479,18 @@ export class PluginStorageService {
     // but new writes always use the encoded filename above.
     const resolveLegacyKeyPath = (key: string): string | null => {
       if (!isStorableKey(key)) return null;
-      // These are package-owned files when package code and state share a directory. They must never
-      // be treated as legacy plugin storage (or get/delete/set migration can read or remove code).
-      if (key === 'manifest' || key === 'package') return null;
       // A canonical encoded filename belongs to the key it decodes to, not to a legacy key spelled like it.
       if (decodeStorageFileName(key) !== null) return null;
       const fileName = `${key}.json`;
-      return isPathWithin(pluginDataDir, fileName) ? path.join(pluginDataDir, fileName) : null;
+      if (!isPathWithin(pluginDataDir, fileName)) return null;
+      const legacyPath = path.join(pluginDataDir, fileName);
+      // manifest.json and package.json are package-owned files when package code and state share a directory. They
+      // must never be treated as legacy plugin storage (or get/delete/set migration can read or remove code). Judged
+      // on the file the key lands on, not on how it is spelled: "./manifest" is that file too, and so is "Manifest"
+      // on a case-insensitive filesystem, or a spelling with a long s or a Kelvin sign on one that also folds
+      // those (APFS), so the name is normalized and upper-cased as the installer does for archive paths.
+      const landsOn = path.relative(pluginDataDir, legacyPath).normalize('NFC').toUpperCase();
+      return PACKAGE_FILES.has(landsOn) ? null : legacyPath;
     };
 
     return {
