@@ -194,10 +194,11 @@ const ONBOARDING_MODAL_INTERVAL_MS = 5_000;
 const ONBOARDING_MODAL_MAX_LIFETIME_MS = 5 * 60_000;
 const ONBOARDING_MODAL_PROBE_TIMEOUT_MS = 5_000;
 // Clicking Continue dismisses the modal, so one click is the normal case and the next tick finds
-// nothing. Repeated clicks mean the click is not landing — the only evidence that actually justifies
-// asking a human to intervene. Five, not three: a multi-step "What's new" flow is clicked through
-// one screen per tick, and three screens inside one watcher run must not read as a stuck modal.
-// Five failed clicks still trips in ~25s — far inside the lifetime cap and the ~5m unlink deadline.
+// nothing. A modal that is still there after repeated clicks means the click is not landing: the only
+// evidence that actually justifies asking a human to intervene. Five, not three: a multi-step "What's
+// new" flow is clicked through one screen per tick, and three screens inside one watcher run must not
+// read as a stuck modal. The click that follows five clicks which left the modal in place trips it, in
+// ~30s: far inside the lifetime cap and the ~5m unlink deadline.
 const ONBOARDING_MODAL_MAX_DISMISS_CLICKS = 5;
 
 /**
@@ -228,9 +229,13 @@ export class WwebjsOnboardingWatcher {
   private onboardingWatcherTimer: ReturnType<typeof setTimeout> | null = null;
   private onboardingWatcherStartedAt = 0;
   private onboardingWatcherStarted = false;
-  // How many times we have clicked the modal's Continue button. Not reset by clear(): it counts for
-  // the engine's lifetime, which is what makes "the click is not landing" detectable.
+  // How many times we have clicked the modal's Continue button over the engine's lifetime, for the logs.
   private onboardingDismissClicks = 0;
+  // The clicks since a probe last found the modal gone. A click that dismisses the modal is followed by a probe that
+  // finds nothing, so this only grows while a modal is still there after each click: a stuck one, or one more screen of
+  // a flow. A flow of more screens than the limit therefore trips it, which a person must still click through. Not
+  // reset by clear().
+  private onboardingClickRun = 0;
   // Dialog signatures the watcher already warned about (#1072 follow-up). A signature is the
   // serialized diagnostics of what is on screen, so the warn fires once per DISTINCT unrecognised
   // dialog instead of once per 5s tick. Dies with the engine, exactly like the watcher itself.
@@ -365,24 +370,28 @@ export class WwebjsOnboardingWatcher {
         }
       }
 
+      // The modal is gone: whatever was clicked before did land.
+      if (result?.dismissed === false) this.onboardingClickRun = 0;
       if (!result?.dismissed) return;
 
       // We clicked. A modal that is really dismissed is gone by the next tick, so a click here is
-      // normally a one-off. Repeated clicks mean the click is not taking effect (an overlay is
-      // swallowing it, or WhatsApp keeps re-showing the modal) — that, and only that, is evidence a
-      // human has to acknowledge it on the phone before the companion is unlinked.
+      // normally a one-off. A modal that is still there after repeated clicks means the click is not
+      // taking effect (an overlay is swallowing it, or WhatsApp keeps re-showing the modal): that, and
+      // only that, is evidence a human has to acknowledge it on the phone before the companion is unlinked.
+      const survived = this.onboardingClickRun;
+      this.onboardingClickRun += 1;
       this.onboardingDismissClicks += 1;
       this.host.logger.log('Dismissed the WhatsApp Web onboarding modal', {
         sessionId: this.host.config.sessionId,
         attempt: this.onboardingDismissClicks,
         action: 'onboarding_modal_dismissed',
       });
-      if (this.onboardingDismissClicks >= ONBOARDING_MODAL_MAX_DISMISS_CLICKS) {
+      if (survived >= ONBOARDING_MODAL_MAX_DISMISS_CLICKS) {
         this.reportActionRequired(
-          `WhatsApp is still showing its onboarding modal after ${this.onboardingDismissClicks} ` +
+          `WhatsApp is still showing its onboarding modal after ${survived} ` +
             "attempts to dismiss it. Open WhatsApp Web on the account holder's own browser and click " +
             'through the "What\'s new" screen, or the companion device will be unlinked. Then restart ' +
-            'the session (stop, then start) — acknowledging the modal does not return it to ready on its own.',
+            'the session (stop, then start). Acknowledging the modal does not return it to ready on its own.',
         );
       }
     } catch {

@@ -9045,13 +9045,55 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         expect(adapter.getStatus()).toBe(EngineStatus.READY);
         expect(onActionRequired).not.toHaveBeenCalled();
 
-        // Fifth click on a modal that is still there — the click is not landing, a human must act.
+        // The fifth click may be the one that dismisses the last screen of a flow, which is only known when the
+        // next probe finds the modal gone, so it does not trip yet.
+        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
+        await jest.advanceTimersByTimeAsync(5100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
+
+        // A sixth click on a modal that survived five: the click is not landing, a human must act.
         evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
         await jest.advanceTimersByTimeAsync(5100);
 
         expect(adapter.getStatus()).toBe(EngineStatus.ACTION_REQUIRED);
         expect(onActionRequired).toHaveBeenCalledTimes(1);
-        expect(onActionRequired).toHaveBeenCalledWith(expect.stringMatching(/onboarding modal/i));
+        expect(onActionRequired).toHaveBeenCalledWith(expect.stringMatching(/onboarding modal after 5 attempts/i));
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    // A flow of five screens is five clicks that each land. The probe after the last one finds the modal gone, and
+    // what was clicked before is not held against a modal that shows up again later.
+    it('does not fall back for clicks that landed: the count restarts once the modal is gone', async () => {
+      jest.useFakeTimers();
+      try {
+        const { adapter, evaluate, onActionRequired } = promoteToReady();
+        (adapter as unknown as { client: EventEmitter }).client.emit('authenticated');
+        await jest.advanceTimersByTimeAsync(2100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+
+        const tick = async (probe: ModalProbe): Promise<void> => {
+          evaluate.mockResolvedValueOnce(probe);
+          await jest.advanceTimersByTimeAsync(5100);
+        };
+        const click: ModalProbe = { modalPresent: true, dismissed: true };
+        const gone: ModalProbe = { modalPresent: false, dismissed: false };
+
+        for (let i = 0; i < 5; i++) await tick(click);
+        await tick(gone);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
+
+        // Five more clicks after it was gone are a new run, not the sixth to ninth of one.
+        for (let i = 0; i < 5; i++) await tick(click);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
+
+        await tick(click);
+        expect(adapter.getStatus()).toBe(EngineStatus.ACTION_REQUIRED);
+        expect(onActionRequired).toHaveBeenCalledTimes(1);
       } finally {
         jest.useRealTimers();
       }
@@ -9168,8 +9210,8 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         (client as EventEmitter).emit('authenticated');
         await jest.advanceTimersByTimeAsync(2100);
 
-        // Drive it to the fallback the only way that reaches it: clicks that keep failing to land.
-        for (let i = 0; i < 5; i++) {
+        // Drive it to the fallback the only way that reaches it: a modal that survives five clicks and is clicked again.
+        for (let i = 0; i < 6; i++) {
           evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
           await jest.advanceTimersByTimeAsync(5100);
         }
@@ -9192,7 +9234,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
 
         (client as EventEmitter).emit('authenticated');
         await jest.advanceTimersByTimeAsync(2100);
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 6; i++) {
           evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
           await jest.advanceTimersByTimeAsync(5100);
         }
