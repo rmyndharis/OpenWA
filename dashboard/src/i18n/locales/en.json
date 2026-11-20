@@ -1146,6 +1146,7 @@
       "reason409": "The session is not connected",
       "reason429": "The gateway rate limit was reached",
       "reason503": "WhatsApp did not answer a lookup",
+      "reasonReloading": "WhatsApp Web is reloading its page",
       "reasonOther": "The gateway refused a lookup",
       "partial": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} number was not sent. Try again later.",
       "partial_other": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} numbers were not sent. Try again later.",

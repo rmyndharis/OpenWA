@@ -1146,6 +1146,7 @@
       "reason409": "Die Sitzung ist nicht verbunden",
       "reason429": "Das Anfragelimit des Gateways wurde erreicht",
       "reason503": "WhatsApp hat eine Abfrage nicht beantwortet",
+      "reasonReloading": "WhatsApp Web lädt seine Seite neu",
       "reasonOther": "Das Gateway hat eine Abfrage abgelehnt",
       "partial": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummer wurde nicht geprüft. Versuche es später erneut.",
       "partial_other": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummern wurden nicht geprüft. Versuche es später erneut.",

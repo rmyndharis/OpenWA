@@ -1161,6 +1161,7 @@
       "reason409": "ה-Session אינו מחובר",
       "reason429": "מגבלת הקצב של השער מוצתה",
       "reason503": "WhatsApp לא השיב לשאילתה",
+      "reasonReloading": "WhatsApp Web טוען מחדש את הדף שלו",
       "reasonOther": "השער סירב לשאילתה",
       "partial": "{{reason}} (HTTP {{status}}). הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}; {{count}} מספר לא נשלח. יש לנסות שוב מאוחר יותר.",
       "partial_many": "{{reason}} (HTTP {{status}}). הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}; {{count}} מספרים לא נשלחו. יש לנסות שוב מאוחר יותר.",

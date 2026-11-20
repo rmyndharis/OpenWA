@@ -1146,6 +1146,7 @@
       "reason409": "会话未连接",
       "reason429": "已达到网关的速率限制",
       "reason503": "WhatsApp 未响应查询",
+      "reasonReloading": "WhatsApp Web 正在重新加载页面",
       "reasonOther": "网关拒绝了一次查询",
       "partial": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 个号码处停止（共 {{total}} 个），其余 {{count}} 个号码未查询。请稍后重试。",
       "partial_other": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 个号码处停止（共 {{total}} 个），其余 {{count}} 个号码未查询。请稍后重试。",

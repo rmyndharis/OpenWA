@@ -1175,6 +1175,7 @@
       "reason409": "الجلسة غير متصلة",
       "reason429": "تم بلوغ حد معدّل الطلبات في البوابة",
       "reason503": "لم يردّ WhatsApp على أحد الاستعلامات",
+      "reasonReloading": "يعيد WhatsApp Web تحميل صفحته",
       "reasonOther": "رفضت البوابة أحد الاستعلامات",
       "partial": "{{reason}} (HTTP {{status}}). توقف الفحص عند الرقم {{attempted}} من أصل {{total}}؛ لم يُرسَل {{count}} رقم. حاول مرة أخرى لاحقًا.",
       "partial_other": "{{reason}} (HTTP {{status}}). توقف الفحص عند الرقم {{attempted}} من أصل {{total}}؛ لم يُرسَل {{count}} رقم. حاول مرة أخرى لاحقًا.",

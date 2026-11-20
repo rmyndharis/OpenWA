@@ -1153,6 +1153,7 @@
       "reason409": "La session n'est pas connectée",
       "reason429": "La limite de requêtes de la passerelle a été atteinte",
       "reason503": "WhatsApp n'a pas répondu à une requête",
+      "reasonReloading": "WhatsApp Web recharge sa page",
       "reasonOther": "La passerelle a refusé une requête",
       "partial": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéro n'a pas été vérifié. Réessayez plus tard.",
       "partial_other": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéros n'ont pas été vérifiés. Réessayez plus tard.",

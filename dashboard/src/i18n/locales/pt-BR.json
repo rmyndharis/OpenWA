@@ -1153,6 +1153,7 @@
       "reason409": "A sessão não está conectada",
       "reason429": "O limite de taxa do gateway foi atingido",
       "reason503": "O WhatsApp não respondeu a uma consulta",
+      "reasonReloading": "O WhatsApp Web está recarregando a página",
       "reasonOther": "O gateway recusou uma consulta",
       "partial": "{{reason}} (HTTP {{status}}). A verificação parou no número {{attempted}} de {{total}}; {{count}} número não foi enviado. Tente novamente mais tarde.",
       "partial_other": "{{reason}} (HTTP {{status}}). A verificação parou no número {{attempted}} de {{total}}; {{count}} números não foram enviados. Tente novamente mais tarde.",

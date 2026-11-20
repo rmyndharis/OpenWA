@@ -1153,6 +1153,7 @@
       "reason409": "La sesión no está conectada",
       "reason429": "Se alcanzó el límite de solicitudes de la puerta de enlace",
       "reason503": "WhatsApp no respondió a una consulta",
+      "reasonReloading": "WhatsApp Web está recargando su página",
       "reasonOther": "La puerta de enlace rechazó una consulta",
       "partial": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} número no se envió. Inténtalo de nuevo más tarde.",
       "partial_other": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} números no se enviaron. Inténtalo de nuevo más tarde.",

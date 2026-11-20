@@ -1146,6 +1146,7 @@
       "reason409": "세션이 연결되어 있지 않습니다",
       "reason429": "게이트웨이의 요청 속도 제한에 도달했습니다",
       "reason503": "WhatsApp이 조회에 응답하지 않았습니다",
+      "reasonReloading": "WhatsApp Web이 페이지를 새로고침하는 중입니다",
       "reasonOther": "게이트웨이가 조회를 거부했습니다",
       "partial": "{{reason}} (HTTP {{status}}). {{total}}개 중 {{attempted}}번째 번호에서 중지되었으며, 나머지 {{count}}개는 확인하지 못했습니다. 나중에 다시 시도하세요.",
       "partial_other": "{{reason}} (HTTP {{status}}). {{total}}개 중 {{attempted}}번째 번호에서 중지되었으며, 나머지 {{count}}개는 확인하지 못했습니다. 나중에 다시 시도하세요.",

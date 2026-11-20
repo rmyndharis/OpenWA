@@ -15,6 +15,8 @@ export interface CheckResultItem extends CheckNumberResponse {
 export interface BatchStop {
   // 0 when the lookup got no HTTP answer at all.
   status: number;
+  // The gateway's stable error code, when the answer carried one.
+  code?: string;
   attempted: number;
   total: number;
 }
@@ -28,10 +30,18 @@ const STOP_REASON_KEYS: Record<number, string> = {
   503: 'numberChecker.stopped.reason503',
 };
 
+// One 409 means two things that only the gateway's code tells apart: the session is not connected, or the WhatsApp Web
+// page is reloading under a session that still reads ready and answers again in seconds.
+const RELOADING_CODE = 'ENGINE_PAGE_RELOADING';
+
 // `attempted` counts the lookup that stopped the run, which is the last one sent; only the rest were never sent.
-export function batchStopMessage(t: TFunction, { status, attempted, total }: BatchStop): string {
+export function batchStopMessage(t: TFunction, { status, code, attempted, total }: BatchStop): string {
   if (status === 0) return t('numberChecker.stopped.noAnswer', { attempted, total });
-  const reason = t(STOP_REASON_KEYS[status] ?? 'numberChecker.stopped.reasonOther');
+  const reason = t(
+    code === RELOADING_CODE
+      ? 'numberChecker.stopped.reasonReloading'
+      : (STOP_REASON_KEYS[status] ?? 'numberChecker.stopped.reasonOther'),
+  );
   const unsent = total - attempted;
   return unsent > 0
     ? t('numberChecker.stopped.partial', { reason, status, attempted, total, count: unsent })

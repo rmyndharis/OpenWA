@@ -1146,6 +1146,7 @@
       "reason409": "Oturum bağlı değil",
       "reason429": "Ağ geçidinin hız sınırına ulaşıldı",
       "reason503": "WhatsApp bir sorguya yanıt vermedi",
+      "reasonReloading": "WhatsApp Web sayfasını yeniden yüklüyor",
       "reasonOther": "Ağ geçidi bir sorguyu reddetti",
       "partial": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",
       "partial_other": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",

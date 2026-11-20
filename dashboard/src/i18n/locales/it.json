@@ -1153,6 +1153,7 @@
       "reason409": "La sessione non è connessa",
       "reason429": "È stato raggiunto il limite di richieste del gateway",
       "reason503": "WhatsApp non ha risposto a una verifica",
+      "reasonReloading": "WhatsApp Web sta ricaricando la sua pagina",
       "reasonOther": "Il gateway ha rifiutato una verifica",
       "partial": "{{reason}} (HTTP {{status}}). Verifica interrotta al numero {{attempted}} di {{total}}; {{count}} numero non è stato inviato. Riprova più tardi.",
       "partial_other": "{{reason}} (HTTP {{status}}). Verifica interrotta al numero {{attempted}} di {{total}}; {{count}} numeri non sono stati inviati. Riprova più tardi.",

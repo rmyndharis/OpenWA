@@ -1146,6 +1146,7 @@
       "reason409": "工作階段未連線",
       "reason429": "已達到閘道的速率限制",
       "reason503": "WhatsApp 沒有回應查詢",
+      "reasonReloading": "WhatsApp Web 正在重新載入頁面",
       "reasonOther": "閘道拒絕了一次查詢",
       "partial": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 個號碼處停止（共 {{total}} 個），其餘 {{count}} 個號碼未查詢。請稍後再試。",
       "partial_other": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 個號碼處停止（共 {{total}} 個），其餘 {{count}} 個號碼未查詢。請稍後再試。",

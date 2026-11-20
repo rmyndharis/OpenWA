@@ -1146,6 +1146,7 @@
       "reason409": "Sesi tidak terhubung",
       "reason429": "Batas permintaan gateway tercapai",
       "reason503": "WhatsApp tidak merespons pemeriksaan",
+      "reasonReloading": "WhatsApp Web sedang memuat ulang halamannya",
       "reasonOther": "Gateway menolak pemeriksaan",
       "partial": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",
       "partial_other": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",
