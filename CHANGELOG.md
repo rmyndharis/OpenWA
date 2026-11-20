@@ -74,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard: a long group name or an unbroken token in a failed send no longer widens the Message Tester past a phone screen, and a long plugin name ends with an ellipsis on a plugin card.
 - Dashboard: the error row of a session card keeps the start of the message in Arabic and Hebrew, where the end was kept and the start cut.
 - Dashboard: the plugin instance, webhook secret, template name, API key, Number Checker and BullMQ URL copy buttons show a failure toast when neither clipboard path works, as the chat id button does, where they did nothing.
+- Dashboard: the pairing QR image has an alt text in the page language, where it read "QR" in English.
 - whatsapp-web.js: a start no longer waits on a `ps` or a stale lock removal that never returns, such as one stuck on a hung volume; each gets five seconds.
 - whatsapp-web.js: the onboarding fallback moves a session to `action_required` on the click that follows five clicks which left the modal in place, where a flow of five screens that each landed tripped it on the fifth.
 - whatsapp-web.js: the chats of a label carry `lastMessage`, as the chat list does.
