@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Baileys: a reaction, edit, delete or poll vote no longer keeps about 1 KB of memory until the account is unlinked.
 - Answer `503`, not `500`, when the database drops the row read a stop or delete makes, or the check its stop record makes after a missed write; nothing was stopped or deleted.
 - Log that another node holds a session only when a live peer does, not on every start or delete of a missing session.
+- whatsapp-web.js: a send, reply, forward or status post that a page reload cuts while it runs answers a `409` that says it may or may not have gone out, where it was a bare `500` that counted toward the session send breaker; a keyed send keeps its `Idempotency-Key`.
 - Drop the restriction, error, presence and claim state of sessions an infra data import removes, so the restricted-sessions gauge stops counting them and no false lost-claim warning follows.
 - `backup.sh` and `restore.sh` read a `PLUGINS_DIR` exported empty as the app does, as unset to its default directory, where they took the directory `./.env` named.
 - Baileys: a poll vote on the account's own broadcast-list poll is reported only when it arrives in a 1:1 chat, as documented; a vote from a group, the list or the status chat was reported too.
