@@ -207,6 +207,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Correct the migration guide: the 0.15.0 reload row no longer says to wait for a `ready` event that nothing announces, and the import troubleshooting rows describe the shipped import, which replaces everything, restores in a fixed order and rolls back whole.
 - Correct the troubleshooting guide's messaging entry (a send answers `201`, the engine failure log line, no message queue, a history check both engines serve).
 - Point the migration guide at the CHANGELOG upgrade notes, which name the behavior changes of a release, where it named a Breaking marker that recent releases do not use.
+- Correct the API reference: the plugin search provider shows as `plugin:<pluginId>` and `SEARCH_PROVIDER` never takes a plugin id, `byType` of the message statistics has `text` and counts only messages with a body or metadata, an empty `url` beside `base64` of a status post is accepted, the import example carries its notice, the seeded key lists `(master key)`, the chats of a label answer `404` for a missing label only, and `message.received` names its optional fields.
 
 ### Dependencies
 

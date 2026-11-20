@@ -85,7 +85,8 @@ export class MessageStatsResponseDto {
   timeSeries!: TimeSeriesPointDto[];
 
   @ApiProperty({
-    description: 'Message count per message type.',
+    description:
+      'Message count per message type, counting only messages that carry a body or metadata, so the total can be lower than the totals of the time series and the sessions.',
     example: { text: 900, image: 124 },
     additionalProperties: { type: 'integer' },
   })
