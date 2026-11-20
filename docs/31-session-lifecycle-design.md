@@ -229,8 +229,9 @@ a row this node holds and a lapsed holder's, a release that interrupts a claim w
 `claimUnlessHeldElsewhere` asks them; a live peer refusing all of them), `session-delete-claim.spec.ts` ('two
 claims of one session that overlap': a start and a delete in either order, two and three requests, a live peer
 refusing every pair; 'stops of one session whose holder lapsed': two and three stops, a stop beside a start and
-beside a delete, a live peer; the 'older claim SQL reply' cases for a claim lost and regained) and
-`session.service.spec.ts` ('ownership release': the second ask and its refusals).
+beside a delete, a live peer; 'handles an older %s claim SQL reply': a start or a delete whose older claim reply
+arrives late, fails, or follows a lost and regained claim) and `session.service.spec.ts` ('ownership release': the
+second ask and its refusals).
 **The naive fixes that are wrong:** guessing a self-overlap from request state (another delete not yet returned, a
 second start reservation): a pair of the other kind, or a partner that has already returned, still answered the
 false 409. Asking again a fixed number of times: it absorbs about as many overlapping claims as it asks, so three
