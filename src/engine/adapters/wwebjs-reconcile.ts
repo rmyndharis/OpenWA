@@ -20,6 +20,13 @@ export interface WwebjsReadyReconcileHost {
   getCallbacks(): EngineEventCallbacks;
   /** Promote to READY off the live client's info — the lifecycle's own ready path. */
   markReadyFromClientInfo(): void;
+  /** The page navigations stamped so far: a probe reads it before it asks the page, to tell a newer navigation. */
+  stampedNavigations(): number;
+  /**
+   * Close the reload window of the navigations stamped up to `navigationsBefore`, which a probe has found the page
+   * through. A navigation stamped since is a newer one, and leaves the window as it is.
+   */
+  closeRecoveredEpisode(navigationsBefore: number): void;
   /** Whether this engine showed a QR before authenticating: a fresh pairing, not a restored session. */
   wasFreshPairing(): boolean;
   /** The deadline's fresh-pairing branch: clear the broken auth and let the lifecycle re-pair. */
@@ -137,10 +144,15 @@ export class WwebjsReadyReconcile {
 
       if (this.readyReconcileProbeInFlight) return;
       this.readyReconcileProbeInFlight = true;
+      const navigationsBefore = this.host.stampedNavigations();
       void this.isClientRuntimeReady()
         .then(ready => {
           if (ready && this.host.getClient() && this.host.getStatus() === EngineStatus.AUTHENTICATING) {
             this.host.logger.warn('WhatsApp Web ready event was missed; reconciling from connected runtime state');
+            // The library's own `ready` closes the reload window a navigation opened while the session authenticated,
+            // and this promotion is the one that stands in for it. The probe found the helpers in the page it asked,
+            // which is what the window waits for; a navigation stamped while it was out is a newer one.
+            this.host.closeRecoveredEpisode(navigationsBefore);
             this.host.markReadyFromClientInfo();
           } else if (this.host.getStatus() === EngineStatus.AUTHENTICATING) {
             this.maybeReloadDeadBridge();
