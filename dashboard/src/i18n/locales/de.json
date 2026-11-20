@@ -99,6 +99,8 @@
     "loadingOlderMessages": "Ältere Nachrichten werden geladen...",
     "loadOlderMessagesError": "Ältere Nachrichten konnten nicht geladen werden. Zum erneuten Versuch nach oben scrollen.",
     "loadOlderMessagesRetryHint": "Zum erneuten Versuch nach oben scrollen.",
+    "refreshMessagesError": "Nachrichten konnten nicht aktualisiert werden. Zum erneuten Versuch tippen.",
+    "refreshMessagesRetryHint": "Zum erneuten Versuch tippen.",
     "noMessagesInChat": "Noch keine Nachrichten. Sende die erste Nachricht, um zu beginnen!",
     "downloadDocument": "Dokument herunterladen",
     "actions": {

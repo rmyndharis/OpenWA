@@ -80,6 +80,10 @@ interface ChatThreadProps {
   /** Whether an older page of this chat's history exists. */
   hasMoreMessages: boolean;
   loadingOlderMessages: boolean;
+  /** Whether the failure shown is that of a refresh of a thread that has pages: the strip retries it when pressed. */
+  refreshFailed?: boolean;
+  /** Whether a request for the thread is running, which a pressed retry of a refresh is. */
+  refreshing?: boolean;
   onLoadOlderMessages: () => void;
   onMediaLoad: (event?: { currentTarget: Element | null }) => void;
   /** Seeds each media element's pre-decode height; see useChatScrollPosition.measureMedia. */
@@ -117,6 +121,8 @@ function ChatThread({
   messagesContainerRef,
   hasMoreMessages,
   loadingOlderMessages,
+  refreshFailed = false,
+  refreshing = false,
   onLoadOlderMessages,
   onMediaLoad,
   measureMedia,
@@ -512,25 +518,41 @@ function ChatThread({
           messages already loaded, which must not fall through to the full-screen error below: that would
           replace the loaded thread with a placeholder, collapsing the scroll container so the failed
           page can never be retried by scrolling. */}
-      {!loadingMessages && (loadingOlderMessages || (messagesError && visibleMessages.length > 0)) && (
-        <div className={loadingOlderMessages ? 'messages-loading-older' : 'messages-loading-older failed'}>
-          {loadingOlderMessages ? (
-            <>
-              <Loader2 className="animate-spin" size={18} />
-              <span>{t('chats.loadingOlderMessages')}</span>
-            </>
-          ) : (
-            <>
-              <AlertCircle size={18} />
-              {/* The whole sentence, or only the retry instruction when the thread is too narrow to fit
-                  the whole one in two lines: Chats.css shows one of them, and hides the other from
-                  assistive technology as well. */}
-              <span className="older-failure-full">{t('chats.loadOlderMessagesError')}</span>
-              <span className="older-failure-hint">{t('chats.loadOlderMessagesRetryHint')}</span>
-            </>
-          )}
-        </div>
-      )}
+      {!loadingMessages &&
+        (loadingOlderMessages || (messagesError && visibleMessages.length > 0)) &&
+        // A refresh that failed is not retried by scrolling up (a thread with no older page has no such trigger, and
+        // one too short to scroll cannot raise it), so its strip is the retry.
+        (refreshFailed && !loadingOlderMessages ? (
+          <button
+            type="button"
+            className="messages-loading-older failed retry"
+            disabled={refreshing}
+            aria-busy={refreshing}
+            onClick={onLoadOlderMessages}
+          >
+            {refreshing ? <Loader2 className="animate-spin" size={18} /> : <AlertCircle size={18} />}
+            <span className="older-failure-full">{t('chats.refreshMessagesError')}</span>
+            <span className="older-failure-hint">{t('chats.refreshMessagesRetryHint')}</span>
+          </button>
+        ) : (
+          <div className={loadingOlderMessages ? 'messages-loading-older' : 'messages-loading-older failed'}>
+            {loadingOlderMessages ? (
+              <>
+                <Loader2 className="animate-spin" size={18} />
+                <span>{t('chats.loadingOlderMessages')}</span>
+              </>
+            ) : (
+              <>
+                <AlertCircle size={18} />
+                {/* The whole sentence, or only the retry instruction when the thread is too narrow to fit
+                    the whole one in two lines: Chats.css shows one of them, and hides the other from
+                    assistive technology as well. */}
+                <span className="older-failure-full">{t('chats.loadOlderMessagesError')}</span>
+                <span className="older-failure-hint">{t('chats.loadOlderMessagesRetryHint')}</span>
+              </>
+            )}
+          </div>
+        ))}
       {loadingMessages ? (
         <div className="messages-loading">
           <Loader2 className="animate-spin" size={32} />

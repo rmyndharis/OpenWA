@@ -99,6 +99,8 @@
     "loadingOlderMessages": "正在加载更早的消息...",
     "loadOlderMessagesError": "无法加载更早的消息。向上滚动重试。",
     "loadOlderMessagesRetryHint": "向上滚动重试。",
+    "refreshMessagesError": "无法刷新消息。点按重试。",
+    "refreshMessagesRetryHint": "点按重试。",
     "noMessagesInChat": "暂无消息。发送第一条消息即可开始！",
     "downloadDocument": "下载文档",
     "actions": {

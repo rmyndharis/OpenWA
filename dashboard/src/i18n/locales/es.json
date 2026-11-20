@@ -102,6 +102,8 @@
     "loadingOlderMessages": "Cargando mensajes anteriores...",
     "loadOlderMessagesError": "No se pudieron cargar los mensajes anteriores. Desplázate hacia arriba para reintentar.",
     "loadOlderMessagesRetryHint": "Desplázate hacia arriba para reintentar.",
+    "refreshMessagesError": "No se pudieron actualizar los mensajes. Toca para reintentar.",
+    "refreshMessagesRetryHint": "Toca para reintentar.",
     "noMessagesInChat": "Aún no hay mensajes. ¡Envía el primero para empezar!",
     "downloadDocument": "Descargar documento",
     "actions": {

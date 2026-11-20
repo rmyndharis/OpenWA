@@ -181,6 +181,9 @@ let storedReadStatus = 200;
 // whatsapp-web.js thread takes: a failure that comes after the read of the chat is due.
 let storedReadDelayMs = 0;
 let historyDelayMs = 0;
+// The status the first page of Carol's thread answers, and a gate that holds that answer open.
+let carolFirstStatus = 200;
+let carolFirstGate: Promise<void> | null = null;
 // Rows Carol's older page serves after the fixture rows (oldest last, as the gateway orders them).
 let olderPageExtra: ChatMessage[] = [];
 
@@ -355,6 +358,12 @@ function installFetchStub(): void {
       const query = new URLSearchParams(path.slice(path.indexOf('?') + 1));
       if (query.get('chatId') === CHAT_2.id) {
         const isFirstPage = Number(query.get('offset')) === 0;
+        if (isFirstPage && carolFirstStatus !== 200) {
+          // The status the request was made under, whenever its answer comes.
+          const status = carolFirstStatus;
+          const refused = () => jsonResponse({ message: 'refused' }, status);
+          return carolFirstGate ? carolFirstGate.then(refused) : Promise.resolve(refused());
+        }
         if (!isFirstPage && olderPageFails) return Promise.resolve(jsonResponse({ message: 'boom' }, 500));
         const messages = isFirstPage ? PAGED_NEWEST : [...PAGED_OLDEST, ...olderPageExtra];
         // `total` deliberately does NOT equal the 120 rows actually served (PAGED_NEWEST.length +
@@ -497,6 +506,8 @@ afterEach(async () => {
   storedReadStatus = 200;
   storedReadDelayMs = 0;
   historyDelayMs = 0;
+  carolFirstStatus = 200;
+  carolFirstGate = null;
   olderPageExtra = [];
   chatsResponder = null;
   for (const id of Object.keys(lidPhones)) delete lidPhones[id];
@@ -3964,6 +3975,102 @@ test('a failed older-page fetch does not blank an already-loaded thread', async 
     assert.match(inline!.textContent ?? '', /couldn.t load older messages/i);
     assert.ok(inline!.classList.contains('failed'), 'the failure is styled to stay at the top of the thread');
   });
+});
+
+// A refresh that fails after a reconnect leaves the newest page stale. Scrolling up asks for an older page, which a thread
+// with none, or too short to scroll, cannot do, so the strip itself is the retry; a thread with an older page also
+// retries by scrolling up, and a retry that is already running is not started again.
+test('a failed refresh of a thread with no older page is retried by pressing the strip', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  // 50 rows: one short page, so there is no older page.
+  firstPageOverride = Array.from({ length: 50 }, (_, i) => ({
+    ...DB_MESSAGE,
+    id: `short-${i}`,
+    waMessageId: `wamid.short.${i}`,
+    body: `short row ${i}`,
+    timestamp: 1_700_000_000 + (50 - i),
+    createdAt: new Date((1_700_000_000 + (50 - i)) * 1000).toISOString(),
+  }));
+  const { container } = renderChats();
+  await screen.findByText(SESSION.name);
+  fireEvent.click(await screen.findByText('Alice'));
+  const thread = container.querySelector('.room-messages') as HTMLElement;
+  await within(thread).findByText('short row 0');
+
+  storedReadStatus = 503;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  const strip = await waitFor(() => {
+    const found = thread.querySelector('button.messages-loading-older.failed.retry') as HTMLButtonElement | null;
+    assert.ok(found, 'a failed refresh shows a strip that can be pressed');
+    return found;
+  });
+  assert.match(strip.textContent ?? '', /couldn.t refresh the messages/i);
+  assert.doesNotMatch(strip.textContent ?? '', /scroll up/i, 'a refresh is not retried by scrolling');
+
+  storedReadStatus = 200;
+  resetFetchCalls();
+  fireEvent.click(strip);
+  await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older.failed') === null, 'the failure stayed'));
+  const firstPageReads = fetchCalls.filter(
+    call =>
+      call.method === 'GET' &&
+      call.path.startsWith(`/api/sessions/${SESSION.id}/messages?chatId=${encodeURIComponent(CHAT.id)}`),
+  );
+  assert.equal(firstPageReads.length, 1, 'the strip asked for the newest page once');
+});
+
+test('a failed refresh of a thread with an older page is also retried by scrolling up, and by the strip', async () => {
+  const { fireEvent, waitFor } = rtl;
+  const { container } = renderChats();
+  const thread = await openPagedChat(container);
+  carolFirstStatus = 503;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  await waitFor(() => assert.ok(thread.querySelector('button.messages-loading-older.failed.retry'), 'the strip shows'));
+
+  carolFirstStatus = 200;
+  resetFetchCalls();
+  makeScrollable(thread, 0);
+  fireEvent.scroll(thread);
+  await waitFor(() => assert.equal(countFetchCalls('GET', pagedMessagesPath(0)), 1), { timeout: 3_000 });
+  await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older.failed') === null));
+});
+
+test('a refresh retry that is already running is not started again by the next scroll or press', async () => {
+  const { fireEvent, waitFor } = rtl;
+  const { container } = renderChats();
+  const thread = await openPagedChat(container);
+  carolFirstStatus = 503;
+  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+  const strip = await waitFor(() => {
+    const found = thread.querySelector('button.messages-loading-older.failed.retry') as HTMLButtonElement | null;
+    assert.ok(found, 'the strip shows');
+    return found;
+  });
+  // The retry is held open, as a slow gateway would.
+  let release!: () => void;
+  carolFirstGate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  resetFetchCalls();
+  makeScrollable(thread, 60);
+  fireEvent.scroll(thread);
+  await waitFor(() => assert.equal(countFetchCalls('GET', pagedMessagesPath(0)), 1));
+  (thread as unknown as { scrollTop: number }).scrollTop = 30;
+  fireEvent.scroll(thread);
+  (thread as unknown as { scrollTop: number }).scrollTop = 5;
+  fireEvent.scroll(thread);
+  fireEvent.click(strip);
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(countFetchCalls('GET', pagedMessagesPath(0)), 1, 'a running retry was restarted');
+  assert.equal(strip.disabled, true, 'the strip stays pressed while the retry runs');
+  // The retry that was running is refused too, and the strip is pressable again; the next press loads the thread.
+  carolFirstGate = null;
+  release();
+  const pressable = () => thread.querySelector('button.messages-loading-older.failed.retry:not(:disabled)');
+  await waitFor(() => assert.ok(pressable() !== null, 'the strip stayed pressed after the retry failed'));
+  carolFirstStatus = 200;
+  fireEvent.click(pressable() as HTMLButtonElement);
+  await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older.failed') === null));
 });
 
 test('a delivery ack reaches a message held by an older page', async () => {

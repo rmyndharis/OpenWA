@@ -67,7 +67,8 @@ export function loadMoreOfThread(
     'isRefetchError' | 'isFetchNextPageError' | 'refetch' | 'fetchNextPage'
   >,
 ): Promise<unknown> {
-  return refreshFailed(query) ? query.refetch() : query.fetchNextPage();
+  // A refresh already running is the retry: asking again would cancel it and send its page requests once more.
+  return refreshFailed(query) ? query.refetch({ cancelRefetch: false }) : query.fetchNextPage();
 }
 
 /** Whether the strip's retry is a refresh: the thread has pages, and the failure was not an older page's. */

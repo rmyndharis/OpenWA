@@ -99,6 +99,8 @@
     "loadingOlderMessages": "Memuat pesan lama...",
     "loadOlderMessagesError": "Gagal memuat pesan lama. Gulir ke atas untuk mencoba lagi.",
     "loadOlderMessagesRetryHint": "Gulir ke atas untuk mencoba lagi.",
+    "refreshMessagesError": "Gagal menyegarkan pesan. Ketuk untuk mencoba lagi.",
+    "refreshMessagesRetryHint": "Ketuk untuk mencoba lagi.",
     "noMessagesInChat": "Belum ada pesan. Kirim pesan pertama untuk memulai!",
     "downloadDocument": "Unduh dokumen",
     "actions": {

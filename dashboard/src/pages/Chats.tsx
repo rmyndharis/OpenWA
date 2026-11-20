@@ -400,6 +400,7 @@ export function Chats() {
     isFetchingNextPage: loadingOlderMessages,
     isRefetchError: threadRefreshError,
     isFetchNextPageError: olderPageError,
+    isFetching: fetchingMessages,
     refetch: refetchMessages,
     fetchNextPage,
   } = useChatMessages(
@@ -2596,6 +2597,11 @@ export function Chats() {
                   messagesContainerRef={messagesContainerRef}
                   hasMoreMessages={Boolean(hasMoreMessages)}
                   loadingOlderMessages={loadingOlderMessages}
+                  refreshFailed={refreshFailed({
+                    isRefetchError: threadRefreshError,
+                    isFetchNextPageError: olderPageError,
+                  })}
+                  refreshing={fetchingMessages}
                   onLoadOlderMessages={handleLoadOlderMessages}
                   onMediaLoad={onMediaLoad}
                   measureMedia={measureMedia}

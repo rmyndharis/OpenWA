@@ -102,6 +102,8 @@
     "loadingOlderMessages": "Carregando mensagens anteriores...",
     "loadOlderMessagesError": "Não foi possível carregar mensagens anteriores. Role para cima para tentar novamente.",
     "loadOlderMessagesRetryHint": "Role para cima para tentar novamente.",
+    "refreshMessagesError": "Não foi possível atualizar as mensagens. Toque para tentar novamente.",
+    "refreshMessagesRetryHint": "Toque para tentar novamente.",
     "noMessagesInChat": "Ainda não há mensagens. Envie a primeira para começar!",
     "downloadDocument": "Baixar documento",
     "actions": {

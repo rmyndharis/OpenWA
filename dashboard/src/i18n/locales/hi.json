@@ -99,6 +99,8 @@
     "loadingOlderMessages": "पुराने संदेश लोड हो रहे हैं...",
     "loadOlderMessagesError": "पुराने संदेश लोड नहीं किए जा सके। पुनः प्रयास करने के लिए ऊपर स्क्रॉल करें।",
     "loadOlderMessagesRetryHint": "पुनः प्रयास करने के लिए ऊपर स्क्रॉल करें।",
+    "refreshMessagesError": "संदेश रीफ़्रेश नहीं किए जा सके। पुनः प्रयास करने के लिए टैप करें।",
+    "refreshMessagesRetryHint": "पुनः प्रयास करने के लिए टैप करें।",
     "noMessagesInChat": "अभी तक कोई संदेश नहीं। आरंभ करने के लिए पहला संदेश भेजें!",
     "downloadDocument": "दस्तावेज़ डाउनलोड करें",
     "actions": {

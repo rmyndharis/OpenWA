@@ -99,6 +99,8 @@
     "loadingOlderMessages": "이전 메시지 불러오는 중...",
     "loadOlderMessagesError": "이전 메시지를 불러오지 못했습니다. 위로 스크롤하여 다시 시도하세요.",
     "loadOlderMessagesRetryHint": "위로 스크롤하여 다시 시도하세요.",
+    "refreshMessagesError": "메시지를 새로 고치지 못했습니다. 탭하여 다시 시도하세요.",
+    "refreshMessagesRetryHint": "탭하여 다시 시도하세요.",
     "noMessagesInChat": "아직 메시지가 없습니다. 첫 메시지를 보내 대화를 시작하세요!",
     "downloadDocument": "문서 다운로드",
     "actions": {

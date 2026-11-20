@@ -105,6 +105,8 @@
     "loadingOlderMessages": "טוען הודעות ישנות יותר...",
     "loadOlderMessagesError": "טעינת ההודעות הישנות נכשלה. גלול למעלה כדי לנסות שוב.",
     "loadOlderMessagesRetryHint": "גלול למעלה כדי לנסות שוב.",
+    "refreshMessagesError": "רענון ההודעות נכשל. הקש כדי לנסות שוב.",
+    "refreshMessagesRetryHint": "הקש כדי לנסות שוב.",
     "noMessagesInChat": "אין הודעות עדיין. שלח את ההודעה הראשונה כדי להתחיל!",
     "downloadDocument": "הורדת מסמך",
     "actions": {

@@ -99,6 +99,8 @@
     "loadingOlderMessages": "正在載入較舊的訊息...",
     "loadOlderMessagesError": "無法載入較舊的訊息。向上捲動重試。",
     "loadOlderMessagesRetryHint": "向上捲動重試。",
+    "refreshMessagesError": "無法重新整理訊息。輕按重試。",
+    "refreshMessagesRetryHint": "輕按重試。",
     "noMessagesInChat": "尚無訊息。傳送第一則訊息即可開始！",
     "downloadDocument": "下載文件",
     "actions": {

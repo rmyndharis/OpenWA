@@ -99,6 +99,8 @@
     "loadingOlderMessages": "Daha eski mesajlar yükleniyor...",
     "loadOlderMessagesError": "Daha eski mesajlar yüklenemedi. Tekrar denemek için yukarı kaydırın.",
     "loadOlderMessagesRetryHint": "Tekrar denemek için yukarı kaydırın.",
+    "refreshMessagesError": "Mesajlar yenilenemedi. Tekrar denemek için dokunun.",
+    "refreshMessagesRetryHint": "Tekrar denemek için dokunun.",
     "noMessagesInChat": "Henüz mesaj yok. Başlamak için ilk mesajı gönderin!",
     "downloadDocument": "Belgeyi indir",
     "actions": {
