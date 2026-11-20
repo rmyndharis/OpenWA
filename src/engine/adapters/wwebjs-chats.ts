@@ -212,6 +212,36 @@ export async function listChats(host: WwebjsEngineHost, context: string): Promis
 }
 
 /**
+ * The neutral summary of one chat that carries a serialized id. The chat list and the chats of a label are the same
+ * rows (docs/06), so both are built here and a field is never added to one and forgotten in the other.
+ */
+export function summarizeChat(chat: Chat, id: string): ChatSummary {
+  const lastMessage =
+    chat.lastMessage && !isNotice(chat.lastMessage) && !isUnlistedContentless(chat.lastMessage)
+      ? chat.lastMessage
+      : undefined;
+
+  return {
+    id,
+    name: chat.name || id,
+    isGroup: Boolean(chat.isGroup),
+    kind: chatKind(id),
+    unreadCount: chat.unreadCount || 0,
+    timestamp: chat.timestamp || 0,
+    // A location message's body is the base64 map thumbnail; don't surface it as the chat preview.
+    lastMessage:
+      lastMessage?.type === MessageTypes.LOCATION ? '📍' : (lastMessage && wwebjsBody(lastMessage)) || undefined,
+    lastMessageType: lastMessage ? mapWwebjsMessageType(lastMessage.type) : undefined,
+    archived: Boolean(chat.archived),
+    pinned: Boolean(chat.pinned),
+    // Chat.isMuted is the current verdict; muteExpiration is wwjs epoch SECONDS with -1 = forever.
+    muted: Boolean(chat.isMuted),
+    // Expose the expiry as ms (0 = indefinite), present only when muted, per ChatSummary.
+    muteExpiration: chat.isMuted ? ((chat.muteExpiration ?? 0) > 0 ? (chat.muteExpiration ?? 0) * 1000 : 0) : undefined,
+  };
+}
+
+/**
  * Chat-list operations extracted from WhatsAppWebJsAdapter. The adapter keeps the public methods as
  * thin forwarders and injects the shared host surface (./wwebjs-host) via closures, so the delegate
  * never touches lifecycle state directly. Presence (sendChatState) resolves the recipient through
@@ -244,34 +274,7 @@ export class WwebjsChats {
         skipped++;
         continue;
       }
-
-      const lastMessage =
-        chat.lastMessage && !isNotice(chat.lastMessage) && !isUnlistedContentless(chat.lastMessage)
-          ? chat.lastMessage
-          : undefined;
-
-      summaries.push({
-        id,
-        name: chat.name || id,
-        isGroup: Boolean(chat.isGroup),
-        kind: chatKind(id),
-        unreadCount: chat.unreadCount || 0,
-        timestamp: chat.timestamp || 0,
-        // A location message's body is the base64 map thumbnail; don't surface it as the chat preview.
-        lastMessage:
-          lastMessage?.type === MessageTypes.LOCATION ? '📍' : (lastMessage && wwebjsBody(lastMessage)) || undefined,
-        lastMessageType: lastMessage ? mapWwebjsMessageType(lastMessage.type) : undefined,
-        archived: Boolean(chat.archived),
-        pinned: Boolean(chat.pinned),
-        // Chat.isMuted is the current verdict; muteExpiration is wwjs epoch SECONDS with -1 = forever.
-        muted: Boolean(chat.isMuted),
-        // Expose the expiry as ms (0 = indefinite), present only when muted, per ChatSummary.
-        muteExpiration: chat.isMuted
-          ? (chat.muteExpiration ?? 0) > 0
-            ? (chat.muteExpiration ?? 0) * 1000
-            : 0
-          : undefined,
-      });
+      summaries.push(summarizeChat(chat, id));
     }
 
     if (skipped > 0) {

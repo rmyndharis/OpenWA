@@ -128,23 +128,7 @@ export interface BusinessClient extends Omit<
 > {
   getLabels(): Promise<Array<{ id: string; name: string; hexColor: string }>>;
   /** Chats carrying a label. whatsapp-web.js has the read but exposes no label create/update/delete. */
-  getChatsByLabelId(labelId: string): Promise<
-    Array<
-      | {
-          id?: { _serialized?: string };
-          name?: string;
-          isGroup?: boolean;
-          unreadCount?: number;
-          timestamp?: number;
-          archived?: boolean;
-          pinned?: boolean;
-          isMuted?: boolean;
-          muteExpiration?: number;
-          lastMessage?: { type: string };
-        }
-      | undefined
-    >
-  >;
+  getChatsByLabelId(labelId: string): Promise<Array<Chat | undefined>>;
   getChannels(): Promise<WwjsChannelData[]>;
   /** Takes a channel ID (`…@newsletter`), NOT an invite code; resolves true only on success. */
   subscribeToChannel(channelId: string): Promise<boolean>;

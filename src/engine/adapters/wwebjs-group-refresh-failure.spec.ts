@@ -241,10 +241,26 @@ describe('getChatsByLabel when a group on the label fails an invariant', () => {
 
     const common = { unreadCount: 1, timestamp: 1_700_000_000, archived: false, pinned: false, muted: false };
     expect(summaries).toEqual([
-      { id: PERSONAL, name: 'Alice', isGroup: false, kind: 'individual', lastMessageType: 'text', ...common },
-      // Served locally: no last message, so no lastMessageType.
+      {
+        id: PERSONAL,
+        name: 'Alice',
+        isGroup: false,
+        kind: 'individual',
+        lastMessage: 'hi',
+        lastMessageType: 'text',
+        ...common,
+      },
+      // Served locally: no last message, so no lastMessage and no lastMessageType.
       { id: GROUP, name: 'Coex group', isGroup: true, kind: 'group', lastMessageType: undefined, ...common },
-      { id: OTHER_GROUP, name: 'Team', isGroup: true, kind: 'group', lastMessageType: 'text', ...common },
+      {
+        id: OTHER_GROUP,
+        name: 'Team',
+        isGroup: true,
+        kind: 'group',
+        lastMessage: 'hi',
+        lastMessageType: 'text',
+        ...common,
+      },
     ]);
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('1 group(s) from local metadata'),
