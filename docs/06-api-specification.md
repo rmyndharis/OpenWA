@@ -763,7 +763,7 @@ A stopped session stays down: boot auto-start (`AUTO_START_SESSIONS`) and the mu
 
 An accepted stop on an expired or missing foreign lease clears that claim in the same write, except while a delete holds it. Repeated stops during a delete preserve every claim field so the deleting node can renew; an independent stop remains if that delete is refused. If the former owner still runs, its next successful heartbeat detects lease loss and retires its engine. The stop response does not wait for that remote teardown.
 
-**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` · `403` · `404` not found · `409` another node currently holds this session's live engine (multi-node deployments) · `502` `SESSION_STOP_INCOMPLETE` — session stopped locally but the engine teardown did not complete (retryable; the graceful disconnect and the force-destroy escalation both failed, status `disconnected`, no success audit) · `503` the database did not answer the read of the session or the check of whether another node holds it (nothing was stopped; retry)
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` · `403` · `404` not found · `409` another node currently holds this session's live engine (multi-node deployments) · `502` `SESSION_STOP_INCOMPLETE` — session stopped locally but the engine teardown did not complete (retryable; the graceful disconnect and the force-destroy escalation both failed, status `disconnected`, no success audit) · `503` the database did not answer the read of the session, the check of whether another node holds it or the write that records the stop (nothing was stopped; a stop whose record the database did not confirm may have been recorded, and repeating it is safe; retry)
 
 #### POST /api/sessions/:sessionId/logout
 
@@ -853,7 +853,7 @@ Returned via `transformSession`; status becomes `disconnected` and `phone` is cl
 auto-start does not resurrect the session). Recorded in the audit log as `session_logged_out`,
 distinguishing an intentional unlink from a plain stop.
 
-**Errors:** `400` session is not started (no engine to send through; the row is left untouched) · `401` · `403` · `404` not found · `409` Baileys: the session has no linked device, so there is nothing to unlink (stopped locally; `phone` cleared, no success audit; `start` it to link a device, or `delete` it) · `502` `SESSION_LOGOUT_INCOMPLETE` — session stopped locally but the logout operation did not complete (retryable; `phone` cleared, no success audit)
+**Errors:** `400` session is not started (no engine to send through; the row is left untouched) · `401` · `403` · `404` not found · `409` Baileys: the session has no linked device, so there is nothing to unlink (stopped locally; `phone` cleared, no success audit; `start` it to link a device, or `delete` it) · `502` `SESSION_LOGOUT_INCOMPLETE` — session stopped locally but the logout operation did not complete (retryable; `phone` cleared, no success audit) · `503` the database did not answer the read of the session (nothing was logged out; retry)
 
 #### POST /api/sessions/:sessionId/force-kill
 
@@ -892,7 +892,7 @@ Returned via `transformSession`.
 
 Like `stop`, a force-killed session stays down across restarts and takeover until an explicit `POST /start`; a `400` refusal records nothing.
 
-**Errors:** `400` session is not started (no live engine to kill) · `401` · `403` · `404` not found · `502` `SESSION_FORCE_KILL_INCOMPLETE`: session stopped locally but the engine force-kill did not complete (status `disconnected`, no success audit; a retry answers `400` because the engine is no longer registered, so restart the node to reap a leaked process)
+**Errors:** `400` session is not started (no live engine to kill) · `401` · `403` · `404` not found · `502` `SESSION_FORCE_KILL_INCOMPLETE`: session stopped locally but the engine force-kill did not complete (status `disconnected`, no success audit; a retry answers `400` because the engine is no longer registered, so restart the node to reap a leaked process) · `503` the database did not answer the read of the session (nothing was killed; retry)
 
 #### POST /api/sessions/:sessionId/pairing-code
 
@@ -1377,7 +1377,7 @@ The delete removes no file from the media store. The session's received-status m
 
 An auth directory that is a symbolic link (a profile relocated onto another volume) is removed as a link only: what it points to stays in place, with any WhatsApp login stored there, and a warning in the log names it (`action=engine_purge_link`). Remove that directory by hand to destroy the login.
 
-**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session, or key role below OPERATOR · `404` session not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; on a `409` the row is **not** deleted and no hook/auth-purge runs — retry after cleanup settles), or, on a multi-node deployment, another node currently holds this session's live engine (no `code`; nothing is deleted; send the delete to the owning node), or ownership changed during removal (earlier batches may already be removed) · `503` the session could not be read, checked or claimed for the delete because the database did not answer (nothing is deleted; retry), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed; retry)
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session, or key role below OPERATOR · `404` session not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; on a `409` the row is **not** deleted and no hook/auth-purge runs — retry after cleanup settles), or, on a multi-node deployment, another node currently holds this session's live engine (no `code`; nothing is deleted; send the delete to the owning node), or ownership changed during removal (earlier batches may already be removed) · `503` the session could not be read, checked, claimed or recorded for the delete because the database did not answer (nothing is deleted; a delete whose record the database did not confirm may have been recorded, and repeating it is safe; retry), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed; retry)
 
 ### 6.4.2 Messages
 

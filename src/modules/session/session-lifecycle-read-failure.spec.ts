@@ -257,6 +257,92 @@ describe('a stop or delete whose row read fails before it acts answers 503', () 
   });
 });
 
+describe('a logout or force-kill whose row read fails before it acts answers 503', () => {
+  beforeEach(() => jest.spyOn(console, 'warn').mockImplementation(() => undefined));
+  afterEach(() => jest.restoreAllMocks());
+
+  it.each([
+    ['logout', 'nothing was logged out'],
+    ['forceKill', 'nothing was killed'],
+  ] as const)('%s() with an engine loaded: %s', async (verb, said) => {
+    const f = stack(1);
+
+    const error = await outcome(f.service[verb](ID));
+
+    expect(f.failed).toBe('repo.findOne');
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as Error).message).toContain(said);
+    expect(f.effects).toEqual([]);
+    expect(f.marked()).toBe(false);
+    expect(f.requests.size).toBe(0);
+  });
+
+  it.each(['logout', 'forceKill'] as const)(
+    '%s() whose row read the database rejected keeps that error',
+    async verb => {
+      const f = stack(1, { error: rejected });
+
+      await expect(f.service[verb](ID)).rejects.toBeInstanceOf(QueryFailedError);
+    },
+  );
+});
+
+/**
+ * The write that records a stop or a delete runs before anything is taken down or removed: a database that did not
+ * answer it has stopped and deleted nothing, though it may have applied the statement before the connection dropped.
+ */
+describe('a stop or delete whose record write fails before it acts answers 503', () => {
+  beforeEach(() => jest.spyOn(console, 'warn').mockImplementation(() => undefined));
+  afterEach(() => jest.restoreAllMocks());
+
+  it.each([true, false])('stop() with an engine loaded: %s', async engine => {
+    // The holder check and the lifecycle's read of the row, then the stop record.
+    const f = stack(3, { engine });
+
+    const error = await outcome(f.service.stop(ID));
+
+    expect(f.failed).toBe('repo.update desiredState');
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as Error).message).toContain('nothing was stopped');
+    expect((error as Error).message).toContain('may have been recorded');
+    expect(f.effects).toEqual([]);
+    expect(f.marked()).toBe(false);
+    expect(f.requests.size).toBe(0);
+  });
+
+  it.each([
+    [3, 'manager.query.update'],
+    [4, 'repo.update desiredState'],
+    [5, 'repo.update desiredState'],
+  ])('delete() whose write number %i fails', async (at, statement) => {
+    // The holder check and the claim, then the owner write and the two stop records.
+    const f = stack(at);
+
+    const error = await outcome(f.service.delete(ID));
+
+    expect(f.failed).toBe(statement);
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as Error).message).toContain('nothing was deleted');
+    expect((error as Error).message).toContain('may have been recorded');
+    expect(f.effects).toEqual([]);
+    expect(f.rowPresent).toBe(true);
+    expect(f.marked()).toBe(false);
+    expect(f.requests.size).toBe(0);
+  });
+
+  it('stop() whose record write the database rejected keeps that error', async () => {
+    const f = stack(3, { error: rejected });
+
+    await expect(f.service.stop(ID)).rejects.toBeInstanceOf(QueryFailedError);
+  });
+
+  it('delete() whose record write the database rejected keeps that error', async () => {
+    const f = stack(4, { error: rejected });
+
+    await expect(f.service.delete(ID)).rejects.toBeInstanceOf(QueryFailedError);
+  });
+});
+
 describe('the answers beside that read keep their own status', () => {
   beforeEach(() => jest.spyOn(console, 'warn').mockImplementation(() => undefined));
   afterEach(() => jest.restoreAllMocks());

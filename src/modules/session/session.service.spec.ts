@@ -3295,7 +3295,7 @@ describe('SessionService', () => {
         const row = await seed({ nodeId: 'dead-node', leaseExpiresAt: new Date(Date.now() - 60_000) });
         (repository.findOne as jest.Mock).mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
 
-        await expect(call(service, row.id)).rejects.toThrow('Connection terminated unexpectedly');
+        await expect(call(service, row.id)).rejects.toBeInstanceOf(ServiceUnavailableException);
 
         expect(await nodeIdOf(row.id)).toBe('dead-node');
       });

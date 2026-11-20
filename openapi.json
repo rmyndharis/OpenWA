@@ -901,7 +901,7 @@
             }
           },
           "503": {
-            "description": "The session could not be read, checked or claimed for the delete because the database did not answer (nothing is deleted), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed). Retry the delete.",
+            "description": "The session could not be read, checked, claimed or recorded for the delete because the database did not answer (nothing is deleted; a delete whose record the database did not confirm may have been recorded, and repeating it is safe), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed). Retry the delete.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1421,7 +1421,7 @@
             }
           },
           "503": {
-            "description": "The database did not answer the read of the session or the check of whether another node holds it, so nothing was stopped. Retry the stop.",
+            "description": "The database did not answer the read of the session, the check of whether another node holds it or the write that records the stop, so nothing was stopped. A stop whose record the database did not confirm may have been recorded, and repeating it is safe. Retry the stop.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1536,6 +1536,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "The database did not answer the read of the session, so nothing was logged out. Retry the logout.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Log out of WhatsApp (unlinks this device) and stop the session",
@@ -1611,6 +1621,16 @@
           },
           "502": {
             "description": "Session was stopped locally, but the engine force-kill did not complete (the force-destroy threw or timed out, so the engine process may still be running). The body carries `code: 'SESSION_FORCE_KILL_INCOMPLETE'`; the status is settled to `disconnected` and no success audit is written. Restart the node to reap a leaked process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database did not answer the read of the session, so nothing was killed. Retry the force-kill.",
             "content": {
               "application/json": {
                 "schema": {
