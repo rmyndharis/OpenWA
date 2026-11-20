@@ -1274,8 +1274,9 @@ adapter boundary — none silently stubs.
   that holds no group, so it is the `404`, and a `500` with a text is the retryable `503`. Whether a revoked or unknown
   link reaches the page as that answer has not been observed on a live account. Baileys answers `503` for `408` and
   `429`, `404` for every other `4xx`, and
-  rethrows a `5xx` as it came (a `500`). The adapter does not look the job up first, as the library's call did not: a
-  page without it answers the `404`, and a build without the module breaks the group reads before this route.
+  rethrows a `5xx` as it came (a `500`). The adapter looks the job up first, as the revoke does: a build whose
+  `WAWebGroupQueryJob` has no `queryGroupInvite` answers `501` before anything is asked of WhatsApp, where the
+  library's call died in the page and every code, valid ones included, was the `404` of an unknown invite.
 - **`deleteGroupPicture` and `deleteProfilePicture` (wwjs) need a WhatsApp Web build that has the picture delete job.**
   The adapter sends `requestDeletePicture` of `WAWebContactProfilePicThumbBridge` in the page, with the group id (or the
   account's own) built by `WAWebWidFactory`, and answers `501` where either is missing, before anything is asked of

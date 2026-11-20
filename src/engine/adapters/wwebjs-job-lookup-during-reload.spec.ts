@@ -4,7 +4,7 @@ import { WwebjsLifecycle } from './wwebjs-lifecycle';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EnginePageReloadingError, ENGINE_PAGE_RELOADING } from '../../common/errors/engine-page-reloading.error';
-import { deleteGroupPictureInPage, joinInviteInPage, revokeInviteInPage } from './wwebjs-groups';
+import { deleteGroupPictureInPage, joinInviteInPage, readInviteInfoInPage, revokeInviteInPage } from './wwebjs-groups';
 import { readStatusSetterInPage } from './wwebjs-profile';
 import { pinInPage } from './wwebjs-page-writes';
 
@@ -68,6 +68,7 @@ describe('a page that finds no job while a navigation lands on the call', () => 
   const SITES: Array<[string, unknown, (w: Wire) => Promise<unknown>]> = [
     ['the invite revoke', revokeInviteInPage, w => w.adapter.revokeGroupInviteCode(GROUP)],
     ['the group join', joinInviteInPage, w => w.adapter.joinGroupViaInviteCode('CODE')],
+    ['the invite preview', readInviteInfoInPage, w => w.adapter.getGroupJoinInfo('CODE')],
     ['the group picture delete', deleteGroupPictureInPage, w => w.adapter.deleteGroupPicture(GROUP)],
     ['the own picture delete', deleteGroupPictureInPage, w => w.adapter.deleteProfilePicture()],
     ['the About probe', readStatusSetterInPage, w => w.adapter.setProfileStatus('hello')],

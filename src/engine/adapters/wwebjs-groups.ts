@@ -184,18 +184,31 @@ export async function joinInviteInPage(
  * The preview of the library's own `getInviteInfo`, run IN-PAGE with the status WhatsApp gave: `queryGroupInvite` of
  * `WAWebGroupQueryJob`, called with the invite code as the library calls it, answering what it resolves. An invite
  * WhatsApp refuses, a rate limit, a timeout and a server error all reject `ServerStatusCodeError(status)`, which
- * Puppeteer hands over without its status, so all of them were the unknown invite. Like the library's call it does not
- * look the job up: a page without it rejects as the library's call did, which the caller reads as no such invite, and a
- * document with no `require` at all fails on it, the page that is reloading. The Mex job that a build runs in place of
- * the IQ job makes up a 500 with no text at all when its query answers no group and no error. That is no status
- * WhatsApp sent but an answer that holds no group, so it is the 404 of an unknown invite, where a 500 with a text is a
- * failure to retry. Any rejection that is not a status is rethrown. Self-contained, since Puppeteer ships it to the
- * page as source.
+ * Puppeteer hands over without its status, so all of them were the unknown invite. The library's call does not look the
+ * job up, so on a build whose module lost `queryGroupInvite` it died in the page with a TypeError, which was read as
+ * the unknown invite: every valid code was refused. From a page.evaluate Meta's `require` answers `undefined` for a
+ * module the page has not defined, and throws only inside a guard or before the page's error setup has run, so the
+ * lookup tests the answer and guards the throw; a build with no such job answers `'missing'` before anything was asked
+ * of WhatsApp. A document with no `require` at all is a page that is reloading, not a build without the job, and that
+ * failure is let through. The Mex job that a build runs in place of the IQ job makes up a 500 with no text at all when
+ * its query answers no group and no error. That is no status WhatsApp sent but an answer that holds no group, so it is
+ * the 404 of an unknown invite, where a 500 with a text is a failure to retry. Any rejection that is not a status is
+ * rethrown. Self-contained, since Puppeteer ships it to the page as source.
  */
-export async function readInviteInfoInPage(inviteCode: string): Promise<{ status: number; info?: unknown }> {
-  const w = window as unknown as { require: (m: string) => { queryGroupInvite: (code: string) => Promise<unknown> } };
+export async function readInviteInfoInPage(
+  inviteCode: string,
+): Promise<{ status: number; info?: unknown } | 'missing'> {
+  type PreviewJob = { queryGroupInvite: (code: string) => Promise<unknown> };
+  const w = window as unknown as { require: (m: string) => unknown };
+  let job: Partial<PreviewJob> | undefined;
   try {
-    return { status: 200, info: await w.require('WAWebGroupQueryJob').queryGroupInvite(inviteCode) };
+    job = w.require('WAWebGroupQueryJob') as Partial<PreviewJob> | undefined;
+  } catch (err) {
+    if (typeof w.require !== 'function') throw err;
+  }
+  if (typeof job?.queryGroupInvite !== 'function') return 'missing';
+  try {
+    return { status: 200, info: await job.queryGroupInvite(inviteCode) };
   } catch (err) {
     const failure = err as { name?: unknown; status?: unknown; message?: unknown } | undefined;
     if (typeof failure?.name === 'string' && failure.name.endsWith('ServerStatusCodeError')) {
@@ -744,6 +757,7 @@ export class WwebjsGroups {
    *
    * The preview is read in the page ({@link readInviteInfoInPage}), so that the status WhatsApp gave decides the answer:
    * a timeout, a rate limit or a server error is a 503 where it was the unknown invite, and any other status is the 404.
+   * A build whose job module has no preview call is the 501, and the code is not judged.
    */
   async getGroupJoinInfo(inviteCode: string): Promise<GroupJoinInfo> {
     this.host.ensureReady();
@@ -779,6 +793,12 @@ export class WwebjsGroups {
         error: error instanceof Error ? error.message : String(error),
       });
       throw new GroupNotFoundError(inviteCode);
+    }
+    // A build with no job to preview with: nothing was asked of WhatsApp, so the code was not judged and this is no
+    // unknown invite. A document a reload has just opened finds no job either, and that is the retryable 409.
+    if (answer === 'missing') {
+      throwIfNavigatedSince(this.host, since);
+      throw new EngineNotSupportedError('getGroupJoinInfo(no invite preview job on this build)');
     }
     // A timeout, a rate limit or a server error read nothing, and the same code may pass a moment later: the retryable
     // 503, as on Baileys. Any other status is the refused invite. Settled outside the try, which reads a failure of the
