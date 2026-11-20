@@ -768,7 +768,7 @@ test('a typed pairing phone number survives toggling to the QR tab and back', as
 
   // Wait for the eager GET .../qr fetch triggered by opening the modal to settle before driving
   // tab interactions, so its async setQrData doesn't land in the middle of the sequence below.
-  await screen.findByAltText('QR');
+  await screen.findByAltText('QR Code');
 
   fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
   const phoneInput = screen.getByLabelText('Phone Number') as HTMLInputElement;
@@ -794,7 +794,7 @@ test('a pairing phone number typed in native-script or full-width digits is kept
   await screen.findByText('new-device');
   const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
   fireEvent.click(within(qrCard).getByRole('button', { name: 'Show QR' }));
-  await screen.findByAltText('QR');
+  await screen.findByAltText('QR Code');
   fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
   const phoneInput = screen.getByLabelText('Phone Number') as HTMLInputElement;
 
@@ -815,7 +815,7 @@ test('the pairing phone field leaves a composition in progress alone and reads i
   await screen.findByText('new-device');
   const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
   fireEvent.click(within(qrCard).getByRole('button', { name: 'Show QR' }));
-  await screen.findByAltText('QR');
+  await screen.findByAltText('QR Code');
   fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
   const phoneInput = screen.getByLabelText('Phone Number') as HTMLInputElement;
   const fullwidth = (ascii: string) => [...ascii].map(d => String.fromCharCode(0xff10 + Number(d))).join('');
@@ -841,7 +841,7 @@ async function openPairingPhoneField() {
   await screen.findByText('new-device');
   const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
   fireEvent.click(within(qrCard).getByRole('button', { name: 'Show QR' }));
-  await screen.findByAltText('QR');
+  await screen.findByAltText('QR Code');
   fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
   return {
     phoneInput: screen.getByLabelText('Phone Number') as HTMLInputElement,
@@ -991,7 +991,7 @@ test('the phone pairing tab warns that a code can unlink an existing session', a
   await screen.findByText('new-device');
   const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
   fireEvent.click(within(qrCard).getByRole('button', { name: 'Show QR' }));
-  await screen.findByAltText('QR');
+  await screen.findByAltText('QR Code');
 
   fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
 
@@ -1012,7 +1012,7 @@ test('stopping a session dismisses its own open QR modal', async () => {
 
   // Wait for the eager GET .../qr fetch triggered by opening the modal to settle, same as the
   // toggle-persistence case above, so the assertion below isn't racing that fetch's state update.
-  await screen.findByAltText('QR');
+  await screen.findByAltText('QR Code');
   assert.ok(screen.getByRole('dialog'), 'expected the QR modal to be open before stopping the session');
 
   // SESSION_QR has engineLoaded: true, so isSessionStarted puts a no-confirmation Stop button on
@@ -1062,7 +1062,7 @@ test('a QR answer that lands after its modal closed changes nothing', async () =
     await screen.findByRole('dialog');
     closeModal();
     fireEvent.click(within(otherCard).getByRole('button', { name: 'Show QR' }));
-    await screen.findByAltText('QR');
+    await screen.findByAltText('QR Code');
     release();
     await new Promise(resolve => setTimeout(resolve, 50));
     const dialog = screen.getByRole('dialog');
@@ -1090,7 +1090,7 @@ test('a pairing code that lands after its modal closed changes nothing', async (
       let release: () => void = () => {};
       pairingGate = new Promise<void>(resolve => (release = resolve));
       fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
-      await screen.findByAltText('QR');
+      await screen.findByAltText('QR Code');
       fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
       fireEvent.change(screen.getByLabelText('Phone Number'), { target: { value: '919876543210' } });
       fireEvent.click(screen.getByRole('button', { name: 'Generate Pairing Code' }));
@@ -1098,7 +1098,7 @@ test('a pairing code that lands after its modal closed changes nothing', async (
       fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
 
       fireEvent.click(within(reopen).getByRole('button', { name: 'Show QR' }));
-      await screen.findByAltText('QR');
+      await screen.findByAltText('QR Code');
       fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
       const dialog = screen.getByRole('dialog');
       assert.ok(!within(dialog).queryByText('Generating pairing code...'), 'Generate stayed stuck on the old request');
@@ -1403,7 +1403,7 @@ test('a failed status push closes that session QR modal', async () => {
 
   const card = (await screen.findByText('new-device')).closest('.session-card') as HTMLElement;
   fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
-  await screen.findByAltText('QR');
+  await screen.findByAltText('QR Code');
 
   pushSessionStatus(SESSION_STALE_ENGINE.id, 'failed');
   assert.ok(screen.queryByRole('dialog'), "another session's failure closed this QR modal");
@@ -1470,7 +1470,7 @@ test('a disconnected push closes the QR modal once the re-read shows no engine',
 
     const card = (await screen.findByText('dropped')).closest('.session-card') as HTMLElement;
     fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
-    await screen.findByAltText('QR');
+    await screen.findByAltText('QR Code');
 
     Object.assign(row, { status: 'disconnected', engineLoaded: false });
     pushSessionStatus(row.id, 'disconnected');
@@ -1495,7 +1495,7 @@ test('a QR pushed while the disconnect re-read is in flight keeps the modal open
 
     const card = (await screen.findByText('raced')).closest('.session-card') as HTMLElement;
     fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
-    await screen.findByAltText('QR');
+    await screen.findByAltText('QR Code');
 
     // The server answer will say the engine is gone, which is what used to close the modal outright.
     Object.assign(row, { status: 'disconnected', engineLoaded: false });
@@ -1521,7 +1521,7 @@ test('a QR pushed while the disconnect re-read is in flight keeps the modal open
 
     // The fresh code is on screen, so the push really landed in the modal that is being judged.
     await waitFor(() =>
-      assert.equal((screen.getByAltText('QR') as HTMLImageElement).src, 'data:image/png;base64,FRESH'),
+      assert.equal((screen.getByAltText('QR Code') as HTMLImageElement).src, 'data:image/png;base64,FRESH'),
     );
     // And the handler's re-read has resolved, so the close decision has already been taken.
     await waitFor(() =>
@@ -1546,7 +1546,7 @@ test('a disconnected push keeps the QR modal while the engine is still registere
 
     const card = (await screen.findByText('backoff')).closest('.session-card') as HTMLElement;
     fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
-    await screen.findByAltText('QR');
+    await screen.findByAltText('QR Code');
 
     row.status = 'disconnected';
     pushSessionStatus(row.id, 'disconnected');
@@ -1574,12 +1574,12 @@ test('a disconnected push blanks the displayed QR code', async () => {
 
     const card = (await screen.findByText('blanked')).closest('.session-card') as HTMLElement;
     fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
-    await screen.findByAltText('QR');
+    await screen.findByAltText('QR Code');
 
     row.status = 'disconnected';
     pushSessionStatus(row.id, 'disconnected');
 
-    await waitFor(() => assert.ok(!screen.queryByAltText('QR'), 'the dead QR code stayed on screen'));
+    await waitFor(() => assert.ok(!screen.queryByAltText('QR Code'), 'the dead QR code stayed on screen'));
     assert.ok(screen.queryByRole('dialog'), 'the QR modal closed while the engine was still registered');
   } finally {
     SESSIONS.pop();
@@ -1598,7 +1598,7 @@ test('a disconnected push keeps the QR modal when the re-read fails', async () =
 
     const card = (await screen.findByText('unknown')).closest('.session-card') as HTMLElement;
     fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
-    await screen.findByAltText('QR');
+    await screen.findByAltText('QR Code');
 
     sessionListFailures = 1;
     pushSessionStatus(row.id, 'disconnected');
@@ -1631,7 +1631,7 @@ test('a disconnect re-read overtaken by a newer read still closes the QR modal',
     renderSessions();
     const card = (await screen.findByText('overtaken')).closest('.session-card') as HTMLElement;
     fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
-    await screen.findByAltText('QR');
+    await screen.findByAltText('QR Code');
     const reads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
 
     let releaseDisconnect: () => void = () => {};
@@ -2007,7 +2007,7 @@ test('the QR modal says WhatsApp asked for a passkey, on both tabs', async () =>
   const { screen, fireEvent, within } = rtl;
   await withQrSessionRestriction(PASSKEY_RESTRICTION, async card => {
     fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
-    await screen.findByAltText('QR');
+    await screen.findByAltText('QR Code');
 
     const note = screen.getByRole('status');
     assert.match(note.textContent ?? '', /WhatsApp asked for a passkey to finish linking this device/);
@@ -2026,7 +2026,7 @@ test('the QR modal carries no passkey note for another restriction or none', asy
   for (const restriction of [undefined, { kind: 'reachout_timelock' as const, code: 'BIZ_QUALITY' }]) {
     await withQrSessionRestriction(restriction, async card => {
       fireEvent.click(within(card).getByRole('button', { name: 'Show QR' }));
-      await screen.findByAltText('QR');
+      await screen.findByAltText('QR Code');
       assert.equal(screen.queryByText(/asked for a passkey/) === null, true);
     });
     rtl.cleanup();

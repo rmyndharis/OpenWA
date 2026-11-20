@@ -939,7 +939,11 @@ export function Sessions() {
               // QR Code Content
               qrData.qrCode ? (
                 <>
-                  <img src={qrData.qrCode} alt="QR" style={{ maxWidth: '280px', borderRadius: '12px' }} />
+                  <img
+                    src={qrData.qrCode}
+                    alt={t('sessions.pairing.tabQr')}
+                    style={{ maxWidth: '280px', borderRadius: '12px' }}
+                  />
                   <div className="qr-instructions">
                     <p className="qr-step">
                       <Trans i18nKey="sessions.qr.step1" components={{ strong: <strong /> }} />

@@ -71,7 +71,7 @@ async function openPairingDialog() {
   const card = (await rtl.screen.findByText('new-device')).closest('.session-card') as HTMLElement;
   rtl.fireEvent.click(rtl.within(card).getByRole('button', { name: 'Show QR' }));
   // The dialog fetches the QR when it opens; let that answer land before driving the tabs.
-  await rtl.screen.findByAltText('QR');
+  await rtl.screen.findByAltText('QR Code');
 }
 
 const tabNames = () => rtl.screen.getAllByRole('tab').map(tab => tab.textContent);
