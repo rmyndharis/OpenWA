@@ -1230,6 +1230,55 @@ describe('PluginsService — recovering a plugin whose code went missing', () =>
       expect(storage.getPluginConfig('svc-plg')).toEqual({ token: 'keep-me' });
     });
 
+    it('removes a subdirectory the failed install created', () => {
+      const { service } = orphan();
+
+      expect(() =>
+        service.install({
+          buffer: pkgWith([
+            ['lib/deep/x.txt', 'x'],
+            [TOO_LONG, 'x'],
+          ]),
+        }),
+      ).toThrow(BadRequestException);
+
+      expect(listing()).toEqual(['key-abc.json']);
+    });
+
+    it('removes the directories a mkdir created before it failed', () => {
+      const { service } = orphan();
+
+      // mkdir creates "docs" and then fails on the component past the 255-byte name limit.
+      expect(() => service.install({ buffer: pkgWith([[`docs/${'z'.repeat(300)}/readme.txt`, 'x']]) })).toThrow(
+        BadRequestException,
+      );
+
+      expect(listing()).toEqual(['key-abc.json']);
+    });
+
+    it('removes a new file whose write failed midway', () => {
+      const { service } = orphan();
+      const write = fs.writeFileSync;
+      // The write of a new file leaves part of it behind, as a full disk does, and then fails.
+      const spy = jest.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+        if (String(file).endsWith('fresh.js')) {
+          write(file, 'module.exp');
+          throw new Error('disk full');
+        }
+        write(file, data, options);
+      });
+
+      try {
+        expect(() => service.install({ buffer: pkgWith([['fresh.js', 'module.exports = 1;']]) })).toThrow(
+          /Failed to install plugin: disk full/,
+        );
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(listing()).toEqual(['key-abc.json']);
+    });
+
     it('puts back a stored file whose replacement failed midway', () => {
       const { service } = orphan();
       const write = fs.writeFileSync;

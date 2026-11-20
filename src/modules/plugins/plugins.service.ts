@@ -40,6 +40,13 @@ const CATALOG_MAX_BYTES = 1 * 1024 * 1024;
 const logger = createLogger('PluginsService');
 
 /** A change the plugin registry could not store is answered as not applied, like any other refused change. */
+/** The topmost directory of `target`'s path that does not exist yet, which is the first one a recursive mkdir creates. */
+function firstMissingDir(target: string): string | null {
+  let missing: string | null = null;
+  for (let current = target; !fs.existsSync(current); current = path.dirname(current)) missing = current;
+  return missing;
+}
+
 function notApplied(error: unknown): { success: boolean; message: string } {
   if (error instanceof PluginRegistryWriteError) return { success: false, message: error.message };
   throw error;
@@ -419,18 +426,28 @@ export class PluginsService {
     // files this install reached: the directory holds the operator's stored data, and deleting it to
     // undo a failed reinstall would destroy exactly what the reinstall promised to keep. A file the
     // install created is removed; one it replaced (an entry named like a stored file) gets its bytes
-    // back, so a failed reinstall leaves the directory as it found it.
+    // back, and a directory it created goes too, so a failed reinstall leaves the directory as it found it.
     const written: Array<{ dest: string; previous: Buffer | null }> = [];
+    // The first directory each mkdir is to create: nothing below it existed before, so all of it is this install's.
+    // Recorded before the call, since a mkdir that fails part-way (a name past the filesystem limit) leaves what it made.
+    const createdDirs: string[] = [];
     try {
       for (const entry of entries) {
         const dest = path.join(dir, entry.relPath);
+        const firstMissing = firstMissingDir(path.dirname(dest));
+        if (firstMissing) createdDirs.push(firstMissing);
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         const previous = fs.existsSync(dest) ? fs.readFileSync(dest) : null;
         // A file this install replaces is recorded before the write, because a write that fails midway leaves it
         // truncated. One it creates is recorded after, so a write that failed at open (a name too long for the
-        // filesystem) leaves nothing to undo.
+        // filesystem) leaves nothing to undo, unless the write failed after the file came to exist.
         if (previous !== null) written.push({ dest, previous });
-        fs.writeFileSync(dest, entry.data);
+        try {
+          fs.writeFileSync(dest, entry.data);
+        } catch (writeError) {
+          if (previous === null && fs.existsSync(dest)) written.push({ dest, previous });
+          throw writeError;
+        }
         if (previous === null) written.push({ dest, previous });
       }
       this.pluginLoader.loadPlugin(dir);
@@ -443,6 +460,17 @@ export class PluginsService {
             else fs.writeFileSync(dest, previous);
           } catch (undoError) {
             logger.warn(`Could not undo the write of ${dest} after a failed install of ${manifest.id}`, {
+              pluginId: manifest.id,
+              action: 'plugin_install_undo_failed',
+              error: undoError instanceof Error ? undoError.message : String(undoError),
+            });
+          }
+        }
+        for (const created of createdDirs.reverse()) {
+          try {
+            fs.rmSync(created, { recursive: true, force: true });
+          } catch (undoError) {
+            logger.warn(`Could not remove ${created} after a failed install of ${manifest.id}`, {
               pluginId: manifest.id,
               action: 'plugin_install_undo_failed',
               error: undoError instanceof Error ? undoError.message : String(undoError),
