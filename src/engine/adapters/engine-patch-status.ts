@@ -6,7 +6,8 @@ import * as path from 'path';
  *
  * The patches are applied two ways, and only one of them is loud. The Docker production stage runs
  * every patcher WITHOUT `--best-effort`, so an unrecognised source shape fails the image build. A
- * source install runs them through `scripts/postinstall.js` WITH `--best-effort`, where a patcher
+ * source install runs them through `scripts/postinstall.js` WITH `--best-effort`, except the Puppeteer
+ * transform, which aborts the install on a shape it does not recognise. Under `--best-effort` a patcher
  * that cannot apply prints one line into a long `npm install` transcript and the install still
  * succeeds. The operator then runs a tree that is missing a fix, and the symptom arrives later as
  * exactly the opaque failure the patch existed to remove: an unnamed 500, a send that reports no
@@ -95,12 +96,13 @@ export function unappliedPatches(family: PatchFamily, scriptsDir?: string, depDi
 
 /** The startup line for a non-empty `unappliedPatches` result. */
 export function unappliedPatchesMessage(family: PatchFamily, names: string[]): string {
+  const commands = names.map(name => `\`node scripts/${name}.js\``).join(', ');
   return (
     `The installed ${PACKAGE_FOR[family]} is missing ${names.length} of OpenWA's install-time ` +
     `patches: ${names.join(', ')}. The capabilities each one repairs will fail with errors that ` +
-    'name no cause. The install skipped them, usually because it ran with --ignore-scripts or ' +
-    'because a patcher refused a source shape it did not recognise. Apply them with ' +
-    `\`node scripts/${names[0]}.js\` (or reinstall with \`npm install\`) and restart. ` +
-    'See docs/12-troubleshooting-faq.md.'
+    'name no cause. The install skipped them. When it ran with --ignore-scripts, apply them with ' +
+    `${commands} (or reinstall with \`npm install\`) and restart. A patcher that refused a source shape ` +
+    'it did not recognise is not fixed by either: the library has moved and the transform needs ' +
+    're-evaluating. See docs/12-troubleshooting-faq.md.'
   );
 }
