@@ -1064,7 +1064,8 @@ export class MessageController {
   // GET /messages/batch/{batchId}, never as a status on this route. An absent engine is the 400 above.
   @ApiResponse({
     status: 400,
-    description: 'Session not active or invalid request',
+    description:
+      'Session not active or invalid request, including a media item whose `url` is not an absolute http(s) URL or carries a user name or password',
   })
   @ApiResponse({ status: 413, description: BULK_MEDIA_TOO_LARGE_413 })
   @ApiResponse({
