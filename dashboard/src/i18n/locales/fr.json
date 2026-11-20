@@ -632,7 +632,7 @@
     "filters": {
       "title": "Filtres (facultatif)",
       "hint": "Déclencher uniquement lorsque toutes les conditions sont remplies. S'applique aux événements de message.",
-      "incomplete": "Attribuez une valeur à chaque condition de filtre et utilisez au plus 20 conditions, 100 valeurs par condition et 1000 caractères de texte.",
+      "incomplete": "Attribuez une valeur à chaque condition de filtre et utilisez au plus 20 conditions, 100 valeurs par condition, 128 caractères par identifiant et 1000 caractères de texte.",
       "badge": "{{count}} filtre",
       "badge_other": "{{count}} filtres",
       "badge_many": "{{count}} filtres",

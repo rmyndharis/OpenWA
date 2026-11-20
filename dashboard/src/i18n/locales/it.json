@@ -632,7 +632,7 @@
     "filters": {
       "title": "Filtri (opzionale)",
       "hint": "Attiva solo quando tutte le condizioni corrispondono. Si applica agli eventi dei messaggi.",
-      "incomplete": "Assegna un valore a ogni condizione di filtro e usa al massimo 20 condizioni, 100 valori per condizione e 1000 caratteri di testo.",
+      "incomplete": "Assegna un valore a ogni condizione di filtro e usa al massimo 20 condizioni, 100 valori per condizione, 128 caratteri per ID e 1000 caratteri di testo.",
       "badge": "{{count}} filtro",
       "badge_other": "{{count}} filtri",
       "badge_many": "{{count}} filtri",

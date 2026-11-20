@@ -627,7 +627,7 @@
     "filters": {
       "title": "Filter (optional)",
       "hint": "Wird nur ausgelöst, wenn alle Bedingungen erfüllt sind. Gilt für Nachrichtenereignisse.",
-      "incomplete": "Gib jeder Filterbedingung einen Wert und verwende höchstens 20 Bedingungen, 100 Werte pro Bedingung und 1000 Zeichen Text.",
+      "incomplete": "Gib jeder Filterbedingung einen Wert und verwende höchstens 20 Bedingungen, 100 Werte pro Bedingung, 128 Zeichen pro ID und 1000 Zeichen Text.",
       "badge": "{{count}} Filter",
       "badge_other": "{{count}} Filter",
       "addCondition": "Bedingung hinzufügen",

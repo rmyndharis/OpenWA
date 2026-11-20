@@ -627,7 +627,7 @@
     "filters": {
       "title": "Filtreler (isteğe bağlı)",
       "hint": "Yalnızca tüm koşullar eşleştiğinde tetiklenir. Mesaj olayları için geçerlidir.",
-      "incomplete": "Her filtre koşuluna bir değer verin ve en fazla 20 koşul, koşul başına 100 değer ve 1000 karakter metin kullanın.",
+      "incomplete": "Her filtre koşuluna bir değer verin ve en fazla 20 koşul, koşul başına 100 değer, kimlik başına 128 karakter ve 1000 karakter metin kullanın.",
       "badge": "{{count}} filtre",
       "badge_other": "{{count}} filtre",
       "addCondition": "Koşul ekle",

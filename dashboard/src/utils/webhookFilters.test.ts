@@ -38,3 +38,9 @@ test('the gateway limits are enforced', () => {
     true,
   );
 });
+
+test('a chat id entry past the gateway limit of 128 characters is incomplete', () => {
+  const entry = (length: number) => '1'.repeat(length - '@g.us'.length) + '@g.us';
+  assert.equal(filtersIncomplete({ conditions: [sender([entry(128)])] }), false);
+  assert.equal(filtersIncomplete({ conditions: [sender(['1@c.us', entry(129)])] }), true);
+});

@@ -627,7 +627,7 @@
     "filters": {
       "title": "Filters (optional)",
       "hint": "Only fire when all conditions match. Applies to message events.",
-      "incomplete": "Give every filter condition a value, and use at most 20 conditions, 100 values per condition and 1000 characters of text.",
+      "incomplete": "Give every filter condition a value, and use at most 20 conditions, 100 values per condition, 128 characters per ID and 1000 characters of text.",
       "badge": "{{count}} filter",
       "badge_other": "{{count}} filters",
       "addCondition": "Add condition",

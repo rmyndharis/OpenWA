@@ -553,7 +553,7 @@ export function Webhooks() {
             <span className="hint error" role="status">
               {t(
                 'webhooks.filters.incomplete',
-                'Give every filter condition a value, and use at most 20 conditions, 100 values per condition and 1000 characters of text.',
+                'Give every filter condition a value, and use at most 20 conditions, 100 values per condition, 128 characters per ID and 1000 characters of text.',
               )}
             </span>
           )}
@@ -647,7 +647,7 @@ export function Webhooks() {
             <span className="hint error" role="status">
               {t(
                 'webhooks.filters.incomplete',
-                'Give every filter condition a value, and use at most 20 conditions, 100 values per condition and 1000 characters of text.',
+                'Give every filter condition a value, and use at most 20 conditions, 100 values per condition, 128 characters per ID and 1000 characters of text.',
               )}
             </span>
           )}
