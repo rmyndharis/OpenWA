@@ -218,6 +218,8 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
       setStatus: status => this.lifecycle.setStatus(status),
       getCallbacks: () => this.callbacks,
       markReadyFromClientInfo: () => this.lifecycle.markReadyFromClientInfo(),
+      stampedNavigations: () => this.lifecycle.stampedNavigations(),
+      closeRecoveredEpisode: navigationsBefore => this.lifecycle.closeRecoveredEpisode(navigationsBefore),
       wasFreshPairing: () => this.lifecycle.qrShown,
       recoverFromStuckAuth: () => this.recoverFromStuckAuth(),
     });

@@ -129,6 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python SDK: the call link `startTime` is typed `int`, as the gateway refuses a fraction with `400`; the PHP docblock and the Go, Java and JavaScript field comments say a whole number.
 - Python SDK: the source distribution ships `tests/conftest.py`, so the tests run from the unpacked archive.
 - whatsapp-web.js: a send or forward that met a page reload after its first attempt had run answers a `409` that says the message may or may not have been sent, where it said to retry; a forward refused there keeps its send pacing admission, as it keeps its `Idempotency-Key`.
+- whatsapp-web.js: a session promoted to `ready` after its `ready` event was missed no longer answers the page reload `409` for up to a minute when WhatsApp Web had navigated while it authenticated; the promotion closes the window the probe has just found the helpers through, unless another navigation landed meanwhile (#2139).
 
 ### Documentation
 
@@ -182,6 +183,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A process that reads the local media directory or the storage export archives as a user other than the one the gateway runs as, such as a static file server or a backup job under another uid, loses access: the media root becomes `0700` at the next boot, whatever `STORAGE_TYPE` is, `data/exports` becomes `0700`, and new files are `0600`. Files written earlier keep their mode but sit under the `0700` root. A media directory the gateway does not own keeps its mode and a warning is logged at boot. Run such a reader as the gateway's user (the image runs as `openwa`). With `STORAGE_TYPE=s3` the directory matters only while it still holds files: those stored before the move to s3 and the fallback written while the bucket was unreachable.
 - Baileys lists `name` as "" for a chat held under a privacy id that has no saved, verified or push name, with its `phone` when the session maps the id, where 0.30.3 listed the id's own digits: title such a chat by `phone`, else by `id`. This reaches `GET /api/sessions/{sessionId}/chats`, the MCP `SessionGetChats` tool and a plugin's `getChats`. Every Baileys chat `name` is also trimmed, and a blank name of any other chat lists the contact's name or the id's digits, where 0.30.3 listed it as it came.
 - In a plugin config list with a secret column, a row that differs from another only by its secret, and was edited or removed in a save of the same length in which a row moved, is saved without its secret; enter that secret again (see `docs/19-plugin-architecture.md`).
+- The `409` a whatsapp-web.js session answers while WhatsApp Web reloads its page has a new message ("Retry every few seconds: this can last a few minutes.") and carries `code` `ENGINE_PAGE_RELOADING` and `retryAfterSeconds`. A client that matched the old text, "Retry in a few seconds.", must match the `code`.
 
 ## [0.30.3] - 2026-11-16
 

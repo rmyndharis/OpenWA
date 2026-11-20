@@ -102,7 +102,7 @@ A few refusals add a stable machine-readable `code`, so a client can branch with
 | `SESSION_FORCE_KILL_INCOMPLETE` | `502`  | The engine did not confirm the force-kill; its process may still be running                                                                   |
 | `SEND_PACING_LIMITED`           | `429`  | Send pacing refused the send; the body also carries `retryAfterSeconds`                                                                       |
 | `ENGINE_PAGE_ERROR`             | `500`  | whatsapp-web.js: WhatsApp Web rejected the operation in the page; the body also carries `pageError` and, when the page could read it, `build` |
-| `ENGINE_PAGE_RELOADING`         | `409`  | whatsapp-web.js: WhatsApp Web is reloading its page and the request was not carried out; the body also carries `retryAfterSeconds`            |
+| `ENGINE_PAGE_RELOADING`         | `409`  | whatsapp-web.js: WhatsApp Web is reloading its page; the request is safe to repeat, and the body also carries `retryAfterSeconds`             |
 | `RESTART_DATABASE_NOT_STARTED`  | `409`  | The built-in PostgreSQL the restart starts did not start; nothing was stopped, and a configuration saved since boot was put back              |
 | `RESTART_ALREADY_RUNNING`       | `409`  | Another restart request is running, or the server is already restarting                                                                       |
 | `IMPORT_ALREADY_RUNNING`        | `409`  | Another data import is in progress                                                                                                            |

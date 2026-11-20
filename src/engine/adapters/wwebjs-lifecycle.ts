@@ -1520,7 +1520,7 @@ export class WwebjsLifecycle {
    * every LATER navigation via the episode cap. Only an episode this answer can speak for: a navigation stamped
    * while the read was pending is a newer one.
    */
-  private closeRecoveredEpisode(navigationsBefore: number): void {
+  closeRecoveredEpisode(navigationsBefore: number): void {
     if (navigationsBefore !== this.navigationCount) return;
     this.clearNavigationReinjectWindow();
     this.reinjectUnverifiedSince = 0;

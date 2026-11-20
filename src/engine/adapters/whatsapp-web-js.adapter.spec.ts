@@ -2403,6 +2403,80 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     expect(onReady).toHaveBeenCalledTimes(1);
   });
 
+  // WhatsApp Web navigates while the session authenticates (a reload at startup, or OpenWA's own reload of a page whose
+  // event bridge never attached). The navigation stamps the reload window, and the library's `ready` closes it. A
+  // `ready` that is missed leaves the promotion to this reconciliation, and the session would then read ready while
+  // every call answered the reload 409 for up to a minute, though the probe had just found the helpers in the page.
+  describe('a navigation before the session is ready', () => {
+    const IDENT = 'https://web.whatsapp.com/';
+    const withNavigatingPage = (adapter: WhatsAppWebJsAdapter, overrides: Partial<FakeClient> = {}) => {
+      const pupPage = Object.assign(new EventEmitter(), { evaluate: jest.fn().mockResolvedValue(true) });
+      const attached = attachFakeClient(adapter, { pupPage, pupBrowser: new EventEmitter() } as Partial<FakeClient>);
+      Object.assign(attached.client, overrides);
+      (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.attachPuppeteerLifecycleListeners();
+      return { ...attached, pupPage };
+    };
+    const navigate = (pupPage: EventEmitter): void => void pupPage.emit('framenavigated', { url: () => IDENT });
+
+    it('is not a reload window once the reconciliation finds the helpers in the page and promotes the session', async () => {
+      jest.useFakeTimers();
+      const adapter = newAdapter();
+      const { client, pupPage } = withNavigatingPage(adapter);
+
+      client.emit('authenticated');
+      navigate(pupPage);
+      await jest.advanceTimersByTimeAsync(2100);
+
+      expect(adapter.getStatus()).toBe(EngineStatus.READY);
+      expect((adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.isInNavigationReinjectWindow()).toBe(
+        false,
+      );
+      // The guard every call of the engine begins with.
+      expect(() => (adapter as unknown as { ensureReady(): void }).ensureReady()).not.toThrow();
+    });
+
+    it('stays a reload window when another navigation lands while the probe is out', async () => {
+      jest.useFakeTimers();
+      const adapter = newAdapter();
+      let answer!: (found: boolean) => void;
+      const { client, pupPage } = withNavigatingPage(adapter);
+      pupPage.evaluate.mockReturnValueOnce(
+        new Promise<boolean>(resolve => {
+          answer = resolve;
+        }),
+      );
+
+      client.emit('authenticated');
+      navigate(pupPage);
+      await jest.advanceTimersByTimeAsync(2100);
+      // The probe read the helpers from the document it asked, which a newer navigation has since replaced.
+      navigate(pupPage);
+      answer(true);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(adapter.getStatus()).toBe(EngineStatus.READY);
+      expect((adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.isInNavigationReinjectWindow()).toBe(
+        true,
+      );
+      await expect(adapter.getChats()).rejects.toMatchObject({ response: { code: 'ENGINE_PAGE_RELOADING' } });
+    });
+
+    it('is closed by the library ready event as before', () => {
+      jest.useFakeTimers();
+      const adapter = newAdapter();
+      const { client, pupPage } = withNavigatingPage(adapter);
+
+      client.emit('authenticated');
+      navigate(pupPage);
+      client.emit('ready');
+
+      expect(adapter.getStatus()).toBe(EngineStatus.READY);
+      expect((adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.isInNavigationReinjectWindow()).toBe(
+        false,
+      );
+    });
+  });
+
   it('does not promote while the runtime is connected but client info is not populated yet', async () => {
     jest.useFakeTimers();
 
