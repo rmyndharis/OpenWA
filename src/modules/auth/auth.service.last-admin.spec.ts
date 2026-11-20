@@ -51,6 +51,22 @@ describe('AuthService last-admin guard and expiring admins', () => {
     await expect(service.revoke(b)).resolves.toMatchObject({ isActive: false });
   });
 
+  // The body of an update may carry role: null, which the validation lets through and the patch ignores: it changes
+  // no role, so on the only admin it is no demotion.
+  it('lets the only admin be renamed or restricted by IP when the body also carries role: null', async () => {
+    const sole = await admin('sole', null);
+
+    await expect(service.update(sole, { name: 'renamed', role: null } as never)).resolves.toMatchObject({
+      name: 'renamed',
+      role: ApiKeyRole.ADMIN,
+    });
+    await expect(service.update(sole, { allowedIps: ['10.0.0.0/8'], role: null } as never)).resolves.toMatchObject({
+      role: ApiKeyRole.ADMIN,
+    });
+    await expect(service.update(sole, { role: ApiKeyRole.OPERATOR })).rejects.toThrow(ConflictException);
+    expect((await repo.findOneByOrFail({ id: sole })).role).toBe(ApiKeyRole.ADMIN);
+  });
+
   it('lets an expiring admin go when another admin lasts at least as long', async () => {
     const old = await admin('old', inHours(1));
     await admin('rotated', inHours(24 * 30));

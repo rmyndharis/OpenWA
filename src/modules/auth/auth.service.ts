@@ -311,8 +311,9 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
 
     // Scoping the last unscoped admin (non-empty allowedSessions) strips key-management just as
     // surely as demoting or expiring it: @RequireUnscopedKey would then 403 every lifecycle route.
+    // A role that is null (or empty) is read as no role by the patch below, so it demotes nothing.
     const stripsAdmin =
-      (dto.role !== undefined && dto.role !== ApiKeyRole.ADMIN) ||
+      (!!dto.role && dto.role !== ApiKeyRole.ADMIN) ||
       (normalizeScopeList(dto.allowedSessions)?.length ?? 0) > 0 ||
       (normalizeChatAllowList(dto.allowedChats)?.length ?? 0) > 0;
     const expiry = dto.expiresAt ? AuthService.parseExpiry(dto.expiresAt) : null;
