@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Baileys: a connect, reconnect or session start no longer leaves a key cache and its ten-minute timer running for the life of the process.
 - Baileys: a group's second and later settings changes, the lid to phone pairs of a history sync and every answer to an event that the library buffers in one window are delivered, through a new install-time patch, `scripts/patch-baileys-event-buffer.js`.
 - Baileys: a link preview built from a fetched page cuts its title to 256 and its description to 1024 characters, as a supplied preview is held to, where a page could put hundreds of thousands into the message.
+- Plugins: an install or an update answers `400` naming the field for a manifest whose `ingress` is not a list or whose hmac-sha256 `contentTemplate` is not a string, where an update stopped the running plugin first; the boot scan refuses the same manifests.
+- Plugins: `ctx.storage` no longer reads or deletes the plugin's own `manifest.json` or `package.json` through the keys `./manifest`, `./package` or a spelling the filesystem folds to them, which made the plugin stop loading at the next boot.
+- Plugins: a reinstall into the surviving plugin directory that fails after an entry replaced a stored file puts that file back, where the rollback deleted it.
+- Plugins: the boot scan no longer renames or deletes a dot-directory such as `.cache.bak` or `.tmp.new` in the plugins directory unless it holds that plugin's package, where it treated it as an interrupted update's leftover.
+- Plugins: the boot scan logs a warning when a plugin directory is a symbolic link, which it does not follow, where it skipped it without a line in the log.
+- MCP: a tool's `sessionId` takes letters, digits and hyphens, at most 128 characters, as the REST routes do, where any string reached the lookup and was echoed whole into the not-found answer.
+- Webhooks: the OpenAPI schema and the Python and JavaScript SDK types of the update request declare that a `null` `secret` clears it, as the route has always accepted.
 - Drop the restriction, error, presence and claim state of sessions an infra data import removes, so the restricted-sessions gauge stops counting them and no false lost-claim warning follows.
 - `backup.sh` and `restore.sh` read a `PLUGINS_DIR` exported empty as the app does, as unset to its default directory, where they took the directory `./.env` named.
 - Baileys: a poll vote on the account's own broadcast-list poll is reported only when it arrives in a 1:1 chat, as documented; a vote from a group, the list or the status chat was reported too.
