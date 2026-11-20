@@ -23,6 +23,23 @@ export class SsrfBlockedError extends Error {
  */
 export const SSRF_BLOCKED_CLIENT_MESSAGE = 'Destination address is not allowed';
 
+/** The text of the refusal of a URL that carries credentials: it repeats nothing of the URL. */
+export const URL_CREDENTIALS_MESSAGE = 'URL must not contain credentials (userinfo)';
+
+/**
+ * Whether a URL carries a user name or a password: the exact condition undici refuses to build a request for, with a
+ * TypeError whose text repeats the URL, credentials included. An empty userinfo (`http://@host/`) is accepted by
+ * undici, and an unparsable URL is left to the guard, which names it.
+ */
+export function urlCarriesCredentials(url: string): boolean {
+  try {
+    const { username, password } = new URL(url);
+    return username !== '' || password !== '';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Map an error to a client/surfaced message, redacting SSRF detail. An `SsrfBlockedError`'s message
  * names the resolved internal IP ("… resolves to a blocked internal address: 10.0.0.5") — a recon /
@@ -595,6 +612,9 @@ export async function withSafeFetch<T>(
   use: (response: Response) => Promise<T> | T,
   opts: { guard?: boolean; followRedirects?: boolean; proxyUrl?: string } = {},
 ): Promise<T> {
+  // undici would refuse the URL itself, with a text that repeats the credentials, and the callers carry the text of a
+  // failure into a response body or a stored delivery failure. Refuse it first, with a text that repeats nothing.
+  if (urlCarriesCredentials(rawUrl)) throw new Error(URL_CREDENTIALS_MESSAGE);
   const guard = opts.guard ?? true;
   if (!guard) {
     // Redirect-following is a separate decision from SSRF protection: an operator who disabled the
