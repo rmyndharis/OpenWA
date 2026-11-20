@@ -25,6 +25,7 @@ import {
   type WwebjsEngineHost,
   navigationsSeen,
   rethrowIfNavigation,
+  throwIfNavigatedSince,
   withPageWrite,
   reportPageDeath,
 } from './wwebjs-host';
@@ -700,6 +701,7 @@ export class WwebjsGroups {
 
   async revokeGroupInviteCode(groupId: string): Promise<string> {
     await this.requireGroupChat(groupId, 'revokeGroupInviteCode');
+    const since = navigationsSeen(this.host);
     const answer = await reportPageDeath(this.host, 'revokeGroupInviteCode', () =>
       this.page().evaluate(revokeInviteInPage, groupId),
     ).catch((error: unknown) => {
@@ -709,8 +711,10 @@ export class WwebjsGroups {
       if (isMissingRequireError(error)) throw new EnginePageReloadingError();
       throw error;
     });
-    // A build with no job to reset a code: nothing was asked of WhatsApp, so this is no refusal and no failure.
+    // A build with no job to reset a code: nothing was asked of WhatsApp, so this is no refusal and no failure. A
+    // document a reload has just opened finds no job either, and that is the retryable 409.
     if (answer === 'missing') {
+      throwIfNavigatedSince(this.host, since);
       throw new EngineNotSupportedError('revokeGroupInviteCode(no reset job on this build)');
     }
     // A status answer means WhatsApp refused it and rotated nothing, so a repeat converges: the 503 is safe here, where
@@ -815,6 +819,7 @@ export class WwebjsGroups {
     // group's id (`res.gid._serialized || res.gid.$1`) - already the neutral `<id>@g.us` dialect. A gid-less result is
     // the same client-facing outcome as a thrown refusal: no such invite (400, not a 500).
     let answer: Awaited<ReturnType<typeof joinInviteInPage>> | undefined;
+    const since = navigationsSeen(this.host);
     try {
       answer = await this.page().evaluate(joinInviteInPage, inviteCode);
     } catch (error) {
@@ -836,8 +841,10 @@ export class WwebjsGroups {
       }
       this.host.logger.warn(`Failed to accept group invite: ${String(error)}`);
     }
-    // A build with no job to join with: nothing was asked of WhatsApp, so this is no refused invite and no failure.
+    // A build with no job to join with: nothing was asked of WhatsApp, so this is no refused invite and no failure. A
+    // document a reload has just opened finds no job either, and that is the retryable 409.
     if (answer === 'missing') {
+      throwIfNavigatedSince(this.host, since);
       throw new EngineNotSupportedError('joinGroupViaInviteCode(no join job on this build)');
     }
     // The group has an admin approve new members: WhatsApp took the invite as a request to join, so the invite is good.
@@ -934,12 +941,16 @@ export class WwebjsGroups {
 
   async deleteGroupPicture(groupId: string): Promise<void> {
     await this.requireGroupChat(groupId, 'deleteGroupPicture');
+    const since = navigationsSeen(this.host);
     const status = await withPageWrite(this.host, 'deleteGroupPicture', () =>
       this.page().evaluate(deleteGroupPictureInPage, groupId),
     );
-    // A build with no job to send the delete: nothing was asked of WhatsApp, so this is no refusal and no failure.
-    if (status === 'missing')
+    // A build with no job to send the delete: nothing was asked of WhatsApp, so this is no refusal and no failure. A
+    // document a reload has just opened finds no job either, and that is the retryable 409.
+    if (status === 'missing') {
+      throwIfNavigatedSince(this.host, since);
       throw new EngineNotSupportedError('deleteGroupPicture(no picture delete job on this build)');
+    }
     this.host.logger.debug('WhatsApp answered the group picture delete', { groupId, status });
     // WhatsApp answers 200 for a group with no picture as for one it removed, so a repeat converges. A rate limit or
     // a server error deleted nothing, and the same request may pass later.

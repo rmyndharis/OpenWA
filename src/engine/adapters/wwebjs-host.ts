@@ -85,6 +85,17 @@ export function rethrowIfNavigation(host: WwebjsEngineHost, error: unknown, sinc
 }
 
 /**
+ * Answer the retryable 409 when a navigation was stamped since `since` ({@link navigationsSeen} where the call
+ * started), for a page function that answered "no such job" and not with a failure. A document a reload has just
+ * opened has not defined its modules yet, so a lookup on it finds none, as on a build that lacks the job, and the 501
+ * that says so is final. Nothing was asked of WhatsApp in either case. Returns when no navigation was stamped, which
+ * is a build that really lacks the job.
+ */
+export function throwIfNavigatedSince(host: WwebjsEngineHost, since: number): void {
+  if (navigationsSeen(host) !== since) throw new EnginePageReloadingError();
+}
+
+/**
  * Run a client operation, classifying a dead page/transport as the documented 503 plus an early
  * death signal instead of an opaque 500 under a status that still says READY - the split every
  * chats read already makes (#1081), and a page that navigated under the call as the 409 of

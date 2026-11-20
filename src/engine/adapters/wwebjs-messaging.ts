@@ -43,7 +43,13 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { EnginePageReloadingError } from '../../common/errors/engine-page-reloading.error';
 import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
-import { type WwebjsEngineHost, requireClient, withPageWrite } from './wwebjs-host';
+import {
+  type WwebjsEngineHost,
+  navigationsSeen,
+  requireClient,
+  throwIfNavigatedSince,
+  withPageWrite,
+} from './wwebjs-host';
 import { type EvaluatePage, type PinAnswer, pinInPage, settleWriteStatus } from './wwebjs-page-writes';
 import { isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
@@ -1433,9 +1439,12 @@ export class WwebjsMessaging {
   private pinThroughPage(op: 'pinMessage' | 'unpinMessage', chatId: string, messageId: string, durationSeconds = 0) {
     const pin = op === 'pinMessage';
     return withPageWrite(this.host, op, async (): Promise<PinAnswer> => {
+      const since = navigationsSeen(this.host);
       const message = await this.findInFetchWindow(chatId, messageId);
       const { pupPage } = this.client() as unknown as { pupPage: EvaluatePage };
       const answer = await pupPage.evaluate(pinInPage, message.id._serialized, pin, durationSeconds);
+      // A document a reload has just opened has no sender either: that is the retryable 409, not a build without one.
+      if (answer === 'missing') throwIfNavigatedSince(this.host, since);
       if (answer !== 'legacy') return answer;
       return pin ? message.pin(durationSeconds) : message.unpin();
     });
