@@ -125,7 +125,8 @@ const ERROR_RESPONSE: SchemaObject = {
         'SEND_PACING_LIMITED (429), ' +
         'ENGINE_PAGE_ERROR (500, whatsapp-web.js: WhatsApp Web threw inside the page during a send or status post), ' +
         'ENGINE_PAGE_RELOADING (409, whatsapp-web.js: WhatsApp Web is reloading its page; the request is safe to repeat), ' +
-        'IMPORT_ALREADY_RUNNING, EXPORT_IN_PROGRESS, IMPORT_WOULD_ORPHAN_ENGINES and IMPORT_NESTED_TRANSACTION (409), ' +
+        'IMPORT_ALREADY_RUNNING, EXPORT_IN_PROGRESS, IMPORT_WOULD_ORPHAN_ENGINES, IMPORT_NESTED_TRANSACTION, ' +
+        'RESTART_DATABASE_NOT_STARTED and RESTART_ALREADY_RUNNING (409), ' +
         'IDEMPOTENCY_KEY_INVALID (400), IDEMPOTENCY_KEY_REUSED (422), ' +
         'IDEMPOTENCY_KEY_IN_PROGRESS and IDEMPOTENCY_OUTCOME_UNKNOWN (409), ' +
         'POLL_OPTION_NOT_FOUND (400, whatsapp-web.js vote-poll).',
