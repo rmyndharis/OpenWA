@@ -470,10 +470,12 @@ export class BaileysEvents {
   private readonly messageChanges = new KeyedMutationQueue();
   private changesPreparing = 0;
   private preparationRoom?: { ready: Promise<void>; release: () => void };
-  private retirePreparations!: () => void;
-  private preparationsRetired = new Promise<void>(resolve => {
-    this.retirePreparations = resolve;
-  });
+  /**
+   * What fenceStoredWrites runs to end the preparations still under way, one entry per preparation until it has
+   * ended. Each settles the promises that preparation waits on itself: racing them against a promise the adapter
+   * keeps for good would leave a reaction on it for every change, for as long as the account stays linked.
+   */
+  private readonly preparationRetirements = new Set<() => void>();
 
   private static readonly CHANGES_PARKED_LIMIT = 64;
 
@@ -532,11 +534,10 @@ export class BaileysEvents {
   /** Drop the store writes of every message that arrived before now; call before wiping the store. */
   fenceStoredWrites(): void {
     this.storeGeneration++;
-    const retire = this.retirePreparations;
-    this.preparationsRetired = new Promise<void>(resolve => {
-      this.retirePreparations = resolve;
-    });
-    retire();
+    const retirements = [...this.preparationRetirements];
+    this.preparationRetirements.clear();
+    for (const retire of retirements) retire();
+    this.wakePreparationWaiters();
   }
 
   /** Whether a delete for everyone of this message was accepted (see deletedForEveryone). */
@@ -1130,7 +1131,6 @@ export class BaileysEvents {
     work: (releasePreparation: () => void) => Promise<void>,
   ): Promise<void> {
     if (opts.generation !== this.storeGeneration) return;
-    const retired = this.preparationsRetired;
     if (!messageId) {
       if (opts.generation === this.storeGeneration) await work(() => undefined);
       return;
@@ -1144,7 +1144,7 @@ export class BaileysEvents {
         });
         this.preparationRoom = { ready, release };
       }
-      await Promise.race([this.preparationRoom.ready, retired]);
+      await this.preparationRoom.ready;
       if (opts.generation !== this.storeGeneration) return;
     }
     this.changesPreparing++;
@@ -1163,16 +1163,29 @@ export class BaileysEvents {
         if (opts.generation === this.storeGeneration) await work(releasePreparation);
       })().then(finish, fail);
       try {
-        await Promise.race([preparing, released, retired]);
+        await Promise.race([preparing, released]);
       } finally {
         this.changesPreparing--;
-        const room = this.preparationRoom;
-        this.preparationRoom = undefined;
-        room?.release();
+        this.wakePreparationWaiters();
       }
     });
-    const settled = Promise.race([done, retired]);
-    await (opts.yieldSlot ? opts.yieldSlot(() => settled) : settled);
+    const retire = (): void => {
+      releasePreparation();
+      finish();
+    };
+    this.preparationRetirements.add(retire);
+    try {
+      await (opts.yieldSlot ? opts.yieldSlot(() => done) : done);
+    } finally {
+      this.preparationRetirements.delete(retire);
+    }
+  }
+
+  /** Wake the arrivals waiting for room; each looks again for room, and whether its store was fenced meanwhile. */
+  private wakePreparationWaiters(): void {
+    const room = this.preparationRoom;
+    this.preparationRoom = undefined;
+    room?.release();
   }
 
   private async processMessageChange(
