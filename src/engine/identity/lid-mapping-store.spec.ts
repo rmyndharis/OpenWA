@@ -4484,6 +4484,28 @@ describe('LidMappingStoreService: a lid whose table write is still under way', (
       await answers('628333');
     });
 
+    // The entry leaves the mirror while the negative's statement is under way: the negative has cleared the row all the
+    // same, so the mark that guarded the row it replaced ends with it and the lid answers what the table holds.
+    describe.each([
+      ['later lids pushed its entry out of the mirror', pushOut],
+      ['a reload left its entry out of the mirror', () => store.reload()],
+    ] as const)('and %s while its statement is under way', (_state, leave) => {
+      it('answers the table again once the negative has cleared the row', async () => {
+        await failReport();
+        const clearing = hold('update');
+        const negative = store.remember('333', null, OWNER);
+        await clearing.reached;
+        await leave();
+        clearing.release();
+        await expect(negative).resolves.toBe(true);
+        expect((await repo.findOneBy({ lid: '333' }))?.phone).toBeNull();
+        await peerRemaps('628333');
+
+        expect(evicted()).toBe(0);
+        await answers('628333');
+      });
+    });
+
     it('answers the table after a reload, which replaces it', async () => {
       await failReport();
       await pushOut();

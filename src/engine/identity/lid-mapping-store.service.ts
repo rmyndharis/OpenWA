@@ -795,7 +795,9 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
     }
     // A newer report of a phone owns the cached entry. A newer negative says what this one did, so the entry goes
     // now: left to that negative, it would stay if its statement failed, answering a phone the table has cleared.
-    const latest = writing?.latestReport as { phone: string | null } | undefined;
+    // Read through latestActual: an eviction or a reload erases latestReport while this statement is under way, and
+    // the marks that guarded the row it cleared must still end with it.
+    const latest = writing?.latestActual as { phone: string | null } | undefined;
     if (latest !== report && latest?.phone !== null) return;
     const cached = this.lidToPhone.get(lid);
     this.lidToPhone.delete(lid);
