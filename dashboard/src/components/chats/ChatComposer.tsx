@@ -195,7 +195,8 @@ function ChatComposer({
   );
   // A template exactly as it was inserted is not sent: the Enter that follows an insert is a slip, not a decision.
   // Once the operator has edited it the text is theirs to send, with the notice still up while a placeholder is.
-  const templateUnfilled = placeholderLeft && templateTexts.includes(messageInput);
+  // Compared as the send reads the draft, trimmed: whitespace around the template edits nothing of what goes out.
+  const templateUnfilled = placeholderLeft && templateTexts.includes(messageInput.trim());
 
   // Escape dismisses the emoji picker instead of closing the conversation behind it.
   //
