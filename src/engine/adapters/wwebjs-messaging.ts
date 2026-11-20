@@ -487,13 +487,16 @@ export class WwebjsMessaging {
    * rethrows unchanged. Not for the send itself, whose failure leaves the outcome unknown.
    */
   private async readBeforeSend<T>(context: string, read: () => Promise<T>): Promise<T> {
+    const since = navigationsSeen(this.host);
     try {
       return await read();
     } catch (error) {
       this.host.reportIfPageTransportError(error, context);
       this.ensureReadyToSend();
-      // A reload that cut the read short is the retryable 409 every other call gets for it, and nothing was sent.
-      if (isNavigationError(error)) throw markNothingSent(new EnginePageReloadingError());
+      // A reload that cut the read short, by what the failure says or by a navigation stamped while it ran, is the
+      // retryable 409 every other call gets for it, and nothing was sent.
+      if (isNavigationError(error, navigationsSeen(this.host) !== since) && !this.host.isPageTransportError(error))
+        throw markNothingSent(new EnginePageReloadingError());
       if (isProtocolTimeout(error))
         throw new EngineNotSentError(`WhatsApp Web did not answer the ${context} read in time`);
       throw error;

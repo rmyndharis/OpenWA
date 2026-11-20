@@ -22,7 +22,8 @@ import { readStatusSetterInPage } from './wwebjs-profile';
 import { runWriteInPage } from './wwebjs-page-writes';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { hasUnknownOutcome } from '../../common/errors/engine-not-sent.error';
+import { hasUnknownOutcome, provesNothingSent } from '../../common/errors/engine-not-sent.error';
+import { countsTowardSendBreaker } from '../../modules/message/send-pacing.service';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
@@ -473,6 +474,44 @@ describe('a call that a page navigation lands on', () => {
 
     it.each(UNKNOWN)('%s: with no navigation stamped the answer is unchanged', async (_name, route) => {
       await expect(route(wire(false))).rejects.toBeInstanceOf(TypeError);
+    });
+  });
+
+  // The read before a reply or a forward sends nothing, so a reload that cuts it is the retryable 409 and no fault for
+  // the send breaker. Inside the grace of a fresh navigation the readiness check answers that before the failure is
+  // read; once the page has kept navigating past the grace, the failure is all there is to read.
+  describe('the read before a reply or a forward, once the page has kept navigating past the reload grace', () => {
+    const PAST_GRACE = (w: Wire) => {
+      (w.lifecycle as unknown as { navigationEpisodeStartedAt: number }).navigationEpisodeStartedAt =
+        Date.now() - 4 * 60_000;
+      return w;
+    };
+    const READS: Array<[string, (w: Wire) => Promise<unknown>]> = [
+      ['a reply', w => w.adapter.replyToMessage('628111@c.us', 'quoted-1', 'hello')],
+      ['a forward', w => w.adapter.forwardMessage('628111@c.us', '628222@c.us', 'm-1')],
+    ];
+
+    it.each(READS)(
+      '%s: a navigation stamped during the read answers the retryable 409 and sent nothing',
+      async (_what, call) => {
+        const w = PAST_GRACE(wire(true));
+        w.client.getChatById = w.fail('getChat');
+
+        const error: unknown = await call(w).catch((e: unknown) => e);
+
+        expect(w.lifecycle.isInNavigationReinjectWindow()).toBe(false);
+        expect(error).toBeInstanceOf(EngineNotReadyError);
+        expect(error).toMatchObject({ response: { code: 'ENGINE_PAGE_RELOADING', retryAfterSeconds: 5 } });
+        expect(provesNothingSent(error)).toBe(true);
+        expect(countsTowardSendBreaker(error)).toBe(false);
+      },
+    );
+
+    it.each(READS)('%s: with no navigation stamped the failure is unchanged', async (_what, call) => {
+      const w = PAST_GRACE(wire(false));
+      w.client.getChatById = w.fail('getChat');
+
+      await expect(call(w)).rejects.toBeInstanceOf(TypeError);
     });
   });
 
