@@ -556,7 +556,7 @@ On the Baileys engine the list is rebuilt after a restart from the messages the 
 
 On the Baileys engine a chat deleted on WhatsApp (on the phone or through `chats/delete`) is left out until a newer message re-creates it, and the deletion is dated by the gateway's clock when it arrives, whereas a message carries WhatsApp's server second, so a message whose second is earlier than that date (the gateway's clock running ahead, or a deletion made on the phone reaching the gateway late) counts as older and the chat stays hidden until a message dated after the deletion arrives.
 
-**Errors:** `400` session not started · `401` · `403` · `404` session not found · `409` session not connected (also answered for a few seconds while WhatsApp Web reloads its page and the engine re-injects) · `503` page connection died mid-read, or the command timed out
+**Errors:** `400` session not started · `401` · `403` · `404` session not found · `409` session not connected (also answered while WhatsApp Web reloads its page and the engine re-injects, which takes seconds on most reloads and can take a few minutes; retry every few seconds) · `503` page connection died mid-read, or the command timed out
 
 #### GET /api/sessions/stats/overview
 

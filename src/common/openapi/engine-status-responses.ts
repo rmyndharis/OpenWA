@@ -20,7 +20,8 @@ export const ENGINE_NOT_READY_409 =
   'retry. A session that was never started answers `400` instead, and the session lifecycle routes ' +
   'answer `409` for a conflicting state rather than this. One window answers this while the session ' +
   'still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects ' +
-  'into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.';
+  'into it, and until it has the answer is a `409` naming the reload. That takes seconds on most ' +
+  'reloads and can take a few minutes, and no event marks its end: retry every few seconds.';
 
 /**
  * `EngineRegistry.require()`'s default `BadRequestException` (400): the session has no engine at all,

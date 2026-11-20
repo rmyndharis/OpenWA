@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The SSRF guard also refuses the documentation and benchmarking address ranges and the 6a44 relay anycast address `192.88.99.2` in webhook, media, plugin download and plugin request urls (see Upgrade notes).
 - The local media store (`STORAGE_LOCAL_PATH`, `./data/media` by default) is owner-only: its root is set `0700` at every boot when the gateway owns it, and a warning is logged when it does not; new directories and files are written `0700` and `0600`, as the databases and the engine auth directories already are (see Upgrade notes).
 - The storage export archive is written `0600` in a `0700` `data/exports`, where it was `0644` in `0755`, so it is as private as the media it copies; the next boot closes the directory of an archive an earlier version left.
+- whatsapp-web.js: the `409` answered while WhatsApp Web reloads its page says to retry every few seconds for up to a few minutes, where it said to retry in a few seconds (#2139).
 
 ### Fixed
 
@@ -150,6 +151,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Say in the MCP `SessionGetChats` and `MessageSearch` descriptions, the plugin guide, the `ChatSummary.name` comment, the typed SDKs and the PHP client that a Baileys privacy-id chat with no name of its own lists `name` "" and, when the session can map the id, a `phone` to show instead.
 - Say in the security design that a host other users can log in to should run the gateway with `TMPDIR` set to a directory only its user can enter, since the engine libraries stage the media of an upload in the temporary directory.
 - Say in the API reference that, while the database cannot be read, the chat match of a chat-restricted key falls back to the gateway's in-memory mappings, which do not see a mapping another gateway node has changed since.
+- Say in the API reference and the troubleshooting guide how long the whatsapp-web.js page reload `409` can last, that no event marks its end, and how to retry on it (#2139).
 
 ### Dependencies
 
