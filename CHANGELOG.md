@@ -78,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - whatsapp-web.js: a start no longer waits on a `ps` or a stale lock removal that never returns, such as one stuck on a hung volume; each gets five seconds.
 - whatsapp-web.js: the onboarding fallback moves a session to `action_required` on the click that follows five clicks which left the modal in place, where a flow of five screens that each landed tripped it on the fifth.
 - whatsapp-web.js: the chats of a label carry `lastMessage`, as the chat list does.
+- whatsapp-web.js: a group invite join that a reload cut answers the `503` that says it may or may not have been applied, whatever text the failure carries, where a failure with another text answered the `400` of an invalid invite code.
 - The startup line for missing install-time patches gives a command for each patch and offers a reinstall only for an install that ran with `--ignore-scripts`.
 - Drop the restriction, error, presence and claim state of sessions an infra data import removes, so the restricted-sessions gauge stops counting them and no false lost-claim warning follows.
 - `backup.sh` and `restore.sh` read a `PLUGINS_DIR` exported empty as the app does, as unset to its default directory, where they took the directory `./.env` named.
