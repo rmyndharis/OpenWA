@@ -1094,6 +1094,9 @@ adapter boundary — none silently stubs.
   `lastMessage`. The count Baileys adds for it stays in the chunk's, so the chat can be listed with one unread message
   more than it holds; a chunk that held a count of its own, or that a text was merged into as well, counts more and is
   left as Baileys hands it over, so the message can still date the chat and bring back a deleted one.
+  Two or more such messages for one chat that reach the socket in one batch, as the offline queue does after a reconnect,
+  are counted together and handled as a message of their own would be: they add their sum to the count, list a chat the
+  session holds no record of and bring back a chat WhatsApp deleted.
   An unread mark set on the phone that Baileys delivers in the same batch just before such a message, as after a reconnect, is folded into that
   message's count by the library and is therefore not listed; the mark stays on the account. A receipt that names only older messages, or only the account's own (which Baileys leaves out of a
   receipt), leaves the count, and so does one a newer message overtook, recorded or still being processed; a session restarted since holds
