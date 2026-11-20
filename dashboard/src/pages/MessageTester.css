@@ -23,6 +23,9 @@
 
 .message-tester .compose-panel,
 .message-tester .response-panel {
+  /* A grid item will not shrink below its content: a long group name or an unbroken token in an error would widen
+     the whole form past a phone screen, where the page clips what falls outside. */
+  min-width: 0;
   background: var(--bg-white);
   border-radius: 12px;
   padding: 1.5rem;
@@ -187,6 +190,8 @@
 }
 
 .message-tester .detail-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 0.875rem;
   color: var(--text-primary);
   font-weight: 500;
@@ -460,6 +465,7 @@
 }
 
 .message-tester .group-picker-option span {
+  unicode-bidi: plaintext;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
