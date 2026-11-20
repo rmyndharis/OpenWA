@@ -351,8 +351,10 @@ const INGRESS_ROUTE_SEGMENT = /^[^/\\?#%\x00-\x1f\x7f\p{Cs}]+$/u;
  * match, that a declared `toleranceSec` is a finite number > 0 (a replay window of zero or less, or
  * NaN, would make the tolerance check a no-op), that `dedupOn` is 'header' or 'body', that a
  * declared ack is a final status (200-599) with a string body and header names and values Node can
- * write, and that no route declares `signature.scheme: 'none'` unless the operator has explicitly
- * opted in via `ALLOW_UNSIGNED_INGRESS=true`. A `none`-scheme route is a fully-unauthenticated `@Public()`
+ * write, that `ingress` is a list and an hmac-sha256 `contentTemplate` a string (the load-time warnings
+ * iterate the list and call string methods on the template), and that no route declares
+ * `signature.scheme: 'none'` unless the operator has explicitly opted in via
+ * `ALLOW_UNSIGNED_INGRESS=true`. A `none`-scheme route is a fully-unauthenticated `@Public()`
  * endpoint — once an instance is provisioned, anyone who can reach the host can POST a forged
  * payload that triggers outbound WhatsApp sends. Rejecting it at load (rather than only warning)
  * keeps that surface from lighting up silently. A manifest with no `ingress` entries is a no-op.
@@ -360,6 +362,13 @@ const INGRESS_ROUTE_SEGMENT = /^[^/\\?#%\x00-\x1f\x7f\p{Cs}]+$/u;
  * written, and from PluginLoaderService.loadPlugin, so a package already on disk is refused at load time.
  */
 export function validateIngressManifest(manifest: PluginManifest, allowUnsignedIngress = false): void {
+  // Before the shortcut below: an object, a boolean or a number has no length, so it would pass as "no ingress
+  // declared" and then fail in the load-time warnings. A string is left to the checks below: an empty one declares
+  // no route, and any other is refused there.
+  const declared: unknown = manifest.ingress;
+  if (declared !== undefined && declared !== null && typeof declared !== 'string' && !Array.isArray(declared)) {
+    throw new Error(`Plugin ${manifest.id}: ingress must be a list of routes`);
+  }
   if (!manifest.ingress?.length) return; // no ingress declared → nothing to validate
   const declaredMajor = Number.parseInt((manifest.sdkVersion ?? '1').split('.')[0], 10);
   if (!Number.isFinite(declaredMajor) || declaredMajor !== SUPPORTED_SDK_MAJOR) {
@@ -407,6 +416,18 @@ export function validateIngressManifest(manifest: PluginManifest, allowUnsignedI
         `Plugin ${manifest.id}: route '${r.route}' signature.encoding must be 'hex' or 'base64' ` +
           `(got '${String(signature.encoding)}')`,
       );
+    }
+    // warnUnsignedTimestampRoutes calls `.includes` on an hmac-sha256 template, which throws for a number, a boolean
+    // or an object. An array has `includes` and loads today, so it is not refused here.
+    const template: unknown = signature.contentTemplate;
+    if (
+      signature.scheme === 'hmac-sha256' &&
+      template !== undefined &&
+      template !== null &&
+      typeof template !== 'string' &&
+      !Array.isArray(template)
+    ) {
+      throw new Error(`Plugin ${manifest.id}: route '${r.route}' signature.contentTemplate must be a string`);
     }
     if (r.signature.scheme === 'none' && !allowUnsignedIngress) {
       throw new Error(

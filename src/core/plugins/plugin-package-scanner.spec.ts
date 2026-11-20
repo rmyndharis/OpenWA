@@ -308,6 +308,23 @@ describe('PluginPackageScanner — boot-time manifest validation parity with ins
     });
     expect(() => scanner.loadPlugin(dir)).toThrow(/webhook:ingress/i);
   });
+
+  it('names the field when ingress is not a list or an hmac contentTemplate is not a string', () => {
+    // These used to fail inside a load-time warning, with an engine message such as "object is not iterable".
+    const permissions = ['webhook:ingress'];
+    const route = { route: 'events', signature: { scheme: 'hmac-sha256', header: 'X-Sig', contentTemplate: 5 } };
+    expect(() =>
+      scanner.loadPlugin(writePlugin('one-route', { ...baseManifest('one-route'), permissions, ingress: route })),
+    ).toThrow('Plugin one-route: ingress must be a list of routes');
+    expect(() =>
+      scanner.loadPlugin(writePlugin('true-ingress', { ...baseManifest('true-ingress'), permissions, ingress: true })),
+    ).toThrow('Plugin true-ingress: ingress must be a list of routes');
+    expect(() =>
+      scanner.loadPlugin(
+        writePlugin('number-template', { ...baseManifest('number-template'), permissions, ingress: [route] }),
+      ),
+    ).toThrow("Plugin number-template: route 'events' signature.contentTemplate must be a string");
+  });
 });
 
 describe('PluginPackageScanner — interrupted-update recovery at boot', () => {
