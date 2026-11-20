@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP: `MCP_MAX_RESULT_BYTES`, an opt-in cap for clients that put a whole tool result in the model's context. When set, every result, an error answer included, is one text item, cut at that many bytes with a note of its full size, and none is offloaded as a base64 resource; unset or `0`, the default, changes nothing (#2100). Thanks @sudipta-prodevs.
 - Dashboard: a message typed in a chat but not sent is listed on that chat's row, after a `Draft:` label, in place of the last message until the chat is opened again (#2125). Thanks @juanbracamonte.
 - Dashboard: `/name` typed in the chat composer offers the session's templates by name, and Enter or a click puts the chosen one in the message field, to be sent like any other message; a template that still holds a placeholder is not sent until its text is edited (#2123). Thanks @juanbracamonte.
+- whatsapp-web.js: the `409` answered while WhatsApp Web reloads its page carries `code` `ENGINE_PAGE_RELOADING` and `retryAfterSeconds`, the interval to ask again at, so a client can tell it from other conflicts and retry (#2139).
 
 ### Changed
 
@@ -127,6 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PHP SDK: the `mentions`, poll `options`, status `recipients`, webhook `events` and `filters`, webhook redrive `ids` and mark-read `messageIds` lists are sent as JSON arrays when their keys have gaps (`array_filter`, `array_unique`), which the gateway refused with `400`.
 - Python SDK: the call link `startTime` is typed `int`, as the gateway refuses a fraction with `400`; the PHP docblock and the Go, Java and JavaScript field comments say a whole number.
 - Python SDK: the source distribution ships `tests/conftest.py`, so the tests run from the unpacked archive.
+- whatsapp-web.js: a send or forward that met a page reload after its first attempt had run answers a `409` that says the message may or may not have been sent, where it said to retry; a forward refused there keeps its send pacing admission, as it keeps its `Idempotency-Key`.
 
 ### Documentation
 

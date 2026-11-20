@@ -268,7 +268,10 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
   `429`, or on `503` when it carries an `Idempotency-Key` or the `503` carries
   `Retry-After` (never after a network error), never retries a send-pacing `429`
   (`code: "SEND_PACING_LIMITED"`), honors `Retry-After`, and rewinds request
-  bodies; it is still off unless you ask for it.
+  bodies; it is still off unless you ask for it. A `409` whose `code` is
+  `"ENGINE_PAGE_RELOADING"` (whatsapp-web.js, while WhatsApp Web reloads its
+  page) was not carried out: wait the error's retry-after seconds and repeat
+  the request, for up to a few minutes. No client retries it on its own.
 - **Webhook signatures.** Every SDK verifies a delivery's `X-OpenWA-Signature`
   against the raw request body: `verifyWebhookSignature` (JavaScript),
   `verify_webhook_signature` (Python), `VerifyWebhookSignature` (Go),

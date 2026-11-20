@@ -40,6 +40,7 @@ import { isChannelJid } from '../identity/wa-id';
 import { LidMappingStore } from '../identity/lid-mapping-store.service';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EnginePageReloadingError } from '../../common/errors/engine-page-reloading.error';
 import { ChannelMediaNotSupportedError } from '../../common/errors/channel-media-not-supported.error';
 import { markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { WwebjsGroups } from './wwebjs-groups';
@@ -61,7 +62,7 @@ import { WwebjsChats } from './wwebjs-chats';
 import { WwebjsCatalog } from './wwebjs-catalog';
 import { registerWwebjsGroupEvents } from './wwebjs-group-events';
 import { WwebjsOnboardingWatcher } from './wwebjs-onboarding';
-import { PAGE_RELOADING_MESSAGE, WwebjsLifecycle } from './wwebjs-lifecycle';
+import { WwebjsLifecycle } from './wwebjs-lifecycle';
 import { WwebjsReadyReconcile } from './wwebjs-reconcile';
 import { WwebjsStuckAuth } from './wwebjs-stuck-auth';
 import { WwebjsCalls } from './wwebjs-calls';
@@ -978,7 +979,7 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
     // naming the reload so the operator can tell this state from a plain disconnect (#1081). Past the
     // window the same holds for a reloaded page a liveness probe has read without its helpers.
     if (this.lifecycle.isInNavigationReinjectWindow() || this.lifecycle.isPageWithoutHelpers()) {
-      throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
+      throw new EnginePageReloadingError();
     }
   }
 

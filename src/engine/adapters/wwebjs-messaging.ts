@@ -40,11 +40,12 @@ import { buildVCard } from './vcard';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EnginePageReloadingError } from '../../common/errors/engine-page-reloading.error';
 import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { type WwebjsEngineHost, requireClient, withPageWrite } from './wwebjs-host';
 import { type EvaluatePage, type PinAnswer, pinInPage, settleWriteStatus } from './wwebjs-page-writes';
-import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
+import { isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
 import { noteVideoLoadTimeout } from './wwebjs-video-load-timeout';
@@ -389,6 +390,23 @@ function ensureSendable(chatId: string, shape: 'reply' | 'location' | 'contact c
 }
 
 /**
+ * What a send answers 409 when WhatsApp Web reloaded its page after a first attempt had run. The attempt may have
+ * left the page, so unlike the reload refusal of a request that sent nothing, it does not say to send it again.
+ */
+export const PAGE_RELOADED_DURING_SEND_MESSAGE =
+  'WhatsApp Web reloaded its page while the message was being sent, and it may or may not have been sent. ' +
+  'Check the chat before sending it again.';
+
+/**
+ * A not-ready refusal as a send answers it once an attempt has run. The reload refusal carries a `code` and
+ * `retryAfterSeconds` that tell a client to ask again, which is right only for a request that sent nothing, so here
+ * it becomes a plain not-ready 409 that says the message may have been sent. Any other refusal is returned as it is.
+ */
+function afterAttempt<T>(error: T): T | EngineNotReadyError {
+  return error instanceof EnginePageReloadingError ? new EngineNotReadyError(PAGE_RELOADED_DURING_SEND_MESSAGE) : error;
+}
+
+/**
  * Messaging operations extracted from WhatsAppWebJsAdapter: the send paths (with the @c.us -> @lid
  * resolution cache), reactions, history, delete and edit. The adapter keeps the public methods as
  * thin forwarders and injects the shared host surface (./wwebjs-host) via closures, so the delegate
@@ -417,12 +435,13 @@ export class WwebjsMessaging {
   /**
    * The readiness check after a send attempt has run: its 409 does not prove the first attempt stayed off the wire,
    * so it carries markOutcomeUnknown, and a paced send keeps its admission as a keyed send keeps its `Idempotency-Key`.
+   * A page that is reloading answers what {@link afterAttempt} makes of its refusal.
    */
   private ensureReadyAfterAttempt(): void {
     try {
       this.host.ensureReady();
     } catch (error) {
-      throw markOutcomeUnknown(error);
+      throw markOutcomeUnknown(afterAttempt(error));
     }
   }
 
@@ -444,7 +463,7 @@ export class WwebjsMessaging {
       this.host.reportIfPageTransportError(error, context);
       this.ensureReadyToSend();
       // A reload that cut the read short is the retryable 409 every other call gets for it, and nothing was sent.
-      if (isNavigationError(error)) throw markNothingSent(new EngineNotReadyError(PAGE_RELOADING_MESSAGE));
+      if (isNavigationError(error)) throw markNothingSent(new EnginePageReloadingError());
       if (isProtocolTimeout(error))
         throw new EngineNotSentError(`WhatsApp Web did not answer the ${context} read in time`);
       throw error;
@@ -510,12 +529,13 @@ export class WwebjsMessaging {
   /**
    * The answer to a `No LID for user` send whose re-resolution did not answer. The gateway learned nothing
    * about the recipient, so it is not reported unreachable: a reload that cut the lookup short is the
-   * retryable 409 the lookup raised, and anything else is what it was, WhatsApp Web refusing the send in the
-   * page. That is an engine error with an unproven outcome (500), so a keyed send keeps its key taken, but one
-   * the send breaker does not count: it says nothing about the account.
+   * not-ready 409 of a send after an attempt ({@link afterAttempt}), and anything else is what it was,
+   * WhatsApp Web refusing the send in the page. That is an engine error with an unproven outcome (500), so
+   * a keyed send keeps its key taken, but one the send breaker does not count: it says nothing about the
+   * account.
    */
   private unansweredLookup(chatId: string, sendError: Error, failure: unknown): Error {
-    if (failure instanceof EngineNotReadyError) return markOutcomeUnknown(failure);
+    if (failure instanceof EngineNotReadyError) return markOutcomeUnknown(afterAttempt(failure));
     this.host.logger.warn('Could not re-resolve a recipient after "No LID for user": the lookup did not answer', {
       sessionId: this.host.config.sessionId,
       chatId,
@@ -952,7 +972,7 @@ export class WwebjsMessaging {
         // The read above is a page round trip a teardown can land in. Its failure only leaves the copy
         // unidentified, unless it shows the page is gone, which this check then refuses. Before the first
         // attempt nothing was forwarded, so that refusal frees a keyed send's key; a retry's may follow a copy.
-        if (attempted) this.host.ensureReady();
+        if (attempted) this.ensureReadyAfterAttempt();
         else this.ensureReadyToSend();
         attempted = true;
         return msgToForward.forward(to);

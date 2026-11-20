@@ -104,10 +104,7 @@ export function isProtocolTimeout(error: unknown): boolean {
   return PROTOCOL_TIMEOUT_PATTERN.test(error instanceof Error ? error.message : String(error));
 }
 
-/** What a request answers 409 while WhatsApp Web reloads its page, whichever side of the window stamp it lands. */
-export const PAGE_RELOADING_MESSAGE =
-  'WhatsApp Web is reloading its page and the session is re-injecting. Retry every few seconds: ' +
-  'this can last a few minutes.';
+export { PAGE_RELOADING_MESSAGE } from '../../common/errors/engine-page-reloading.error';
 
 /**
  * Whether a page call was cut short by the page navigating away under it (WhatsApp Web reloading). Puppeteer

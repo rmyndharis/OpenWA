@@ -1,13 +1,13 @@
 import { type Client } from 'whatsapp-web.js';
 import { CallLinkType, MediaInput } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EnginePageReloadingError } from '../../common/errors/engine-page-reloading.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { toMessageMedia } from './wwebjs-messaging';
 import { deleteGroupPictureInPage } from './wwebjs-groups';
 import { type EvaluatePage, runWriteInPage, settleWriteStatus } from './wwebjs-page-writes';
 import { type WwebjsEngineHost, withPageWrite, reportPageDeath } from './wwebjs-host';
-import { PAGE_RELOADING_MESSAGE } from './wwebjs-lifecycle';
 
 /**
  * Whether the page's `WAWebContactStatusBridge` still exports `setMyStatus`, which `Client.setStatus` calls. The build
@@ -136,7 +136,7 @@ export class WwebjsProfile {
     );
     // Nothing was sent when the page cannot run the write: a page without whatsapp-web.js's helpers is reloading, and
     // a build without the job has none to run. The library's own call needs the same modules, so it is not tried.
-    if (answer === 'no-helpers') throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
+    if (answer === 'no-helpers') throw new EnginePageReloadingError();
     if (answer === 'missing') throw new EngineNotSupportedError('setProfilePicture(no write job on this build)');
     const refusal = 'the engine rejected the profile picture change';
     settleWriteStatus(

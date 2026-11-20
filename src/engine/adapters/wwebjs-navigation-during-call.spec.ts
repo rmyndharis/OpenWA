@@ -366,7 +366,10 @@ describe('a call that a page navigation lands on', () => {
     const call = route(wire(true));
 
     await expect(call).rejects.toBeInstanceOf(EngineNotReadyError);
-    await expect(call).rejects.toMatchObject({ message: PAGE_RELOADING_MESSAGE });
+    await expect(call).rejects.toMatchObject({
+      message: PAGE_RELOADING_MESSAGE,
+      response: { code: 'ENGINE_PAGE_RELOADING', retryAfterSeconds: 5 },
+    });
   });
 
   it.each(ROUTES)('%s: with no navigation stamped the answer is unchanged', async (_name, route, before) => {
@@ -475,7 +478,10 @@ describe('the classification of a failure by a navigation stamped during the cal
     const result = withPage(host, 'getLabels', failing(ordinary));
 
     await expect(result).rejects.toBeInstanceOf(EngineNotReadyError);
-    await expect(result).rejects.toMatchObject({ message: PAGE_RELOADING_MESSAGE });
+    await expect(result).rejects.toMatchObject({
+      message: PAGE_RELOADING_MESSAGE,
+      response: { code: 'ENGINE_PAGE_RELOADING', retryAfterSeconds: 5 },
+    });
     expect(reportIfPageTransportError).not.toHaveBeenCalled();
   });
 

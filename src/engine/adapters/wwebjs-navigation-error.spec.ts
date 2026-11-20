@@ -84,7 +84,11 @@ describe('a call the page navigation cut short', () => {
     return { host, reportIfPageTransportError };
   }
 
-  const reload = (): unknown => expect.objectContaining({ message: PAGE_RELOADING_MESSAGE });
+  const reload = (): unknown =>
+    expect.objectContaining({
+      message: PAGE_RELOADING_MESSAGE,
+      response: expect.objectContaining({ code: 'ENGINE_PAGE_RELOADING', retryAfterSeconds: 5 }) as unknown,
+    });
 
   it('withPage answers the 409 and reports nothing', async () => {
     const { host, reportIfPageTransportError } = makeHost({});
