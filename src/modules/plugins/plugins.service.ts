@@ -415,22 +415,40 @@ export class PluginsService {
     }
 
     // Write the validated entries then load; roll back on any failure so a bad package never leaves
-    // a half-installed plugin behind. Into a pre-existing directory the rollback removes only the
-    // files this install actually wrote: the directory holds the operator's stored data, and
-    // deleting it to undo a failed reinstall would destroy exactly what the reinstall promised to
-    // keep.
-    const written: string[] = [];
+    // a half-installed plugin behind. Into a pre-existing directory the rollback touches only the
+    // files this install reached: the directory holds the operator's stored data, and deleting it to
+    // undo a failed reinstall would destroy exactly what the reinstall promised to keep. A file the
+    // install created is removed; one it replaced (an entry named like a stored file) gets its bytes
+    // back, so a failed reinstall leaves the directory as it found it.
+    const written: Array<{ dest: string; previous: Buffer | null }> = [];
     try {
       for (const entry of entries) {
         const dest = path.join(dir, entry.relPath);
         fs.mkdirSync(path.dirname(dest), { recursive: true });
+        const previous = fs.existsSync(dest) ? fs.readFileSync(dest) : null;
+        // A file this install replaces is recorded before the write, because a write that fails midway leaves it
+        // truncated. One it creates is recorded after, so a write that failed at open (a name too long for the
+        // filesystem) leaves nothing to undo.
+        if (previous !== null) written.push({ dest, previous });
         fs.writeFileSync(dest, entry.data);
-        written.push(dest);
+        if (previous === null) written.push({ dest, previous });
       }
       this.pluginLoader.loadPlugin(dir);
     } catch (error) {
       if (dirExisted) {
-        for (const dest of written) fs.rmSync(dest, { force: true });
+        for (const { dest, previous } of written) {
+          // One file that cannot be put back must not stop the others or hide why the install failed.
+          try {
+            if (previous === null) fs.rmSync(dest, { force: true });
+            else fs.writeFileSync(dest, previous);
+          } catch (undoError) {
+            logger.warn(`Could not undo the write of ${dest} after a failed install of ${manifest.id}`, {
+              pluginId: manifest.id,
+              action: 'plugin_install_undo_failed',
+              error: undoError instanceof Error ? undoError.message : String(undoError),
+            });
+          }
+        }
       } else {
         fs.rmSync(dir, { recursive: true, force: true });
       }
