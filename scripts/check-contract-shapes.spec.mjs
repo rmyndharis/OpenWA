@@ -735,6 +735,26 @@ function editSource(source, from, to) {
   return source.replace(from, to);
 }
 
+/** The Go struct with the JSON name of one field changed, failing loudly when the struct or the field has moved. */
+function renameWireField(source, type, from, to) {
+  const start = source.indexOf(`type ${type} struct {`);
+  assert.ok(start >= 0, `${type} is not in this Go source any more`);
+  const end = source.indexOf('\n}', start);
+  const body = source.slice(start, end);
+  assert.ok(body.includes(`json:"${from}`), `${type} has no wire field ${from} any more`);
+  return source.slice(0, start) + body.replace(`json:"${from}`, `json:"${to}`) + source.slice(end);
+}
+
+/** The TypeScript interface with one member renamed, failing loudly when the interface or the member has moved. */
+function renameTsField(source, type, from, to) {
+  const start = source.indexOf(`export interface ${type} {`);
+  assert.ok(start >= 0, `${type} is not in this source any more`);
+  const end = source.indexOf('\n}', start);
+  const body = source.slice(start, end);
+  assert.ok(new RegExp(`\\n  ${from}\\??:`).test(body), `${type} has no member ${from} any more`);
+  return source.slice(0, start) + body.replace(new RegExp(`\\n  ${from}(\\??):`), `\n  ${to}$1:`) + source.slice(end);
+}
+
 /** One more exposed route, answering a payload that no client maps. */
 function withBrandNewPayload(contract) {
   contract.components.schemas.BrandNewDto = {
@@ -942,6 +962,50 @@ test('the gate refuses a mapping whose size differs from its floor', () => {
     /\d+ mapped pairs for sdk\/java \(model\/\*\.java\), above its floor of \d+: raise the floor/,
   );
 });
+
+// A pair excluded for a field type that is deliberately loose still has its field names compared: a renamed field in
+// it fails the run, which listing the whole pair as excluded let through.
+for (const [what, run] of [
+  [
+    'a Go create webhook request',
+    () =>
+      runGateOnCopy({
+        sdk: { 'sdk/go/types_webhook.go': s => renameWireField(s, 'CreateWebhookRequest', 'url', 'uri') },
+      }),
+  ],
+  [
+    'a Go update webhook request',
+    () =>
+      runGateOnCopy({
+        sdk: { 'sdk/go/types_webhook.go': s => renameWireField(s, 'UpdateWebhookRequest', 'url', 'uri') },
+      }),
+  ],
+  [
+    'a Go webhook response',
+    () =>
+      runGateOnCopy({ sdk: { 'sdk/go/types_webhook.go': s => renameWireField(s, 'WebhookResponse', 'url', 'uri') } }),
+  ],
+  [
+    'a Go membership request action request',
+    () =>
+      runGateOnCopy({
+        sdk: {
+          'sdk/go/types_group.go': s => renameWireField(s, 'MembershipRequestActionRequest', 'participants', 'members'),
+        },
+      }),
+  ],
+  ['a dashboard webhook', () => runGateOnCopy({ dashboardTypes: api => renameTsField(api, 'Webhook', 'url', 'uri') })],
+  [
+    'a dashboard session',
+    () => runGateOnCopy({ dashboardTypes: api => renameTsField(api, 'Session', 'name', 'title') }),
+  ],
+]) {
+  test(`a renamed field of ${what} fails the gate`, () => {
+    const result = run();
+    assert.equal(result.status, 1, result.output);
+    assert.match(result.output, /(uri|members|title)/);
+  });
+}
 
 test('the gate refuses a NAMES_ONLY entry whose pair is not excluded', () => {
   // An entry left behind after a pair is retyped and un-excluded would keep the weaker name-only comparison.

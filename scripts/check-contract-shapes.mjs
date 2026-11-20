@@ -53,7 +53,7 @@
  *
  * An excluded pair listed in NAMES_ONLY is still compared by field NAME in both directions (not by
  * optionality or token), so a renamed or dropped field in it fails the run. Those are the Go and Java
- * types whose field TYPES are deliberately looser than the contract: a plain string where the
+ * types, and the dashboard types that model client state, whose field TYPES are deliberately looser than the contract: a plain string where the
  * contract lists a vocabulary keeps a value the server adds later decodable and callers' string
  * handling compiling, and a defined type, a changed pointer or a changed numeric kind would be a source
  * break for a published client. Only a pair whose every other field conforms belongs there; one that cannot be
@@ -294,8 +294,19 @@ const EXCLUDED = {
  * EXCLUDED: the run fails on one that is not, so a retyped pair cannot keep the weaker comparison.
  */
 const NAMES_ONLY = {
-  'sdk/go': ['ContactRecord', 'GroupPictureResponse', 'GroupSettings', 'StatusRecord', 'AuthValidateResponse'],
+  'sdk/go': [
+    'ContactRecord',
+    'GroupPictureResponse',
+    'GroupSettings',
+    'StatusRecord',
+    'AuthValidateResponse',
+    'CreateWebhookRequest',
+    'UpdateWebhookRequest',
+    'WebhookResponse',
+    'MembershipRequestActionRequest',
+  ],
   'sdk/java': ['GroupSettings', 'StatusRecord', 'AuthValidateResponse'],
+  'dashboard/src/services/api.ts': ['Webhook', 'Session'],
 };
 
 /**
