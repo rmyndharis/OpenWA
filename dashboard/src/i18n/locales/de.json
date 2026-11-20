@@ -843,8 +843,8 @@
     "confirm": {
       "deleteTitle": "API-Schlüssel löschen",
       "revokeTitle": "API-Schlüssel widerrufen",
-      "deleteMessage": "Möchtest du <strong>{{name}}</strong> wirklich dauerhaft löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
-      "revokeMessage": "Möchtest du <strong>{{name}}</strong> wirklich widerrufen? Der Schlüssel funktioniert anschließend nicht mehr.",
+      "deleteMessage": "Möchtest du <name/> wirklich dauerhaft löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
+      "revokeMessage": "Möchtest du <name/> wirklich widerrufen? Der Schlüssel funktioniert anschließend nicht mehr.",
       "signedIn": "Dieses Dashboard ist mit diesem Schlüssel angemeldet. Wenn du ihn widerrufst oder löschst, wirst du abgemeldet.",
       "delete": "Löschen",
       "revoke": "Widerrufen"

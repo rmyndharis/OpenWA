@@ -799,8 +799,8 @@
     "confirm": {
       "deleteTitle": "Eliminar clave API",
       "revokeTitle": "Revocar clave API",
-      "deleteMessage": "¿Seguro que quieres eliminar permanentemente <strong>{{name}}</strong>? Esta acción no se puede deshacer.",
-      "revokeMessage": "¿Seguro que quieres revocar <strong>{{name}}</strong>? Dejará de funcionar.",
+      "deleteMessage": "¿Seguro que quieres eliminar permanentemente <name/>? Esta acción no se puede deshacer.",
+      "revokeMessage": "¿Seguro que quieres revocar <name/>? Dejará de funcionar.",
       "signedIn": "Este panel ha iniciado sesión con esta clave. Si la revocas o la eliminas, se cerrará tu sesión.",
       "delete": "Eliminar",
       "revoke": "Revocar"

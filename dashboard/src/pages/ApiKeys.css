@@ -461,6 +461,11 @@
   font-size: 0.8125rem;
 }
 
+/* Under the confirmation sentence, which sets no margin below it. */
+.api-keys-page .confirm-message + .key-signed-in-warning {
+  margin-top: 1rem;
+}
+
 .api-keys-page .key-signed-in-warning svg {
   flex: none;
   margin-top: 0.125rem;

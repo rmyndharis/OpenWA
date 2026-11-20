@@ -843,8 +843,8 @@
     "confirm": {
       "deleteTitle": "刪除 API 金鑰",
       "revokeTitle": "撤銷 API 金鑰",
-      "deleteMessage": "確定要永久刪除 <strong>{{name}}</strong> 嗎？此操作無法復原。",
-      "revokeMessage": "確定要撤銷 <strong>{{name}}</strong> 嗎？它將無法再使用。",
+      "deleteMessage": "確定要永久刪除 <name/> 嗎？此操作無法復原。",
+      "revokeMessage": "確定要撤銷 <name/> 嗎？它將無法再使用。",
       "signedIn": "此控制台正以此金鑰登入。撤銷或刪除此金鑰會令你登出。",
       "delete": "刪除",
       "revoke": "撤銷"

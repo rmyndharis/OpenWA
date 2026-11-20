@@ -843,8 +843,8 @@
     "confirm": {
       "deleteTitle": "Delete API Key",
       "revokeTitle": "Revoke API Key",
-      "deleteMessage": "Are you sure you want to permanently delete <strong>{{name}}</strong>? This action cannot be undone.",
-      "revokeMessage": "Are you sure you want to revoke <strong>{{name}}</strong>? It will no longer work.",
+      "deleteMessage": "Are you sure you want to permanently delete <name/>? This action cannot be undone.",
+      "revokeMessage": "Are you sure you want to revoke <name/>? It will no longer work.",
       "signedIn": "This dashboard is signed in with this key. Revoking or deleting it signs you out.",
       "delete": "Delete",
       "revoke": "Revoke"
