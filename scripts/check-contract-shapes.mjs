@@ -270,8 +270,6 @@ const EXCLUDED = {
       'Type is a plain string holding text, image, video or voice; a defined type would be a source break for callers that pass it on as a string. The other fields conform',
     AuthValidateResponse:
       'Role is a plain string holding admin, operator or viewer; a defined type would be a source break for callers that pass it on as a string. The other fields conform',
-    CreateCallLinkRequest:
-      'StartTime is a float64 although the contract says integer and the gateway answers 400 for a fraction; the field comment says whole number, and an int64 would be a source break for callers that pass a float64. The other fields conform',
   },
   'sdk/java': {
     UpdateSessionConfigRequest:
@@ -282,8 +280,6 @@ const EXCLUDED = {
       'type is a String holding text, image, video or voice; an enum would break callers that compare it as a string. The other components conform',
     AuthValidateResponse:
       'role is a String holding admin, operator or viewer; an enum would break callers that compare it as a string. The other components conform',
-    CreateCallLinkRequest:
-      'startTime is a Double although the contract says integer and the gateway answers 400 for a fraction; the Javadoc says whole number, and a Long would break callers that pass a Double. The other components conform',
   },
   'dashboard/src/services/api.ts': {
     Webhook:
@@ -298,15 +294,18 @@ const EXCLUDED = {
  * EXCLUDED: the run fails on one that is not, so a retyped pair cannot keep the weaker comparison.
  */
 const NAMES_ONLY = {
-  'sdk/go': [
-    'ContactRecord',
-    'GroupPictureResponse',
-    'GroupSettings',
-    'StatusRecord',
-    'AuthValidateResponse',
-    'CreateCallLinkRequest',
-  ],
-  'sdk/java': ['GroupSettings', 'StatusRecord', 'AuthValidateResponse', 'CreateCallLinkRequest'],
+  'sdk/go': ['ContactRecord', 'GroupPictureResponse', 'GroupSettings', 'StatusRecord', 'AuthValidateResponse'],
+  'sdk/java': ['GroupSettings', 'StatusRecord', 'AuthValidateResponse'],
+};
+
+/**
+ * Fields a client types as a float where the contract says integer (the gateway answers 400 for a fraction), because an
+ * integer type would break callers that pass a float. Only the listed field accepts the float kind: the rest of its pair
+ * stays fully compared, which listing the whole pair in EXCLUDED did not leave. Keyed by client, then hand type name.
+ */
+const FLOAT_FOR_INTEGER = {
+  'sdk/go': { CreateCallLinkRequest: ['startTime'] },
+  'sdk/java': { CreateCallLinkRequest: ['startTime'] },
 };
 
 const ACK_SHAPE =
@@ -1064,6 +1063,7 @@ export function comparePair(
   schemas,
   compareOptionality = true,
   namesOnly = false,
+  floatFields = [],
 ) {
   const diffs = [];
   const ctx = memberContext.get(handMembers);
@@ -1095,6 +1095,7 @@ export function comparePair(
           schemas,
           compareOptionality,
           namesOnly,
+          floatFields,
         )) {
           diffs.push(`${field}.${subDiff}`);
         }
@@ -1118,10 +1119,18 @@ export function comparePair(
         // enums and keep comparing by presence.
         const enumMembers = /^enum\((\[[\s\S]*\])\)$/.exec(contract)?.[1];
         const members = enumMembers ? JSON.parse(enumMembers) : [];
-        if (NUMERIC_KIND.test(hand) && members.length > 0 && members.every(value => typeof value === 'number')) {
+        // A scalar only: a list of integers is no stand-in for a scalar enum.
+        if (
+          /^(number|integer|float)$/.test(hand) &&
+          members.length > 0 &&
+          members.every(value => typeof value === 'number')
+        ) {
           hand = contract;
         }
       }
+      // The one field a client deliberately types as a float for an integer contract (see FLOAT_FOR_INTEGER).
+      if (floatFields.includes(field) && /^float(\|null)?$/.test(hand))
+        contract = contract.replace(/^integer/, 'float');
       const absorbs = handInfo.absorbsNull && tokensAgree(`${hand}|null`, contract);
       // Any other hand token is drift. One no parser could reduce (an alias that is not exported, an enum, a
       // type outside the known kinds) fails too: skipping it left the field uncompared while the run passed.
@@ -1711,6 +1720,7 @@ if (isDirectRun) {
       excluded: EXCLUDED['sdk/go'] ?? {},
       namesOnly: NAMES_ONLY['sdk/go'] ?? [],
       floor: MINIMUM_MAPPED['sdk/go'],
+      floatFields: FLOAT_FOR_INTEGER['sdk/go'],
       compareOptionality: true,
       sdk: true,
     },
@@ -1721,6 +1731,7 @@ if (isDirectRun) {
       excluded: EXCLUDED['sdk/java'] ?? {},
       namesOnly: NAMES_ONLY['sdk/java'] ?? [],
       floor: MINIMUM_MAPPED['sdk/java'],
+      floatFields: FLOAT_FOR_INTEGER['sdk/java'],
       compareOptionality: false,
       sdk: true,
     },
@@ -1761,7 +1772,16 @@ if (isDirectRun) {
         }
         fileCompared++;
         compared++;
-        const diffs = comparePair(handName, hand, schemaName, schema, schemas, client.compareOptionality, namesOnly);
+        const diffs = comparePair(
+          handName,
+          hand,
+          schemaName,
+          schema,
+          schemas,
+          client.compareOptionality,
+          namesOnly,
+          client.floatFields?.[handName],
+        );
         if (diffs.length) {
           fileResults.push(`  ${handName} ↔ ${schemaName}:`, ...diffs.map(d => `    ${d}`));
           failures++;

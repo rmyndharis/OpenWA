@@ -192,6 +192,42 @@ test('the integer rule holds through a null arm and an array', () => {
   assert.deepEqual(diffsOf('go', '[]float64', list), ['"n": hand array<float>, contract array<integer>']);
 });
 
+// A client that deliberately types one field as a float for an integer contract (FLOAT_FOR_INTEGER) keeps every other
+// field of that pair compared: listing the whole pair as names-only dropped the vocabulary of its other field too.
+test('a listed float field accepts the float and leaves the rest of its pair compared', () => {
+  const schema = {
+    type: 'object',
+    required: ['type', 'startTime'],
+    properties: { type: { type: 'string', enum: ['video', 'voice'] }, startTime: { type: 'integer' } },
+  };
+  const hand = parseGoTypes([
+    'type S struct {\n\tType string `json:"type"`\n\tStartTime float64 `json:"startTime"`\n}\n',
+  ]).S;
+  assert.deepEqual(comparePair('S', hand, 'SDto', schema, {}, true, false, ['startTime']), [
+    '"type": hand string, contract enum(["video","voice"])',
+  ]);
+  assert.deepEqual(comparePair('S', hand, 'SDto', schema, {}, true, false), [
+    '"type": hand string, contract enum(["video","voice"])',
+    '"startTime": hand float, contract integer',
+  ]);
+});
+
+test('a float field that is not listed still fails, and only an integer contract takes the allowance', () => {
+  const schema = { type: 'object', required: ['n'], properties: { n: { type: 'integer' } } };
+  const hand = parseGoTypes(['type S struct {\n\tN float64 `json:"n"`\n}\n']).S;
+  assert.deepEqual(comparePair('S', hand, 'SDto', schema, {}, true, false, ['other']), [
+    '"n": hand float, contract integer',
+  ]);
+  const text = { type: 'object', required: ['n'], properties: { n: { type: 'string' } } };
+  assert.deepEqual(comparePair('S', hand, 'SDto', text, {}, true, false, ['n']), ['"n": hand float, contract string']);
+});
+
+test('the Java numeric enum rescue takes a scalar number and not a list of them', () => {
+  const schema = { type: 'number', enum: [86400, 604800] };
+  assert.deepEqual(diffsOf('java', 'Integer', schema), []);
+  assert.equal(diffsOf('java', 'List<Integer>', schema).length, 1);
+});
+
 test('an absent-or-null Go pointer takes an integer contract only as an integer kind', () => {
   const schema = { type: 'object', properties: { n: { type: 'integer', nullable: true } } };
   const go = type => parseGoTypes([`type S struct {\n\tN *${type} \`json:"n,omitempty"\`\n}\n`]).S;
