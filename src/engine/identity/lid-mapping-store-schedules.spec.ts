@@ -16,7 +16,9 @@ import { ChatScopeService } from '../../modules/auth/chat-scope.service';
  * calls and of their landings, never the store's bookkeeping: while a phone this process holds for the lid is not
  * stored, or the revocation of a display lookup is not stored, the lid answers none, and otherwise at most the phone of
  * the row. The other lids of the script have a truth of their own: one whose write failed answers none until it is
- * reported again or the mapping reloads, one that no call touches answers its row throughout.
+ * reported again or the mapping reloads, one that no call touches answers its row throughout. Past the bound of the
+ * lids reported again after their marks went, one of them may answer none again once it has no mirror entry, when at
+ * least that many reports landed after its own, and never another phone.
  */
 type Outcome = 'ok' | 'fail' | 'failAfter';
 interface CallSpec {
@@ -34,6 +36,7 @@ type Environment =
   | 'reloadEnd'
   | 'failReports'
   | 'failLookups'
+  | 'failExtras'
   | 'recover'
   | 'down'
   | 'up';
@@ -81,8 +84,17 @@ const LOOKUP_FILLERS = [
   { lid: 'g2', row: '628702', engine: '628702' },
   { lid: 'g3', row: '628703', engine: '628703' },
 ];
+/** More lids than the marks hold, whose reports fail together: the oldest mark goes in the sync itself. */
+const EXTRA_FILLERS = [
+  { lid: 'x1', row: '628901', engine: '628911' },
+  { lid: 'x2', row: '628902', engine: '628912' },
+  { lid: 'x3', row: '628903', engine: '628913' },
+  { lid: 'x4', row: '628904', engine: '628914' },
+];
 const UNTOUCHED = { lid: 'u1', row: '628801' };
-const FILLER_LIDS = new Set([...REPORT_FILLERS, ...LOOKUP_FILLERS].map(filler => filler.lid));
+const FILLER_LIDS = new Set([...REPORT_FILLERS, ...LOOKUP_FILLERS, ...EXTRA_FILLERS].map(filler => filler.lid));
+/** LID_MAPPING_CACHE_MAX of the walk: it bounds the mirror, the failed-write marks and the lids reported again. */
+const CAP = 3;
 
 /** What the process holds for the lid, from the order of the calls and of their landings alone. */
 class Reference {
@@ -273,7 +285,7 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
   };
 
   beforeAll(async () => {
-    process.env.LID_MAPPING_CACHE_MAX = '3'; // three lids push the one under test out of the mirror, and bound its marks
+    process.env.LID_MAPPING_CACHE_MAX = String(CAP); // three lids push the lid out of the mirror, and bound its marks
     ds = await new DataSource({
       type: 'better-sqlite3',
       database: ':memory:',
@@ -391,7 +403,10 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
     await repo.clear();
     // The newest row is the lid's, so a mirror of three loads it with the two rows before it.
     const rows: Array<Partial<LidMapping>> = [
-      ...[...REPORT_FILLERS, ...LOOKUP_FILLERS].map(filler => ({ lid: filler.lid, phone: filler.row })),
+      ...[...EXTRA_FILLERS, ...REPORT_FILLERS, ...LOOKUP_FILLERS].map(filler => ({
+        lid: filler.lid,
+        phone: filler.row,
+      })),
       { lid: UNTOUCHED.lid, phone: UNTOUCHED.row },
     ];
     if (init !== 'none')
@@ -413,11 +428,19 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
     let failed = false;
     let peered = false;
     let reloading: Promise<void> | undefined;
-    // What the script knows of the other lids: whether a write of theirs failed and whether a report has landed since.
+    // What the script knows of the other lids: whether a write of theirs failed and whether a report has landed since,
+    // and how many reports of any lid of the script had landed when it did.
     const fillers = new Map<
       string,
-      { kind: 'report' | 'lookup'; row: string; engine: string; state: 'failed' | 'ended' | 'landed' }
+      {
+        kind: 'report' | 'lookup';
+        row: string;
+        engine: string;
+        state: 'failed' | 'ended' | 'landed';
+        landedAt?: number;
+      }
     >();
+    let landings = 0;
 
     const unexpected = (after: string, what: string): void => {
       problems.push(`after ${after}: ${what}`);
@@ -499,7 +522,14 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
           !(filler.kind === 'lookup' && answer === filler.row)
         )
           unexpected(after, `a lid whose ${filler.kind} failed answers ${answer}, the table holds ${filler.row}`);
-        if (!down && filler.state === 'landed' && answer !== filler.engine)
+        // Past the bound of the lids reported again, the one reported least lately is in the record of dropped marks
+        // again: once it has no mirror entry it may answer none, never another phone.
+        const forgottenAgain =
+          EXTRA_FILLERS.some(extra => extra.lid === lid) &&
+          answer === null &&
+          landings - (filler.landedAt ?? landings) >= CAP &&
+          !inner.lidToPhone.has(lid);
+        if (!down && filler.state === 'landed' && answer !== filler.engine && !forgottenAgain)
           unexpected(
             after,
             `a lid reported again after its write failed answers ${String(answer)}, not ${filler.engine}`,
@@ -553,6 +583,7 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
           } else next.resolve(result);
         }
         reference.land(index, step.outcome, calls[index].kind === 'negative' ? affected : 0);
+        if (step.outcome === 'ok' && calls[index].kind === 'report') landings++;
         after = `${step.outcome === 'ok' ? 'landing' : step.outcome} of ${calls[index].name}`;
         await settleAll();
       } else if (step.step === 'evict') {
@@ -600,11 +631,12 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
           'lid',
         ]);
         peered = true;
-      } else if (step.step === 'failReports' || step.step === 'failLookups') {
+      } else if (step.step === 'failReports' || step.step === 'failLookups' || step.step === 'failExtras') {
         // A sync while the database is down: each lid's write fails, past the bound of the failed-write marks.
         failingFillers = true;
-        const sync = step.step === 'failReports' ? REPORT_FILLERS : LOOKUP_FILLERS;
-        const kind = step.step === 'failReports' ? 'report' : 'lookup';
+        const sync =
+          step.step === 'failReports' ? REPORT_FILLERS : step.step === 'failLookups' ? LOOKUP_FILLERS : EXTRA_FILLERS;
+        const kind = step.step === 'failLookups' ? 'lookup' : 'report';
         for (const filler of sync) {
           if (kind === 'report') await store.remember(filler.lid, filler.engine, OWNER);
           else await store.rememberIfUnknown(filler.lid, filler.engine, OTHER);
@@ -612,10 +644,12 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
         }
         failingFillers = false;
       } else {
-        // The database is back and the first lid of the sync is reported again.
-        const filler = [...fillers.values()].find(f => f.state === 'failed' && f.kind === 'report');
-        const lid = REPORT_FILLERS.find(f => fillers.get(f.lid) === filler)?.lid;
-        if (filler && lid && (await store.remember(lid, filler.engine, OWNER))) filler.state = 'landed';
+        // The database is back and the first lid of the syncs whose report failed is reported again.
+        const [lid, filler] = [...fillers].find(([, f]) => f.state === 'failed' && f.kind === 'report') ?? [];
+        if (filler && lid && (await store.remember(lid, filler.engine, OWNER))) {
+          filler.state = 'landed';
+          filler.landedAt = ++landings;
+        }
       }
       if (step.step !== 'begin' && step.step !== 'settle') {
         // The environment can have left the lid out of the mirror without the script's say: it only reads that residency.
@@ -831,6 +865,36 @@ describe('LidMappingStoreService: every order of the writes of one lid', () => {
     });
     expect(three.explored).toBeGreaterThan(3000);
     expect(three.problems).toEqual([]);
+  }, 600_000);
+
+  // The lids whose marks went and that are reported again are remembered apart from the failed-write marks: a sync that
+  // fails after them pushes none of them out, and none pushes out a mark. Past their own bound the one reported least
+  // lately is forgotten again, while the lid under test, which no more than two other lids follow, keeps answering.
+  it('answers the lids reported again after a sync failed past the failed-write marks', async () => {
+    const found = await explore({
+      ...base,
+      inits: ['reported'],
+      lists: lists(['reportFirst', 'lookupFirst', 'negative'], 2),
+      events: [
+        ['failExtras', 'recover', 'failLookups'],
+        ['failExtras', 'failLookups', 'recover', 'recover', 'failLookups'],
+      ],
+    });
+    expect(found.explored).toBeGreaterThan(4000);
+    expect(found.problems).toEqual([]);
+    const past = await explore({
+      ...base,
+      outcomes: ['ok'],
+      inits: ['reported'],
+      lists: lists(['reportFirst', 'lookupFirst', 'negative'], 1),
+      events: [
+        ['failExtras', 'failLookups', 'recover', 'recover', 'recover', 'recover'],
+        ['failExtras', 'failLookups', 'recover', 'recover', 'recover', 'recover', 'evict'],
+      ],
+      full: true,
+    });
+    expect(past.explored).toBeGreaterThan(40);
+    expect(past.problems).toEqual([]);
   }, 600_000);
 
   // With the table unreadable the readers answer from the mirror, which is judged as a row would be: a lid whose write
