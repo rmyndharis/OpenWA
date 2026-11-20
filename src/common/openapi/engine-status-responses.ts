@@ -134,6 +134,20 @@ export const STATUS_POST_503 =
   'been published). The post also answers 503 when the connection closes before it is written (nothing was ' +
   'posted).';
 
+/**
+ * ENGINE_NOT_READY_409 on a status post, which has no recipient and takes no idempotency key, so the send wording of
+ * the shared text does not fit. On whatsapp-web.js a post that a reload of WhatsApp Web cut short while it ran is the
+ * exception that a send has: a `409` with no `code` that says it may or may not have been published.
+ */
+export const STATUS_POST_409 =
+  'The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, ' +
+  'reconnecting, or still initializing, so the post never reached WhatsApp. Wait for `ready` and retry. ' +
+  'On whatsapp-web.js, WhatsApp Web periodically reloads its own page and the engine re-injects into it: a ' +
+  'post made until it has answers a `409` naming the reload, with `code` `ENGINE_PAGE_RELOADING` and ' +
+  '`retryAfterSeconds`, and was not posted. A post that a reload cut short while it ran is the exception: it ' +
+  'answers a `409` with no `code` that says it may or may not have been published, so check your status ' +
+  'before posting it again.';
+
 /** `MessageNotFoundError` (404): outside the adapter's lookup window, or revoked. */
 export const MESSAGE_NOT_FOUND_404 =
   "No such message: the id is outside the engine's lookup window (roughly the last hundred messages " +
