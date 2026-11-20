@@ -683,8 +683,9 @@ once, so the session stops instead of being silently unlinked by WhatsApp about 
 > minutes later and the device disappears from the phone's Linked devices list. That miss is not
 > silent: when the watcher finds a visible dialog it cannot match, it logs a warning
 > (`action: onboarding_dialog_unrecognized`) carrying the dialog's heading and button labels, including
-> the label to add, minutes before the unlink would happen. Copy that label as printed: a multi-word
-> label works, and whitespace runs compare as one space. Because that path wipes the stored
+> the label to add, minutes before the unlink would happen. An icon with no text prints under its icon
+> name, so the lists can read `ic-close` beside `Continuar`: the label to add is the word, not the icon.
+> Copy that label as printed: a multi-word label works, and whitespace runs compare as one space. Because that path wipes the stored
 > credentials, the automatic reconnect comes back with a fresh QR on its own, so the session is
 > usually already sitting at `qr_ready` rather than needing a manual start. Acknowledge the modal once
 > in a browser signed in as that account, then scan the QR. It does not recur — the modal is shown
@@ -856,7 +857,9 @@ with no `code`, and keeps its key, so a retry with that key answers `409`
 `409`, saying the post may or may not have been published: check your status before posting it
 again. A window that does not end, or that opens again and again, shows in the log as
 `could not re-inject` or as repeated `Page navigated` lines: see "Startup logs say install-time
-patches are missing" below and "Frequent Disconnections" above.
+patches are missing" below and "Frequent Disconnections" above. A warning `onboarding_dialog_unrecognized`
+next to the `Page navigated` line means WhatsApp's "What's new" screen is open in a language the gateway does
+not recognise: see "Session stuck at `action_required`" above.
 
 ### Issue: Sends return 500 "engine returned no message", and chats or media fail with `r: r`
 

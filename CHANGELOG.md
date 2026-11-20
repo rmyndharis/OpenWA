@@ -209,6 +209,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Point the migration guide at the CHANGELOG upgrade notes, which name the behavior changes of a release, where it named a Breaking marker that recent releases do not use.
 - Correct the API reference: the plugin search provider shows as `plugin:<pluginId>` and `SEARCH_PROVIDER` never takes a plugin id, `byType` of the message statistics has `text` and counts only messages with a body or metadata, an empty `url` beside `base64` of a status post is accepted, the import example carries its notice, the seeded key lists `(master key)`, the chats of a label answer `404` for a missing label only, and `message.received` names its optional fields.
 - Correct the troubleshooting guide's database locked step, which ran a command that checked nothing, to name the process that holds the file.
+- Say in the troubleshooting guide that an `onboarding_dialog_unrecognized` warning beside the page reload `409` means the "What's new" screen of WhatsApp Web is open in a language the gateway does not recognise.
+- Say in the troubleshooting guide that an icon with no text prints under its icon name (`ic-close`) in the lists of an `onboarding_dialog_unrecognized` warning, and that it is not the label to add.
 
 ### Dependencies
 
