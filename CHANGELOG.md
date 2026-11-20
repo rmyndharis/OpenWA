@@ -202,6 +202,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Say in the API reference and the troubleshooting guide how long the whatsapp-web.js page reload `409` can last, that no event marks its end, and how to retry on it (#2139).
 - Correct the migration guide: the 0.15.0 reload row no longer says to wait for a `ready` event that nothing announces, and the import troubleshooting rows describe the shipped import, which replaces everything, restores in a fixed order and rolls back whole.
 - Correct the troubleshooting guide's messaging entry (a send answers `201`, the engine failure log line, no message queue, a history check both engines serve).
+- Point the migration guide at the CHANGELOG upgrade notes, which name the behavior changes of a release, where it named a Breaking marker that recent releases do not use.
 
 ### Dependencies
 

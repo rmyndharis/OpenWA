@@ -782,7 +782,7 @@ times out on slow first boot_ above).
 **Symptoms:**
 
 - API returns `201` but the message is not delivered (`201` means accepted, not delivered; see "Send response" in the API reference)
-- A send fails inside the engine: the gateway logs `Send failed in the engine (<type>)` for an unclassified fault, a WhatsApp rate limit or a WhatsApp refusal (a validation refusal, a not-ready `409` or a `501` logs nothing)
+- A send fails inside the engine: the gateway logs `Send failed in the engine (<type>)` for an unclassified fault, a WhatsApp rate limit or a WhatsApp refusal (a validation refusal, a not-ready `409`, a `501`, a `503` other than a WhatsApp rate limit, and any failure raised before the message was handed to WhatsApp, such as a Baileys media upload the media host refused, log nothing)
 - A bulk batch stays in `processing`
 
 **Diagnostic:**
