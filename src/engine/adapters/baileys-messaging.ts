@@ -334,6 +334,21 @@ export const CONNECTION_LOST_DURING_SEND_MESSAGE =
   'The WhatsApp connection was replaced or stopped while the message was being sent, and it may or may not have ' +
   'been sent. Check the chat before sending it again.';
 
+/** The same window for a status post, which is written to status@broadcast and takes no idempotency key. */
+export const CONNECTION_LOST_DURING_STATUS_POST =
+  'The WhatsApp connection was replaced or stopped while the status was being posted, and it may or may not have ' +
+  'been published. Check your status before posting it again.';
+
+/** The same window for the revoke of a status. */
+export const CONNECTION_LOST_DURING_STATUS_REVOKE =
+  'The WhatsApp connection was replaced or stopped while the status was being revoked, and it may or may not have ' +
+  'been removed. Check your status before deleting it again.';
+
+/** The same window for a reaction to a message, an edit, a delete or a pin, which is a change to a message. */
+export const CONNECTION_LOST_DURING_MESSAGE_CHANGE =
+  'The WhatsApp connection was replaced or stopped while the change was being written, and it may or may not have ' +
+  'been applied. Check the chat before repeating it.';
+
 /**
  * Give a WhatsApp throttle or timeout answer (WA code 429 or 408) its retryable 503 instead of letting
  * the raw Boom surface as a 500. `sendMessage` awaits several IQs before it relays the message (group
@@ -1216,7 +1231,13 @@ export class BaileysMessaging {
       if (this.host.getSocketOrNull() !== sock)
         throw provesNothingSent(error)
           ? markNothingSent(new EngineNotReadyError())
-          : markOutcomeUnknown(new EngineNotReadyError(CONNECTION_LOST_DURING_SEND_MESSAGE));
+          : markOutcomeUnknown(
+              new EngineNotReadyError(
+                'react' in message || 'delete' in message || 'edit' in message || 'pin' in message
+                  ? CONNECTION_LOST_DURING_MESSAGE_CHANGE
+                  : CONNECTION_LOST_DURING_SEND_MESSAGE,
+              ),
+            );
       throw mapSendRefusal(error);
     }
     // Mutations are announced by their library echo; no local callback replaces it.

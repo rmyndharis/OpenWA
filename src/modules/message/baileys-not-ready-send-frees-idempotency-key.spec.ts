@@ -48,6 +48,7 @@ describe('a keyed Baileys send refused with the not-ready 409', () => {
   let replacement: FakeSock;
   let loadLib: jest.Mock;
   let getStoredMessage: jest.Mock;
+  let messaging: BaileysMessaging;
   let service: MessageSendService;
   let ds: DataSource;
   let interceptor: SendIdempotencyInterceptor;
@@ -88,7 +89,7 @@ describe('a keyed Baileys send refused with the not-ready 409', () => {
       recordLidMapping: () => undefined,
       getOnMessageCreate: () => undefined,
     } as unknown as BaileysMessagingHost;
-    const messaging = new BaileysMessaging(host);
+    messaging = new BaileysMessaging(host);
     const engines = new EngineRegistry();
     engines.set('sess-1', {
       sendTextMessage: (...args: Parameters<BaileysMessaging['sendTextMessage']>) => messaging.sendTextMessage(...args),
@@ -272,5 +273,34 @@ describe('a keyed Baileys send refused with the not-ready 409', () => {
     expect(await keyState()).toBe('failed');
     current = sock;
     await expect(withKey()).rejects.toMatchObject({ response: { code: 'IDEMPOTENCY_OUTCOME_UNKNOWN' } });
+  });
+
+  // A reaction, an edit, a delete and a pin change a message, so their answer says the change may or may not have been
+  // applied, not that a message may or may not have been sent.
+  it.each([
+    ['a reaction', () => messaging.reactToMessage(LID, 'Q1', String.fromCodePoint(0x1f44d))],
+    ['an edit', () => messaging.editMessage(LID, 'Q1', 'a new body')],
+    ['a delete', () => messaging.deleteMessage(LID, 'Q1', true)],
+    ['a pin', () => messaging.pinMessage(LID, 'Q1', 86_400)],
+  ])('answers that %s cut off by a replaced connection may or may not have been applied', async (_what, change) => {
+    getStoredMessage.mockImplementation((id: string) =>
+      Promise.resolve({ key: { remoteJid: LID, id, fromMe: true }, message: { conversation: 'mine' } }),
+    );
+    loadLib.mockResolvedValue({
+      proto: { PinInChat: { Type: { PIN_FOR_ALL: 1 } } },
+      normalizeMessageContent: (content: unknown) => content,
+    });
+    sock.sendMessage.mockImplementation(() => {
+      current = null;
+      return Promise.reject(new Error('Connection Closed'));
+    });
+
+    const error = await change().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(EngineNotReadyError);
+    expect((error as Error).message).toMatch(
+      /while the change was being written, and it may or may not have been applied/,
+    );
+    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
   });
 });

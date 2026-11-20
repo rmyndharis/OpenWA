@@ -144,9 +144,9 @@ export const STATUS_POST_409 =
   'reconnecting, or still initializing, so the post never reached WhatsApp. Wait for `ready` and retry. ' +
   'On whatsapp-web.js, WhatsApp Web periodically reloads its own page and the engine re-injects into it: a ' +
   'post made until it has answers a `409` naming the reload, with `code` `ENGINE_PAGE_RELOADING` and ' +
-  '`retryAfterSeconds`, and was not posted. A post that a reload cut short while it ran is the exception: it ' +
-  'answers a `409` with no `code` that says it may or may not have been published, so check your status ' +
-  'before posting it again.';
+  '`retryAfterSeconds`, and was not posted. A post cut short while it ran is the exception, by a reload on ' +
+  'whatsapp-web.js or by a connection replaced or stopped while it was written on Baileys: it answers a `409` ' +
+  'with no `code` that says it may or may not have been published, so check your status before posting it again.';
 
 /** `MessageNotFoundError` (404): outside the adapter's lookup window, or revoked. */
 export const MESSAGE_NOT_FOUND_404 =

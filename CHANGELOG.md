@@ -171,7 +171,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - whatsapp-web.js: a session promoted to `ready` after its `ready` event was missed no longer answers the page reload `409` for up to a minute when WhatsApp Web had navigated while it authenticated; the promotion closes the window the probe has just found the helpers through, unless another navigation landed meanwhile (#2139).
 - Webhooks: a recovery pass that does not fill its batch starts again at the oldest stale delivery, so one whose queue job was lost is replayed while newer stale deliveries keep arriving, where it waited for that backlog to clear.
 - MCP: a tool error carries `retryAfterSeconds` beside its `code` when the REST answer has one (`ENGINE_PAGE_RELOADING`, `SEND_PACING_LIMITED`), where only the code came through.
-- Baileys: a send whose connection was replaced or stopped while the message was being written answers a `409` that says it may or may not have been sent, where it said the session was not connected.
+- Baileys: a send, status post, status delete, reaction, edit, message delete or pin whose connection was replaced or stopped while it was being written answers a `409` that says it may or may not have been sent, published, removed or applied, where it said the session was not connected.
 
 ### Documentation
 
