@@ -1825,6 +1825,8 @@ Get the processing status and progress of a bulk batch.
 
 `status` is one of `pending|processing|completed|cancelled|failed`; `results` holds one entry per recipient attempted as of the last saved checkpoint, with `status` `sent` or `failed`. While the batch is `processing`, the row is saved after every recipient, so `results` and `progress` trail the send loop by at most the recipient in flight, and a cancel from another node stops the run after at most one more recipient; a recipient not yet attempted, or dropped by a cancel, appears only in the `progress` counters. A failed result carries a sanitized `error { code, message }` (internals are not leaked).
 
+A failed result carries `error.code`: `SEND_FAILED` when the engine refused or failed the send (a recipient WhatsApp does not know included), `SEND_BLOCKED` when the media URL was refused by the SSRF guard, and `SEND_PACING_LIMITED` when send pacing refused the send.
+
 **Errors:** `401` missing/invalid API key · `404` batch not found for this session
 
 ### Send pacing (opt-in, `429 SEND_PACING_LIMITED`)
@@ -2651,7 +2653,7 @@ Cancel a running (pending/processing) bulk batch. No request body.
 
 **Response** `200`
 
-`200` via `@HttpCode`. On cancel, the remaining pending count is moved to `cancelled`.
+`200` via `@HttpCode`. On cancel, the remaining pending count is moved to `cancelled`. The counters are those of the last saved checkpoint: a recipient whose send is running when the batch is cancelled may still be delivered, and then counts as sent in `GET /api/sessions/:sessionId/messages/batch/:batchId`.
 
 ```json
 {
