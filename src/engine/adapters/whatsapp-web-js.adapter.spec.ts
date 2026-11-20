@@ -477,7 +477,8 @@ describe('WhatsAppWebJsAdapter initialize() retry on a navigation-killed first i
     jest.useFakeTimers();
     clientInitSpy
       .mockImplementationOnce(function (this: Client) {
-        // The patched hasSynced level-check can fire AUTHENTICATED before the killed evaluate
+        // whatsapp-web.js 1.34.8 fires its post-auth callback once on the hasSynced level as well, so
+        // AUTHENTICATED can fire before the killed evaluate
         // rejects initialize() — attempt 1 then leaves a live 90s reconcile deadline behind, whose
         // non-bridge branch DELETES credentials (recoverFromStuckAuth). The retry must clear it.
         this.emit('authenticated');

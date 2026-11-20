@@ -208,8 +208,9 @@ export class WwebjsReadyReconcile {
   /**
    * One-shot self-heal for a CONNECTED page whose event bridge never attached: reload the page.
    * whatsapp-web.js re-runs its injection on every `framenavigated`, and a fresh page walks the
-   * whole auth->synced->attach pipeline again (with the level-check patch closing the missed-edge
-   * race), so a reload is the cheapest full reinjection that keeps the saved session intact.
+   * whole auth->synced->attach pipeline again (whatsapp-web.js 1.34.8 fires its post-auth callback once on
+   * the hasSynced level as well, which closes the missed-edge race), so a reload is the cheapest full
+   * reinjection that keeps the saved session intact.
    */
   private maybeReloadDeadBridge(): void {
     if (this.readyReconcileReloadAttempted) return;
