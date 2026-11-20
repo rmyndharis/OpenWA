@@ -763,7 +763,7 @@ A stopped session stays down: boot auto-start (`AUTO_START_SESSIONS`) and the mu
 
 An accepted stop on an expired or missing foreign lease clears that claim in the same write, except while a delete holds it. Repeated stops during a delete preserve every claim field so the deleting node can renew; an independent stop remains if that delete is refused. If the former owner still runs, its next successful heartbeat detects lease loss and retires its engine. The stop response does not wait for that remote teardown.
 
-**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` · `403` · `404` not found · `409` another node currently holds this session's live engine (multi-node deployments) · `502` `SESSION_STOP_INCOMPLETE` — session stopped locally but the engine teardown did not complete (retryable; the graceful disconnect and the force-destroy escalation both failed, status `disconnected`, no success audit) · `503` the database did not answer the check of whether another node holds the session (nothing was stopped; retry)
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` · `403` · `404` not found · `409` another node currently holds this session's live engine (multi-node deployments) · `502` `SESSION_STOP_INCOMPLETE` — session stopped locally but the engine teardown did not complete (retryable; the graceful disconnect and the force-destroy escalation both failed, status `disconnected`, no success audit) · `503` the database did not answer the read of the session or the check of whether another node holds it (nothing was stopped; retry)
 
 #### POST /api/sessions/:sessionId/logout
 

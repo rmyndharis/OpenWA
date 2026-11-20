@@ -2822,7 +2822,7 @@ describe('SessionService', () => {
       };
 
       (repository.findOne as jest.Mock).mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
-      await expect(call(service)).rejects.toThrow('Connection terminated unexpectedly');
+      await expect(call(service)).rejects.toBeInstanceOf(ServiceUnavailableException);
       expect(internals.stoppingSessions.has('sess-uuid-1')).toBe(false);
       // Nothing was taken down, so no stop is recorded for the next boot and no request stays counted.
       expect((repository.update as jest.Mock).mock.calls).not.toContainEqual([
