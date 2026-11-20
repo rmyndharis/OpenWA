@@ -405,6 +405,13 @@ export class WwebjsChats {
 
   async muteChat(chatId: string, muteUntil: number | null): Promise<void> {
     this.host.ensureReady();
+    if (isChannelJid(chatId)) {
+      // A channel resolves to a wwebjs `Channel`, whose mute is a structure of its own with no end date: the page's chat
+      // mute of it rejects with a TypeError, a bare 500 for the mute and the unmute alike. Say where a channel is muted.
+      throw new BadRequestException(
+        `Chat ${chatId} is a channel: mute or unmute it through the channel route, not the chat route`,
+      );
+    }
     await this.requireResolvableChat(chatId);
     if (muteUntil === null) {
       await this.chatWrite('muteChat', () => this.client().unmuteChat(chatId));

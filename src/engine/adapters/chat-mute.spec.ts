@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { WwebjsChats } from './wwebjs-chats';
 import { BaileysContacts, type BaileysContactsHost } from './baileys-contacts';
 import { createLogger } from '../../common/services/logger.service';
@@ -65,6 +66,21 @@ describe('WwebjsChats.muteChat', () => {
     expect(client.unmuteChat).toHaveBeenCalledWith('628123@c.us');
     expect(client.muteChat).not.toHaveBeenCalled();
   });
+
+  // A channel resolves to a wwebjs Channel, and the page's chat mute of it rejects with a TypeError, which NestJS turned
+  // into a bare 500 on a live session for the mute and the unmute alike. A channel has a mute route of its own.
+  it.each([MUTE_UNTIL, null])(
+    'refuses a channel id with a 400 before it asks the page (muteUntil %p)',
+    async muteUntil => {
+      const { chats, client } = makeChats();
+      await expect(chats.muteChat('120363000000000001@newsletter', muteUntil)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(client.getChatById).not.toHaveBeenCalled();
+      expect(client.muteChat).not.toHaveBeenCalled();
+      expect(client.unmuteChat).not.toHaveBeenCalled();
+    },
+  );
 
   it('propagates a failure — the caller asked for this state, so a swallow would lie', async () => {
     const { chats, client } = makeChats();

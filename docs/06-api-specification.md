@@ -1241,7 +1241,7 @@ Mute a chat's notifications until a given moment, or unmute it.
 > last message on either engine, so a chat with no known history mutes like any other. The response is
 > always `{ "success": true }` or an error.
 
-**Errors:** `400` session not started, invalid `chatId`/`muteUntil`, or a `chatId` the whatsapp-web.js engine cannot resolve (the Baileys engine answers `success: true` for a chat it has never seen, and `400` for a phone `chatId` held under a LID that neither the stored mapping nor a WhatsApp lookup pairs) · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
+**Errors:** `400` session not started, invalid `chatId`/`muteUntil`, a channel id on the whatsapp-web.js engine (a channel is muted through `POST /api/sessions/:sessionId/channels/:channelId/mute`), or a `chatId` the whatsapp-web.js engine cannot resolve (the Baileys engine answers `success: true` for a chat it has never seen, and `400` for a phone `chatId` held under a LID that neither the stored mapping nor a WhatsApp lookup pairs) · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
 
 #### POST /api/sessions/:sessionId/chats/pin
 

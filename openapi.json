@@ -2894,7 +2894,7 @@
             }
           },
           "400": {
-            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry. Also an invalid chatId / muteUntil, or a chatId the whatsapp-web.js engine cannot resolve. The Baileys engine answers `success: true` for a chat it has never seen, and `400` for a phone chatId held under a LID that neither the stored mapping nor a WhatsApp lookup pairs.",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry. Also an invalid chatId / muteUntil, a channel id on the whatsapp-web.js engine (a channel is muted through its own route), or a chatId that engine cannot resolve. The Baileys engine answers `success: true` for a chat it has never seen, and `400` for a phone chatId held under a LID that neither the stored mapping nor a WhatsApp lookup pairs.",
             "content": {
               "application/json": {
                 "schema": {
