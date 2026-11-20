@@ -33,7 +33,7 @@ import('@whiskeysockets/baileys')
       'fetchLatestWaWebVersion', 'normalizeMessageContent', 'extractMessageContent', 'getContentType',
       'downloadMediaMessage', 'BufferJSON', 'proto', 'DisconnectReason', 'S_WHATSAPP_NET', 'ALL_WA_PATCH_NAMES',
       'CALL_VIDEO_PREFIX', 'CALL_AUDIO_PREFIX', 'isRealMessage', 'decryptPollVote', 'USyncQuery', 'USyncUser',
-      'prepareWAMessageMedia'];
+      'prepareWAMessageMedia', 'getChatId', 'jidNormalizedUser'];
     const missing = used.filter(name => m[name] === undefined);
     if (missing.length > 0 || typeof m.default !== 'function') throw new Error('missing exports: ' + missing.join(', '));
     console.log('PASS: Baileys loaded with every export the adapter uses');

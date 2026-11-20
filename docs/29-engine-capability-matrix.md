@@ -1097,10 +1097,17 @@ adapter boundary — none silently stubs.
   more than it holds; a chunk that held a count of its own, or that a text was merged into as well, counts more and is
   left as Baileys hands it over, so the message can still date the chat and bring back a deleted one.
   Two or more such messages for one chat that reach the socket in one batch, as the offline queue does after a reconnect,
-  are counted together and handled as a message of their own would be: they add their sum to the count, list a chat the
-  session holds no record of and bring back a chat WhatsApp deleted.
-  An unread mark set on the phone that Baileys delivers in the same batch just before such a message, as after a reconnect, is folded into that
-  message's count by the library and is therefore not listed; the mark stays on the account. A receipt that names only older messages, or only the account's own (which Baileys leaves out of a
+  are recognised the same way when Baileys counted no message of its own for the chat in that batch: the chat update
+  loses their time and message, and the count they explain (Baileys adds one for each and lowers the sum for one the
+  account read on another device), so the chat is left as it was. A chunk is recognised when its count is exactly their
+  number, and its count stays the sum. When a message of its own came in the same batch, the sum is kept, and adds to
+  the count, lists a chat the session holds no record of and brings back a chat WhatsApp deleted, as that message does.
+  A count they do not explain stays on the update, without their time and message: an unread mark set on the phone
+  after them is listed, and so is a count above their number.
+  An unread mark set on the phone that Baileys delivers in the same batch just before such a message, as after a
+  reconnect, is folded into that message's count by the library and is therefore not listed; the mark stays on the
+  account. A read synced from the phone in the same batch is folded in the same way, since its zero adds nothing to
+  their count, so it is not seen either: the chat keeps the count it had until the next read. A receipt that names only older messages, or only the account's own (which Baileys leaves out of a
   receipt), leaves the count, and so does one a newer message overtook, recorded or still being processed; a session restarted since holds
   no received message to compare, and takes any received id for the read. Only a chat marked unread by
   hand (listed with `unreadCount` `-1`, by `markUnread` or on the phone) takes a second write,

@@ -1,5 +1,5 @@
 import type * as BaileysLib from '@whiskeysockets/baileys';
-import type { Chat, proto } from '@whiskeysockets/baileys';
+import type { Chat, proto, WAMessage } from '@whiskeysockets/baileys';
 import {
   DeliveryStatus,
   EventResponseKind,
@@ -45,6 +45,9 @@ export const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
 
 /** The helpers of the loaded library that name the content a message carries. */
 export type ContentTypeLib = Pick<typeof BaileysLib, 'normalizeMessageContent' | 'getContentType'>;
+/** What {@link countedMessageKind} asks of the library: its own tests of a real message and of the chat it files one under. */
+export type CountedMessageLib = ContentTypeLib &
+  Pick<typeof BaileysLib, 'isRealMessage' | 'getChatId' | 'jidNormalizedUser'>;
 
 /**
  * Whether a normalized message is made of protocol noise alone, which nothing announces. `messageContextInfo` is also
@@ -112,18 +115,20 @@ export function isNonContent(
  * a contact's encrypted edit or reaction, a pin, a keep-in-chat toggle, an album header, an event RSVP, an encrypted
  * comment or a lone fast-ratchet sender-key distribution listed the chat unread with nothing new to read, and, by its
  * time, brought back a chat WhatsApp had deleted, which only a message of its own may do. Only an update that counts
- * exactly that one message is recognised: Baileys' event buffer adds the counts of one flush and keeps the last message
- * alone, so a larger count may hold a message of its own and is left as it is. For the same reason the message has to
- * be one Baileys counts, received and with no stub type: after a contact's text, the account's own pin or edit in the
- * same flush leaves the text's count of one beside a message that was never counted. The account's own message carries
- * no count at all, so an own count in the update belongs to something else and leaves it whole.
+ * exactly one message is recognised here: Baileys' event buffer adds the counts of one flush and keeps the last message
+ * alone, so any other count may hold a message of its own, and is settled with the messages of its flush instead
+ * ({@link withoutNonContentOnlyFlush}). For the same reason the message has to be one Baileys counts, received and with
+ * no stub type: after a contact's text, the account's own pin or edit in the same flush leaves the text's count of one
+ * beside a message that was never counted. The account's own message carries no count at all, so an own count in the
+ * update belongs to something else and leaves it whole.
  *
  * Whatever else the update carries (a timer, a name, a mute, a pin, `archived`) is still the chat's. `undefined` says
  * nothing is left of it but its id, which a store that has never seen the chat would take for a chat of its own.
  *
- * One case cannot be told apart: an unread mark set on the phone that Baileys delivers in the same flush just before
- * such a message, as after a reconnect. The buffer folds the mark into the message's count and emits exactly what the
- * message alone produces, so the mark is not listed. It stays on the account, and the phone still shows it.
+ * One case cannot be told apart: an unread mark set on the phone, or a read, that Baileys delivers in the same flush
+ * just before such a message, as after a reconnect. The buffer folds it into the message's count (a read adds its zero)
+ * and emits exactly what the message alone produces, so the mark is not listed and the read is not seen. The mark stays
+ * on the account, and the phone still shows it.
  */
 export function withoutNonContentMessage(
   update: Partial<Chat>,
@@ -133,11 +138,78 @@ export function withoutNonContentMessage(
   if (!last || (last.key?.fromMe === true ? Object.hasOwn(update, 'unreadCount') : update.unreadCount !== 1)) {
     return update;
   }
+  return withoutMessageParts(update, false);
+}
+
+/** The update without its message and its time, and without its count unless `keepCount`; undefined when only its id is left. */
+function withoutMessageParts(update: Partial<Chat>, keepCount: boolean): Partial<Chat> | undefined {
   const rest = { ...update };
-  delete rest.unreadCount;
+  if (!keepCount) delete rest.unreadCount;
   delete rest.conversationTimestamp;
   delete rest.messages;
   return Object.keys(rest).every(key => key === 'id' || key === 'conditional') ? undefined : rest;
+}
+
+/**
+ * Whether a live chat update ends in a message that is none of its own from a contact and does not count exactly one
+ * message. The library's event buffer adds the counts of a flush, lowers the sum for a message the account read on
+ * another device (the count is gone when it reaches zero) and replaces it for an unread mark, so the count cannot say
+ * whether the chat holds a message of its own. The buffer emits the chat updates of a flush before its messages, so the
+ * answer comes with the messages ({@link countedMessageKind}), and the update is held until they have been seen.
+ */
+export function mayHoldOnlyNonContent(update: Partial<Chat>, lib: ContentTypeLib | undefined): boolean {
+  const last = nonContentLast(update, lib);
+  return !!last && last.key?.fromMe !== true && update.unreadCount !== 1;
+}
+
+/**
+ * The update of a flush that counted no message of its own for the chat, only `noContent` of them that are none of
+ * their own (see {@link mayHoldOnlyNonContent}): without the message and the time, which would date the chat or bring
+ * back one WhatsApp deleted, and without the count when the messages explain it. They add one each and a read on
+ * another device only lowers the sum, so a count from 1 to `noContent` is theirs. One that is not stays: a mark set on
+ * the phone (below zero, or cancelled), more than they add up to, or the zero of a read.
+ */
+export function withoutNonContentOnlyFlush(
+  update: Partial<Chat>,
+  lib: ContentTypeLib | undefined,
+  noContent: number,
+): Partial<Chat> | undefined {
+  const last = nonContentLast(update, lib);
+  if (!last || last.key?.fromMe === true) return update;
+  const count = update.unreadCount;
+  return withoutMessageParts(update, !(typeof count === 'number' && count >= 1 && count <= noContent));
+}
+
+/**
+ * Whether a history chunk or an upsert of a chat ends in a message that is none of its own from a contact and counts
+ * more than one message: the chunk's count is its own plus one for each such message merged into it, and
+ * {@link withoutMergedNonContentMessage} cannot tell from the chunk alone how many were merged. Held as a live update is.
+ */
+export function mayCountSeveralNonContent(update: Partial<Chat>, lib: ContentTypeLib | undefined): boolean {
+  const last = nonContentLast(update, lib);
+  return !!last && last.key?.fromMe !== true && (update.unreadCount ?? 0) >= 2;
+}
+
+/**
+ * How the library's unread count takes a message of a flush: undefined when it does not count it (the account's own,
+ * one with a stub type, or one the library does not take for a real message, such as a plain reaction or a poll vote),
+ * otherwise whether it is none of its own, as {@link withoutNonContentMessage} reads it.
+ */
+export function countedMessageKind(message: WAMessage, lib: CountedMessageLib): 'content' | 'noContent' | undefined {
+  if (message.key.fromMe || message.messageStubType || !message.message || !lib.isRealMessage(message))
+    return undefined;
+  return isNonContent(lib.normalizeMessageContent(message.message) ?? message.message, lib.getContentType)
+    ? 'noContent'
+    : 'content';
+}
+
+/** The chat the library files a message under, as its chat update names it; undefined for a key it cannot file. */
+export function countedChatId(key: WAMessage['key'], lib: CountedMessageLib): string | undefined {
+  try {
+    return lib.jidNormalizedUser(lib.getChatId(key)) || undefined;
+  } catch {
+    return undefined; // the library throws for such a key before it counts the message
+  }
 }
 
 /** The time {@link withoutMergedNonContentMessage} took out of a chat, by the chat it returned. */
@@ -150,23 +222,30 @@ const droppedMessageTimes = new WeakMap<object, number>();
  * chat WhatsApp deleted, and with the message as its last. The time is taken out only when it is the message's: after a
  * message that came before the chunk it is the chunk's own, and stays.
  *
- * As for a live update ({@link withoutNonContentMessage}), only a chat that counts exactly that one message is
- * recognised: a received message leaves a count of one, one of the account's own leaves none. A larger count may hold a
- * message of its own, and a deleted chat that lost its time would drop the count of a text of the same flush, which is
- * recorded only afterwards and brings the chat back with none. So a chunk that held a count of its own, or that a text
- * was merged into as well, is left as it is: it keeps the time and message of the last update merged into it.
+ * As for a live update ({@link withoutNonContentMessage}), only a chat that counts exactly `count` messages is
+ * recognised, one by default: a received message leaves a count of one, one of the account's own leaves none. A larger
+ * count may hold a message of its own, and a deleted chat that lost its time would drop the count of a text of the same
+ * flush, which is recorded only afterwards and brings the chat back with none. So a chunk that held a count of its own,
+ * or that a text was merged into as well, is left as it is: it keeps the time and message of the last update merged
+ * into it. The lifecycle passes the number of messages of the flush that are none of their own when they are every
+ * message counted for the chat ({@link mayCountSeveralNonContent}).
  *
  * The count stays whatever it is: it is the chunk's count plus the count of every update merged into it, and nothing in
  * the chat says whether the chunk held a count to add to (the library replaces one that is not a number), so the
- * message's count cannot be told from the rest. A pin merged into a chunk therefore still raises that chat's count by one.
+ * message's count cannot be told from the rest. A pin merged into a chunk therefore still raises that chat's count by
+ * one, and two of them by two.
  *
  * The time that was taken out is the only time the phone gave a chat the session may know nothing else of, which is
  * listed at the epoch without it. The filter cannot see the session, so it names the time ({@link droppedMessageTime})
  * and the session store gives it back to a chat that is not deleted and holds no time of its own.
  */
-export function withoutMergedNonContentMessage(chat: Partial<Chat>, lib: ContentTypeLib | undefined): Partial<Chat> {
+export function withoutMergedNonContentMessage(
+  chat: Partial<Chat>,
+  lib: ContentTypeLib | undefined,
+  count = 1,
+): Partial<Chat> {
   const last = nonContentLast(chat, lib);
-  if (!last || (last.key?.fromMe === true ? (chat.unreadCount ?? 0) > 0 : chat.unreadCount !== 1)) return chat;
+  if (!last || (last.key?.fromMe === true ? (chat.unreadCount ?? 0) > 0 : chat.unreadCount !== count)) return chat;
   const rest = { ...chat };
   delete rest.messages;
   if (last.messageTimestamp != null && Number(rest.conversationTimestamp) === Number(last.messageTimestamp)) {

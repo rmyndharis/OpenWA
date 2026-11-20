@@ -186,6 +186,12 @@ jest.mock('@whiskeysockets/baileys', () => ({
   getContentType: jest.fn(() => 'conversation'),
   // What Baileys counts as unread: every message of these tests is real content, so this is identity-true.
   isRealMessage: jest.fn(() => true),
+  // The chat a message is filed under: its own, or the sender's for a broadcast list; without a device suffix.
+  getChatId: jest.fn(
+    ({ remoteJid, participant, fromMe }: { remoteJid: string; participant?: string; fromMe?: boolean }) =>
+      remoteJid.endsWith('@broadcast') && remoteJid !== 'status@broadcast' && !fromMe ? participant : remoteJid,
+  ),
+  jidNormalizedUser: jest.fn((jid: string) => jid.replace(/:\d+@/, '@').replace('@c.us', '@s.whatsapp.net')),
   // The adapter now downloads via 'stream' mode, so resolve to an async-iterable of chunks (factory is
   // hoisted above imports, so this stays inline; tests override with the `streamOf` helper below).
   downloadMediaMessage: jest.fn(() =>
@@ -8512,10 +8518,121 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
       expect(await unread(adapter)).toBe(held);
     });
 
-    it('leaves the count of a flush that adds up several messages, which may hold one of its own', async () => {
+    // The library adds the counts of one flush and emits its chat updates before its messages, so an update that counts
+    // several messages is settled with the messages that follow it in the same turn.
+    const PIN = { pinInChatMessage: {} };
+    const flush = (...received: Array<[Record<string, unknown>, string?]>) => ({
+      type: 'notify',
+      messages: received.map(([content, chat = '628111@s.whatsapp.net'], i) => ({
+        key: { remoteJid: chat, fromMe: false, id: `F${i}` },
+        message: content,
+        messageTimestamp: 1700000040 + i,
+      })),
+    });
+    const settled = () => new Promise(resolve => setImmediate(resolve));
+
+    it('leaves the count of an update that adds up several messages when no message of the flush says which', async () => {
       const adapter = await readyWithMessage();
 
       fakeSock.fire('chats.update', counting({ secretEncryptedMessage: {} }, 2));
+      await settled();
+
+      expect(await unread(adapter)).toBe(2);
+    });
+
+    it('does not list the chat as unread for several messages of no content that arrive in one flush', async () => {
+      const adapter = await readyWithMessage();
+
+      fakeSock.fire('chats.update', counting(PIN, 3));
+      fakeSock.fire('messages.upsert', flush([PIN], [{ encReactionMessage: {} }], [PIN]));
+      await settled();
+
+      expect(await unread(adapter)).toBe(0);
+    });
+
+    it('keeps the sum when a message of its own arrives in the flush beside them', async () => {
+      const adapter = await readyWithMessage();
+
+      fakeSock.fire('chats.update', counting(PIN, 3));
+      fakeSock.fire('messages.upsert', flush([PIN], [{ conversation: 'new' }], [PIN]));
+      await settled();
+
+      expect(await unread(adapter)).toBe(3);
+    });
+
+    it('counts only the messages of the chat the update names', async () => {
+      const adapter = await readyWithMessage();
+
+      fakeSock.fire('chats.update', counting(PIN, 2));
+      fakeSock.fire('messages.upsert', flush([PIN], [{ conversation: 'elsewhere' }, '628222@s.whatsapp.net'], [PIN]));
+      await settled();
+
+      expect(await unread(adapter)).toBe(0);
+    });
+
+    it('keeps a count that the messages of the flush do not add up to', async () => {
+      const adapter = await readyWithMessage();
+
+      fakeSock.fire('chats.update', counting(PIN, 2));
+      fakeSock.fire('messages.upsert', flush([PIN]));
+      await settled();
+
+      expect(await unread(adapter)).toBe(2);
+    });
+
+    // The library lowers the sum of a flush for a message the account read on another device, and takes the count away
+    // when it reaches zero: the chat still holds no message of its own, so it takes no time and no message from the pins.
+    const timeOf = async (adapter: BaileysAdapter) =>
+      (await adapter.getChats()).find(chat => chat.id === '628111@c.us')?.timestamp;
+
+    it('does not list the chat as unread when the account read one of the messages of no content', async () => {
+      const adapter = await readyWithMessage();
+      const before = await timeOf(adapter);
+
+      fakeSock.fire('chats.update', counting(PIN, 2));
+      fakeSock.fire('messages.upsert', flush([PIN], [PIN], [PIN]));
+      await settled();
+
+      expect(await unread(adapter)).toBe(0);
+      expect(await timeOf(adapter)).toBe(before);
+    });
+
+    it('does not date the chat by a message of no content whose count the library took away', async () => {
+      const adapter = await readyWithMessage();
+      const before = await timeOf(adapter);
+      const [update] = counting(PIN);
+      delete (update as { unreadCount?: number }).unreadCount;
+
+      fakeSock.fire('chats.update', [update]);
+      fakeSock.fire('messages.upsert', flush([PIN]));
+      await settled();
+
+      expect(await unread(adapter)).toBe(0);
+      expect(await timeOf(adapter)).toBe(before);
+    });
+
+    it('keeps a mark set on the phone but not the time of the messages of no content after it', async () => {
+      const adapter = await readyWithMessage();
+      const before = await timeOf(adapter);
+
+      fakeSock.fire('chats.update', counting(PIN, -1));
+      fakeSock.fire('messages.upsert', flush([PIN]));
+      await settled();
+
+      expect(await unread(adapter)).toBe(-1);
+      expect(await timeOf(adapter)).toBe(before);
+    });
+
+    it('does not count the messages of one flush for the update of the next', async () => {
+      const adapter = await readyWithMessage();
+      fakeSock.fire('chats.update', counting(PIN, 2));
+      fakeSock.fire('messages.upsert', flush([PIN], [PIN]));
+      await settled();
+      expect(await unread(adapter)).toBe(0);
+
+      fakeSock.fire('chats.update', counting(PIN, 2));
+      fakeSock.fire('messages.upsert', flush([{ conversation: 'elsewhere' }, '628222@s.whatsapp.net']));
+      await settled();
 
       expect(await unread(adapter)).toBe(2);
     });

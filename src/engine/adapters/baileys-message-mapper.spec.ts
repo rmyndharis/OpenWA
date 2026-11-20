@@ -29,6 +29,11 @@ import {
   withoutFastRatchetDistribution,
   withoutMergedNonContentMessage,
   withoutNonContentMessage,
+  withoutNonContentOnlyFlush,
+  countedChatId,
+  countedMessageKind,
+  mayCountSeveralNonContent,
+  mayHoldOnlyNonContent,
 } from './baileys-message-mapper';
 import type { Chat, proto } from '@whiskeysockets/baileys';
 
@@ -1617,6 +1622,132 @@ describe('what is no message of its own', () => {
     it('leaves an update alone before the library is loaded', () => {
       const update = raised(PIN);
       expect(withoutNonContentMessage(update, undefined)).toBe(update);
+    });
+  });
+
+  // The library's event buffer adds the counts of one flush, lowers the sum for a message read elsewhere and emits the
+  // chat updates before the messages, so an update that does not count exactly one message is settled with the messages
+  // of its flush: the chat holds none of its own when every message the library counted for it is none of its own.
+  describe('settling an update with its flush', () => {
+    // The parts of the library that file a message under a chat, as process-message.ts has them.
+    const filing = {
+      getChatId: ({ remoteJid, participant, fromMe }: proto.IMessageKey) => {
+        if (!remoteJid) throw new Error('Cannot derive chat id: message key is missing remoteJid');
+        return remoteJid.endsWith('@broadcast') && remoteJid !== 'status@broadcast' && !fromMe
+          ? (participant as string)
+          : remoteJid;
+      },
+      jidNormalizedUser: (jid: string) => jid.replace(/:\d+@/, '@').replace('@c.us', '@s.whatsapp.net'),
+    };
+    const lib = {
+      getContentType: libraryContentType,
+      normalizeMessageContent: (content: unknown) => content,
+      isRealMessage: () => true,
+      ...filing,
+    } as never;
+    const CHAT_ID = '628111@s.whatsapp.net';
+    const raised = (content: Record<string, unknown>, unreadCount: number, fromMe = false): Partial<Chat> => ({
+      id: CHAT_ID,
+      ...(fromMe ? {} : { unreadCount }),
+      conversationTimestamp: 1700000040,
+      messages: [{ message: { key: { remoteJid: CHAT_ID, fromMe, id: 'X1' }, message: content } }],
+    });
+    const PIN = { pinInChatMessage: {} };
+    /** The update once the library's buffer lowered its count to zero, which it takes away. */
+    const withoutCount = (update: Partial<Chat>): Partial<Chat> => {
+      delete update.unreadCount;
+      return update;
+    };
+    const wire = (content: Record<string, unknown> | null, over: Partial<proto.IWebMessageInfo> = {}) =>
+      ({
+        key: { remoteJid: CHAT_ID, fromMe: false, id: 'M1' },
+        ...(content ? { message: content } : {}),
+        ...over,
+      }) as never;
+
+    it.each<[string, Partial<Chat>]>([
+      ['a count above one', raised(PIN, 2)],
+      ['a count the library lowered to nothing', { ...raised(PIN, 2), unreadCount: undefined }],
+      ['a count the library took away', withoutCount(raised(PIN, 2))],
+      ['a mark set by hand', raised(PIN, -1)],
+      ['a read', raised(PIN, 0)],
+    ])('holds an update that ends in a message of no content and has %s', (_what, update) => {
+      expect(mayHoldOnlyNonContent(update, lib)).toBe(true);
+    });
+
+    it.each<[string, Partial<Chat>]>([
+      ['a count of one, which needs no flush', raised(PIN, 1)],
+      ['a message of the account itself', raised(PIN, 0, true)],
+      ['a last message with content', raised({ conversation: 'hi' }, 2)],
+      ['no message at all', { id: CHAT_ID, unreadCount: 2 }],
+    ])('does not hold an update with %s', (_what, update) => {
+      expect(mayHoldOnlyNonContent(update, lib)).toBe(false);
+    });
+
+    it('holds a chunk that ends in a message of no content and counts more than one, and no other', () => {
+      expect(mayCountSeveralNonContent(raised(PIN, 2), lib)).toBe(true);
+      expect(mayCountSeveralNonContent(raised(PIN, 1), lib)).toBe(false);
+      expect(mayCountSeveralNonContent(raised(PIN, -1), lib)).toBe(false);
+      expect(mayCountSeveralNonContent(raised({ conversation: 'hi' }, 2), lib)).toBe(false);
+    });
+
+    it.each([1, 2, 3])('takes the message, the time and a count of 1 to 3 the messages explain: %i', count => {
+      expect(withoutNonContentOnlyFlush(raised(PIN, count), lib, 3)).toBeUndefined();
+    });
+
+    it('takes the message and the time of an update whose count the library took away', () => {
+      expect(withoutNonContentOnlyFlush(withoutCount(raised(PIN, 2)), lib, 3)).toBeUndefined();
+    });
+
+    it.each<[string, number | null | undefined]>([
+      ['more than the messages add up to', 4],
+      ['a mark set by hand', -1],
+      ['the zero of a read', 0],
+      ['a mark cancelled', null],
+    ])('takes the message and the time but keeps a count that is %s', (_what, unreadCount) => {
+      const kept = withoutNonContentOnlyFlush({ ...raised(PIN, 1), unreadCount }, lib, 3);
+      expect(kept).toEqual({ id: CHAT_ID, unreadCount });
+    });
+
+    it('leaves the update of a message of the account itself, and one with no message, whole', () => {
+      const own = raised(PIN, 0, true);
+      expect(withoutNonContentOnlyFlush(own, lib, 2)).toBe(own);
+      const bare = { id: CHAT_ID, unreadCount: 2 };
+      expect(withoutNonContentOnlyFlush(bare, lib, 2)).toBe(bare);
+      const text = raised({ conversation: 'hi' }, 2);
+      expect(withoutNonContentOnlyFlush(text, lib, 2)).toBe(text);
+    });
+
+    it('names what the library counts a message of the flush as', () => {
+      expect(countedMessageKind(wire(PIN), lib)).toBe('noContent');
+      expect(countedMessageKind(wire({ conversation: 'hi' }), lib)).toBe('content');
+      expect(
+        countedMessageKind(wire(PIN, { key: { remoteJid: CHAT_ID, fromMe: true, id: 'M1' } }), lib),
+      ).toBeUndefined();
+      expect(countedMessageKind(wire(PIN, { messageStubType: 2 }), lib)).toBeUndefined();
+      expect(countedMessageKind(wire(null), lib)).toBeUndefined();
+      const notReal = { ...(lib as object), isRealMessage: () => false } as never;
+      expect(countedMessageKind(wire({ conversation: 'hi' }), notReal)).toBeUndefined();
+    });
+
+    it('files a message under the chat the library gives its update', () => {
+      expect(countedChatId({ remoteJid: CHAT_ID, fromMe: false }, lib)).toBe(CHAT_ID);
+      expect(countedChatId({ remoteJid: '628111@c.us', fromMe: false }, lib)).toBe(CHAT_ID);
+      expect(countedChatId({ remoteJid: '120363@g.us', participant: '628222:12@s.whatsapp.net' }, lib)).toBe(
+        '120363@g.us',
+      );
+      // The sender chat of a broadcast list, with the device suffix the library takes off.
+      expect(
+        countedChatId({ remoteJid: '12345@broadcast', participant: '628222:12@s.whatsapp.net', fromMe: false }, lib),
+      ).toBe('628222@s.whatsapp.net');
+      expect(
+        countedChatId({ remoteJid: 'status@broadcast', participant: '628222@s.whatsapp.net', fromMe: false }, lib),
+      ).toBe('status@broadcast');
+    });
+
+    it('files no message under a chat when the library cannot', () => {
+      expect(countedChatId({ fromMe: false }, lib)).toBeUndefined();
+      expect(countedChatId({ remoteJid: '12345@broadcast', fromMe: false }, lib)).toBeUndefined();
     });
   });
 
