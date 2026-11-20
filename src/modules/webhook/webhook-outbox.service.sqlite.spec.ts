@@ -1,11 +1,11 @@
 import 'reflect-metadata';
 import { LoggerService } from '../../common/services/logger.service';
-import { DataSource } from 'typeorm';
+import { DataSource, FindOperator, Repository } from 'typeorm';
 import { Session } from '../session/entities/session.entity';
 import { Webhook } from './entities/webhook.entity';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
 import { WebhookOutboxEvent } from './entities/webhook-outbox-event.entity';
-import { WebhookOutboxService } from './webhook-outbox.service';
+import { OUTBOX_UNREADABLE_RETRY_MS, WebhookOutboxService } from './webhook-outbox.service';
 import { recordWebhookDeliveryFailure } from './utils/record-delivery-failure';
 
 // SQLite serves every repository from one connection, so a transaction a write opens is shared with the
@@ -111,6 +111,101 @@ describe('WebhookOutboxService.findStale() past an unreadable payload (SQLite)',
       );
     } finally {
       error.mockRestore();
+    }
+  });
+
+  // The page read fails for as long as the row sits in it, and each failure is a read of every row of the page
+  // and a log line, on every pass of the sweep, for a row that cannot be replayed anyway.
+  it('leaves an unreadable row out of the next passes and reads it again after the wait', async () => {
+    const error = jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+    const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    const now = jest.spyOn(Date, 'now');
+    try {
+      const t0 = Date.parse('2026-02-01T00:00:00Z');
+      now.mockReturnValue(t0);
+      await insertRaw('00000000-0000-4000-8000-000000000001', 'k1', '{oops', '2026-01-01 00:00:00');
+      await insertRaw('00000000-0000-4000-8000-000000000002', 'k2', '{"a":1}', '2026-01-01 00:00:01');
+      const olderThan = new Date('2026-01-15T00:00:00Z');
+
+      expect((await outbox.findStale(olderThan, 10)).map(r => r.idempotencyKey)).toEqual(['k2']);
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      // Same wait still running: the page reads, and nothing is logged.
+      now.mockReturnValue(t0 + OUTBOX_UNREADABLE_RETRY_MS - 1);
+      expect((await outbox.findStale(olderThan, 10)).map(r => r.idempotencyKey)).toEqual(['k2']);
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      now.mockReturnValue(t0 + OUTBOX_UNREADABLE_RETRY_MS);
+      expect((await outbox.findStale(olderThan, 10)).map(r => r.idempotencyKey)).toEqual(['k2']);
+      expect(error).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+});
+
+// A read that fails because the database said "not now" says nothing about the row: it is read again by the next pass.
+describe('WebhookOutboxService.findStale() past a row the database would not read', () => {
+  const failing = (rowError: Error) => {
+    const find = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('page read failed'))
+      .mockResolvedValueOnce([{ id: 'row-1' }])
+      .mockRejectedValueOnce(new Error('page read failed'))
+      .mockResolvedValue([{ id: 'row-1' }]);
+    const findOneBy = jest.fn().mockRejectedValue(rowError);
+    const outbox = new WebhookOutboxService({ find, findOneBy } as unknown as Repository<WebhookOutboxEvent>);
+    return { outbox, find };
+  };
+  const pageWhere = (find: jest.Mock, call: number): Record<string, unknown> =>
+    (find.mock.calls[call] as [{ where: Record<string, unknown> }])[0].where;
+
+  it('keeps leaving a row out when its payload does not parse, and not when the database was busy', async () => {
+    const olderThan = new Date('2026-02-01T00:00:00Z');
+    jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const parse = failing(new SyntaxError('Unexpected token o in JSON'));
+      await parse.outbox.findStale(olderThan, 10);
+      await parse.outbox.findStale(olderThan, 10);
+      expect(pageWhere(parse.find, 0)).not.toHaveProperty('id');
+      expect(pageWhere(parse.find, 2)).toHaveProperty('id');
+
+      const busy = failing(Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' }));
+      await busy.outbox.findStale(olderThan, 10);
+      await busy.outbox.findStale(olderThan, 10);
+      expect(pageWhere(busy.find, 2)).not.toHaveProperty('id');
+    } finally {
+      jest.restoreAllMocks();
+    }
+  });
+
+  it('remembers at most 1000 unreadable rows, the newest of them', async () => {
+    jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const ids = Array.from({ length: 1001 }, (_, i) => ({ id: `row-${i}` }));
+      const find = jest
+        .fn()
+        .mockRejectedValueOnce(new Error('page read failed'))
+        .mockResolvedValueOnce(ids)
+        .mockResolvedValue([]);
+      const findOneBy = jest.fn().mockRejectedValue(new SyntaxError('Unexpected token o in JSON'));
+      const outbox = new WebhookOutboxService({ find, findOneBy } as unknown as Repository<WebhookOutboxEvent>);
+
+      await outbox.findStale(new Date('2026-02-01T00:00:00Z'), 2000);
+      await outbox.findStale(new Date('2026-02-01T00:00:00Z'), 2000);
+
+      const left = (pageWhere(find, 2).id as FindOperator<string[]>).value;
+      expect(left).toHaveLength(1000);
+      expect(left).not.toContain('row-0');
+      expect(left).toContain('row-1000');
+    } finally {
+      jest.restoreAllMocks();
     }
   });
 });
