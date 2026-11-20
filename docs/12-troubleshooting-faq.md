@@ -1306,8 +1306,12 @@ DATABASE_STATEMENT_TIMEOUT_MS=30000   # server-side per-query cap (default 30000
 **Solutions:**
 
 ```bash
-# Check for long-running queries (default SQLite file; override with DATABASE_NAME)
-sqlite3 ./data/openwa.sqlite ".timeout 30000"
+# SQLite has no list of running queries. Name the process that holds the file instead (default SQLite file; override
+# with DATABASE_NAME). On a host:
+lsof ./data/openwa.sqlite
+# In the container, which has ps but neither lsof nor fuser: look for a second sqlite3 session or a running
+# scripts/backup.sh
+docker exec <container> ps aux
 
 # Check WAL mode
 sqlite3 ./data/openwa.sqlite "PRAGMA journal_mode;"
