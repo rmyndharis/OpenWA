@@ -45,6 +45,17 @@ export function flattenMessagePages(data: MessagesData): ChatMessageView[] {
 }
 
 /**
+ * A refusal of the stored-message read that asking again may change: no answer at all, a timeout, a limit, or the gateway
+ * or its database down. Left to fall back to the engine history, it would leave a thread with no media, no delivery
+ * state and no older page, which staleTime: Infinity then caches as the whole thread. A 4xx is the route refusing this
+ * chat, which asking again does not change.
+ */
+function mayPass(reason: unknown): boolean {
+  const status = (reason as { status?: unknown } | null)?.status;
+  return typeof status !== 'number' || status === 408 || status === 429 || status >= 500;
+}
+
+/**
  * Fetch a chat's messages a page at a time, newest page first, cached at staleTime: Infinity;
  * realtime updates flow through useChatMessagesActions, not refetches.
  *
@@ -75,10 +86,12 @@ export function useChatMessages(
         sessionApi.getChatMessages(sessionId, chatId!, MESSAGE_PAGE_SIZE, pageParam),
         wantsHistory ? sessionApi.getChatHistory(sessionId, chatId!, 100, false) : Promise.resolve([]),
       ]);
-      // Only the first page may fall back to history alone; an older page has no second source, so a
-      // rejected DB read there is a real failure and must surface rather than resolve to an empty
-      // page that would read as "no more messages".
-      if (dbRes.status === 'rejected' && (!wantsHistory || historyRes.status === 'rejected')) throw dbRes.reason;
+      // Only the first page may fall back to history alone, and only for a refusal that asking again would not
+      // change (see mayPass). An older page has no second source, so a rejected DB read there is a real failure and
+      // must surface rather than resolve to an empty page that would read as "no more messages".
+      if (dbRes.status === 'rejected' && (!wantsHistory || historyRes.status === 'rejected' || mayPass(dbRes.reason))) {
+        throw dbRes.reason;
+      }
       const db = dbRes.status === 'fulfilled' ? dbRes.value : { messages: [] };
       const history = historyRes.status === 'fulfilled' ? historyRes.value.map(mapEngineHistoryMessage) : [];
       // The gateway answers newest-first (createdAt DESC); reversed here so `page.db` is ascending
