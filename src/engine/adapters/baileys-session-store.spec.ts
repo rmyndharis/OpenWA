@@ -987,11 +987,31 @@ describe('BaileysSessionStore', () => {
         expect(store.listChats()[0].name).toBe(listed);
       });
 
-      it('leaves the contact list as the account filed it', () => {
+      // A history chunk folds the chat's title into the push name, and a chat with no name is titled by the digits: a
+      // contact read and a status poster report those as no name, as the chat list does.
+      it.each([
+        ['push name', { notify: '111' }],
+        ['push name', { notify: ' 111@lid ' }],
+        ['saved name', { name: '111@lid' }],
+        ['verified name', { verifiedName: '111' }],
+      ])('stores no %s that is only the privacy id, as %j', (_what, record) => {
+        store.upsertContacts([{ id: '111@lid', ...record }]);
+        const contact = store.findContact('111@lid');
+        expect(contact).toMatchObject({ id: '111@lid', isMyContact: false });
+        expect(contact?.name).toBeUndefined();
+        expect(contact?.pushName).toBeUndefined();
+        expect(store.listContacts()).toEqual([]);
+      });
+
+      it('keeps the other names of a record that brings the privacy id in one of them', () => {
         store.upsertContacts([{ id: '111@lid', name: '111', notify: 'Alice' }]);
-        expect(store.listContacts()).toEqual([
-          expect.objectContaining({ id: '111@lid', name: '111', pushName: 'Alice' }),
-        ]);
+        store.upsertContacts([{ id: '111@lid', verifiedName: 'Acme Ltd', notify: '111' }]);
+        expect(store.findContact('111@lid')).toMatchObject({ name: 'Acme Ltd', pushName: 'Alice', isMyContact: false });
+      });
+
+      it('keeps the digits a phone-keyed contact brings as its push name', () => {
+        store.upsertContacts([{ id: '628111@s.whatsapp.net', lid: '111@lid', notify: '111' }]);
+        expect(store.findContact('628111@s.whatsapp.net')?.pushName).toBe('111');
       });
     });
   });
