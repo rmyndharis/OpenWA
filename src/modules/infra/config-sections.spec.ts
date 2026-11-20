@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { recordOsEnvKeys, recordPinnedEnvKeys } from '../../config/env-precedence';
 import {
   applyDatabaseSection,
@@ -453,5 +454,31 @@ describe('PostgreSQL database name', () => {
     const sent = context();
     applyDatabaseSection({ type: 'postgres', builtIn: false, ...external, database: 'other' }, existing, sent);
     expect(savedValues(existing, sent).DATABASE_NAME).toBe('other');
+  });
+});
+
+describe('PostgreSQL pool size', () => {
+  const external = { host: 'db.example.invalid', username: 'app', password: 'DummyPassword123456' };
+
+  // The next boot reads the value back as digits, and a number written in exponent form (`1e+21`) is refused.
+  it.each([[-1], [1.5], [1e21], [2 ** 53]])('refuses a pool size of %s without writing it', poolSize => {
+    const ctx = context();
+
+    expect(() => applyDatabaseSection({ type: 'postgres', builtIn: false, ...external, poolSize }, {}, ctx)).toThrow(
+      BadRequestException,
+    );
+    expect(ctx.updates).not.toHaveProperty('DATABASE_POOL_SIZE');
+  });
+
+  it.each([
+    [25, '25'],
+    [1e7, '10000000'],
+    [0, '10'],
+  ])('writes a pool size of %s as %s', (poolSize, written) => {
+    const ctx = context();
+
+    applyDatabaseSection({ type: 'postgres', builtIn: false, ...external, poolSize }, {}, ctx);
+
+    expect(ctx.updates.DATABASE_POOL_SIZE).toBe(written);
   });
 });

@@ -48,6 +48,8 @@ describe('non-send message operations distinguish a dead page from an ordinary f
     const client = {
       getChatById: jest.fn().mockResolvedValue(chat),
       getMessageById: jest.fn().mockResolvedValue(message),
+      // A build whose pin sender still takes positional arguments, so a pin and an unpin are the library's own call.
+      pupPage: { evaluate: jest.fn().mockResolvedValue('legacy') },
     };
     const reportIfPageTransportError = jest.fn();
     const host = {

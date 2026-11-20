@@ -1,11 +1,19 @@
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
-import { deleteGroupPictureInPage, readInviteSenderInPage, revokeInviteInPage } from './wwebjs-groups';
+import {
+  deleteGroupPictureInPage,
+  joinInviteInPage,
+  readInviteCodeInPage,
+  readInviteInfoInPage,
+  readInviteSenderInPage,
+  revokeInviteInPage,
+} from './wwebjs-groups';
+import { runChannelWriteInPage } from './wwebjs-channels';
 import { readCurrentLid, readLeanContacts } from './wwebjs-contacts';
 import { readChatModels } from './wwebjs-chats';
 import { readLabelChatIds } from './wwebjs-labels';
 import { downloadMediaInPage } from './wwebjs-messaging';
 import { readStatusSetterInPage } from './wwebjs-profile';
-import { runWriteInPage } from './wwebjs-page-writes';
+import { pinInPage, runWriteInPage } from './wwebjs-page-writes';
 import { isNavigationError } from './wwebjs-lifecycle';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -51,6 +59,10 @@ describe('a page helper that lands on a document WhatsApp Web has not booted yet
   const HELPERS = [
     ['deleteGroupPictureInPage', deleteGroupPictureInPage, GROUP],
     ['revokeInviteInPage', revokeInviteInPage, GROUP],
+    ['readInviteCodeInPage', readInviteCodeInPage, GROUP],
+    ['readInviteInfoInPage', readInviteInfoInPage, 'CODE'],
+    ['joinInviteInPage', joinInviteInPage, 'CODE'],
+    ['pinInPage', pinInPage, 'M'],
     ['readInviteSenderInPage', readInviteSenderInPage, undefined],
     ['readStatusSetterInPage', readStatusSetterInPage, undefined],
     ['readLeanContacts', readLeanContacts, undefined],
@@ -62,6 +74,9 @@ describe('a page helper that lands on a document WhatsApp Web has not booted yet
     ['runWriteInPage, a description', runWriteInPage, { kind: 'description', chatId: GROUP, description: 'd' }],
     ['runWriteInPage, a picture', runWriteInPage, { kind: 'picture', chatId: GROUP, picture: {} }],
     ['runWriteInPage, a property', runWriteInPage, { kind: 'property', chatId: GROUP, property: 'restrict', value: 1 }],
+    ['runChannelWriteInPage, a delete', runChannelWriteInPage, 'delete'],
+    ['runChannelWriteInPage, a mute', runChannelWriteInPage, 'mute'],
+    ['runChannelWriteInPage, an unsubscription', runChannelWriteInPage, 'unsubscribe'],
   ] as Array<[string, (arg?: unknown) => unknown, unknown]>;
 
   it.each(HELPERS)(

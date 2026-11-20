@@ -1,14 +1,5 @@
 import { createBaileysLogger } from './baileys-logger';
-
-/**
- * CPU time this process has used since `since`, in milliseconds. A bound on work is asserted on it and not on the
- * wall clock: a busy runner can hold the worker off the CPU for longer than the whole bound, while code that is slow
- * burns the CPU on every run.
- */
-const cpuMsSince = (since: NodeJS.CpuUsage): number => {
-  const { user, system } = process.cpuUsage(since);
-  return (user + system) / 1000;
-};
+import { leastCpuMs } from '../../../test/helpers/cpu-time';
 
 // Everything the logger writes to stdout while `emit` runs.
 const captureOutput = (emit: () => void): string => {
@@ -171,17 +162,19 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     it('writes 900 references to one wide object below the fifth level as [Truncated] in a bounded time', () => {
       const shared = wide(20_000);
 
-      const started = process.cpuUsage();
-      const rows = at(
-        write({ a: { b: { c: { d: { rows: Array.from({ length: 900 }, () => shared) } } } } }, 'x'),
-        'a',
-        'b',
-        'c',
-        'd',
-        'rows',
-      ) as unknown[];
+      let rows: unknown[] = [];
+      const cpuMs = leastCpuMs(() => {
+        rows = at(
+          write({ a: { b: { c: { d: { rows: Array.from({ length: 900 }, () => shared) } } } } }, 'x'),
+          'a',
+          'b',
+          'c',
+          'd',
+          'rows',
+        ) as unknown[];
+      });
 
-      expect(cpuMsSince(started)).toBeLessThan(500);
+      expect(cpuMs).toBeLessThan(500);
       expect(new Set(rows)).toEqual(new Set(['[Truncated]']));
     });
   });
@@ -196,11 +189,14 @@ describe('createBaileysLogger writes any record the library hands it', () => {
   it('writes a Buffer of 5 million bytes as its type and length at once, in the first levels and below the fifth', () => {
     const file = Buffer.alloc(5_000_000);
 
-    const started = process.cpuUsage();
-    const shallow = write({ file, jid: 'j' }, 'x');
-    const deep = write({ a: { b: { c: { d: { e: { file } } } } } }, 'x');
+    let shallow: Record<string, unknown> = {};
+    let deep: Record<string, unknown> = {};
+    const cpuMs = leastCpuMs(() => {
+      shallow = write({ file, jid: 'j' }, 'x');
+      deep = write({ a: { b: { c: { d: { e: { file } } } } } }, 'x');
+    });
 
-    expect(cpuMsSince(started)).toBeLessThan(1000);
+    expect(cpuMs).toBeLessThan(1000);
     expect(shallow).toMatchObject({ file: { type: 'Buffer', length: 5_000_000 }, jid: 'j', msg: 'x' });
     expect(deep).toMatchObject({ a: { b: { c: { d: { e: { file: { type: 'Buffer', length: 5_000_000 } } } } } } });
   });
@@ -278,10 +274,12 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     const list: unknown[] = [];
     list.length = 2 ** 32 - 1;
 
-    const started = process.cpuUsage();
-    const line = write({ list, jid: 'j' }, 'x');
+    let line: Record<string, unknown> = {};
+    const cpuMs = leastCpuMs(() => {
+      line = write({ list, jid: 'j' }, 'x');
+    });
 
-    expect(cpuMsSince(started)).toBeLessThan(1000);
+    expect(cpuMs).toBeLessThan(1000);
     expect(line).toMatchObject({ list: '[Truncated]', jid: 'j', msg: 'x' });
   });
 

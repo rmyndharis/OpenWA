@@ -83,7 +83,10 @@ export class GlobalValidationPipe extends ValidationPipe {
       return await super.transform(value, metadata);
     } catch (error) {
       if (error instanceof TypeError && holdsOwnToString(value)) {
-        throw new BadRequestException('Request body holds a value of the wrong type');
+        // The pipe also runs over a query DTO, so the answer names the part of the request that holds the value.
+        throw new BadRequestException(
+          `Request ${metadata.type === 'custom' ? 'input' : metadata.type} holds a value of the wrong type`,
+        );
       }
       throw error;
     }

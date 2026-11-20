@@ -20,6 +20,7 @@ import type { SessionLidResolver } from '../session/session-lid-resolver.service
 import { StorageService } from '../../common/storage/storage.service';
 import { StatusUpdate } from './entities/status-update.entity';
 import { StatusStoreService } from './status-store.service';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 const SESSION = 's1';
 const SELF = '620000000000@c.us';
@@ -28,6 +29,8 @@ const POSTER_LID = '111111111111111@lid';
 const OTHER = '628444555666@c.us';
 const STORY = '3EB0A1B2C3D4E5F6';
 
+// A short pause for what must NOT happen, and between two steps of a case that hold each other in order. Something that
+// must happen is waited for with `waitUntil`: the file calls of a delete take as long as the machine makes them.
 const settle = async (): Promise<void> => {
   for (let n = 0; n < 10; n++) await new Promise(resolve => setTimeout(resolve, 5));
 };
@@ -51,6 +54,8 @@ const sentBy = (participant?: string, fromMe = false): { fromMe: boolean; partic
 // revoke of the status message. The store already hides a story once its 24 hours are up, as WhatsApp does; a story
 // its poster deleted has to leave the reads too, its media has to stop being served, and its file has to go.
 describe('a received status its poster deleted', () => {
+  // The waits below are deadlines of thirty seconds, which is more than a test may take by default.
+  jest.setTimeout(60_000);
   let dir: string;
   let db: DataSource;
   let storage: StorageService;
@@ -155,6 +160,9 @@ describe('a received status its poster deleted', () => {
   };
   const announced = (event: string): unknown[] =>
     (dispatch.mock.calls as Array<[string, string, unknown]>).filter(call => call[1] === event).map(call => call[2]);
+  /** The delete removes the row and then its file, a filesystem call: wait for both. */
+  const removed = (): Promise<void> =>
+    waitUntil(async () => (await rowCount()) === 0 && (await storedFiles()).length === 0);
 
   const shapes: Array<[string, string, RevokedMessage, ReturnType<typeof sentBy> | undefined]> = [
     // Baileys: the revoke's key is the story's own, and the adapter says who sent it.
@@ -180,7 +188,7 @@ describe('a received status its poster deleted', () => {
       expect(await storedFiles()).toHaveLength(1);
 
       projector.handleMessageRevoked(SESSION, engine, revoked, actor);
-      await settle();
+      await removed();
 
       expect((await store.list(SESSION)).map(status => status.id)).toEqual([]);
       expect(await store.listByContact(SESSION, POSTER)).toEqual([]);
@@ -195,7 +203,7 @@ describe('a received status its poster deleted', () => {
       await receive('3EB0STRANGERS', OTHER);
 
       projector.handleMessageRevoked(SESSION, engine, revoked, actor);
-      await settle();
+      await waitUntil(async () => (await rowCount()) === 2 && (await storedFiles()).length === 2);
 
       expect((await store.list(SESSION)).map(status => status.id).sort()).toEqual(['3EB0OTHERSTORY', '3EB0STRANGERS']);
       expect(await storedFiles()).toHaveLength(2);
@@ -214,6 +222,7 @@ describe('a received status its poster deleted', () => {
       await receive(statusId, POSTER);
 
       projector.handleMessageRevoked(SESSION, engine, revoked, actor);
+      await waitUntil(() => announced('message.revoked').length > 0);
       await settle();
 
       expect(announced('message.revoked')).toEqual([expect.objectContaining({ chatId: 'status@broadcast' })]);
@@ -223,7 +232,7 @@ describe('a received status its poster deleted', () => {
       const receipt = projector.handleInboundMessage(SESSION, engine, story(statusId, POSTER));
       projector.handleMessageRevoked(SESSION, engine, revoked, actor);
       await receipt?.settled;
-      await settle();
+      await removed();
 
       expect(await rowCount()).toBe(0);
       expect(await storedFiles()).toEqual([]);
@@ -244,7 +253,7 @@ describe('a received status its poster deleted', () => {
       const receipt = projector.handleInboundMessage(SESSION, engine, story(statusId, POSTER));
       await writing; // the row is saved, the file is being written
       projector.handleMessageRevoked(SESSION, engine, revoked, actor);
-      await settle();
+      await waitUntil(async () => (await rowCount()) === 0);
       expect(await rowCount()).toBe(0);
 
       release();
@@ -277,7 +286,7 @@ describe('a received status its poster deleted', () => {
       await settle();
       saves[1].open();
       await second?.settled;
-      await settle();
+      await removed();
 
       expect(await rowCount()).toBe(0);
     });
@@ -310,7 +319,7 @@ describe('a received status its poster deleted', () => {
       await settle();
       ingestRead.open();
       await second?.settled;
-      await settle();
+      await removed();
 
       expect(await rowCount()).toBe(0);
     });
@@ -326,7 +335,7 @@ describe('a received status its poster deleted', () => {
       const receipt = projector.handleInboundMessage(SESSION, engine, story(statusId, POSTER));
       await writing.reached; // the row is saved, the file is being written
       projector.handleMessageRevoked(SESSION, engine, revoked, actor);
-      await settle();
+      await waitUntil(async () => (await rowCount()) === 0);
       expect(await rowCount()).toBe(0);
 
       writing.open();
@@ -341,6 +350,7 @@ describe('a received status its poster deleted', () => {
       jest.spyOn(storage, 'deleteFile').mockRejectedValue(new Error('disk gone'));
 
       projector.handleMessageRevoked(SESSION, engine, revoked, actor);
+      await waitUntil(async () => (await rowCount()) === 0 && announced('message.revoked').length > 0);
       await settle();
 
       expect(await store.list(SESSION)).toEqual([]);
@@ -352,6 +362,7 @@ describe('a received status its poster deleted', () => {
       jest.spyOn(db.getRepository(StatusUpdate), 'delete').mockRejectedValue(new Error('database is locked'));
 
       expect(() => projector.handleMessageRevoked(SESSION, engine, revoked, actor)).not.toThrow();
+      await waitUntil(() => announced('message.revoked').length > 0);
       await settle();
 
       expect(announced('message.revoked')).toHaveLength(1);
@@ -401,7 +412,7 @@ describe('a received status its poster deleted', () => {
       await receive(STORY, POSTER_LID);
 
       projector.handleMessageRevoked(SESSION, engine, revoked, sentBy(POSTER));
-      await settle();
+      await removed();
 
       expect(await rowCount()).toBe(0);
       expect(await storedFiles()).toEqual([]);
@@ -417,7 +428,7 @@ describe('a received status its poster deleted', () => {
       await receive(STORY, POSTER);
 
       projector.handleMessageRevoked(SESSION, engine, revoked, sentBy(POSTER_LID));
-      await settle();
+      await removed();
 
       expect(await rowCount()).toBe(0);
     });
@@ -449,7 +460,7 @@ describe('a received status its poster deleted', () => {
 
     await expect(store.removeRevoked(SESSION, STORY)).resolves.toBe(true);
     await Promise.all(joiners);
-    await settle();
+    await removed();
 
     expect(await rowCount()).toBe(0);
     expect(joiners).toHaveLength(20);
@@ -482,6 +493,10 @@ describe('a received status its poster deleted', () => {
     const message: RevokedMessage = { ...revoke(STORY, STORY), chatId: '628999000111@c.us' };
 
     projector.handleMessageRevoked(SESSION, engine, message);
+    await waitUntil(
+      async () =>
+        (await db.getRepository(Message).findOneBy({ sessionId: SESSION, waMessageId: STORY }))?.type === 'revoked',
+    );
     await settle();
 
     // The message row is cleared as before, and the story with the same id stays.

@@ -158,8 +158,8 @@ you have already handled is the same event arriving again.
   keys have gaps, as `array_unique` and `array_filter` leave them, as an object, which the gateway answers
   with `400`, so the resource methods re-index the lists they send: group `participants`, the bulk
   `messages` list, `mentions`, poll `options`, status `recipients`, webhook `events`, filter `conditions`
-  and a condition's list `value`, redrive `ids` and `messageIds`. A body you pass to
-  `$client->request()` is sent as given: pass its lists through `array_values()`.
+  and a condition's list `value`, the `ids` of a webhook redrive and the `messageIds` of `chats->markRead`.
+  A body you pass to `$client->request()` is sent as given: pass its lists through `array_values()`.
 - The SDK does **not** retry, and **never follows redirects** (so the key is never re-sent to
   a redirect target). Path segments are percent-encoded; a base-URL path prefix (e.g. behind a
   reverse proxy) is preserved.

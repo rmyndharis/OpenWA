@@ -1,7 +1,8 @@
 import { Client, MessageMedia, WAState } from 'whatsapp-web.js';
 import { EventEmitter } from 'events';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
-import { extractLinkedParentJID } from './wwebjs-groups';
+import { runChannelWriteInPage } from './wwebjs-channels';
+import { extractLinkedParentJID, joinInviteInPage } from './wwebjs-groups';
 import {
   downloadMediaInPage,
   isHttpUrl,
@@ -63,6 +64,7 @@ import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import * as loadRemoteMediaModule from '../../common/media/load-remote-media';
 import { fetch as undiciFetch } from 'undici';
 import { lookup } from 'dns/promises';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 // Allowlisted hosts are PINNED to their DNS answer (ssrf-guard pins allowlisted hosts to their DNS answers), so the specs that exercise
 // the SSRF_ALLOWED_HOSTS escape-hatch need a deterministic resolver. Default answers are PUBLIC
@@ -1665,28 +1667,36 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
   });
 
   describe('group picture', () => {
-    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
-    // covered in wwebjs-group-write-status.spec.ts.
     const groupChat = (over: Record<string, unknown> = {}) => ({
       getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...over }),
-      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
     });
 
-    it('uses GroupChat.setPicture, not the own-account Client.setProfilePicture', async () => {
-      const setPicture = jest.fn().mockResolvedValue(true);
+    // The picture is sent in the page, addressed to the group (the own account's picture is setProfilePicture). What the
+    // page answers is covered in wwebjs-group-write-status.spec.ts.
+    it('sends the picture to the group in the page, and touches neither library setter', async () => {
+      const setPicture = jest.fn();
       const setProfilePicture = jest.fn();
-      await readyAdapter({ ...groupChat({ setPicture }), setProfilePicture }).setGroupPicture('g@g.us', {
-        mimetype: 'image/png',
-        data: 'QUJD',
-      });
-      expect(setPicture).toHaveBeenCalled();
+      const evaluate = jest.fn().mockResolvedValue({ status: 200 });
+      await readyAdapter({
+        ...groupChat({ setPicture }),
+        setProfilePicture,
+        pupPage: { evaluate },
+      }).setGroupPicture('g@g.us', { mimetype: 'image/png', data: 'QUJD' });
+      expect(evaluate).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.objectContaining({ kind: 'picture', chatId: 'g@g.us' }),
+      );
+      expect(setPicture).not.toHaveBeenCalled();
       expect(setProfilePicture).not.toHaveBeenCalled();
     });
 
-    it('treats a false setPicture as a refusal (admin rights required)', async () => {
-      const setPicture = jest.fn().mockResolvedValue(false);
+    it('treats a refusal status as a refusal (admin rights required)', async () => {
+      const evaluate = jest.fn().mockResolvedValue({ status: 403 });
       await expect(
-        readyAdapter(groupChat({ setPicture })).setGroupPicture('g@g.us', { mimetype: 'image/png', data: 'QUJD' }),
+        readyAdapter({ ...groupChat(), pupPage: { evaluate } }).setGroupPicture('g@g.us', {
+          mimetype: 'image/png',
+          data: 'QUJD',
+        }),
       ).rejects.toBeInstanceOf(EngineRefusedError);
     });
 
@@ -1789,30 +1799,32 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
   });
 
   describe('setGroupMemberAddMode', () => {
-    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
-    // covered in wwebjs-group-write-status.spec.ts.
-    const groupChat = (over: Record<string, unknown> = {}) => ({
-      getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...over }),
-      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
+    // The write is sent in the page, as the property WhatsApp names it: 0 for admins only, 1 for every member. What the
+    // page answers is covered in wwebjs-group-write-status.spec.ts.
+    const onPage = (evaluate: jest.Mock) => ({
+      getChatById: jest.fn().mockResolvedValue({ isGroup: true }),
+      pupPage: { evaluate },
     });
 
-    it("maps 'admins' to adminsOnly=true — the wwjs setter is inverted relative to our vocabulary", async () => {
-      const setAddMembersAdminsOnly = jest.fn().mockResolvedValue(true);
-      await readyAdapter(groupChat({ setAddMembersAdminsOnly })).setGroupMemberAddMode('g@g.us', 'admins');
-      expect(setAddMembersAdminsOnly).toHaveBeenCalledWith(true);
+    it.each([
+      ['admins', 0],
+      ['all', 1],
+    ] as const)("maps '%s' to the member_add_mode value %i", async (mode, value) => {
+      const evaluate = jest.fn().mockResolvedValue({ status: 200 });
+      await readyAdapter(onPage(evaluate)).setGroupMemberAddMode('g@g.us', mode);
+      expect(evaluate).toHaveBeenCalledWith(expect.any(Function), {
+        kind: 'property',
+        chatId: 'g@g.us',
+        property: 'member_add_mode',
+        value,
+      });
     });
 
-    it("maps 'all' to adminsOnly=false", async () => {
-      const setAddMembersAdminsOnly = jest.fn().mockResolvedValue(true);
-      await readyAdapter(groupChat({ setAddMembersAdminsOnly })).setGroupMemberAddMode('g@g.us', 'all');
-      expect(setAddMembersAdminsOnly).toHaveBeenCalledWith(false);
-    });
-
-    it('treats a false result as a refusal (admin rights required), not a silent no-op', async () => {
-      const setAddMembersAdminsOnly = jest.fn().mockResolvedValue(false);
-      await expect(
-        readyAdapter(groupChat({ setAddMembersAdminsOnly })).setGroupMemberAddMode('g@g.us', 'admins'),
-      ).rejects.toBeInstanceOf(EngineRefusedError);
+    it('treats a refusal status as a refusal (admin rights required), not a silent no-op', async () => {
+      const evaluate = jest.fn().mockResolvedValue({ status: 403 });
+      await expect(readyAdapter(onPage(evaluate)).setGroupMemberAddMode('g@g.us', 'admins')).rejects.toBeInstanceOf(
+        EngineRefusedError,
+      );
     });
   });
 
@@ -6079,8 +6091,11 @@ describe('pinMessage / unpinMessage', () => {
     (adapter as unknown as { client: unknown }).client = client;
     return adapter;
   };
+  // A build whose pin sender still takes positional arguments, so a pin and an unpin are the library's own call (the
+  // sender that takes one options object is covered by wwebjs-message-pin-layout.spec.ts).
   const chatWith = (messages: unknown[]) => ({
     getChatById: jest.fn().mockResolvedValue({ fetchMessages: jest.fn().mockResolvedValue(messages) }),
+    pupPage: { evaluate: jest.fn().mockResolvedValue('legacy') },
   });
 
   it('pins a message found by _serialized id, passing the duration through', async () => {
@@ -8117,8 +8132,8 @@ describe('WhatsAppWebJsAdapter page transport error detection (wedged page fast-
   // conflated with a dead page at that call site). The dead page still has to reach the liveness
   // path rather than being reported purely as the caller's bad invite code.
   it('detects a transport error during joinGroupViaInviteCode (a 503 to the caller)', async () => {
-    const acceptInvite = jest.fn().mockRejectedValue(new Error('Protocol error: Target closed'));
-    const { adapter, onDisconnected } = readyAdapter({ acceptInvite });
+    const evaluate = jest.fn().mockRejectedValue(new Error('Protocol error: Target closed'));
+    const { adapter, onDisconnected } = readyAdapter({ pupPage: { evaluate } });
 
     await expect(adapter.joinGroupViaInviteCode('CODE123')).rejects.toBeInstanceOf(EngineTransportError);
 
@@ -8128,8 +8143,8 @@ describe('WhatsAppWebJsAdapter page transport error detection (wedged page fast-
   });
 
   it('does not report an ordinary refused invite as a disconnect', async () => {
-    const acceptInvite = jest.fn().mockRejectedValue(new Error('Evaluation failed: invite revoked'));
-    const { adapter, onDisconnected } = readyAdapter({ acceptInvite });
+    const evaluate = jest.fn().mockRejectedValue(new Error('Evaluation failed: invite revoked'));
+    const { adapter, onDisconnected } = readyAdapter({ pupPage: { evaluate } });
 
     await expect(adapter.joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(InvalidInviteCodeError);
 
@@ -8158,45 +8173,51 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
   };
 
   describe('joinGroupViaInviteCode', () => {
-    it('returns the joined group id from acceptInvite', async () => {
-      const acceptInvite = jest.fn().mockResolvedValue('120363000@g.us');
-      await expect(readyAdapter({ acceptInvite }).joinGroupViaInviteCode('CODE123')).resolves.toBe('120363000@g.us');
-      expect(acceptInvite).toHaveBeenCalledWith('CODE123');
+    it('returns the joined group id the join job answers', async () => {
+      const evaluate = jest.fn().mockResolvedValue({ gid: '120363000@g.us' });
+      await expect(readyAdapter({ pupPage: { evaluate } }).joinGroupViaInviteCode('CODE123')).resolves.toBe(
+        '120363000@g.us',
+      );
+      expect(evaluate).toHaveBeenCalledWith(joinInviteInPage, 'CODE123');
     });
 
     it('maps a thrown page error to InvalidInviteCodeError (400)', async () => {
-      const acceptInvite = jest.fn().mockRejectedValue(new Error('Evaluation failed: invite revoked'));
-      await expect(readyAdapter({ acceptInvite }).joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(
+      const evaluate = jest.fn().mockRejectedValue(new Error('Evaluation failed: invite revoked'));
+      await expect(readyAdapter({ pupPage: { evaluate } }).joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(
         InvalidInviteCodeError,
       );
     });
 
     it('maps a gid-less result to InvalidInviteCodeError (400)', async () => {
-      const acceptInvite = jest.fn().mockResolvedValue(undefined);
-      await expect(readyAdapter({ acceptInvite }).joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(
+      const evaluate = jest.fn().mockResolvedValue({});
+      await expect(readyAdapter({ pupPage: { evaluate } }).joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(
         InvalidInviteCodeError,
       );
     });
   });
 
   describe('setGroupMessagesAdminsOnly / setGroupInfoAdminsOnly', () => {
-    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
-    // covered in wwebjs-group-write-status.spec.ts.
-    const groupClient = (impl: Record<string, jest.Mock>) => ({
-      getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...impl }),
-      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
+    // Both are sent in the page, as the property WhatsApp names them. What the page answers is covered in
+    // wwebjs-group-write-status.spec.ts.
+    const groupClient = (evaluate: jest.Mock) => ({
+      getChatById: jest.fn().mockResolvedValue({ isGroup: true }),
+      pupPage: { evaluate },
     });
 
-    it('resolves the group chat and calls setMessagesAdminsOnly', async () => {
-      const setMessagesAdminsOnly = jest.fn().mockResolvedValue(true);
-      await readyAdapter(groupClient({ setMessagesAdminsOnly })).setGroupMessagesAdminsOnly('g@g.us', true);
-      expect(setMessagesAdminsOnly).toHaveBeenCalledWith(true);
-    });
-
-    it('resolves the group chat and calls setInfoAdminsOnly', async () => {
-      const setInfoAdminsOnly = jest.fn().mockResolvedValue(true);
-      await readyAdapter(groupClient({ setInfoAdminsOnly })).setGroupInfoAdminsOnly('g@g.us', false);
-      expect(setInfoAdminsOnly).toHaveBeenCalledWith(false);
+    it.each([
+      ['setGroupMessagesAdminsOnly', true, 'announcement', 1],
+      ['setGroupMessagesAdminsOnly', false, 'announcement', 0],
+      ['setGroupInfoAdminsOnly', true, 'restrict', 1],
+      ['setGroupInfoAdminsOnly', false, 'restrict', 0],
+    ] as const)('%s(%s) is sent as the property %s with the value %i', async (method, adminsOnly, property, value) => {
+      const evaluate = jest.fn().mockResolvedValue({ status: 200 });
+      await readyAdapter(groupClient(evaluate))[method]('g@g.us', adminsOnly);
+      expect(evaluate).toHaveBeenCalledWith(expect.any(Function), {
+        kind: 'property',
+        chatId: 'g@g.us',
+        property,
+        value,
+      });
     });
 
     it('throws GroupNotFoundError (404) when the chat is not a group', async () => {
@@ -8242,20 +8263,17 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
       await expect(call(readyAdapter({ getChatById }))).rejects.toBeInstanceOf(GroupNotFoundError);
     });
 
-    it.each([
-      ['setGroupMessagesAdminsOnly', 'setMessagesAdminsOnly'],
-      ['setGroupInfoAdminsOnly', 'setInfoAdminsOnly'],
-    ])('%s throws EngineRefusedError (403) when the engine reports false (no admin rights)', async (method, native) => {
-      // wwebjs RESOLVES false (instead of throwing) on a ServerStatusCodeError — a silent no-op
-      // would dress up a refused write as a success.
-      const client = groupClient({ [native]: jest.fn().mockResolvedValue(false) });
-      const call = (readyAdapter(client) as unknown as Record<string, (g: string, v: boolean) => Promise<void>>)[
-        method
-      ]('g@g.us', true);
-      const err = await call.catch((e: unknown) => e);
-      expect(err).toBeInstanceOf(EngineRefusedError);
-      expect((err as Error).message).toMatch(/admin rights required/);
-    });
+    it.each(['setGroupMessagesAdminsOnly', 'setGroupInfoAdminsOnly'] as const)(
+      '%s throws EngineRefusedError (403) when WhatsApp refuses it (no admin rights)',
+      async method => {
+        const evaluate = jest.fn().mockResolvedValue({ status: 403 });
+        const err = await readyAdapter(groupClient(evaluate))
+          [method]('g@g.us', true)
+          .catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(EngineRefusedError);
+        expect((err as Error).message).toMatch(/WhatsApp refused it \(403\)/);
+      },
+    );
   });
 
   describe('setGroupEphemeral (no wwjs 1.34.8 API → honest 501)', () => {
@@ -8304,33 +8322,51 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
   });
 
   describe('setProfilePicture', () => {
+    const OWN = '628000000001@c.us';
+    // The picture is sent in the page under the id of the account itself. What the page answers is covered in
+    // wwebjs-group-write-status.spec.ts.
+    const accountOn = (answer: unknown) => {
+      const evaluate = jest.fn().mockResolvedValue(answer);
+      return { evaluate, adapter: readyAdapter({ info: { wid: { _serialized: OWN } }, pupPage: { evaluate } }) };
+    };
+    const sentPicture = (evaluate: jest.Mock): MessageMedia =>
+      (evaluate.mock.calls as Array<[unknown, { kind: string; chatId: string; picture: MessageMedia }]>)[0][1].picture;
+
     it('converts base64 MediaInput to a MessageMedia (same helper as media sends)', async () => {
-      const setProfilePicture = jest.fn().mockResolvedValue(true);
-      await readyAdapter({ setProfilePicture }).setProfilePicture({
-        mimetype: 'image/png',
-        data: Buffer.from([1, 2, 3]).toString('base64'),
-      });
-      const calls = setProfilePicture.mock.calls as Array<[MessageMedia]>;
-      const media = calls[0][0];
+      const { adapter, evaluate } = accountOn({ status: 200 });
+      await adapter.setProfilePicture({ mimetype: 'image/png', data: Buffer.from([1, 2, 3]).toString('base64') });
+      expect(evaluate).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.objectContaining({ kind: 'picture', chatId: OWN }),
+      );
+      const media = sentPicture(evaluate);
       expect(media).toBeInstanceOf(MessageMedia);
       expect(media.mimetype).toBe('image/png');
       expect(media.data).toBe(Buffer.from([1, 2, 3]).toString('base64'));
     });
 
     it('converts a Buffer payload to base64 MessageMedia', async () => {
-      const setProfilePicture = jest.fn().mockResolvedValue(true);
-      await readyAdapter({ setProfilePicture }).setProfilePicture({ mimetype: 'image/jpeg', data: Buffer.from('IMG') });
-      const calls = setProfilePicture.mock.calls as Array<[MessageMedia]>;
-      expect(calls[0][0].data).toBe(Buffer.from('IMG').toString('base64'));
+      const { adapter, evaluate } = accountOn({ status: 200 });
+      await adapter.setProfilePicture({ mimetype: 'image/jpeg', data: Buffer.from('IMG') });
+      expect(sentPicture(evaluate).data).toBe(Buffer.from('IMG').toString('base64'));
     });
 
-    it('throws EngineRefusedError (403) when the engine resolves false', async () => {
-      const setProfilePicture = jest.fn().mockResolvedValue(false);
-      const err = await readyAdapter({ setProfilePicture })
-        .setProfilePicture({ mimetype: 'image/jpeg', data: 'AAAA' })
+    it('throws EngineRefusedError (403) when WhatsApp refuses it', async () => {
+      const err = await accountOn({ status: 403 })
+        .adapter.setProfilePicture({ mimetype: 'image/jpeg', data: 'AAAA' })
         .catch((e: unknown) => e);
       expect(err).toBeInstanceOf(EngineRefusedError);
       expect((err as Error).message).toMatch(/rejected the profile picture change/);
+    });
+
+    // The write is addressed by the account's own id, so a client that has not reported it asks nothing of the page.
+    it('answers the retryable 409 when the client has not reported its own account id', async () => {
+      const evaluate = jest.fn();
+      const err = await readyAdapter({ info: {}, pupPage: { evaluate } })
+        .setProfilePicture({ mimetype: 'image/jpeg', data: 'AAAA' })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineNotReadyError);
+      expect(evaluate).not.toHaveBeenCalled();
     });
   });
 
@@ -8641,34 +8677,25 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
     },
   );
 
-  describe('setGroupSubject / setGroupDescription (library boolean is honored)', () => {
-    // A page with no job for the write: the write is the library's own call, whose boolean is read here. The page call is
-    // covered in wwebjs-group-write-status.spec.ts.
-    const withoutPageJob = (chat: unknown) => ({
-      getChatById: jest.fn().mockResolvedValue(chat),
-      pupPage: { evaluate: jest.fn().mockResolvedValue('missing') },
+  describe('setGroupSubject / setGroupDescription (the status of WhatsApp is honored)', () => {
+    // Both are sent in the page. What the page answers beyond a refusal or a success is covered in
+    // wwebjs-group-write-status.spec.ts.
+    const onPage = (evaluate: jest.Mock) => ({
+      getChatById: jest.fn().mockResolvedValue(groupChat({})),
+      pupPage: { evaluate },
     });
 
-    it.each([
-      ['setGroupSubject', 'setSubject'],
-      ['setGroupDescription', 'setDescription'],
-    ] as const)('%s throws EngineRefusedError when wwebjs resolves false', async (method, libMethod) => {
-      const chat = groupChat({ [libMethod]: jest.fn().mockResolvedValue(false) });
-      const adapter = readyAdapter(withoutPageJob(chat));
-      await expect(
-        (adapter as unknown as Record<string, (g: string, v: string) => Promise<void>>)[method](GROUP, 'New'),
-      ).rejects.toBeInstanceOf(EngineRefusedError);
-    });
+    it.each(['setGroupSubject', 'setGroupDescription'] as const)(
+      '%s throws EngineRefusedError when WhatsApp refuses it',
+      async method => {
+        const adapter = readyAdapter(onPage(jest.fn().mockResolvedValue({ status: 403 })));
+        await expect(adapter[method](GROUP, 'New')).rejects.toBeInstanceOf(EngineRefusedError);
+      },
+    );
 
-    it.each([
-      ['setGroupSubject', 'setSubject'],
-      ['setGroupDescription', 'setDescription'],
-    ] as const)('%s resolves on true', async (method, libMethod) => {
-      const chat = groupChat({ [libMethod]: jest.fn().mockResolvedValue(true) });
-      const adapter = readyAdapter(withoutPageJob(chat));
-      await expect(
-        (adapter as unknown as Record<string, (g: string, v: string) => Promise<void>>)[method](GROUP, 'New'),
-      ).resolves.toBeUndefined();
+    it.each(['setGroupSubject', 'setGroupDescription'] as const)('%s resolves on a success', async method => {
+      const adapter = readyAdapter(onPage(jest.fn().mockResolvedValue({ status: 200 })));
+      await expect(adapter[method](GROUP, 'New')).resolves.toBeUndefined();
     });
   });
 
@@ -8691,16 +8718,20 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
     });
   });
 
-  describe('unsubscribeFromChannel (library boolean is honored)', () => {
-    it('throws EngineRefusedError when wwebjs resolves false', async () => {
-      const adapter = readyAdapter({ unsubscribeFromChannel: jest.fn().mockResolvedValue(false) });
+  describe('unsubscribeFromChannel (the status of the page is honored)', () => {
+    // The unsubscription is sent in the page, which answers the status WhatsApp gave. What the page answers for each
+    // status is covered in wwebjs-channel-write-status.spec.ts.
+    const pageAnswering = (answer: unknown) => ({ pupPage: { evaluate: jest.fn().mockResolvedValue(answer) } });
+
+    it('throws EngineRefusedError when the page answers a refusal', async () => {
+      const adapter = readyAdapter(pageAnswering({ status: 403, local: true }));
       await expect(adapter.unsubscribeFromChannel('120363401234567890@newsletter')).rejects.toBeInstanceOf(
         EngineRefusedError,
       );
     });
 
-    it('resolves on true', async () => {
-      const adapter = readyAdapter({ unsubscribeFromChannel: jest.fn().mockResolvedValue(true) });
+    it('resolves on 200', async () => {
+      const adapter = readyAdapter(pageAnswering({ status: 200 }));
       await expect(adapter.unsubscribeFromChannel('120363401234567890@newsletter')).resolves.toBeUndefined();
     });
   });
@@ -8721,7 +8752,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
     });
 
     it('joinGroupViaInviteCode answers EngineTransportError (503) on a dead page — not 400', async () => {
-      const adapter = readyAdapter({ acceptInvite: jest.fn().mockRejectedValue(transportError()) });
+      const adapter = readyAdapter({ pupPage: { evaluate: jest.fn().mockRejectedValue(transportError()) } });
       await expect(adapter.joinGroupViaInviteCode('CODE123')).rejects.toBeInstanceOf(EngineTransportError);
     });
 
@@ -8731,29 +8762,32 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
     it.each([
       ['setProfileName', (a: WhatsAppWebJsAdapter) => a.setProfileName('New Name')],
       ['setProfileStatus', (a: WhatsAppWebJsAdapter) => a.setProfileStatus('Busy')],
-      ['setProfilePicture', (a: WhatsAppWebJsAdapter) => a.setProfilePicture({ mimetype: 'image/png', data: 'aGk=' })],
-      ['deleteProfilePicture', (a: WhatsAppWebJsAdapter) => a.deleteProfilePicture()],
       ['getContactStatuses', (a: WhatsAppWebJsAdapter) => a.getContactStatuses()],
       ['deleteStatus', (a: WhatsAppWebJsAdapter) => a.deleteStatus('status@broadcast')],
       ['getSubscribedChannels', (a: WhatsAppWebJsAdapter) => a.getSubscribedChannels()],
-      // The channel WRITES take the same path: deleteChannel reached the client directly, so a dead
-      // page there surfaced as an opaque 500 under a session still reporting READY, while the route
-      // documents 503. unsubscribeFromChannel is its structural twin and was already wrapped.
-      ['deleteChannel', (a: WhatsAppWebJsAdapter) => a.deleteChannel('1200@newsletter')],
-      ['unsubscribeFromChannel', (a: WhatsAppWebJsAdapter) => a.unsubscribeFromChannel('1200@newsletter')],
     ])('%s answers EngineTransportError (503) on a dead page', async (_name, call) => {
       const adapter = readyAdapter({
         setDisplayName: jest.fn().mockRejectedValue(transportError()),
         setStatus: jest.fn().mockRejectedValue(transportError()),
         pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
-        setProfilePicture: jest.fn().mockRejectedValue(transportError()),
-        deleteProfilePicture: jest.fn().mockRejectedValue(transportError()),
         getBroadcasts: jest.fn().mockRejectedValue(transportError()),
         sendMessage: jest.fn().mockRejectedValue(transportError()),
         revokeStatusMessage: jest.fn().mockRejectedValue(transportError()),
         getChannels: jest.fn().mockRejectedValue(transportError()),
-        deleteChannel: jest.fn().mockRejectedValue(transportError()),
-        unsubscribeFromChannel: jest.fn().mockRejectedValue(transportError()),
+      });
+      await expect(call(adapter)).rejects.toBeInstanceOf(EngineTransportError);
+    });
+
+    // The pictures and the channel writes are sent in the page, so the death is the page call's.
+    it.each([
+      ['setProfilePicture', (a: WhatsAppWebJsAdapter) => a.setProfilePicture({ mimetype: 'image/png', data: 'aGk=' })],
+      ['deleteProfilePicture', (a: WhatsAppWebJsAdapter) => a.deleteProfilePicture()],
+      ['deleteChannel', (a: WhatsAppWebJsAdapter) => a.deleteChannel('1200@newsletter')],
+      ['unsubscribeFromChannel', (a: WhatsAppWebJsAdapter) => a.unsubscribeFromChannel('1200@newsletter')],
+    ])('%s answers EngineTransportError (503) on a dead page', async (_name, call) => {
+      const adapter = readyAdapter({
+        info: { wid: { _serialized: '628000000001@c.us' } },
+        pupPage: { evaluate: jest.fn().mockRejectedValue(transportError()) },
       });
       await expect(call(adapter)).rejects.toBeInstanceOf(EngineTransportError);
     });
@@ -8796,7 +8830,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       // dies first. The conversion stays OUTSIDE withPage by design (a bad URL is a 400-class
       // failure, not a transport death), so this case asserts the rejection is the raw TypeError
       // from the mock - documenting the boundary rather than forcing it into the 503 class.
-      const adapter = readyAdapter({ setProfilePicture: jest.fn() });
+      const adapter = readyAdapter({});
       await expect(
         adapter.setProfilePicture({ mimetype: 'image/png', data: 'http://dead.lan/x.png' }),
       ).rejects.toBeInstanceOf(Error);
@@ -8804,7 +8838,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
 
     it('joinGroupViaInviteCode still maps a refused invite to InvalidInviteCodeError (400)', async () => {
       const adapter = readyAdapter({
-        acceptInvite: jest.fn().mockRejectedValue(new Error('Evaluation failed: Error: 404')),
+        pupPage: { evaluate: jest.fn().mockRejectedValue(new Error('Evaluation failed: Error: 404')) },
       });
       await expect(adapter.joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(InvalidInviteCodeError);
     });
@@ -9902,16 +9936,21 @@ describe('WhatsAppWebJsAdapter channel administration', () => {
     expect(channel).not.toHaveProperty('description');
   });
 
+  // The writes of a channel are sent in the page, which answers the status WhatsApp gave. What the page answers for each
+  // status is covered in wwebjs-channel-write-status.spec.ts.
   it('surfaces a refused delete rather than reporting success', async () => {
-    const deleteChannel = jest.fn().mockResolvedValue(false);
+    const evaluate = jest.fn().mockResolvedValue({ status: 403, local: true });
 
-    await expect(readyAdapter({ deleteChannel }).deleteChannel(CHANNEL)).rejects.toBeInstanceOf(EngineRefusedError);
+    await expect(readyAdapter({ pupPage: { evaluate } }).deleteChannel(CHANNEL)).rejects.toBeInstanceOf(
+      EngineRefusedError,
+    );
   });
 
   it('resolves a successful delete', async () => {
-    const deleteChannel = jest.fn().mockResolvedValue(true);
+    const evaluate = jest.fn().mockResolvedValue({ status: 200 });
 
-    await expect(readyAdapter({ deleteChannel }).deleteChannel(CHANNEL)).resolves.toBeUndefined();
+    await expect(readyAdapter({ pupPage: { evaluate } }).deleteChannel(CHANNEL)).resolves.toBeUndefined();
+    expect(evaluate).toHaveBeenCalledWith(runChannelWriteInPage, 'delete', CHANNEL);
   });
 
   // Mute lives on the Channel structure, reached through getChatById — the client itself has no
@@ -9919,20 +9958,26 @@ describe('WhatsAppWebJsAdapter channel administration', () => {
   it.each([
     [true, 'mute'],
     [false, 'unmute'],
-  ])('routes mute=%s to Channel.%s', async (mute, method) => {
-    const act = jest.fn().mockResolvedValue(true);
-    const getChatById = jest.fn().mockResolvedValue({ [method]: act });
+  ])('routes mute=%s to the %s write of the page', async (mute, write) => {
+    // The structure only has to exist, which is what tells a channel from a chat: the page sends the write.
+    const getChatById = jest.fn().mockResolvedValue({ [write]: jest.fn() });
+    const evaluate = jest.fn().mockResolvedValue({ status: 200 });
 
-    await expect(readyAdapter({ getChatById }).muteChannel(CHANNEL, mute)).resolves.toBeUndefined();
+    await expect(
+      readyAdapter({ getChatById, pupPage: { evaluate } }).muteChannel(CHANNEL, mute),
+    ).resolves.toBeUndefined();
 
     expect(getChatById).toHaveBeenCalledWith(CHANNEL);
-    expect(act).toHaveBeenCalled();
+    expect(evaluate).toHaveBeenCalledWith(runChannelWriteInPage, write, CHANNEL);
   });
 
   it('surfaces a refused mute rather than reporting success', async () => {
-    const getChatById = jest.fn().mockResolvedValue({ mute: jest.fn().mockResolvedValue(false) });
+    const getChatById = jest.fn().mockResolvedValue({ mute: jest.fn() });
+    const evaluate = jest.fn().mockResolvedValue({ status: 403 });
 
-    await expect(readyAdapter({ getChatById }).muteChannel(CHANNEL, true)).rejects.toBeInstanceOf(EngineRefusedError);
+    await expect(
+      readyAdapter({ getChatById, pupPage: { evaluate } }).muteChannel(CHANNEL, true),
+    ).rejects.toBeInstanceOf(EngineRefusedError);
   });
 
   // A non-channel chat has no mute() at all; that is a wrong-id error, not a refusal.
@@ -9953,18 +9998,20 @@ describe('WhatsAppWebJsAdapter group join-info', () => {
     (adapter as unknown as { client: unknown }).client = client;
     return adapter;
   };
+  /** A client whose page answers the preview job with `info` and the 200 of a read that went through. */
+  const previewing = (info: unknown) => ({ pupPage: { evaluate: jest.fn().mockResolvedValue({ status: 200, info }) } });
 
   it('maps the full shape, taking the disclosed member count', async () => {
-    const getInviteInfo = jest.fn().mockResolvedValue({
+    const raw = {
       id: { _serialized: '120363@g.us' },
       subject: 'Team',
       desc: 'Internal',
       owner: { _serialized: '628111@c.us' },
       creation: 1700000000,
       size: 42,
-    });
+    };
 
-    await expect(readyAdapter({ getInviteInfo }).getGroupJoinInfo('ABC')).resolves.toEqual({
+    await expect(readyAdapter(previewing(raw)).getGroupJoinInfo('ABC')).resolves.toEqual({
       id: '120363@g.us',
       name: 'Team',
       description: 'Internal',
@@ -9977,17 +10024,15 @@ describe('WhatsAppWebJsAdapter group join-info', () => {
   // Absent fields must not become empty strings or zeroes: "created at the epoch" and "owned by
   // nobody" are claims, and this engine never promised to report them.
   it('omits everything the engine did not report', async () => {
-    const getInviteInfo = jest.fn().mockResolvedValue({ id: '120363@g.us', subject: 'Team' });
-
-    const info = await readyAdapter({ getInviteInfo }).getGroupJoinInfo('ABC');
+    const info = await readyAdapter(previewing({ id: '120363@g.us', subject: 'Team' })).getGroupJoinInfo('ABC');
 
     expect(info).toEqual({ id: '120363@g.us', name: 'Team' });
   });
 
   it('falls back to a participants array when no count is disclosed', async () => {
-    const getInviteInfo = jest.fn().mockResolvedValue({ id: 'g@g.us', subject: 'T', participants: [{}, {}, {}] });
+    const raw = { id: 'g@g.us', subject: 'T', participants: [{}, {}, {}] };
 
-    await expect(readyAdapter({ getInviteInfo }).getGroupJoinInfo('ABC')).resolves.toMatchObject({
+    await expect(readyAdapter(previewing(raw)).getGroupJoinInfo('ABC')).resolves.toMatchObject({
       participantCount: 3,
     });
   });
@@ -9995,9 +10040,7 @@ describe('WhatsAppWebJsAdapter group join-info', () => {
   // No id means there is no group to describe — the invite was refused, which is a 404 rather than a
   // half-populated success.
   it.each([{}, null, { subject: 'Team' }])('reports %p as not-found', async raw => {
-    const getInviteInfo = jest.fn().mockResolvedValue(raw);
-
-    await expect(readyAdapter({ getInviteInfo }).getGroupJoinInfo('ABC')).rejects.toBeInstanceOf(GroupNotFoundError);
+    await expect(readyAdapter(previewing(raw)).getGroupJoinInfo('ABC')).rejects.toBeInstanceOf(GroupNotFoundError);
   });
 });
 
@@ -10118,10 +10161,10 @@ describe('WhatsAppWebJsAdapter transport death is not a not-found', () => {
   const dead = (): Error => new Error('Protocol error (Runtime.callFunctionOn): Target closed');
 
   it('getGroupJoinInfo answers 503 for a dead page, 404 for a refused invite', async () => {
-    const transport = readyAdapter({ getInviteInfo: jest.fn().mockRejectedValue(dead()) });
+    const transport = readyAdapter({ pupPage: { evaluate: jest.fn().mockRejectedValue(dead()) } });
     await expect(transport.getGroupJoinInfo('CODE')).rejects.toBeInstanceOf(EngineTransportError);
 
-    const refused = readyAdapter({ getInviteInfo: jest.fn().mockRejectedValue(new Error('invite revoked')) });
+    const refused = readyAdapter({ pupPage: { evaluate: jest.fn().mockRejectedValue(new Error('invite revoked')) } });
     await expect(refused.getGroupJoinInfo('CODE')).rejects.toBeInstanceOf(GroupNotFoundError);
   });
 
@@ -10313,14 +10356,10 @@ describe('WhatsAppWebJsAdapter raw-id extraction hardening', () => {
   });
 
   it('getGroupJoinInfo reads id/owner via $1 on a renamed build instead of a false 404', async () => {
-    const getInviteInfo = jest.fn().mockResolvedValue({
-      id: { $1: '120363000@g.us' },
-      subject: 'G',
-      owner: { $1: '628111@c.us' },
-      size: 3,
-    });
+    const raw = { id: { $1: '120363000@g.us' }, subject: 'G', owner: { $1: '628111@c.us' }, size: 3 };
+    const evaluate = jest.fn().mockResolvedValue({ status: 200, info: raw });
 
-    const info = await readyAdapter({ getInviteInfo }).getGroupJoinInfo('CODE');
+    const info = await readyAdapter({ pupPage: { evaluate } }).getGroupJoinInfo('CODE');
 
     expect(info.id).toBe('120363000@g.us');
     expect(info.owner).toBe('628111@c.us');
@@ -10426,6 +10465,10 @@ describe('WhatsAppWebJsAdapter number check through the library page code', () =
     };
     try {
       await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBe('551187654321');
+      // The seed is written in the background, through a PostgreSQL round trip: wait for the row, not for turns.
+      await waitUntil(
+        async () => (await repo.findOne({ where: { lid: '159442138038327' } }))?.phone === '551187654321',
+      );
       await settle();
       expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({ phone: '551187654321' });
       await peer.remember('159442138038327', '628222', s2);
@@ -10457,6 +10500,10 @@ describe('WhatsAppWebJsAdapter number check through the library page code', () =
       const hidden = checkOn({ knownLocally: false, secondQuery: 'absent' });
       engines.set(s1, hidden.adapter);
       await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBeNull();
+      await waitUntil(async () => {
+        const row = await repo.findOne({ where: { lid: '159442138038327' } });
+        return row?.phone === null && row.sessionId === s1;
+      });
       await settle();
       expect(hidden.queryWidExists).toHaveBeenCalledTimes(1);
       expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({ phone: null, sessionId: s1 });
@@ -10467,7 +10514,7 @@ describe('WhatsAppWebJsAdapter number check through the library page code', () =
         await admin.destroy();
       }
     }
-  });
+  }, 60_000);
 
   it('sends a second query when the page does not, and answers the phone it reads', async () => {
     const { adapter, queryWidExists } = checkOn({ knownLocally: false, secondQuery: 'fills' });

@@ -1160,6 +1160,10 @@ export interface WebhookRedriveResult {
 
 export interface ChatSummary {
   id: Jid;
+  /**
+   * `''` for a Baileys chat held under a privacy id (`@lid`) that has no name of its own: title it by `phone`,
+   * when present.
+   */
   name: string;
   /**
    * Phone digits of a 1:1 chat WhatsApp holds under a privacy id (`@lid`), when the session can map
@@ -1196,7 +1200,7 @@ export type CallLinkType = 'audio' | 'video';
 /** Body for {@link CallsResource.createLink}. */
 export interface CreateCallLinkRequest {
   type: CallLinkType;
-  /** Absolute epoch MILLISECONDS the call is scheduled to start at. */
+  /** Absolute epoch MILLISECONDS the call is scheduled to start at, a whole number: a fraction answers `400`. */
   startTime: number;
 }
 

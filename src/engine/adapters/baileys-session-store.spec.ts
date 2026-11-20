@@ -1,5 +1,8 @@
+import { DataSource } from 'typeorm';
 import { BaileysSessionStore } from './baileys-session-store';
-import type { LidMappingStore } from '../identity/lid-mapping-store.service';
+import { LidMapping } from '../identity/lid-mapping.entity';
+import { LidMappingStoreService, type LidMappingStore } from '../identity/lid-mapping-store.service';
+import { withoutMergedNonContentMessage, type ContentTypeLib } from './baileys-message-mapper';
 import {
   mergeTwinStates,
   type ChatStateField,
@@ -803,6 +806,194 @@ describe('BaileysSessionStore', () => {
       store.upsertChats([{ id: '628333@s.whatsapp.net' }]);
       expect(store.listChats()[0].name).toBe('628333');
     });
+
+    describe('a privacy-id chat the store can name', () => {
+      // The in-memory mirror of the shared table: pairs this session has not learned itself.
+      const lidTable = (pairs: Record<string, string>) => {
+        const getCached = jest.fn((lid: string) => pairs[lid]);
+        return {
+          getCached,
+          resolveLid: jest.fn((jid: string) => getCached(userPart(jid)) ?? null),
+          lidsForPhone: jest.fn(() => [] as string[]),
+          remember: jest.fn(() => Promise.resolve(true)),
+        };
+      };
+
+      it('lists the push name when the contact record holds the privacy id as its saved name', () => {
+        store.upsertChats([{ id: '111@lid', name: '111' }]);
+        store.upsertContacts([{ id: '111@lid', name: '111' }]);
+        store.upsertContacts([{ id: '111@lid', notify: 'Alice' }]);
+        expect(store.listChats()[0].name).toBe('Alice');
+      });
+
+      // A history chunk files a contact for every conversation, titled by the privacy id's digits when it has no name.
+      it.each([
+        ['saved name', { name: 'Carol' }, { name: '111' }],
+        ['verified name', { verifiedName: 'Acme Ltd' }, { verifiedName: '111@lid' }],
+        ['push name', { notify: 'Alice' }, { notify: '111' }],
+      ] as const)('keeps a held %s when a later title of the chat is only the privacy id', (_field, held, later) => {
+        const [expected] = Object.values(held);
+        store.upsertChats([{ id: '111@lid' }]);
+        store.upsertContacts([{ id: '111@lid', ...held }]);
+        store.upsertContacts([{ id: '111@lid', ...later }]);
+        expect(store.listChats()[0].name).toBe(expected);
+      });
+
+      it('takes a later real name over a held one, and a name over a held privacy id', () => {
+        store.upsertChats([{ id: '111@lid' }]);
+        store.upsertContacts([{ id: '111@lid', name: 'Carol' }]);
+        store.upsertContacts([{ id: '111@lid', name: 'Caroline' }]);
+        expect(store.listChats()[0].name).toBe('Caroline');
+        store.upsertContacts([{ id: '222@lid', name: '222' }]);
+        store.upsertContacts([{ id: '222@lid', name: 'Dan' }]);
+        store.upsertChats([{ id: '222@lid' }]);
+        expect(store.listChats().find(c => c.id === '222@lid')?.name).toBe('Dan');
+      });
+
+      it('lists the verified name before the push name when the saved name is only the privacy id', () => {
+        store.upsertChats([{ id: '111@lid' }]);
+        store.upsertContacts([{ id: '111@lid', name: '111@lid', verifiedName: 'Acme Ltd', notify: 'Alice' }]);
+        expect(store.listChats()[0].name).toBe('Acme Ltd');
+      });
+
+      it('lists the saved name, else the verified name, else the push name', () => {
+        store.upsertChats([{ id: '111@lid' }, { id: '222@lid' }, { id: '333@lid' }]);
+        store.upsertContacts([
+          { id: '111@lid', name: 'Saved', verifiedName: 'Verified', notify: 'Push' },
+          { id: '222@lid', verifiedName: 'Verified', notify: 'Push' },
+          { id: '333@lid', notify: 'Push' },
+        ]);
+        expect(Object.fromEntries(store.listChats().map(c => [c.id, c.name]))).toEqual({
+          '111@lid': 'Saved',
+          '222@lid': 'Verified',
+          '333@lid': 'Push',
+        });
+      });
+
+      it.each(['628999@s.whatsapp.net', '628999@c.us'])(
+        'lists the contact saved as %s, behind a phone only the shared table holds',
+        key => {
+          const s = new BaileysSessionStore(lidTable({ '111': '628999' }));
+          s.upsertChats([{ id: '111@lid' }]);
+          s.upsertContacts([{ id: key, name: 'Carol' }]);
+          expect(s.listChats()[0]).toMatchObject({ name: 'Carol', phone: '628999' });
+        },
+      );
+
+      it('lists the contact saved behind the phone once the session map evicted the pair the table holds', () => {
+        const before = process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES;
+        process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES = '1';
+        try {
+          const s = new BaileysSessionStore(lidTable({ '111': '628999', '222': '628222' }));
+          s.addLidMappings([{ lid: '111@lid', pn: '628999@s.whatsapp.net' }]);
+          s.addLidMappings([{ lid: '222@lid', pn: '628222@s.whatsapp.net' }]); // evicts the first pair
+          s.upsertContacts([{ id: '628999@s.whatsapp.net', name: 'Carol' }]); // pinned: the cap never evicts a saved name
+          s.upsertChats([{ id: '111@lid' }]);
+          expect(s.listChats()[0]).toMatchObject({ name: 'Carol', phone: '628999' });
+        } finally {
+          if (before === undefined) delete process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES;
+          else process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES = before;
+        }
+      });
+
+      it('lists the phone and no name for a pair only the shared table holds when no contact is saved', () => {
+        const s = new BaileysSessionStore(lidTable({ '111': '628999' }));
+        s.upsertChats([{ id: '111@lid' }]);
+        expect(s.listChats()[0]).toMatchObject({ name: '', phone: '628999' });
+      });
+
+      it('asks the shared table at most twice for a privacy-id row, naming it included', () => {
+        // Once for the keys of the chat's state and once for the phone the row lists; naming adds no read.
+        const table = lidTable({ '111': '628999' });
+        const s = new BaileysSessionStore(table);
+        s.upsertChats([{ id: '111@lid' }, { id: '222@lid' }]);
+        s.upsertContacts([{ id: '628999@s.whatsapp.net', name: 'Carol' }]);
+        expect(Object.fromEntries(s.listChats().map(c => [c.id, c.name]))).toEqual({
+          '111@lid': 'Carol',
+          '222@lid': '',
+        });
+        const asked = (lid: string) => table.getCached.mock.calls.filter(([called]) => called === lid).length;
+        expect(asked('111')).toBeLessThanOrEqual(2);
+        expect(asked('222')).toBeLessThanOrEqual(2);
+      });
+
+      describe('with the stored table', () => {
+        let db: DataSource;
+        beforeEach(async () => {
+          db = await new DataSource({
+            type: 'better-sqlite3',
+            database: ':memory:',
+            entities: [LidMapping],
+            synchronize: true,
+          }).initialize();
+        });
+        afterEach(async () => {
+          await db.destroy();
+        });
+
+        it('lists the phone and the saved contact behind it for a pair the table held at start', async () => {
+          const repo = db.getRepository(LidMapping);
+          await repo.save({ lid: '111', phone: '628999', sessionId: null, isReported: true });
+          const table = new LidMappingStoreService(repo);
+          await table.onModuleInit(); // what the boot does
+          const s = new BaileysSessionStore(table, 'sess'); // a new engine has learned no pair yet
+          s.upsertChats([{ id: '111@lid' }]);
+          s.upsertContacts([{ id: '628999@s.whatsapp.net', name: 'Carol' }]);
+          expect(s.listChats()[0]).toMatchObject({ name: 'Carol', phone: '628999' });
+        });
+      });
+
+      it.each(['111', '111@lid', ' 111 '])('lists no name for a chat titled %j, the privacy id itself', title => {
+        store.upsertChats([{ id: '111@lid', name: title }]);
+        expect(store.listChats()[0].name).toBe('');
+      });
+
+      it.each([
+        { name: '111' },
+        { name: '111@lid' },
+        { verifiedName: '111' },
+        { notify: '111' },
+        { notify: ' 111@lid ' },
+      ])('lists no name for a contact record that holds only the privacy id, as %j', record => {
+        store.upsertChats([{ id: '111@lid' }]);
+        store.upsertContacts([{ id: '111@lid', ...record }]);
+        expect(store.listChats()[0].name).toBe('');
+      });
+
+      it.each([{ name: '111' }, { verifiedName: '111@lid' }, { notify: '111' }])(
+        'lists no name for the contact behind the phone when it holds only the privacy id, as %j',
+        record => {
+          store.addLidMappings([{ lid: '111@lid', pn: '628999@s.whatsapp.net' }]);
+          store.upsertChats([{ id: '111@lid' }]);
+          store.upsertContacts([{ id: '628999@s.whatsapp.net', ...record }]);
+          expect(store.listChats()[0]).toMatchObject({ name: '', phone: '628999' });
+        },
+      );
+
+      it('lists a contact name trimmed, and takes the next name for a blank one', () => {
+        store.upsertChats([{ id: '628222@s.whatsapp.net' }]);
+        store.upsertContacts([{ id: '628222@s.whatsapp.net', name: '  ', notify: ' Dave ' }]);
+        expect(store.listChats()[0].name).toBe('Dave');
+      });
+
+      it.each([
+        ['120363111@g.us', '  Team  ', 'Team'],
+        ['120363111@g.us', '', '120363111'],
+        ['120363111@g.us', '   ', '120363111'],
+        ['628111@s.whatsapp.net', '', '628111'],
+        ['120363999@newsletter', '', '120363999'],
+      ])('lists the chat %s titled %j as %j', (id, title, listed) => {
+        store.upsertChats([{ id, name: title }]);
+        expect(store.listChats()[0].name).toBe(listed);
+      });
+
+      it('leaves the contact list as the account filed it', () => {
+        store.upsertContacts([{ id: '111@lid', name: '111', notify: 'Alice' }]);
+        expect(store.listContacts()).toEqual([
+          expect.objectContaining({ id: '111@lid', name: '111', pushName: 'Alice' }),
+        ]);
+      });
+    });
   });
 
   describe('recordKeyLidMappings (#362)', () => {
@@ -1351,6 +1542,199 @@ describe('BaileysSessionStore', () => {
       expect(fake.get(SID, PHONE)?.deletedAt).toBe(mark);
       // A timer WhatsApp keeps across a deletion still applies.
       expect(s.getEphemeralExpiration(PHONE)).toBe(86_400);
+    });
+
+    // The chat of a history chunk (a first sync, a history fetch) whose newest message is a pin, as the lifecycle hands it
+    // to the store once the filter took the message and its time, which is the time of the chunk, out of it.
+    describe('a history chunk whose last message is none of its own', () => {
+      const lib = {
+        getContentType: (content: object | undefined) =>
+          Object.keys(content ?? {}).find(key => key === 'conversation' || key.includes('Message')),
+        normalizeMessageContent: (content: unknown) => content,
+      } as unknown as ContentTypeLib;
+      const T = 1_700_000_100;
+      const chunk = (id: string, fromMe = false, at = T) =>
+        withoutMergedNonContentMessage(
+          {
+            id,
+            conversationTimestamp: at,
+            unreadCount: fromMe ? 0 : 1,
+            messages: [
+              {
+                message: {
+                  key: { remoteJid: id, fromMe, id: 'PIN1' },
+                  message: { pinInChatMessage: {} },
+                  messageTimestamp: at,
+                },
+              },
+            ],
+          },
+          lib,
+        );
+      const text = (remoteJid: string, ts: number) => ({
+        key: { remoteJid, fromMe: false, id: 'TEXT1' },
+        message: { conversation: 'hello' },
+        messageTimestamp: ts,
+      });
+
+      it.each([
+        ['a contact', false, 1],
+        ['the account', true, 0],
+      ])(
+        'lists a chat it alone tells of, with a pin from %s, at the time the phone gave it',
+        (_who, fromMe, unread) => {
+          const s = newStore();
+          s.upsertChats([chunk(PHONE, fromMe)]);
+          expect(s.listChats()).toEqual([
+            expect.objectContaining({ id: '628111@c.us', timestamp: T, unreadCount: unread, lastMessage: undefined }),
+          ]);
+        },
+      );
+
+      it('lists such a chat at the time of a text recorded after it, with the text, and never with the pin', () => {
+        const s = newStore();
+        s.upsertChats([chunk(PHONE)]);
+        s.recordMessage(text(PHONE, T - 50));
+        expect(s.listChats()).toEqual([expect.objectContaining({ timestamp: T - 50, lastMessage: 'hello' })]);
+      });
+
+      it('leaves the time a record of the chat holds', () => {
+        const s = newStore();
+        s.upsertChats([{ id: PHONE, conversationTimestamp: T - 500 }]);
+        s.upsertChats([chunk(PHONE)]);
+        expect(s.listChats()).toEqual([expect.objectContaining({ timestamp: T - 500 })]);
+      });
+
+      it('leaves the time a record holds under the other spelling of the chat', () => {
+        const s = newStore();
+        s.addLidMappings([{ lid: LID, pn: PHONE }]);
+        s.upsertChats([{ id: LID, conversationTimestamp: T - 500 }]);
+        s.upsertChats([chunk(PHONE)]);
+        expect(s.listChats().map(chat => chat.timestamp)).not.toContain(T);
+      });
+
+      it('leaves the time and the preview of a message the session recorded', () => {
+        const s = newStore();
+        s.recordMessage(text(PHONE, T - 500));
+        s.upsertChats([chunk(PHONE)]);
+        expect(s.listChats()).toEqual([expect.objectContaining({ timestamp: T - 500, lastMessage: 'hello' })]);
+      });
+
+      it('keeps a deleted chat deleted, with its mark, for a pin newer than the deletion', async () => {
+        const s = newStore();
+        s.upsertChats([{ id: PHONE, conversationTimestamp: T - 500 }]);
+        s.removeChats([PHONE]);
+        await flush();
+        const mark = fake.get(SID, PHONE)?.deletedAt;
+        expect(mark).toEqual(expect.any(Number));
+
+        s.upsertChats([chunk(PHONE, false, Math.floor(Date.now() / 1000) + 60)]);
+        await flush();
+
+        expect(s.listChats()).toEqual([]);
+        expect(fake.get(SID, PHONE)?.deletedAt).toBe(mark);
+      });
+
+      it('takes no time for a copy of the chat the filter returned', () => {
+        const s = newStore();
+        s.upsertChats([{ ...chunk(PHONE) }]);
+        expect(s.listChats()).toEqual([expect.objectContaining({ timestamp: 0 })]);
+      });
+    });
+
+    // What Baileys writes for a counted message, or a plain reaction to an own message, when the account unarchives on a
+    // new message: the pair alone, once the message's time and the message itself are taken out.
+    describe('the pair of an unarchiving message, for a chat this session holds no record of', () => {
+      const GROUP = '120363000000000000@g.us';
+      const UNARCHIVES = { archived: false, readOnly: false };
+
+      it.each([
+        ['a phone chat', PHONE],
+        ['a privacy-id chat', LID],
+        ['a group', GROUP],
+        ['the status chat', 'status@broadcast'],
+      ])('lists no row for %s, nor writes a state row for it', (_what, id) => {
+        const s = newStore();
+        s.upsertChats([{ id, ...UNARCHIVES }]);
+        s.upsertChats([Object.assign({ id, ...UNARCHIVES }, { conditional: () => true })]);
+        expect(s.listChats()).toEqual([]);
+        expect(fake.rows.size).toBe(0);
+      });
+
+      it.each([
+        ['an app-state unarchive, which carries no readOnly', { archived: false }],
+        ['an app-state archive', { archived: true }],
+        ['a read-only flag alone', { readOnly: false }],
+        ['the pair with a name', { ...UNARCHIVES, name: 'Alice' }],
+        ['the pair with a time', { ...UNARCHIVES, conversationTimestamp: 1_700_000_000 }],
+        ['the pair with a count', { ...UNARCHIVES, unreadCount: 1 }],
+        ['the pair of a chat the account was removed from', { archived: false, readOnly: true }],
+      ])('still lists a chat the phone told of with %s', (_what, update) => {
+        const s = newStore();
+        s.upsertChats([{ id: PHONE, ...update }]);
+        expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us' })]);
+      });
+
+      // A record under the other spelling of the id would be a second row at the epoch beside the chat's own, so the pair
+      // creates none; the state it carries still goes to the persisted row, which unarchives the chat that is listed.
+      describe.each([
+        ['a lid', LID, PHONE],
+        ['a phone', PHONE, LID],
+      ])('a chat held under %s, when the pair comes with the other spelling', (_held, held, other) => {
+        it('adds no second row', () => {
+          const s = newStore();
+          s.addLidMappings([{ lid: LID, pn: PHONE }]);
+          s.upsertChats([{ id: held, conversationTimestamp: 1_700_000_000 }]);
+          const before = s.listChats().map(chat => chat.id);
+
+          s.upsertChats([{ id: other, ...UNARCHIVES }]);
+
+          expect(before).toHaveLength(1);
+          expect(s.listChats().map(chat => chat.id)).toEqual(before);
+        });
+
+        it('still unarchives the chat that is listed', () => {
+          const s = newStore();
+          s.addLidMappings([{ lid: LID, pn: PHONE }]);
+          s.upsertChats([{ id: held, archived: true, conversationTimestamp: 1_700_000_000 }]);
+
+          s.upsertChats([{ id: other, ...UNARCHIVES }]);
+
+          const listed = s.listChats().find(chat => chat.id === held.replace('@s.whatsapp.net', '@c.us'));
+          expect(listed).toMatchObject({ archived: false });
+        });
+      });
+
+      it('unarchives a chat the session holds a record of', () => {
+        const s = newStore();
+        s.upsertChats([{ id: PHONE, archived: true, conversationTimestamp: 1_700_000_000 }]);
+        s.upsertChats([{ id: PHONE, ...UNARCHIVES }]);
+        expect(s.listChats()).toEqual([expect.objectContaining({ archived: false })]);
+        expect(fake.get(SID, PHONE)?.archived).toBe(false);
+      });
+
+      it('unarchives a chat only its persisted state is known by, as after a restart', () => {
+        fake.rows.set(K(PHONE), { muteEndTime: null, archived: true, pinned: false });
+        const s = newStore();
+        expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', archived: true })]);
+
+        s.upsertChats([{ id: PHONE, ...UNARCHIVES }]);
+
+        expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', archived: false })]);
+        expect(fake.get(SID, PHONE)?.archived).toBe(false);
+      });
+
+      it('leaves a deleted chat out of the list', async () => {
+        const s = newStore();
+        s.upsertChats([{ id: PHONE, conversationTimestamp: 1_700_000_000 }]);
+        s.removeChats([PHONE]);
+        await flush();
+
+        s.upsertChats([{ id: PHONE, ...UNARCHIVES }]);
+
+        expect(s.listChats()).toEqual([]);
+        expect(fake.get(SID, PHONE)?.deletedAt).toEqual(expect.any(Number));
+      });
     });
 
     it('finds the lid through the persisted mapping table as well', () => {

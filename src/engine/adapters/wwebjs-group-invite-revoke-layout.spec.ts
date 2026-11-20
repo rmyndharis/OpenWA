@@ -11,8 +11,9 @@ import { EngineRefusedError } from '../../common/errors/engine-refused.error';
  * IN the page, so a build that moved it must still give the new code, a build that did not must keep working, and a
  * build with neither must answer 501, never a bare 500 from a missing function.
  *
- * The module exports below are those of build 2.3000.1054966512-alpha, read off its scripts. Meta's `require` throws
- * for a module a build does not define, as the registry here does.
+ * The module exports below are those of build 2.3000.1054966512-alpha, read off its scripts. From a page.evaluate
+ * Meta's `require` answers `undefined` for a module the page has not defined, and throws only inside a guard or before
+ * the page's error setup has run; the registry here does either, and throws unless told to answer `undefined`.
  */
 describe('revoking the invite code of a group on each WhatsApp Web layout', () => {
   const GROUP = '120363000000000001@g.us';
@@ -33,10 +34,13 @@ describe('revoking the invite code of a group on each WhatsApp Web layout', () =
   });
   const inviteJob = (reset: jest.Mock) => ({ resetGroupInviteCode: reset, joinGroupViaInvite: jest.fn() });
 
-  const pageWith = (modules: Record<string, unknown>) => {
+  const pageWith = (modules: Record<string, unknown>, unknownModule: 'throws' | 'undefined' = 'throws') => {
     g.window = {
       require: (name: string) => {
-        if (!(name in modules)) throw new Error(`Requiring unknown module "${name}"`);
+        if (!(name in modules)) {
+          if (unknownModule === 'undefined') return undefined;
+          throw new Error(`Requiring unknown module "${name}"`);
+        }
         return modules[name];
       },
     };
@@ -105,6 +109,23 @@ describe('revoking the invite code of a group on each WhatsApp Web layout', () =
     const attempt = adapterOnThatPage().revokeGroupInviteCode(GROUP);
     await expect(attempt).rejects.toBeInstanceOf(EngineNotSupportedError);
     await expect(attempt).rejects.toThrow(/revokeGroupInviteCode\(no reset job on this build\)/);
+  });
+
+  // The shape of a booted page: a module it has not defined answers `undefined`.
+  it('gives the new code from WAWebGroupQueryJob when require answers undefined for WAWebGroupInviteJob', async () => {
+    const reset = jest.fn().mockResolvedValue({ code: 'OLDCODE' });
+    pageWith(
+      { WAWebWidFactory: widFactory, WAWebGroupQueryJob: { ...queryJobWithoutReset(), resetGroupInviteCode: reset } },
+      'undefined',
+    );
+
+    await expect(adapterOnThatPage().revokeGroupInviteCode(GROUP)).resolves.toBe('OLDCODE');
+  });
+
+  it('answers 501 when require answers undefined for both modules', async () => {
+    pageWith({ WAWebWidFactory: widFactory }, 'undefined');
+
+    await expect(adapterOnThatPage().revokeGroupInviteCode(GROUP)).rejects.toBeInstanceOf(EngineNotSupportedError);
   });
 
   it.each([

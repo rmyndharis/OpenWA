@@ -57,15 +57,32 @@ const THROTTLED_503 =
   'retry after a pause.';
 
 // On whatsapp-web.js the group writes below are sent in the page, so WhatsApp's own status decides the answer: a rate
-// limit (423, 429) or a server error (5xx) is this 503 and says nothing was changed, where it read as missing admin rights.
+// limit (423, 429), a timeout (408) or a server error (5xx) is this 503 and says nothing was changed, where it read as
+// missing admin rights.
 const WWJS_STATUS_503 =
-  ' On whatsapp-web.js, also when WhatsApp answers the change with a rate limit or a server error (423, 429 or 5xx): ' +
+  ' On whatsapp-web.js, also when WhatsApp answers the change with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
   'nothing was changed, so retry after a pause.';
+
+// A build of WhatsApp Web that has none of the jobs the page needs to send such a write cannot make it, and the library's
+// own call reads the same jobs, so the answer comes before anything is asked of WhatsApp.
+const WWJS_NO_WRITE_JOB_501 =
+  'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to send the change with. ' +
+  'Nothing was asked of WhatsApp: the group is unchanged.';
 
 // The invite code read is sent in the page the same way, so its status decides the answer too.
 const WWJS_INVITE_READ_503 =
-  ' On whatsapp-web.js, also when WhatsApp answers the read with a rate limit or a server error (423, 429 or 5xx): ' +
+  ' On whatsapp-web.js, also when WhatsApp answers the read with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
   'no code was returned, so retry after a pause.';
+
+// The join and the preview of an invite are sent in the page too, so the status WhatsApp gave decides their answer: a
+// good invite is no longer read as a bad one when the request was only rate limited, timed out or failed.
+const WWJS_INVITE_JOIN_503 =
+  ' On whatsapp-web.js, also when WhatsApp answers the join with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
+  'the account joined nothing, so retry after a pause.';
+const WWJS_INVITE_PREVIEW_503 =
+  ' On whatsapp-web.js, also when WhatsApp answers the preview with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
+  'no group was returned, so retry after a pause. A 500 that carries no text, which the job in the page makes up when ' +
+  'its query returns no group and no error, answers 404.';
 
 // The subject, description and picture are the group's info: WhatsApp lets an admin edit them and, unless the group
 // restricts its info to admins, any member too. The settings and the invite routes below stay admin-only.
@@ -153,7 +170,8 @@ export class GroupController {
     description:
       'WhatsApp did not answer within the request budget. Deliberately not folded into the 404 above — ' +
       'a query that never came back is not the same claim as a group that does not exist.' +
-      THROTTLED_503,
+      THROTTLED_503 +
+      WWJS_INVITE_PREVIEW_503,
   })
   @ApiResponse({ status: 400, description: 'Session not started, or no code supplied' })
   @ApiResponse({ status: 404, description: 'No such invite — invalid, expired or revoked' })
@@ -196,15 +214,27 @@ export class GroupController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiBody({ type: JoinGroupDto })
   @ApiResponse({ status: 200, description: 'Joined the group', type: GroupJoinedResponseDto })
-  @ApiResponse({ status: 400, description: 'Invalid or expired invite code, or session is not started' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Invalid or expired invite code, or session is not started. Also answered when the group has an admin approve ' +
+      'new members: the invite is good and a request to join was sent, but the account has not joined.',
+  })
   @ApiResponse({
     status: 503,
     description:
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
       'the gateway stopped waiting for a confirmation that never came.' +
-      THROTTLED_503,
+      THROTTLED_503 +
+      WWJS_INVITE_JOIN_503,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({
+    status: 501,
+    description:
+      'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to join a group with. ' +
+      'Nothing was asked of WhatsApp: the invite code is not judged.',
+  })
   async join(@Param('sessionId') sessionId: string, @Body() dto: JoinGroupDto) {
     const groupId = await this.groupService.joinGroupViaInviteCode(sessionId, dto.inviteCode);
     return { success: true, groupId };
@@ -249,14 +279,20 @@ export class GroupController {
   })
   @ApiResponse({ status: 403, description: 'The engine refused the change (the account is not a group admin)' })
   @ApiResponse({ status: 404, description: 'Group not found' })
-  @ApiResponse({ status: 501, description: 'The active engine does not support a requested setting' })
+  @ApiResponse({
+    status: 501,
+    description:
+      'The active engine does not support a requested setting. On whatsapp-web.js, also answered when the WhatsApp ' +
+      'Web build the session runs has no job to apply `announce`, `locked` or `memberAddMode` with: nothing was asked ' +
+      'of WhatsApp for that setting.',
+  })
   @ApiResponse({
     status: 503,
     description:
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
       'the gateway stopped waiting for a confirmation that never came.' +
       THROTTLED_503 +
-      ' On whatsapp-web.js, also when WhatsApp answers a setting with a rate limit or a server error (423, 429 or 5xx): ' +
+      ' On whatsapp-web.js, also when WhatsApp answers a setting with a rate limit, a timeout or a server error (408, 423, 429 or 5xx): ' +
       'that setting was not applied, or, for a member add mode change, may have been applied in part, and the message ' +
       'names any setting of the same request that was already applied.',
   })
@@ -516,6 +552,7 @@ export class GroupController {
   @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
+  @ApiResponse({ status: 501, description: WWJS_NO_WRITE_JOB_501 })
   async setSubject(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -545,6 +582,7 @@ export class GroupController {
   @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
+  @ApiResponse({ status: 501, description: WWJS_NO_WRITE_JOB_501 })
   async setDescription(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -685,6 +723,7 @@ export class GroupController {
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
+  @ApiResponse({ status: 501, description: WWJS_NO_WRITE_JOB_501 })
   async setPicture(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -714,11 +753,17 @@ export class GroupController {
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
       'the gateway stopped waiting for a confirmation that never came.' +
       THROTTLED_503 +
-      ' On whatsapp-web.js, also when WhatsApp answers the delete with a rate limit or a server error: ' +
+      ' On whatsapp-web.js, also when WhatsApp answers the delete with a rate limit, a timeout or a server error: ' +
       'nothing was deleted.',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
+  @ApiResponse({
+    status: 501,
+    description:
+      'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to remove a group picture ' +
+      'with. Nothing was asked of WhatsApp: the picture is unchanged.',
+  })
   async deletePicture(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     await this.groupService.deleteGroupPicture(sessionId, groupId);
     return { success: true, message: 'Group picture removed' };
@@ -762,9 +807,11 @@ export class GroupController {
   @ApiResponse({
     status: 503,
     description:
-      INVITE_CODE_503 +
-      ' On whatsapp-web.js, the revoke is also answered 503 when WhatsApp answers it with a rate limit or a server ' +
-      'error (423, 429 or 5xx): the current code is unchanged, so retry after a pause.',
+      'On Baileys, WhatsApp did not answer the invite-code revocation in time, or rate-limited or timed it out ' +
+      '(code 429 or 408); retry after a pause. On whatsapp-web.js, only when WhatsApp answers the revoke with a rate ' +
+      'limit, a timeout or a server error (408, 423, 429 or 5xx): the current code is unchanged, so retry after a pause. On ' +
+      'whatsapp-web.js a protocol timeout or a page that died mid-call answers 500 instead, since the revoke may ' +
+      'already have rotated the code: read the current code before repeating it.',
   })
   @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })

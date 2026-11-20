@@ -12,8 +12,8 @@ export class ChatSummaryDto {
 
   @ApiProperty({
     description:
-      "The chat's name, an empty string for a Baileys chat held under a privacy id (@lid) that has no saved name " +
-      'or push name, which a client titles by `phone`.',
+      "The chat's name, an empty string for a Baileys chat held under a privacy id (@lid) that has no saved, " +
+      'verified or push name, which a client titles by `phone`.',
     example: 'Alice',
   })
   name!: string;

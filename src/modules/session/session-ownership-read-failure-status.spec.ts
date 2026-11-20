@@ -100,7 +100,7 @@ describe('a lifecycle route whose ownership bookkeeping cannot reach the databas
 
   it('start() whose claim matched no row and whose row read then fails answers 503', async () => {
     const f = fixture();
-    f.ownership.claim.mockResolvedValueOnce(false);
+    f.ownership.claim.mockResolvedValue(false);
     f.repository.findOne.mockRejectedValueOnce(dropped());
 
     await expect(f.service.start(ID, { explicit: true })).rejects.toBeInstanceOf(ServiceUnavailableException);
@@ -141,7 +141,7 @@ describe('a lifecycle route whose ownership bookkeeping cannot reach the databas
 
   it('delete() whose claim matched no row and whose row read then fails answers 503', async () => {
     const f = fixture();
-    f.ownership.claim.mockResolvedValueOnce(false);
+    f.ownership.claim.mockResolvedValue(false);
     f.repository.findOne.mockRejectedValueOnce(dropped());
 
     await expect(f.service.delete(ID)).rejects.toBeInstanceOf(ServiceUnavailableException);
@@ -189,7 +189,7 @@ describe('a lifecycle route whose ownership bookkeeping cannot reach the databas
 
   it('delete() whose claim matched no row and whose row read then fails drops the stop mark and the stop request', async () => {
     const f = fixture();
-    f.ownership.claim.mockResolvedValueOnce(false);
+    f.ownership.claim.mockResolvedValue(false);
     f.repository.findOne.mockRejectedValueOnce(dropped());
 
     await expect(f.service.delete(ID)).rejects.toBeInstanceOf(ServiceUnavailableException);
@@ -219,12 +219,12 @@ describe('the refusals beside those reads keep their answers', () => {
 
   it('start() and delete() whose claim matched no row for a missing session answer 404', async () => {
     const start = fixture();
-    start.ownership.claim.mockResolvedValueOnce(false);
+    start.ownership.claim.mockResolvedValue(false);
     start.repository.findOne.mockResolvedValueOnce(null);
     await expect(start.service.start(ID, { explicit: true })).rejects.toBeInstanceOf(NotFoundException);
 
     const remove = fixture();
-    remove.ownership.claim.mockResolvedValueOnce(false);
+    remove.ownership.claim.mockResolvedValue(false);
     remove.repository.findOne.mockResolvedValueOnce(null);
     await expect(remove.service.delete(ID)).rejects.toBeInstanceOf(NotFoundException);
   });
@@ -304,11 +304,15 @@ const turn = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 describe('a stop or delete that fails before it acts drops its own stop mark, not a later one', () => {
   it('delete() whose claim matched no row and whose row read then fails leaves the mark a later stop set', async () => {
     const f = fixture();
-    f.ownership.claim.mockResolvedValueOnce(false);
+    f.ownership.claim.mockResolvedValue(false);
     const deletionRead = deferred<Session>();
     f.repository.findOne.mockImplementationOnce(() => deletionRead.promise);
     const stopCheck = deferred<boolean>();
-    f.ownership.isHeldByOtherNode.mockResolvedValueOnce(false).mockImplementationOnce(() => stopCheck.promise);
+    // The delete's own check, the one it makes when its claim is refused, then the stop's.
+    f.ownership.isHeldByOtherNode
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockImplementationOnce(() => stopCheck.promise);
 
     const deleting = f.service.delete(ID).catch((error: unknown) => error);
     await turn();

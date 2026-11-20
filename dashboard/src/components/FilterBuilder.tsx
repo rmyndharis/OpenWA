@@ -140,7 +140,7 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
       <div className="chips-row">
         {value.map(jid => (
           <span key={jid} className="chip" title={jid}>
-            {labelFor(jid)}
+            <bdi>{labelFor(jid)}</bdi>
             <button
               type="button"
               className="chip-remove"
@@ -186,7 +186,9 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
               onClick={() => add(c.id)}
             >
               <span className="chips-suggestion-name">{chatTitle(c)}</span>
-              <span className="chips-suggestion-id">{c.id}</span>
+              <span className="chips-suggestion-id">
+                <bdi dir="ltr">{c.id}</bdi>
+              </span>
             </button>
           ))}
           {text.trim() && normalizeToJid(text) && (

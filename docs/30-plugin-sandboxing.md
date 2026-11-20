@@ -64,16 +64,27 @@ from disk is user-installed and sandboxed.
   cap. The worker therefore limits the log lines and capability calls it posts. `ctx.logger.*` lines are
   limited to 198 per 10 s: the rest are dropped inside the worker, with one note at the first drop and a count
   with the first line after the window ends. The two notes bring a window to the 200 messages per 10 s that the
-  host's log relay admits as a backstop, so neither is refused there. A capability call is refused with a
-  thrown `Error` while 64 calls are unanswered, twice the 32 concurrent calls the host runs. A plugin that
-  awaits its calls and logs at an ordinary rate never reaches either limit. Registration is deduplicated but
-  not counted: `ctx.registerWebhook` tells the host about a route once, `ctx.registerSearchProvider` once, and
-  `ctx.registerHook` about an event once, then again only for a handler whose priority is lower than every
-  earlier one for that event, since the host runs the plugin's handlers for an event from one entry, at the
-  lowest priority asked for. A loop that registers new route names or ever lower priorities posts on every
-  pass, and the worker leaves that to the plugin's own code. Output these limits do not cover, such as a
-  message posted to the port directly, is outside the boundary like the other direct access described below. A
-  loop that only spins on its own thread is ended by the liveness check once a dispatch to the plugin times out.
+  host's log relay admits as a backstop. The relay keeps windows of its own, opened when the plugin is enabled
+  and not when the worker's opens, so a burst that straddles a boundary of the relay's window can still lose
+  lines, or a note, there; the relay then logs how many it dropped. At most 64 capability calls are unanswered at
+  once, twice the 32 concurrent calls the host runs. A call made while 64 are waiting is held in the worker and
+  posted, in the order it was made, as each reply frees a slot, so a `Promise.all` over a long list of calls is
+  answered in full. It is refused with a thrown `Error` only when 10,000 calls are already held, which only a
+  loop that never yields reaches. The host's own bound of 32 calls in flight is unchanged: a slow verb past it is
+  refused there. A held call made in a hook handler keeps the hook chain of its dispatch only while the handler runs, so
+  a held send (`ctx.messages.sendText`, `ctx.messages.reply`, `ctx.conversations.send`) still waiting after its handler
+  has returned is refused with the thrown `Error`, as a call past the bound was before calls were held: posted then, it
+  would fire the hooks of the send outside the re-entrancy guard and dispatch the handler again (a loop of more than 64
+  sends nobody awaits). Any other held call is posted as usual, and a handler that awaits its calls is still running
+  when they are posted, so it loses none. A plugin that logs at an ordinary rate never reaches the log limit, and one
+  that awaits its calls one after another never has a call held. Registration is deduplicated but not counted:
+  `ctx.registerWebhook` tells the host about a route once, `ctx.registerSearchProvider` once, and `ctx.registerHook`
+  about an event once, then again only for a handler whose priority is lower than every earlier one for that event,
+  since the host runs the plugin's handlers for an event from one entry, at the lowest priority asked for. A loop that
+  registers new route names or ever lower priorities posts on every pass, and the worker leaves that to the plugin's own
+  code. Output these limits do not cover, such as a message posted to the port directly, is outside the boundary like
+  the other direct access described below. A loop that only spins on its own thread is ended by the liveness check once
+  a dispatch to the plugin times out.
 - **Memory-kind boundary.** The heap cap bounds the V8 heap only. `Buffer`/`ArrayBuffer` allocations
   are native memory outside `maxOldGenerationSizeMb`, and worker threads share the host's address
   space, so a plugin that accumulates Buffers grows host RSS until the container's memory limit

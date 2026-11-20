@@ -8,7 +8,12 @@ import {
   WwebjsLifecycle,
   isNavigationError,
 } from './wwebjs-lifecycle';
-import { deleteGroupPictureInPage, readInviteSenderInPage, revokeInviteInPage } from './wwebjs-groups';
+import {
+  deleteGroupPictureInPage,
+  readInviteInfoInPage,
+  readInviteSenderInPage,
+  revokeInviteInPage,
+} from './wwebjs-groups';
 import { readLeanContacts } from './wwebjs-contacts';
 import { readChatModels } from './wwebjs-chats';
 import { readLabelChatIds, readLocalChatLabels } from './wwebjs-labels';
@@ -231,7 +236,11 @@ describe('a call that a page navigation lands on', () => {
     [
       'getGroupJoinInfo (a failed preview is not "no such invite")',
       w => {
-        w.client.getInviteInfo = w.fail('queryGroupInvite');
+        // The preview is the adapter's own page function, which fails on a page that holds no job as the library's did.
+        const failing = w.fail('queryGroupInvite');
+        w.pupPage.evaluate.mockImplementation((fn: PageFunction) =>
+          fn === readInviteInfoInPage ? failing() : Promise.resolve(false),
+        );
         return w.adapter.getGroupJoinInfo('code');
       },
       { error: GroupNotFoundError },
@@ -295,6 +304,14 @@ describe('a call that a page navigation lands on', () => {
         w.client.getChatById = jest.fn().mockResolvedValue(group());
         w.runOnPage(deleteGroupPictureInPage);
         return w.adapter.deleteGroupPicture(GROUP);
+      },
+      reloads,
+    ],
+    [
+      'readInviteInfoInPage, the preview of an invite',
+      w => {
+        w.runOnPage(readInviteInfoInPage);
+        return w.adapter.getGroupJoinInfo('code');
       },
       reloads,
     ],

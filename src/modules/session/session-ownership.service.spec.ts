@@ -81,6 +81,35 @@ describe('SessionOwnershipService', () => {
       await expect(node.claim(session.id)).resolves.toBe(true);
     });
 
+    // A delete fences its removal on the time the row was claimed that it read, so a claim of this node written after it
+    // read the row must not move that time. Claims of one session that overlap each take this path.
+    it('keeps the time this node took a row it already holds when it claims the row again', async () => {
+      const claimedAt = new Date(Date.now() - 120_000);
+      const session = await seed({ nodeId: 'node-a', claimedAt, leaseExpiresAt: new Date(Date.now() + 30_000) });
+
+      // A claim with no memory of the row takes the write path, as one that began while another was writing does.
+      await expect(service('node-a').claim(session.id)).resolves.toBe(true);
+
+      const stored = await sessions.findOneByOrFail({ id: session.id });
+      expect(stored.claimedAt).toEqual(claimedAt);
+      expect(stored.leaseExpiresAt!.getTime()).toBeGreaterThan(Date.now() + 30_000);
+    });
+
+    it.each([
+      ['nobody holds it', {}],
+      [
+        'a node whose lease lapsed holds it',
+        { nodeId: 'node-b', claimedAt: new Date(Date.now() - 120_000), leaseExpiresAt: new Date(Date.now() - 60_000) },
+      ],
+    ])('records when this node took a row that %s', async (_label, row) => {
+      const session = await seed(row);
+      const before = Date.now();
+
+      await expect(service('node-a').claim(session.id)).resolves.toBe(true);
+
+      expect((await sessions.findOneByOrFail({ id: session.id })).claimedAt!.getTime()).toBeGreaterThanOrEqual(before);
+    });
+
     // A process that dies without releasing must not strand its sessions forever.
     it('takes over once the holder’s lease has lapsed', async () => {
       const session = await seed({
@@ -312,6 +341,7 @@ describe('SessionOwnershipService', () => {
       const [one, two, three] = [await seed(), await seed(), await seed()];
       const nodeA = service('node-a');
       const claimGen = (nodeA as unknown as { claimGen: Map<string, number> }).claimGen;
+      const releasing = (nodeA as unknown as { releasing: Map<string, unknown> }).releasing;
       await nodeA.claim(one.id);
       await nodeA.claim(two.id);
       await nodeA.claim(three.id);
@@ -320,9 +350,32 @@ describe('SessionOwnershipService', () => {
       await sessions.update({ id: two.id }, { nodeId: 'node-b', leaseExpiresAt: new Date(Date.now() + 60_000) });
       await nodeA.renew();
       expect([...claimGen.keys()]).toEqual([three.id]);
+      expect(releasing.size).toBe(0);
 
       await nodeA.releaseAll();
       expect(claimGen.size).toBe(0);
+      expect(releasing.size).toBe(0);
+    });
+
+    // A claim that begins while a release is writing waits for it, so a release that failed must not keep it waiting.
+    it('lets a claim begin after a release that failed', async () => {
+      const session = await seed();
+      const nodeA = service('node-a');
+      const releasing = (nodeA as unknown as { releasing: Map<string, unknown> }).releasing;
+      await nodeA.claim(session.id);
+      const failing = jest.spyOn(sessions, 'createQueryBuilder').mockImplementationOnce(() => {
+        throw new Error('database down');
+      });
+
+      try {
+        await expect(nodeA.release(session.id)).rejects.toThrow('database down');
+      } finally {
+        failing.mockRestore();
+      }
+      await expect(nodeA.claim(session.id)).resolves.toBe(true);
+
+      expect(releasing.size).toBe(0);
+      expect((await sessions.findOneByOrFail({ id: session.id })).nodeId).toBe('node-a');
     });
   });
 

@@ -26,7 +26,10 @@ export class ProfileService {
     return this.getEngine(sessionId).setProfileStatus(status);
   }
 
-  /** Remove the account's own picture. Idempotent: no picture to remove is a no-op, not an error. */
+  /**
+   * Remove the account's own picture. A repeat sends the same request again and answers what WhatsApp answers: the
+   * removal of an absent picture is observed to succeed for a group, and not yet for an account's own.
+   */
   deleteProfilePicture(sessionId: string) {
     return this.getEngine(sessionId).deleteProfilePicture();
   }

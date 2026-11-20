@@ -1,6 +1,8 @@
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
 import { deleteGroupPictureInPage } from './wwebjs-groups';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 
@@ -106,5 +108,107 @@ describe('the in-page delete of a group picture', () => {
 
     page(jest.fn().mockRejectedValue(refusal('not a number')));
     await expect(deleteGroupPictureInPage(GROUP)).rejects.toThrow('status not a number');
+  });
+
+  // A build that lacks the job or the id factory: from a page.evaluate Meta's `require` answers `undefined` for a module
+  // the page has not defined, and throws only inside a guard or before the page's error setup has run. Nothing is sent
+  // either way.
+  describe.each([
+    ['the module is not defined (require throws)', (name: string) => ({ throws: name })],
+    ['the module answers undefined', (name: string) => ({ answers: name })],
+  ])('when %s', (_how, lacking) => {
+    const lackingPage = (name: string, requestDeletePicture: jest.Mock) => {
+      const { throws, answers } = lacking(name) as { throws?: string; answers?: string };
+      const modules: Record<string, unknown> = {
+        WAWebWidFactory: { createWid: (id: string) => ({ _serialized: id }) },
+        WAWebContactProfilePicThumbBridge: { requestDeletePicture },
+      };
+      g.window = {
+        require: (module: string) => {
+          if (module === throws) throw new Error(`Requiring unknown module "${module}"`);
+          return module === answers ? undefined : modules[module];
+        },
+      };
+    };
+
+    it.each(['WAWebContactProfilePicThumbBridge', 'WAWebWidFactory'])(
+      'answers missing without sending when %s is gone',
+      async name => {
+        const requestDeletePicture = jest.fn();
+        lackingPage(name, requestDeletePicture);
+
+        await expect(deleteGroupPictureInPage(GROUP)).resolves.toBe('missing');
+        expect(requestDeletePicture).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it('answers missing when the modules lack the members the request needs', async () => {
+    g.window = {
+      require: (name: string) =>
+        ({ WAWebWidFactory: { createWid: () => ({}) }, WAWebContactProfilePicThumbBridge: {} })[name as never],
+    };
+    await expect(deleteGroupPictureInPage(GROUP)).resolves.toBe('missing');
+
+    g.window = {
+      require: (name: string) =>
+        ({ WAWebWidFactory: {}, WAWebContactProfilePicThumbBridge: { requestDeletePicture: jest.fn() } })[
+          name as never
+        ],
+    };
+    await expect(deleteGroupPictureInPage(GROUP)).resolves.toBe('missing');
+  });
+
+  // A document that has not defined `require` yet is a page that is reloading, not a build without the job.
+  it('lets the failure of a document without require through', async () => {
+    g.window = {};
+
+    await expect(deleteGroupPictureInPage(GROUP)).rejects.toThrow('w.require is not a function');
+  });
+
+  describe('through the adapter', () => {
+    const adapterOnThatPage = () => {
+      const chat = { id: { _serialized: GROUP }, isGroup: true, participants: [], groupMetadata: {} };
+      const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+      (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+      (adapter as unknown as { client: unknown }).client = {
+        info: { wid: { _serialized: '628000000001@c.us', user: '628000000001' } },
+        getChatById: jest.fn().mockResolvedValue(chat),
+        pupPage: { evaluate: (fn: (arg: string) => unknown, arg: string) => Promise.resolve().then(() => fn(arg)) },
+      };
+      return adapter;
+    };
+
+    it('answers 501 on a build with no job to delete with, before anything is asked of WhatsApp', async () => {
+      g.window = {
+        require: (name: string) => {
+          if (name !== 'WAWebWidFactory') throw new Error(`Requiring unknown module "${name}"`);
+          return { createWid: (id: string) => ({ _serialized: id }) };
+        },
+      };
+
+      const attempt = adapterOnThatPage().deleteGroupPicture(GROUP);
+
+      await expect(attempt).rejects.toBeInstanceOf(EngineNotSupportedError);
+      await expect(attempt).rejects.toThrow(/deleteGroupPicture\(no picture delete job on this build\)/);
+    });
+
+    it('answers 501 when the module answers undefined, as it does from a page.evaluate with no guard active', async () => {
+      g.window = { require: () => undefined };
+
+      await expect(adapterOnThatPage().deleteGroupPicture(GROUP)).rejects.toBeInstanceOf(EngineNotSupportedError);
+    });
+
+    it('answers the retryable 409 for a document that has no require yet', async () => {
+      g.window = {};
+
+      await expect(adapterOnThatPage().deleteGroupPicture(GROUP)).rejects.toBeInstanceOf(EngineNotReadyError);
+    });
+
+    it('still removes the picture where the job exists', async () => {
+      page(jest.fn().mockResolvedValue({ status: 200 }));
+
+      await expect(adapterOnThatPage().deleteGroupPicture(GROUP)).resolves.toBeUndefined();
+    });
   });
 });

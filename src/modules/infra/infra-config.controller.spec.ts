@@ -199,6 +199,23 @@ describe('InfraConfigController.saveConfig values the next boot refuses', () => 
     expect(fs.writeFileSync).not.toHaveBeenCalled();
   });
 
+  // An environment value outranks the file, so the boot validation of the save reads the pinned pool size and never
+  // sees the one being written, which the boot reads once the pin is lifted.
+  it('refuses a pool size that is not written as digits while the environment pins the pool size', () => {
+    process.env.DATABASE_POOL_SIZE = '20';
+    recordPinnedEnvKeys({ DATABASE_POOL_SIZE: '20' });
+    (fs.writeFileSync as jest.Mock).mockClear();
+    try {
+      expect(() => newController().saveConfig({ database: { ...external, poolSize: 1e21 } } as never)).toThrow(
+        BadRequestException,
+      );
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.DATABASE_POOL_SIZE;
+      recordPinnedEnvKeys({});
+    }
+  });
+
   // The boot only reports an S3 endpoint the client cannot use, so an instance that stored one keeps starting, and the
   // dashboard, which sends the storage type and endpoint with every save, must keep saving. The endpoint is refused
   // only when the save changes what the boot reads for it or newly selects S3.

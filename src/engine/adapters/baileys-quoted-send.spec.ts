@@ -141,6 +141,23 @@ describe('BaileysMessaging — a quote rides along with every content kind', () 
     expect(sock.sendMessage).not.toHaveBeenCalled();
   });
 
+  // Baileys quotes a message by the first key that contains `Message`. The store keeps a message as JSON in the order of
+  // the proto's fields, which puts a fast-ratchet distribution before a business prompt, so a row written while the
+  // distribution was still stored would quote it in place of the prompt.
+  it.each([
+    ['a text send', (m: BaileysMessaging) => m.sendTextMessage(CHAT, 'hi', undefined, { quotedMessageId: 'QUOTED-1' })],
+    ['a reply', (m: BaileysMessaging) => m.replyToMessage(CHAT, 'QUOTED-1', 'hi')],
+  ])('%s quotes a stored prompt without the fast-ratchet distribution stored before it', async (_kind, send) => {
+    const prompt = { buttonsMessage: { contentText: 'Proceed?' } };
+    const stored = { ...STORED, message: { fastRatchetKeySenderKeyDistributionMessage: { groupId: 'g' }, ...prompt } };
+    const { messaging, sock } = makeMessaging(stored);
+
+    await send(messaging);
+
+    expect(optionsOf(sock).quoted).toEqual({ ...STORED, message: prompt });
+    expect(Object.keys(stored.message)).toEqual(['fastRatchetKeySenderKeyDistributionMessage', 'buttonsMessage']);
+  });
+
   it('refuses a message deleted for everyone instead of quoting what was deleted', async () => {
     // The store keeps a deleted message with `message: null`. Baileys copies the quoted message into
     // the reply's contextInfo, so quoting the pre-delete copy would send the deleted content again.

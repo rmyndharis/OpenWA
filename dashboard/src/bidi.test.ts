@@ -161,6 +161,24 @@ test('the session number is cut by its own isolate, so an RTL page keeps its fir
   assert.match(body('pages/Chats.css', '.chats-page .session-phone-line'), /max-width:\s*100%/);
 });
 
+test('a chat id printed as text is isolated left to right in the save-contact dialog and the filter list', () => {
+  // "15550001111@c.us" is laid out right to left in an RTL page and reads "c.us@15550001111". A chip is a name, or the
+  // id of a chat the list does not hold, so it takes its direction from its own first strong letter.
+  const dialogs = readFileSync(join(SRC, 'components/chats/ChatDialogs.tsx'), 'utf8');
+  assert.match(
+    dialogs,
+    /<p className="text-muted">\s*<bdi dir="ltr">\{chat\.id\}<\/bdi>\s*<\/p>/,
+    'the id in the save-contact dialog is not isolated',
+  );
+  const filter = readFileSync(join(SRC, 'components/FilterBuilder.tsx'), 'utf8');
+  assert.match(
+    filter,
+    /<span className="chips-suggestion-id">\s*<bdi dir="ltr">\{c\.id\}<\/bdi>\s*<\/span>/,
+    'a suggested id is not isolated',
+  );
+  assert.match(filter, /<bdi>\{labelFor\(jid\)\}<\/bdi>/, 'a chip is not isolated');
+});
+
 test('chart plots stay left to right on a right to left page', () => {
   assert.match(body('components/DashboardCharts.css', '.dashboard-charts .recharts-surface'), /direction:\s*ltr/);
 });

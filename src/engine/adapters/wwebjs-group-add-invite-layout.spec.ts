@@ -31,7 +31,14 @@ describe('adding participants who can only be invited, on each WhatsApp Web layo
     delete g.window;
   });
 
-  type Layout = { sendMessagesModule: Record<string, unknown> | 'undefined-module' };
+  /**
+   * `unknownModule` is what the page's `require` does for a module it has not defined: from a page.evaluate it answers
+   * `undefined`, and it throws only inside a guard or before the page's error setup has run.
+   */
+  type Layout = {
+    sendMessagesModule: Record<string, unknown> | 'undefined-module';
+    unknownModule?: 'throws' | 'undefined';
+  };
   /** WAWebChatSendMessages on the pinned build: four functions, none of them the invitation sender. */
   const pinnedSendMessages = () => ({
     sendDismissChangeNumber: jest.fn(),
@@ -64,7 +71,10 @@ describe('adding participants who can only be invited, on each WhatsApp Web layo
     if (layout.sendMessagesModule !== 'undefined-module') modules.WAWebChatSendMessages = layout.sendMessagesModule;
     g.window = {
       require: (name: string) => {
-        if (!(name in modules)) throw new Error(`Requiring unknown module "${name}"`);
+        if (!(name in modules)) {
+          if (layout.unknownModule === 'undefined') return undefined;
+          throw new Error(`Requiring unknown module "${name}"`);
+        }
         return modules[name];
       },
       WWebJS: {
@@ -131,16 +141,19 @@ describe('adding participants who can only be invited, on each WhatsApp Web layo
       await expect(attempt).rejects.toThrow(`${INVITE_ONLY} (403)`);
     });
 
-    it('does the same when the module is not defined at all', async () => {
-      pageWith({ sendMessagesModule: 'undefined-module' });
+    it.each<['throws' | 'undefined']>([['throws'], ['undefined']])(
+      'does the same when the module is not defined at all and require %s for it',
+      async unknownModule => {
+        pageWith({ sendMessagesModule: 'undefined-module', unknownModule });
 
-      const results = await adapterOnThatPage().adapter.addParticipants(GROUP, [ADDED, INVITE_ONLY]);
+        const results = await adapterOnThatPage().adapter.addParticipants(GROUP, [ADDED, INVITE_ONLY]);
 
-      expect(results.map(r => [r.id, r.success, r.status])).toEqual([
-        [ADDED, true, 200],
-        [INVITE_ONLY, false, 403],
-      ]);
-    });
+        expect(results.map(r => [r.id, r.success, r.status])).toEqual([
+          [ADDED, true, 200],
+          [INVITE_ONLY, false, 403],
+        ]);
+      },
+    );
   });
 
   describe('on an earlier layout, whose WAWebChatSendMessages has sendGroupInviteMessage', () => {

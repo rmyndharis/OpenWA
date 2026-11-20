@@ -641,6 +641,7 @@
   display: inline-block;
   width: 48px;
   height: 26px;
+  flex-shrink: 0;
 }
 
 .webhooks-page .toggle-switch input {

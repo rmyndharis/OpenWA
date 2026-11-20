@@ -134,15 +134,15 @@ describe('a call the page navigation cut short', () => {
   });
 
   it('an invite preview is not "no such invite"', async () => {
-    const getInviteInfo = jest.fn().mockRejectedValue(navigation);
-    const { host } = makeHost({ getInviteInfo });
+    const evaluate = jest.fn().mockRejectedValue(navigation);
+    const { host } = makeHost({ pupPage: { evaluate } });
 
     await expect(new WwebjsGroups(host).getGroupJoinInfo('code')).rejects.toBeInstanceOf(EngineNotReadyError);
   });
 
   it('an invite acceptance answers the unknown-outcome 503, not an invalid invite', async () => {
-    const acceptInvite = jest.fn().mockRejectedValue(navigation);
-    const { host } = makeHost({ acceptInvite });
+    const evaluate = jest.fn().mockRejectedValue(navigation);
+    const { host } = makeHost({ pupPage: { evaluate } });
 
     await expect(new WwebjsGroups(host).joinGroupViaInviteCode('code')).rejects.toBeInstanceOf(EngineTransportError);
   });

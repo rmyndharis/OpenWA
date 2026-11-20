@@ -207,14 +207,20 @@ host.
 A `configSchema` field may set `secret: true` (e.g. an API key): the value is masked on read and
 preserved on an unchanged write. A write keeps the stored value for the mask and for an empty string, and
 removes it for an explicit `null`. In a list of rows with a secret column, a masked row is matched to its
-stored row by its other fields, so rows can be reordered, added and removed. A row whose other fields were
-edited, with its mask untouched, keeps the secret of the stored row at its position only in a save of the same
-length in which no row has moved. A row counts as moved when its other fields equal those of exactly one stored
-row and that row sits at another position. Removing a row ahead of a kept row and adding another moves the kept
-row, and so does reordering rows. In such a save, and in any save of another length, the payload cannot say
-which stored secret the edited row replaces, so it is saved without one and the secret is entered again. The
-generated form in the dashboard has no control to reorder rows, so only an API client, or a plugin's own config
-editor that reorders rows, sends the reordering form of this save.
+stored row by its other fields, so rows can be reordered, added and removed, and a stored secret is saved on one
+row at most. A row whose other fields were edited, with its mask untouched, keeps the secret of the stored row at
+its position only in a save of the same length in which no row has moved. A row counts as moved when none of the
+stored rows it can be, going by its other fields alone, sits at its position, whether its own secret is masked,
+typed over, cleared or left out. Removing a row ahead of a kept row and adding another moves the kept row, and so
+does reordering rows. In such a save, and in any save of another length, the payload cannot say which stored
+secret the edited row replaces, so it is saved without one and the secret is entered again.
+Rows that differ only by their secret cannot be told apart. While every one of them is still in the save they keep
+their secrets in order. When one was removed or edited, a row takes the secret of the stored row at its position
+only if that row is one of them and no row has moved. A row that has the fields of a stored row never takes the
+secret of a stored row with other fields, and when several rows carry the fields of a single stored row, its
+secret stays with the row at its position, or else the first. The generated form in the dashboard has no control
+to reorder rows, so only an API client, or a plugin's own config editor that reorders rows, sends the reordering
+form of this save.
 A per-session override and an integration instance's own config are
 overlaid on the base config, secret fields included, so a stored secret reaches every override that does
 not replace it. The exception is an override or instance that points a `net.allowConfigHosts` key at
@@ -365,6 +371,7 @@ export interface PluginEngineReadCapability {
   getContacts(sessionId: string): Promise<...>;
   getContactById(sessionId: string, contactId: string): Promise<...>;
   checkNumberExists(sessionId: string, phone: string): Promise<...>;
+  // `name` is '' for a Baileys privacy-id chat with no name of its own; `phone`, when present, is the number to show.
   getChats(sessionId: string): Promise<...>;
   // Recent messages for a chat, both directions, oldest first (history backfill). `limit` is clamped host-side to 1-100.
   getChatHistory(sessionId: string, chatId: string, limit?: number, includeMedia?: boolean): Promise<...>;
@@ -884,15 +891,25 @@ tier automatically. Key properties:
 - The worker bounds the log lines and the capability calls it posts to the host, so a loop that never yields cannot
   flood the host's one thread with either: `ctx.logger.*` lines are limited to **198 per 10 s** (the rest are
   dropped inside the worker, with a note at the first drop and a count with the first line after the window ends;
-  the two notes bring a window to the **200** messages per 10 s that the host's log relay admits as a backstop,
-  so neither is refused there), and a capability call is refused with a thrown `Error` while **64** calls are
-  unanswered (twice the 32 concurrent calls the host runs). A plugin that awaits its calls and logs at an
-  ordinary rate never reaches either limit. Registration is deduplicated but not counted: `ctx.registerWebhook`
-  tells the host about a route once, `ctx.registerSearchProvider` once, and `ctx.registerHook` about an event
-  once, then again only for a handler whose priority is lower than every earlier one for that event (the host
-  runs the plugin's handlers for an event from one entry, at the lowest priority asked for). A loop that
-  registers new route names or ever lower priorities posts on every pass, and the worker leaves that to the
-  plugin's own code.
+  the two notes bring a window to the **200** messages per 10 s that the host's log relay admits as a backstop. The
+  relay keeps windows of its own, opened when the plugin is enabled and not when the worker's opens, so a burst
+  that straddles a boundary of the relay's window can still lose lines, or a note, there, and the relay then logs
+  how many it dropped), and at most **64** capability calls are unanswered at once (twice the 32 concurrent calls
+  the host runs). A call made while 64 are waiting is held in the worker and posted, in the order it was made, as
+  each reply frees a slot, so a `Promise.all` over a long list of calls is answered in full. It is refused with a
+  thrown `Error` only when **10,000** calls are already held, which only a loop that never yields reaches. The
+  host's own bound of 32 calls in flight is unchanged: a slow verb past it is refused there. A held call made in a hook
+  handler keeps the hook chain of its dispatch only while the handler runs, so a held send (`ctx.messages.sendText`,
+  `ctx.messages.reply`, `ctx.conversations.send`) still waiting after its handler has returned is refused with the
+  thrown `Error`, as a call past the bound was before calls were held: posted then, it would fire the hooks of the send
+  outside the re-entrancy guard and dispatch the handler again (a loop of more than 64 sends nobody awaits). Any other
+  held call is posted as usual, and a handler that awaits its calls is still running when they are posted, so it loses
+  none. A plugin that logs at an ordinary rate never reaches the log limit, and one that awaits its calls one after
+  another never has a call held. Registration is deduplicated but not counted: `ctx.registerWebhook` tells the host
+  about a route once, `ctx.registerSearchProvider` once, and `ctx.registerHook` about an event once, then again only for
+  a handler whose priority is lower than every earlier one for that event (the host runs the plugin's handlers for an
+  event from one entry, at the lowest priority asked for). A loop that registers new route names or ever lower
+  priorities posts on every pass, and the worker leaves that to the plugin's own code.
 - Lifecycle methods (`load`/`onLoad`/`onEnable`/`onDisable`) and `healthCheck` are bounded by a **30 s**
   / **5 s** timeout respectively, so a wedged plugin can't hang an ADMIN enable/disable or the health endpoint.
 - The worker gets a **minimal allowlisted env** (`NODE_ENV`, `NODE_EXTRA_CA_CERTS`, `TZ`) — host secrets

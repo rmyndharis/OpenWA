@@ -8,6 +8,10 @@ package com.rmyndharis.openwa.model;
  */
 public record ChatSummary(
     String id,
+    /**
+     * {@code ""} for a Baileys chat held under a privacy id that has no name of its own: title it by
+     * {@code phone}, when present.
+     */
     String name,
     Boolean isGroup,
     Integer unreadCount,

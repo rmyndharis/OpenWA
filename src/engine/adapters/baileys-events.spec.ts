@@ -1293,6 +1293,125 @@ describe('BaileysEvents partial decryption and ciphertext stubs', () => {
   });
 });
 
+/** Waits for `condition` between event-loop turns and fails at the deadline instead of hanging. */
+async function until(condition: () => boolean, what: string, ms = 10_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
+describe('BaileysEvents a message that merged a fast-ratchet distribution before its content', () => {
+  const DISTRIBUTION = 'fastRatchetKeySenderKeyDistributionMessage';
+  const PEER = '6281111111111@s.whatsapp.net';
+  const secret = { messageSecret: Buffer.alloc(32, 7) };
+
+  /** What the merge of a stanza's decrypted parts leaves: the distribution first, then the content and its context. */
+  const merged = (id: string, content: Record<string, unknown>): WAMessage => ({
+    key: { id, remoteJid: PEER, fromMe: false },
+    messageTimestamp: 1_700_000_000,
+    message: { [DISTRIBUTION]: { groupId: 'g' }, ...content, messageContextInfo: secret },
+  });
+
+  const image = (over: Record<string, unknown> = {}) => ({
+    imageMessage: {
+      mimetype: 'image/jpeg',
+      fileLength: 3,
+      url: 'https://mmg.whatsapp.net/v/t62/x.enc',
+      directPath: '/v/t62/x.enc',
+      ...over,
+    },
+  });
+
+  function setup() {
+    const stored = new Map<string, WAMessage>();
+    const onMessage = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getStoredMessage: id => Promise.resolve(stored.get(id) ?? null),
+        putStoredMessage: msg => {
+          if (msg.key?.id) stored.set(msg.key.id, msg);
+          return Promise.resolve();
+        },
+        getOnMessage: () => onMessage,
+      }),
+    );
+    return { events, stored, onMessage };
+  }
+
+  beforeEach(() => {
+    downloadMediaMessage.mockReset();
+    downloadMediaMessage.mockImplementation(() => Promise.resolve(streamOf(Buffer.from('IMG'))));
+  });
+
+  it('hands the download and the store the message without the distribution, and announces it by its content', async () => {
+    const { events, stored, onMessage } = setup();
+    const received = merged('IMG1', image());
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [received] });
+    await until(() => onMessage.mock.calls.length === 1, 'the image to be announced');
+
+    expect(downloadMediaMessage).toHaveBeenCalledTimes(1);
+    const [downloaded] = downloadMediaMessage.mock.calls[0] as [WAMessage];
+    expect(Object.keys(downloaded.message ?? {})).toEqual(['imageMessage', 'messageContextInfo']);
+    // What the library keeps reading the message by, and what a later edit, reaction or vote is read with.
+    expect(Object.keys(stored.get('IMG1')?.message ?? {})).toEqual(['imageMessage', 'messageContextInfo']);
+    expect(stored.get('IMG1')?.message?.messageContextInfo?.messageSecret).toBe(secret.messageSecret);
+    const [announced] = onMessage.mock.calls[0] as [{ media?: { data?: string } }];
+    expect(announced).toMatchObject({ id: 'IMG1', type: 'image' });
+    expect(announced.media?.data).toBe('SU1H');
+    // Baileys' own copy is the one it keeps, and may still read.
+    expect(Object.keys(received.message ?? {})[0]).toBe(DISTRIBUTION);
+  });
+
+  it('refuses the media of such a message whose address is outside WhatsApp hosts, as for any other', async () => {
+    const { events, onMessage } = setup();
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [merged('IMG2', image({ url: 'http://127.0.0.1/latest/meta-data/', directPath: undefined }))],
+    });
+    await until(() => onMessage.mock.calls.length === 1, 'the image to be announced');
+
+    expect(downloadMediaMessage).not.toHaveBeenCalled();
+    expect(onMessage.mock.calls[0]).toMatchObject([{ id: 'IMG2', type: 'image', media: { omitted: true } }]);
+  });
+
+  it('still drops a distribution that stands alone as protocol noise', async () => {
+    const { events, stored, onMessage } = setup();
+
+    // A text behind it, as the control that the handler ran: once that is announced, the distribution has been judged.
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'LONE1', remoteJid: PEER, fromMe: false },
+          messageTimestamp: 1_700_000_000,
+          message: { [DISTRIBUTION]: {} },
+        },
+        {
+          key: { id: 'TEXT1', remoteJid: PEER, fromMe: false },
+          messageTimestamp: 1_700_000_001,
+          message: { conversation: 'after' },
+        },
+      ],
+    });
+    await until(() => onMessage.mock.calls.length >= 1, 'the text to be announced');
+
+    expect(onMessage.mock.calls.map(([incoming]: [{ id: string }]) => incoming.id)).toEqual(['TEXT1']);
+    expect([...stored.keys()]).toEqual(['TEXT1']);
+  });
+
+  it('reserves room for the download of such an image, as for one that merged after it', () => {
+    const { events } = setup();
+    const after = { ...merged('IMG3', {}), message: { ...image(), [DISTRIBUTION]: {} } } as unknown as WAMessage;
+
+    expect(events.plannedMediaDownload(libStub, merged('IMG4', image()))).toBe(true);
+    expect(events.plannedMediaDownload(libStub, after)).toBe(true);
+  });
+});
+
 describe('BaileysEvents own status addressed by LID', () => {
   const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
   const settle = async (): Promise<void> => {
@@ -1516,7 +1635,10 @@ describe('BaileysEvents record of conflicting copies removed', () => {
     const limit = BaileysEvents.DELETED_FOR_EVERYONE_LIMIT;
     const settled = Promise.resolve({ conflict: true });
     const events = new BaileysEvents(makeHost({ getOnMessage: () => () => ({ settled }) }));
-    const deliver = async (...ids: string[]): Promise<void> => {
+    const removals = (events as unknown as { copyRemovals: Map<string, number> }).copyRemovals;
+    // Waits for the removals to be recorded, with a deadline: how many turns of the event loop thousands of messages take
+    // depends on the machine, so no fixed number of them is enough.
+    const deliver = async (ids: string[], recorded: () => boolean): Promise<void> => {
       events.handleMessagesUpsert({
         type: 'notify',
         messages: ids.map(id => ({
@@ -1525,21 +1647,24 @@ describe('BaileysEvents record of conflicting copies removed', () => {
           message: { conversation: 'hi' },
         })),
       });
-      for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+      const deadline = Date.now() + 30_000;
+      while (!recorded() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
     };
-    const removals = (events as unknown as { copyRemovals: Map<string, number> }).copyRemovals;
 
-    await deliver(...Array.from({ length: limit }, (_, i) => `M${i}`));
+    await deliver(
+      Array.from({ length: limit }, (_, i) => `M${i}`),
+      () => removals.size === limit,
+    );
     expect(removals.size).toBe(limit);
     // M0 is removed again, which makes it the newest, and one more id pushes the oldest out.
-    await deliver('M0');
-    await deliver('EXTRA');
+    await deliver(['M0'], () => removals.get('M0') === 2);
+    await deliver(['EXTRA'], () => removals.has('EXTRA'));
 
     expect(removals.size).toBe(limit);
     expect(removals.get('M0')).toBe(2);
     expect(removals.has('M1')).toBe(false);
     expect(removals.get('EXTRA')).toBe(1);
-  });
+  }, 120_000);
 });
 
 describe('BaileysEvents live keys of a 1:1 chat', () => {
@@ -2203,6 +2328,34 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     );
     expect(recordMessageEdit).toHaveBeenCalledWith(group, 'ORIG1', 'new text', undefined, expect.any(Function));
     expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it('reads an encrypted edit of a message stored from an upsert that merged a fast-ratchet distribution before its content', async () => {
+    const held = new Map<string, WAMessage>();
+    const { events, onMessageEdited } = setup({
+      putStoredMessage: msg => {
+        if (msg.key?.id) held.set(msg.key.id, msg);
+        return Promise.resolve();
+      },
+      getStoredMessage: id => Promise.resolve(held.get(id) ?? null),
+    });
+    const merged = original({
+      message: {
+        fastRatchetKeySenderKeyDistributionMessage: { groupId: group },
+        conversation: 'old text',
+        messageContextInfo: { messageSecret: secret.toString('base64') },
+      },
+    });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [merged] });
+    await until(() => held.has('ORIG1'), 'the original to be stored');
+    // The stored copy lost the distribution and kept the secret the edit is read with.
+    expect(Object.keys(held.get('ORIG1')?.message ?? {})).toEqual(['conversation', 'messageContextInfo']);
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [editEnvelope()] });
+    await until(() => onMessageEdited.mock.calls.length === 1, 'the edit to be announced');
+
+    expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
   });
 
   it('reads the edit of a 1:1 message, whose key names the partner by chat and leaves the participant empty', async () => {

@@ -212,10 +212,16 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
   const CHAT = '628@c.us';
   const chats = (host: WwebjsEngineHost): WwebjsChats => new WwebjsChats(host, {} as WwebjsMessaging);
 
+  /** A client whose call `method` rejects: a method of the library, or the page itself for a call run in the page. */
+  const rejecting = (method: string, error: Error): Record<string, jest.Mock> =>
+    (method === 'pupPage.evaluate'
+      ? { pupPage: { evaluate: jest.fn().mockRejectedValue(error) } }
+      : { [method]: jest.fn().mockRejectedValue(error) }) as unknown as Record<string, jest.Mock>;
+
   const OPS: Record<string, [string, (host: WwebjsEngineHost) => Promise<unknown>]> = {
     getGroupInfo: ['getChatById', host => new WwebjsGroups(host).getGroupInfo('120363@g.us')],
-    getGroupJoinInfo: ['getInviteInfo', host => new WwebjsGroups(host).getGroupJoinInfo('AbCdEf')],
-    joinGroupViaInviteCode: ['acceptInvite', host => new WwebjsGroups(host).joinGroupViaInviteCode('AbCdEf')],
+    getGroupJoinInfo: ['pupPage.evaluate', host => new WwebjsGroups(host).getGroupJoinInfo('AbCdEf')],
+    joinGroupViaInviteCode: ['pupPage.evaluate', host => new WwebjsGroups(host).joinGroupViaInviteCode('AbCdEf')],
     getChatsByLabel: ['getChatsByLabelId', host => new WwebjsLabels(host).getChatsByLabel('7')],
     getContactById: ['getContactById', host => new WwebjsContacts(host).getContactById('628@c.us')],
     upsertContact: ['saveOrEditAddressbookContact', host => new WwebjsContacts(host).upsertContact('628@c.us', 'Ada')],
@@ -233,7 +239,7 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
   it.each(Object.keys(OPS))('%s answers an expired protocolTimeout with a 503 and reports no death', async op => {
     const [method, call] = OPS[op];
     const timeout = new Error(await puppeteerProtocolTimeoutMessage());
-    const { host, reportIfPageTransportError } = makeHost({ [method]: jest.fn().mockRejectedValue(timeout) });
+    const { host, reportIfPageTransportError } = makeHost(rejecting(method, timeout));
 
     await expect(call(host)).rejects.toBeInstanceOf(EngineTransportError);
     expect(reportIfPageTransportError).not.toHaveBeenCalled();
@@ -289,7 +295,7 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
     ['deleteChat', false],
   ])('%s keeps its verdict for an ordinary refusal', async (op, verdict) => {
     const [method, call] = OPS[op];
-    const { host } = makeHost({ [method]: jest.fn().mockRejectedValue(new Error('Evaluation failed: not found')) });
+    const { host } = makeHost(rejecting(method, new Error('Evaluation failed: not found')));
 
     if (typeof verdict === 'function') {
       await expect(call(host)).rejects.toBeInstanceOf(verdict);
@@ -451,8 +457,9 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
     const labels = (host: WwebjsEngineHost): WwebjsLabels => new WwebjsLabels(host);
     const messaging = (host: WwebjsEngineHost): WwebjsMessaging => new WwebjsMessaging(host);
 
-    // The group writes are sent in-page. A page that answers 'missing' has no job for it, so the write is the library's
-    // own call on the chat; a page that fails is the page call itself running out of budget.
+    // The group writes and the profile picture and its removal are sent in-page, and so is the invite code read: a page that fails is the
+    // page call itself running out of budget. A page that answers 'missing' has no job to read the code with, so that
+    // read is the library's own call on the chat.
     const noPageJob = (): Record<string, jest.Mock> =>
       ({ pupPage: { evaluate: resolved('missing') } }) as unknown as Record<string, jest.Mock>;
     const pageFailing = (error: Error): Record<string, jest.Mock> =>
@@ -475,11 +482,6 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
       [
         'profile picture',
         h => new WwebjsProfile(h).setProfilePicture(PICTURE),
-        e => ({ setProfilePicture: failing(e) }),
-      ],
-      [
-        'profile picture, the page call',
-        h => new WwebjsProfile(h).setProfilePicture(PICTURE),
         e =>
           ({
             info: { wid: { _serialized: CHAT } },
@@ -489,9 +491,13 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
       [
         'profile picture removal',
         h => new WwebjsProfile(h).deleteProfilePicture(),
-        e => ({ deleteProfilePicture: failing(e) }),
+        e =>
+          ({
+            info: { wid: { _serialized: CHAT } },
+            ...pageFailing(e),
+          }) as unknown as Record<string, jest.Mock>,
       ],
-      ['channel delete', h => new WwebjsChannels(h).deleteChannel(CHANNEL), e => ({ deleteChannel: failing(e) })],
+      ['channel delete', h => new WwebjsChannels(h).deleteChannel(CHANNEL), e => pageFailing(e)],
       [
         'channel mute, the chat lookup',
         h => new WwebjsChannels(h).muteChannel(CHANNEL, true),
@@ -500,71 +506,37 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
       [
         'channel mute',
         h => new WwebjsChannels(h).muteChannel(CHANNEL, true),
-        e => ({ getChatById: resolved({ mute: failing(e), unmute: failing(e) }) }),
+        e => ({ getChatById: resolved({ mute: jest.fn(), unmute: jest.fn() }), ...pageFailing(e) }),
       ],
-      [
-        'channel unsubscribe',
-        h => new WwebjsChannels(h).unsubscribeFromChannel(CHANNEL),
-        e => ({ unsubscribeFromChannel: failing(e) }),
-      ],
+      ['channel unsubscribe', h => new WwebjsChannels(h).unsubscribeFromChannel(CHANNEL), e => pageFailing(e)],
       ['status delete', h => new WwebjsStatus(h).deleteStatus('status-id'), e => ({ revokeStatusMessage: failing(e) })],
       [
         'group subject',
-        h => groups(h).setGroupSubject(GROUP, 'Subject'),
-        e => ({ getChatById: resolved(groupChat({ setSubject: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group subject, the page call',
         h => groups(h).setGroupSubject(GROUP, 'Subject'),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
       [
         'group description',
         h => groups(h).setGroupDescription(GROUP, 'About'),
-        e => ({ getChatById: resolved(groupChat({ setDescription: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group description, the page call',
-        h => groups(h).setGroupDescription(GROUP, 'About'),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
       [
         'group announce setting',
-        h => groups(h).setGroupMessagesAdminsOnly(GROUP, true),
-        e => ({ getChatById: resolved(groupChat({ setMessagesAdminsOnly: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group announce setting, the page call',
         h => groups(h).setGroupMessagesAdminsOnly(GROUP, true),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
       [
         'group locked setting',
         h => groups(h).setGroupInfoAdminsOnly(GROUP, true),
-        e => ({ getChatById: resolved(groupChat({ setInfoAdminsOnly: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group locked setting, the page call',
-        h => groups(h).setGroupInfoAdminsOnly(GROUP, true),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
       [
         'group member add mode',
         h => groups(h).setGroupMemberAddMode(GROUP, 'admins'),
-        e => ({ getChatById: resolved(groupChat({ setAddMembersAdminsOnly: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group member add mode, the page call',
-        h => groups(h).setGroupMemberAddMode(GROUP, 'admins'),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
       [
         'group picture',
-        h => groups(h).setGroupPicture(GROUP, PICTURE),
-        e => ({ getChatById: resolved(groupChat({ setPicture: failing(e) })), ...noPageJob() }),
-      ],
-      [
-        'group picture, the page call',
         h => groups(h).setGroupPicture(GROUP, PICTURE),
         e => ({ getChatById: resolved(groupChat({})), ...pageFailing(e) }),
       ],
@@ -635,15 +607,27 @@ describe('a protocol timeout is a 503, never a not-found verdict', () => {
         h => messaging(h).votePoll(CHAT, MESSAGE, ['a']),
         e => ({ getChatById: resolved(chatWith({ vote: failing(e) })) }),
       ],
+      // A build whose pin sender still takes positional arguments: the library's own call.
       [
         'message pin',
         h => messaging(h).pinMessage(CHAT, MESSAGE, 86_400),
-        e => ({ getChatById: resolved(chatWith({ pin: failing(e) })) }),
+        e => ({ getChatById: resolved(chatWith({ pin: failing(e) })), pupPage: { evaluate: resolved('legacy') } }),
       ],
       [
         'message unpin',
         h => messaging(h).unpinMessage(CHAT, MESSAGE),
-        e => ({ getChatById: resolved(chatWith({ unpin: failing(e) })) }),
+        e => ({ getChatById: resolved(chatWith({ unpin: failing(e) })), pupPage: { evaluate: resolved('legacy') } }),
+      ],
+      // A build whose sender takes one options object: the call runs in the page.
+      [
+        'message pin, in the page',
+        h => messaging(h).pinMessage(CHAT, MESSAGE, 86_400),
+        e => ({ getChatById: resolved(chatWith({})), pupPage: { evaluate: failing(e) } }),
+      ],
+      [
+        'message unpin, in the page',
+        h => messaging(h).unpinMessage(CHAT, MESSAGE),
+        e => ({ getChatById: resolved(chatWith({})), pupPage: { evaluate: failing(e) } }),
       ],
       [
         'message star',

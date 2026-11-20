@@ -85,13 +85,15 @@ backed by `localStorage` — there is no Zustand store.
 5. **Dark mode** - Support for light/dark themes
 
 Arabic and Hebrew mirror the layout, and text that a person typed or that a contact or a plugin author wrote
-(names, template bodies, found messages, plugin descriptions, and the fields they are typed into) takes its
-direction from its own characters (`unicode-bidi: plaintext`), so a Latin line keeps its full stop in an Arabic
-page and an Arabic line in an English one. The property aligns the text by that direction too, so a box that its
-container would stretch is as wide as its text (`width: fit-content`) and the text stays at the edge the page puts
-it; the one-line template fields keep the right edge that `index.css` gives the other text fields in an Arabic page.
-Ids, phone numbers and URLs stay on `<bdi dir="ltr">`. `dashboard/src/user-text-direction.test.ts` fails the build
-when one of these rules is dropped.
+(names, template bodies, found messages, plugin descriptions) takes its direction from its own characters
+(`unicode-bidi: plaintext`), so a Latin line keeps its full stop in an Arabic page and an Arabic line in an English
+one. The property aligns the text by that direction too, so a box that its container would stretch is as wide as its
+text (`width: fit-content`) and the text stays at the edge the page puts it. The fields it is typed into are covered
+by one global rule in `index.css`, not a list: every textarea and every input with no type or of type text or search,
+which an Arabic page keeps at the right edge. Url, email, tel, number and password fields are not typed text and keep
+their direction. Ids, phone numbers and URLs stay on `<bdi dir="ltr">`. `dashboard/src/user-text-direction.test.ts`
+fails the build when one of the element rules is dropped, when an input or textarea in the markup is of a type that
+rule does not cover or that the test has not classified, and when a stylesheet gives a field another `unicode-bidi`.
 
 The audit log table gives each of its six columns a floor and shares the rest, so it fits a laptop window from about
 1100px beside the open sidebar; a session, key or address that is still too long ends in an ellipsis and keeps its

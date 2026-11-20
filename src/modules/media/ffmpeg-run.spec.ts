@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FfmpegConversionError, FfmpegSpawnError, killRunningConversions, probeFfmpeg, runFfmpeg } from './ffmpeg';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 // The real spawn, wrapped so a test can reach the child process it created.
 jest.mock('node:child_process', () => {
@@ -199,12 +200,12 @@ esac
       }
     };
     try {
-      for (let i = 0; i < 40 && alive(); i++) await new Promise(r => setTimeout(r, 50));
+      await waitUntil(() => !alive());
       expect(alive()).toBe(false);
     } finally {
       if (alive()) process.kill(grandchild, 'SIGKILL');
     }
-  }, 15_000);
+  }, 60_000);
 
   // Each run sits in its own process group, so a signal to the gateway's group never reaches it and its
   // timeout dies with the gateway. Whatever is still running has to be killed on the way out.
@@ -217,10 +218,10 @@ esac
     const settled = run.catch((error: unknown) => error);
 
     let grandchild = 0;
-    for (let i = 0; i < 40 && !grandchild; i++) {
-      await new Promise(r => setTimeout(r, 50));
+    await waitUntil(async () => {
       grandchild = Number((await readFile(pidFile, 'utf8').catch(() => '')).trim());
-    }
+      return grandchild > 0;
+    });
     const alive = (): boolean => {
       try {
         process.kill(grandchild, 0);
@@ -230,17 +231,17 @@ esac
       }
     };
     try {
-      // The stub's own sleep ends in 10 s, so the kill has to land well before that to count.
+      // The stub's own sleep ends in 10 s, so the kill has to land well before that to count: six seconds leaves four.
       const killedAt = Date.now();
       killRunningConversions();
       expect(await settled).toBeInstanceOf(FfmpegConversionError);
-      for (let i = 0; i < 40 && alive(); i++) await new Promise(r => setTimeout(r, 50));
+      await waitUntil(() => !alive(), 6_000);
       expect(alive()).toBe(false);
-      expect(Date.now() - killedAt).toBeLessThan(2_000);
+      expect(Date.now() - killedAt).toBeLessThan(6_000);
     } finally {
       if (alive()) process.kill(grandchild, 'SIGKILL');
     }
-  }, 15_000);
+  }, 60_000);
 
   // Transcoding can inflate as well as shrink, so the output needs a ceiling of its own.
   it('refuses output above the cap, and says what it measured', async () => {

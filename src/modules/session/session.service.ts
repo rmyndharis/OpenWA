@@ -78,6 +78,9 @@ import type { PluginSessionPort } from '../../core/plugins/plugin-host-ports';
 /** Stagger before the single transient-launch retry; short - the claim is held while it waits. */
 const SESSION_START_RETRY_DELAY_MS = 2_000;
 
+/** How often a stop writes its record again when the row changed under its writes and no peer holds it. */
+const KEEP_DOWN_PASSES = 5;
+
 /** `config.linkPreview` when it is a boolean; anything else left in the opaque blob means no default. */
 export function linkPreviewDefault(config: unknown): boolean | null {
   const value = (config as Record<string, unknown> | null)?.linkPreview;
@@ -797,10 +800,22 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     this.endStop(id, request);
   }
 
-  /** Another delete of the session than `request` is running here: its call has not returned. */
-  private otherDeleteRuns(id: string, request: StopRequest): boolean {
-    const others = [...(this.stopRequests.get(id)?.requests ?? [])];
-    return others.some(other => other !== request && other.kind === 'delete' && !other.ended);
+  /**
+   * Claim the session for this node. A claim answers false for more than a peer holding the row: one that a release
+   * ended while it was in flight does too, and a missing row matches nothing. Only the row says which, so a miss with no
+   * other node holding the row on a live lease is asked once more: the claim then writes a row nobody holds. A peer
+   * that holds the row refuses at once. Claims of this node that overlap never answer false for that reason (see
+   * SessionOwnershipService.claim), however many requests there are.
+   */
+  private async claimUnlessHeldElsewhere(
+    id: string,
+    ownership: SessionOwnershipService,
+    onClaimed?: (ownsClaim: () => boolean) => void,
+  ): Promise<boolean> {
+    const claim = (): Promise<boolean> => (onClaimed ? ownership.claim(id, onClaimed) : ownership.claim(id));
+    if (await claim()) return true;
+    if (await ownership.isHeldByOtherNode(id)) return false;
+    return claim();
   }
 
   /**
@@ -819,10 +834,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   ): Promise<void> {
     let claimed: boolean;
     try {
-      claimed = await ownership.claim(id, onClaimed);
-      // Another delete of the session here may have replaced this claim and settled first, which reads as a miss though
-      // no other node holds the row. Ask again: the claim then renews the one that delete holds.
-      if (!claimed && this.otherDeleteRuns(id, request)) claimed = await ownership.claim(id, onClaimed);
+      claimed = await this.claimUnlessHeldElsewhere(id, ownership, onClaimed);
     } catch (error) {
       this.dropStopMark(id, request);
       this.withdrawStop(request);
@@ -1066,9 +1078,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   private async claimForStart(id: string, ownership: SessionOwnershipService): Promise<void> {
     let claimed: boolean;
     try {
-      claimed = await ownership.claim(id);
-      // As for a delete: a start still running here may have replaced this claim and settled first.
-      if (!claimed && (this.startReservations.get(id) ?? 0) > 1) claimed = await ownership.claim(id);
+      claimed = await this.claimUnlessHeldElsewhere(id, ownership);
     } catch (error) {
       this.logger.warn(`Could not claim session ${id} for the start; nothing was started`, {
         sessionId: id,
@@ -1266,8 +1276,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * Persist a stop only while no live peer owns the engine. The initial ownership read may predate a peer's
    * claim; deciding in this write also fences a stop delayed until after that peer's start returned. A delete's
    * record still accepts a stop, while remaining distinguishable until its delete finishes.
+   *
+   * A row no write could take is a live peer's, or one another request changed since the write that missed: the
+   * other stop cleared an abandoned claim, this node's own start took it, a delete began. Only a live lease names
+   * another node, so with none the writes run again, up to `passes` times.
    */
-  private async keepDown(id: string): Promise<void> {
+  private async keepDown(id: string, passes = KEEP_DOWN_PASSES): Promise<void> {
     const claims: FindOptionsWhere<Session>[] = this.ownership
       ? [
           { id, nodeId: IsNull() },
@@ -1293,7 +1307,19 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // pending delete took the branch above and keeps its claim throughout removal.
       if (this.ownership && (await this.ownership.stopExpiredForeignClaim(id))) return;
       await this.findOne(id);
-      throw new ConflictException(`Session ${id} is running on another node`);
+      if (!this.ownership || (await this.ownership.isHeldByOtherNode(id))) {
+        throw new ConflictException(`Session ${id} is running on another node`);
+      }
+      if (passes > 1) return this.keepDown(id, passes - 1);
+      // No write took the row in any pass and no peer holds it: a row that kept changing is settled by the requests that
+      // changed it, and a row in a state the stop cannot change stays as it is.
+      this.logger.warn(
+        `Could not record the stop of session ${id}: no write took the row in ${KEEP_DOWN_PASSES} passes`,
+        {
+          sessionId: id,
+          action: 'session_stop_record_unsettled',
+        },
+      );
     }
   }
 

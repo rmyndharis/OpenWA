@@ -449,6 +449,18 @@ code {
   color: var(--text-primary, #1e293b);
 }
 
+/* Typed text takes its direction from its own characters: under the page direction an Arabic page put the full stop
+   of an English sentence on the wrong end of it. One rule covers every field a person types into (a textarea, and
+   an input with no type or of type text or search), so a new field cannot miss it. url, email, tel, number and
+   password fields hold addresses, digits and secrets and are left as they are (url, email and tel are forced left
+   to right below). */
+textarea,
+input:not([type]),
+input[type='text'],
+input[type='search'] {
+  unicode-bidi: plaintext;
+}
+
 /* RTL / Hebrew direction support */
 
 /* Keep code, technical identifiers, and numbers LTR even inside RTL containers */
@@ -489,7 +501,9 @@ code {
 /* Inputs in modals: text aligns naturally */
 [dir='rtl'] .modal-body input,
 [dir='rtl'] .modal-body textarea,
+[dir='rtl'] input:not([type]),
 [dir='rtl'] input[type='text'],
+[dir='rtl'] input[type='search'],
 [dir='rtl'] input[type='url'],
 [dir='rtl'] input[type='password'],
 [dir='rtl'] input[type='number'],

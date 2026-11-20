@@ -15,6 +15,9 @@ import type { HookManager } from '../../core/hooks';
 import type { StatusStoreService } from '../status-store/status-store.service';
 import type { SessionLidResolver } from './session-lid-resolver.service';
 
+// The waits below are deadlines, not counts of turns, and a PostgreSQL round trip on a busy runner can take seconds.
+jest.setTimeout(60_000);
+
 /**
  * Baileys' event buffer merges a 1:1 ack that lands within about 100 ms of a message's own upsert into that
  * upsert, as `status` (and `messageTimestamp`), and raises no messages.update for it. This runs the adapter's
@@ -37,10 +40,10 @@ const pause = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
 const settle = async (): Promise<void> => {
   for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
 };
-/** Polls until `read` answers `expected` or two seconds pass; a PostgreSQL write takes real time to land. */
+/** Polls until `read` answers `expected` or the deadline passes; a PostgreSQL write takes real time to land. */
 const eventually = async <T>(read: () => Promise<T>, expected: T): Promise<T> => {
   let last = await read();
-  for (const start = Date.now(); last !== expected && Date.now() - start < 2000;) {
+  for (const start = Date.now(); last !== expected && Date.now() - start < 30_000;) {
     await pause(20);
     last = await read();
   }

@@ -220,6 +220,16 @@ describe('the global pipes ahead of the DTO transform', () => {
       });
     });
 
+    // The pipe also converts a query DTO, so the answer names the part of the request that holds the value.
+    it.each([
+      ['body', 'Request body holds a value of the wrong type'],
+      ['query', 'Request query holds a value of the wrong type'],
+    ] as const)('names the %s when it holds an object with its own toString', async (type, message) => {
+      const value = text({ text: { toString: 'x' } });
+
+      await expect(runAll(value, body(type, SendTextMessageDto))).rejects.toThrow(new BadRequestException(message));
+    });
+
     // Only a conversion that throws is answered. A body is never refused up front for holding such an object: a
     // free-form map may name a key toString, and the conversion never reads it.
     it('takes a free-form map that has a key named toString', async () => {

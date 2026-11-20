@@ -13,7 +13,9 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
  * semantics (an expiry, a gate by account) are not those of the plain About text.
  *
  * The module exports are those of build 2.3000.1054966512-alpha, read off its scripts, and the earlier layout adds the
- * `setMyStatus` the library was written for. Meta's `require` throws for a module a build does not define.
+ * `setMyStatus` the library was written for. From a page.evaluate Meta's `require` answers `undefined` for a module the
+ * page has not defined, and throws only inside a guard or before the page's error setup has run; the registry here does
+ * either, and throws unless told to answer `undefined`.
  */
 describe('setting the About text on each WhatsApp Web layout', () => {
   const g = globalThis as unknown as { window?: unknown };
@@ -25,10 +27,13 @@ describe('setting the About text on each WhatsApp Web layout', () => {
     delete g.window;
   });
 
-  const pageWith = (modules: Record<string, unknown>) => {
+  const pageWith = (modules: Record<string, unknown>, unknownModule: 'throws' | 'undefined' = 'throws') => {
     g.window = {
       require: (name: string) => {
-        if (!(name in modules)) throw new Error(`Requiring unknown module "${name}"`);
+        if (!(name in modules)) {
+          if (unknownModule === 'undefined') return undefined;
+          throw new Error(`Requiring unknown module "${name}"`);
+        }
         return modules[name];
       },
     };
@@ -72,6 +77,15 @@ describe('setting the About text on each WhatsApp Web layout', () => {
     await expect(attempt).rejects.toBeInstanceOf(EngineNotSupportedError);
     await expect(attempt).rejects.toThrow(/setProfileStatus\(no status setter on this build\)/);
     // One page call: the check for the setter. The library's setStatus was never run.
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  // The shape of a booted page: a module it has not defined answers `undefined`.
+  it('answers 501 and writes nothing when require answers undefined for the module', async () => {
+    pageWith({}, 'undefined');
+    const { adapter, evaluate } = adapterOnThatPage();
+
+    await expect(adapter.setProfileStatus('Busy')).rejects.toBeInstanceOf(EngineNotSupportedError);
     expect(evaluate).toHaveBeenCalledTimes(1);
   });
 

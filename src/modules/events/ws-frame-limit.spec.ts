@@ -12,6 +12,10 @@ import { AuthService } from '../auth/auth.service';
 import { ChatScopeService } from '../auth/chat-scope.service';
 import { SUBSCRIBABLE_EVENTS } from './dto/ws-messages.dto';
 import { RedisIoAdapter } from './redis-io.adapter';
+import { waitUntil } from '../../../test/helpers/wait-until';
+
+// The waits below are deadlines of thirty seconds: a socket on a busy runner answers when it answers.
+jest.setTimeout(60_000);
 
 /**
  * What matters is what a real socket does with a frame, so this boots the gateway behind the adapter the
@@ -73,7 +77,7 @@ describe('/events client frame size', () => {
     `42/events,${JSON.stringify(['message', { type: 'subscribe', ...subscribe }])}`;
 
   const waitFor = async (predicate: () => boolean): Promise<boolean> => {
-    for (let waited = 0; waited < 2000 && !predicate(); waited += 20) await new Promise(r => setTimeout(r, 20));
+    await waitUntil(predicate);
     return predicate();
   };
 

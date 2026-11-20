@@ -281,6 +281,7 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
           <label htmlFor="pi-5">{t('plugins.instances.form.config')}</label>
           <textarea
             id="pi-5"
+            className="pi-json"
             value={form.config}
             placeholder={t('plugins.instances.form.configPlaceholder')}
             onChange={e => setForm({ ...form, config: e.target.value })}
@@ -386,6 +387,7 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
           <label htmlFor="pi-7">{t('plugins.instances.form.config')}</label>
           <textarea
             id="pi-7"
+            className="pi-json"
             value={editForm.config}
             placeholder={t('plugins.instances.form.configPlaceholder')}
             onChange={e => setEditForm({ ...editForm, config: e.target.value })}

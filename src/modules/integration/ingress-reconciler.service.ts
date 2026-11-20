@@ -48,16 +48,32 @@ export function resolveIngressReconcilerOptions(env: NodeJS.ProcessEnv = process
 
 /**
  * How long a row stays out of the sweep's batch, and how many such rows are remembered, after the sweep found no
- * use in reading it again soon. A full batch of them, oldest first, would otherwise head every sweep and no
- * healthy row behind them would ever be replayed. Two reasons: its stored payload could not be read, which is
- * looked at again after an hour; and its queue job is still live (waiting behind a backlog, running, delayed),
- * which the worker settles on its own and which only needs another look after a quarter of an hour, well inside
- * the hour a completed job is kept. Held in memory, not in the attempt budget: the row is not touched, so nothing
- * of its budget is spent, and it is looked at again after the wait or a restart.
+ * use in reading it again soon. Two reasons: its stored payload could not be read, which is looked at again after
+ * an hour; and its queue job is still live (waiting behind a backlog, running, delayed), which the worker settles on
+ * its own and which only needs another look after a quarter of an hour at the earliest. A completed job is kept for
+ * an hour or until 1000 newer ones have completed (removeOnComplete age and count), whichever comes first, so a look
+ * that comes later than that finds no job and the row is replayed. Held in memory, not in the attempt budget: the
+ * row is not touched, so nothing of its budget is spent, and it is looked at again after the wait or a restart. The
+ * list only spares the reads: it holds at most (wait / sweep interval) * batch size rows back, so what keeps such
+ * rows from starving the ones behind them is the walk below.
  */
 const UNREADABLE_RETRY_MS = 60 * 60 * 1000;
 const LIVE_JOB_RETRY_MS = 15 * 60 * 1000;
 const SET_ASIDE_MAX = 1000;
+
+/**
+ * Where the sweep's walk through the stale rows stands: `after` is the last row a pass finished with, `before` the
+ * creation time the walk began with, `restoring` the plugins it left out because the boot restore had not reached them.
+ */
+interface IngressWalk {
+  after: string;
+  before: Date;
+  restoring: string[];
+}
+
+// A row that became old enough after the walk began belongs to the next walk, and the clock never widens the grace.
+const walkBound = (walk: IngressWalk | undefined, cutoff: Date): Date =>
+  walk && walk.before < cutoff ? walk.before : cutoff;
 
 export interface IngressReconcileStats {
   scanned: number;
@@ -103,6 +119,14 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
   private readonly stop = new AbortController();
   // Row id to the time it may be looked at again, for rows the sweep set aside (see above).
   private readonly setAsideUntil = new Map<string, number>();
+  // The walk through the stale rows, oldest first, or none when the next pass starts at the oldest. A pass that fills
+  // its batch is followed by one that goes on after its last row, so rows that are only looked at and left alone (a
+  // live job, a payload that cannot be read) cannot keep the rows behind them from being reached: a stranded row
+  // behind N others is looked at within ceil((N + 1) / batchSize) passes, however many of them hold a live job. A pass
+  // that does not fill its batch has reached the end, and the next one starts over. The creation time bound is kept
+  // from the start of the walk so that rows arriving while it runs cannot keep it from ending. Held in memory: a
+  // restart, or another node, begins at the oldest row, and replaying a row is idempotent by its job id.
+  private walk?: IngressWalk;
 
   constructor(
     @InjectRepository(IngressEvent, 'data') private readonly events: Repository<IngressEvent>,
@@ -173,29 +197,47 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       // 1:1 (plugin_instances is unique on pluginId+instanceId), so limit() bounds rows, not join fan-out.
       // Ids only: a stored payload that does not parse (an imported or hand-edited row) fails the read of the
       // whole batch, so no row behind it would ever be replayed. Each row is read on its own below, and one
-      // that cannot be read is kept out of the next batches for a while, so a batch full of them cannot starve
-      // the rows behind.
+      // that cannot be read is kept out of the next batches for a while, so it is not read again on every walk.
       const unreadable = this.setAsideRows(now);
       // A plugin the boot restore has not reached has no worker to take a replay, and the loop below skips its
       // rows, so they are left out here too: a batch's worth of them would otherwise be handed back by every
       // pass until the restore ends, with no other plugin's stranded delivery replayed in the meantime.
       const restoring = this.loader.restorePendingIds();
-      const query = this.events
-        .createQueryBuilder('e')
-        .select('e.id')
-        .innerJoin(
-          PluginInstance,
-          'pi',
-          'pi.pluginId = e.pluginId AND pi.instanceId = e.instanceId AND pi.enabled = :enabled',
-          { enabled: true },
-        )
-        .where('e.dispatchState = :state', { state: 'pending' })
-        .andWhere('e.createdAt < :cutoff', { cutoff })
-        .andWhere('e.payload IS NOT NULL');
-      if (unreadable.length) query.andWhere('e.id NOT IN (:...unreadable)', { unreadable });
-      if (restoring.length) query.andWhere('e.pluginId NOT IN (:...restoring)', { restoring });
-      const batch = await query.orderBy('e.createdAt', 'ASC').limit(opts.batchSize).getMany();
-      for (const { id } of batch) {
+      // A plugin the walk left out has finished restoring, and its rows lie behind the walk: begin again at the oldest.
+      let walk = this.walk?.restoring.every(id => restoring.includes(id)) ? this.walk : undefined;
+      const readPage = (from?: IngressWalk): Promise<IngressEvent[]> => {
+        const query = this.events
+          .createQueryBuilder('e')
+          .select('e.id')
+          .innerJoin(
+            PluginInstance,
+            'pi',
+            'pi.pluginId = e.pluginId AND pi.instanceId = e.instanceId AND pi.enabled = :enabled',
+            { enabled: true },
+          )
+          .where('e.dispatchState = :state', { state: 'pending' })
+          .andWhere('e.createdAt < :before', { before: walkBound(from, cutoff) })
+          .andWhere('e.payload IS NOT NULL');
+        if (from) {
+          // Compared in SQL, as the webhook outbox reconciler does, so the microseconds of a PostgreSQL timestamp are
+          // never rounded through a Date; the id orders the rows that share a creation time.
+          const position = this.events.createQueryBuilder('c').select(['c.createdAt', 'c.id']).where('c.id = :after');
+          query.andWhere(`(e.createdAt, e.id) > (${position.getQuery()})`, { after: from.after });
+        }
+        if (unreadable.length) query.andWhere('e.id NOT IN (:...unreadable)', { unreadable });
+        if (restoring.length) query.andWhere('e.pluginId NOT IN (:...restoring)', { restoring });
+        return query.orderBy('e.createdAt', 'ASC').addOrderBy('e.id', 'ASC').limit(opts.batchSize).getMany();
+      };
+      let batch = await readPage(walk);
+      // Nothing left after the walk's position: it ended on a full page, or the row it stands on is gone.
+      if (!batch.length && walk) {
+        walk = undefined;
+        batch = await readPage();
+      }
+      // The walk goes on after a full page, and from the row before the one a pass stopped at.
+      let passed = batch.at(-1)?.id;
+      let goesOn = batch.length === opts.batchSize;
+      for (const [index, { id }] of batch.entries()) {
         if (this.stop.signal.aborted) break;
         let row: IngressEvent | null;
         try {
@@ -206,7 +248,8 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
             action: 'ingress_reconcile_row_unreadable',
           });
           // Set aside only a row whose payload could not be read. A read that failed because the database
-          // said "not now" (a lock, a dropped connection) is looked at again by the next sweep, as before.
+          // said "not now" (a lock, a dropped connection) is looked at again when the walk gets back to it:
+          // by the next pass, as before, unless more rows than a batch are waiting.
           // A payload that does not parse is told by its error class: the message of a SyntaxError quotes
           // the start of the text, which may read like a connection error.
           if ((err instanceof Error && err.name === 'SyntaxError') || !isTransientDbError(err)) {
@@ -268,11 +311,14 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
             this.logger.warn('Ingress queue unreachable; the rest of the reconcile pass waits for the next one', {
               action: 'ingress_reconcile_queue_unreachable',
             });
+            // This row was not looked up, so the walk goes on from the one before it and the next pass begins here.
+            passed = batch[index - 1]?.id ?? walk?.after;
+            goesOn = true;
             break;
           }
         } catch (err) {
           // A bookkeeping failure (repo update/DLQ write) must not abort the batch; the row stays
-          // 'pending' and is retried next sweep.
+          // 'pending' and is retried when the walk gets back to it.
           this.logger.error('Ingress reconcile row failed', err instanceof Error ? err.message : String(err), {
             pluginId: row.pluginId,
             instanceId: row.instanceId,
@@ -282,6 +328,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
           stats.skipped++;
         }
       }
+      this.walk = goesOn && passed ? { after: passed, before: walkBound(walk, cutoff), restoring } : undefined;
       return stats;
     } finally {
       this.inFlight = undefined;

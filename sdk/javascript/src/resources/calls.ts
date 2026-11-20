@@ -28,10 +28,10 @@ export class CallsResource {
   /**
    * Create a shareable WhatsApp call link.
    *
-   * Both fields are required. `startTime` is absolute epoch MILLISECONDS — a link for right now is
-   * `Date.now()` rather than an omitted field, because whatsapp-web.js generates an event-linked
-   * call and has no notion of "no start time". A WhatsApp-side failure answers `403` rather than a
-   * success carrying an empty link.
+   * Both fields are required. `startTime` is absolute epoch MILLISECONDS and a whole number (a fraction answers
+   * `400`). A link for right now is `Date.now()` rather than an omitted field, because whatsapp-web.js
+   * generates an event-linked call and has no notion of "no start time". A WhatsApp-side failure answers
+   * `403` rather than a success carrying an empty link.
    */
   createLink(sessionId: string, body: CreateCallLinkRequest): Promise<CallLinkResponse> {
     return this.client.request<CallLinkResponse>({

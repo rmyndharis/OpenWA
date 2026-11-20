@@ -1,18 +1,22 @@
 import { type Client } from 'whatsapp-web.js';
 import { CallLinkType, MediaInput } from '../interfaces/whatsapp-engine.interface';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { toMessageMedia } from './wwebjs-messaging';
+import { deleteGroupPictureInPage } from './wwebjs-groups';
 import { type EvaluatePage, runWriteInPage, settleWriteStatus } from './wwebjs-page-writes';
 import { type WwebjsEngineHost, withPageWrite, reportPageDeath } from './wwebjs-host';
+import { PAGE_RELOADING_MESSAGE } from './wwebjs-lifecycle';
 
 /**
  * Whether the page's `WAWebContactStatusBridge` still exports `setMyStatus`, which `Client.setStatus` calls. The build
  * the gateway selects today exports only `queryStatusAll` and `sendReadStatus`: the About text is an expiring text
- * status there, set through modules the library does not call, so the call was a TypeError in the page. A module a
- * build does not define throws from `require`. A document with no `require` at all is a page that is reloading, not
- * a build without the setter, and that failure is let through (spelled as the library spells it, which is how the
- * reload is read).
+ * status there, set through modules the library does not call, so the call was a TypeError in the page. From a
+ * page.evaluate Meta's `require` answers `undefined` for a module the page has not defined, and throws only inside a
+ * guard or before the page's error setup has run, so the lookup tests the answer and guards the throw. A document with
+ * no `require` at all is a page that is reloading, not a build without the setter, and that failure is let through
+ * (spelled as the library spells it, which is how the reload is read).
  */
 export function readStatusSetterInPage(): boolean {
   type Bridge = { setMyStatus?: unknown } | undefined;
@@ -57,17 +61,37 @@ export class WwebjsProfile {
     return link;
   }
 
+  /**
+   * The id of the account itself, which the picture writes address. A client that has not reported it yet has none,
+   * and the write asks nothing of the page.
+   */
+  private ownAccountId(): string {
+    const id = this.client().info?.wid?._serialized;
+    if (!id)
+      throw new EngineNotReadyError('The WhatsApp client has not reported its own account id yet. Retry shortly.');
+    return id;
+  }
+
   async deleteProfilePicture(): Promise<void> {
     this.host.ensureReady();
-    // `Promise<boolean>` understates this. `WWebJS.deletePicture` has three exits
-    // (Injected/Utils.js:1404-1418): `undefined` when `canDelete()` was false and nothing was
-    // attempted, `true` on an HTTP 200, `false` on a ServerStatusCodeError. `undefined` is falsy, so
-    // the usual `if (!ok) throw` would report "there was nothing to delete" as a refusal and turn a
-    // repeat delete into a 403. Only an explicit `false` is WhatsApp saying no.
-    const result = await withPageWrite(this.host, 'deleteProfilePicture', () => this.client().deleteProfilePicture());
-    if (result === false) {
-      throw new EngineRefusedError('the engine rejected the profile picture removal');
+    const chatId = this.ownAccountId();
+    // The request is sent in-page, so that WhatsApp's own status decides the answer: the library's deleteProfilePicture
+    // resolves false for every status, and a rate limit or a server error, which removed nothing and may pass later,
+    // read as a refusal. The request is the one that removes a group's picture, addressed by the id of the account.
+    const status = await withPageWrite(this.host, 'deleteProfilePicture', () =>
+      (this.client() as unknown as { pupPage: EvaluatePage }).pupPage.evaluate(deleteGroupPictureInPage, chatId),
+    );
+    // A build without the job: nothing was asked of WhatsApp, so this is neither a refusal nor a failure to retry.
+    if (status === 'missing') {
+      throw new EngineNotSupportedError('deleteProfilePicture(no picture delete job on this build)');
     }
+    // A repeat sends the same request again and answers what WhatsApp answers: a group with no picture left answers
+    // 200, and an account's own has not been observed to.
+    settleWriteStatus(status, {
+      request: 'the profile picture removal',
+      nothing: 'removed nothing',
+      refused: refusedWith => `the engine rejected the profile picture removal (WhatsApp answered ${refusedWith})`,
+    });
     this.host.logger.log('Deleted profile picture');
   }
 
@@ -99,32 +123,34 @@ export class WwebjsProfile {
     this.host.ensureReady();
     const messageMedia = await toMessageMedia(media, this.host.config.proxy?.url);
     const client = this.client();
-    // The picture is sent in-page, so that WhatsApp's own status decides the answer: setProfilePicture resolves false
-    // for every status, and a rate limit or a server error, which changed nothing and may pass later, read as a refusal.
-    // An account with no id of its own, or a page that has no job to send it with, is the library's own call.
-    const chatId = client.info?.wid?._serialized;
-    const answer = chatId
-      ? await withPageWrite(this.host, 'setProfilePicture', () =>
-          (client as unknown as { pupPage: EvaluatePage }).pupPage.evaluate(runWriteInPage, {
-            kind: 'picture',
-            chatId,
-            picture: messageMedia,
-          }),
-        )
-      : 'missing';
+    // The picture is sent in-page, so that WhatsApp's own status decides the answer: the library's setProfilePicture
+    // resolves false for every status, and a rate limit or a server error, which changed nothing and may pass later,
+    // read as a refusal. It is addressed by the id of the account itself.
+    const chatId = this.ownAccountId();
+    const answer = await withPageWrite(this.host, 'setProfilePicture', () =>
+      (client as unknown as { pupPage: EvaluatePage }).pupPage.evaluate(runWriteInPage, {
+        kind: 'picture',
+        chatId,
+        picture: messageMedia,
+      }),
+    );
+    // Nothing was sent when the page cannot run the write: a page without whatsapp-web.js's helpers is reloading, and
+    // a build without the job has none to run. The library's own call needs the same modules, so it is not tried.
+    if (answer === 'no-helpers') throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
+    if (answer === 'missing') throw new EngineNotSupportedError('setProfilePicture(no write job on this build)');
     const refusal = 'the engine rejected the profile picture change';
-    if (answer === 'missing') {
-      // setProfilePicture resolves false (rather than throwing) when the upload is refused.
-      if (!(await withPageWrite(this.host, 'setProfilePicture', () => client.setProfilePicture(messageMedia)))) {
-        throw new EngineRefusedError(refusal);
-      }
-    } else {
-      settleWriteStatus(answer.status, {
+    settleWriteStatus(
+      answer.status,
+      {
         request: 'the profile picture change',
         nothing: 'changed nothing',
-        refused: status => `${refusal} (WhatsApp answered ${status})`,
-      });
-    }
+        refused: (status, local) =>
+          local
+            ? `${refusal} (the page says this account may not change it, nothing was sent)`
+            : `${refusal} (WhatsApp answered ${status})`,
+      },
+      answer.local,
+    );
     this.host.logger.log('Updated profile picture');
   }
 }

@@ -9,6 +9,7 @@ import type { WebhookService } from '../webhook/webhook.service';
 import type { HookManager } from '../../core/hooks';
 import type { StatusStoreService } from '../status-store/status-store.service';
 import type { SessionLidResolver } from './session-lid-resolver.service';
+import { waitUntil } from '../../../test/helpers/wait-until';
 import type {
   EditedMessage,
   IncomingMessage,
@@ -20,6 +21,8 @@ import type {
 // revoked one does, or the index keeps serving the text the sender replaced. Runs on SQLite, and on the
 // postgres:16 service when DATABASE_TYPE=postgres.
 describe('message:persisted after a stored message changes its text', () => {
+  // The waits below are deadlines of thirty seconds, which is more than a test may take by default.
+  jest.setTimeout(60_000);
   const CHAT = '15550001111@c.us';
   let db: DataSource;
   let repository: Repository<Message>;
@@ -39,6 +42,12 @@ describe('message:persisted after a stored message changes its text', () => {
     hookManager.execute.mock.calls
       .filter(([event]) => event === 'message:persisted')
       .map(([, data]) => (data as { message: Record<string, unknown> }).message);
+  // Waits for the hand-overs with a deadline, since a PostgreSQL round trip takes as long as it takes, then settles for
+  // a second one that must not follow.
+  const handedOver = async (count: number): Promise<void> => {
+    await waitUntil(() => persistedRows().length >= count);
+    await flush();
+  };
 
   async function seed(waMessageId: string, direction: MessageDirection): Promise<Message> {
     return repository.save(
@@ -125,14 +134,14 @@ describe('message:persisted after a stored message changes its text', () => {
   it('hands the cleared row of a revoked message to message:persisted (the existing contract)', async () => {
     const row = await seed('WA_REVOKE', MessageDirection.INCOMING);
     await projector.recordRevoke('s1', 'WA_REVOKE', { kind: 'revoke', chatId: CHAT, fromMe: false });
-    await flush();
+    await handedOver(1);
     expect(persistedRows()).toEqual([expect.objectContaining({ id: row.id, body: '', type: 'revoked' })]);
   });
 
   it('hands the edited row of an inbound edit to message:persisted, marker included', async () => {
     const row = await seed('WA_EDIT_IN', MessageDirection.INCOMING);
     projector.applyMessageEditQueued('s1', editOf('WA_EDIT_IN', 'the corrected text'));
-    await flush();
+    await handedOver(1);
     expect((await repository.findOneByOrFail({ id: row.id })).body).toBe('the corrected text');
     const persisted = persistedRows();
     expect(persisted).toEqual([expect.objectContaining({ id: row.id, body: 'the corrected text' })]);
@@ -146,7 +155,7 @@ describe('message:persisted after a stored message changes its text', () => {
       chatId: CHAT,
       fromMe: true,
     });
-    await flush();
+    await handedOver(1);
     expect((await repository.findOneByOrFail({ id: row.id })).body).toBe('the corrected text');
     expect(persistedRows()).toEqual([expect.objectContaining({ id: row.id, body: 'the corrected text' })]);
   });
@@ -159,7 +168,7 @@ describe('message:persisted after a stored message changes its text', () => {
       fromMe: true,
     });
     projector.applyMessageEditQueued('s1', editOf('WA_EDIT_ECHO', 'the corrected text', { fromMe: true }));
-    await flush();
+    await handedOver(1);
     expect(persistedRows()).toEqual([expect.objectContaining({ id: row.id, body: 'the corrected text' })]);
   });
 
@@ -182,11 +191,11 @@ describe('message:persisted after a stored message changes its text', () => {
     let release!: () => void;
     receivedGate = new Promise(resolve => (release = resolve));
     projector.handleInboundMessage('s1', engine, inbound('WA_HELD'));
-    await flush();
+    await waitUntil(() => hookManager.execute.mock.calls.some(([event]) => event === 'message:received'));
     projector.applyMessageEditQueued('s1', editOf('WA_HELD', 'the corrected text'));
     await flush();
     release();
-    await flush();
+    await handedOver(1);
     expect((await repository.findOneByOrFail({ waMessageId: 'WA_HELD' })).body).toBe('the corrected text');
     expect(persistedRows().map(row => row.body)).toEqual(['the corrected text']);
   });
@@ -195,16 +204,16 @@ describe('message:persisted after a stored message changes its text', () => {
     let releaseInsert!: () => void;
     const insertHeld = new Promise<void>(resolve => (releaseInsert = resolve));
     const insert = repository.insert.bind(repository);
-    jest.spyOn(repository, 'insert').mockImplementation(async row => {
+    const held = jest.spyOn(repository, 'insert').mockImplementation(async row => {
       await insertHeld;
       return insert(row);
     });
     projector.handleInboundMessage('s1', engine, inbound('WA_DURING'));
-    await flush();
+    await waitUntil(() => held.mock.calls.length > 0);
     projector.applyMessageEditQueued('s1', editOf('WA_DURING', 'the corrected text'));
     await flush();
     releaseInsert();
-    await flush();
+    await handedOver(2);
     expect((await repository.findOneByOrFail({ waMessageId: 'WA_DURING' })).body).toBe('the corrected text');
     expect(persistedRows().map(row => row.body)).toEqual(['the original text', 'the corrected text']);
   });

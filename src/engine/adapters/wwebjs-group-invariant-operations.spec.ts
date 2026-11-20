@@ -3,6 +3,7 @@ import * as wwebjs from 'whatsapp-web.js';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
 import { readChatModels } from './wwebjs-chats';
 import { readInviteCodeInPage } from './wwebjs-groups';
+import { pinInPage } from './wwebjs-page-writes';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
@@ -165,8 +166,11 @@ describe('WhatsAppWebJsAdapter group operations when groupMetadata.update hits i
       },
     ]);
     const getChatById = jest.fn().mockRejectedValue(INVARIANT);
+    // The page answers a pin as a build whose sender still takes positional arguments does: the library's own call.
     const evaluate = jest.fn((fn: unknown) =>
-      fn === readChatModels ? Promise.resolve([localGroupModel]) : Promise.resolve(undefined),
+      fn === readChatModels
+        ? Promise.resolve([localGroupModel])
+        : Promise.resolve(fn === pinInPage ? 'legacy' : undefined),
     );
 
     const adapter = readyAdapter({ getChatById, pupPage: { evaluate } });

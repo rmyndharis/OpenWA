@@ -18,6 +18,7 @@ import {
   extractBaileysContext,
   type ContentTypeLib,
   contentTypeOf,
+  droppedMessageTime,
   isBaileysCatalogShare,
   isNonContent,
   isNoiseOnly,
@@ -25,6 +26,7 @@ import {
   mapBaileysStatus,
   setBaileysText,
   storedKeyInChatPersisted,
+  withoutFastRatchetDistribution,
   withoutMergedNonContentMessage,
   withoutNonContentMessage,
 } from './baileys-message-mapper';
@@ -1435,6 +1437,66 @@ describe('what is no message of its own', () => {
     });
   });
 
+  describe('withoutFastRatchetDistribution', () => {
+    const SECRET = { messageSecret: 'c2VjcmV0' };
+    const stored = (message: Record<string, unknown> | null) =>
+      ({ key: { id: 'X1', remoteJid: '628111@s.whatsapp.net' }, messageTimestamp: 1700000040, message }) as {
+        key: { id: string; remoteJid: string };
+        messageTimestamp: number;
+        message: proto.IMessage | null;
+      };
+
+    it.each<[string, Record<string, unknown>]>([
+      ['before', { [FAST_RATCHET]: {}, imageMessage: { url: 'u' }, messageContextInfo: SECRET }],
+      ['after', { imageMessage: { url: 'u' }, [FAST_RATCHET]: {}, messageContextInfo: SECRET }],
+    ])('takes out a distribution that merged %s the content, and keeps the rest in its order', (_where, message) => {
+      const msg = stored(message);
+      const out = withoutFastRatchetDistribution(msg);
+      expect(Object.keys(out.message ?? {})).toEqual(['imageMessage', 'messageContextInfo']);
+      expect(out.message?.messageContextInfo).toBe(message.messageContextInfo);
+      expect(out.key).toBe(msg.key);
+      expect(out.messageTimestamp).toBe(1700000040);
+      // Baileys types the message it hands on by its content, as the adapter does.
+      expect(libraryContentType(out.message ?? undefined)).toBe('imageMessage');
+    });
+
+    it('is a copy: the message it is given keeps the distribution', () => {
+      const msg = stored({ [FAST_RATCHET]: { groupId: 'g' }, conversation: 'hi' });
+      const out = withoutFastRatchetDistribution(msg);
+      expect(out).not.toBe(msg);
+      expect(out.message).not.toBe(msg.message);
+      expect(Object.keys(msg.message ?? {})).toEqual([FAST_RATCHET, 'conversation']);
+    });
+
+    it('takes out nothing but the fast-ratchet distribution', () => {
+      const out = withoutFastRatchetDistribution(
+        stored({
+          senderKeyDistributionMessage: {},
+          [FAST_RATCHET]: {},
+          messageHistoryNotice: {},
+          conversation: 'hi',
+          messageContextInfo: SECRET,
+        }),
+      );
+      expect(Object.keys(out.message ?? {})).toEqual([
+        'senderKeyDistributionMessage',
+        'messageHistoryNotice',
+        'conversation',
+        'messageContextInfo',
+      ]);
+    });
+
+    it.each<[string, ReturnType<typeof stored> | null | undefined]>([
+      ['a message with no distribution', stored({ conversation: 'hi', messageContextInfo: SECRET })],
+      ['a message whose distribution is only inherited', stored(Object.create({ [FAST_RATCHET]: null }) as never)],
+      ['a message with no content', stored(null)],
+      ['no message', null],
+      ['nothing', undefined],
+    ])('returns what it is given for %s', (_what, msg) => {
+      expect(withoutFastRatchetDistribution(msg)).toBe(msg);
+    });
+  });
+
   describe('isNonContent', () => {
     it.each<[string, Record<string, unknown>]>([
       ['a pin', { pinInChatMessage: {} }],
@@ -1613,6 +1675,8 @@ describe('what is no message of its own', () => {
       ['a stub type', merged(PIN, { stub: 2 })],
       ['a count above one, which may hold a text or a count of the chunk', merged(PIN, { count: 2 })],
       ['a count the chunk held, with a pin of the account after it', merged(PIN, { count: 3, fromMe: true })],
+      // A contact's text, then the account's own pin, in one flush: the one count is the text's, not the pin's.
+      ["the count of one a contact's text left beside a pin of the account", merged(PIN, { count: 1, fromMe: true })],
       ['no message', { ...merged(PIN), messages: [] }],
       ['no messages key', { id: CHAT_ID, conversationTimestamp: 1700000040, unreadCount: 3 }],
       ['a message with no content', { ...merged(PIN), messages: [{ message: { key: { id: 'X1' } } }] }],
@@ -1631,6 +1695,30 @@ describe('what is no message of its own', () => {
         id: CHAT_ID,
         name: 'Rina',
         ...('unreadCount' in chat ? { unreadCount: chat.unreadCount } : {}),
+      });
+    });
+
+    describe('droppedMessageTime', () => {
+      it('names the time that was taken out, for the chat the filter returned', () => {
+        const chat = merged(PIN);
+        expect(droppedMessageTime(withoutMergedNonContentMessage(chat, lib))).toBe(1700000040);
+        expect(droppedMessageTime(withoutMergedNonContentMessage(merged(PIN, { count: 0, fromMe: true }), lib))).toBe(
+          1700000040,
+        );
+      });
+
+      it('names the time of a Long as a number', () => {
+        const messageTime = { low: 1700000040, high: 0, unsigned: false, toString: () => '1700000040' };
+        expect(droppedMessageTime(withoutMergedNonContentMessage(merged(PIN, { messageTime }), lib))).toBe(1700000040);
+      });
+
+      it('names nothing when the chat kept its time, or was left whole, or is not what the filter returned', () => {
+        const kept = withoutMergedNonContentMessage(merged(PIN, { time: 1700000010 }), lib);
+        const whole = merged({ conversation: 'hi' });
+        expect(droppedMessageTime(kept)).toBeUndefined();
+        expect(droppedMessageTime(withoutMergedNonContentMessage(whole, lib))).toBeUndefined();
+        expect(droppedMessageTime(merged(PIN))).toBeUndefined();
+        expect(droppedMessageTime({ ...withoutMergedNonContentMessage(merged(PIN), lib) })).toBeUndefined();
       });
     });
 

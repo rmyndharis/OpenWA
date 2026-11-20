@@ -42,6 +42,7 @@ import {
   mapBaileysEventResponseType,
   mapBaileysStatus,
   setBaileysText,
+  withoutFastRatchetDistribution,
 } from './baileys-message-mapper';
 import { boundPollOptions, boundPollText, buildEditedMessage } from './message-mapper';
 import { toUnixSeconds } from './baileys-history';
@@ -1033,6 +1034,10 @@ export class BaileysEvents {
       }
 
       // --- Normal message: enrich + emit ---
+      // Baileys' own readers of the message (the media download, a quote of it) type it by the first key that
+      // contains `Message`, which a fast-ratchet distribution merged in before the content is. contentType above
+      // passed over it, so the download, the click and the quote get the message without it too.
+      msg = withoutFastRatchetDistribution(msg);
       // A message the store already holds was delivered or sent before: WhatsApp re-delivers a node
       // whose ack was lost on a drop, so the second copy has to stop here. Downstream would not catch
       // it: the own-send path dispatches message.sent whatever its insert did, and the inbound path

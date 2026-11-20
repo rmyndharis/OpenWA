@@ -4,7 +4,7 @@ import { chatKind, parseWaId, toNeutralJid as canonicalizeWaId, userPart } from 
 import type { LidMappingStore } from '../identity/lid-mapping-store.service';
 import { mergeTwinStates, type ChatStateStore, type ChatStateValue } from './baileys-chat-state-store.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
-import { baileysChatJid, baileysMessageText } from './baileys-message-mapper';
+import { baileysChatJid, baileysMessageText, droppedMessageTime } from './baileys-message-mapper';
 import type { StoredChatPreview } from './baileys-stored-chat-previews.service';
 
 interface LastMessage {
@@ -29,6 +29,18 @@ export const SESSION_STORE_MAP_CAP_DEFAULT = 5000;
  * the buffer held has arrived by then. A note nothing consumed lapses with it.
  */
 const READ_ECHO_WINDOW_MS = 35_000;
+
+/**
+ * Whether a chat update is the pair Baileys writes for a message when the account unarchives on a new message
+ * (`archived` and `readOnly`, both false) and nothing else but the id. An app-state archive carries no `readOnly`.
+ */
+function unarchivesOnly(update: Partial<Chat>): boolean {
+  return (
+    update.archived === false &&
+    update.readOnly === false &&
+    Object.keys(update).every(key => key === 'id' || key === 'conditional' || key === 'archived' || key === 'readOnly')
+  );
+}
 
 /**
  * Insertion-ordered Map with an LRU cap, the same discipline as LidMappingStoreService: a read or
@@ -337,6 +349,13 @@ export class BaileysSessionStore {
       const merged: BaileysContact = { id: existing.id };
       this.assignDefined(merged, existing);
       this.assignDefined(merged, { ...r, id });
+      // A history chunk titles a privacy-id chat by the id's own digits when it has no name: that is no name, and it
+      // replaces none the contact already holds, whichever of the three fields it came in.
+      for (const field of ['name', 'verifiedName', 'notify'] as const) {
+        const held = existing[field];
+        const incoming = r[field];
+        if (held && incoming && this.isLidIdentityLabel(id, incoming)) merged[field] = held;
+      }
       this.contacts.set(id, merged);
       // Capture a lid->phone pair from the merged record (lid + phone can arrive in separate updates).
       // `phoneNumber` is the authoritative PN field; fall back to `id` itself only when it's already
@@ -432,8 +451,23 @@ export class BaileysSessionStore {
         }
         continue;
       }
+      // The only time the phone gave a chunk's chat was that of a last message that is none of its own, which the filter
+      // took out so that it cannot date a chat or bring back a deleted one. The deleted chat was refused above; a chat
+      // that holds no time of its own takes it, as it would be listed at the epoch otherwise.
+      const messageTime = droppedMessageTime(record);
+      const dated =
+        messageTime !== undefined && !this.holdsTime(r.id, lidIndex) ? { ...r, conversationTimestamp: messageTime } : r;
+      // Baileys adds this pair to the update of a counted message, and to a plain reaction to the account's own
+      // message, when the account unarchives on a new message. It names no time and no message, so it proves no
+      // chat: a record under a spelling of the id that has none would be a second row at the epoch, also for a chat
+      // held under the other spelling. Whatever state it carries still goes to a chat that has a persisted row, which
+      // a contact's message unarchives as it always has.
+      if (unarchivesOnly(dated) && !this.chats.has(r.id)) {
+        this.persistChatState(r.id, dated);
+        continue;
+      }
       const existing: StoredChat = this.chats.get(r.id) ?? { id: r.id };
-      const applied = this.withoutReadEcho(r, existing);
+      const applied = this.withoutReadEcho(dated, existing);
       // A count that replaces a mark set by hand leaves the mark on the account: the record remembers it, so the
       // read that covers the message undoes the mark as well. Any other count the update carries (a read or a mark
       // synced from the phone, or the `undefined` Baileys writes where a sync cancelled a mark) says how the chat
@@ -446,6 +480,13 @@ export class BaileysSessionStore {
       this.persistChatState(r.id, applied);
       this.applyChatTimer(r.id, applied, lidIndex);
     }
+  }
+
+  /** Whether a record of the chat, under any spelling of it, carries a time. A recorded message dates the listing itself. */
+  private holdsTime(chatId: string, lidIndex?: Map<string, string[]>): boolean {
+    return this.chatTwins(chatId, lidIndex).some(
+      key => this.toUnixSeconds(this.chats.get(key)?.conversationTimestamp) > 0,
+    );
   }
 
   /**
@@ -1350,7 +1391,7 @@ export class BaileysSessionStore {
       id,
       // A title that is only the privacy id's own digits is not a name. The phone, when known, is
       // `phone` so the client can format it the way WhatsApp does, instead of listing the @lid.
-      name: this.chatDisplayName(rawId, [c, ...others]),
+      name: this.chatDisplayName(rawId, [c, ...others], phone),
       ...(phone ? { phone } : {}),
       isGroup: rawId.endsWith('@g.us'),
       kind: chatKind(id),
@@ -1531,43 +1572,38 @@ export class BaileysSessionStore {
 
   /**
    * Best-known display name for a chat id when Baileys gave the chat no title (#369). Prefers the saved
-   * contact name, then verifiedName, then pushName (`notify`); for a @lid chat it also tries the contact
-   * behind the resolved phone. A phone-keyed chat with no name falls back to its digits. A privacy id
-   * does not: those digits are not a phone number, and the listing carries the mapped number separately.
+   * contact name, then verifiedName, then pushName (`notify`), the first of them that is a real name; for
+   * a @lid chat it also tries the contact saved under `phone`, the number the row lists. A phone-keyed
+   * chat with no name falls back to its digits. A privacy id does not: those digits are not a phone
+   * number, and the listing carries the mapped number separately.
    */
-  private resolveContactName(id: string): string {
-    const direct = this.contactDisplayName(id);
-    if (direct && !this.isLidIdentityLabel(id, direct)) {
+  private resolveContactName(id: string, phone?: string): string {
+    const direct = this.contactDisplayName(id, id);
+    if (direct) {
       return direct;
     }
-    const parsed = parseWaId(id);
-    if (parsed.kind === 'lid') {
-      const lidJid = `${parsed.userPart}@lid`;
-      const pn =
-        this.lidToPn.get(lidJid) ??
-        this.lidToPn.get(id) ??
-        (this.contacts.get(lidJid) ?? this.contacts.get(id))?.phoneNumber;
-      if (pn) {
-        const viaPhone =
-          this.contactDisplayName(pn) ??
-          this.contactDisplayName(`${userPart(pn)}@s.whatsapp.net`) ??
-          this.contactDisplayName(`${userPart(pn)}@c.us`);
-        if (viaPhone && !this.isLidIdentityLabel(id, viaPhone)) {
-          return viaPhone;
-        }
-      }
-      return '';
+    if (parseWaId(id).kind !== 'lid') {
+      return userPart(id);
     }
-    return userPart(id);
+    const viaPhone = phone
+      ? (this.contactDisplayName(`${phone}@s.whatsapp.net`, id) ?? this.contactDisplayName(`${phone}@c.us`, id))
+      : undefined;
+    return viaPhone ?? '';
   }
 
   /** The chat title to list: a real name, else the contact's, else nothing for a privacy id. */
-  private chatDisplayName(id: string, records: Array<{ name?: string | null }>): string {
+  private chatDisplayName(id: string, records: Array<{ name?: string | null }>, phone?: string): string {
     for (const record of records) {
-      const name = record.name?.trim();
-      if (name && !this.isLidIdentityLabel(id, name)) return name;
+      const name = this.realName(id, record.name);
+      if (name) return name;
     }
-    return this.resolveContactName(id);
+    return this.resolveContactName(id, phone);
+  }
+
+  /** `name` trimmed, or undefined when it is blank or only the privacy id itself: neither is a name. */
+  private realName(id: string, name: string | null | undefined): string | undefined {
+    const trimmed = name?.trim();
+    return trimmed && !this.isLidIdentityLabel(id, trimmed) ? trimmed : undefined;
   }
 
   /** True when the label is only the privacy id itself (`2714…` or `2714…@lid`), which is no name. */
@@ -1578,9 +1614,10 @@ export class BaileysSessionStore {
     return trimmed === parsed.userPart || trimmed === `${parsed.userPart}@lid`;
   }
 
-  private contactDisplayName(id: string): string | undefined {
-    const c = this.contacts.get(id);
-    return c ? (c.name ?? c.verifiedName ?? c.notify ?? undefined) : undefined;
+  /** The first of the saved, verified and push names of the contact filed under `key` that names chat `id`. */
+  private contactDisplayName(key: string, id: string): string | undefined {
+    const c = this.contacts.get(key);
+    return c ? [c.name, c.verifiedName, c.notify].map(name => this.realName(id, name)).find(Boolean) : undefined;
   }
 
   private toUnixSeconds(ts: number | { toNumber(): number } | null | undefined): number {
