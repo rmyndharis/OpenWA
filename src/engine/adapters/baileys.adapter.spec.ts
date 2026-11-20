@@ -248,6 +248,9 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { LidNotMappedError } from '../../common/errors/lid-not-mapped.error';
 import { countsTowardSendBreaker, sentNothing } from '../../modules/message/send-pacing.service';
+import { markEngineSendFailure } from '../../common/errors/engine-send-failure';
+import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
+import { sendFailureProvesNothingSent } from '../../modules/message/idempotency/run-idempotent-send';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { describeAudio, describeVideo } from './baileys-audio-probe';
 import * as safeLinkPreview from './safe-link-preview';
@@ -333,6 +336,9 @@ const SVG_BYTES = Buffer.from(
  */
 const safeSendOptions = (): unknown =>
   expect.objectContaining({ getUrlInfo: expect.any(Function) as unknown }) as unknown;
+
+/** The upload option every send hands the library, so a failed upload is known to have sent nothing. */
+const uploadOption = (): unknown => expect.objectContaining({ upload: expect.any(Function) as unknown }) as unknown;
 
 function firstEditedMessage(callback: jest.Mock): EditedMessage {
   const calls = callback.mock.calls as Array<[EditedMessage]>;
@@ -2243,9 +2249,13 @@ describe('BaileysAdapter location + contact + poll sends', () => {
       description: 'Office',
       address: '1 Main St',
     });
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      location: { degreesLatitude: 24.12, degreesLongitude: 55.11, name: 'Office', address: '1 Main St' },
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        location: { degreesLatitude: 24.12, degreesLongitude: 55.11, name: 'Office', address: '1 Main St' },
+      },
+      uploadOption(),
+    );
   });
 
   it('sendContactMessage builds a vCard with the waid', async () => {
@@ -2281,9 +2291,13 @@ describe('BaileysAdapter location + contact + poll sends', () => {
   it('sendPollMessage maps name/values and defaults to single choice (selectableCount 1)', async () => {
     const adapter = await ready();
     await adapter.sendPollMessage('120363000@g.us', { name: 'Where?', options: ['Park', 'Beach'] });
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('120363000@g.us', {
-      poll: { name: 'Where?', values: ['Park', 'Beach'], selectableCount: 1 },
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '120363000@g.us',
+      {
+        poll: { name: 'Where?', values: ['Park', 'Beach'], selectableCount: 1 },
+      },
+      uploadOption(),
+    );
   });
 
   it('sendPollMessage uses selectableCount 0 (no limit) when multiple answers are allowed', async () => {
@@ -2293,9 +2307,13 @@ describe('BaileysAdapter location + contact + poll sends', () => {
       options: ['Cheese', 'Ham', 'Olives'],
       allowMultipleAnswers: true,
     });
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('120363000@g.us', {
-      poll: { name: 'Toppings?', values: ['Cheese', 'Ham', 'Olives'], selectableCount: 0 },
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '120363000@g.us',
+      {
+        poll: { name: 'Toppings?', values: ['Cheese', 'Ham', 'Olives'], selectableCount: 0 },
+      },
+      uploadOption(),
+    );
   });
 });
 
@@ -4800,11 +4818,15 @@ describe('BaileysAdapter media sends', () => {
       data: buf,
       caption: 'hi',
     });
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      image: buf,
-      caption: 'hi',
-      mimetype: 'image/png',
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        image: buf,
+        caption: 'hi',
+        mimetype: 'image/png',
+      },
+      uploadOption(),
+    );
     expect(res).toEqual({ id: 'M1', timestamp: 1700000005 });
   });
 
@@ -4819,6 +4841,7 @@ describe('BaileysAdapter media sends', () => {
     expect(fakeSock.sendMessage).toHaveBeenCalledWith(
       '120@g.us',
       expect.objectContaining({ mentions: ['62811@s.whatsapp.net'] }),
+      uploadOption(),
     );
   });
 
@@ -4831,12 +4854,16 @@ describe('BaileysAdapter media sends', () => {
       caption: 'a document',
     });
     expect(loadRemoteMediaBuffer).not.toHaveBeenCalled();
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      document: Buffer.from('PDFDATA'),
-      mimetype: 'application/pdf',
-      fileName: 'doc.pdf',
-      caption: 'a document',
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        document: Buffer.from('PDFDATA'),
+        mimetype: 'application/pdf',
+        fileName: 'doc.pdf',
+        caption: 'a document',
+      },
+      uploadOption(),
+    );
   });
 
   it('fetches a URL data string through the SSRF-guarded loader', async () => {
@@ -4844,12 +4871,16 @@ describe('BaileysAdapter media sends', () => {
     const adapter = await ready();
     await adapter.sendVideoMessage('628111@s.whatsapp.net', { mimetype: '', data: 'https://cdn.example/v.mp4' });
     expect(loadRemoteMediaBuffer).toHaveBeenCalledWith('https://cdn.example/v.mp4', undefined);
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      video: Buffer.from([9]),
-      caption: undefined,
-      mimetype: 'video/mp4',
-      jpegThumbnail: null,
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        video: Buffer.from([9]),
+        caption: undefined,
+        mimetype: 'video/mp4',
+        jpegThumbnail: null,
+      },
+      uploadOption(),
+    );
   });
 
   // Baileys runs ffmpeg through a shell on the file itself whenever the content has no thumbnail.
@@ -4877,12 +4908,16 @@ describe('BaileysAdapter media sends', () => {
     const adapter = await ready();
     await adapter.sendAudioMessage('628111@s.whatsapp.net', { mimetype: 'audio/mp4', data: Buffer.from([1]) });
     // seconds is always present: an undefined one is what makes Baileys read the file itself.
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      audio: Buffer.from([1]),
-      mimetype: 'audio/mp4',
-      ptt: false,
-      seconds: 0,
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        audio: Buffer.from([1]),
+        mimetype: 'audio/mp4',
+        ptt: false,
+        seconds: 0,
+      },
+      uploadOption(),
+    );
   });
 
   it('sendAudioMessage hands Baileys the duration and waveform read in the child, so it reads nothing itself', async () => {
@@ -4895,13 +4930,17 @@ describe('BaileysAdapter media sends', () => {
       ptt: true,
     });
     expect(describeAudio).toHaveBeenLastCalledWith(Buffer.from([1]), true);
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      audio: Buffer.from([1]),
-      mimetype: 'audio/ogg; codecs=opus',
-      ptt: true,
-      seconds: 7,
-      waveform,
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        audio: Buffer.from([1]),
+        mimetype: 'audio/ogg; codecs=opus',
+        ptt: true,
+        seconds: 7,
+        waveform,
+      },
+      uploadOption(),
+    );
   });
 
   /**
@@ -4920,6 +4959,7 @@ describe('BaileysAdapter media sends', () => {
     expect(fakeSock.sendMessage).toHaveBeenCalledWith(
       '120@g.us',
       expect.objectContaining({ mentions: ['62811@s.whatsapp.net'] }),
+      uploadOption(),
     );
   });
 
@@ -4930,12 +4970,16 @@ describe('BaileysAdapter media sends', () => {
       data: Buffer.from([1]),
       ptt: true,
     });
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      audio: Buffer.from([1]),
-      mimetype: 'audio/ogg; codecs=opus',
-      ptt: true,
-      seconds: 0,
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        audio: Buffer.from([1]),
+        mimetype: 'audio/ogg; codecs=opus',
+        ptt: true,
+        seconds: 0,
+      },
+      uploadOption(),
+    );
   });
 
   it('sendStickerMessage sends the sticker buffer', async () => {
@@ -4949,7 +4993,7 @@ describe('BaileysAdapter media sends', () => {
       'base64',
     );
     await adapter.sendStickerMessage('628111@s.whatsapp.net', { mimetype: 'image/webp', data: webp });
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { sticker: webp });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { sticker: webp }, uploadOption());
   });
 
   it('sendStickerMessage tags the participants it was given', async () => {
@@ -4966,10 +5010,14 @@ describe('BaileysAdapter media sends', () => {
       data: webp,
       mentions: ['62811@c.us'],
     });
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      sticker: webp,
-      mentions: ['62811@s.whatsapp.net'],
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        sticker: webp,
+        mentions: ['62811@s.whatsapp.net'],
+      },
+      uploadOption(),
+    );
   });
 
   // A URL send is made by the gateway, not by the socket, so nothing else makes it follow the
@@ -5045,11 +5093,15 @@ describe('BaileysAdapter media sends', () => {
     });
     const adapter = await ready();
     await adapter.sendImageMessage('628111@s.whatsapp.net', { mimetype: 'image/png', data: 'https://cdn.example/x' });
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      image: Buffer.from([1]),
-      caption: undefined,
-      mimetype: 'image/png',
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        image: Buffer.from([1]),
+        caption: undefined,
+        mimetype: 'image/png',
+      },
+      uploadOption(),
+    );
   });
 
   it('media sends reject with EngineNotReadyError before the connection is open', async () => {
@@ -5266,9 +5318,13 @@ describe('BaileysAdapter store-backed ops', () => {
         { text: 'got it', linkPreview: null },
         expect.objectContaining({ quoted: listMsg }),
       );
-      expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-        react: { text: '👍', key: listMsg.key },
-      });
+      expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+        '628111@s.whatsapp.net',
+        {
+          react: { text: '👍', key: listMsg.key },
+        },
+        uploadOption(),
+      );
     });
 
     it('is still found through the list id, and not through another chat', async () => {
@@ -5283,7 +5339,7 @@ describe('BaileysAdapter store-backed ops', () => {
     fakeStore.getMessage.mockResolvedValue(stored);
     const adapter = await ready();
     await adapter.forwardMessage('628111@s.whatsapp.net', '628222@s.whatsapp.net', 'TARGET');
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628222@s.whatsapp.net', { forward: stored });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628222@s.whatsapp.net', { forward: stored }, uploadOption());
   });
 
   // fromChatId was accepted and ignored: any stored id forwarded from any claimed source, while
@@ -5304,9 +5360,13 @@ describe('BaileysAdapter store-backed ops', () => {
     fakeStore.getMessage.mockResolvedValue(stored);
     const adapter = await ready();
     await adapter.reactToMessage('628111@s.whatsapp.net', 'TARGET', '👍');
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      react: { text: '👍', key: stored.key },
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        react: { text: '👍', key: stored.key },
+      },
+      uploadOption(),
+    );
   });
 
   it("starMessage carries the stored key's fromMe, not just the id", async () => {
@@ -5344,11 +5404,15 @@ describe('BaileysAdapter store-backed ops', () => {
     await adapter.pinMessage('628111@s.whatsapp.net', 'TARGET', 604800);
     // PIN_FOR_ALL (1) on a sendMessage — NOT chatModify({pin}), which pins the CHAT in the chat
     // list. The two are entirely different features that happen to share the word "pin".
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      pin: stored.key,
-      type: 1,
-      time: 604800,
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        pin: stored.key,
+        type: 1,
+        time: 604800,
+      },
+      uploadOption(),
+    );
     expect(fakeSock.chatModify).not.toHaveBeenCalled();
   });
 
@@ -5356,10 +5420,14 @@ describe('BaileysAdapter store-backed ops', () => {
     fakeStore.getMessage.mockResolvedValue(stored);
     const adapter = await ready();
     await adapter.unpinMessage('628111@s.whatsapp.net', 'TARGET');
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      pin: stored.key,
-      type: 2,
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        pin: stored.key,
+        type: 2,
+      },
+      uploadOption(),
+    );
   });
 
   it('pinMessage 404s when the message is not in the store', async () => {
@@ -5374,7 +5442,11 @@ describe('BaileysAdapter store-backed ops', () => {
     fakeStore.getMessage.mockResolvedValue(ownStored);
     const adapter = await ready();
     await adapter.deleteMessage('628111@s.whatsapp.net', 'TARGET', true);
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { delete: ownStored.key });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      { delete: ownStored.key },
+      uploadOption(),
+    );
   });
 
   it('deleteMessage for everyone of a message the account received deletes it for the account only', async () => {
@@ -5412,7 +5484,7 @@ describe('BaileysAdapter store-backed ops', () => {
       withSelfRole('admin');
       const adapter = await ready();
       await adapter.deleteMessage(GROUP, 'TARGET', true);
-      expect(fakeSock.sendMessage).toHaveBeenCalledWith(GROUP, { delete: memberMessage.key });
+      expect(fakeSock.sendMessage).toHaveBeenCalledWith(GROUP, { delete: memberMessage.key }, uploadOption());
       expect(fakeSock.chatModify).not.toHaveBeenCalled();
     });
 
@@ -5449,7 +5521,7 @@ describe('BaileysAdapter store-backed ops', () => {
       withLidAddressedSelfRole('admin');
       const adapter = await ready();
       await adapter.deleteMessage(GROUP, 'TARGET', true);
-      expect(fakeSock.sendMessage).toHaveBeenCalledWith(GROUP, { delete: lidMemberMessage.key });
+      expect(fakeSock.sendMessage).toHaveBeenCalledWith(GROUP, { delete: lidMemberMessage.key }, uploadOption());
       expect(fakeSock.chatModify).not.toHaveBeenCalled();
     });
 
@@ -5473,7 +5545,7 @@ describe('BaileysAdapter store-backed ops', () => {
       withLidAddressedSelfRole(null);
       const adapter = await ready();
       await adapter.deleteMessage(GROUP, 'TARGET', true);
-      expect(fakeSock.sendMessage).toHaveBeenCalledWith(GROUP, { delete: lidMemberMessage.key });
+      expect(fakeSock.sendMessage).toHaveBeenCalledWith(GROUP, { delete: lidMemberMessage.key }, uploadOption());
       expect(fakeSock.chatModify).not.toHaveBeenCalled();
     });
   });
@@ -5485,7 +5557,7 @@ describe('BaileysAdapter store-backed ops', () => {
     expect(fakeSock.sendMessage).toHaveBeenCalledWith(
       '628111@s.whatsapp.net',
       expect.objectContaining({ image: Buffer.from([1]) }),
-      { ephemeralExpiration: 86400 },
+      { ephemeralExpiration: 86400, upload: expect.any(Function) as unknown },
     );
   });
 
@@ -5507,10 +5579,18 @@ describe('BaileysAdapter store-backed ops', () => {
     fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
     await adapter.reactToMessage('628111@s.whatsapp.net', 'TARGET', '👍');
     await adapter.deleteMessage('628111@s.whatsapp.net', 'TARGET', true);
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      react: { text: '👍', key: ownStored.key },
-    });
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { delete: ownStored.key });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        react: { text: '👍', key: ownStored.key },
+      },
+      uploadOption(),
+    );
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      { delete: ownStored.key },
+      uploadOption(),
+    );
   });
 
   it('throws when the referenced message is not in the store', async () => {
@@ -5761,7 +5841,11 @@ describe('BaileysAdapter store-backed ops', () => {
     fakeSock.signalRepository = { lidMapping: { getLIDForPN: jest.fn().mockResolvedValue('484848@lid') } };
     const adapter = await ready();
     await adapter.pinMessage('628111@c.us', 'TARGET', 86400);
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('484848@lid', expect.objectContaining({ pin: stored.key }));
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '484848@lid',
+      expect.objectContaining({ pin: stored.key }),
+      uploadOption(),
+    );
   });
 
   // newsletterMetadata hands back the raw GraphQL node (parseNewsletterMetadata returns it as-is), nested
@@ -10207,6 +10291,7 @@ describe('BaileysAdapter status posting', () => {
         statusJidList: ['628111@s.whatsapp.net', '628222@lid'],
         backgroundColor: '#25D366',
         font: 2,
+        upload: expect.any(Function) as unknown,
       },
     );
     expect(result.statusId).toBe('STATUS1');
@@ -10224,7 +10309,12 @@ describe('BaileysAdapter status posting', () => {
     expect(fakeSock.sendMessage).toHaveBeenCalledWith(
       'status@broadcast',
       { image: Buffer.from([1, 2, 3]), caption: 'cap', mimetype: 'image/png' },
-      { statusJidList: ['628111@s.whatsapp.net'], backgroundColor: undefined, font: undefined },
+      {
+        statusJidList: ['628111@s.whatsapp.net'],
+        backgroundColor: undefined,
+        font: undefined,
+        upload: expect.any(Function) as unknown,
+      },
     );
     expect(fakeStore.put).not.toHaveBeenCalled();
   });
@@ -10236,7 +10326,12 @@ describe('BaileysAdapter status posting', () => {
     expect(fakeSock.sendMessage).toHaveBeenCalledWith(
       'status@broadcast',
       { video: Buffer.from('AAAA', 'base64'), caption: undefined, mimetype: 'video/mp4', jpegThumbnail: null },
-      { statusJidList: ['628111@s.whatsapp.net'], backgroundColor: undefined, font: undefined },
+      {
+        statusJidList: ['628111@s.whatsapp.net'],
+        backgroundColor: undefined,
+        font: undefined,
+        upload: expect.any(Function) as unknown,
+      },
     );
   });
 
@@ -10294,7 +10389,7 @@ describe('BaileysAdapter status posting', () => {
           participant: '628999@s.whatsapp.net',
         },
       },
-      { statusJidList: ['628111@s.whatsapp.net'] },
+      { statusJidList: ['628111@s.whatsapp.net'], upload: expect.any(Function) as unknown },
     );
     expect(fakeStore.getMessage).not.toHaveBeenCalled();
   });
@@ -10625,20 +10720,24 @@ describe('BaileysAdapter catalog (#905)', () => {
 
     const res = await adapter.sendProduct('628111@s.whatsapp.net', 'p1', 'check this');
 
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
-      product: {
-        productId: 'p1',
-        title: 'Coffee',
-        description: 'Beans',
-        currencyCode: 'USD',
-        priceAmount1000: 1500000,
-        retailerId: 'SKU1',
-        url: 'https://shop.example/p1',
-        productImage: { url: 'https://img.example/x.jpg' },
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      {
+        product: {
+          productId: 'p1',
+          title: 'Coffee',
+          description: 'Beans',
+          currencyCode: 'USD',
+          priceAmount1000: 1500000,
+          retailerId: 'SKU1',
+          url: 'https://shop.example/p1',
+          productImage: { url: 'https://img.example/x.jpg' },
+        },
+        businessOwnerJid: '628999@s.whatsapp.net',
+        body: 'check this',
       },
-      businessOwnerJid: '628999@s.whatsapp.net',
-      body: 'check this',
-    });
+      uploadOption(),
+    );
     expect(res).toEqual({ id: 'M1', timestamp: 1700000005 });
   });
 
@@ -10691,6 +10790,32 @@ describe('BaileysAdapter catalog (#905)', () => {
     expect((error as HttpException).getStatus()).toBe(503);
     expect(sentNothing(error)).toBe(true);
     expect(fakeSock.sendMessage).not.toHaveBeenCalled();
+  });
+
+  // The lookup is a read that comes before the write, so whatever it fails with, nothing was handed to WhatsApp.
+  it('sendProduct frees the send for a catalog lookup that fails with a WhatsApp server error', async () => {
+    const adapter = await ready();
+    fakeSock.getCatalog.mockRejectedValue(new Boom('internal-server-error', { data: 500 }));
+
+    const error: unknown = await adapter.sendProduct('628111@s.whatsapp.net', 'p1').catch((e: unknown) => e);
+
+    expect(provesNothingSent(error)).toBe(true);
+    expect(sendFailureProvesNothingSent(markEngineSendFailure(error))).toBe(true);
+    expect(sentNothing(error)).toBe(true);
+    expect(countsTowardSendBreaker(error)).toBe(false);
+    expect(fakeSock.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('sendProduct leaves a failed write as unknown', async () => {
+    const adapter = await ready();
+    fakeSock.getCatalog.mockResolvedValue({ products: [baileysProduct()], nextPageCursor: undefined });
+    fakeSock.sendMessage.mockRejectedValue(new Boom('write failed', { statusCode: 500 }));
+
+    const error: unknown = await adapter.sendProduct('628111@s.whatsapp.net', 'p1').catch((e: unknown) => e);
+
+    expect(provesNothingSent(error)).toBe(false);
+    expect(sendFailureProvesNothingSent(markEngineSendFailure(error))).toBe(false);
+    expect(sentNothing(error)).toBe(false);
   });
 });
 

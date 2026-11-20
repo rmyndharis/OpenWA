@@ -3,6 +3,7 @@ import type * as BaileysLib from '@whiskeysockets/baileys';
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
+  WAMediaUploadFunction,
   WAMessage,
   WAMessageKey,
   WASocket,
@@ -43,7 +44,12 @@ import { MessageNotFoundError } from '../../common/errors/message-not-found.erro
 import { type createLogger } from '../../common/services/logger.service';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
-import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
+import {
+  EngineNotSentError,
+  markNothingSent,
+  markOutcomeUnknown,
+  provesNothingSent,
+} from '../../common/errors/engine-not-sent.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, guardLookup, withQueryDeadline } from './baileys-query-deadline';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
@@ -350,6 +356,24 @@ export function mapSendRefusal(error: unknown): unknown {
     return new EngineNotSentError('The WhatsApp connection closed before the message was sent');
   }
   return error;
+}
+
+/**
+ * The `upload` option of a send. Baileys awaits the upload while it builds the message, before `relayMessage` hands
+ * anything to WhatsApp, and it spreads the caller's options last, so this stands in for its own. A failure of it (the
+ * media host refusing every attempt) therefore sent nothing, and the error carries markNothingSent: a keyed send frees
+ * its Idempotency-Key, a paced one gives its admission back, and the send breaker does not count it. The send's refusal
+ * mapping still runs on the error, so a throttle or a closed connection answers as it does anywhere else and a timeout
+ * of the media query stays unproven, as one of any other query does.
+ */
+export function uploadBeforeRelay(sock: WASocket): WAMediaUploadFunction {
+  return async (filePath, options) => {
+    try {
+      return await sock.waUploadToServer(filePath, options);
+    } catch (error) {
+      throw markNothingSent(error);
+    }
+  };
 }
 
 export class BaileysMessaging {
@@ -1071,8 +1095,7 @@ export class BaileysMessaging {
 
   /**
    * Options carrying the vetted generator, so the library's own is never selected. Added only for
-   * text-bearing content: media sends never reach the generator, and leaving their options untouched
-   * keeps the two-argument sendMessage call they already make.
+   * text-bearing content: media sends never reach the generator.
    */
   private previewSafeOptions(content: AnyMessageContent, options?: MiscMessageGenerationOptions) {
     if (!('text' in content)) return options;
@@ -1180,13 +1203,20 @@ export class BaileysMessaging {
     const message = typeof content === 'function' ? await content() : content;
     this.sock(sock);
     const mediaUploadTimeoutMs = this.uploadTimeoutMs();
-    const sendOptions = mediaUploadTimeoutMs ? { ...options, mediaUploadTimeoutMs } : options;
+    const sendOptions = {
+      ...options,
+      upload: uploadBeforeRelay(sock),
+      ...(mediaUploadTimeoutMs ? { mediaUploadTimeoutMs } : {}),
+    };
     let sent: WAMessage | undefined;
     try {
-      sent = sendOptions ? await sock.sendMessage(jid, message, sendOptions) : await sock.sendMessage(jid, message);
+      sent = await sock.sendMessage(jid, message, sendOptions);
     } catch (error) {
+      // An upload that failed on a socket since replaced or stopped still sent nothing: the write was never reached.
       if (this.host.getSocketOrNull() !== sock)
-        throw markOutcomeUnknown(new EngineNotReadyError(CONNECTION_LOST_DURING_SEND_MESSAGE));
+        throw provesNothingSent(error)
+          ? markNothingSent(new EngineNotReadyError())
+          : markOutcomeUnknown(new EngineNotReadyError(CONNECTION_LOST_DURING_SEND_MESSAGE));
       throw mapSendRefusal(error);
     }
     // Mutations are announced by their library echo; no local callback replaces it.

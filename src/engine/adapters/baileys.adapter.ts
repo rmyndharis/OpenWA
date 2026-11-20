@@ -854,9 +854,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
       // Still 403, but no longer an EngineRefusedError: the send breaker counts WhatsApp refusing a
       // send, and a catalog read it refused says nothing about the account's send standing.
       if (error instanceof EngineRefusedError) throw markNothingSent(new ForbiddenException(error.message));
-      // A lookup that timed out or was throttled failed before the message was handed to WhatsApp.
+      // A lookup that timed out or was throttled failed before the message was handed to WhatsApp, and so did
+      // any other failure of this read: the write comes after it.
       if (error instanceof EngineTransportError) throw new EngineNotSentError(error.message);
-      throw mapSendRefusal(error);
+      throw markNothingSent(mapSendRefusal(error));
     });
     this.ensureReadySocket(sock);
     if (!product) {

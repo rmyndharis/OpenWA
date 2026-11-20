@@ -1,7 +1,7 @@
 import type { AnyMessageContent, WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { MediaInput, StatusPostOptions, StatusResult } from '../interfaces/whatsapp-engine.interface';
 import { BadRequestException } from '@nestjs/common';
-import { mapSendRefusal, resolveMediaBuffer } from './baileys-messaging';
+import { mapSendRefusal, resolveMediaBuffer, uploadBeforeRelay } from './baileys-messaging';
 import { describeAudio, describeVideo } from './baileys-audio-probe';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -57,8 +57,10 @@ export class BaileysStatus {
   ): Promise<WAMessage | undefined> {
     const sock = this.sock(expected);
     const deadline = this.host.sessionProxyUrl() ? { mediaUploadTimeoutMs: BAILEYS_QUERY_BUDGET_MS } : {};
+    // The library takes this option and its type does not list it, so it goes through a variable.
+    const sendOptions = { ...options, ...deadline, upload: uploadBeforeRelay(sock) };
     try {
-      return await sock.sendMessage('status@broadcast', content, { ...options, ...deadline });
+      return await sock.sendMessage('status@broadcast', content, sendOptions);
     } catch (error) {
       if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
       throw mapSendRefusal(error);

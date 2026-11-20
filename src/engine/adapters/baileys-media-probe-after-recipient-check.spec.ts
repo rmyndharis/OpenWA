@@ -37,6 +37,7 @@ describe('Baileys media probes run only for a send that passed its own checks', 
   const video = { data: Buffer.from('video'), mimetype: 'video/mp4' };
   const voiceNote = { data: Buffer.from('audio'), mimetype: 'audio/ogg', ptt: true };
   const unregistered = (jid = '628123456789@s.whatsapp.net') => [{ jid, exists: false }];
+  const uploads = (): unknown => expect.objectContaining({ upload: expect.any(Function) as unknown }) as unknown;
 
   const failureOf = (promise: Promise<unknown>): Promise<unknown> =>
     promise.then(
@@ -160,6 +161,7 @@ describe('Baileys media probes run only for a send that passed its own checks', 
       expect(sock.sendMessage).toHaveBeenCalledWith(
         '628123456789@s.whatsapp.net',
         expect.objectContaining({ video: video.data, jpegThumbnail: 'dGh1bWI=' }),
+        uploads(),
       );
     });
 
@@ -176,6 +178,7 @@ describe('Baileys media probes run only for a send that passed its own checks', 
       expect(sock.sendMessage).toHaveBeenCalledWith(
         '628123456789@s.whatsapp.net',
         expect.objectContaining({ audio: voiceNote.data, ptt: true, seconds: 7, waveform }),
+        uploads(),
       );
     });
 
@@ -184,7 +187,11 @@ describe('Baileys media probes run only for a send that passed its own checks', 
 
       expect(sock.onWhatsApp).not.toHaveBeenCalled();
       expect(describeVideo).toHaveBeenCalledTimes(1);
-      expect(sock.sendMessage).toHaveBeenCalledWith('120363001@g.us', expect.objectContaining({ video: video.data }));
+      expect(sock.sendMessage).toHaveBeenCalledWith(
+        '120363001@g.us',
+        expect.objectContaining({ video: video.data }),
+        uploads(),
+      );
     });
 
     it('sends nothing, and answers 409, when the socket is replaced while the thumbnail is made', async () => {
@@ -291,6 +298,7 @@ describe('Baileys media probes run only for a send that passed its own checks', 
       expect(sock.sendMessage).toHaveBeenCalledWith(
         '120363001@g.us',
         expect.objectContaining({ text: 'see https://example.com', linkPreview: null }),
+        uploads(),
       );
     });
   });

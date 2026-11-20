@@ -11,7 +11,10 @@ import { LIDMappingStore } from '@whiskeysockets/baileys/lib/Signal/lid-mapping.
 const require = createRequire(import.meta.url);
 const { BaileysMessaging } = require('../../dist/engine/adapters/baileys-messaging.js');
 const { BaileysSessionStore } = require('../../dist/engine/adapters/baileys-session-store.js');
-const { EngineNotSentError } = require('../../dist/common/errors/engine-not-sent.error.js');
+const { EngineNotSentError, provesNothingSent } = require('../../dist/common/errors/engine-not-sent.error.js');
+const { markEngineSendFailure } = require('../../dist/common/errors/engine-send-failure.js');
+const { sendFailureProvesNothingSent } = require('../../dist/modules/message/idempotency/run-idempotent-send.js');
+const { countsTowardSendBreaker, sentNothing } = require('../../dist/modules/message/send-pacing.service.js');
 const { EngineNotReadyError } = require('../../dist/common/errors/engine-not-ready.error.js');
 const { BaileysLifecycle, createProxyAgent } = require('../../dist/engine/adapters/baileys-lifecycle.js');
 const sharp = require('sharp');
@@ -475,5 +478,90 @@ test('a direct session leaves a stalled upload to the idle timeout of the agent 
   await messaging.sendImageMessage(PN.replace('@s.whatsapp.net', '@c.us'), { data: image, mimetype: 'image/jpeg' });
 
   assert.deepEqual(timeouts, [undefined]);
-  assert.equal(sock.sendMessage.mock.calls[1].arguments.length, 2);
+  assert.equal(sock.sendMessage.mock.calls[1].arguments[2].mediaUploadTimeoutMs, undefined);
+});
+
+// A TCP port that nothing listens on: the OS picks one and the server lets it go, so a connection is refused at once.
+async function closedPort() {
+  const server = net.createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  await new Promise(resolve => server.close(resolve));
+  return port;
+}
+
+// The library's own uploader, aimed at a media host that refuses the connection.
+async function refusingUploader() {
+  const port = await closedPort();
+  return lib.getWAUploadToServer({ customUploadHosts: [], fetchAgent: undefined, logger: silent, options: {} }, () =>
+    Promise.resolve({
+      hosts: [{ hostname: `127.0.0.1:${port}`, maxContentLengthBytes: 1e9 }],
+      auth: 'a',
+      ttl: 60,
+      fetchDate: new Date(),
+    }),
+  );
+}
+
+// What the library's sendMessage does: build the message, which uploads its media, and relay it only after that.
+function relayingAfterUpload(t, sock, relayed = []) {
+  sock.sendMessage = t.mock.fn(async (jid, content, options) => {
+    const message = await lib.generateWAMessage(jid, content, {
+      logger: silent,
+      userJid: PN,
+      upload: sock.waUploadToServer,
+      ...options,
+    });
+    relayed.push(message);
+    return message;
+  });
+  return relayed;
+}
+
+test('a media send whose upload the media host refuses sent nothing', async t => {
+  const image = await previewImage();
+  const chat = PN.replace('@s.whatsapp.net', '@c.us');
+  for (const send of [
+    messaging => messaging.sendImageMessage(chat, { data: image, mimetype: 'image/jpeg' }),
+    messaging => messaging.sendDocumentMessage(chat, { data: image, mimetype: 'application/pdf', filename: 'a.pdf' }),
+  ]) {
+    const { messaging, sock } = build(t);
+    sock.waUploadToServer = await refusingUploader();
+    const relayed = relayingAfterUpload(t, sock);
+
+    const error = await send(messaging).then(
+      () => assert.fail('the send must fail'),
+      failure => failure,
+    );
+
+    assert.equal(error.message, 'Media upload failed on all hosts');
+    assert.deepEqual(relayed, [], 'the relay is never reached');
+    assert.equal(provesNothingSent(error), true);
+    assert.equal(sendFailureProvesNothingSent(markEngineSendFailure(error)), true);
+    assert.equal(sentNothing(error), true);
+    assert.equal(countsTowardSendBreaker(error), false);
+  }
+});
+
+test('an upload that succeeds is relayed with the media it uploaded, encrypted and with its thumbnail', async t => {
+  const image = await previewImage();
+  const { messaging, sock } = build(t);
+  const uploads = [];
+  sock.waUploadToServer = (filePath, options) => {
+    uploads.push(options);
+    return Promise.resolve({ mediaUrl: 'https://mmg.example/u', directPath: '/d/u' });
+  };
+  const relayed = relayingAfterUpload(t, sock);
+
+  await messaging.sendImageMessage(PN.replace('@s.whatsapp.net', '@c.us'), { data: image, mimetype: 'image/jpeg' });
+
+  assert.equal(uploads.length, 1);
+  assert.equal(uploads[0].mediaType, 'image');
+  assert.equal(uploads[0].timeoutMs, undefined);
+  assert.ok(uploads[0].fileEncSha256B64.length > 0);
+  const media = relayed[0].message.imageMessage;
+  assert.equal(media.url, 'https://mmg.example/u');
+  assert.equal(media.directPath, '/d/u');
+  assert.ok(media.mediaKey.length > 0 && media.fileEncSha256.length > 0 && media.fileSha256.length > 0);
+  assert.ok(media.jpegThumbnail.length > 0);
 });
