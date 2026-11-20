@@ -855,8 +855,9 @@ export class WwebjsGroups {
       if (isProtocolTimeout(error)) {
         throw new EngineTransportError('WhatsApp Web did not answer the group invite acceptance in time');
       }
-      // A reload cut the call: the same unknown outcome, and not a refused invite either.
-      if (isNavigationError(error)) {
+      // A reload cut the call: the same unknown outcome, and not a refused invite either. A navigation stamped
+      // during the call counts whatever the failure says, as for every other call that a reload lands on.
+      if (isNavigationError(error, navigationsSeen(this.host) !== since)) {
         throw new EngineTransportError('WhatsApp Web reloaded its page during the group invite acceptance');
       }
       this.host.logger.warn(`Failed to accept group invite: ${String(error)}`);

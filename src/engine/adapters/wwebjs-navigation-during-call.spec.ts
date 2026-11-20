@@ -10,6 +10,7 @@ import {
 } from './wwebjs-lifecycle';
 import {
   deleteGroupPictureInPage,
+  joinInviteInPage,
   readInviteInfoInPage,
   readInviteSenderInPage,
   revokeInviteInPage,
@@ -24,6 +25,7 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { hasUnknownOutcome } from '../../common/errors/engine-not-sent.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
+import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
 import { createLogger } from '../../common/services/logger.service';
 
@@ -482,6 +484,33 @@ describe('a call that a page navigation lands on', () => {
     pupPage.emit('framenavigated', { url: () => 'https://web.whatsapp.com/' });
 
     expect(lifecycle.stampedNavigations()).toBe(2);
+  });
+
+  // The join is a write whose repeat could duplicate, so a reload that cut it is the unknown outcome (503), and a
+  // failure whose text does not say reload must not become the 400 of a refused invite when a navigation was stamped.
+  it('answers a join cut by a reload as its unknown outcome, whatever the failure says', async () => {
+    const w = wire(true);
+    w.pupPage.evaluate.mockImplementation((fn: PageFunction) => {
+      if (fn !== joinInviteInPage) return Promise.resolve(false);
+      w.pupPage.emit('framenavigated', { url: () => 'https://web.whatsapp.com/' });
+      return Promise.reject(new Error('Evaluation failed: TypeError: Cannot read properties of null (reading gid)'));
+    });
+
+    const error = await w.adapter.joinGroupViaInviteCode('code').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(EngineTransportError);
+    expect((error as Error).message).toContain('reloaded its page during the group invite acceptance');
+  });
+
+  it('still answers a failed join with no navigation as the refused invite', async () => {
+    const w = wire(false);
+    w.pupPage.evaluate.mockImplementation((fn: PageFunction) =>
+      fn === joinInviteInPage
+        ? Promise.reject(new Error('Evaluation failed: TypeError: Cannot read properties of null (reading gid)'))
+        : Promise.resolve(false),
+    );
+
+    await expect(w.adapter.joinGroupViaInviteCode('code')).rejects.toBeInstanceOf(InvalidInviteCodeError);
   });
 });
 
