@@ -3,9 +3,9 @@ import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import type { WebhookService } from '../../../modules/webhook/webhook.service';
 import { WebhookResponseDto } from '../../../modules/webhook/dto/webhook.dto';
 import { listLimitSchema } from '../list-limit-schema';
-import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
+import { defineTool, sessionIdSchema, type AnyToolDescriptor } from '../tool-descriptor';
 
-const sessionId = z.string().min(1).describe('Session UUID (the session id, not the name)');
+const sessionId = sessionIdSchema;
 
 export function webhookTools(webhook: WebhookService): AnyToolDescriptor[] {
   return [

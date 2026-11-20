@@ -2,9 +2,9 @@ import { z } from 'zod';
 import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import type { LabelService } from '../../../modules/label/label.service';
 import { chatIdSchema } from '../chat-id-schema';
-import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
+import { defineTool, sessionIdSchema, type AnyToolDescriptor } from '../tool-descriptor';
 
-const sessionId = z.string().min(1).describe('Session UUID (the session id, not the name)');
+const sessionId = sessionIdSchema;
 const labelId = z.string().min(1).describe('Label id');
 const chatId = chatIdSchema.describe('Chat JID, e.g. 628123456789@c.us or <id>@g.us');
 

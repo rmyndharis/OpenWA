@@ -31,9 +31,9 @@ import {
 import { MessageDirection } from '../../../modules/message/entities/message.entity';
 import { MESSAGE_REFERENCE_MAX_LENGTH, MESSAGE_TYPE_MAX_LENGTH } from '../../../modules/message/message-window';
 import { chatIdSchema, chatJidSchema } from '../chat-id-schema';
-import { defineTool, refuseUnknownArguments, type AnyToolDescriptor } from '../tool-descriptor';
+import { defineTool, refuseUnknownArguments, sessionIdSchema, type AnyToolDescriptor } from '../tool-descriptor';
 
-const sessionId = z.string().min(1).describe('Session UUID (the session id, not the name)');
+const sessionId = sessionIdSchema;
 
 /**
  * Mirrors the REST `quotedMessageId` field so an agent can reply with media, a location, a contact

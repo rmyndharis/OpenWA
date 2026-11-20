@@ -32,6 +32,7 @@ import {
   GroupSubjectDto,
   ParticipantsDto,
 } from '../../../modules/group/dto/group.dto';
+import { MAX_SESSION_ID_LENGTH, SessionIdPipe } from '../../../modules/session/session-id.pipe';
 import { MarkChatReadDto } from '../../../modules/session/dto/mark-chat-read.dto';
 import { MarkChatUnreadDto } from '../../../modules/session/dto/mark-chat-unread.dto';
 import { SubscribePresenceDto } from '../../../modules/session/dto/presence.dto';
@@ -339,5 +340,61 @@ describe('MCP tool chat ids take the shape the REST bodies require', () => {
       expect({ chatId, toolAccepts }).toEqual({ chatId, toolAccepts: restAccepts });
       expect(restAccepts).toBe(WELL_FORMED.includes(chatId));
     }
+  });
+});
+
+/**
+ * The REST routes take a session id of letters, digits and hyphens, at most 128 characters (SessionIdPipe), and the
+ * tools call the services directly, so the pipe never runs. Left as any string, an id of a megabyte was echoed whole
+ * into the not-found answer and the log. Each tool that names a session accepts and refuses exactly the ids the
+ * pipe does, a restored id included (those are not UUIDs).
+ */
+describe('MCP tool session ids take the shape the REST routes require', () => {
+  const tools = allAgentTools({} as never);
+  const sessionFields = tools.flatMap(t => {
+    const shape = (t.inputSchema as unknown as z.ZodObject<Record<string, z.ZodType>>).shape;
+    return 'sessionId' in shape ? [[t.name, shape.sessionId] as const] : [];
+  });
+  const restAccepts = (id: string): boolean => {
+    try {
+      new SessionIdPipe().transform(id);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const ids = [
+    's1',
+    'sess-1',
+    '5b8f1c2e-1a2b-4c3d-8e9f-0a1b2c3d4e5f',
+    'a'.repeat(MAX_SESSION_ID_LENGTH),
+    'a'.repeat(MAX_SESSION_ID_LENGTH + 1),
+    'x'.repeat(100_000),
+    'a b',
+    ' s1',
+    's1\n',
+    '../x',
+    'a/b',
+    'a.b',
+    'a_b',
+    'sess:1',
+    'caf\u00e9',
+  ];
+
+  it('finds the session id fields to check', () => {
+    const scoped = tools.filter(t => t.sessionScoped).map(t => t.name);
+    expect(sessionFields.map(([name]) => name)).toEqual(expect.arrayContaining(scoped));
+    expect(sessionFields.length).toBeGreaterThan(30);
+  });
+
+  it.each(sessionFields)('%s accepts and refuses the same ids as its REST route', (_name, schema) => {
+    for (const id of ids) {
+      expect({ id: id.slice(0, 24), length: id.length, toolAccepts: schema.safeParse(id).success }).toEqual({
+        id: id.slice(0, 24),
+        length: id.length,
+        toolAccepts: restAccepts(id),
+      });
+    }
+    expect(ids.filter(restAccepts)).toContain('a'.repeat(MAX_SESSION_ID_LENGTH));
   });
 });
