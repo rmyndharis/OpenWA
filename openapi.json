@@ -20388,8 +20388,9 @@
           },
           "secret": {
             "type": "string",
-            "description": "Secret key for HMAC signature. At least 16 characters, or an empty string to clear it. Never returned by any webhook route.",
-            "maxLength": 255
+            "description": "Secret key for HMAC signature. At least 16 characters, or an empty string or null to clear it. Never returned by any webhook route.",
+            "maxLength": 255,
+            "nullable": true
           },
           "headers": {
             "type": "object",

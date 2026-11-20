@@ -407,6 +407,16 @@ describe('WebhookService', () => {
       expect(repository.save).not.toHaveBeenCalled();
     });
 
+    it('clears the secret for a null as it does for an empty string', async () => {
+      const webhook = createMockWebhook();
+      (repository.findOne as jest.Mock).mockResolvedValue(webhook);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      await service.update('sess-1', 'wh-uuid-1', { secret: null as unknown as string });
+
+      expect(repository.update).toHaveBeenCalledWith({ id: 'wh-uuid-1', sessionId: 'sess-1' }, { secret: null });
+    });
+
     it('answers 404 instead of re-creating a webhook deleted while the update was in flight', async () => {
       const webhook = createMockWebhook();
       (repository.findOne as jest.Mock).mockResolvedValue(webhook);
