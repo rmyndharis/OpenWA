@@ -427,6 +427,27 @@ export function validateIngressManifest(manifest: PluginManifest, allowUnsignedI
     ) {
       throw new Error(`Plugin ${manifest.id}: route '${r.route}' signature.contentTemplate must be a string`);
     }
+    // The delivery path lower-cases these names to read the request headers, so one that is not a string throws on every
+    // delivery: after it was stored, for conversationId.header, which leaves a row no sweep can replay. Absent and null
+    // stay absent. A scheme that never reads the signature headers (standard-webhooks fixes its own, none verifies
+    // nothing) is not held to them.
+    const readsSignatureHeaders = signature.scheme === 'hmac-sha256' || signature.scheme === 'shared-secret';
+    const headerFields: Array<[field: string, value: unknown]> = [
+      ...(readsSignatureHeaders
+        ? ([
+            ['signature.header', signature.header],
+            ['signature.timestampHeader', signature.timestampHeader],
+          ] as Array<[string, unknown]>)
+        : []),
+      ['signature.dedupHeader', signature.dedupHeader],
+      ['dedupHeader', (r as { dedupHeader?: unknown }).dedupHeader],
+      ['conversationId.header', (r.conversationId as { header?: unknown } | null | undefined)?.header],
+    ];
+    for (const [field, value] of headerFields) {
+      if (value !== undefined && value !== null && typeof value !== 'string') {
+        throw new Error(`Plugin ${manifest.id}: route '${r.route}' ${field} must be a string`);
+      }
+    }
     if (r.signature.scheme === 'none' && !allowUnsignedIngress) {
       throw new Error(
         `Plugin ${manifest.id}: ingress route '${r.route}' declares signature.scheme 'none', which is an ` +
@@ -531,8 +552,9 @@ export function warnUnauthenticatedIngressRoutes(
  * route (which binds neither body nor time). The dedup header is not covered by the credential, so a
  * copy sent with a different header value is accepted as new. `dedupOn: 'body'` silences it.
  *
- * Warn-only (SDK v1 is additive within a major; a load-time rejection would break already-installed
- * manifests). Called from PluginLoaderService.loadPlugin.
+ * Warn-only: a route that binds no timestamp works, it is only easier to replay, and SDK v1 is additive within a major,
+ * so rejecting it at load would break installed manifests. A manifest of the wrong shape is another matter, and is
+ * refused by {@link validateIngressManifest}. Called from PluginLoaderService.loadPlugin.
  */
 export function warnUnsignedTimestampRoutes(
   manifest: PluginManifest,

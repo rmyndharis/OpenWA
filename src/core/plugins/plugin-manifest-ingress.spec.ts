@@ -242,13 +242,31 @@ describe('validateIngressManifest: a declaration the load-time warnings cannot r
     expect(() => validateIngressManifest(withTemplate(5, scheme))).not.toThrow();
   });
 
-  // Only text of the warnings reads these, so a non-string one has always loaded.
-  it('still accepts a route whose timestampHeader, header or dedupHeader is not a string', () => {
-    for (const field of ['timestampHeader', 'header', 'dedupHeader']) {
-      const m = manifestWithRoute({ signature: { scheme: 'hmac-sha256', header: 'X-Sig', [field]: 5 } });
-      expect(() => validateIngressManifest(m)).not.toThrow();
-      expect(() => warnUnsignedTimestampRoutes(m, { warn: jest.fn() })).not.toThrow();
-      expect(() => warnUnauthenticatedIngressRoutes(m, { warn: jest.fn() })).not.toThrow();
+  // The delivery path lower-cases these names to read the request headers, so a non-string one fails every delivery with
+  // a TypeError: for conversationId.header only after the delivery was stored, which leaves a row no sweep can replay.
+  it.each([
+    ['signature.header', { signature: { scheme: 'hmac-sha256', header: 5 } }],
+    ['signature.header', { signature: { scheme: 'shared-secret', header: 5 } }],
+    ['signature.timestampHeader', { signature: { scheme: 'hmac-sha256', header: 'X-Sig', timestampHeader: 5 } }],
+    ['signature.dedupHeader', { signature: { scheme: 'hmac-sha256', header: 'X-Sig', dedupHeader: 5 } }],
+    ['dedupHeader', { dedupHeader: ['X-Delivery'] }],
+    ['conversationId.header', { conversationId: { header: 5 } }],
+  ])('refuses a route whose %s is not a string, naming the route and the field', (field, overrides) => {
+    const base = { signature: { scheme: 'hmac-sha256', header: 'X-Sig' } };
+    expect(() => validateIngressManifest(manifestWithRoute({ ...base, ...overrides }))).toThrow(
+      `Plugin p: route 'r' ${field} must be a string`,
+    );
+  });
+
+  it('accepts string and absent header names, and does not hold a scheme to the headers it never reads', () => {
+    const named = { signature: { scheme: 'hmac-sha256', header: 'X-Sig', timestampHeader: 'X-Ts', dedupHeader: null } };
+    for (const overrides of [
+      named,
+      { ...named, dedupHeader: 'X-Delivery', conversationId: { header: 'X-Conversation' } },
+      { signature: { scheme: 'standard-webhooks', header: 5, timestampHeader: 5, dedupHeader: 'webhook-id' } },
+      { signature: { scheme: 'none', header: 5 } },
+    ]) {
+      expect(() => validateIngressManifest(manifestWithRoute(overrides), true)).not.toThrow();
     }
   });
 
