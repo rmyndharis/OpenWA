@@ -321,6 +321,14 @@ export async function resolveMediaBuffer(
 const CONNECTION_CLOSED = 428;
 
 /**
+ * What a send answers 409 when its socket was replaced or stopped while the message was being written. The frame may
+ * already be on the wire, so unlike the refusal of a send that sent nothing, it does not say to send it again.
+ */
+export const CONNECTION_LOST_DURING_SEND_MESSAGE =
+  'The WhatsApp connection was replaced or stopped while the message was being sent, and it may or may not have ' +
+  'been sent. Check the chat before sending it again.';
+
+/**
  * Give a WhatsApp throttle or timeout answer (WA code 429 or 408) its retryable 503 instead of letting
  * the raw Boom surface as a 500. `sendMessage` awaits several IQs before it relays the message (group
  * roster, devices, sessions) and nothing after the relay awaits a result, so a numeric code here is a
@@ -1177,7 +1185,8 @@ export class BaileysMessaging {
     try {
       sent = sendOptions ? await sock.sendMessage(jid, message, sendOptions) : await sock.sendMessage(jid, message);
     } catch (error) {
-      if (this.host.getSocketOrNull() !== sock) throw markOutcomeUnknown(new EngineNotReadyError());
+      if (this.host.getSocketOrNull() !== sock)
+        throw markOutcomeUnknown(new EngineNotReadyError(CONNECTION_LOST_DURING_SEND_MESSAGE));
       throw mapSendRefusal(error);
     }
     // Mutations are announced by their library echo; no local callback replaces it.

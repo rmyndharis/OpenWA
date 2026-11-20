@@ -17,7 +17,11 @@
 export const ENGINE_NOT_READY_409 =
   'The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, ' +
   'reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and ' +
-  'retry. A session that was never started answers `400` instead, and the session lifecycle routes ' +
+  'retry. A send whose first attempt had already run when the session left `ready` (or WhatsApp Web ' +
+  'reloaded its page) is the exception: it answers a `409` with no `code` that says the message may or ' +
+  'may not have been sent, so check the chat before sending it again (a retry with the same ' +
+  '`Idempotency-Key` answers `IDEMPOTENCY_OUTCOME_UNKNOWN`). A session that was never started answers ' +
+  '`400` instead, and the session lifecycle routes ' +
   'answer `409` for a conflicting state rather than this. One window answers this while the session ' +
   'still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects ' +
   'into it, and until it has the answer is a `409` naming the reload, with `code` ' +

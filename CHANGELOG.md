@@ -132,9 +132,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - whatsapp-web.js: a session promoted to `ready` after its `ready` event was missed no longer answers the page reload `409` for up to a minute when WhatsApp Web had navigated while it authenticated; the promotion closes the window the probe has just found the helpers through, unless another navigation landed meanwhile (#2139).
 - Webhooks: a recovery pass that does not fill its batch starts again at the oldest stale delivery, so one whose queue job was lost is replayed while newer stale deliveries keep arriving, where it waited for that backlog to clear.
 - MCP: a tool error carries `retryAfterSeconds` beside its `code` when the REST answer has one (`ENGINE_PAGE_RELOADING`, `SEND_PACING_LIMITED`), where only the code came through.
+- Baileys: a send whose connection was replaced or stopped while the message was being written answers a `409` that says it may or may not have been sent, where it said the session was not connected.
 
 ### Documentation
 
+- Say in the API reference and the OpenAPI text of the routes that reach an engine that a send whose first attempt had already run answers a `409` with no `code`, which says the message may or may not have been sent, where they called every such `409` a refusal before WhatsApp that is safe to retry.
 - Say in the `limit` description of the MCP tools that answer a bare list (`SessionFindAll`, `SessionGetChats`, `ContactFindAll`, `GroupFindAll`, `WebhooksList`) that a call returns at most 1000 rows, also when `limit` is omitted, so a full page may not be the whole list.
 - Correct the 0.27.0 rollback hazard in the migration guide: run `migration:revert:prod` until `migration:show:prod` lists `AddChatStateDeletedAt1791700000000` as pending; it said once, which since 0.28.0 only drops the status media index.
 - Say in the docs that `INGRESS_DISPATCH_TIMEOUT_MS`, `SANDBOX_HOOK_TIMEOUT_MS` and `SANDBOX_SEARCH_TIMEOUT_MS` are fixed budgets and not settings, and give the ingress `202` text in `openapi.json` the 5 s figure in place of the name.

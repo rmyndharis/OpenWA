@@ -266,6 +266,8 @@ describe('a keyed Baileys send refused with the not-ready 409', () => {
     const error = await failure();
 
     expect((error as HttpException).getStatus()).toBe(409);
+    // The answer says the message may have left, which the plain not-ready text does not.
+    expect((error as HttpException).message).toMatch(/may or may not have been sent/);
     expect(sock.sendMessage).toHaveBeenCalledTimes(1);
     expect(await keyState()).toBe('failed');
     current = sock;
