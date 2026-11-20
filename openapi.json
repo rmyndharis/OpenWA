@@ -5661,7 +5661,7 @@
             }
           },
           "400": {
-            "description": "Baileys rejects a phone number reported as unregistered. The request was rejected before anything was sent. Among the causes: the recipient could not be addressed — WhatsApp reports no deliverable id for that `chatId`, which is how it says the number is not on WhatsApp — as well as body validation and a session that is not active.",
+            "description": "Baileys rejects a phone number reported as unregistered. The request was rejected before anything was sent. Among the causes: the recipient could not be addressed — WhatsApp reports no deliverable id for that `chatId`, which is how it says the number is not on WhatsApp — as well as body validation and a session that is not active. On whatsapp-web.js, also a video that ffmpeg refused (its reason is included): nothing was sent.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5741,7 +5741,7 @@
             }
           },
           "503": {
-            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`).",
+            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing was sent, and a keyed send frees its `Idempotency-Key`). On whatsapp-web.js, also when the ffmpeg of the host is missing or cannot run the video conversion: nothing was sent.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10096,6 +10096,16 @@
           },
           "409": {
             "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A send whose first attempt had already run when the session left `ready` (or WhatsApp Web reloaded its page) is the exception: it answers a `409` with no `code` that says the message may or may not have been sent, so check the chat before sending it again (a retry with the same `Idempotency-Key` answers `IDEMPOTENCY_OUTCOME_UNKNOWN`). A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and until it has the answer is a `409` naming the reload, with `code` `ENGINE_PAGE_RELOADING` and `retryAfterSeconds`. That takes seconds on most reloads and can take a few minutes, and no event marks its end: ask again at that interval.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to preview an invite with. Nothing was asked of WhatsApp: the invite code is not judged.",
             "content": {
               "application/json": {
                 "schema": {

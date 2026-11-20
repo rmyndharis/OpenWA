@@ -76,6 +76,13 @@ const CHANNEL_OR_BROADCAST = 'a channel (`<id>@newsletter`) or a status or broad
 const QUOTED_SEND_501 = `whatsapp-web.js also refuses a send with \`quotedMessageId\` to ${CHANNEL_OR_BROADCAST}; nothing is sent.`;
 const wwebjsRefuses501 = (what: string): string => `whatsapp-web.js cannot send ${what}; nothing is sent.`;
 
+// whatsapp-web.js converts a video sticker with the ffmpeg of the host before it calls the page, so a failed conversion
+// sends nothing and never counts toward the send breaker.
+const WWJS_STICKER_CONVERSION_400 =
+  'On whatsapp-web.js, also a video that ffmpeg refused (its reason is included): nothing was sent.';
+const WWJS_STICKER_CONVERSION_503 =
+  'On whatsapp-web.js, also when the ffmpeg of the host is missing or cannot run the video conversion: nothing was sent.';
+
 @ApiTags('messages')
 @Controller('sessions/:sessionId/messages')
 export class MessageController {
@@ -426,13 +433,16 @@ export class MessageController {
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
-  @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
+  @ApiResponse({ status: 400, description: `${RECIPIENT_UNREACHABLE_400} ${WWJS_STICKER_CONVERSION_400}` })
   @ApiResponse({
     status: 501,
     description: `${CHANNEL_MEDIA_501} ${wwebjsRefuses501('a sticker to a status or broadcast list (`@broadcast`) either')}`,
   })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
-  @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${SEND_503}` })
+  @ApiResponse({
+    status: 503,
+    description: `${MEDIA_URL_PROXY_503} ${SEND_503} ${WWJS_STICKER_CONVERSION_503}`,
+  })
   async sendSticker(
     @Param('sessionId') sessionId: string,
     @Body() dto: SendMediaMessageDto,
