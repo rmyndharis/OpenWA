@@ -119,7 +119,8 @@ function scriptValues(cwd: string, key: string, values: string[], locale = UNSET
 function mismatches(cwd: string, key: string, values: string[], locale = UNSET): string[] {
   const script = scriptValues(cwd, key, values, locale);
   return values.flatMap((value, i) => {
-    const app = appValue(cwd, key, value) ?? FALLBACK;
+    // An empty value is the key's default: for the app (PLUGINS_DIR || default) and for a blank line of a file alike.
+    const app = appValue(cwd, key, value) || FALLBACK;
     return script[i] === app
       ? []
       : [`${JSON.stringify(value)}: app ${JSON.stringify(app)}, script ${JSON.stringify(script[i])}`];
@@ -172,11 +173,29 @@ describe('scripts/lib-env.sh against the app for a blank value in the environmen
     const cleared = BLANK_SHADOWED_ENV_KEYS.includes(key);
     // What the app does with the blank is the premise of every comparison: the file value when it clears the key.
     expect(appValue(dir, key, ' ')).toBe(cleared ? OVERLAY : ' ');
-    // An empty PLUGINS_DIR stays empty in the app, which then takes its default; the scripts read the files instead.
-    const values = [...BLANKS, ...WRITTEN, ...(cleared ? [''] : [])];
+    // An empty value is in the list for every key: the app clears it for a compose-forwarded key, so the files supply
+    // it, and keeps it for PLUGINS_DIR and DATABASE_URL, which then take their defaults, as the scripts must.
+    const values = [...BLANKS, ...WRITTEN, ''];
 
     expect(mismatches(dir, key, values)).toEqual([]);
   });
+
+  it.each(['PLUGINS_DIR', 'DATABASE_URL'])(
+    '%s exported empty is set, and one absent from the environment reads the files',
+    key => {
+      // Only printenv's status tells the two apart; the value is empty in both.
+      const resolve = (env: Record<string, string>): string =>
+        spawnSync('bash', ['-c', `. "${libEnv}"; DATA_DIR=./data; openwa_resolve ${key} ${FALLBACK}`], {
+          cwd: dir,
+          env: { PATH: PATH_ENV, ...env },
+          encoding: 'utf8',
+          timeout: 60_000,
+        }).stdout;
+
+      expect(resolve({ [key]: '' })).toBe(FALLBACK);
+      expect(resolve({})).toBe(OVERLAY);
+    },
+  );
 
   it.each(['DATABASE_NAME', 'PLUGINS_DIR'].flatMap(key => LOCALES.map(locale => [key, locale] as const)))(
     '%s reads every code point trim() takes, and the ones beside them, as the app does (LC_ALL %s)',
@@ -216,10 +235,11 @@ describe('scripts/lib-env.sh against the app for a blank value in the environmen
     }
 
     // An exported empty value is what a compose forward renders, and the only one a variable of the script's own that
-    // carries the key's name can hide behind; a value of blanks is the one the app drops as well.
+    // carries the key's name can hide behind; a value of blanks is the one the app drops as well. PLUGINS_DIR is not
+    // cleared: exported empty it is set, so the archive's value is not the one the app reads (see below).
     it.each(
-      ARCHIVE_KEYS.flatMap(key =>
-        ['', ...(BLANK_SHADOWED_ENV_KEYS.includes(key) ? [' '] : [])].map(value => [key, value] as const),
+      ARCHIVE_KEYS.filter(key => BLANK_SHADOWED_ENV_KEYS.includes(key)).flatMap(key =>
+        ['', ' '].map(value => [key, value] as const),
       ),
     )('refuses %s outside the data directory with the key exported as %j', (key, value) => {
       const outside = path.join(dir, 'outside');
@@ -240,6 +260,25 @@ describe('scripts/lib-env.sh against the app for a blank value in the environmen
       expect(run.status).toBe(1);
       expect(fs.readdirSync(outside)).toEqual([]);
       expect(fs.readdirSync(target)).toEqual([]);
+    });
+
+    it('restores the plugin packages into the default directory when PLUGINS_DIR is exported empty', () => {
+      const outside = path.join(dir, 'outside');
+      const target = path.join(dir, 'target');
+      fs.mkdirSync(outside);
+      fs.mkdirSync(target);
+
+      const run = spawnSync('bash', [restore, archiveNaming('PLUGINS_DIR', outside)], {
+        cwd: target,
+        env: { PATH: PATH_ENV, PLUGINS_DIR: '' },
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+
+      // The app keeps the empty value and takes <data dir>/plugins, not the directory the archive's file names.
+      expect(run.status).toBe(0);
+      expect(fs.readFileSync(path.join(target, 'data', 'plugins', 'file'), 'utf8')).toBe('x');
+      expect(fs.readdirSync(outside)).toEqual([]);
     });
   });
 
@@ -344,4 +383,40 @@ describe('scripts/lib-env.sh against the app for a blank value in the environmen
       expect(run.status === 0 ? members : ['./database.sql']).toContain('./database.sql');
     },
   );
+
+  it('backup.sh archives the default plugin directory when PLUGINS_DIR is exported empty and ./.env names another', async () => {
+    const install = path.join(dir, 'install');
+    for (const [folder, id] of [
+      ['data/plugins', 'default-plugin'],
+      ['custom', 'custom-plugin'],
+    ]) {
+      fs.mkdirSync(path.join(install, folder, id), { recursive: true });
+      fs.writeFileSync(path.join(install, folder, id, 'manifest.json'), '{}');
+    }
+    for (const name of ['main', 'openwa']) {
+      const db = new DataSource({ type: 'better-sqlite3', database: path.join(install, 'data', `${name}.sqlite`) });
+      await db.initialize();
+      await db.query('CREATE TABLE t (x TEXT)');
+      await db.destroy();
+    }
+    fs.writeFileSync(path.join(install, '.env'), 'PLUGINS_DIR=./custom\n');
+    const members = (env: Record<string, string>, out: string): string[] => {
+      const run = spawnSync('bash', [backup], {
+        cwd: install,
+        env: { PATH: PATH_ENV, BACKUP_DIR: path.join(dir, out), ...env },
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+      expect(run.status).toBe(0);
+      const [archive] = fs.readdirSync(path.join(dir, out)).filter(name => name.endsWith('.tar.gz'));
+      return spawnSync('tar', ['-tzf', path.join(dir, out, archive)], { encoding: 'utf8' }).stdout.split('\n');
+    };
+
+    // Not exported at all, the key is the file's; the control that makes the empty export's result mean something.
+    expect(members({}, 'unset')).toContain('./plugin-packages/custom-plugin/manifest.json');
+    // Exported empty, the app keeps the empty value and takes the default.
+    const empty = members({ PLUGINS_DIR: '' }, 'empty');
+    expect(empty).toContain('./plugin-packages/default-plugin/manifest.json');
+    expect(empty).not.toContain('./plugin-packages/custom-plugin/manifest.json');
+  });
 });
