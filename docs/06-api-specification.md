@@ -6477,7 +6477,7 @@ Install a plugin from an uploaded `.zip` package.
 
 Reinstalling over a plugin whose code went missing is supported and is the recovery the boot warning
 prescribes: its `ctx.storage` directory, config, session activations and enabled-on-boot decision are
-all kept. A directory the gateway did not install is still refused.
+all kept. A directory the gateway did not install is still refused. A reinstall that fails leaves that directory as it found it: files the install created are removed, and a stored file that one of its entries replaced is put back.
 
 **Errors:** `400` no file / invalid package / install failed · `401` · `403` · `409` plugin already loaded, or a directory under that id the gateway did not install · `413` package larger than 5 MB
 
