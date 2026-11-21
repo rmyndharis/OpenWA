@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-11-21
+
 ### Added
 
 - `GET /api/sessions/{sessionId}/chats` lists `phone` for a Baileys privacy-id chat the session can map, and the JavaScript, Python, Go and Java SDK types carry it (#2134). Thanks @juanbracamonte.
