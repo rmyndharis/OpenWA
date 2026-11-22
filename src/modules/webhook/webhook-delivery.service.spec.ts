@@ -3963,4 +3963,37 @@ describe('WebhookDeliveryService', () => {
       mockFetch.mockReset();
     });
   });
+
+  describe('failingWebhooks cap and forgetWebhook', () => {
+    it('caps failingWebhooks at 10_000 with LRU recency refresh and removes entries via forgetWebhook()', async () => {
+      const internal = service as unknown as { failingWebhooks: Set<string> };
+      for (let i = 0; i < 10_000; i++) {
+        internal.failingWebhooks.add(`wh-${i}`);
+      }
+      expect(internal.failingWebhooks.size).toBe(10_000);
+
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+      const mockFetch = undiciFetch as jest.Mock;
+      mockFetch.mockReset();
+      mockFetch.mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' });
+
+      // Repeat failure on wh-0 refreshes its recency so wh-1 becomes oldest.
+      const wh0 = createMockWebhook({ id: 'wh-0', retryCount: 1 });
+      await service.redeliver(wh0, 'sess-1', 'message.received', 'k0', {});
+
+      // New failing webhook wh-10000 evicts wh-1 while keeping wh-0 and wh-10000.
+      const whNew = createMockWebhook({ id: 'wh-10000', retryCount: 1 });
+      await service.redeliver(whNew, 'sess-1', 'message.received', 'knew', {});
+
+      expect(internal.failingWebhooks.size).toBe(10_000);
+      expect(internal.failingWebhooks.has('wh-0')).toBe(true);
+      expect(internal.failingWebhooks.has('wh-1')).toBe(false);
+      expect(internal.failingWebhooks.has('wh-10000')).toBe(true);
+
+      // forgetWebhook immediately drops a deleted webhook from failingWebhooks.
+      service.forgetWebhook('wh-10000');
+      expect(internal.failingWebhooks.has('wh-10000')).toBe(false);
+      mockFetch.mockReset();
+    });
+  });
 });

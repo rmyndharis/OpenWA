@@ -14,6 +14,7 @@ import { Template } from '../template/entities/template.entity';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 import { ChatState } from '../../engine/adapters/baileys-chat-state.entity';
 import { StatusUpdate } from '../status-store/entities/status-update.entity';
+import { AutomationRule } from '../automation/entities/automation-rule.entity';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { HookManager } from '../../core/hooks';
@@ -60,6 +61,7 @@ const entities = [
   BaileysStoredMessage,
   ChatState,
   StatusUpdate,
+  AutomationRule,
 ];
 
 describe('Session content lifetime', () => {
@@ -952,4 +954,41 @@ describe('Session content lifetime', () => {
       },
     );
   });
+
+  (process.env.DATABASE_TYPE === 'postgres' ? it.skip : it)(
+    'explicitly deletes automation_rules rows for the deleted session even when SQLite foreign_keys is OFF',
+    async () => {
+      const doomed = await createSession();
+      const kept = await db.getRepository(Session).save({ name: 'kept-automation', config: {} });
+      const ruleRepo = db.getRepository(AutomationRule);
+      await ruleRepo.save([
+        ruleRepo.create({
+          sessionId: doomed.id,
+          name: 'doomed-rule',
+          enabled: true,
+          conditions: { conditions: [] },
+          replyText: 'bye',
+          cooldownSeconds: 60,
+        }),
+        ruleRepo.create({
+          sessionId: kept.id,
+          name: 'kept-rule',
+          enabled: true,
+          conditions: { conditions: [] },
+          replyText: 'stay',
+          cooldownSeconds: 60,
+        }),
+      ]);
+
+      await db.query('PRAGMA foreign_keys = OFF');
+      try {
+        await controls.delete(doomed.id);
+      } finally {
+        await db.query('PRAGMA foreign_keys = ON');
+      }
+
+      expect(await ruleRepo.countBy({ sessionId: doomed.id })).toBe(0);
+      expect(await ruleRepo.countBy({ sessionId: kept.id })).toBe(1);
+    },
+  );
 });

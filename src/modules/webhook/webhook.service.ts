@@ -340,6 +340,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     const webhook = await this.findOne(sessionId, id);
     await this.webhookRepository.remove(webhook);
     this.delivery.invalidateOptInSubscriptions(sessionId);
+    this.delivery.forgetWebhook(id);
   }
 
   async test(sessionId: string, webhookId: string): Promise<{ success: boolean; statusCode?: number; error?: string }> {

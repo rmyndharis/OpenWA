@@ -844,10 +844,10 @@ export class InfraDataService {
           await queryRunner.query('SET LOCAL statement_timeout = 0');
           await queryRunner.query(`SET LOCAL lock_timeout = ${lockWaitMs}`);
         }
-        // Clear existing data (in correct order due to foreign keys). templates and
-        // baileys_stored_messages FK sessions ON DELETE CASCADE, so the sessions DELETE would clear
-        // them too; clearing them explicitly first keeps the order correct on engines where the
-        // cascade is not enforced. Tolerate a genuinely-absent table (isMissingTableError) but let any
+        // Clear existing data (in correct order due to foreign keys). templates,
+        // baileys_stored_messages, and automation_rules FK sessions ON DELETE CASCADE, so the
+        // sessions DELETE would clear them too; clearing them explicitly first keeps the order
+        // correct on engines where the cascade is not enforced. Tolerate a genuinely-absent table (isMissingTableError) but let any
         // OTHER failure (lock, I/O, aborted tx) propagate to the transaction rollback below — a blind
         // `.catch(() => {})` here could otherwise silently commit a MERGED (not replaced) restore on
         // SQLite, violating the endpoint's "replaces existing data" contract.
@@ -881,6 +881,7 @@ export class InfraDataService {
         await clearTable('message_batches');
         await clearTable('templates');
         await clearTable('baileys_stored_messages');
+        await clearTable('automation_rules');
         // lid_mappings is not a FK to sessions, so the sessions DELETE below won't clear it; clear it
         // explicitly so a restore replaces the cache rather than colliding on existing lid PKs.
         await clearTable('lid_mappings');

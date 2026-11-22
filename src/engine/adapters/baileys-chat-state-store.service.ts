@@ -226,6 +226,9 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
       this.logger.log(
         `Loaded ${rows.length} chat states into cache${this.maxEntries ? ` (cap ${this.maxEntries})` : ''}`,
       );
+      for (const [sessionId, writes] of this.sessionWrites) {
+        if (writes.pending.size === 0) this.sessionWrites.delete(sessionId);
+      }
     } catch (err) {
       this.logger.warn(`Could not preload chat states: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -332,7 +335,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
 
   /** True once {@link clearSession} ran after the write was queued: it must neither index nor persist. */
   private cleared(sessionId: string, generation: number): boolean {
-    return this.writesOf(sessionId).generation !== generation;
+    return this.sessionWrites.get(sessionId)?.generation !== generation;
   }
 
   private bumpWriteSeq(sessionId: string): void {
@@ -562,6 +565,9 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     writes.generation++;
     await Promise.allSettled([...writes.pending]);
     await this.repo.delete({ sessionId });
+    if (this.sessionWrites.get(sessionId) === writes && writes.pending.size === 0) {
+      this.sessionWrites.delete(sessionId);
+    }
     // Evicted after the delete, so a read-through that raced it cannot leave a deleted row cached.
     const prefix = `${sessionId}${SEP}`;
     for (const k of [...this.states.keys()]) {
@@ -647,7 +653,16 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     }
     // Marked after the loop: indexing these rows can evict other sessions' keys, never this one's.
     // Only this session's writes can leave its keys out of the load, so another session's do not count.
-    if (this.loadWasWhole(rows.length, idle && writes.seq === seq && writes.pending.size === 0 && !skipped)) {
+    if (
+      this.loadWasWhole(
+        rows.length,
+        idle &&
+          this.sessionWrites.get(sessionId) === writes &&
+          writes.seq === seq &&
+          writes.pending.size === 0 &&
+          !skipped,
+      )
+    ) {
       this.completeSessions.add(sessionId);
     }
   }

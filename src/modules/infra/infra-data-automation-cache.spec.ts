@@ -189,4 +189,40 @@ describe('InfraDataService.importData automation rule cache reconciliation', () 
     expect(findSpy).toHaveBeenCalledTimes(1);
     expect(sends.map(s => s.text)).toEqual(['live-reply']);
   });
+
+  it('explicitly clears existing automation_rules rows during importData even when SQLite foreign_keys is OFF', async () => {
+    const existing = await automationRules.create('s-live', {
+      name: 'pre-existing',
+      replyText: 'stale-reply',
+      cooldownSeconds: 60,
+    });
+    const dump = await infraData.exportData();
+
+    // Add a second rule that is NOT in the archive, then disable FK cascades before importing.
+    const extra = await automationRules.create('s-live', {
+      name: 'extra-not-in-archive',
+      replyText: 'should-be-cleared',
+      cooldownSeconds: 60,
+    });
+
+    await ds.query('PRAGMA foreign_keys = OFF');
+    try {
+      const replacementTables: Partial<MigrationTables> = {
+        ...dump.tables,
+        automationRules: (dump.tables.automationRules ?? []).map(row =>
+          row.id === existing.id ? { ...row, replyText: 'restored-with-fk-off' } : row,
+        ),
+      };
+      const res = await infraData.importData({ tables: replacementTables });
+      expect(res.imported).toBe(true);
+    } finally {
+      await ds.query('PRAGMA foreign_keys = ON');
+    }
+
+    const rules = await ds.getRepository(AutomationRule).find();
+    expect(rules.map(r => ({ id: r.id, replyText: r.replyText }))).toEqual([
+      { id: existing.id, replyText: 'restored-with-fk-off' },
+    ]);
+    expect(rules.find(r => r.id === extra.id)).toBeUndefined();
+  });
 });

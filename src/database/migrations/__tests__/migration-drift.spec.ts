@@ -92,9 +92,8 @@ const tally = (statements: string[]): Map<string, number> =>
  * disappearing leaves the distinct-statement list identical. Counting catches that.
  */
 const expectDriftMatchesSnapshot = (actual: string[], known: string[]): void => {
-  // A snapshot that lost its contents would make any comparison vacuous, so require it to hold the
-  // drift we know is there before comparing against it.
-  expect(known.length).toBeGreaterThan(0);
+  // Confirm the snapshot entry loaded as an array; an empty array asserts zero drift for that connection.
+  expect(Array.isArray(known)).toBe(true);
   const actualCounts = tally(actual);
   const knownCounts = tally(known);
   const describe = (sql: string, from: number, to: number): string => `${from} -> ${to}  ${sql}`;

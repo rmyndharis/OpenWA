@@ -97,6 +97,9 @@ export { DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS };
  */
 const OPT_IN_SUBSCRIPTIONS_TTL_MS = 5000;
 
+/** Upper bound on in-memory degraded-receiver tracking so churned webhook ids cannot grow memory without bound. */
+export const FAILING_WEBHOOKS_MAX = 10_000;
+
 /**
  * The result of one delivery attempt. Reported, not thrown: every delivery failure below is already
  * handled in place, so a try/catch cannot tell a delivered event from a dead-lettered one. Two
@@ -705,6 +708,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    */
   invalidateOptInSubscriptions(sessionId: string): void {
     this.optInSubscriptions.delete(sessionId);
+  }
+
+  /**
+   * Drop degraded-receiver tracking for a deleted webhook so its id is not retained in memory.
+   */
+  forgetWebhook(webhookId: string): void {
+    this.failingWebhooks.delete(webhookId);
   }
 
   /**
@@ -1635,7 +1645,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         return true;
       } catch (error) {
         if (isAbortedBackoff(error, backoffSignal)) throw error;
-        this.failingWebhooks.add(webhook.id);
+        this.markFailingWebhook(webhook.id);
         this.logger.error(`Webhook delivery failed for ${webhook.id}`, String(error), {
           webhookId: webhook.id,
           attempt,
@@ -1672,6 +1682,16 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         if (recorded === null) throw new UnrecordedWebhookFailure(redactSsrfError(error));
         throw error;
       }
+    }
+  }
+
+  private markFailingWebhook(webhookId: string): void {
+    this.failingWebhooks.delete(webhookId);
+    this.failingWebhooks.add(webhookId);
+    while (this.failingWebhooks.size > FAILING_WEBHOOKS_MAX) {
+      const oldest = this.failingWebhooks.values().next().value;
+      if (oldest === undefined) break;
+      this.failingWebhooks.delete(oldest);
     }
   }
 }

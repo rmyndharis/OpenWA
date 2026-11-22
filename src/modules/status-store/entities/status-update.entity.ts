@@ -3,8 +3,8 @@ import { bigintToNumberTransformer } from '../../message/entities/message.entity
 import { NulFreeTransformer } from '../../../common/transformers/nul-free.transformer';
 
 @Entity('status_updates')
-@Index(['sessionId', 'contactJid'])
-@Index(['sessionId', 'waStatusId'], { unique: true })
+@Index('IDX_status_updates_sessionId_contactJid', ['sessionId', 'contactJid'])
+@Index('UQ_status_updates_sessionId_waStatusId', ['sessionId', 'waStatusId'], { unique: true })
 export class StatusUpdate {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -61,6 +61,6 @@ export class StatusUpdate {
   postedAt!: number; // epoch ms
 
   @Column({ type: 'bigint', transformer: bigintToNumberTransformer })
-  @Index()
+  @Index('IDX_status_updates_expiresAt')
   expiresAt!: number; // epoch ms
 }

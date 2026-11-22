@@ -10,7 +10,7 @@ import { Session } from '../../modules/session/entities/session.entity';
  * the migration path clean up stored messages when the parent session row is deleted.
  */
 @Entity('baileys_stored_messages')
-@Index(['sessionId', 'waMessageId'], { unique: true }) // lookup + dedup (send-return vs upsert echo)
+@Index('UQ_baileys_stored_messages_session_wamsg', ['sessionId', 'waMessageId'], { unique: true }) // lookup + dedup (send-return vs upsert echo)
 // Eviction ordering: the cap trim's cutoff lookup and range delete both walk (createdAt, id).
 @Index('IDX_baileys_stored_messages_session_created_id', ['sessionId', 'createdAt', 'id'])
 export class BaileysStoredMessage {
