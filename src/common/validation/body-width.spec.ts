@@ -78,6 +78,22 @@ describe('exceededBodyWidth', () => {
     expect(BODY_WIDTH_MESSAGES.object).toContain(String(MAX_BODY_OBJECT_KEYS));
     expect(BODY_WIDTH_MESSAGES.total).toContain(String(MAX_BODY_ENTRIES));
   });
+
+  it('supports overriding individual width limits', () => {
+    const customLimits = {
+      maxArrayLength: Infinity,
+      maxEntries: Infinity,
+      maxObjectKeys: MAX_BODY_OBJECT_KEYS,
+    };
+    const wideArray = { rows: array(MAX_BODY_ARRAY_LENGTH + 5) };
+    const wideObjectInsideWideArray = { rows: [object(MAX_BODY_OBJECT_KEYS + 1)] };
+
+    expect(exceededBodyWidth(wideArray, customLimits)).toBeUndefined();
+    expect(exceededBodyWidth(wideObjectInsideWideArray, customLimits)).toBe('object');
+    expect(exceededBodyWidth(array(4), { maxArrayLength: 3 })).toBe('array');
+    expect(exceededBodyWidth(object(4), { maxObjectKeys: 3 })).toBe('object');
+    expect(exceededBodyWidth({ a: [1, 2], b: [3, 4] }, { maxEntries: 5 })).toBe('total');
+  });
 });
 
 /**

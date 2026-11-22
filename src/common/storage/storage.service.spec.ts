@@ -535,11 +535,14 @@ describe('StorageService local store holding a symbolic link', () => {
     await expect(service.createExportStream()).rejects.toThrow(/symbolic link.*chat-media/);
   });
 
-  it('still serves the linked file and lets a sweep of the linked prefix list it', async () => {
-    expect((await service.getFile('chat-media/archived.bin')).toString()).toBe('archived');
-    const listed: string[] = [];
-    for await (const file of service.iterateFiles('chat-media/', { skipUnreadable: true })) listed.push(file);
-    expect(listed).toEqual(['chat-media/archived.bin']);
+  it('refuses reads and prefix walks through a symbolic link that escapes the storage root', async () => {
+    await expect(service.getFile('chat-media/archived.bin')).rejects.toThrow(/outside storage root/);
+    const collect = async (): Promise<string[]> => {
+      const listed: string[] = [];
+      for await (const file of service.iterateFiles('chat-media/', { skipUnreadable: true })) listed.push(file);
+      return listed;
+    };
+    await expect(collect()).rejects.toThrow(/outside storage root/);
   });
 });
 

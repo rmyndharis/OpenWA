@@ -32,6 +32,12 @@ export const MAX_BODY_ENTRIES = 250_000;
 
 export type BodyWidthLimit = 'array' | 'object' | 'total';
 
+export interface BodyWidthLimits {
+  maxArrayLength?: number;
+  maxObjectKeys?: number;
+  maxEntries?: number;
+}
+
 /** The 400 text, naming the limit that was exceeded. */
 export const BODY_WIDTH_MESSAGES: Record<BodyWidthLimit, string> = {
   array: `Request body must not hold an array of more than ${MAX_BODY_ARRAY_LENGTH} items`,
@@ -45,14 +51,17 @@ export const BODY_WIDTH_MESSAGES: Record<BodyWidthLimit, string> = {
  * about the cost of reading it. The walk recurses once per level, which the nesting bound that runs ahead of it holds
  * to 100.
  */
-export function exceededBodyWidth(value: unknown): BodyWidthLimit | undefined {
+export function exceededBodyWidth(value: unknown, limits: BodyWidthLimits = {}): BodyWidthLimit | undefined {
+  const maxArrayLength = limits.maxArrayLength ?? MAX_BODY_ARRAY_LENGTH;
+  const maxObjectKeys = limits.maxObjectKeys ?? MAX_BODY_OBJECT_KEYS;
+  const maxEntries = limits.maxEntries ?? MAX_BODY_ENTRIES;
   let entries = 0;
   const walk = (node: unknown): BodyWidthLimit | undefined => {
     if (typeof node !== 'object' || node === null) return undefined;
     if (Array.isArray(node)) {
-      if (node.length > MAX_BODY_ARRAY_LENGTH) return 'array';
+      if (node.length > maxArrayLength) return 'array';
       entries += node.length;
-      if (entries > MAX_BODY_ENTRIES) return 'total';
+      if (entries > maxEntries) return 'total';
       for (const child of node) {
         const exceeded = walk(child);
         if (exceeded) return exceeded;
@@ -60,9 +69,9 @@ export function exceededBodyWidth(value: unknown): BodyWidthLimit | undefined {
       return undefined;
     }
     const keys = Object.keys(node);
-    if (keys.length > MAX_BODY_OBJECT_KEYS) return 'object';
+    if (keys.length > maxObjectKeys) return 'object';
     entries += keys.length;
-    if (entries > MAX_BODY_ENTRIES) return 'total';
+    if (entries > maxEntries) return 'total';
     for (const key of keys) {
       const exceeded = walk((node as Record<string, unknown>)[key]);
       if (exceeded) return exceeded;
