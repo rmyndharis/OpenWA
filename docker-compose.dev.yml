@@ -300,6 +300,8 @@ services:
       - LOG_FORMAT=${LOG_FORMAT:-}
       - BASE_URL=${BASE_URL:-}
       - DASHBOARD_URL=${DASHBOARD_URL:-}
+      - DOCKER_HOST=${DOCKER_HOST:-}
+      - DOCKER_ALLOW_LOCAL_SOCKET=${DOCKER_ALLOW_LOCAL_SOCKET:-}
     volumes:
       - ./data:/app/data
     restart: unless-stopped

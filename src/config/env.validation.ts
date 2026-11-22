@@ -3,6 +3,7 @@ import { normalizeS3KeyPrefix } from '../common/storage/s3-key-prefix';
 import { namesBundledContainer } from '../modules/docker/bundled-host';
 import { resolveBodyLimit } from './bootstrap-security';
 import { parseBodyLimitBytes } from './inflight-body-budget';
+import { puppeteerArgsError } from './puppeteer-args';
 
 type EnvConfig = Record<string, unknown>;
 
@@ -735,6 +736,8 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'POSTGRES_BUILTIN',
     'REDIS_BUILTIN',
     'MINIO_BUILTIN',
+    // Explicit opt-in for connecting to the local Unix Docker socket (/var/run/docker.sock or unix://).
+    'DOCKER_ALLOW_LOCAL_SOCKET',
     // Perf/observability only, but same silent-typo class.
     'CACHE_ENABLED',
     'DATABASE_LOGGING',
@@ -805,6 +808,14 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     errors.push(
       `LOG_LEVEL must be one of ${LOG_LEVEL_VALUES.map(v => `"${v}"`).join(', ')} (got ${JSON.stringify(rawLogLevel)})`,
     );
+  }
+
+  // PUPPETEER_ARGS: restrict Chromium launch flags to the vetted allowlist (fail-closed) so
+  // command-execution, extension-loading, debugging, or proxy-bypass switches are refused at boot.
+  const rawPuppeteerArgs = config.PUPPETEER_ARGS;
+  if (typeof rawPuppeteerArgs === 'string' && rawPuppeteerArgs !== '') {
+    const argsErr = puppeteerArgsError(rawPuppeteerArgs);
+    if (argsErr) errors.push(argsErr);
   }
 
   if (errors.length > 0) {

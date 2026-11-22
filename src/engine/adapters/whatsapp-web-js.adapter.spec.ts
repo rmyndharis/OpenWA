@@ -543,6 +543,27 @@ describe('WhatsAppWebJsAdapter initialize() with an unusable stored proxy', () =
     expect(onError).toHaveBeenCalledWith(expect.stringMatching(reason));
     expect(clientInitSpy).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['--gpu-launcher=/bin/sh'],
+    ['--load-extension=/tmp/ext'],
+    ['--remote-debugging-port=9222'],
+    ['--user-data-dir=/tmp/profile'],
+    ['--disable-web-security'],
+  ])('refuses disallowed puppeteer.args entry %s at launch sink before starting Chromium', async badArg => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-bad-args',
+      sessionDataPath: './data/sessions',
+      puppeteer: { args: ['--no-sandbox', badArg] },
+    });
+    const onError = jest.fn();
+
+    await expect(adapter.initialize({ onError })).rejects.toThrow(/PUPPETEER_ARGS/);
+
+    expect(adapter.getStatus()).toBe(EngineStatus.FAILED);
+    expect(onError).toHaveBeenCalledWith(expect.stringMatching(/PUPPETEER_ARGS/));
+    expect(clientInitSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('buildProxyLaunchConfig (#628 — proxy credentials must not go into --proxy-server)', () => {

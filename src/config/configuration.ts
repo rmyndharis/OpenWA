@@ -8,6 +8,7 @@ import { DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS, MAX_TIMER_MS } from '../common/servi
 import { parseTrustedProxies } from '../common/utils/ip';
 import { positiveIntFromEnv } from '../common/utils/env-int';
 import { resolveSqliteJournalMode } from '../database/sqlite-pragmas';
+import { parsePuppeteerArgs } from './puppeteer-args';
 
 /**
  * Root of the host's persistent state. Relative on purpose: the image sets WORKDIR /app and mounts
@@ -235,12 +236,10 @@ export default () => ({
       // a single glued token like "--no-sandbox --disable-gpu" silently neuters --no-sandbox.
       // A comma only splits before the next flag, since flag values carry commas of their own
       // (--disable-features=A,B, --window-size=1280,720).
-      args: withPinnedBrowserLocale(
-        (process.env.PUPPETEER_ARGS || DEFAULT_PUPPETEER_ARGS.join(','))
-          .split(/\s+|,+(?=-)/)
-          .map(arg => arg.replace(/^,+|,+$/g, ''))
-          .filter(Boolean),
-      ),
+      args: (() => {
+        const parsed = parsePuppeteerArgs(process.env.PUPPETEER_ARGS ?? '');
+        return withPinnedBrowserLocale(parsed.length > 0 ? parsed : DEFAULT_PUPPETEER_ARGS);
+      })(),
       // Optional path to a system Chromium/Chrome binary. When unset, whatsapp-web.js
       // uses Puppeteer's bundled Chromium. Required on hosts where the bundled binary
       // is missing or incompatible (Alpine, ARM, custom base images).

@@ -252,6 +252,8 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'LOG_FORMAT',
   'BASE_URL',
   'DASHBOARD_URL',
+  'DOCKER_HOST',
+  'DOCKER_ALLOW_LOCAL_SOCKET',
 ];
 
 export function clearBlankEnv(env: NodeJS.ProcessEnv, keys: string[]): void {

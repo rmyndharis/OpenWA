@@ -12,6 +12,7 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { EnginePageError } from '../../common/errors/engine-page.error';
 import { type createLogger } from '../../common/services/logger.service';
 import { DEFAULT_PUPPETEER_ARGS, MAX_TIMER_MS, withPinnedBrowserLocale } from '../../config/configuration';
+import { validatePuppeteerArg } from '../../config/puppeteer-args';
 import { resolveWebVersionPin } from '../wa-web-version';
 import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import { killOrphanedChromiumProcesses, removeStaleSingletonFiles } from './chromium-profile-hygiene';
@@ -399,13 +400,27 @@ export class WwebjsLifecycle {
     // Set once the launch is known to drop the credentials of a SOCKS proxy URL, for the reason a failed start reports.
     let socksCredentialsDropped = false;
     try {
-      // Build puppeteer args, including proxy if configured
-      // Pin stored argument overrides too: their array replaces the environment list and its locale pin.
-      // A copy, never mutated.
+      // Build puppeteer args, including proxy if configured.
+      // Validate configured args at the launch sink as well as in env/infra validation: plugin
+      // config saved via `PUT /api/plugins/whatsapp-web.js/config` merges directly into engine
+      // config without restarting through validateEnv. Pin stored argument overrides too; never mutate.
       const configuredArgs: unknown = this.host.config.puppeteer?.args;
-      const puppeteerArgs = withPinnedBrowserLocale(
-        Array.isArray(configuredArgs) ? (configuredArgs as string[]) : DEFAULT_PUPPETEER_ARGS,
-      );
+      let validatedArgs: readonly string[];
+      if (Array.isArray(configuredArgs)) {
+        const collected: string[] = [];
+        for (const entry of configuredArgs) {
+          if (typeof entry !== 'string') {
+            throw new Error(`PUPPETEER_ARGS entries must be strings (got ${typeof entry})`);
+          }
+          const argError = validatePuppeteerArg(entry);
+          if (argError) throw new Error(argError);
+          collected.push(entry);
+        }
+        validatedArgs = collected;
+      } else {
+        validatedArgs = DEFAULT_PUPPETEER_ARGS;
+      }
+      const puppeteerArgs = withPinnedBrowserLocale(validatedArgs);
 
       // Add proxy configuration if provided. A stored proxy that does not parse to a supported scheme
       // fails the session, as on Baileys (#859): launching without it would send the session's traffic

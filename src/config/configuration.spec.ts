@@ -89,6 +89,20 @@ describe('configuration — Puppeteer args delimiter', () => {
       `--lang=${PINNED_BROWSER_LOCALE}`,
     ]);
   });
+
+  it.each(['   ', ',,,', ' , , '])(
+    'falls back to the default sandbox flag set when PUPPETEER_ARGS=%j parses to zero flags',
+    blankOrCommas => {
+      process.env.PUPPETEER_ARGS = blankOrCommas;
+      expect(configuration().engine.puppeteer.args).toEqual([
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        `--lang=${PINNED_BROWSER_LOCALE}`,
+      ]);
+    },
+  );
 });
 
 describe('configuration — Postgres pool timeouts', () => {

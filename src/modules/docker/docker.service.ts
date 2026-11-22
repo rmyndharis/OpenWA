@@ -150,8 +150,18 @@ export class DockerService implements OnModuleInit {
   }
 
   private async initializeDocker(): Promise<void> {
+    const options = this.buildDockerOptions();
+    if (!options) {
+      this.docker = null;
+      this.isAvailable = false;
+      this.logger.log(
+        'Docker orchestration disabled (enable the docker-proxy profile with DOCKER_HOST=tcp://docker-proxy:2375, ' +
+          'or set DOCKER_ALLOW_LOCAL_SOCKET=true for local Unix socket access)',
+      );
+      return;
+    }
     try {
-      this.docker = new Docker(this.buildDockerOptions());
+      this.docker = new Docker(options);
       await this.answered(abortSignal => this.abortable<unknown>('ping', abortSignal), 'a ping');
       this.isAvailable = true;
       this.hasConnected = true;
@@ -165,15 +175,24 @@ export class DockerService implements OnModuleInit {
   }
 
   // Visible for testing
-  buildDockerOptions(): Docker.DockerOptions {
-    const dockerHost = process.env.DOCKER_HOST;
+  buildDockerOptions(): Docker.DockerOptions | null {
+    const dockerHost = process.env.DOCKER_HOST?.trim();
+    const allowLocalSocket = process.env.DOCKER_ALLOW_LOCAL_SOCKET === 'true';
+
     if (dockerHost) {
       const match = /^tcp:\/\/([^:]+):(\d+)$/.exec(dockerHost);
       if (match) {
         return { host: match[1], port: parseInt(match[2], 10), protocol: 'http' };
       }
+      if (dockerHost.startsWith('unix://')) {
+        if (!allowLocalSocket) return null;
+        const socketPath = dockerHost.slice('unix://'.length);
+        return { socketPath: socketPath || '/var/run/docker.sock' };
+      }
+      return null;
     }
-    return { socketPath: '/var/run/docker.sock' };
+
+    return allowLocalSocket ? { socketPath: '/var/run/docker.sock' } : null;
   }
 
   /**
@@ -183,12 +202,17 @@ export class DockerService implements OnModuleInit {
    * (DOCKER_HOST=tcp://...), the proxy container may not be accepting connections at
    * the moment onModuleInit runs (compose `service_started` doesn't wait for readiness).
    * If the first connect failed, retry it once in the background here so orchestration
-   * recovers without a process restart. Only for the DOCKER_HOST (proxy/tcp) case or a daemon
-   * that answered before: a docker-less deployment has no such race. Built-in services the boot
-   * skipped while Docker was unreachable are started once it answers.
+   * recovers without a process restart. Only when a valid Docker endpoint is configured
+   * (DOCKER_HOST=tcp://... or an opted-in local socket that answered before): a
+   * docker-less deployment triggers zero background retries.
    */
   isDockerAvailable(): boolean {
-    if (!this.isAvailable && !this.reinitInFlight && (process.env.DOCKER_HOST || this.hasConnected)) {
+    if (
+      !this.isAvailable &&
+      !this.reinitInFlight &&
+      this.buildDockerOptions() !== null &&
+      (process.env.DOCKER_HOST?.trim() || this.hasConnected)
+    ) {
       this.reinitInFlight = true;
       void this.initializeDocker()
         .then(() => this.bootstrapOrchestration())
@@ -339,8 +363,9 @@ export class DockerService implements OnModuleInit {
    *    127.0.0.1:9000/9001. The specs below publish nothing, like postgres and redis: they run the
    *    fixed built-in credentials, which the boot guard exempts only because the container is
    *    reachable on the internal network alone. The app reaches it by its `minio` alias.
-   *  - Resource limits: neither path sets CPU/memory/PID limits on the datastore containers;
-   *    only openwa-api carries mem_limit/pids_limit (in compose).
+   *  - Hardening and resource limits: both paths apply `no-new-privileges:true`, `cap_drop: [ALL]`
+   *    (plus minimal `cap_add` for postgres/redis entrypoint chown + privilege drop), memory limits,
+   *    and PID ceilings in lockstep.
    */
   private getContainerSpec(profile: string): {
     image: string;
@@ -352,6 +377,10 @@ export class DockerService implements OnModuleInit {
     healthcheck?: { test: string[]; interval: number; timeout: number; retries: number };
     labels: Record<string, string>;
     securityOpt: string[];
+    capDrop: string[];
+    capAdd?: string[];
+    memoryBytes: number;
+    pidsLimit: number;
   } | null {
     // A container outlives the process that creates it, and after a dashboard save the restart that
     // creates it runs in the OLD process, whose env still holds the values the save just replaced.
@@ -360,17 +389,27 @@ export class DockerService implements OnModuleInit {
     let saved: Record<string, string> | undefined;
     const nextBoot = (key: string): string | undefined =>
       isEnvPinned(key) || isOsProvidedEnv(key) ? process.env[key] : (saved ??= readGeneratedEnv())[key];
+    const redisPassword = nextBoot('REDIS_PASSWORD');
     const specs: Record<string, ReturnType<typeof this.getContainerSpec>> = {
       redis: {
         image: 'redis:7-alpine',
         name: 'openwa-redis',
         alias: 'redis', // DNS alias for resolution
         // noeviction mirrors docker-compose.yml: BullMQ requires it, or Redis may evict queue keys
-        // once maxmemory is reached and silently drop queued jobs.
-        cmd: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction'],
+        // once maxmemory is reached and silently drop queued jobs. Enforces --requirepass when
+        // REDIS_PASSWORD is configured; stays passwordless on the internal network when unset.
+        cmd: [
+          'sh',
+          '-c',
+          'if [ -n "$REDIS_PASSWORD" ]; then exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory-policy noeviction --requirepass "$REDIS_PASSWORD"; else exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory-policy noeviction; fi',
+        ],
+        ...(redisPassword ? { env: [`REDIS_PASSWORD=${redisPassword}`] } : {}),
         volumes: [{ name: 'openwa_redis-data', path: '/data' }],
         healthcheck: {
-          test: ['CMD', 'redis-cli', 'ping'],
+          test: [
+            'CMD-SHELL',
+            'if [ -n "$REDIS_PASSWORD" ]; then REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli ping; else redis-cli ping; fi',
+          ],
           interval: 5000000000, // 5s in nanoseconds
           timeout: 3000000000,
           retries: 5,
@@ -380,12 +419,16 @@ export class DockerService implements OnModuleInit {
           'com.openwa.builtin': 'true',
         },
         securityOpt: ['no-new-privileges:true'],
+        capDrop: ['ALL'],
+        capAdd: ['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETGID', 'SETUID'],
+        memoryBytes: 512 * 1024 * 1024,
+        pidsLimit: 256,
       },
       postgres: {
         image: 'postgres:16-alpine',
         name: 'openwa-postgres',
         alias: 'postgres',
-        // The built-in credentials — the dashboard saves them to data/.env.generated
+        // The built-in credentials: the dashboard saves them to data/.env.generated
         // (infra-config.controller) and the production boot guard exempts the default pair only for the
         // built-in, internal-host deployment (see the getContainerSpec docblock). The password is the
         // one the next boot dials with, like the MinIO keys below: a custom one saved with the built-in
@@ -408,6 +451,10 @@ export class DockerService implements OnModuleInit {
           'com.openwa.builtin': 'true',
         },
         securityOpt: ['no-new-privileges:true'],
+        capDrop: ['ALL'],
+        capAdd: ['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETGID', 'SETUID'],
+        memoryBytes: 1024 * 1024 * 1024,
+        pidsLimit: 256,
       },
       minio: {
         // Same pin (release tag and digest) as the compose minio service; never a floating tag.
@@ -434,6 +481,9 @@ export class DockerService implements OnModuleInit {
           'com.openwa.builtin': 'true',
         },
         securityOpt: ['no-new-privileges:true'],
+        capDrop: ['ALL'],
+        memoryBytes: 1024 * 1024 * 1024,
+        pidsLimit: 256,
       },
     };
     return specs[profile] || null;
@@ -532,6 +582,10 @@ export class DockerService implements OnModuleInit {
           RestartPolicy: { Name: 'unless-stopped' },
           Binds: spec.volumes?.map(v => `${v.name}:${v.path}`),
           SecurityOpt: spec.securityOpt,
+          CapDrop: spec.capDrop,
+          ...(spec.capAdd ? { CapAdd: spec.capAdd } : {}),
+          Memory: spec.memoryBytes,
+          PidsLimit: spec.pidsLimit,
         },
         Healthcheck: spec.healthcheck
           ? {
@@ -638,7 +692,10 @@ export class DockerService implements OnModuleInit {
    * the role only when the data volume is first initialized, so a recreated container still
    * authenticates with the password stored in the volume. Change it with `ALTER ROLE openwa
    * PASSWORD '...'` in the running container, or re-initialize the volume (which discards the data).
-   * Redis runs without credentials. To reclaim disk space, remove the container manually.
+   * Redis reads REDIS_PASSWORD from its container environment on creation (--requirepass when set,
+   * passwordless when unset): after changing REDIS_PASSWORD, remove the container (`docker rm <name>`)
+   * before re-enabling so the recreated container picks up the new password. To reclaim disk space,
+   * remove the container manually.
    */
   async stopManagedService(profile: string): Promise<boolean> {
     this.logger.log(`Stopping service with profile: ${profile} (container retained, not removed)`);

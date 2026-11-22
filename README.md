@@ -239,13 +239,17 @@ disable that policy globally.
 
 ### Docker Socket Proxy
 
-The production stack never exposes `/var/run/docker.sock` directly to the application container. Instead, a dedicated `docker-proxy` sidecar (based on [`tecnativa/docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)) acts as the sole gateway to the Docker daemon:
+The production stack never exposes `/var/run/docker.sock` directly to the application container, and Docker orchestration is off by default (`DockerService` will not fall back to `/var/run/docker.sock` unless `DOCKER_ALLOW_LOCAL_SOCKET=true` is explicitly set). If you want Dashboard > Infrastructure built-in datastore orchestration under Docker Compose, opt in via the dedicated `docker-proxy` profile (based on [`tecnativa/docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)) and set `DOCKER_HOST=tcp://docker-proxy:2375` in `.env`:
+
+```bash
+DOCKER_HOST=tcp://docker-proxy:2375 docker compose --profile docker-proxy up -d
+```
 
 ```
-openwa-api  ──TCP 2375──▶  docker-proxy  ──unix──▶  /var/run/docker.sock
+openwa-api  --TCP 2375-->  docker-proxy  --unix-->  /var/run/docker.sock
 ```
 
-Only the operations needed for container orchestration are enabled (`CONTAINERS`, `IMAGES`, `VOLUMES`, `PING`, plus the `POST` method switch). The application connects via the `DOCKER_HOST=tcp://docker-proxy:2375` environment variable, which `DockerService` detects automatically. Note this is an operational gateway, not a fine-grained privilege boundary: with `POST` enabled the proxy admits every method to the enabled paths and cannot scope container-create payloads, so a compromised API container would be host-root-equivalent — see `SECURITY.md` for the full threat model, mitigations, and how to disable the proxy if you don't use the built-in datastore orchestration.
+Only the operations needed for container orchestration are enabled (`CONTAINERS`, `IMAGES`, `VOLUMES`, `PING`, plus the `POST` method switch), and the sidecar runs hardened (`read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true`, memory/PID limits) on an internal-only network. Note this is an operational gateway, not a fine-grained privilege boundary: with `POST` enabled the proxy admits every method to the enabled paths and cannot scope container-create payloads, so a compromised API container would be host-root-equivalent. See `SECURITY.md` for the full threat model and mitigations.
 
 ### Non-root Container Execution
 
@@ -282,12 +286,13 @@ docker compose --profile postgres up -d
 docker compose --profile full up -d
 ```
 
-| Profile    | Services                                        |
-| ---------- | ----------------------------------------------- |
-| `postgres` | PostgreSQL database                             |
-| `redis`    | Redis (queue, rate limits, WebSocket fan-out)   |
-| `minio`    | S3-compatible storage (MinIO fork `pgsty/silo`) |
-| `full`     | All services above                              |
+| Profile        | Services                                                                         |
+| -------------- | -------------------------------------------------------------------------------- |
+| `docker-proxy` | Opt-in Docker socket proxy for Dashboard > Infrastructure built-in orchestration |
+| `postgres`     | PostgreSQL database                                                              |
+| `redis`        | Redis (queue, rate limits, WebSocket fan-out)                                    |
+| `minio`        | S3-compatible storage (MinIO fork `pgsty/silo`)                                  |
+| `full`         | PostgreSQL, Redis, and MinIO                                                     |
 
 A profile only starts the container; OpenWA keeps using SQLite and local storage until it is told
 to use the new service. The simplest route is **Dashboard > Infrastructure**: pick the built-in

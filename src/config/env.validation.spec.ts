@@ -1002,3 +1002,53 @@ describe('validateEnv SQLITE_JOURNAL_MODE', () => {
     );
   });
 });
+
+describe('validateEnv DOCKER_ALLOW_LOCAL_SOCKET', () => {
+  it.each([undefined, '', '   ', 'true', 'false'])('accepts DOCKER_ALLOW_LOCAL_SOCKET=%j', value => {
+    expect(() => validateEnv({ DOCKER_ALLOW_LOCAL_SOCKET: value })).not.toThrow();
+  });
+
+  it.each(['1', 'yes', 'TRUE', ' true '])('rejects invalid DOCKER_ALLOW_LOCAL_SOCKET=%j', value => {
+    expect(() => validateEnv({ DOCKER_ALLOW_LOCAL_SOCKET: value })).toThrow(
+      /DOCKER_ALLOW_LOCAL_SOCKET must be "true" or "false"/,
+    );
+  });
+});
+
+describe('validateEnv PUPPETEER_ARGS allowlist', () => {
+  it.each([
+    undefined,
+    '',
+    '   ',
+    '--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu',
+    '--no-sandbox --disable-software-rasterizer --disable-extensions --no-first-run --no-zygote --mute-audio --hide-scrollbars --headless',
+    '--lang=en-US --window-size=1280,720 --disable-features=IsolateOrigins,site-per-process --enable-features=NetworkService --disable-blink-features=AutomationControlled --headless=new --use-gl=swiftshader --force-color-profile=srgb --font-render-hinting=none',
+  ])('accepts safe PUPPETEER_ARGS=%j', value => {
+    expect(() => validateEnv({ PUPPETEER_ARGS: value })).not.toThrow();
+  });
+
+  it.each([
+    '--gpu-launcher=/bin/sh',
+    '--utility-cmd-prefix=sh',
+    '--renderer-cmd-prefix=sh',
+    '--browser-subprocess-path=/bin/sh',
+    '--load-extension=/tmp/ext',
+    '--disable-extensions-except=/tmp/ext',
+    '--remote-debugging-port=9222',
+    '--remote-debugging-address=0.0.0.0',
+    '--user-data-dir=/tmp/profile',
+    '--disk-cache-dir=/tmp/cache',
+    '--proxy-server=http://evil:8080',
+    '--proxy-pac-url=http://evil/pac',
+    '--disable-web-security',
+    '--ignore-certificate-errors',
+    '--js-flags=--expose-gc',
+    '--no-sandbox https://evil.example',
+    '--lang=en;id',
+    '--window-size=0,720',
+    '--headless=invalid',
+    '--no-sandbox\n--disable-gpu',
+  ])('rejects disallowed PUPPETEER_ARGS=%j', value => {
+    expect(() => validateEnv({ PUPPETEER_ARGS: value })).toThrow(/PUPPETEER_ARGS/);
+  });
+});

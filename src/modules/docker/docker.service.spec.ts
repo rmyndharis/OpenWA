@@ -66,9 +66,12 @@ describe('DockerService.getRunningBuiltinServices', () => {
 describe('DockerService.buildDockerOptions', () => {
   let service: DockerService;
   const originalDockerHost = process.env.DOCKER_HOST;
+  const originalAllowLocal = process.env.DOCKER_ALLOW_LOCAL_SOCKET;
 
   beforeEach(() => {
     service = new DockerService();
+    delete process.env.DOCKER_HOST;
+    delete process.env.DOCKER_ALLOW_LOCAL_SOCKET;
   });
 
   afterEach(() => {
@@ -76,6 +79,11 @@ describe('DockerService.buildDockerOptions', () => {
       delete process.env.DOCKER_HOST;
     } else {
       process.env.DOCKER_HOST = originalDockerHost;
+    }
+    if (originalAllowLocal === undefined) {
+      delete process.env.DOCKER_ALLOW_LOCAL_SOCKET;
+    } else {
+      process.env.DOCKER_ALLOW_LOCAL_SOCKET = originalAllowLocal;
     }
   });
 
@@ -88,18 +96,36 @@ describe('DockerService.buildDockerOptions', () => {
     });
   });
 
-  it('falls back to unix socket when DOCKER_HOST is not set', () => {
-    delete process.env.DOCKER_HOST;
+  it('returns null by default when DOCKER_HOST is unset and local socket fallback is not opted in', () => {
+    expect(service.buildDockerOptions()).toBeNull();
+    process.env.DOCKER_ALLOW_LOCAL_SOCKET = 'false';
+    expect(service.buildDockerOptions()).toBeNull();
+  });
+
+  it('returns null for unix:// DOCKER_HOST unless DOCKER_ALLOW_LOCAL_SOCKET=true', () => {
+    process.env.DOCKER_HOST = 'unix:///run/docker.sock';
+    expect(service.buildDockerOptions()).toBeNull();
+  });
+
+  it('allows default /var/run/docker.sock fallback only when DOCKER_ALLOW_LOCAL_SOCKET=true', () => {
+    process.env.DOCKER_ALLOW_LOCAL_SOCKET = 'true';
     expect(service.buildDockerOptions()).toEqual({
       socketPath: '/var/run/docker.sock',
     });
   });
 
-  it('falls back to unix socket for unsupported DOCKER_HOST schemes', () => {
+  it('allows explicit unix:// socket paths when DOCKER_ALLOW_LOCAL_SOCKET=true', () => {
     process.env.DOCKER_HOST = 'unix:///run/docker.sock';
+    process.env.DOCKER_ALLOW_LOCAL_SOCKET = 'true';
     expect(service.buildDockerOptions()).toEqual({
-      socketPath: '/var/run/docker.sock',
+      socketPath: '/run/docker.sock',
     });
+  });
+
+  it('returns null for unsupported DOCKER_HOST schemes even when local socket is enabled', () => {
+    process.env.DOCKER_HOST = 'ssh://root@remote-host';
+    process.env.DOCKER_ALLOW_LOCAL_SOCKET = 'true';
+    expect(service.buildDockerOptions()).toBeNull();
   });
 });
 
@@ -209,6 +235,7 @@ describe('DockerService.onModuleInit', () => {
   // so no real socket is ever touched.
   const ENV_KEYS = [
     'DOCKER_HOST',
+    'DOCKER_ALLOW_LOCAL_SOCKET',
     'REDIS_BUILTIN',
     'POSTGRES_BUILTIN',
     'MINIO_BUILTIN',
@@ -239,6 +266,7 @@ describe('DockerService.onModuleInit', () => {
       savedEnv[k] = process.env[k];
       delete process.env[k];
     }
+    process.env.DOCKER_HOST = 'tcp://docker-proxy:2375';
   });
 
   afterEach(() => {
@@ -250,7 +278,21 @@ describe('DockerService.onModuleInit', () => {
     DockerMock.mockReset();
   });
 
-  it('does not throw when the Docker socket is absent — orchestration is disabled and bootstrap is skipped', async () => {
+  it('disables Docker without touching dockerode or retrying when neither DOCKER_HOST nor local socket opt-in is set', async () => {
+    delete process.env.DOCKER_HOST;
+    delete process.env.DOCKER_ALLOW_LOCAL_SOCKET;
+    const service = new DockerService();
+
+    await expect(service.onModuleInit()).resolves.toBeUndefined();
+    expect(DockerMock).not.toHaveBeenCalled();
+    expect(service.isDockerAvailable()).toBe(false);
+    expect(service.isDockerAvailable()).toBe(false);
+    expect(DockerMock).not.toHaveBeenCalled();
+  });
+
+  it('does not throw when the Docker socket is absent (opted-in local socket) - orchestration is disabled and bootstrap is skipped', async () => {
+    delete process.env.DOCKER_HOST;
+    process.env.DOCKER_ALLOW_LOCAL_SOCKET = 'true';
     DockerMock.mockImplementation(() => ({
       ping: jest.fn().mockRejectedValue(new Error('connect ENOENT /var/run/docker.sock')),
     }));
@@ -348,8 +390,17 @@ describe('DockerService.onModuleInit', () => {
 
 describe('prestartBuiltinDatabase', () => {
   const builtin = { DATABASE_TYPE: 'postgres', POSTGRES_BUILTIN: 'true' };
+  const origDockerHost = process.env.DOCKER_HOST;
 
-  afterEach(() => DockerMock.mockReset());
+  beforeEach(() => {
+    process.env.DOCKER_HOST = 'tcp://docker-proxy:2375';
+  });
+
+  afterEach(() => {
+    if (origDockerHost === undefined) delete process.env.DOCKER_HOST;
+    else process.env.DOCKER_HOST = origDockerHost;
+    DockerMock.mockReset();
+  });
 
   it('starts a stopped built-in postgres container through a real DockerService', async () => {
     const container = {
@@ -422,19 +473,31 @@ describe('prestartBuiltinDatabase', () => {
 
 describe('DockerService.isDockerAvailable', () => {
   const originalDockerHost = process.env.DOCKER_HOST;
+  const originalAllowLocal = process.env.DOCKER_ALLOW_LOCAL_SOCKET;
 
   afterEach(() => {
     if (originalDockerHost === undefined) delete process.env.DOCKER_HOST;
     else process.env.DOCKER_HOST = originalDockerHost;
+    if (originalAllowLocal === undefined) delete process.env.DOCKER_ALLOW_LOCAL_SOCKET;
+    else process.env.DOCKER_ALLOW_LOCAL_SOCKET = originalAllowLocal;
     DockerMock.mockReset();
   });
 
   it('returns the live availability flag', () => {
     delete process.env.DOCKER_HOST; // no re-probe: the flag is reported as-is
+    delete process.env.DOCKER_ALLOW_LOCAL_SOCKET;
     const service = new DockerService();
     expect(service.isDockerAvailable()).toBe(false);
     Object.assign(service as unknown as Record<string, unknown>, { isAvailable: true });
     expect(service.isDockerAvailable()).toBe(true);
+  });
+
+  it('does not trigger background re-probes for unix:// DOCKER_HOST when local socket access is disabled', () => {
+    process.env.DOCKER_HOST = 'unix:///var/run/docker.sock';
+    delete process.env.DOCKER_ALLOW_LOCAL_SOCKET;
+    const service = new DockerService();
+    expect(service.isDockerAvailable()).toBe(false);
+    expect(DockerMock).not.toHaveBeenCalled();
   });
 
   it('re-probes once in the background when DOCKER_HOST is set and the first probe failed', async () => {
@@ -917,6 +980,7 @@ describe('DockerService.orchestrateProfiles', () => {
 describe('DockerService availability recovery', () => {
   const keys = [
     'DOCKER_HOST',
+    'DOCKER_ALLOW_LOCAL_SOCKET',
     'DATABASE_TYPE',
     'STORAGE_TYPE',
     'REDIS_ENABLED',
@@ -1019,6 +1083,7 @@ describe('DockerService availability recovery', () => {
 
   it('recovers a previously reachable local socket after its inventory fails', async () => {
     delete process.env.DOCKER_HOST;
+    process.env.DOCKER_ALLOW_LOCAL_SOCKET = 'true';
     process.env.POSTGRES_BUILTIN = 'false';
     process.env.REDIS_BUILTIN = 'false';
     process.env.MINIO_BUILTIN = 'false';
