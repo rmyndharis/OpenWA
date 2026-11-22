@@ -244,6 +244,8 @@ export class SessionController {
   }
 
   @Get(':sessionId/proxy')
+  @RequireRole(ApiKeyRole.ADMIN)
+  @RequireUnscopedKey()
   @ApiOperation({ summary: 'Get the per-session egress proxy configuration (credentials masked)' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({
@@ -252,6 +254,7 @@ export class SessionController {
     type: SessionProxyResponseDto,
   })
   @ApiResponse({ status: 400, description: SESSION_ID_400 })
+  @ApiResponse({ status: 403, description: 'Key lacks the ADMIN role, or is restricted to specific sessions' })
   @ApiResponse({ status: 404, description: 'Session not found' })
   async getProxy(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionProxyResponseDto> {
     return this.sessionService.getProxy(id);
@@ -1056,7 +1059,7 @@ export class SessionController {
   })
   @ApiResponse({
     status: 200,
-    description: 'Session statistics including counts and memory usage',
+    description: 'Session statistics including counts, plus process memory usage for unscoped ADMIN keys',
     type: SessionsOverviewResponseDto,
   })
   async getStats(@CurrentApiKey() apiKey?: ApiKey): Promise<{
@@ -1065,10 +1068,11 @@ export class SessionController {
     ready: number;
     disconnected: number;
     byStatus: Record<string, number>;
-    memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
+    memoryUsage?: { heapUsed: number; heapTotal: number; rss: number };
   }> {
     // Scope aggregate stats to the key's allowedSessions so a session-restricted key cannot enumerate
-    // global session counts/status (the route carries no :sessionId for the guard to scope against).
-    return this.sessionService.getStats(apiKey?.allowedSessions);
+    // global session counts/status, and expose process memory usage only to unscoped ADMIN callers.
+    const includeMemoryUsage = apiKey?.role === ApiKeyRole.ADMIN && !apiKey.allowedSessions?.length;
+    return this.sessionService.getStats(apiKey?.allowedSessions, { includeMemoryUsage });
   }
 }

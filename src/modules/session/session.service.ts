@@ -1981,13 +1981,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   /**
    * Get overall session statistics for multi-session monitoring
    */
-  async getStats(allowedSessions?: string[] | null): Promise<{
+  async getStats(
+    allowedSessions?: string[] | null,
+    options?: { includeMemoryUsage?: boolean },
+  ): Promise<{
     total: number;
     active: number;
     ready: number;
     disconnected: number;
     byStatus: Record<string, number>;
-    memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
+    memoryUsage?: { heapUsed: number; heapTotal: number; rss: number };
   }> {
     // Scope to the caller's allowedSessions so a session-restricted key cannot enumerate the count /
     // status distribution of sessions it has no rights to (matches the scoped GET /sessions route).
@@ -2013,21 +2016,32 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       total += count;
     }
 
-    const memory = process.memoryUsage();
-
-    return {
+    const result: {
+      total: number;
+      active: number;
+      ready: number;
+      disconnected: number;
+      byStatus: Record<string, number>;
+      memoryUsage?: { heapUsed: number; heapTotal: number; rss: number };
+    } = {
       total,
       // engines is keyed by session id; a scoped key sees only its own running engines, not the global count.
       active: scope ? [...this.engines.keys()].filter(id => scope.includes(id)).length : this.engines.size,
       ready: byStatus[SessionStatus.READY] || 0,
       disconnected: byStatus[SessionStatus.DISCONNECTED] || 0,
       byStatus,
-      memoryUsage: {
+    };
+
+    if (options?.includeMemoryUsage) {
+      const memory = process.memoryUsage();
+      result.memoryUsage = {
         heapUsed: Math.round(memory.heapUsed / 1024 / 1024),
         heapTotal: Math.round(memory.heapTotal / 1024 / 1024),
         rss: Math.round(memory.rss / 1024 / 1024),
-      },
-    };
+      };
+    }
+
+    return result;
   }
 
   /**

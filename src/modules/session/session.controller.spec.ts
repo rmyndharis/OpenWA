@@ -457,22 +457,34 @@ describe('SessionController getStats scope', () => {
     );
   });
 
-  it("hands the key's allowedSessions to the service and returns its answer", async () => {
-    const apiKey = { allowedSessions: ['sess-uuid-1', 'sess-uuid-2'] } as unknown as ApiKey;
+  it("hands the key's allowedSessions to the service and omits memoryUsage for scoped or non-admin callers", async () => {
+    const apiKey = {
+      role: ApiKeyRole.ADMIN,
+      allowedSessions: ['sess-uuid-1', 'sess-uuid-2'],
+    } as unknown as ApiKey;
 
     await expect(controller.getStats(apiKey)).resolves.toBe(stats);
 
     expect(sessionService.getStats).toHaveBeenCalledTimes(1);
-    expect(sessionService.getStats).toHaveBeenCalledWith(['sess-uuid-1', 'sess-uuid-2']);
+    expect(sessionService.getStats).toHaveBeenCalledWith(['sess-uuid-1', 'sess-uuid-2'], {
+      includeMemoryUsage: false,
+    });
   });
 
-  it('hands over no scope for a key without an allowlist, or for no key', async () => {
-    await controller.getStats({ allowedSessions: null } as unknown as ApiKey);
+  it('includes memoryUsage only for an unscoped ADMIN key', async () => {
+    await controller.getStats({ role: ApiKeyRole.ADMIN, allowedSessions: null } as unknown as ApiKey);
+    await controller.getStats({ role: ApiKeyRole.ADMIN, allowedSessions: [] } as unknown as ApiKey);
+    await controller.getStats({ role: ApiKeyRole.OPERATOR, allowedSessions: null } as unknown as ApiKey);
+    await controller.getStats({ role: ApiKeyRole.VIEWER, allowedSessions: null } as unknown as ApiKey);
     await controller.getStats(undefined);
 
-    // null, undefined and [] all mean "every session" to the service; any list would narrow the totals.
-    const scopes = sessionService.getStats.mock.calls.map((call: unknown[]) => call[0] ?? []);
-    expect(scopes).toEqual([[], []]);
+    expect(sessionService.getStats.mock.calls).toEqual([
+      [null, { includeMemoryUsage: true }],
+      [[], { includeMemoryUsage: true }],
+      [null, { includeMemoryUsage: false }],
+      [null, { includeMemoryUsage: false }],
+      [undefined, { includeMemoryUsage: false }],
+    ]);
   });
 });
 
@@ -719,6 +731,12 @@ describe('SessionController — proxy() response contract', () => {
       auditService as unknown as AuditService,
       new ChatScopeService(),
     );
+  });
+
+  it('getProxy restricts reads to unscoped ADMIN keys matching updateProxy', () => {
+    const handler = Object.getOwnPropertyDescriptor(SessionControllerClass.prototype, 'getProxy')!.value as object;
+    expect(Reflect.getMetadata(REQUIRED_ROLE_KEY, handler)).toBe(ApiKeyRole.ADMIN);
+    expect(Reflect.getMetadata(UNSCOPED_KEY, handler)).toBe(true);
   });
 
   it('getProxy returns the masked projection without proxyUrl', async () => {

@@ -707,8 +707,8 @@ test('saving proxy settings issues PATCH /api/sessions/:id/proxy', async () => {
   });
 });
 
-// The API accepts a session proxy only from an ADMIN key, so an operator is not offered the controls.
-test('an operator key is not offered proxy writes, in the create modal or the proxy modal', async () => {
+// Proxy reads and writes require an unscoped ADMIN key, so an operator sees neither proxy creation nor the Proxy action.
+test('an operator key is not offered proxy controls and never fires GET /proxy', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   resetFetchCalls();
   window.sessionStorage.setItem('openwa_user_role', 'operator');
@@ -723,21 +723,16 @@ test('an operator key is not offered proxy writes, in the create modal or the pr
     await waitFor(() => assert.equal(screen.queryByRole('dialog') === null, true));
 
     const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
-    fireEvent.click(within(qrCard).getByRole('button', { name: 'Proxy' }));
-    const dialog = await screen.findByRole('dialog');
-    await waitFor(() => assert.ok(findFetchCall('GET', '/api/sessions/sess-qr-1/proxy')));
-    const toggle = (await within(dialog).findByRole('checkbox')) as HTMLInputElement;
-    assert.equal(toggle.disabled, true);
-    assert.equal(within(dialog).queryByRole('button', { name: 'Save' }) === null, true);
+    assert.equal(within(qrCard).queryByRole('button', { name: 'Proxy' }) === null, true);
+    assert.equal(findFetchCall('GET', '/api/sessions/sess-qr-1/proxy'), undefined);
   } finally {
     window.sessionStorage.setItem('openwa_user_role', 'admin');
   }
 });
 
-// Creating a session and changing its proxy are refused for any session-scoped key, admin included,
-// so neither is offered; the proxy settings stay readable.
-test('a session-scoped admin key is offered neither New Session nor a proxy Save', async () => {
-  const { screen, fireEvent, within, waitFor } = rtl;
+// Creating a session and reading or changing its proxy require an unscoped key, so a session-scoped admin sees neither.
+test('a session-scoped admin key is offered neither New Session nor Proxy and never fires GET /proxy', async () => {
+  const { screen, within } = rtl;
   resetFetchCalls();
   window.sessionStorage.setItem('openwa_key_scoped', 'true');
   try {
@@ -746,12 +741,8 @@ test('a session-scoped admin key is offered neither New Session nor a proxy Save
     assert.equal(screen.queryByRole('button', { name: 'New Session' }) === null, true);
 
     const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
-    fireEvent.click(within(qrCard).getByRole('button', { name: 'Proxy' }));
-    const dialog = await screen.findByRole('dialog');
-    await waitFor(() => assert.ok(findFetchCall('GET', '/api/sessions/sess-qr-1/proxy')));
-    const toggle = (await within(dialog).findByRole('checkbox')) as HTMLInputElement;
-    assert.equal(toggle.disabled, true);
-    assert.equal(within(dialog).queryByRole('button', { name: 'Save' }) === null, true);
+    assert.equal(within(qrCard).queryByRole('button', { name: 'Proxy' }) === null, true);
+    assert.equal(findFetchCall('GET', '/api/sessions/sess-qr-1/proxy'), undefined);
   } finally {
     window.sessionStorage.removeItem('openwa_key_scoped');
   }

@@ -72,7 +72,10 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
       description: 'Aggregate session counts (total, active, ready, disconnected) the key is allowed to see.',
       tier: 'read',
       inputSchema: z.object({}),
-      handler: (_input, apiKey) => session.getStats(apiKey.allowedSessions),
+      handler: (_input, apiKey) =>
+        session.getStats(apiKey.allowedSessions, {
+          includeMemoryUsage: apiKey.role === ApiKeyRole.ADMIN && !apiKey.allowedSessions?.length,
+        }),
     }),
     defineTool({
       name: 'SessionSubscribePresence',

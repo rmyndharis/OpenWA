@@ -131,7 +131,7 @@ export interface SessionStats {
   ready: number;
   disconnected: number;
   byStatus: Record<string, number>;
-  memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
+  memoryUsage?: { heapUsed: number; heapTotal: number; rss: number };
 }
 
 export type WebhookFilterOperator = 'is' | 'isNot' | 'contains' | 'equals';

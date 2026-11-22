@@ -63,6 +63,9 @@ export class SessionsOverviewResponseDto {
   })
   byStatus!: { [status: string]: number };
 
-  @ApiProperty({ type: SessionMemoryUsageDto, description: 'Process memory usage of this gateway.' })
-  memoryUsage!: SessionMemoryUsageDto;
+  @ApiPropertyOptional({
+    type: () => SessionMemoryUsageDto,
+    description: 'Process memory usage of this gateway. Returned only to unscoped ADMIN callers.',
+  })
+  memoryUsage?: SessionMemoryUsageDto;
 }

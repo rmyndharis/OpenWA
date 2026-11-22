@@ -576,7 +576,12 @@ export function Sessions() {
     }
   };
 
-  const proxySessionId = proxySession?.id ?? null;
+  const openProxyModal = (session: Session) => {
+    if (!canEditProxy) return;
+    setProxySession(session);
+  };
+
+  const proxySessionId = canEditProxy ? (proxySession?.id ?? null) : null;
   // Cancel stays enabled while a save runs, so a save that answers after its modal closed must neither
   // close nor unlock whichever proxy modal is open by then.
   const proxyVisit = useRef(0);
@@ -1136,7 +1141,7 @@ export function Sessions() {
         </Modal>
       )}
 
-      {proxySession && (
+      {proxySession && canEditProxy && (
         <Modal
           open
           onClose={() => setProxySession(null)}
@@ -1417,10 +1422,12 @@ export function Sessions() {
                   <Eye size={16} />
                   {t('sessions.actions.view')}
                 </button>
-                <button className="btn-action" onClick={() => setProxySession(session)}>
-                  <Globe size={16} />
-                  {t('sessions.actions.proxy')}
-                </button>
+                {canEditProxy && (
+                  <button className="btn-action" onClick={() => openProxyModal(session)}>
+                    <Globe size={16} />
+                    {t('sessions.actions.proxy')}
+                  </button>
+                )}
                 {canWrite && isSessionStarted(session) ? (
                   <button className="btn-action" onClick={() => handleStop(session.id)}>
                     <Square size={16} />
