@@ -1,17 +1,16 @@
-import { useState, useCallback, type ReactNode } from 'react';
+import { useState, useCallback, useMemo, type ReactNode } from 'react';
 import type { UserRole, RoleContextType } from '../types/role';
 import { RoleContext } from '../hooks/useRole';
+import { getActiveApiKeyId, setActiveApiKeyId } from '../utils/authLifecycle';
 
 export function RoleProvider({ children }: { children: ReactNode }) {
-  // Per tab, next to the API key it was validated for: a role outliving its key (or shared with
-  // another tab signed in with a different key) would gate the UI for the wrong actor.
+  // Per tab, next to the active session actor id it was hydrated for: a role outliving its session
+  // (or shared with another tab signed in as a different actor) would gate the UI for the wrong role.
   const [role, setRoleState] = useState<UserRole | null>(() => {
-    // Older builds kept the role in localStorage, shared by every tab. A tab that already holds its
-    // key but no role of its own adopts that copy, so its first reload after an upgrade does not drop
-    // the role until /auth/validate answers. The copy is left in place for the other tabs signed in
-    // before the upgrade; every sign-in since stores a role with its key, so no newer tab adopts it.
+    // Older builds kept the role in localStorage, shared by every tab. A tab that already holds an
+    // active session id but no role of its own adopts that copy until GET /auth/session answers.
     const legacy = localStorage.getItem('openwa_user_role');
-    if (legacy && !sessionStorage.getItem('openwa_user_role') && sessionStorage.getItem('openwa_api_key')) {
+    if (legacy && !sessionStorage.getItem('openwa_user_role') && getActiveApiKeyId()) {
       sessionStorage.setItem('openwa_user_role', legacy);
     }
     const saved = sessionStorage.getItem('openwa_user_role');
@@ -27,7 +26,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Kept beside the role because GET /infra/engines/current is admin-only: the validate response is
+  // Kept beside the role because GET /infra/engines/current is admin-only: the session response is
   // the one place every role learns which engine it is talking to.
   const [engineType, setEngineTypeState] = useState<string | null>(() => sessionStorage.getItem('openwa_engine_type'));
 
@@ -53,18 +52,48 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const value: RoleContextType = {
-    role,
-    setRole,
-    isAdmin: role === 'admin',
-    isOperator: role === 'operator',
-    isViewer: role === 'viewer',
-    canWrite: role === 'admin' || role === 'operator',
-    engineType,
-    setEngineType,
-    scoped,
-    setScoped,
-  };
+  const [apiKeyId, setApiKeyIdState] = useState<string | null>(() => getActiveApiKeyId());
+
+  const setApiKeyId = useCallback((newApiKeyId: string | null) => {
+    setApiKeyIdState(newApiKeyId);
+    setActiveApiKeyId(newApiKeyId);
+  }, []);
+
+  const [sessionEpoch, setSessionEpoch] = useState(0);
+  const bumpSessionEpoch = useCallback(() => {
+    setSessionEpoch(epoch => epoch + 1);
+  }, []);
+
+  const value = useMemo<RoleContextType>(
+    () => ({
+      role,
+      setRole,
+      isAdmin: role === 'admin',
+      isOperator: role === 'operator',
+      isViewer: role === 'viewer',
+      canWrite: role === 'admin' || role === 'operator',
+      engineType,
+      setEngineType,
+      scoped,
+      setScoped,
+      apiKeyId,
+      setApiKeyId,
+      sessionEpoch,
+      bumpSessionEpoch,
+    }),
+    [
+      role,
+      setRole,
+      engineType,
+      setEngineType,
+      scoped,
+      setScoped,
+      apiKeyId,
+      setApiKeyId,
+      sessionEpoch,
+      bumpSessionEpoch,
+    ],
+  );
 
   return <RoleContext.Provider value={value}>{children}</RoleContext.Provider>;
 }

@@ -8,7 +8,7 @@ before(async () => {
 });
 
 beforeEach(() => {
-  sessionStorage.setItem('openwa_api_key', 'key-a');
+  sessionStorage.setItem('openwa_api_key_id', 'key-a');
 });
 
 /** Fake page source: holds `total` rows, but never returns more than `serverMax` per call. */
@@ -165,7 +165,7 @@ test('a walk stops once the key it started with is signed out or replaced', asyn
   const { fetchPage } = fakeSource(1_000, 200);
   const sentWith: Array<string | null> = [];
   const keyedPage = async (limit: number, offset: number) => {
-    sentWith.push(sessionStorage.getItem('openwa_api_key'));
+    sentWith.push(sessionStorage.getItem('openwa_api_key_id'));
     return fetchPage(limit, offset);
   };
 
@@ -177,7 +177,7 @@ test('a walk stops once the key it started with is signed out or replaced', asyn
         const page = await keyedPage(limit, offset);
         if (offset === 200 && !throttled) {
           throttled = true;
-          sessionStorage.removeItem('openwa_api_key');
+          sessionStorage.removeItem('openwa_api_key_id');
           throw httpError(429);
         }
         return page;
@@ -190,11 +190,11 @@ test('a walk stops once the key it started with is signed out or replaced', asyn
 
   // Signed in again with another key while a page was out: no page goes out as the new key.
   sentWith.length = 0;
-  sessionStorage.setItem('openwa_api_key', 'key-a');
+  sessionStorage.setItem('openwa_api_key_id', 'key-a');
   await assert.rejects(
     fetchAllPages(async (limit, offset) => {
       const page = await keyedPage(limit, offset);
-      if (offset === 200) sessionStorage.setItem('openwa_api_key', 'key-b');
+      if (offset === 200) sessionStorage.setItem('openwa_api_key_id', 'key-b');
       return page;
     }),
     /Signed out/,
@@ -202,11 +202,11 @@ test('a walk stops once the key it started with is signed out or replaced', asyn
   assert.deepEqual(sentWith, ['key-a', 'key-a']);
 
   // Signed out while the last page was out: its rows do not come back as a finished walk.
-  sessionStorage.setItem('openwa_api_key', 'key-a');
+  sessionStorage.setItem('openwa_api_key_id', 'key-a');
   await assert.rejects(
     fetchAllPages(async (limit, offset) => {
       const page = await fetchPage(limit, offset);
-      if (offset === 800) sessionStorage.removeItem('openwa_api_key');
+      if (offset === 800) sessionStorage.removeItem('openwa_api_key_id');
       return page;
     }),
     /Signed out/,
@@ -214,13 +214,13 @@ test('a walk stops once the key it started with is signed out or replaced', asyn
 
   // Signed out while the last retry of a throttled page was out: the rows in hand do not come back
   // as a throttled partial walk.
-  sessionStorage.setItem('openwa_api_key', 'key-a');
+  sessionStorage.setItem('openwa_api_key_id', 'key-a');
   let refused = 0;
   await assert.rejects(
     fetchAllPages(
       async (limit, offset) => {
         if (offset === 0) return fetchPage(limit, offset);
-        if (++refused === 3) sessionStorage.removeItem('openwa_api_key');
+        if (++refused === 3) sessionStorage.removeItem('openwa_api_key_id');
         throw httpError(429);
       },
       { retryDelayMs: 0 },
@@ -237,11 +237,11 @@ test('a walk does not send its retry when the key is signed out during the throt
   await assert.rejects(
     fetchAllPages(
       async (limit, offset) => {
-        sentWith.push(sessionStorage.getItem('openwa_api_key'));
+        sentWith.push(sessionStorage.getItem('openwa_api_key_id'));
         if (offset === 200 && !refused) {
           refused = true;
           // The refusal settles first; the operator signs out while the walk waits to retry it.
-          setTimeout(() => sessionStorage.removeItem('openwa_api_key'), 5);
+          setTimeout(() => sessionStorage.removeItem('openwa_api_key_id'), 5);
           throw httpError(429);
         }
         return fetchPage(limit, offset);

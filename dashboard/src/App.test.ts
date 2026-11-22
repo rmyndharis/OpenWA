@@ -15,11 +15,15 @@ function jsonResponse(data: unknown, status = 200): Response {
 }
 
 function installFetchStub(): void {
-  globalThis.fetch = ((input: RequestInfo | URL): Promise<Response> => {
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const method = init?.method ?? 'GET';
     const path = url.replace(/^https?:\/\/[^/]+/, '');
     requested.push(path);
-    if (path === '/api/auth/validate') return Promise.resolve(jsonResponse({ valid: true, role, scoped }));
+    if (path === '/api/auth/session') {
+      if (method === 'DELETE') return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({ valid: true, role, scoped, apiKeyId: 'key-test-1' }));
+    }
     if (path === '/api/audit' || path.startsWith('/api/audit?'))
       return Promise.resolve(jsonResponse({ data: [], total: 0 }));
     // One ready session: the Number Checker runs below need one, and the app's query cache keeps the first answer.
@@ -65,14 +69,14 @@ before(async () => {
 afterEach(() => {
   rtl.cleanup();
   scoped = false;
-  window.sessionStorage.removeItem('openwa_key_scoped');
+  window.sessionStorage.clear();
 });
 
 function renderAt(path: string, as: string): void {
   role = as;
   requested.length = 0;
   window.history.replaceState(null, '', path);
-  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-test-1');
   window.sessionStorage.setItem('openwa_user_role', as);
   rtl.render(createElement(App));
 }
@@ -118,24 +122,25 @@ for (const page of ['api-keys', 'infrastructure', 'plugins']) {
   });
 }
 
-// The startup /auth/validate for a saved key is not cancelled by a logout. If it lands after the user
-// has signed back in with another key, its answer is about a key no longer in use and must not touch
+// The startup GET /auth/session hydration is not cancelled by a logout. If it lands after the user
+// has signed back in with another key, its answer is about an older session and must not touch
 // the new session's role.
 test('a startup validation that lands after a sign-in with another key is ignored', async () => {
   const previous = globalThis.fetch;
   let answerStale: ((res: Response) => void) | undefined;
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    if (url.endsWith('/api/auth/validate')) {
-      if (new Headers(init?.headers).get('X-API-Key') === 'old-admin-key')
-        return new Promise<Response>(resolve => (answerStale = resolve));
-      return Promise.resolve(jsonResponse({ valid: true, role: 'viewer' }));
+    const method = init?.method ?? 'GET';
+    if (url.endsWith('/api/auth/session')) {
+      if (method === 'GET') return new Promise<Response>(resolve => (answerStale = resolve));
+      if (method === 'DELETE') return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({ valid: true, role: 'viewer', apiKeyId: 'key-new-viewer' }));
     }
     return previous(input, init);
   }) as typeof fetch;
   try {
     window.history.replaceState(null, '', '/');
-    window.sessionStorage.setItem('openwa_api_key', 'old-admin-key');
+    window.sessionStorage.setItem('openwa_api_key_id', 'key-old-admin');
     window.sessionStorage.setItem('openwa_user_role', 'admin');
     rtl.render(createElement(App));
 
@@ -157,11 +162,12 @@ test('a startup validation that lands after a sign-in with another key is ignore
 
     assert.ok(answerStale, 'the startup validation was never sent');
     await rtl.act(async () => {
-      answerStale!(jsonResponse({ valid: true, role: 'admin' }));
+      answerStale!(jsonResponse({ valid: true, role: 'admin', apiKeyId: 'key-old-admin' }));
       await new Promise(resolve => setTimeout(resolve, 50));
     });
-    assert.equal(logsLink() === null, true, "the old key's admin role was applied to the new viewer session");
-    assert.equal(window.sessionStorage.getItem('openwa_api_key'), 'new-viewer-key');
+    assert.equal(logsLink() === null, true, "the old session's admin role was applied to the new viewer session");
+    assert.equal(window.sessionStorage.getItem('openwa_api_key_id'), 'key-new-viewer');
+    assert.equal(window.sessionStorage.getItem('openwa_api_key'), null);
   } finally {
     globalThis.fetch = previous;
   }

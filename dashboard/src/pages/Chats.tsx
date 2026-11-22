@@ -29,7 +29,7 @@ import {
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
 import { useResolvedPhone, resolvedPhoneQuery, isResolvedPhoneHeld } from '../hooks/useResolvedPhone';
-import { keepsSameKey } from '../utils/authLifecycle';
+import { getActiveApiKeyId, keepsSameKey } from '../utils/authLifecycle';
 import { chatTitle, formatPhoneForDisplay, savedChatName } from '../utils/formatPhone';
 import {
   sessionApi,
@@ -911,7 +911,7 @@ export function Chats() {
   // read flushed then goes out keyless and its 401 reloads the login form, so drop it instead.
   useEffect(
     () => () => {
-      if (sessionStorage.getItem('openwa_api_key')) markReadCoalescer.flush();
+      if (getActiveApiKeyId()) markReadCoalescer.flush();
       else markReadCoalescer.cancel();
     },
     [markReadCoalescer],

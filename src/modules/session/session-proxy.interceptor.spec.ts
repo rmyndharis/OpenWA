@@ -120,6 +120,32 @@ describe('SessionProxyInterceptor', () => {
       },
     );
 
+    it('refuses forwarding a cookie-authenticated request (no API key header) to a peer with 409 ConflictException', async () => {
+      const req = request({
+        headers: { cookie: 'openwa_session=node-local-tok', 'content-type': 'application/json' },
+      });
+      const { interceptor, context, next, handle } = build({ req, row: row({ nodeId: 'peer-node' }) });
+      await expect(interceptor.intercept(context, next)).rejects.toMatchObject({
+        status: 409,
+        message: `Session ${SID} is running on another node; browser sessions are node-local, so connect directly to that node or authenticate with an API key header.`,
+      });
+      expect(handle).not.toHaveBeenCalled();
+    });
+
+    it('does not misclassify an unauthenticated request without a browser session cookie as cookie-authenticated', async () => {
+      const port = await closedPort();
+      const req = request({
+        headers: { 'content-type': 'application/json' },
+      });
+      const { interceptor, context, next, res } = build({
+        req,
+        row: row({ nodeId: 'peer-node', nodeUrl: `http://127.0.0.1:${port}` }),
+      });
+      // Proceeds to forwarding (writing 503 on the closed peer port) rather than throwing 409 browser-session refusal.
+      await interceptor.intercept(context, next);
+      expect(res.status).toHaveBeenCalledWith(503);
+    });
+
     it('executes a forwarded request locally when this node hosts (or may host) the session', async () => {
       const req = request({ headers: { [FORWARDED_HEADER]: 'peer-node', 'x-api-key': 'k' } });
       const owned = build({ req, row: row({ nodeId: 'me' }) });

@@ -531,7 +531,7 @@ test('a media download answered after sign-out saves no file', async () => {
     type: 'document',
     metadata: { media: { mimetype: 'application/pdf', filename: 'report.pdf', omitted: true, sizeBytes: 10 } },
   };
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   const fetchOriginal = globalThis.fetch;
   const createOriginal = URL.createObjectURL;
   const revokeOriginal = URL.revokeObjectURL;
@@ -553,7 +553,7 @@ test('a media download answered after sign-out saves no file', async () => {
     assert.ok(button, 'the over-budget document did not render its download button');
     rtl.fireEvent.click(button);
     await rtl.waitFor(() => assert.ok(answer, 'the download did not start'));
-    window.sessionStorage.removeItem('openwa_api_key');
+    window.sessionStorage.removeItem('openwa_api_key_id');
     answer(new Response(new Blob(['x']), { status: 200 }));
     await new Promise(resolve => setTimeout(resolve, 50));
     assert.deepEqual(saved, [], 'the media file was saved after the sign-out');
@@ -562,7 +562,7 @@ test('a media download answered after sign-out saves no file', async () => {
     URL.createObjectURL = createOriginal;
     URL.revokeObjectURL = revokeOriginal;
     document.createElement = createElementOriginal;
-    window.sessionStorage.removeItem('openwa_api_key');
+    window.sessionStorage.removeItem('openwa_api_key_id');
   }
 });
 
@@ -2188,7 +2188,7 @@ async function clickDownload(
   answer: (call: number) => Response,
   check: (state: { container: HTMLElement; saved: string[]; calls: () => number }) => Promise<void>,
 ): Promise<void> {
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   const fetchOriginal = globalThis.fetch;
   const createOriginal = URL.createObjectURL;
   const revokeOriginal = URL.revokeObjectURL;
@@ -2215,7 +2215,7 @@ async function clickDownload(
     URL.createObjectURL = createOriginal;
     URL.revokeObjectURL = revokeOriginal;
     document.createElement = createElementOriginal;
-    window.sessionStorage.removeItem('openwa_api_key');
+    window.sessionStorage.removeItem('openwa_api_key_id');
   }
 }
 
@@ -2262,7 +2262,7 @@ test('a media download waiting to retry after a refusal is cancelled on sign-out
     call => (call === 1 ? poolFull() : new Response(new Blob(['x']), { status: 200 })),
     async ({ container, saved, calls }) => {
       await rtl.waitFor(() => assert.equal(calls(), 1));
-      window.sessionStorage.removeItem('openwa_api_key');
+      window.sessionStorage.removeItem('openwa_api_key_id');
       await new Promise(resolve => setTimeout(resolve, 1_250));
       assert.equal(calls(), 1);
       assert.deepEqual(saved, [], 'the media file was saved after the sign-out');
@@ -2276,7 +2276,7 @@ test('a media download whose retry is answered after sign-out saves no file', as
   const readBlob = retried.blob.bind(retried);
   let read: Promise<Blob> | undefined;
   retried.blob = () => {
-    window.sessionStorage.removeItem('openwa_api_key');
+    window.sessionStorage.removeItem('openwa_api_key_id');
     return (read = readBlob());
   };
   await clickDownload(

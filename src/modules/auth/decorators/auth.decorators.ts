@@ -9,6 +9,7 @@ export const SESSION_SCOPED_KEY = 'sessionScoped';
 export const UNSCOPED_KEY = 'requireUnscopedKey';
 export const CHAT_SCOPED_KEY = 'chatScoped';
 export const CHAT_QUOTED_ALLOWED_KEY = 'chatQuotedAllowed';
+export const HEADER_AUTH_ONLY_KEY = 'headerAuthOnly';
 
 /**
  * Mark a route as requiring a specific role
@@ -74,6 +75,11 @@ export const ChatScoped = (kind: ChatScopeKind) => SetMetadata(CHAT_SCOPED_KEY, 
  * reference the guard cannot see.
  */
 export const ChatQuotedAllowed = () => SetMetadata(CHAT_QUOTED_ALLOWED_KEY, true);
+
+/**
+ * Mark a route as requiring API-key header authentication (never browser session cookies).
+ */
+export const HeaderAuthOnly = () => SetMetadata(HEADER_AUTH_ONLY_KEY, true);
 
 /**
  * Get the current API key from request

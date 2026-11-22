@@ -25,6 +25,7 @@ import { ActiveKeyIndex } from './active-key-index';
 import { apiKeyAuthorizationFingerprint, normalizeScopeList } from './api-key-authorization';
 import { normalizeChatAllowList } from '../../common/security/chat-scope';
 import { EventsGateway, type ApiKeyEvictionReason } from '../events/events.gateway';
+import { BrowserSessionService } from './browser-session.service';
 import { isSwaggerEnabled } from '../../config/bootstrap-security';
 
 /**
@@ -383,6 +384,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     // Drop any un-flushed usage accumulator so a deleted key leaves nothing behind in the Map.
     this.usageTracker.forget(id);
     this.removeBootstrapKeyFileIfMatching(apiKey);
+    await this.revokeBrowserSessionsForKey(id);
     this.evictActiveSockets(id, 'deleted');
     this.keyIndex?.refreshSoon();
     this.logger.log(`API key deleted: ${apiKey.name}`, {
@@ -404,6 +406,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     // drop it here.
     this.usageTracker.forget(id);
     this.removeBootstrapKeyFileIfMatching(apiKey);
+    await this.revokeBrowserSessionsForKey(id);
     // Kick any WebSocket connections already authenticated with this key: without this, a revoked
     // key keeps receiving events on already-subscribed sockets until they happen to disconnect.
     this.evictActiveSockets(id, 'revoked');
@@ -549,6 +552,15 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async revokeBrowserSessionsForKey(keyId: string): Promise<void> {
+    try {
+      const sessions = this.moduleRef.get(BrowserSessionService, { strict: false });
+      await sessions?.revokeByApiKeyId(keyId);
+    } catch {
+      // BrowserSessionService may be absent in minimal unit-test modules.
+    }
+  }
+
   /**
    * The current rows for a set of key ids, in one statement. Feeds the WebSocket gateway's periodic
    * re-validation of the keys behind its live sockets: an id whose row is gone simply comes back
@@ -569,11 +581,32 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     // Trim before hashing so every surface agrees on what the credential is. HTTP already strips
     // surrounding whitespace from header values, so a pasted key with a stray space/newline
     // authenticates over REST but fails on the WebSocket handshake (the CONNECT payload carries the
-    // literal string) — the dashboard then runs commands fine while never receiving events, and the
-    // session looks permanently disconnected. Whitespace is never part of a key.
+    // literal string). Whitespace is never part of a key.
     const keyHash = this.hashKey(rawKey?.trim());
     const apiKey = await this.apiKeyRepository.findOne({ where: { keyHash } });
+    return this.checkAndRecordApiKey(apiKey, clientIp, sessionId, { recordUsage });
+  }
 
+  /**
+   * Re-validate a live API key by its primary key id (used by browser session cookies so revoking,
+   * expiring, demoting, or re-scoping a key takes immediate effect without storing raw keys).
+   */
+  async validateApiKeyById(
+    apiKeyId: string,
+    clientIp?: string,
+    sessionId?: string,
+    { recordUsage = true }: { recordUsage?: boolean } = {},
+  ): Promise<ApiKey> {
+    const apiKey = await this.apiKeyRepository.findOne({ where: { id: apiKeyId } });
+    return this.checkAndRecordApiKey(apiKey, clientIp, sessionId, { recordUsage });
+  }
+
+  private async checkAndRecordApiKey(
+    apiKey: ApiKey | null,
+    clientIp?: string,
+    sessionId?: string,
+    { recordUsage = true }: { recordUsage?: boolean } = {},
+  ): Promise<ApiKey> {
     if (!apiKey) {
       throw new UnresolvedApiKeyException('Invalid API key');
     }

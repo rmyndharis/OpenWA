@@ -91,7 +91,7 @@ afterEach(() => {
   updateStatus = 200;
   updateGate = undefined;
   updatePaths.length = 0;
-  window.sessionStorage.removeItem('openwa_api_key');
+  window.sessionStorage.removeItem('openwa_api_key_id');
 });
 
 function renderApiKeys(): void {
@@ -532,17 +532,17 @@ test('a refused update keeps the editor open and shows the reason', async () => 
 });
 
 test('editing the key the dashboard is signed in with warns before saving', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'owa_k1abXXXXYYYYZZZZ');
+  window.sessionStorage.setItem('openwa_api_key_id', billingBot.id);
   await openEdit(billingBot);
   rtl.screen.getByText(/This dashboard is signed in with this key/);
   rtl.cleanup();
-  window.sessionStorage.setItem('openwa_api_key', 'owa_k1zzXXXXYYYYZZZZ');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-other');
   await openEdit(billingBot);
   assert.equal(rtl.screen.queryByText(/This dashboard is signed in with this key/) === null, true);
 });
 
-// The key seeded from API_MASTER_KEY lists a fixed marker, not its own first characters, so the row of the key the
-// dashboard signed in with is the one that no other prefix matches.
+// The key seeded from API_MASTER_KEY lists a fixed marker instead of a prefix; matching by the
+// session's non-secret apiKeyId identifies it unambiguously without storing any raw key.
 const masterKey = {
   ...billingBot,
   id: 'key-master',
@@ -563,7 +563,7 @@ async function openEditOf(list: Record<string, unknown>[], name: string): Promis
 const signedInNote = () => rtl.screen.queryByText(/This dashboard is signed in with this key/);
 
 test('editing the key seeded from API_MASTER_KEY warns when the dashboard is signed in with it', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'Acme-Prod-Gateway-Master-2026-Q4!');
+  window.sessionStorage.setItem('openwa_api_key_id', masterKey.id);
   await openEditOf([masterKey, billingBot], 'Default Admin Key');
   assert.notEqual(signedInNote(), null);
   rtl.cleanup();
@@ -571,14 +571,8 @@ test('editing the key seeded from API_MASTER_KEY warns when the dashboard is sig
   assert.equal(signedInNote(), null);
 });
 
-test('the warning also finds a seeded key that looks like a generated one', async () => {
-  window.sessionStorage.setItem('openwa_api_key', `owa_k1_${'ab12'.repeat(16)}`);
-  await openEditOf([masterKey, billingBot], 'Default Admin Key');
-  assert.notEqual(signedInNote(), null);
-});
-
 test('editing the key seeded from API_MASTER_KEY does not warn when the dashboard is signed in with another key', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'owa_k1abXXXXYYYYZZZZ');
+  window.sessionStorage.setItem('openwa_api_key_id', billingBot.id);
   await openEditOf([masterKey, billingBot], 'Default Admin Key');
   assert.equal(signedInNote(), null);
   rtl.cleanup();

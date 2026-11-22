@@ -50,12 +50,12 @@ afterEach(() => {
   rtl.cleanup();
   queryClient?.clear();
   queryClient = undefined;
-  window.sessionStorage.removeItem('openwa_api_key');
+  window.sessionStorage.removeItem('openwa_api_key_id');
 });
 
 /** The page listing `keys`, the dashboard signed in with billing-bot, once the row of the key called `name` is there. */
 async function renderKeys(name: string): Promise<void> {
-  window.sessionStorage.setItem('openwa_api_key', 'owa_k1abXXXXYYYYZZZZ');
+  window.sessionStorage.setItem('openwa_api_key_id', signedInKey.id);
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   rtl.render(
     createElement(

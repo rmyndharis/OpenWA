@@ -116,7 +116,7 @@ beforeEach(() => {
   hits = [hit(SECOND, 1), hit(FOURTH, 2)];
   window.sessionStorage.setItem('openwa_user_role', 'admin');
   window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
-  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-key');
 });
 
 afterEach(async () => {

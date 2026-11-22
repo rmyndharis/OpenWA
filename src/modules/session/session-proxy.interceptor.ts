@@ -17,6 +17,8 @@ import type { Request, Response } from 'express';
 import { Session } from './entities/session.entity';
 import { SessionOwnershipService } from './session-ownership.service';
 import { SESSION_SCOPED_KEY } from '../auth/decorators/auth.decorators';
+import { extractBrowserSessionCookie } from '../auth/browser-session.util';
+import { presentedApiKey } from '../../common/security/bearer-token';
 import { createLogger } from '../../common/services/logger.service';
 import { getRequestId } from '../../common/services/request-context';
 import { isTransientDbError } from '../../common/utils/db-errors';
@@ -314,6 +316,22 @@ export class SessionProxyInterceptor implements NestInterceptor {
     }
 
     if (!owner.nodeUrl) return next.handle();
+
+    // Browser sessions live in each node's local main.sqlite and are never shared across replicas.
+    // Forwarding a cookie-authenticated request without an API key header would hit the peer
+    // unauthenticated, produce spurious auth-failure audit logs, and relay a 401 that signs the
+    // dashboard user out. Fail clearly with 409 instead.
+    const isCookieAuthenticated =
+      !presentedApiKey(request.headers) &&
+      Boolean(
+        (request as Request & { browserSessionId?: string }).browserSessionId ||
+        extractBrowserSessionCookie(request.headers.cookie),
+      );
+    if (isCookieAuthenticated) {
+      throw new ConflictException(
+        `Session ${sessionId} is running on another node; browser sessions are node-local, so connect directly to that node or authenticate with an API key header.`,
+      );
+    }
 
     await this.forward(request, context.switchToHttp().getResponse<Response>(), owner.nodeId, owner.nodeUrl);
     // The response has been written and ended here. Emit undefined rather than completing empty:

@@ -473,7 +473,7 @@ before(async () => {
   window.sessionStorage.setItem('openwa_engine_type', 'baileys');
   // useWebSocket.connect() bails without this, so no socket would exist to receive a frame. It
   // dials nothing: the client is the double above.
-  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-key');
   // The real i18n instance, and then its readiness promise: catalogues are fetched rather than
   // bundled, so importing the module only STARTS the load. Every `getByText` below is English copy
   // out of en.json, which renders as a raw key until it lands. Awaiting is what makes that
@@ -1937,12 +1937,12 @@ async function leaveWithPendingRead(loggedOut: boolean): Promise<number> {
     'the read went out before the page was left',
   );
   // Logout removes the key before the authenticated tree unmounts.
-  if (loggedOut) window.sessionStorage.removeItem('openwa_api_key');
+  if (loggedOut) window.sessionStorage.removeItem('openwa_api_key_id');
   try {
     unmount();
     await new Promise(resolve => setTimeout(resolve, 1_000));
   } finally {
-    window.sessionStorage.setItem('openwa_api_key', 'test-key');
+    window.sessionStorage.setItem('openwa_api_key_id', 'test-key');
   }
   return countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`);
 }

@@ -2,6 +2,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Optional,
   Req,
   ServiceUnavailableException,
   UnauthorizedException,
@@ -16,6 +17,8 @@ import { Public } from '../auth/decorators/auth.decorators';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { AuthService } from '../auth/auth.service';
+import { BrowserSessionService } from '../auth/browser-session.service';
+import { extractBrowserSessionCookie } from '../auth/browser-session.util';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { SlidingWindowLimiter } from '../events/ws-rate-limit';
@@ -63,6 +66,7 @@ export class HealthController {
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
+    @Optional() private readonly browserSessionService?: BrowserSessionService,
   ) {
     // Bounds the audit rows one source IP can write per minute through this deliberately
     // unthrottled route: the health probes themselves must never be rate-limited, but without a
@@ -109,13 +113,18 @@ export class HealthController {
    */
   private async hasValidApiKey(req: Request): Promise<boolean> {
     const rawKey = presentedApiKey(req.headers);
-    if (!rawKey) return false;
+    const cookieToken = rawKey === undefined ? extractBrowserSessionCookie(req.headers?.cookie) : undefined;
+    if (rawKey === undefined && !(cookieToken && this.browserSessionService)) return false;
     const clientIp = resolveClientIp(req, this.configService.get<string[]>('security.trustedProxies') ?? []);
     const subject = limiterKeyForIp(clientIp);
     const reservation = {};
     if (!this.keyValidationLimiter.allow(subject, reservation)) return false;
     try {
-      await this.authService.validateApiKey(rawKey, clientIp);
+      if (rawKey !== undefined) {
+        await this.authService.validateApiKey(rawKey, clientIp);
+      } else {
+        await this.browserSessionService!.validateSessionToken(cookieToken!, clientIp);
+      }
       this.keyValidationLimiter.refund(subject, reservation);
       return true;
     } catch (err) {

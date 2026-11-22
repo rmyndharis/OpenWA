@@ -113,7 +113,7 @@ afterEach(async () => {
   queryClient = undefined;
   window.confirm = confirmOriginal;
   HTMLAnchorElement.prototype.click = anchorClickOriginal;
-  window.sessionStorage.removeItem('openwa_api_key');
+  window.sessionStorage.removeItem('openwa_api_key_id');
 });
 
 // Every top-level rule of the page's stylesheet that sets display: none.
@@ -159,7 +159,7 @@ test('the backup file chooser of Import data can be opened from the keyboard', a
 });
 
 test('keyboard focus stays on Import data after a backup file is imported', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-admin-key');
   window.confirm = () => true;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   rtl.render(
@@ -185,7 +185,7 @@ test('keyboard focus stays on Import data after a backup file is imported', asyn
 });
 
 test('keyboard focus returns to Import data when the import confirmation is declined', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-admin-key');
   window.confirm = () => false;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   rtl.render(
@@ -210,7 +210,7 @@ test('keyboard focus returns to Import data when the import confirmation is decl
 });
 
 test('keyboard focus stays on Export data after a backup is exported', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-admin-key');
   HTMLAnchorElement.prototype.click = () => {};
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   rtl.render(
@@ -237,7 +237,7 @@ test('keyboard focus stays on Export data after a backup is exported', async () 
 });
 
 test('restoring focus after a backup export does not scroll the page back to the button', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-admin-key');
   HTMLAnchorElement.prototype.click = () => {};
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   rtl.render(
@@ -268,7 +268,7 @@ test('restoring focus after a backup export does not scroll the page back to the
 });
 
 test('keyboard focus stays on Download backup first in the restart modal after a backup is exported', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-admin-key');
   HTMLAnchorElement.prototype.click = () => {};
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   const { container } = rtl.render(
@@ -304,7 +304,7 @@ test('keyboard focus stays on Download backup first in the restart modal after a
 });
 
 test('moving keyboard focus to another control while a backup export runs does not steal focus back', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-admin-key');
   HTMLAnchorElement.prototype.click = () => {};
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   rtl.render(

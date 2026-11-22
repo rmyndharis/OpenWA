@@ -162,4 +162,52 @@ describe('ActiveKeyIndex', () => {
     await jest.advanceTimersByTimeAsync(60_000);
     expect(find).toHaveBeenCalledTimes(2);
   });
+
+  it('recognises active browser session cookies for pre-body-parser keyed classification except on header-only paths', async () => {
+    const keyRow = { id: 'key-1', ...row('k1', { allowedIps: ['10.0.0.1'] }) };
+    const sessionToken = 'browser-session-tok-1';
+    const sessionRepo = {
+      find: jest.fn().mockResolvedValue([
+        {
+          tokenHash: sha(sessionToken),
+          apiKeyId: 'key-1',
+          expiresAt: new Date(Date.now() + 60_000),
+          revokedAt: null,
+        },
+      ]),
+    };
+    const keyRepo = { find: jest.fn().mockResolvedValue([keyRow]) };
+    const IndexCtor = ActiveKeyIndex as unknown as new (...args: unknown[]) => ActiveKeyIndex;
+    const index = new IndexCtor(keyRepo, sessionRepo);
+    await index.onApplicationBootstrap();
+    try {
+      expect(index.recognise({ cookie: `openwa_session=${sessionToken}` }, '10.0.0.1', '/api/infra/import-data')).toBe(
+        sha('k1'),
+      );
+      expect(
+        index.recognise({ cookie: `openwa_session=${sessionToken}` }, '10.0.0.99', '/api/infra/import-data'),
+      ).toBeUndefined();
+      expect(index.recognise({ cookie: `openwa_session=${sessionToken}` }, '10.0.0.1', '/mcp')).toBeUndefined();
+      expect(index.recognise({ cookie: `openwa_session=${sessionToken}` }, '10.0.0.1', '/api/metrics')).toBeUndefined();
+      expect(
+        index.recognise({ cookie: `openwa_session=${sessionToken}` }, '10.0.0.1', '/api/admin/queues'),
+      ).toBeUndefined();
+      // Header precedence: invalid or whitespace-only X-API-Key does not fall back to a valid cookie.
+      expect(
+        index.recognise(
+          { 'x-api-key': 'wrong', cookie: `openwa_session=${sessionToken}` },
+          '10.0.0.1',
+          '/api/sessions',
+        ),
+      ).toBeUndefined();
+      expect(
+        index.recognise({ 'x-api-key': '   ', cookie: `openwa_session=${sessionToken}` }, '10.0.0.1', '/api/sessions'),
+      ).toBeUndefined();
+      // ActiveKeyIndex.load() filters out expired rows at query time (expiresAt > now).
+      const findCalls = sessionRepo.find.mock.calls as Array<Array<{ where?: { expiresAt?: unknown } }>>;
+      expect(findCalls[0]?.[0]?.where?.expiresAt).toBeDefined();
+    } finally {
+      index.onModuleDestroy();
+    }
+  });
 });

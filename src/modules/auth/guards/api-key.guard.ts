@@ -5,11 +5,18 @@ import {
   UnauthorizedException,
   ForbiddenException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { AuthService, UnresolvedApiKeyException } from '../auth.service';
+import { BrowserSessionService } from '../browser-session.service';
+import {
+  assertBrowserCsrfSafe,
+  extractBrowserSessionCookie,
+  isCookieAuthDisallowedPath,
+} from '../browser-session.util';
 import { ChatScopeService } from '../chat-scope.service';
 import type { ChatScope } from '../../../common/security/chat-scope';
 import { BULK_MESSAGES_MAX } from '../../message/dto/bulk-message.dto';
@@ -21,6 +28,7 @@ import {
   UNSCOPED_KEY,
   CHAT_SCOPED_KEY,
   CHAT_QUOTED_ALLOWED_KEY,
+  HEADER_AUTH_ONLY_KEY,
   ChatScopeKind,
 } from '../decorators/auth.decorators';
 import { resolveClientIp } from '../../../common/utils/ip';
@@ -38,6 +46,7 @@ export class ApiKeyGuard implements CanActivate {
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
     private readonly chatScope: ChatScopeService,
+    @Optional() private readonly browserSessionService?: BrowserSessionService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -77,9 +86,24 @@ export class ApiKeyGuard implements CanActivate {
 
   private async authorize(request: Request, context: ExecutionContext): Promise<boolean> {
     const apiKeyHeader = this.extractApiKey(request);
+    let cookieToken: string | undefined;
 
     if (!apiKeyHeader) {
-      throw new UnresolvedApiKeyException('API key is required');
+      const candidateCookie = extractBrowserSessionCookie(request.headers?.cookie);
+      if (candidateCookie && this.browserSessionService) {
+        const requestPath = request.path;
+        const originalPath = request.originalUrl?.split('?')[0];
+        const headerOnly = this.reflector.getAllAndOverride<boolean>(HEADER_AUTH_ONLY_KEY, [
+          context.getHandler(),
+          context.getClass(),
+        ]);
+        if (!headerOnly && !isCookieAuthDisallowedPath(requestPath) && !isCookieAuthDisallowedPath(originalPath)) {
+          cookieToken = candidateCookie;
+        }
+      }
+      if (!cookieToken) {
+        throw new UnresolvedApiKeyException('API key is required');
+      }
     }
 
     const requiredRole = this.reflector.getAllAndOverride<ApiKeyRole>(REQUIRED_ROLE_KEY, [
@@ -89,7 +113,7 @@ export class ApiKeyGuard implements CanActivate {
 
     // Resolve the session id used for the key's allowedSessions scope. `:sessionId` is always a
     // session; the bare `:id` param is only a session on controllers marked @SessionScoped (i.e.
-    // SessionController) — on other routes `:id` is an unrelated resource id (API key, plugin, …)
+    // SessionController); on other routes `:id` is an unrelated resource id (API key, plugin, ...)
     // and must NOT be fed to the allowedSessions check, which would spuriously deny a scoped key.
     const sessionScoped = this.reflector.getAllAndOverride<boolean>(SESSION_SCOPED_KEY, [
       context.getHandler(),
@@ -99,8 +123,17 @@ export class ApiKeyGuard implements CanActivate {
       string | undefined;
     const clientIp = this.getClientIp(request);
 
-    // Validate API key
-    const apiKey = await this.authService.validateApiKey(apiKeyHeader, clientIp, sessionId);
+    // Validate API key header (exclusive precedence) or HttpOnly browser session cookie BEFORE
+    // running CSRF checks so bogus/revoked/expired cookies fail with 401 UnresolvedApiKeyException
+    // (bounded by the unauthenticated audit limiter) instead of uncapped 403 audit rows.
+    let apiKey: ApiKey;
+    if (apiKeyHeader) {
+      apiKey = await this.authService.validateApiKey(apiKeyHeader, clientIp, sessionId);
+    } else {
+      const validated = await this.browserSessionService!.validateSessionToken(cookieToken!, clientIp, sessionId);
+      apiKey = validated.apiKey;
+      (request as Request & { browserSessionId?: string }).browserSessionId = validated.session.id;
+    }
 
     // Stamp the resolved actor into the per-request async context so downstream audit log writes —
     // which fire from services deep in the call stack without DI access to the key — can attribute
@@ -113,6 +146,11 @@ export class ApiKeyGuard implements CanActivate {
     // an IP alone — behind NAT or a proxy without TRUSTED_PROXIES that IP is common to every tenant,
     // so the operator could see that a key had been denied but not which one to revoke.
     setRequestActor({ apiKeyId: apiKey.id, apiKeyName: apiKey.name, ipAddress: clientIp });
+
+    if (!apiKeyHeader) {
+      const trustedProxies = this.configService.get<string[]>('security.trustedProxies') ?? [];
+      assertBrowserCsrfSafe(request, trustedProxies);
+    }
 
     if (requiredRole && !this.authService.hasPermission(apiKey, requiredRole)) {
       throw new ForbiddenException(`Insufficient permissions. Required: ${requiredRole}`);

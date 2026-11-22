@@ -33,7 +33,7 @@ const historyRow = (n: number) => ({
 before(async () => {
   const { installJsdomGlobals } = await import('../test-helpers/jsdom.ts');
   await installJsdomGlobals();
-  sessionStorage.setItem('openwa_api_key', 'k');
+  sessionStorage.setItem('openwa_api_key_id', 'k');
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = String(input);
     calls.push(url);

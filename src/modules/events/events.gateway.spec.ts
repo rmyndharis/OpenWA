@@ -1502,4 +1502,234 @@ describe('EventsGateway rate limiting', () => {
       expect(next.disconnect).not.toHaveBeenCalled();
     });
   });
+
+  describe('browser session cookie auth and CSWSH defense', () => {
+    let browserSessionService: { validateSessionToken: jest.Mock; validateSessionById: jest.Mock };
+    const savedEnv = { cors: process.env.CORS_ORIGINS, nodeEnv: process.env.NODE_ENV };
+
+    const makeCookieSock = (
+      id: string,
+      headers: Record<string, string>,
+      opts: { secure?: boolean; address?: string } = {},
+    ): MockSocket => {
+      const s: MockSocket = {
+        id,
+        handshake: {
+          headers,
+          query: {},
+          auth: {},
+          address: opts.address ?? '203.0.113.5',
+          ...(opts.secure !== undefined ? { secure: opts.secure } : {}),
+        },
+        data: {},
+        emit: jest.fn(),
+        disconnect: jest.fn(() => {
+          s.disconnected = true;
+        }),
+        join: jest.fn(),
+        leave: jest.fn(),
+        rooms: new Set<string>([id]),
+      };
+      return s;
+    };
+
+    const buildCookieGateway = () => {
+      const Ctor = EventsGateway as unknown as new (...args: unknown[]) => EventsGateway;
+      return new Ctor(authService, auditService, asConfig(), undefined, browserSessionService);
+    };
+
+    beforeEach(() => {
+      browserSessionService = {
+        validateSessionToken: jest.fn(),
+        validateSessionById: jest.fn(),
+      };
+    });
+
+    afterEach(() => {
+      if (savedEnv.cors === undefined) delete process.env.CORS_ORIGINS;
+      else process.env.CORS_ORIGINS = savedEnv.cors;
+      if (savedEnv.nodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = savedEnv.nodeEnv;
+    });
+
+    it('rejects cookie-authenticated WS handshakes missing Origin or from an untrusted Origin (CSWSH defense)', async () => {
+      process.env.NODE_ENV = 'development';
+      delete process.env.CORS_ORIGINS;
+      const gw = buildCookieGateway();
+
+      const missingOrigin = makeCookieSock('ws-no-origin', {
+        cookie: 'openwa_session=tok-1',
+        host: 'wa.example.com',
+      });
+      await gw.handleConnection(asSocket(missingOrigin));
+      expect(missingOrigin.disconnect).toHaveBeenCalledWith(true);
+      expect(browserSessionService.validateSessionToken).not.toHaveBeenCalled();
+
+      const evilOrigin = makeCookieSock('ws-evil-origin', {
+        cookie: 'openwa_session=tok-1',
+        host: 'wa.example.com',
+        origin: 'https://evil.example',
+      });
+      await gw.handleConnection(asSocket(evilOrigin));
+      expect(evilOrigin.disconnect).toHaveBeenCalledWith(true);
+      expect(browserSessionService.validateSessionToken).not.toHaveBeenCalled();
+
+      // Scheme downgrade: http:// origin on a secure (wss/https) handshake must be refused.
+      const downgradeOrigin = makeCookieSock(
+        'ws-downgrade-origin',
+        {
+          cookie: 'openwa_session=tok-1',
+          host: 'wa.example.com',
+          origin: 'http://wa.example.com',
+        },
+        { secure: true },
+      );
+      await gw.handleConnection(asSocket(downgradeOrigin));
+      expect(downgradeOrigin.disconnect).toHaveBeenCalledWith(true);
+      expect(browserSessionService.validateSessionToken).not.toHaveBeenCalled();
+    });
+
+    it('authenticates same-origin cookie WS without storing raw keys, re-validates via validateSessionById, and supports evictBrowserSession', async () => {
+      const key = {
+        id: 'k-cookie',
+        name: 'Cookie Key',
+        role: 'admin',
+        isActive: true,
+        allowedSessions: null,
+        allowedChats: null,
+        allowedIps: null,
+        expiresAt: null,
+      };
+      browserSessionService.validateSessionToken.mockResolvedValue({
+        session: { id: 'bs-42', apiKeyId: 'k-cookie' },
+        apiKey: key,
+      });
+      browserSessionService.validateSessionById.mockResolvedValue({
+        session: { id: 'bs-42', apiKeyId: 'k-cookie' },
+        apiKey: key,
+      });
+
+      const gw = buildCookieGateway();
+      const sock = makeCookieSock(
+        'ws-ok',
+        {
+          cookie: 'openwa_session=tok-1',
+          host: 'wa.example.com:443',
+          origin: 'https://wa.example.com',
+        },
+        { secure: true },
+      );
+
+      await gw.handleConnection(asSocket(sock));
+      expect(sock.disconnect).not.toHaveBeenCalled();
+      expect(sock.data.browserSessionId).toBe('bs-42');
+      expect(sock.data.apiKeyId).toBe('k-cookie');
+      expect(sock.data.rawApiKey).toBeUndefined();
+
+      const subRes = await gw.handleMessage(asSocket(sock), {
+        type: 'subscribe',
+        sessionId: 's1',
+        events: ['session.status'],
+        requestId: 'r1',
+      } as unknown as WSClientMessage);
+      expect(subRes).toEqual(expect.objectContaining({ type: 'subscribed', sessionId: 's1' }));
+      expect(browserSessionService.validateSessionById).toHaveBeenCalledWith('bs-42', '203.0.113.5');
+
+      // Evicting the browser session disconnects the bound socket immediately.
+      (gw as unknown as { evictBrowserSession: (id: string) => void }).evictBrowserSession('bs-42');
+      expect(sock.disconnect).toHaveBeenCalledWith(true);
+
+      // Behind a trusted reverse proxy rewriting Host -> upstream and forwarding X-Forwarded-Host + X-Forwarded-Proto:
+      const savedProxies = process.env.TRUSTED_PROXIES;
+      delete process.env.TRUSTED_PROXIES;
+      try {
+        // Standard TLS-terminating reverse proxy over plain HTTP without TRUSTED_PROXIES configured:
+        const plainHttpBehindTlsProxy = makeCookieSock(
+          'ws-tls-proxy-default',
+          {
+            cookie: 'openwa_session=tok-1',
+            host: 'wa.example.com',
+            origin: 'https://wa.example.com',
+          },
+          { secure: false, address: '172.18.0.2' },
+        );
+        await gw.handleConnection(asSocket(plainHttpBehindTlsProxy));
+        expect(plainHttpBehindTlsProxy.disconnect).not.toHaveBeenCalled();
+
+        process.env.TRUSTED_PROXIES = '10.0.0.1';
+        const proxiedSock = makeCookieSock(
+          'ws-proxied',
+          {
+            cookie: 'openwa_session=tok-1',
+            host: 'openwa-backend:2785',
+            'x-forwarded-host': 'public.example.com:443',
+            'x-forwarded-proto': 'http, https',
+            origin: 'https://public.example.com',
+          },
+          { secure: false, address: '10.0.0.1' },
+        );
+        await gw.handleConnection(asSocket(proxiedSock));
+        expect(proxiedSock.disconnect).not.toHaveBeenCalled();
+
+        // Trusted proxy announcing HTTPS still refuses plain http:// downgrade Origin.
+        const proxiedDowngradeSock = makeCookieSock(
+          'ws-proxied-downgrade',
+          {
+            cookie: 'openwa_session=tok-1',
+            host: 'wa.example.com',
+            'x-forwarded-proto': 'https',
+            origin: 'http://wa.example.com',
+          },
+          { secure: false, address: '10.0.0.1' },
+        );
+        await gw.handleConnection(asSocket(proxiedDowngradeSock));
+        expect(proxiedDowngradeSock.disconnect).toHaveBeenCalledWith(true);
+      } finally {
+        if (savedProxies === undefined) delete process.env.TRUSTED_PROXIES;
+        else process.env.TRUSTED_PROXIES = savedProxies;
+      }
+    });
+
+    it('disconnects cookie-authenticated sockets during sweep when validateSessionById rejects', async () => {
+      const key = {
+        id: 'k-cookie',
+        name: 'Cookie Key',
+        role: 'admin',
+        isActive: true,
+        allowedSessions: null,
+        allowedChats: null,
+        allowedIps: null,
+        expiresAt: null,
+      };
+      (authService as unknown as { findAuthorizationStates: jest.Mock }).findAuthorizationStates = jest
+        .fn()
+        .mockResolvedValue([key]);
+      browserSessionService.validateSessionToken.mockResolvedValue({
+        session: { id: 'bs-99', apiKeyId: 'k-cookie' },
+        apiKey: key,
+      });
+      browserSessionService.validateSessionById.mockRejectedValue(
+        new UnauthorizedException('Session has been revoked'),
+      );
+
+      const gw = buildCookieGateway();
+      const sock = makeCookieSock(
+        'ws-sweep',
+        {
+          cookie: 'openwa_session=tok-99',
+          host: 'wa.example.com',
+          origin: 'https://wa.example.com',
+        },
+        { secure: true },
+      );
+      await gw.handleConnection(asSocket(sock));
+      expect(sock.disconnect).not.toHaveBeenCalled();
+
+      await (gw as unknown as { sweepApiKeyAuthorization: () => Promise<void> }).sweepApiKeyAuthorization();
+      expect(browserSessionService.validateSessionById).toHaveBeenCalledWith('bs-99', '203.0.113.5', undefined, {
+        recordUsage: false,
+      });
+      expect(sock.disconnect).toHaveBeenCalledWith(true);
+    });
+  });
 });

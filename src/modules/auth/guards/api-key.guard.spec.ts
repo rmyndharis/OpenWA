@@ -799,4 +799,273 @@ describe('ApiKeyGuard', () => {
       expect(await guard.canActivate(bulkContext)).toBe(true);
     });
   });
+
+  describe('browser session cookie authentication and CSRF defense', () => {
+    let browserSessionService: { validateSessionToken: jest.Mock };
+    let cookieGuard: ApiKeyGuard;
+    const savedEnv = { cors: process.env.CORS_ORIGINS, nodeEnv: process.env.NODE_ENV };
+
+    const makeCookieContext = (
+      method: string,
+      path: string,
+      headers: Record<string, string>,
+      params: Record<string, string> = {},
+      opts: { secure?: boolean; remoteAddress?: string } = {},
+    ): ExecutionContext => {
+      const remoteAddress = opts.remoteAddress ?? '127.0.0.1';
+      const request = {
+        method,
+        path,
+        originalUrl: path,
+        headers,
+        params,
+        query: {},
+        body: {},
+        secure: opts.secure ?? false,
+        ip: remoteAddress,
+        socket: { remoteAddress },
+      };
+      return {
+        getHandler: jest.fn(),
+        getClass: jest.fn(),
+        switchToHttp: () => ({
+          getRequest: () => request,
+        }),
+      } as unknown as ExecutionContext;
+    };
+
+    beforeEach(() => {
+      browserSessionService = { validateSessionToken: jest.fn() };
+      const GuardCtor = ApiKeyGuard as unknown as new (...args: unknown[]) => ApiKeyGuard;
+      cookieGuard = new GuardCtor(
+        authService,
+        reflector,
+        configService,
+        auditService,
+        new ChatScopeService(),
+        browserSessionService,
+      );
+      reflector.getAllAndOverride.mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      if (savedEnv.cors === undefined) delete process.env.CORS_ORIGINS;
+      else process.env.CORS_ORIGINS = savedEnv.cors;
+      if (savedEnv.nodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = savedEnv.nodeEnv;
+    });
+
+    it('authenticates safe GET requests using openwa_session cookie without requiring X-Requested-With', async () => {
+      const apiKey = createMockApiKey({ role: ApiKeyRole.ADMIN });
+      browserSessionService.validateSessionToken.mockResolvedValue({
+        session: { id: 'bs-1', apiKeyId: apiKey.id },
+        apiKey,
+      });
+
+      const ctx = makeCookieContext('GET', '/api/sessions', {
+        cookie: 'other=1; openwa_session=tok-abc; foo=bar',
+        host: 'wa.example.com',
+      });
+      await expect(cookieGuard.canActivate(ctx)).resolves.toBe(true);
+      expect(browserSessionService.validateSessionToken).toHaveBeenCalledWith('tok-abc', '127.0.0.1', undefined);
+      expect(authService.validateApiKey).not.toHaveBeenCalled();
+    });
+
+    it('gives X-API-Key header exclusive precedence over cookie and requires no CSRF header on POST', async () => {
+      const apiKey = createMockApiKey({ role: ApiKeyRole.ADMIN });
+      (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+
+      const ctx = makeCookieContext('POST', '/api/sessions', {
+        'x-api-key': 'raw-key',
+        cookie: 'openwa_session=tok-abc',
+      });
+      await expect(cookieGuard.canActivate(ctx)).resolves.toBe(true);
+      expect(authService.validateApiKey).toHaveBeenCalledWith('raw-key', '127.0.0.1', undefined);
+      expect(browserSessionService.validateSessionToken).not.toHaveBeenCalled();
+    });
+
+    it('rejects bogus cookie POST without X-Requested-With as 401 UnresolvedApiKeyException before CSRF check', async () => {
+      browserSessionService.validateSessionToken.mockRejectedValue(new UnresolvedApiKeyException('Invalid session'));
+      const ctx = makeCookieContext('POST', '/api/sessions', {
+        cookie: 'openwa_session=bogus-tok',
+        host: 'wa.example.com',
+        origin: 'https://wa.example.com',
+      });
+      await expect(cookieGuard.canActivate(ctx)).rejects.toThrow(UnresolvedApiKeyException);
+      expect(browserSessionService.validateSessionToken).toHaveBeenCalledWith('bogus-tok', '127.0.0.1', undefined);
+    });
+
+    it('rejects valid cookie-authenticated POST without X-Requested-With: OpenWA-Dashboard with 403', async () => {
+      const apiKey = createMockApiKey({ role: ApiKeyRole.ADMIN });
+      browserSessionService.validateSessionToken.mockResolvedValue({
+        session: { id: 'bs-1', apiKeyId: apiKey.id },
+        apiKey,
+      });
+      const ctx = makeCookieContext(
+        'POST',
+        '/api/sessions',
+        {
+          cookie: 'openwa_session=tok-abc',
+          host: 'wa.example.com',
+          origin: 'https://wa.example.com',
+          'sec-fetch-site': 'same-origin',
+        },
+        {},
+        { secure: true },
+      );
+      await expect(cookieGuard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('rejects valid cookie-authenticated POST with cross-site Origin, scheme mismatch, or bad Sec-Fetch-Site unless in explicit CORS_ORIGINS', async () => {
+      process.env.NODE_ENV = 'development';
+      delete process.env.CORS_ORIGINS;
+      const apiKey = createMockApiKey({ role: ApiKeyRole.ADMIN });
+      browserSessionService.validateSessionToken.mockResolvedValue({
+        session: { id: 'bs-1', apiKeyId: apiKey.id },
+        apiKey,
+      });
+
+      const crossSiteCtx = makeCookieContext(
+        'POST',
+        '/api/sessions',
+        {
+          cookie: 'openwa_session=tok-abc',
+          host: 'wa.example.com',
+          origin: 'https://evil.example',
+          'sec-fetch-site': 'cross-site',
+          'x-requested-with': 'OpenWA-Dashboard',
+        },
+        {},
+        { secure: true },
+      );
+      await expect(cookieGuard.canActivate(crossSiteCtx)).rejects.toThrow(ForbiddenException);
+
+      // Plain http:// Origin against an HTTPS request is rejected even on the same host.
+      const downgradeCtx = makeCookieContext(
+        'POST',
+        '/api/sessions',
+        {
+          cookie: 'openwa_session=tok-abc',
+          host: 'wa.example.com',
+          origin: 'http://wa.example.com',
+          'sec-fetch-site': 'same-origin',
+          'x-requested-with': 'OpenWA-Dashboard',
+        },
+        {},
+        { secure: true },
+      );
+      await expect(cookieGuard.canActivate(downgradeCtx)).rejects.toThrow(ForbiddenException);
+
+      process.env.CORS_ORIGINS = 'https://dash.example.com';
+      const allowedCrossOriginCtx = makeCookieContext(
+        'PATCH',
+        '/api/sessions/s1/config',
+        {
+          cookie: 'openwa_session=tok-abc',
+          host: 'api.example.com',
+          origin: 'https://dash.example.com',
+          'sec-fetch-site': 'same-site',
+          'x-requested-with': 'OpenWA-Dashboard',
+        },
+        {},
+        { secure: true },
+      );
+      await expect(cookieGuard.canActivate(allowedCrossOriginCtx)).resolves.toBe(true);
+    });
+
+    it('allows same-origin cookie-authenticated DELETE with X-Requested-With (including behind trusted X-Forwarded-Host + :443)', async () => {
+      const apiKey = createMockApiKey({ role: ApiKeyRole.ADMIN });
+      browserSessionService.validateSessionToken.mockResolvedValue({
+        session: { id: 'bs-1', apiKeyId: apiKey.id },
+        apiKey,
+      });
+
+      const ctx = makeCookieContext(
+        'DELETE',
+        '/api/sessions/s1',
+        {
+          cookie: 'openwa_session=tok-abc',
+          host: 'wa.example.com:443',
+          origin: 'https://wa.example.com',
+          'sec-fetch-site': 'same-origin',
+          'x-requested-with': 'OpenWA-Dashboard',
+        },
+        {},
+        { secure: true },
+      );
+      await expect(cookieGuard.canActivate(ctx)).resolves.toBe(true);
+
+      // Behind a trusted reverse proxy rewriting Host to internal upstream name:
+      (configService.get as jest.Mock).mockReturnValue(['10.0.0.1']);
+      const proxiedCtx = makeCookieContext(
+        'DELETE',
+        '/api/sessions/s1',
+        {
+          cookie: 'openwa_session=tok-abc',
+          host: 'openwa-backend:2785',
+          'x-forwarded-host': 'public.example.com:443',
+          'x-forwarded-proto': 'https',
+          origin: 'https://public.example.com',
+          'sec-fetch-site': 'same-origin',
+          'x-requested-with': 'OpenWA-Dashboard',
+        },
+        {},
+        { secure: false, remoteAddress: '10.0.0.1' },
+      );
+      await expect(cookieGuard.canActivate(proxiedCtx)).resolves.toBe(true);
+
+      // Standard TLS-terminating reverse proxy over plain HTTP without TRUSTED_PROXIES configured:
+      (configService.get as jest.Mock).mockReturnValue([]);
+      const untrustedTlsTerminatorCtx = makeCookieContext(
+        'POST',
+        '/api/sessions',
+        {
+          cookie: 'openwa_session=tok-abc',
+          host: 'wa.example.com',
+          origin: 'https://wa.example.com',
+          'sec-fetch-site': 'same-origin',
+          'x-requested-with': 'OpenWA-Dashboard',
+        },
+        {},
+        { secure: false, remoteAddress: '172.18.0.2' },
+      );
+      await expect(cookieGuard.canActivate(untrustedTlsTerminatorCtx)).resolves.toBe(true);
+
+      // Trusted HTTPS proxy still rejects plain http:// downgrade Origin.
+      (configService.get as jest.Mock).mockReturnValue(['10.0.0.1']);
+      const trustedProxyDowngradeCtx = makeCookieContext(
+        'POST',
+        '/api/sessions',
+        {
+          cookie: 'openwa_session=tok-abc',
+          host: 'wa.example.com',
+          'x-forwarded-proto': 'https',
+          origin: 'http://wa.example.com',
+          'sec-fetch-site': 'same-origin',
+          'x-requested-with': 'OpenWA-Dashboard',
+        },
+        {},
+        { secure: false, remoteAddress: '10.0.0.1' },
+      );
+      await expect(cookieGuard.canActivate(trustedProxyDowngradeCtx)).rejects.toThrow(ForbiddenException);
+    });
+
+    it.each([
+      '/mcp',
+      '/mcp/sse',
+      '///mcp',
+      '/api/metrics',
+      '//api///metrics',
+      '/api/%6detrics',
+      '/api/admin/queues',
+      '/api/admin/queues/api/queues',
+    ])('refuses cookie authentication on header-only surface %s with 401', async path => {
+      const ctx = makeCookieContext('GET', path, {
+        cookie: 'openwa_session=tok-abc',
+        host: 'wa.example.com',
+      });
+      await expect(cookieGuard.canActivate(ctx)).rejects.toThrow(UnauthorizedException);
+      expect(browserSessionService.validateSessionToken).not.toHaveBeenCalled();
+    });
+  });
 });

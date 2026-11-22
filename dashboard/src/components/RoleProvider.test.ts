@@ -38,7 +38,7 @@ function firstRenderedRole(): string | null {
 }
 
 test('a signed-in tab adopts the role an older build left in localStorage', () => {
-  sessionStorage.setItem('openwa_api_key', 'key');
+  sessionStorage.setItem('openwa_api_key_id', 'key-1');
   localStorage.setItem('openwa_user_role', 'admin');
 
   assert.equal(firstRenderedRole(), 'admin');
@@ -47,7 +47,7 @@ test('a signed-in tab adopts the role an older build left in localStorage', () =
 });
 
 test("the tab's own role wins over the shared copy", () => {
-  sessionStorage.setItem('openwa_api_key', 'key');
+  sessionStorage.setItem('openwa_api_key_id', 'key-1');
   sessionStorage.setItem('openwa_user_role', 'viewer');
   localStorage.setItem('openwa_user_role', 'admin');
 
@@ -55,21 +55,21 @@ test("the tab's own role wins over the shared copy", () => {
   assert.equal(sessionStorage.getItem('openwa_user_role'), 'viewer');
 });
 
-test('a tab without an API key does not take the shared role', () => {
+test('a tab without an active session does not take the shared role', () => {
   localStorage.setItem('openwa_user_role', 'admin');
 
   assert.equal(firstRenderedRole(), null);
   assert.equal(sessionStorage.getItem('openwa_user_role'), null);
-  // A key-less tab (the sign-in page) must not consume the copy the signed-in tabs still need.
+  // A signed-out tab (the sign-in page) must not consume the copy the signed-in tabs still need.
   assert.equal(localStorage.getItem('openwa_user_role'), 'admin');
 });
 
 test('every signed-in tab adopts the shared role, not only the first to reload', () => {
   localStorage.setItem('openwa_user_role', 'admin');
-  // Two tabs share localStorage; each has its own sessionStorage holding only its key.
+  // Two tabs share localStorage; each has its own sessionStorage holding its active session actor id.
   for (const tab of ['first', 'second']) {
     sessionStorage.clear();
-    sessionStorage.setItem('openwa_api_key', `${tab}-key`);
+    sessionStorage.setItem('openwa_api_key_id', `${tab}-key-id`);
     assert.equal(firstRenderedRole(), 'admin', `the ${tab} tab lost its role`);
     rtl.cleanup();
   }
