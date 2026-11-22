@@ -177,25 +177,28 @@ describePostgres('InfraDataController.importData (postgres)', () => {
       entities: ds.options.entities,
       synchronize: false,
     }).initialize();
-    const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'postgres' : def) };
-    const strictController = new InfraDataController(
-      new InfraDataService(cfg as never, strict, undefined, undefined, undefined),
-    );
-    await admin.query(
-      `CREATE FUNCTION "${schema}".slow_messages_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.6); RETURN NULL; END $$`,
-    );
-    await admin.query(
-      `CREATE TRIGGER slow_messages_delete BEFORE DELETE ON "${schema}".messages FOR EACH STATEMENT EXECUTE FUNCTION "${schema}".slow_messages_delete()`,
-    );
     try {
+      const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'postgres' : def) };
+      const strictController = new InfraDataController(
+        new InfraDataService(cfg as never, strict, undefined, undefined, undefined),
+      );
+      await admin.query(
+        `CREATE FUNCTION "${schema}".slow_messages_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.6); RETURN NULL; END $$`,
+      );
+      await admin.query(
+        `CREATE TRIGGER slow_messages_delete BEFORE DELETE ON "${schema}".messages FOR EACH STATEMENT EXECUTE FUNCTION "${schema}".slow_messages_delete()`,
+      );
       // Guard the guard: the lowered timeout does cancel the slow clear outside the import's transaction.
       await expect(strict.query('DELETE FROM messages')).rejects.toThrow(/statement timeout/);
 
       await expect(strictController.importData(dump as never)).resolves.toMatchObject({ imported: true });
     } finally {
-      await admin.query(`DROP TRIGGER IF EXISTS slow_messages_delete ON "${schema}".messages`);
-      await admin.query(`DROP FUNCTION IF EXISTS "${schema}".slow_messages_delete()`);
-      await strict.destroy();
+      try {
+        await admin.query(`DROP TRIGGER IF EXISTS slow_messages_delete ON "${schema}".messages`);
+        await admin.query(`DROP FUNCTION IF EXISTS "${schema}".slow_messages_delete()`);
+      } finally {
+        await strict.destroy();
+      }
     }
   });
 
@@ -241,55 +244,66 @@ describePostgres('InfraDataController.importData (postgres)', () => {
         entities: ds.options.entities,
         synchronize: false,
       }).initialize();
-      const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'postgres' : def) };
-      const service = new InfraDataService(cfg as never, single, undefined, undefined, undefined);
-      // The write is let go once the import reads the sessions it removes, so it asks the pool for its client
-      // after the import has begun.
-      let reading!: () => void;
-      const read = new Promise<void>(resolve => (reading = resolve));
-      let letGo!: () => void;
-      const go = new Promise<void>(resolve => (letGo = resolve));
-      const realCreate = single.createQueryRunner.bind(single);
-      jest.spyOn(single, 'createQueryRunner').mockImplementation((...args: Parameters<typeof realCreate>) => {
-        const runner = realCreate(...args);
-        const query = runner.query.bind(runner);
-        runner.query = ((...queryArgs: Parameters<typeof query>) => {
-          if (/^SELECT id FROM sessions/.test(queryArgs[0])) reading();
-          return query(...queryArgs);
-        }) as typeof runner.query;
-        return runner;
-      });
-      const scope = captureSessionWrites(single, removed);
-      const writing = scope.write(async () => {
-        await go;
-        await single
-          .getRepository(Message)
-          .insert({ sessionId: removed, chatId: '10000000001@c.us', from: 'me', to: '10000000001@c.us', body: 'm' });
-      });
-
-      const importing = service.importData(withoutRemoved as never);
-      await read;
-      letGo();
-      const outcome = await Promise.race([
-        importing.then(result => result.imported),
-        new Promise(resolve => setTimeout(() => resolve('still waiting after 8 s'), 8_000)),
-      ]);
+      let letGo: (() => void) | undefined;
+      let scope: ReturnType<typeof captureSessionWrites> | undefined;
+      let writing: Promise<void> | undefined;
+      let importing: Promise<{ imported: boolean }> | undefined;
+      let outcome: unknown;
       try {
+        const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'postgres' : def) };
+        const service = new InfraDataService(cfg as never, single, undefined, undefined, undefined);
+        // The write is let go once the import reads the sessions it removes, so it asks the pool for its client
+        // after the import has begun.
+        let reading!: () => void;
+        const read = new Promise<void>(resolve => (reading = resolve));
+        const go = new Promise<void>(resolve => (letGo = resolve));
+        const realCreate = single.createQueryRunner.bind(single);
+        jest.spyOn(single, 'createQueryRunner').mockImplementation((...args: Parameters<typeof realCreate>) => {
+          const runner = realCreate(...args);
+          const query = runner.query.bind(runner);
+          runner.query = ((...queryArgs: Parameters<typeof query>) => {
+            if (/^SELECT id FROM sessions/.test(queryArgs[0])) reading();
+            return query(...queryArgs);
+          }) as typeof runner.query;
+          return runner;
+        });
+        scope = captureSessionWrites(single, removed);
+        writing = scope.write(async () => {
+          await go;
+          await single
+            .getRepository(Message)
+            .insert({ sessionId: removed, chatId: '10000000001@c.us', from: 'me', to: '10000000001@c.us', body: 'm' });
+        });
+
+        importing = service.importData(withoutRemoved as never);
+        await read;
+        letGo?.();
+        outcome = await Promise.race([
+          importing.then(result => result.imported),
+          new Promise(resolve => setTimeout(() => resolve('still waiting after 8 s'), 8_000)),
+        ]);
         expect(outcome).toBe(true);
         await expect(writing).resolves.toBeUndefined();
         expect(await sessions.countBy({ id: removed })).toBe(0);
         expect(await ds.getRepository(Message).countBy({ sessionId: removed })).toBe(0);
       } finally {
         jest.restoreAllMocks();
-        scope.close();
-        // Only when the import is stuck: cut its connection so the pool can close.
-        if (outcome !== true) {
-          await admin.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1', [
-            applicationName,
-          ]);
+        letGo?.();
+        scope?.close();
+        try {
+          // Only when the import is stuck or aborted mid-run: cut its connection so the pool can close.
+          if (outcome !== true) {
+            await admin.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1', [
+              applicationName,
+            ]);
+          }
+          const pending: Promise<unknown>[] = [];
+          if (importing) pending.push(importing);
+          if (writing) pending.push(writing);
+          await Promise.allSettled(pending);
+        } finally {
+          await single.destroy();
         }
-        await Promise.allSettled([importing, writing]);
-        await single.destroy();
       }
     },
     30_000,

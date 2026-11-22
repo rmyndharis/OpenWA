@@ -117,6 +117,9 @@
 > copy of one node's `main.sqlite` taken while it is stopped (never one file shared over network
 > storage), which authenticates only on nodes with the same `API_KEY_PEPPER`, since the copied hashes
 > carry the source node's pepper. Each node's audit log records only the requests it handled.
+> Dashboard browser sessions (`openwa_session` cookies stored in `browser_sessions` inside `main.sqlite`)
+> are also node-local: cross-node forwarding returns `409` for cookie-only requests, because the
+> forwarding node never holds the raw API key to replay to the owner.
 >
 > **List and stats routes answer from the node that received them.** `GET /api/sessions` and
 > `GET /api/sessions/stats/overview` name no session, so they are never forwarded. `lastError`,

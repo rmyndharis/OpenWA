@@ -126,6 +126,8 @@ jobs:
       - run: composer install --no-interaction --no-progress
       - run: composer update 'guzzlehttp/guzzle:^7.9' --with-all-dependencies --no-interaction --no-progress
         if: matrix.guzzle == '7'
+      - name: Syntax check PHP files
+        run: find src tests -name '*.php' -print0 | xargs -0 -n1 php -l
       - run: ./vendor/bin/phpunit
 
   java:

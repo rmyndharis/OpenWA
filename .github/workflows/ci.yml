@@ -333,6 +333,11 @@ jobs:
         timeout-minutes: 10
         run: cd dashboard && npm run test:unit
 
+      # Gate the coverage runner script so coverage-specific exclusions and concurrency stay working.
+      - name: Run dashboard unit tests with coverage
+        timeout-minutes: 10
+        run: cd dashboard && npm run test:cov
+
   # The repo ships several host-level shell smoke scripts (scripts/smoke-test-*.sh, plus
   # scripts/backup.sh / scripts/restore.sh exercised by smoke-test-backup-restore.sh). None of them
   # are exercised by the jest suites, so without this gate a regression in the bash hardening lands

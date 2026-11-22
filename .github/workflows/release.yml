@@ -302,6 +302,11 @@ jobs:
         timeout-minutes: 10
         run: cd dashboard && npm run test:unit
 
+      # Gate the coverage runner script so coverage-specific exclusions and concurrency stay working.
+      - name: Run dashboard unit tests with coverage
+        timeout-minutes: 10
+        run: cd dashboard && npm run test:cov
+
   # Mirrors ci.yml's scripts-smoke job, which had no counterpart here at all: the shell scripts that
   # ship inside the image were linted and exercised on the branch path and on nothing else.
   scripts-smoke:

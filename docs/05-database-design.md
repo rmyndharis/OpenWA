@@ -19,7 +19,7 @@ OpenWA supports two database backends that can be selected at deployment time:
 | **SQLite**     | Development, personal bot, low-resource VPS | 1-5      | ❌                 |
 | **PostgreSQL** | Production, multi-session, high volume      | 5+       | ✅                 |
 
-The PostgreSQL row covers the data database only. The main database (`api_keys`, `audit_logs`) is
+The PostgreSQL row covers the data database only. The main database (`api_keys`, `audit_logs`, `browser_sessions`) is
 always a SQLite file on each node, and running more than one replica is not supported yet; see
 [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md).
 
@@ -48,7 +48,7 @@ OpenWA v0.2+ implements a **dual-database architecture** that separates boot con
 ├─────────────────────────────┼───────────────────────────────────┤
 │ • api_keys                  │ • sessions                        │
 │ • audit_logs                │ • webhooks                        │
-│                             │ • messages                        │
+│ • browser_sessions          │ • messages                        │
 │                             │ • message_batches                 │
 │                             │ • templates                       │
 │                             │ • status_updates                  │
@@ -66,10 +66,10 @@ OpenWA v0.2+ implements a **dual-database architecture** that separates boot con
 └─────────────────────────────┴───────────────────────────────────┘
 ```
 
-| Component   | Database             | Location                       | Purpose                                    |
-| ----------- | -------------------- | ------------------------------ | ------------------------------------------ |
-| **Main DB** | SQLite (always)      | `./data/main.sqlite` (default) | Boot-critical config, API keys, audit logs |
-| **Data DB** | SQLite or PostgreSQL | Configurable                   | User data, sessions, messages, webhooks    |
+| Component   | Database             | Location                       | Purpose                                                      |
+| ----------- | -------------------- | ------------------------------ | ------------------------------------------------------------ |
+| **Main DB** | SQLite (always)      | `./data/main.sqlite` (default) | Boot-critical config, API keys, browser sessions, audit logs |
+| **Data DB** | SQLite or PostgreSQL | Configurable                   | User data, sessions, messages, webhooks                      |
 
 The main DB is unconditionally SQLite, but its _path_ is not fixed: `MAIN_DATABASE_NAME` overrides the
 `./data/main.sqlite` default, and is honoured by both the runtime connection factory
@@ -182,7 +182,7 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
 ```
 
 > [!IMPORTANT]
-> The export leaves out webhook `secret` and custom `headers` and the `user:pass` of a session `proxyUrl`. Set them again after the import with `PUT /api/sessions/:sessionId/webhooks/:id` and `PATCH /api/sessions/:sessionId/proxy`, or webhooks deliver unsigned and an authenticated proxy fails the session's next start. The import is one request bounded by `BODY_SIZE_LIMIT` (`413` above it). Plugin instance secrets travel in plaintext, so treat the file as a secret. See [14 - Migration Guide: API-Based Migration](./14-migration-guide.md#api-based-migration-recommended-for-v02) for the full procedure.
+> The export leaves out webhook `secret` and custom `headers` and the `user:pass` of a session `proxyUrl`. Set them again after the import with `PUT /api/sessions/:sessionId/webhooks/:id` and `PATCH /api/sessions/:sessionId/proxy`, or webhooks deliver unsigned and an authenticated proxy fails the session's next start. Plugin instance ingress `secret`, `verifyToken`, and `secret: true` config fields are redacted by default (if a plugin manifest is unavailable, `config` is omitted rather than exported unredacted), and restored redacted instances are disabled with freshly generated secrets until reconfigured; pass `?includePluginSecrets=true` when migrating plugin credentials and treat the resulting file as a secret. The import is one request bounded by `BODY_SIZE_LIMIT` (`413` above it). See [14 - Migration Guide: API-Based Migration](./14-migration-guide.md#api-based-migration-recommended-for-v02) for the full procedure.
 
 #### Cross-Database Date Portability
 
@@ -778,6 +778,27 @@ On SQLite that index can stop matching `messages` after a table rebuild, and a s
 
 ---
 
+### 5.3.9 browser_sessions
+
+Opaque server-side sessions minted by `POST /api/auth/session` for the web dashboard's `HttpOnly; SameSite=Strict` `openwa_session` cookie. Lives on the **main** (always-SQLite) connection so dashboard sessions stay node-local alongside `api_keys`. The raw API key is never stored in the cookie or in this table; every request re-validates the bound `api_keys` row and its current role, IP, and session scopes.
+
+```sql
+CREATE TABLE browser_sessions (
+    id VARCHAR PRIMARY KEY,
+    "tokenHash" VARCHAR(64) NOT NULL,              -- SHA-256(pepper + rawToken), UNIQUE index
+    "apiKeyId" VARCHAR(36) NOT NULL,               -- FK-like reference to api_keys.id on the same node
+    "createdAt" DATETIME NOT NULL DEFAULT (datetime('now')),
+    "expiresAt" DATETIME NOT NULL,                 -- bounded by DASHBOARD_SESSION_TTL_MS (default 12h)
+    "revokedAt" DATETIME                           -- set on logout or when the bound API key is revoked/deleted
+);
+
+CREATE UNIQUE INDEX "UQ_browser_sessions_tokenHash" ON browser_sessions("tokenHash");
+CREATE INDEX "IDX_browser_sessions_apiKeyId" ON browser_sessions("apiKeyId");
+CREATE INDEX "IDX_browser_sessions_expiresAt" ON browser_sessions("expiresAt");
+```
+
+---
+
 ## 5.4 Index Strategy
 
 ### Query Pattern Analysis
@@ -934,7 +955,7 @@ OpenWA runs **two separate TypeORM connections**, each with its own migrations d
 
 | Connection | DataSource            | Migrations dir                  | Owns                                                                                                                                                                                                                                                                                                                                                      |
 | ---------- | --------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **main**   | `data-source-main.ts` | `src/database/migrations-main/` | `api_keys`, `audit_logs`, always SQLite (`./data/main.sqlite` by default)                                                                                                                                                                                                                                                                                 |
+| **main**   | `data-source-main.ts` | `src/database/migrations-main/` | `api_keys`, `audit_logs`, `browser_sessions`, always SQLite (`./data/main.sqlite` by default)                                                                                                                                                                                                                                                             |
 | **data**   | `data-source.ts`      | `src/database/migrations/`      | `sessions`, `webhooks`, `messages`, `message_batches`, `templates`, `status_updates`, `automation_rules`, `webhook_delivery_failures`, `webhook_outbox_events`, `send_idempotency_keys`, the integration tables (`plugin_instances`, `ingress_events`, `conversation_mappings`, `integration_delivery_failures`), engine tables, SQLite **or** PostgreSQL |
 
 Migrations are hand-authored and idempotent (`IF NOT EXISTS`) so they are safe to adopt on a database originally created by `synchronize`. The two connections differ in how schema is managed:
@@ -951,7 +972,8 @@ Migrations are hand-authored and idempotent (`IF NOT EXISTS`) so they are safe t
 src/database/migrations-main/      # main connection (auth + audit, SQLite)
 ├── 1779900000000-CreateAuthAuditTables.ts   # creates api_keys + audit_logs
 ├── 1786600000000-AddApiKeyAllowedChats.ts   # adds api_keys.allowedChats
-└── 1786610000000-DropSynchronizeIndexDuplicates.ts  # drops synchronize-named duplicate indexes
+├── 1786610000000-DropSynchronizeIndexDuplicates.ts  # drops synchronize-named duplicate indexes
+└── 1792000000000-CreateBrowserSessions.ts   # creates browser_sessions (HttpOnly dashboard cookie store)
 
 src/database/migrations/           # data connection (pluggable)
 ├── 1770108659848-AddMessageStatus.ts
