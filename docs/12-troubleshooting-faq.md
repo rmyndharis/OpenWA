@@ -874,41 +874,6 @@ patches are missing" below and "Frequent Disconnections" above. A warning `onboa
 next to the `Page navigated` line means WhatsApp's "What's new" screen is open in a language the gateway does
 not recognise: see "Session stuck at `action_required`" above.
 
-### Issue: Sends return 500 "engine returned no message", and chats or media fail with `r: r`
-
-**Symptoms:**
-
-- `POST /api/sessions/{id}/messages/send-text` returns `{"statusCode":500,"message":"Internal server error"}` — but the message _is_ delivered
-- Logs show `the engine returned no message for this send, so it may not have been delivered`
-- Unrelated operations fail with the minified error `r: r`: `GET /api/sessions/{id}/chats`, media downloads, typing indicators
-- Startup logs may contain `The installed whatsapp-web.js is missing the message-id backport…`, or
-  `The installed whatsapp-web.js carries only part of the message-id backport…` after an interrupted install
-
-**Cause:** WhatsApp Web 2.3000.x renamed the internal message-id property that whatsapp-web.js
-reads. OpenWA ships a backport that restores it, applied at install time by
-`scripts/patch-wwebjs-201832.js`. When the install cannot run it — neither GNU `patch` nor `git`
-available, or `npm install --ignore-scripts` — whatsapp-web.js stays unpatched and every operation
-that reads a message id fails. Source installs only; the Docker image always applies the backport.
-
-**Solution:**
-
-```bash
-# Is the backport missing, or only partly applied? Works on every platform, including Windows without grep.
-node -e "const s=require('./scripts/patch-wwebjs-201832.js').missingSites();const m=require('fs').readFileSync('node_modules/whatsapp-web.js/src/structures/Message.js','utf8');console.log(s.length?'PARTIAL: '+s.join(', '):m.includes('_normalizeId(')?'PATCHED':'NOT PATCHED')"
-
-# Apply it, then restart
-node scripts/patch-wwebjs-201832.js
-```
-
-If that reports a partially patched tree, reinstall the dependency first:
-
-```bash
-rm -rf node_modules/whatsapp-web.js && npm ci
-```
-
-> Pinning `WWEBJS_WEB_VERSION` does **not** work around this — the rename is present in every
-> current WhatsApp Web build, so no pin avoids it.
-
 ### Issue: Startup logs say install-time patches are missing
 
 **Symptoms:**
@@ -927,7 +892,7 @@ rm -rf node_modules/whatsapp-web.js && npm ci
   `<status>` stanzas (the status-ack patch is missing, or is the 0.30.1 revision, which only
   acknowledged them)
 
-**Cause:** OpenWA applies sixteen exact source transforms to its engine libraries at install time
+**Cause:** OpenWA applies fourteen exact source transforms to its engine libraries at install time
 (docs/29 §29.3). The Docker image runs them without `--best-effort`, so a source shape a patcher
 cannot recognise fails the image build. Source installs run the Puppeteer compatibility transform
 without best-effort too, because browser teardown depends on it. The other transforms use
@@ -943,7 +908,7 @@ is actually affected rather than in an install log nobody kept.
 node -e "const fs=require('fs'),p=require('path');for(const f of fs.readdirSync('scripts').filter(n=>n.startsWith('patch-')&&n.endsWith('.js')&&!n.endsWith('.spec.js')).sort()){const m=require('./scripts/'+f);if(typeof m.isApplied!=='function')continue;const k=f.startsWith('patch-wwebjs-')?'whatsapp-web.js':'@whiskeysockets/baileys';try{console.log((m.isApplied(p.dirname(require.resolve(k+'/package.json')))?'APPLIED    ':'NOT APPLIED')+' '+f)}catch{}}"
 
 # Apply each one it named, then restart
-node scripts/patch-wwebjs-group-description.js
+node scripts/patch-wwebjs-media-id.js
 ```
 
 If a patcher answers with an unsupported-shape error instead of applying, the installed library has
@@ -951,9 +916,6 @@ moved and the transform needs re-evaluating against it. Reinstalling will not he
 quoting the message it printed. The one exception is `patch-baileys-pairing.js` saying the backport
 was cut short: an interrupted install left it half applied, and reinstalling `@whiskeysockets/baileys`
 (`rm -rf node_modules/@whiskeysockets/baileys && npm ci`) is the fix.
-
-> `patch-wwebjs-201832.js` is not in that list. It carries its own startup check and its own entry
-> above, because a partially applied backport needs different advice than one that never ran.
 
 > A patch that never applied is not fatal on its own, with two exceptions: without
 > `patch-baileys-media-stream.js`, a Baileys media download abandoned at `MEDIA_DOWNLOAD_TIMEOUT_MS` or

@@ -17,7 +17,6 @@ import { getVerifiedPinnedHtml, resolveWebVersionPin } from '../wa-web-version';
 import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import { killOrphanedChromiumProcesses, removeStaleSingletonFiles } from './chromium-profile-hygiene';
 import { isSupportedProxyUrl, buildProxyLaunchConfig, bypassServiceWorkerOnLaunch } from './wwebjs-proxy';
-import { backportProblem } from './wwebjs-backport-check';
 import { unappliedPatches, unappliedPatchesMessage } from './engine-patch-status';
 import { type EvaluatablePage, reportMissingCallHook } from './wwebjs-call-hook-check';
 import { reportRunningWebBuild } from './wwebjs-running-build';
@@ -384,14 +383,7 @@ export class WwebjsLifecycle {
     this.setStatus(EngineStatus.INITIALIZING);
     const initStartedAt = Date.now();
 
-    // An install that skipped the message-id backport fails later with errors that name no cause
-    // (#889) — say so here instead, while the operator is still looking at the startup logs.
-    const backportProblemText = backportProblem();
-    if (backportProblemText) {
-      this.host.logger.error(backportProblemText);
-    }
-
-    // The other whatsapp-web.js patchers fail the same way and were equally silent about it.
+    // Report any unapplied whatsapp-web.js install-time patches while the operator is watching startup logs.
     const unapplied = unappliedPatches('wwebjs');
     if (unapplied.length) {
       this.host.logger.error(unappliedPatchesMessage('wwebjs', unapplied));

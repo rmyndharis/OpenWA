@@ -51,7 +51,7 @@ RUN npm run build && npm run dashboard:ci -- --include=dev && npm run dashboard:
 # Production stage: runtime dependencies only, without install scripts; the dependency patchers
 # run in the same RUN, and any one failing fails the build.
 RUN npm ci --omit=dev --ignore-scripts \
-    && node scripts/patch-wwebjs-201832.js \
+    && node scripts/patch-wwebjs-newsletter-preview.js \
     # ... one `&& node scripts/patch-*.js \` line per patcher ...
     && npm cache clean --force
 

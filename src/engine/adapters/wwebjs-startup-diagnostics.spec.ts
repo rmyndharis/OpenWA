@@ -1,9 +1,7 @@
 import { Client } from 'whatsapp-web.js';
 import { WwebjsLifecycle, type WwebjsLifecycleHost } from './wwebjs-lifecycle';
-import { backportProblem } from './wwebjs-backport-check';
 import { unappliedPatches, unappliedPatchesMessage } from './engine-patch-status';
 
-jest.mock('./wwebjs-backport-check', () => ({ backportProblem: jest.fn() }));
 jest.mock('./engine-patch-status', () => ({
   unappliedPatches: jest.fn().mockReturnValue([]),
   unappliedPatchesMessage: jest.fn(),
@@ -20,7 +18,6 @@ jest.mock('../wa-web-version', () => ({
   getVerifiedPinnedHtml: jest.fn().mockReturnValue(undefined),
 }));
 
-const problem = backportProblem as jest.Mock;
 const unapplied = unappliedPatches as jest.Mock;
 const unappliedText = unappliedPatchesMessage as jest.Mock;
 
@@ -51,7 +48,6 @@ describe('the patch diagnostics at whatsapp-web.js start', () => {
 
   beforeEach(() => {
     logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
-    problem.mockReset().mockReturnValue(undefined);
     unapplied.mockReset().mockReturnValue([]);
     unappliedText.mockReset().mockReturnValue('patch text');
     clientInitSpy = jest
@@ -61,14 +57,6 @@ describe('the patch diagnostics at whatsapp-web.js start', () => {
 
   afterEach(() => {
     clientInitSpy.mockRestore();
-  });
-
-  it('logs the message-id backport problem as an error', async () => {
-    problem.mockReturnValue('the backport is missing');
-
-    await initialize();
-
-    expect(logger.error).toHaveBeenCalledWith('the backport is missing');
   });
 
   it('logs the patches that did not land as an error', async () => {
