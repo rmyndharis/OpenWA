@@ -663,7 +663,7 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
       await jest.advanceTimersByTimeAsync(60_000);
       expect(sweep).toHaveBeenCalledTimes(2);
 
-      gateway.onModuleDestroy();
+      await gateway.onModuleDestroy();
       await jest.advanceTimersByTimeAsync(120_000);
       expect(sweep).toHaveBeenCalledTimes(2);
     } finally {

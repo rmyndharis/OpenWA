@@ -14,8 +14,8 @@ const LID = '123456';
 
 // With cross-replica fan-out on, a direct chat's events are published to the chat rooms of every identity the
 // lid table gives that chat. A burst of events about one chat names the same chat each time, so the table should
-// be read for it once, not once per event; a chat the table knows no other identity for is read again each time,
-// so a mapping learned meanwhile routes at once.
+// be read for it once, not once per event; an unmapped chat is also held for the short negative TTL until
+// invalidated by a newly persisted mapping (or TTL expiry).
 describe('EventsGateway chat-room identity lookups with Redis fan-out', () => {
   const previous = process.env.REDIS_ENABLED;
   let lidsOfPhone: Record<string, string[]>;
@@ -137,15 +137,19 @@ describe('EventsGateway chat-room identity lookups with Redis fan-out', () => {
     expect(received(restricted)).toHaveLength(2);
   });
 
-  it('reads again for a chat with no other identity, so a mapping learned meanwhile routes at once', async () => {
+  it('caches an unmapped chat for the negative TTL and re-reads immediately once invalidated by a learned mapping', async () => {
     const restricted = await connectRestricted();
 
     gateway.emitMessage('s1', { id: 'IN1', chatId: PHONE });
     await flush();
+    gateway.emitMessage('s1', { id: 'IN2', chatId: PHONE });
+    await flush();
+    expect(reads).toHaveBeenCalledTimes(1);
     expect(received(restricted)).toHaveLength(0);
 
     lidsOfPhone[PHONE_DIGITS] = [LID];
-    gateway.emitMessage('s1', { id: 'IN2', chatId: PHONE });
+    gateway.invalidateChatIdsMemo(PHONE);
+    gateway.emitMessage('s1', { id: 'IN3', chatId: PHONE });
     await flush();
 
     expect(reads).toHaveBeenCalledTimes(2);

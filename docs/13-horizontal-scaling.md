@@ -207,16 +207,20 @@
 > connected to node A receives an event raised on node B. Scope honestly: this distributes event
 > **fan-out only**. The per-key WS rate-limit buckets (counted per replica) and the engine registry
 > are still process-local. Without `REDIS_ENABLED` the adapter is inert and delivery is single-node,
-> exactly as before. With it, an event of a one-to-one chat also costs the emitting node one or two
-> `lid_mappings` lookups (one for a `@lid` chat, none for a group), even when no chat-restricted key
-> exists: it cannot know whether another replica holds a restricted socket, so it names the chat in
-> every form for the rooms to match. Events about one chat of one session that are raised together
-> share a lookup, and an answer that named the chat's other identity is reused for 5 seconds (for up to
-> 1,000 chats). That reuse applies whenever the gateway expands a chat for chat-restricted delivery: with
-> Redis fan-out on, or while a chat-restricted socket is connected to the node. A mapping that arrives can
-> be seen up to 5 seconds late, and after a mapping is removed or moved, events of that chat can keep
-> reaching sockets restricted to the old identity for up to 5 seconds. A chat the table has no other
-> identity for is read again by every event.
+> exactly as before. With it, each replica holding at least one chat-restricted socket registers a
+> lightweight Redis presence lease (`openwa:ws:restricted-nodes` set plus a 30-second per-node TTL
+> key refreshed every 10 seconds and removed on disconnect or shutdown). When Redis confirms zero
+> restricted nodes exist cluster-wide, emitting nodes skip `lid_mappings` lookups and chat-room
+> fan-out completely. If the Redis presence client is absent, disconnected, or errors, the emitting
+> node fails open and expands the chat so restricted subscribers on peers never miss events. When
+> chat-restricted expansion runs (because this node or a peer holds a restricted socket, or during a
+> fail-open fallback), an event of a one-to-one chat costs the emitting node one or two `lid_mappings`
+> lookups (one for a `@lid` chat, none for a group). Events about one chat of one session that are
+> raised together share an in-flight lookup, and both mapped and unmapped answers are reused for 5
+> seconds (for up to 1,000 chats). Newly learned mappings persisted locally immediately evict stale
+> negative entries for both the LID and phone JID; a mapping learned on another replica can be seen up
+> to 5 seconds late, and after a mapping is removed or moved, events of that chat can keep reaching
+> sockets restricted to the old identity for up to 5 seconds.
 >
 > **The fan-out to other replicas is best effort and keeps no replay queue.** A Redis that pauses for less
 > than 10 s (a snapshot fork, a slow fsync) answers afterwards, and every event raised meanwhile reaches the

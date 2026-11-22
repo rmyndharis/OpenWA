@@ -5351,3 +5351,43 @@ describe('LidMappingStoreService: the readers agree with the table once overlapp
     120_000,
   );
 });
+
+describe('LidMappingStoreService onMappingLearned notifications', () => {
+  it('notifies listeners when remember() persists a non-null phone, skips null/failed writes, and supports unsubscribe', async () => {
+    const ds = new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Session, LidMapping],
+      synchronize: true,
+    });
+    await ds.initialize();
+    const repo = ds.getRepository(LidMapping);
+    const store = new LidMappingStoreService(repo);
+    const learned: Array<{ lid: string; phone: string }> = [];
+    const unsubscribe = store.onMappingLearned(mapping => {
+      learned.push(mapping);
+    });
+
+    try {
+      await expect(store.remember('123456', '628111000111', 's1')).resolves.toBe(true);
+      expect(learned).toEqual([{ lid: '123456', phone: '628111000111' }]);
+
+      // Persisting null does not fire mapping-learned notifications.
+      await expect(store.remember('123456', null, 's1')).resolves.toBe(true);
+      expect(learned).toHaveLength(1);
+
+      // Failed DB persistence does not fire mapping-learned notifications.
+      jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('write failed'));
+      await expect(store.remember('789012', '628222000222', 's1')).resolves.toBe(false);
+      expect(learned).toHaveLength(1);
+
+      // Unsubscribed listener receives no further notifications.
+      unsubscribe();
+      await expect(store.remember('789012', '628222000222', 's1')).resolves.toBe(true);
+      expect(learned).toHaveLength(1);
+    } finally {
+      store.onModuleDestroy();
+      await ds.destroy();
+    }
+  });
+});

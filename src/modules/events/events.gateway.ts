@@ -18,6 +18,7 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { hostname } from 'os';
 import { createLogger } from '../../common/services/logger.service';
 import { getRequestActor, runWithRequestId } from '../../common/services/request-context';
 import { ConfigService } from '@nestjs/config';
@@ -31,6 +32,9 @@ import {
 } from '../auth/browser-session.util';
 import { ChatScopeService } from '../auth/chat-scope.service';
 import { isWsRedisEnabled } from './redis-io.adapter';
+import { WS_RESTRICTED_PRESENCE_TRACKER, WsRestrictedPresenceTracker } from './ws-restricted-presence';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { parseWaId, userPart } from '../../engine/identity/wa-id';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { resolveCorsPolicy } from '../../config/bootstrap-security';
@@ -205,10 +209,12 @@ const BROWSER_SESSION_EVICTION_MESSAGES: Record<BrowserSessionEvictionReason, st
 export const WS_MAX_FRAME_BYTES = 8 * 1024;
 
 /**
- * How long the lid table's answer for a chat is reused when it named another identity for it, so the acks of one
- * message read the table once. A chat the table has no other identity for is read again by the next event, so a
- * first mapping routes at once. A second identity arrives up to this long late, and after a mapping is removed or
- * moved, events of the chat keep reaching sockets restricted to the old identity for up to this long.
+ * How long the lid table's answer for a chat is reused, both for mapped chats and as a short negative
+ * cache for unmapped 1:1 chats, so bursts of events for one chat hit the table once. Newly persisted
+ * mappings immediately evict stale entries via LidMappingStoreService.onMappingLearned for both the
+ * LID and phone JID. A mapping learned on another node arrives up to this long late, and after a
+ * mapping is removed or moved, events of the chat keep reaching sockets restricted to the old identity
+ * for up to this long.
  */
 export const CHAT_IDS_MEMO_TTL_MS = 5_000;
 /** Most chats the answers are kept for; the oldest go first. */
@@ -239,6 +245,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   // they cannot join rooms after the client was told they were left.
   private readonly pendingSubscriptions = new WeakMap<Socket, Set<{ sessionId: string; cancelled: boolean }>>();
   private authzSweepTimer?: ReturnType<typeof setInterval>;
+  private unsubscribeMappingLearned?: () => void;
 
   /**
    * Rate limiting for the WS surface (see ws-rate-limit.ts). Frames never pass through the
@@ -271,10 +278,24 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     @Optional()
     @Inject(forwardRef(() => BrowserSessionService))
     private readonly browserSessionService?: BrowserSessionService,
+    @Optional()
+    private readonly lidMappingStore?: LidMappingStoreService,
+    @Optional()
+    @Inject(WS_RESTRICTED_PRESENCE_TRACKER)
+    private restrictedPresence?: WsRestrictedPresenceTracker,
   ) {
     this.rateLimits = readWsRateLimitConfig();
     this.frameLimiter = new TokenBucketLimiter(this.rateLimits.framePerSecond, this.rateLimits.frameBurst);
     this.handshakeLimiter = new SlidingWindowLimiter(this.rateLimits.handshakeMax, this.rateLimits.handshakeWindowMs);
+    const onLearned = ({ lid, phone }: { lid: string; phone: string }) => {
+      const lidUser = userPart(lid.trim());
+      const phoneUser = userPart(phone.trim());
+      if (lidUser) this.invalidateChatIdsMemo(`${lidUser}@lid`);
+      if (phoneUser) this.invalidateChatIdsMemo(`${phoneUser}@c.us`);
+    };
+    this.unsubscribeMappingLearned =
+      this.lidMappingStore?.onMappingLearned?.(onLearned) ?? this.chatScope.onMappingLearned?.(onLearned);
+    this.restrictedPresence?.bindLocalCheck(() => this.hasLocalRestrictedSocket());
   }
 
   afterInit() {
@@ -288,11 +309,21 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       );
     }, 60_000);
     this.authzSweepTimer.unref?.();
+    if (!this.restrictedPresence && isWsRedisEnabled()) {
+      const nodeId = this.configService.get<string>('session.nodeId') || process.env.NODE_ID || hostname();
+      this.restrictedPresence = WsRestrictedPresenceTracker.createDefault(nodeId, () =>
+        this.hasLocalRestrictedSocket(),
+      );
+    }
+    this.restrictedPresence?.start();
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     if (this.authzSweepTimer) clearInterval(this.authzSweepTimer);
     this.authzSweepTimer = undefined;
+    this.unsubscribeMappingLearned?.();
+    this.unsubscribeMappingLearned = undefined;
+    await this.restrictedPresence?.destroy();
   }
 
   /**
@@ -455,9 +486,21 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     }
   }
 
+  private hasLocalRestrictedSocket(): boolean {
+    return Array.from(this.socketsByKeyId.values()).some(sockets =>
+      Array.from(sockets).some(client => this.chatScope.isRestricted((client.data as { apiKey?: ApiKey }).apiKey)),
+    );
+  }
+
+  private syncRestrictedPresence(): Promise<void> {
+    if (!this.restrictedPresence || !isWsRedisEnabled()) return Promise.resolve();
+    return this.restrictedPresence.syncLocal(this.hasLocalRestrictedSocket());
+  }
+
   private untrackSocket(client: Socket): void {
     this.untrackKeySocket(client);
     this.untrackBrowserSessionSocket(client);
+    void this.syncRestrictedPresence();
   }
 
   /**
@@ -479,6 +522,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       client.emit('message', this.createError('UNAUTHORIZED', message));
       client.disconnect(true);
     }
+    void this.syncRestrictedPresence();
   }
 
   /**
@@ -498,6 +542,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       client.emit('message', this.createError('UNAUTHORIZED', message));
       client.disconnect(true);
     }
+    void this.syncRestrictedPresence();
   }
 
   handleConnection(client: Socket): Promise<void> {
@@ -652,6 +697,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         // "Client disconnected" line for a client nothing ever announced as connected.
         this.logger.log(`Client ${client.id} authenticated after it had already gone (key: ${validKey.name})`);
         return;
+      }
+      if (this.chatScope.isRestricted(validKey)) {
+        void this.syncRestrictedPresence();
       }
       this.logger.log(`Client connected: ${client.id} (key: ${validKey.name})`);
     } catch (error) {
@@ -936,6 +984,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     for (const room of rooms) {
       void client.join(room);
     }
+    if (chatRestricted) {
+      await this.syncRestrictedPresence();
+    }
 
     this.logger.debug(`Client ${client.id} subscribed to: ${rooms.join(', ')}`);
 
@@ -1074,19 +1125,24 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     const value = data as Record<string, unknown>;
     const chatId = event.startsWith('group.') ? value.groupId : value.chatId;
     if (typeof chatId !== 'string' || !chatId.trim()) return;
-    if (
-      !isWsRedisEnabled() &&
-      !Array.from(this.socketsByKeyId.values()).some(sockets =>
-        Array.from(sockets).some(client => this.chatScope.isRestricted((client.data as { apiKey?: ApiKey }).apiKey)),
-      )
-    ) {
+    const localRestricted = this.hasLocalRestrictedSocket();
+    if (!isWsRedisEnabled() && !localRestricted) {
       return;
     }
     // Expand the emitted identity using persisted mappings, so new LID mappings work
     // without rejoining rooms. Literal allowlist rooms also enforce the fence across Redis nodes.
+    // Under REDIS_ENABLED=true without a local restricted socket, consult cluster presence first
+    // so replicas skip lid_mappings lookups and chat-room fan-out when Redis confirms zero
+    // restricted nodes exist cluster-wide (failing open when Redis is absent, disconnected, or errors).
     // Resolve identities concurrently, but retain event order within each session, including
     // after a failed lookup. Other sessions and unrestricted broadcasts remain independent.
-    const delivery = Promise.allSettled([this.chatDeliveries.get(sessionId), this.chatIds(sessionId, chatId)])
+    const chatIdsPromise =
+      localRestricted || !this.restrictedPresence
+        ? this.chatIds(sessionId, chatId)
+        : this.restrictedPresence
+            .hasRestrictedNodes()
+            .then(hasAny => (hasAny ? this.chatIds(sessionId, chatId) : undefined));
+    const delivery = Promise.allSettled([this.chatDeliveries.get(sessionId), chatIdsPromise])
       .then(([, resolved]) => {
         if (resolved.status === 'rejected') throw resolved.reason;
         const ids = resolved.value;
@@ -1111,11 +1167,55 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   /**
+   * Evict cached chat-identity expansions for `chatId` (across all sessions and equivalent user/LID
+   * address forms), or clear the entire memo when omitted. Called automatically when
+   * LidMappingStoreService persists a new mapping so stale negative entries clear immediately.
+   */
+  invalidateChatIdsMemo(chatId?: string): void {
+    if (!chatId) {
+      this.chatIdsMemo.clear();
+      return;
+    }
+    const target = parseWaId(chatId);
+    const targetPhoneDigits =
+      target.kind === 'user'
+        ? target.userPart
+        : target.kind === 'unknown' && /^\d+$/.test(target.userPart)
+          ? target.userPart
+          : null;
+    for (const memoKey of this.chatIdsMemo.keys()) {
+      const sep = memoKey.indexOf('\n');
+      const entryChatId = sep === -1 ? memoKey : memoKey.slice(sep + 1);
+      if (entryChatId === chatId) {
+        this.chatIdsMemo.delete(memoKey);
+        continue;
+      }
+      const entry = parseWaId(entryChatId);
+      if (
+        (target.kind === 'user' || target.kind === 'lid') &&
+        entry.kind === target.kind &&
+        entry.userPart === target.userPart
+      ) {
+        this.chatIdsMemo.delete(memoKey);
+        continue;
+      }
+      if (
+        targetPhoneDigits !== null &&
+        ((entry.kind === 'user' && entry.userPart === targetPhoneDigits) ||
+          (entry.kind === 'unknown' && /^\d+$/.test(entry.userPart) && entry.userPart === targetPhoneDigits))
+      ) {
+        this.chatIdsMemo.delete(memoKey);
+      }
+    }
+  }
+
+  /**
    * Every identity of a chat that the lid table gives it: its own address forms plus the other dialect of a mapped
-   * phone or lid. Events about one chat of one session that are raised while a lookup is in flight share it, and a
-   * lookup that named another identity is reused for CHAT_IDS_MEMO_TTL_MS. One that named none, or failed, is dropped
-   * as soon as it settles, so the next event asks again and a failure still fails closed for every event that
-   * shared it. The key is the session as well as the chat so that a slow lookup never holds up another session.
+   * phone or lid. Events about one chat of one session that are raised while a lookup is in flight share it, and
+   * both mapped and unmapped answers are reused for CHAT_IDS_MEMO_TTL_MS (evicted early by invalidateChatIdsMemo
+   * whenever this node persists a new mapping). A failed lookup is dropped as soon as it settles, so the next event
+   * retries and every event that shared the failure still fails closed. The key is the session as well as the chat so
+   * that a slow lookup never holds up another session.
    */
   private chatIds(sessionId: string, chatId: string): Promise<string[] | undefined> {
     const memoKey = `${sessionId}\n${chatId}`;
@@ -1133,10 +1233,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     const forget = () => {
       if (this.chatIdsMemo.get(memoKey) === entry) this.chatIdsMemo.delete(memoKey);
     };
-    ids.then(found => {
-      const literal = this.chatScope.scopeFor({ allowedChats: [chatId] });
-      if (!found?.some(id => !literal?.allowed.has(id))) forget();
-    }, forget);
+    void ids.catch(forget);
     return ids;
   }
 
