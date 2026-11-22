@@ -1,5 +1,6 @@
 import {
   Fragment,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -32,11 +33,13 @@ import { sessionApi, type Chat } from '../../services/api';
 import {
   buildMentionNameMap,
   getMediaSrc,
+  inlineMediaToBlob,
   isRenderableMessage,
   resolveMentions,
   senderKey,
   timestampOf,
   type ChatMessageView,
+  type MessageMedia,
 } from '../../utils/chatMessages';
 import { contactCards, contactSnippet, isVCardBody } from '../../utils/vcard';
 import { formatFileSize } from '../../utils/bulkMedia';
@@ -103,6 +106,21 @@ interface ChatThreadProps {
  * was held; a focus long after the pointer's last event is a script's or an assistive technology's.
  */
 const POINTER_FOCUS_WINDOW_MS = 1000;
+
+// Delay before releasing a Blob object URL after `link.click()` hands off a download.
+// Safari/WebKit and Firefox open the Blob stream asynchronously after click returns; revoking
+// synchronously in `finally` aborts the download. Calling `unref()` keeps Node test runs from
+// waiting on the cleanup timer.
+const BLOB_URL_REVOKE_DELAY_MS = 1000;
+
+function scheduleObjectUrlRevoke(url: string): void {
+  const revoke = typeof URL.revokeObjectURL === 'function' ? URL.revokeObjectURL.bind(URL) : null;
+  if (!revoke) return;
+  const timer = setTimeout(() => {
+    revoke(url);
+  }, BLOB_URL_REVOKE_DELAY_MS);
+  (timer as unknown as { unref?: () => void }).unref?.();
+}
 
 // The messages area of the active chat room: the bubble list (media, quotes, reactions, hover
 // actions) plus the floating scroll-to-bottom button. The page owns the message query and the
@@ -292,6 +310,7 @@ function ChatThread({
       if (!sessionId || !messageId) return;
       setMediaFetch(prev => ({ ...prev, [messageId]: 'loading' }));
       let objectUrl: string | null = null;
+      let handedOff = false;
       const sameKey = keepsSameKey();
       try {
         // A 429 and the 503 of a full S3 download pool are refusals to try again, as the archived previews do.
@@ -311,6 +330,8 @@ function ChatThread({
         // downloads from the same thread apart.
         link.download = message.metadata?.media?.filename || messageId;
         link.click();
+        handedOff = true;
+        scheduleObjectUrlRevoke(objectUrl);
         setMediaFetch(prev => {
           const next = { ...prev };
           delete next[messageId];
@@ -322,11 +343,29 @@ function ChatThread({
         // download disabled, over the inbound cap). Say so on the bubble rather than failing mutely.
         setMediaFetch(prev => ({ ...prev, [messageId]: 'failed' }));
       } finally {
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        if (objectUrl && !handedOff) URL.revokeObjectURL(objectUrl);
       }
     },
     [sessionId, activeChat.id],
   );
+
+  const downloadInlineDocument = useCallback((media: MessageMedia, fallbackName: string) => {
+    const blob = inlineMediaToBlob(media);
+    if (!blob) return;
+    let objectUrl: string | null = null;
+    let handedOff = false;
+    try {
+      objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = media.filename || fallbackName;
+      link.click();
+      handedOff = true;
+      scheduleObjectUrlRevoke(objectUrl);
+    } finally {
+      if (objectUrl && !handedOff) URL.revokeObjectURL(objectUrl);
+    }
+  }, []);
 
   const handleClickButton = useCallback(
     async (message: ChatMessageView, button: { id: string; text: string }) => {
@@ -374,33 +413,52 @@ function ChatThread({
     el.scrollTop = 1;
     nudgedTopRef.current = el.scrollTop > 0 ? el.scrollTop : null;
   }, [olderFailed, hasMoreMessages, messagesContainerRef]);
+  const olderScrollRef = useRef({ hasMoreMessages, loadingOlderMessages, onLoadOlderMessages });
+  useEffect(() => {
+    olderScrollRef.current = { hasMoreMessages, loadingOlderMessages, onLoadOlderMessages };
+  });
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return undefined;
-    const onScroll = (event?: Event) => {
+    const onScroll = () => {
       // 120px gap = a couple of message bubbles before counting as "scrolled up".
       setShowJumpToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
       const nudged = nudgedTopRef.current;
-      if (event && nudged !== null) {
+      if (nudged !== null) {
         nudgedTopRef.current = null;
         if (el.scrollTop === nudged) return;
       }
+      const {
+        hasMoreMessages: hasMore,
+        loadingOlderMessages: isFetching,
+        onLoadOlderMessages: loadOlder,
+      } = olderScrollRef.current;
       const geometry = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
       if (
         shouldFetchOlderMessages({
-          isUserScroll: Boolean(event),
+          isUserScroll: true,
           geometry,
-          hasMore: hasMoreMessages,
-          isFetching: loadingOlderMessages,
+          hasMore,
+          isFetching,
         })
       ) {
-        onLoadOlderMessages();
+        loadOlder();
       }
     };
-    onScroll(); // sync initial position (e.g. saved restore landed above the bottom)
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  });
+  }, [messagesContainerRef]);
+
+  // Sync the jump button when the active chat changes, finishes loading, or changes length
+  // (e.g. saved scroll restore landed above the bottom without firing a user scroll event).
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el || loadingMessages) {
+      setShowJumpToBottom(false);
+      return;
+    }
+    setShowJumpToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+  }, [activeChat?.id, loadingMessages, visibleMessages.length, messagesContainerRef]);
 
   // The reaction popover is centred on its icon and opens above it. The icon of a short bubble is a few pixels
   // from the pane's side edge, and a message at the top of the pane has no room above it, so the emoji
@@ -432,12 +490,9 @@ function ChatThread({
     el.scrollTo({ top: el.scrollHeight });
   }, [messagesContainerRef]);
 
-  // Reset the jump button whenever the active chat changes: the new chat's content is restored by
-  // useChatScrollPosition and our listener will resync on its first scroll tick. The prompt-answer
-  // map goes with it: its ids belong to the chat being left, and holding them would disable a
-  // button in the chat being entered if the two ever shared a message id.
+  // Reset the prompt-answer map whenever the active chat changes: its ids belong to the chat being
+  // left, and holding them would disable a button in the chat being entered if the two ever shared a message id.
   useEffect(() => {
-    setShowJumpToBottom(false);
     setButtonClick({});
   }, [activeChat?.id]);
 
@@ -800,18 +855,32 @@ function ChatThread({
                 );
               case 'document':
               default:
+                if (/^https?:\/\//i.test(mediaSrc)) {
+                  return (
+                    <div className="message-media-document">
+                      {/* A document sent by URL links off-site, where browsers ignore `download`, so a plain
+                          click would navigate the dashboard away; open it in a new tab instead. */}
+                      <a
+                        href={mediaSrc}
+                        download={mediaInfo.filename || 'document'}
+                        className="chat-document-media chat-document-card"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {documentCard}
+                      </a>
+                    </div>
+                  );
+                }
                 return (
                   <div className="message-media-document">
-                    {/* A document sent by URL links off-site, where browsers ignore `download`, so a plain
-                        click would navigate the dashboard away; open it in a new tab instead. */}
-                    <a
-                      href={mediaSrc}
-                      download={mediaInfo.filename || 'document'}
+                    <button
+                      type="button"
                       className="chat-document-media chat-document-card"
-                      {...(/^https?:\/\//i.test(mediaSrc) ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                      onClick={() => downloadInlineDocument(mediaInfo, 'document')}
                     >
                       {documentCard}
-                    </a>
+                    </button>
                   </div>
                 );
             }
@@ -1044,4 +1113,4 @@ function ChatThread({
   );
 }
 
-export default ChatThread;
+export default memo(ChatThread);

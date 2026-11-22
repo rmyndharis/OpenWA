@@ -9,6 +9,14 @@ import {
   mergeReactionSnapshot,
   liveMessageMetadata,
   unacknowledgedIncomingIds,
+  getMediaSrc,
+  inertMediaMimetype,
+  inlineMediaToBlob,
+  normalizeSessionPhone,
+  isOwnReactionSender,
+  ownReactionKey,
+  toggleOwnReaction,
+  applyOwnReaction,
   type EngineHistoryMessage,
 } from './chatMessages.ts';
 import { MENTION_CLOSE, MENTION_OPEN } from './messageFormatter.ts';
@@ -1367,4 +1375,169 @@ test('isRenderableMessage: drops empty unknown rows and keeps rows ChatThread dr
   ] as const) {
     assert.equal(isRenderableMessage(msg({ type, body: '', metadata: undefined })), true, `type=${type}`);
   }
+});
+
+test('getMediaSrc downgrades active and non-allowlisted MIME types to application/octet-stream', () => {
+  assert.equal(
+    getMediaSrc({ mimetype: 'text/html', data: 'PGh0bWw+' }),
+    'data:application/octet-stream;base64,PGh0bWw+',
+  );
+  assert.equal(
+    getMediaSrc({ mimetype: 'image/svg+xml', data: 'PHN2Zz4=' }),
+    'data:application/octet-stream;base64,PHN2Zz4=',
+  );
+  assert.equal(
+    getMediaSrc({ mimetype: 'application/pdf', data: 'JVBERi0=' }),
+    'data:application/octet-stream;base64,JVBERi0=',
+  );
+  assert.equal(
+    getMediaSrc({ mimetype: 'text/html', data: 'data:text/html;base64,PGh0bWw+' }),
+    'data:application/octet-stream;base64,PGh0bWw+',
+  );
+  assert.equal(
+    getMediaSrc({ mimetype: 'image/svg+xml', data: 'DATA:image/svg+xml;charset=utf-8;base64,PHN2Zz4=' }),
+    'data:application/octet-stream;base64,PHN2Zz4=',
+  );
+  assert.equal(
+    getMediaSrc({ mimetype: 'image/png', data: 'data:image/png;base64 ,iVBOR' }),
+    'data:image/png;base64,iVBOR',
+  );
+  assert.equal(
+    getMediaSrc({ mimetype: 'text/html', data: 'data:text/html,<script>alert(1)</script>' }),
+    'data:application/octet-stream,<script>alert(1)</script>',
+  );
+  assert.equal(getMediaSrc({ mimetype: 'image/png', data: 'iVBOR' }), 'data:image/png;base64,iVBOR');
+  assert.equal(getMediaSrc({ mimetype: 'audio/ogg; codecs=opus', data: 'T2dn' }), 'data:audio/ogg;base64,T2dn');
+  assert.equal(
+    getMediaSrc({ mimetype: 'image/jpeg', data: 'https://cdn.example.com/photo.jpg' }),
+    'https://cdn.example.com/photo.jpg',
+  );
+  assert.equal(getMediaSrc({ mimetype: 'image/png', data: 'data:malformed-without-comma' }), '');
+});
+
+test('inertMediaMimetype mirrors the passive media allowlist and strips parameters', () => {
+  for (const allowed of [
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+    'image/bmp',
+    'video/mp4',
+    'video/webm',
+    'video/quicktime',
+    'video/3gpp',
+    'audio/mpeg',
+    'audio/mp4',
+    'audio/ogg',
+    'audio/aac',
+    'audio/wav',
+    'audio/webm',
+  ]) {
+    assert.equal(inertMediaMimetype(allowed), allowed);
+    assert.equal(inertMediaMimetype(`${allowed.toUpperCase()}; codecs=foo`), allowed);
+  }
+  for (const unsafe of [
+    'image/svg+xml',
+    'text/html',
+    'text/javascript',
+    'application/pdf',
+    'application/xhtml+xml',
+    '',
+    undefined,
+  ]) {
+    assert.equal(inertMediaMimetype(unsafe), 'application/octet-stream');
+  }
+});
+
+test('inlineMediaToBlob decodes raw base64 and data URIs into application/octet-stream Blobs', async () => {
+  const rawBlob = inlineMediaToBlob({ mimetype: 'text/html', data: btoa('<h1>hi</h1>') });
+  assert.ok(rawBlob);
+  assert.equal(rawBlob.type, 'application/octet-stream');
+  assert.equal(await rawBlob.text(), '<h1>hi</h1>');
+
+  const dataBase64Blob = inlineMediaToBlob({
+    mimetype: 'image/svg+xml',
+    data: `data:image/svg+xml;base64 ,${btoa('<svg/>')}`,
+  });
+  assert.ok(dataBase64Blob);
+  assert.equal(dataBase64Blob.type, 'application/octet-stream');
+  assert.equal(await dataBase64Blob.text(), '<svg/>');
+
+  const dataPlainBlob = inlineMediaToBlob({
+    mimetype: 'text/html',
+    data: 'data:text/html,%3Cscript%3E1%3C%2Fscript%3E',
+  });
+  assert.ok(dataPlainBlob);
+  assert.equal(dataPlainBlob.type, 'application/octet-stream');
+  assert.equal(await dataPlainBlob.text(), '<script>1</script>');
+
+  assert.equal(inlineMediaToBlob({ mimetype: 'application/pdf', data: 'https://example.com/a.pdf' }), null);
+  assert.equal(inlineMediaToBlob({ mimetype: 'application/pdf', data: 'data:missing-comma' }), null);
+  assert.equal(inlineMediaToBlob(undefined), null);
+});
+
+test('own-reaction helpers match exact session phone JIDs and key consistently', () => {
+  assert.equal(normalizeSessionPhone('+1 (555) 123-4567'), '15551234567');
+  assert.equal(normalizeSessionPhone('15551234567:4@s.whatsapp.net'), '15551234567');
+  assert.equal(normalizeSessionPhone(''), null);
+  assert.equal(normalizeSessionPhone(null), null);
+  assert.equal(normalizeSessionPhone('me'), null);
+
+  assert.equal(ownReactionKey('+1 555-123-4567'), '15551234567@c.us');
+  assert.equal(ownReactionKey(null), 'me');
+
+  // Exact matches for own reaction keys
+  for (const sender of [
+    'me',
+    '15551234567',
+    '15551234567@c.us',
+    '15551234567@s.whatsapp.net',
+    '15551234567:0@c.us',
+    '15551234567:12@s.whatsapp.net',
+    '15551234567:7',
+  ]) {
+    assert.equal(isOwnReactionSender(sender, '15551234567'), true, `expected own match for ${sender}`);
+  }
+
+  // Non-matches: substring, superstring, @lid, @g.us, non-numeric device, null phone with 'me' substring
+  for (const sender of [
+    '155512345678@c.us',
+    '915551234567@c.us',
+    '15551234567@lid',
+    '15551234567@g.us',
+    '15551234567@',
+    '15551234567:abc@c.us',
+    '15551234567:@c.us',
+    'me@c.us',
+    'acme@c.us',
+  ]) {
+    assert.equal(isOwnReactionSender(sender, '15551234567'), false, `unexpected own match for ${sender}`);
+  }
+  assert.equal(isOwnReactionSender('me', null), true);
+  assert.equal(isOwnReactionSender('acme@c.us', null), false);
+
+  // Toggle and apply remove all own aliases ('me', device JID, s.whatsapp.net) and write canonical key
+  const existing = {
+    me: '👍',
+    '15551234567:5@s.whatsapp.net': '👍',
+    '1555123456799@c.us': '❤️',
+    '15551234567@lid': '😂',
+  };
+  assert.equal(toggleOwnReaction(existing, '👍', '15551234567'), '');
+  assert.equal(toggleOwnReaction(existing, '❤️', '15551234567'), '❤️');
+  assert.equal(toggleOwnReaction(existing, '😂', '15551234567'), '😂');
+
+  assert.deepEqual(applyOwnReaction(existing, '🔥', '15551234567'), {
+    '1555123456799@c.us': '❤️',
+    '15551234567@lid': '😂',
+    '15551234567@c.us': '🔥',
+  });
+  assert.deepEqual(applyOwnReaction(existing, '', '15551234567'), {
+    '1555123456799@c.us': '❤️',
+    '15551234567@lid': '😂',
+  });
+  assert.deepEqual(applyOwnReaction({ 'acme@c.us': '👍' }, '👍', null), {
+    'acme@c.us': '👍',
+    me: '👍',
+  });
 });

@@ -14,7 +14,7 @@
     "i18n:check": "node scripts/check-i18n-parity.mjs",
     "test": "npm run test:unit",
     "test:unit": "node --experimental-strip-types --test --test-timeout=120000 \"src/**/*.test.ts\"",
-    "test:cov": "node --experimental-strip-types --test --test-timeout=120000 --experimental-test-coverage --test-coverage-exclude=\"src/**/*.test.ts\" --test-coverage-exclude=\"src/test-helpers/**\" \"src/**/*.test.ts\""
+    "test:cov": "node --experimental-strip-types --test --test-concurrency=4 --test-timeout=240000 --experimental-test-coverage --test-coverage-exclude=\"src/**/*.test.ts\" --test-coverage-exclude=\"src/test-helpers/**\" --test-coverage-exclude=\"src/**/*.css\" --test-coverage-exclude=\"src/**/*.svg\" --test-coverage-exclude=\"src/**/*.png\" --test-coverage-exclude=\"src/**/*.jpg\" --test-coverage-exclude=\"src/**/*.jpeg\" --test-coverage-exclude=\"src/**/*.webp\" --test-coverage-exclude=\"src/**/*.gif\" --test-coverage-exclude=\"src/**/*.json\" \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@fontsource-variable/heebo": "^5.3.0",

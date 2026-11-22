@@ -45,6 +45,7 @@ import {
 } from '../services/api';
 import {
   applyMessageEdit,
+  applyOwnReaction,
   mergeDeliveryStatus,
   mergeReactionSnapshot,
   findRevokedIndex,
@@ -55,6 +56,7 @@ import {
   liveMessageMetadata,
   stripMentionDelimiters,
   timestampOf,
+  toggleOwnReaction,
   unacknowledgedIncomingIds,
   type ChatMessageView,
   type MessageMedia,
@@ -96,7 +98,7 @@ import type { ChatRowActions } from '../components/chats/chatActionItems';
 import { ChatActions } from '../components/chats/ChatRowMenu';
 import { Modal } from '../components/Modal';
 import ChatThread from '../components/chats/ChatThread';
-import ChatComposer, { type StagedAttachment } from '../components/chats/ChatComposer';
+import ChatComposer, { type ChatComposerHandle, type StagedAttachment } from '../components/chats/ChatComposer';
 import StatusMedia from '../components/chats/StatusMedia';
 import StatusComposeModal from '../components/chats/StatusComposeModal';
 import { pauseOtherMedia } from '../utils/mediaPlayback';
@@ -107,6 +109,8 @@ const MARK_READ_DEBOUNCE_MS = 750;
 // Most messages the gateway takes in one read (MarkChatReadDto).
 const MARK_READ_MESSAGE_IDS_MAX = 100;
 const readKey = (sessionId: string, chatId: string) => `${sessionId}\u0000${chatId}`;
+// Shared empty thread list so memoized ChatThread keeps a stable messages prop during loading/error states.
+const EMPTY_MESSAGES: ChatMessageView[] = [];
 
 /**
  * Whether a chat's thread has loaded nothing so far, whether its load is still running or has failed: nobody has seen
@@ -393,7 +397,7 @@ export function Chats() {
   }, [roomSearchOpen]);
 
   const {
-    data: messages = [],
+    data: messages = EMPTY_MESSAGES,
     isLoading: loadingMessages,
     isError: messagesError,
     hasNextPage: hasMoreMessages,
@@ -409,7 +413,7 @@ export function Chats() {
     // Baileys has no live per-chat history read and answers 501 to it; any other or unknown engine is asked.
     engineType !== 'baileys',
   );
-  const { appendMessage, updateMessage } = useChatMessagesActions();
+  const { appendMessage } = useChatMessagesActions();
   const queryClient = useQueryClient();
 
   // The media viewer holds the message it shows by the key the thread merges by (waMessageId ?? id, kept when a refetch
@@ -421,10 +425,7 @@ export function Chats() {
   const [lightbox, setLightbox] = useState<ViewedImage | null>(null);
 
   const [replyingTo, setReplyingTo] = useState<ChatMessageView | null>(null);
-  // The open room's draft text lives here (not in ChatComposer) so it survives closing and reopening the room. Each
-  // thread keeps its own (see the drafts effect below): text carried into another chat would be sent to it.
-  const [messageInput, setMessageInput] = useState<string>('');
-  // The staged attachment lives here for the same reason the draft text does: ChatComposer unmounts when the room
+  // The staged attachment lives here so it survives closing and reopening the room: ChatComposer unmounts when the room
   // closes, which would silently discard a picked file. It is dropped when a DIFFERENT chat is opened (see the effect
   // below): a file that follows the user into another conversation can be sent to the wrong recipient.
   const [attachment, setAttachment] = useState<StagedAttachment | null>(null);
@@ -470,6 +471,7 @@ export function Chats() {
   // the last message, as WhatsApp does, and every way out of the room writes the entry again, so typing costs no state
   // update.
   const draftsRef = useRef(new Map<string, string>());
+  const composerHandleRef = useRef<ChatComposerHandle | null>(null);
   const draftKeyRef = useRef<string | null>(null);
   const [chatDrafts, setChatDrafts] = useState<Record<string, string>>({});
   const openChatId = activeChat?.id;
@@ -477,19 +479,20 @@ export function Chats() {
     const previous = draftKeyRef.current;
     if (openChatId === undefined) {
       // A closed room keeps the field's text for the thread last open, whichever session is selected by now.
-      if (previous !== null) setChatDrafts(drafts => withDraft(drafts, previous, messageInput));
+      if (previous !== null) {
+        const prevText = draftsRef.current.get(previous) ?? '';
+        setChatDrafts(drafts => withDraft(drafts, previous, prevText));
+      }
       return;
     }
     const key = readKey(selectedSessionId, openChatId);
     if (previous === key) return;
     draftKeyRef.current = key;
     if (previous !== null) {
-      if (messageInput !== '') draftsRef.current.set(previous, messageInput);
-      setChatDrafts(drafts => withDraft(drafts, previous, messageInput));
+      const prevText = draftsRef.current.get(previous) ?? '';
+      setChatDrafts(drafts => withDraft(drafts, previous, prevText));
     }
-    setMessageInput(draftsRef.current.get(key) ?? '');
-    draftsRef.current.delete(key);
-  }, [selectedSessionId, openChatId, messageInput]);
+  }, [selectedSessionId, openChatId]);
   // The selected session's drafts, by chat id, as the list reads them.
   const sessionDrafts = useMemo(() => {
     const prefix = readKey(selectedSessionId, '');
@@ -503,8 +506,8 @@ export function Chats() {
   // there since: its failed bubble lasts only until the thread is read again, and then the text was nowhere.
   const restoreRefusedDraft = useCallback((sessionId: string, chatId: string, text: string) => {
     const key = readKey(sessionId, chatId);
-    if (draftKeyRef.current === key) setMessageInput(current => (current === '' ? text : current));
-    else if (!draftsRef.current.get(key)) {
+    if (composerHandleRef.current?.restoreDraftIfEmpty(key, text)) return;
+    if (!draftsRef.current.get(key)) {
       draftsRef.current.set(key, text);
       setChatDrafts(drafts => withDraft(drafts, key, text));
     }
@@ -1397,86 +1400,100 @@ export function Chats() {
   // 4. Message history is fetched by useChatMessages (React Query). The active-chat side effects
   // (mark-as-read + clear sidebar unread badge) live in a small effect below.
 
-  const handleReactMessage = async (msg: ChatMessageView, emoji: string) => {
-    if (!selectedSessionId || !activeChat) return;
+  const selectedSessionPhone = sessions.find(s => s.id === selectedSessionId)?.phone ?? null;
 
-    const msgId = msg.waMessageId || msg.id;
-    const currentReactions = msg.metadata?.reactions || {};
-    const sessionPhone = sessions.find(s => s.id === selectedSessionId)?.phone || 'me';
+  const handleReactMessage = useCallback(
+    async (msg: ChatMessageView, emoji: string) => {
+      if (!selectedSessionId || !activeChatId) return;
+      const sessionId = selectedSessionId;
+      const chatId = activeChatId;
+      const sessionPhone = selectedSessionPhone;
 
-    let alreadyReacted = false;
-    for (const [sender, emo] of Object.entries(currentReactions)) {
-      if ((sender === 'me' || sender.includes(sessionPhone)) && emo === emoji) {
-        alreadyReacted = true;
-        break;
+      const msgId = msg.waMessageId || msg.id;
+      const emojiToSend = toggleOwnReaction(msg.metadata?.reactions, emoji, sessionPhone);
+
+      try {
+        await messageApi.react(sessionId, {
+          chatId,
+          messageId: msgId,
+          emoji: emojiToSend,
+        });
+
+        // Deep-merge metadata.reactions so existing media / quotedMessage on metadata survive.
+        const key = messagesQueryKey(sessionId, chatId);
+        const patchReaction = (m: ChatMessageView): ChatMessageView =>
+          m.type === 'revoked'
+            ? m
+            : {
+                ...m,
+                metadata: {
+                  ...(m.metadata || {}),
+                  reactions: applyOwnReaction(m.metadata?.reactions, emojiToSend, sessionPhone),
+                },
+              };
+        updateCachedMessages(queryClient, key, old => {
+          const patched = patchMatchingMessage(old, msgId, patchReaction);
+          return patched === old && msg.id !== msgId ? patchMatchingMessage(old, msg.id, patchReaction) : patched;
+        });
+      } catch (err) {
+        showErrorToast(t('chats.errors.react'), err instanceof Error ? err.message : undefined);
       }
-    }
+    },
+    [selectedSessionId, activeChatId, selectedSessionPhone, queryClient, showErrorToast, t],
+  );
 
-    const emojiToSend = alreadyReacted ? '' : emoji;
+  const handleDeleteMessage = useCallback(
+    async (msg: ChatMessageView) => {
+      if (!selectedSessionId || !activeChatId) return;
+      const sessionId = selectedSessionId;
+      const chatId = activeChatId;
+      const msgId = msg.waMessageId || msg.id;
 
-    try {
-      await messageApi.react(selectedSessionId, {
-        chatId: activeChat.id,
-        messageId: msgId,
-        emoji: emojiToSend,
-      });
+      if (!window.confirm(t('chats.deleteConfirm'))) return;
 
-      // Deep-merge metadata.reactions so existing media / quotedMessage on metadata survive.
-      const key = messagesQueryKey(selectedSessionId, activeChat.id);
-      updateCachedMessages(queryClient, key, old =>
-        old.map(m => {
-          if (m.type !== 'revoked' && (m.id === msg.id || m.waMessageId === msg.id)) {
-            const metadata = m.metadata || {};
-            const reactions = { ...(metadata.reactions || {}) };
-            if (emojiToSend === '') {
-              delete reactions['me'];
-            } else {
-              reactions['me'] = emojiToSend;
-            }
-            return { ...m, metadata: { ...metadata, reactions } };
-          }
-          return m;
-        }),
-      );
-    } catch (err) {
-      showErrorToast(t('chats.errors.react'), err instanceof Error ? err.message : undefined);
-    }
-  };
+      try {
+        await messageApi.delete(sessionId, {
+          chatId,
+          messageId: msgId,
+          forEveryone: true,
+        });
 
-  const handleDeleteMessage = async (msg: ChatMessageView) => {
-    if (!selectedSessionId || !activeChat) return;
-    const msgId = msg.waMessageId || msg.id;
+        const key = messagesQueryKey(sessionId, chatId);
+        const patchRevoked = (m: ChatMessageView): ChatMessageView =>
+          m.type === 'revoked' && m.body === '' && m.metadata === undefined
+            ? m
+            : { ...m, body: '', type: 'revoked', metadata: undefined };
+        updateCachedMessages(queryClient, key, old => {
+          const patched = patchMatchingMessage(old, msgId, patchRevoked);
+          return patched === old && msg.id !== msgId ? patchMatchingMessage(old, msg.id, patchRevoked) : patched;
+        });
+      } catch (err) {
+        showErrorToast(t('chats.errors.delete'), err instanceof Error ? err.message : undefined);
+      }
+    },
+    [selectedSessionId, activeChatId, queryClient, showErrorToast, t],
+  );
 
-    if (!window.confirm(t('chats.deleteConfirm'))) return;
-
-    try {
-      await messageApi.delete(selectedSessionId, {
-        chatId: activeChat.id,
-        messageId: msgId,
-        forEveryone: true,
-      });
-
-      updateMessage(selectedSessionId, activeChat.id, msg.id, { body: '', type: 'revoked', metadata: undefined });
-    } catch (err) {
-      showErrorToast(t('chats.errors.delete'), err instanceof Error ? err.message : undefined);
-    }
-  };
-
-  const handleClickButton = async (msg: ChatMessageView, button: { id: string; text: string }) => {
-    if (!selectedSessionId || !activeChat) return;
-    const msgId = msg.waMessageId || msg.id;
-    try {
-      await messageApi.clickButton(selectedSessionId, {
-        chatId: activeChat.id,
-        messageId: msgId,
-        buttonId: button.id,
-        text: button.text,
-      });
-    } catch (err) {
-      showErrorToast(t('chats.errors.clickButton'), err instanceof Error ? err.message : undefined);
-      throw err;
-    }
-  };
+  const handleClickButton = useCallback(
+    async (msg: ChatMessageView, button: { id: string; text: string }) => {
+      if (!selectedSessionId || !activeChatId) return;
+      const sessionId = selectedSessionId;
+      const chatId = activeChatId;
+      const msgId = msg.waMessageId || msg.id;
+      try {
+        await messageApi.clickButton(sessionId, {
+          chatId,
+          messageId: msgId,
+          buttonId: button.id,
+          text: button.text,
+        });
+      } catch (err) {
+        showErrorToast(t('chats.errors.clickButton'), err instanceof Error ? err.message : undefined);
+        throw err;
+      }
+    },
+    [selectedSessionId, activeChatId, showErrorToast, t],
+  );
 
   // Side effects when the active chat changes: mark-as-read on the gateway + clear sidebar unread badge.
   // The message-history fetch is driven by useChatMessages; scroll restoration is driven by
@@ -1819,13 +1836,11 @@ export function Chats() {
     if (loadingMessages || messages.length === 0) return;
     const container = messagesContainerRef.current;
     if (container) {
-      try {
-        const el = container.querySelector(`[data-wa-message-id="${pending.waMessageId}"]`);
-        // Through the hook, so that the pin the restore just made is not kept for a thread that has left its bottom.
-        if (el instanceof HTMLElement) showRow(el);
-      } catch {
-        // Unexpected chars in the id made the selector invalid — ignore.
-      }
+      const el = Array.from(container.querySelectorAll<HTMLElement>('[data-wa-message-id]')).find(
+        row => row.dataset.waMessageId === pending.waMessageId,
+      );
+      // Through the hook, so that the pin the restore just made is not kept for a thread that has left its bottom.
+      if (el && typeof el.scrollIntoView === 'function') showRow(el);
     }
     pendingHitRef.current = null;
   }, [activeChat, loadingMessages, messages, messagesContainerRef, showRow, hitSeq]);
@@ -2328,6 +2343,17 @@ export function Chats() {
     if (shown?.key !== lightbox.key) setLightbox(shown);
   }, [lightbox, lightboxIndex, imageMessages]);
 
+  const handleOpenImage = useCallback(
+    (messageId: string) => {
+      const opened = imageMessages.find(m => m.id === messageId);
+      if (opened) setLightbox(viewedImage(opened));
+    },
+    [imageMessages],
+  );
+  const handleSendConfirmed = useCallback((tempId: string, key: string) => {
+    setLightbox(v => (v?.key === tempId ? { ...v, key } : v));
+  }, []);
+
   return (
     <div
       className="chats-page"
@@ -2605,17 +2631,14 @@ export function Chats() {
                   onLoadOlderMessages={handleLoadOlderMessages}
                   onMediaLoad={onMediaLoad}
                   measureMedia={measureMedia}
-                  onOpenImage={messageId => {
-                    const opened = imageMessages.find(m => m.id === messageId);
-                    if (opened) setLightbox(viewedImage(opened));
-                  }}
+                  onOpenImage={handleOpenImage}
                   onReply={startReply}
                   onReact={handleReactMessage}
                   onDelete={handleDeleteMessage}
                   onClickButton={handleClickButton}
                 />
 
-                {/* Composer: attachment preview, emoji panel, reply banner, input bar —
+                {/* Composer: attachment preview, emoji panel, reply banner, input bar -
                     components/chats/ChatComposer. */}
                 <ChatComposer
                   selectedSessionId={selectedSessionId}
@@ -2624,10 +2647,11 @@ export function Chats() {
                   setReplyingTo={setReplyingTo}
                   onMessageAppended={onMessageAppended}
                   onSent={promoteSentChat}
-                  onSendConfirmed={(tempId, key) => setLightbox(v => (v?.key === tempId ? { ...v, key } : v))}
+                  onSendConfirmed={handleSendConfirmed}
                   onSendFailed={restoreRefusedDraft}
-                  messageInput={messageInput}
-                  setMessageInput={setMessageInput}
+                  initialDraft={chatDrafts[openRoomKey] ?? ''}
+                  draftsRef={draftsRef}
+                  composerHandleRef={composerHandleRef}
                   attachment={attachment}
                   setAttachment={setAttachment}
                   previewUrl={previewUrl}
