@@ -6,11 +6,17 @@ import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.in
 import { parseWaId, toNeutralJid } from '../../engine/identity/wa-id';
 import { ConversationMappingConflict } from '../../modules/integration/conversation-mapping.service';
 import { createLogger, UNPRINTABLE } from '../../common/services/logger.service';
-import { isPluginActiveForSession, resolvePluginConfig } from './plugin-activation';
+import {
+  isAllSessionsScope,
+  isPluginActiveForSession,
+  resolveInstanceConfig,
+  resolvePluginConfig,
+  sessionScopeKey,
+} from './plugin-activation';
 import { effectiveNetAllow, isNetHostAllowed, performPluginFetch } from './plugin-net';
 import { buildConversationSendFacade, type ConversationMediaType } from './conversation-send-facade';
 import { PluginHostServices } from './plugin-host-services';
-import type { PluginMessagePort } from './plugin-host-ports';
+import type { PluginInstanceRecord, PluginMessagePort } from './plugin-host-ports';
 import { PluginStorageService } from './plugin-storage.service';
 import {
   PluginCapabilityError,
@@ -108,10 +114,17 @@ const metaFields = (meta: unknown): Record<string, unknown> => {
  * It holds no plugin registry and no worker hosts: the loader owns those. Everything here is derived
  * from the PluginInstance passed in.
  */
+/** Host-authoritative dispatch context active on an async call tree (hook session or ingress instance). */
+export interface PluginDispatchContext {
+  sessionId?: string;
+  instanceId?: string;
+}
+
 export class PluginCapabilityContext {
-  // Carries the firing event's sessionId across an in-process hook handler so ctx.config (a getter)
-  // resolves the per-session slice. Per async call tree, so concurrent sessions don't cross over.
-  private readonly hookSession = new AsyncLocalStorage<{ sessionId?: string }>();
+  // Carries the firing dispatch's sessionId (and ingress instanceId, when applicable) across hook and
+  // sandboxed capability handlers so ctx.config and ctx.net.fetch resolve strictly for that dispatch.
+  // Per async call tree, so concurrent dispatches never cross over.
+  private readonly hookSession = new AsyncLocalStorage<PluginDispatchContext>();
 
   constructor(
     // The LOADER's logger, deliberately — a plugin's ctx.logger lines are prefixed with it, and that
@@ -123,6 +136,14 @@ export class PluginCapabilityContext {
     private readonly pluginStorage: PluginStorageService,
     private readonly lidMappingStore?: LidMappingStore,
   ) {}
+
+  /**
+   * Run `fn` inside a host-authoritative dispatch context so capabilities (such as `ctx.net.fetch`)
+   * scope their checks to the active hook session or ingress instance.
+   */
+  runWithDispatchContext<T>(ctx: PluginDispatchContext, fn: () => T): T {
+    return this.hookSession.run(ctx, fn);
+  }
 
   /**
    * Enforce a plugin's declared manifest permissions at the capability boundary. A plugin may only
@@ -145,13 +166,18 @@ export class PluginCapabilityContext {
     }
   }
 
+  /** Whether `manifest.sessions` permits `sessionId` (absent = ['*']). */
+  private isSessionAllowed(manifest: PluginManifest, sessionId: string): boolean {
+    const allowed = manifest.sessions ?? ['*'];
+    return allowed.includes('*') || allowed.includes(sessionId);
+  }
+
   /**
-   * Enforce a plugin's manifest session scope. Runs BEFORE any engine/message resolution —
+   * Enforce a plugin's manifest session scope. Runs BEFORE any engine/message resolution -
    * sessionId is supplied by the plugin, so this is the security boundary. Absent = ['*'].
    */
   private assertSessionAllowed(manifest: PluginManifest, sessionId: string): void {
-    const allowed = manifest.sessions ?? ['*'];
-    if (!allowed.includes('*') && !allowed.includes(sessionId)) {
+    if (!this.isSessionAllowed(manifest, sessionId)) {
       throw new PluginCapabilityError(`Plugin ${manifest.id} is not permitted to act on session ${sessionId}`);
     }
   }
@@ -385,52 +411,138 @@ export class PluginCapabilityContext {
     } satisfies PluginStorage;
   }
 
+  /** Whether `sessionId` is both manifest-permitted and operator-activated for net host admission. */
+  private isSessionActiveForNet(plugin: PluginInstance, sessionId: string): boolean {
+    return this.isSessionAllowed(plugin.manifest, sessionId) && this.isHookActive(plugin, sessionId);
+  }
+
+  /** Whether an enabled PluginInstance row's scope is currently admissible for `plugin`. */
+  private isInstanceRowScopeActive(plugin: PluginInstance, row: Pick<PluginInstanceRecord, 'sessionScope'>): boolean {
+    if (isAllSessionsScope(row.sessionScope)) return true;
+    if (plugin.manifest.sessionScoped === false) return false;
+    return this.isSessionActiveForNet(plugin, row.sessionScope as string);
+  }
+
   /**
-   * Config of every ENABLED instance of a plugin, for the outbound-host allowlist. A disabled
-   * instance is not a tenant the operator is running, so its host is not admitted.
+   * Enabled instances of a plugin, for the outbound-host allowlist. A disabled instance is not a
+   * tenant the operator is running, so its host is never admitted.
    *
    * Best-effort: a plugin may be loaded in a host that exposes no instance service (and the store
    * can fail), and neither is a reason to refuse a fetch the base config already allows.
    */
-  private async enabledInstanceConfigs(pluginId: string): Promise<Record<string, unknown>[]> {
+  private async enabledInstanceRows(pluginId: string): Promise<{ rows: PluginInstanceRecord[]; listed: boolean }> {
     try {
       const rows = await this.hostServices.getPluginInstancePort().list(pluginId);
-      return rows.filter(row => row.enabled).map(row => row.config ?? {});
+      return { rows: rows.filter(row => row.enabled), listed: true };
     } catch {
-      return [];
+      return { rows: [], listed: false };
+    }
+  }
+
+  /** Look up one specific enabled instance for an ingress dispatch. */
+  private async resolveEnabledInstance(
+    pluginId: string,
+    instanceId: string,
+    listedRows: PluginInstanceRecord[],
+  ): Promise<PluginInstanceRecord | null> {
+    try {
+      const port = this.hostServices.getPluginInstancePort();
+      if (typeof port.resolve === 'function') {
+        const row = await port.resolve(pluginId, instanceId);
+        return row?.enabled ? row : null;
+      }
+      const found = listedRows.find(
+        row => (row as PluginInstanceRecord & { instanceId?: string }).instanceId === instanceId,
+      );
+      return found ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Layer 1 (outside active hook/ingress dispatch): collect configs admitted for background or
+   * lifecycle fetches. Global plugins ignore sessionConfig and concrete-scoped instances; session-
+   * scoped plugins admit only active, manifest-permitted session slices and enabled wildcard or
+   * active-session instances.
+   */
+  private collectLayer1NetConfigs(
+    plugin: PluginInstance,
+    scoped: boolean,
+    rows: PluginInstanceRecord[],
+    out: Record<string, unknown>[],
+  ): void {
+    out.push(plugin.config ?? {});
+    if (scoped) {
+      for (const [sid, cfg] of Object.entries(plugin.sessionConfig ?? {})) {
+        if (this.isSessionActiveForNet(plugin, sid)) out.push(cfg);
+      }
+    }
+    for (const row of rows) {
+      if (this.isInstanceRowScopeActive(plugin, row)) out.push(row.config ?? {});
     }
   }
 
   private buildNetCapability(plugin: PluginInstance): PluginNetCapability {
     return {
       fetch: async (url, init) => {
-        // Two gates: the declared permission, then the effective host allowlist = manifest net.allow
-        // UNION the https origins of net.allowConfigHosts keys across the base config AND every per-session
-        // override. The host gate has no firing-session context for a sandboxed plugin's cap round-trip,
-        // so admit every operator-configured tenant host (all public + still SSRF-guarded at connect)
-        // rather than resolving a single, possibly wrong (base-only), one. The SSRF guard inside
-        // performPluginFetch still blocks internal IPs even when the host is allowlisted.
+        // Two gates: the declared permission, then a two-layer per-session host allowlist.
+        // Layer 2 (inside an active hook or ingress dispatch): scope config-derived hosts strictly
+        // to the firing session or ingress instance. Layer 1 (outside dispatch, e.g. onEnable or
+        // healthCheck): admit base config plus active, manifest-permitted sessions and enabled
+        // wildcard/active-session instances. The SSRF guard inside performPluginFetch still blocks
+        // internal IPs even when the host is allowlisted.
         this.assertPermission(plugin.manifest, PluginCapabilityPermission.NET_FETCH);
-        const netConfigs = [
-          plugin.config ?? {},
-          ...Object.values(plugin.sessionConfig ?? {}),
-          // The instance rows, because the scope-keyed store above holds only the LAST instance
-          // projected onto a scope. Dispatch hands each instance its own config, so without this a
-          // second instance sharing that scope is told to call a host the allowlist never saw and
-          // its fetch is refused — a config that is correct and unusable. Same policy as the slice:
-          // an operator-provisioned tenant host, still gated by allowConfigHosts and the SSRF guard.
-          ...(await this.enabledInstanceConfigs(plugin.manifest.id)),
-        ];
+        const scoped = plugin.manifest.sessionScoped !== false;
+        const store = this.hookSession.getStore();
+        const { rows, listed } = await this.enabledInstanceRows(plugin.manifest.id);
+        const netConfigs: Record<string, unknown>[] = [];
+
+        if (store?.instanceId) {
+          const sid = store.sessionId;
+          const hasConcreteSession = sid !== undefined && !isAllSessionsScope(sid);
+          const sessionActive = hasConcreteSession ? this.isSessionActiveForNet(plugin, sid) : true;
+          const match = await this.resolveEnabledInstance(plugin.manifest.id, store.instanceId, rows);
+          const matchValid =
+            match !== null &&
+            this.isInstanceRowScopeActive(plugin, match) &&
+            sessionScopeKey(match.sessionScope) === sessionScopeKey(sid);
+          if (sessionActive && matchValid) {
+            const scopeIsAttributable =
+              !hasConcreteSession || (listed && rows.filter(row => row.sessionScope === sid).length <= 1);
+            const resolvedBase =
+              hasConcreteSession && scopeIsAttributable
+                ? resolvePluginConfig(plugin.config ?? {}, plugin.sessionConfig, sid, scoped, plugin.manifest)
+                : (plugin.config ?? {});
+            netConfigs.push(resolveInstanceConfig(resolvedBase, match.config, plugin.manifest, plugin.config));
+          }
+        } else if (store?.sessionId) {
+          const sid = store.sessionId;
+          if (isAllSessionsScope(sid)) {
+            this.collectLayer1NetConfigs(plugin, scoped, rows, netConfigs);
+          } else if (this.isSessionActiveForNet(plugin, sid)) {
+            netConfigs.push(
+              resolvePluginConfig(plugin.config ?? {}, plugin.sessionConfig, sid, scoped, plugin.manifest),
+            );
+            for (const row of rows) {
+              if (isAllSessionsScope(row.sessionScope) || (scoped && row.sessionScope === sid)) {
+                netConfigs.push(row.config ?? {});
+              }
+            }
+          }
+        } else {
+          this.collectLayer1NetConfigs(plugin, scoped, rows, netConfigs);
+        }
+
         const allow = [
-          ...new Set(
-            netConfigs.flatMap(cfg =>
-              effectiveNetAllow(plugin.manifest.net?.allow, plugin.manifest.net?.allowConfigHosts, cfg),
-            ),
-          ),
+          ...new Set([
+            ...(plugin.manifest.net?.allow ?? []),
+            ...netConfigs.flatMap(cfg => effectiveNetAllow(undefined, plugin.manifest.net?.allowConfigHosts, cfg)),
+          ]),
         ];
         if (!isNetHostAllowed(allow, url)) {
           throw new PluginCapabilityError(
-            `Plugin ${plugin.manifest.id} may not fetch ${url} — add its host to net.allow or net.allowConfigHosts`,
+            `Plugin ${plugin.manifest.id} may not fetch ${url} - add its host to net.allow or net.allowConfigHosts`,
           );
         }
         return performPluginFetch(url, init);

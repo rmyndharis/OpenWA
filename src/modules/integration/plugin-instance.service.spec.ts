@@ -434,4 +434,363 @@ describe('PluginInstanceService provisioning', () => {
     expect(unscoped.sessionScope).toBeNull();
     expect((await service.resolve('chatwoot', 'acct1'))?.sessionScope).toBeNull();
   });
+
+  describe('sanitizeForBaseRedirect', () => {
+    const manifest = {
+      net: { allowConfigHosts: ['baseUrl'] },
+      configSchema: {
+        type: 'object' as const,
+        properties: {
+          baseUrl: { type: 'string' as const },
+          apiKey: { type: 'string' as const, secret: true },
+          auth: {
+            type: 'object' as const,
+            properties: {
+              token: { type: 'string' as const, secret: true },
+              mode: { type: 'string' as const },
+            },
+          },
+          label: { type: 'string' as const },
+        },
+      },
+    };
+
+    it('strips secrets from concrete and wildcard rows inheriting a redirected base host while keeping rows with their own host', async () => {
+      await service.create('chatwoot', 'inst-concrete', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', auth: { token: 'NESTED-SECRET', mode: 'bearer' }, label: 'A' },
+      });
+      await service.create('chatwoot', 'inst-wild', {
+        config: { apiKey: 'WILD-SECRET', label: 'W' },
+      });
+      await service.create('chatwoot', 'inst-own', {
+        sessionScope: 'sess-B',
+        config: { baseUrl: 'https://own.example', apiKey: 'OWN-SECRET', label: 'B' },
+      });
+      await service.create('other-plugin', 'inst-other', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'OTHER-PLUGIN-SECRET' },
+      });
+
+      await service.sanitizeForBaseRedirect(
+        'chatwoot',
+        { baseUrl: 'https://good.example' },
+        { baseUrl: 'https://attacker.example' },
+        manifest,
+      );
+
+      expect((await service.resolve('chatwoot', 'inst-concrete'))?.config).toEqual({
+        auth: { mode: 'bearer' },
+        label: 'A',
+      });
+      expect((await service.resolve('chatwoot', 'inst-wild'))?.config).toEqual({ label: 'W' });
+      expect((await service.resolve('chatwoot', 'inst-own'))?.config).toEqual({
+        baseUrl: 'https://own.example',
+        apiKey: 'OWN-SECRET',
+        label: 'B',
+      });
+      expect((await service.resolve('other-plugin', 'inst-other'))?.config).toEqual({
+        apiKey: 'OTHER-PLUGIN-SECRET',
+      });
+    });
+
+    it('leaves rows untouched when the base host origin does not change', async () => {
+      await service.create('chatwoot', 'inst-concrete', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', label: 'A' },
+      });
+
+      await service.sanitizeForBaseRedirect(
+        'chatwoot',
+        { baseUrl: 'https://good.example/v1' },
+        { baseUrl: 'https://good.example/v2' },
+        manifest,
+      );
+
+      expect((await service.resolve('chatwoot', 'inst-concrete'))?.config).toEqual({
+        apiKey: 'INST-SECRET',
+        label: 'A',
+      });
+    });
+
+    it('fails closed and clears inherited instance config when configSchema is absent', async () => {
+      await service.create('chatwoot', 'inst-schemaless', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', label: 'A' },
+      });
+
+      await service.sanitizeForBaseRedirect(
+        'chatwoot',
+        { baseUrl: 'https://good.example' },
+        { baseUrl: 'https://attacker.example' },
+        { net: { allowConfigHosts: ['baseUrl'] } },
+      );
+
+      expect((await service.resolve('chatwoot', 'inst-schemaless'))?.config).toEqual({});
+    });
+
+    it('retries a failed sanitization fail-closed before subsequent reads return the row', async () => {
+      await service.create('chatwoot', 'inst-retry', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', label: 'A' },
+      });
+      const repo = ds.getRepository(PluginInstance);
+      const updateSpy = jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('transient lock'));
+
+      await expect(
+        service.sanitizeForBaseRedirect(
+          'chatwoot',
+          { baseUrl: 'https://good.example' },
+          { baseUrl: 'https://attacker.example' },
+          manifest,
+        ),
+      ).rejects.toThrow('transient lock');
+
+      // The next read retries sanitization before returning the row, so INST-SECRET never leaks.
+      updateSpy.mockRestore();
+      expect((await service.resolve('chatwoot', 'inst-retry'))?.config).toEqual({ label: 'A' });
+    });
+
+    it('blocks concurrent readers during an active retry and propagates retry failure to all waiting readers', async () => {
+      await service.create('chatwoot', 'inst-conc', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', label: 'A' },
+      });
+      const repo = ds.getRepository(PluginInstance);
+      const origUpdate = repo.update.bind(repo);
+      const updateSpy = jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('transient lock'));
+
+      await expect(
+        service.sanitizeForBaseRedirect(
+          'chatwoot',
+          { baseUrl: 'https://good.example' },
+          { baseUrl: 'https://attacker.example' },
+          manifest,
+        ),
+      ).rejects.toThrow('transient lock');
+
+      // First retry attempt stays in flight while a second concurrent reader arrives, then fails again.
+      let releaseRetryFail!: () => void;
+      const retryFailGate = new Promise<void>(resolve => {
+        releaseRetryFail = resolve;
+      });
+      let retryStarted!: () => void;
+      const retryStartedPromise = new Promise<void>(resolve => {
+        retryStarted = resolve;
+      });
+      updateSpy.mockImplementationOnce(async () => {
+        retryStarted();
+        await retryFailGate;
+        throw new Error('still locked');
+      });
+
+      const r1 = service.resolve('chatwoot', 'inst-conc');
+      await retryStartedPromise;
+      const r2 = service.list('chatwoot');
+      releaseRetryFail();
+
+      const failedOutcomes = await Promise.allSettled([r1, r2]);
+      expect(failedOutcomes[0].status).toBe('rejected');
+      expect(failedOutcomes[1].status).toBe('rejected');
+
+      // Second retry attempt succeeds slowly while two concurrent readers wait: both must observe sanitized config.
+      let releaseRetryOk!: () => void;
+      const retryOkGate = new Promise<void>(resolve => {
+        releaseRetryOk = resolve;
+      });
+      let retryOkStarted!: () => void;
+      const retryOkStartedPromise = new Promise<void>(resolve => {
+        retryOkStarted = resolve;
+      });
+      updateSpy.mockImplementationOnce(async (...args) => {
+        retryOkStarted();
+        await retryOkGate;
+        return origUpdate(...args);
+      });
+
+      const ok1 = service.resolve('chatwoot', 'inst-conc');
+      await retryOkStartedPromise;
+      const ok2 = service.resolve('chatwoot', 'inst-conc');
+      releaseRetryOk();
+
+      const [inst1, inst2] = await Promise.all([ok1, ok2]);
+      expect(inst1?.config).toEqual({ label: 'A' });
+      expect(inst2?.config).toEqual({ label: 'A' });
+      updateSpy.mockRestore();
+    });
+
+    it('serializes sanitizeForBaseRedirect after an in-flight update so stale restored secrets cannot overwrite sanitization', async () => {
+      await service.create('chatwoot', 'inst-race-upd', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', label: 'A1' },
+      });
+      const repo = ds.getRepository(PluginInstance);
+      const origUpdate = repo.update.bind(repo);
+      let releaseUpdateWrite!: () => void;
+      const updateWriteGate = new Promise<void>(resolve => {
+        releaseUpdateWrite = resolve;
+      });
+      let updateWriteStarted!: () => void;
+      const updateWriteStartedPromise = new Promise<void>(resolve => {
+        updateWriteStarted = resolve;
+      });
+      const updateSpy = jest.spyOn(repo, 'update').mockImplementationOnce(async (...args) => {
+        updateWriteStarted();
+        await updateWriteGate;
+        return origUpdate(...args);
+      });
+
+      const pendingUpdate = service.update(
+        'chatwoot',
+        'inst-race-upd',
+        { config: { apiKey: '***', label: 'A2' } },
+        manifest.configSchema,
+        { net: manifest.net, beneath: { baseUrl: 'https://good.example' } },
+      );
+      await updateWriteStartedPromise;
+
+      const pendingSanitize = service.sanitizeForBaseRedirect(
+        'chatwoot',
+        { baseUrl: 'https://good.example' },
+        { baseUrl: 'https://attacker.example' },
+        manifest,
+      );
+      releaseUpdateWrite();
+
+      await Promise.all([pendingUpdate, pendingSanitize]);
+      updateSpy.mockRestore();
+      expect((await service.resolve('chatwoot', 'inst-race-upd'))?.config).toEqual({ label: 'A2' });
+    });
+
+    it('serializes sanitizeForBaseRedirect after an in-flight create so a concurrent insert cannot escape sanitization', async () => {
+      const repo = ds.getRepository(PluginInstance);
+      const origInsert = repo.insert.bind(repo);
+      let releaseInsert!: () => void;
+      const insertGate = new Promise<void>(resolve => {
+        releaseInsert = resolve;
+      });
+      let insertStarted!: () => void;
+      const insertStartedPromise = new Promise<void>(resolve => {
+        insertStarted = resolve;
+      });
+      const insertSpy = jest.spyOn(repo, 'insert').mockImplementationOnce(async (...args) => {
+        insertStarted();
+        await insertGate;
+        return origInsert(...args);
+      });
+
+      const pendingCreate = service.create('chatwoot', 'inst-race-create', {
+        sessionScope: 'sess-C',
+        config: { apiKey: 'NEW-SECRET', label: 'C' },
+      });
+      await insertStartedPromise;
+
+      const pendingSanitize = service.sanitizeForBaseRedirect(
+        'chatwoot',
+        { baseUrl: 'https://good.example' },
+        { baseUrl: 'https://attacker.example' },
+        manifest,
+      );
+      releaseInsert();
+
+      await Promise.all([pendingCreate, pendingSanitize]);
+      insertSpy.mockRestore();
+      expect((await service.resolve('chatwoot', 'inst-race-create'))?.config).toEqual({ label: 'C' });
+    });
+
+    it('drains in-flight sanitizations on onModuleDestroy', async () => {
+      await service.create('chatwoot', 'inst-drain', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', label: 'A' },
+      });
+      const repo = ds.getRepository(PluginInstance);
+      const origUpdate = repo.update.bind(repo);
+      const updateSpy = jest.spyOn(repo, 'update').mockImplementationOnce(async (...args) => {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        return origUpdate(...args);
+      });
+
+      void service.sanitizeForBaseRedirect(
+        'chatwoot',
+        { baseUrl: 'https://good.example' },
+        { baseUrl: 'https://attacker.example' },
+        manifest,
+      );
+      await service.onModuleDestroy();
+      updateSpy.mockRestore();
+
+      const persisted = await repo.findOne({ where: { id: 'chatwoot:inst-drain' } });
+      expect(persisted?.config).toEqual({ label: 'A' });
+    });
+
+    it('blocks external readers while a mutation drains a pending retry, on both retry failure and success', async () => {
+      await service.create('chatwoot', 'inst-mut-retry', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', label: 'A' },
+      });
+      const repo = ds.getRepository(PluginInstance);
+      const origUpdate = repo.update.bind(repo);
+      const updateSpy = jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('transient lock'));
+
+      await expect(
+        service.sanitizeForBaseRedirect(
+          'chatwoot',
+          { baseUrl: 'https://good.example' },
+          { baseUrl: 'https://attacker.example' },
+          manifest,
+        ),
+      ).rejects.toThrow('transient lock');
+
+      // Case 1: update() starts draining pendingRetries, suspends on DB I/O, and fails again.
+      // An external reader arriving mid-flight must wait and reject rather than read INST-SECRET.
+      let releaseFail!: () => void;
+      const failGate = new Promise<void>(resolve => {
+        releaseFail = resolve;
+      });
+      let failStarted!: () => void;
+      const failStartedPromise = new Promise<void>(resolve => {
+        failStarted = resolve;
+      });
+      updateSpy.mockImplementationOnce(async () => {
+        failStarted();
+        await failGate;
+        throw new Error('retry db error');
+      });
+
+      const failedUpdate = service.update('chatwoot', 'inst-mut-retry', { enabled: false });
+      await failStartedPromise;
+      const concurrentReadDuringFail = service.resolve('chatwoot', 'inst-mut-retry');
+      const concurrentListDuringFail = service.list('chatwoot');
+      releaseFail();
+
+      const failOutcomes = await Promise.allSettled([failedUpdate, concurrentReadDuringFail, concurrentListDuringFail]);
+      expect(failOutcomes.map(o => o.status)).toEqual(['rejected', 'rejected', 'rejected']);
+
+      // Case 2: next mutation (update) drains the restored pending retry slowly and succeeds.
+      // An external reader arriving while the mutation's retry is in flight must wait and observe sanitized config.
+      let releaseOk!: () => void;
+      const okGate = new Promise<void>(resolve => {
+        releaseOk = resolve;
+      });
+      let okStarted!: () => void;
+      const okStartedPromise = new Promise<void>(resolve => {
+        okStarted = resolve;
+      });
+      updateSpy.mockImplementationOnce(async (...args) => {
+        okStarted();
+        await okGate;
+        return origUpdate(...args);
+      });
+
+      const okUpdate = service.update('chatwoot', 'inst-mut-retry', { enabled: false });
+      await okStartedPromise;
+      const concurrentReadDuringOk = service.resolve('chatwoot', 'inst-mut-retry');
+      releaseOk();
+
+      const [updated, readRow] = await Promise.all([okUpdate, concurrentReadDuringOk]);
+      expect(updated?.config).toEqual({ label: 'A' });
+      expect(readRow?.config).toEqual({ label: 'A' });
+      updateSpy.mockRestore();
+    });
+  });
 });

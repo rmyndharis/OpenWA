@@ -14,7 +14,12 @@ import {
 } from './plugin-activation';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
-import { PluginLogLevel, SANDBOX_LOG_MAX_PER_WINDOW, SANDBOX_LOG_WINDOW_MS } from './sandbox/protocol';
+import {
+  PluginLogLevel,
+  SANDBOX_LOG_MAX_PER_WINDOW,
+  SANDBOX_LOG_WINDOW_MS,
+  type SandboxDispatchContext,
+} from './sandbox/protocol';
 import { shouldDispatchToPlugin } from './handover-gate';
 import { countMetaValues, metaText } from './sandbox-log-meta';
 import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
@@ -68,7 +73,7 @@ interface SandboxLogRelayState {
  * closure and calls it exactly where enableSandboxed used to call the method.
  */
 type CreateSandboxHostFn = (
-  capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+  capDispatcher?: (verb: string, args: unknown[], dispatchContext?: SandboxDispatchContext) => Promise<unknown>,
   onHookSubscribe?: (event: string, priority?: number) => void,
   onWebhookSubscribe?: (route: string) => void,
   onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
@@ -386,7 +391,10 @@ export class PluginSandboxBridge {
     };
 
     const host: PluginWorkerHost = this.createHost(
-      (verb, args) => dispatchCapabilityVerb(context, verb, args),
+      (verb, args, dispatchContext) =>
+        dispatchContext
+          ? this.capabilities.runWithDispatchContext(dispatchContext, () => dispatchCapabilityVerb(context, verb, args))
+          : dispatchCapabilityVerb(context, verb, args),
       onHookSubscribe,
       onWebhookSubscribe,
       onLog,

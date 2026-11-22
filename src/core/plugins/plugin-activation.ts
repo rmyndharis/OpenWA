@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { PluginConfigField, PluginManifest } from './plugin.interfaces';
 
 /**
@@ -154,6 +155,7 @@ export function restorableConfig(
   incoming: Record<string, unknown> | null | undefined,
   manifest: ConfigLayerManifest,
   beneath: Record<string, unknown> = {},
+  options: { nullRevertsToBeneath?: boolean } = {},
 ): Record<string, unknown> | undefined {
   const hostKeys = manifest.net?.allowConfigHosts;
   if (!stored || !hostKeys?.length || !isPlainObject(incoming)) return stored;
@@ -162,9 +164,79 @@ export function restorableConfig(
   const bound = Object.fromEntries(
     hostKeys.map(key => [key, stored[key] === undefined || stored[key] === null ? beneath[key] : stored[key]]),
   );
-  if (!redirectsHost(bound, incoming, hostKeys)) return stored;
+  // On a built-in, an explicit null removes the stored override so the key reverts to `beneath`. If
+  // `beneath` names a different origin than `bound`, that revert redirects the stored secrets too.
+  const effectiveIncoming = options.nullRevertsToBeneath
+    ? Object.fromEntries(
+        hostKeys.map(key => [key, incoming[key] === null && beneath[key] !== undefined ? beneath[key] : incoming[key]]),
+      )
+    : incoming;
+  if (!redirectsHost(bound, effectiveIncoming, hostKeys)) return stored;
   const properties = manifest.configSchema?.properties;
   return properties ? withoutSecrets(stored, properties) : {};
+}
+
+/**
+ * Return every declared `allowConfigHosts` key whose origin changed between `previous` and `next`
+ * (using the same redirect rules as {@link mergeLayer} and {@link restorableConfig}).
+ */
+export function redirectedHostKeys(
+  previous: Record<string, unknown>,
+  next: Record<string, unknown>,
+  manifest: ConfigLayerManifest,
+): string[] {
+  const hostKeys = manifest.net?.allowConfigHosts;
+  if (!hostKeys?.length) return [];
+  return hostKeys.filter(key => redirectsHost(previous, next, [key]));
+}
+
+/**
+ * Strip secret fields from a config slice (`sessionConfig[sid]` or `plugin_instances.config`) when
+ * it omits any key in `redirectedKeys` and therefore inherits the redirected base host. Returns the
+ * stripped object when secrets were removed, or `undefined` when the slice defines its own host for
+ * every redirected key or holds no secret fields to remove.
+ */
+export function stripInheritedSecretsForRedirect(
+  slice: Record<string, unknown>,
+  redirectedKeys: readonly string[],
+  manifest: ConfigLayerManifest,
+): Record<string, unknown> | undefined {
+  if (redirectedKeys.length === 0) return undefined;
+  if (!redirectedKeys.some(key => !namesHost(slice, [key]))) return undefined;
+  const properties = manifest.configSchema?.properties;
+  const stripped = properties ? withoutSecrets(slice, properties) : {};
+  return isDeepStrictEqual(stripped, slice) ? undefined : stripped;
+}
+
+/**
+ * Strip secret fields from any per-session config slice that inherits a base `allowConfigHosts` key
+ * redirected between `previousBase` and `nextBase`. Slices that define their own override for every
+ * redirected host key are left untouched. Returns `undefined` when nothing changed.
+ */
+export function sanitizeSessionConfigsForBaseRedirect(
+  sessionConfig: Record<string, Record<string, unknown>> | undefined,
+  previousBase: Record<string, unknown>,
+  nextBase: Record<string, unknown>,
+  manifest: ConfigLayerManifest,
+): Record<string, Record<string, unknown>> | undefined {
+  if (!sessionConfig) return undefined;
+  const redirectedKeys = redirectedHostKeys(previousBase, nextBase, manifest);
+  if (redirectedKeys.length === 0) return undefined;
+
+  let changed = false;
+  const next: Record<string, Record<string, unknown>> = {};
+  for (const [sid, slice] of Object.entries(sessionConfig)) {
+    const stripped = stripInheritedSecretsForRedirect(slice, redirectedKeys, manifest);
+    if (stripped === undefined) {
+      next[sid] = slice;
+      continue;
+    }
+    changed = true;
+    if (Object.keys(stripped).length > 0) {
+      next[sid] = stripped;
+    }
+  }
+  return changed ? next : undefined;
 }
 
 /**

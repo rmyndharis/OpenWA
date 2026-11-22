@@ -1,8 +1,10 @@
+import { randomUUID } from 'crypto';
 import {
   PluginWorkerChannel,
   PluginLifecycleMethod,
   WorkerToHostMessage,
   SandboxStaticContext,
+  SandboxDispatchContext,
   PluginLogLevel,
   SEND_CAP_VERBS,
 } from './protocol';
@@ -115,6 +117,10 @@ export class PluginWorkerHost {
   // Dispatches that timed out host-side while their handler may still be running in the worker, oldest
   // first, each with the release of the in-flight claim it still holds. See holdLateClaim.
   private readonly lateHookClaims = new Map<number, () => void>();
+  // Host-authoritative session/instance context for active hook and webhook dispatches, keyed by a
+  // host-generated dispatchId. Looked up when a worker issues a capability call so the host never
+  // trusts worker-supplied session or instance names.
+  private readonly inFlightDispatches = new Map<string, SandboxDispatchContext>();
 
   // Worker-initiated capability calls currently running host-side, bounded by maxInFlightCaps.
   private inFlightCaps = 0;
@@ -132,7 +138,11 @@ export class PluginWorkerHost {
     private readonly channel: PluginWorkerChannel,
     // Runs a worker-initiated capability call host-side (validating permission + session scope before
     // the real verb). Absent => the worker has no capabilities (e.g. before the bridge is wired).
-    private readonly capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+    private readonly capDispatcher?: (
+      verb: string,
+      args: unknown[],
+      dispatchContext?: SandboxDispatchContext,
+    ) => Promise<unknown>,
     // Called when the worker subscribes a handler to an event, so the host can register a shim with
     // the hook manager that dispatches into the worker.
     private readonly onHookSubscribe?: (event: string, priority?: number) => void,
@@ -211,14 +221,17 @@ export class PluginWorkerHost {
     // crash-drain already produce.
     if (this.dead) return Promise.resolve({ continue: true });
     const id = this.nextId++;
+    const dispatchId = randomUUID();
     const inFlight = [...new Set([...(options.inFlight ?? []), options.event])];
     for (const event of inFlight) this.incInFlightHook(event);
-    return new Promise(resolve => {
+    this.inFlightDispatches.set(dispatchId, { sessionId: options.sessionId });
+    return new Promise((resolve, reject) => {
       let released = false;
       const release = (): void => {
         if (released) return;
         released = true;
         this.lateHookClaims.delete(id);
+        this.inFlightDispatches.delete(dispatchId);
         for (const event of inFlight) this.decInFlightHook(event);
       };
       // settle gives the in-flight claim back on every exit path that ends the dispatch (the worker's
@@ -232,23 +245,31 @@ export class PluginWorkerHost {
         options.onTimeout?.();
         this.probeLiveness();
         // The chain moves on without this plugin, but its handler is still running in the worker, and
-        // a capability call it makes from here on still names this dispatch. Dropping the claim now
-        // would let that call run outside the re-entrancy guard, re-fire the event and dispatch the
-        // same slow handler again, one more send every timeout for as long as the plugin stays enabled.
+        // a capability call it makes from here on still names this dispatch. Retain both the in-flight
+        // re-entrancy claim and the dispatch context until the late result arrives, eviction past
+        // MAX_LATE_HOOK_CLAIMS, or worker exit.
         resolve({ continue: true });
         this.holdLateClaim(id, release);
       }, options.timeoutMs);
       this.hookPending.set(id, { resolve: settle, timer });
-      this.channel.postMessage({
-        kind: 'hook',
-        id,
-        event: options.event,
-        data: options.data,
-        sessionId: options.sessionId,
-        source: options.source,
-        config: options.config,
-        inFlight,
-      });
+      try {
+        this.channel.postMessage({
+          kind: 'hook',
+          id,
+          dispatchId,
+          event: options.event,
+          data: options.data,
+          sessionId: options.sessionId,
+          source: options.source,
+          config: options.config,
+          inFlight,
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        this.hookPending.delete(id);
+        release();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -291,29 +312,50 @@ export class PluginWorkerHost {
     // dispatchWebhook returns immediately instead of waiting the full timeout for a worker that's gone.
     if (this.dead) return Promise.resolve({ ok: false, status: 502 });
     const id = this.nextId++;
-    return new Promise(resolve => {
+    const dispatchId = randomUUID();
+    this.inFlightDispatches.set(dispatchId, { sessionId: options.sessionId, instanceId: options.instanceId });
+    return new Promise((resolve, reject) => {
+      const settle = (result: {
+        status: number;
+        headers?: Record<string, string>;
+        body?: string;
+        ok: boolean;
+        error?: string;
+      }): void => {
+        this.inFlightDispatches.delete(dispatchId);
+        resolve(result);
+      };
       const timer = setTimeout(() => {
         this.webhookPending.delete(id);
+        this.inFlightDispatches.delete(dispatchId);
         options.onTimeout?.();
         this.probeLiveness();
         resolve({ ok: false, status: 504 }); // the ingress job retries or dead-letters the delivery
       }, options.timeoutMs);
-      this.webhookPending.set(id, { resolve, timer });
-      this.channel.postMessage({
-        kind: 'webhook',
-        id,
-        instanceId: options.instanceId,
-        route: options.route,
-        method: options.method,
-        headers: options.headers,
-        query: options.query,
-        body: options.body,
-        rawBody: options.rawBody,
-        verified: options.verified,
-        deliveryId: options.deliveryId,
-        sessionId: options.sessionId,
-        config: options.config,
-      });
+      this.webhookPending.set(id, { resolve: settle, timer });
+      try {
+        this.channel.postMessage({
+          kind: 'webhook',
+          id,
+          dispatchId,
+          instanceId: options.instanceId,
+          route: options.route,
+          method: options.method,
+          headers: options.headers,
+          query: options.query,
+          body: options.body,
+          rawBody: options.rawBody,
+          verified: options.verified,
+          deliveryId: options.deliveryId,
+          sessionId: options.sessionId,
+          config: options.config,
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        this.webhookPending.delete(id);
+        this.inFlightDispatches.delete(dispatchId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -450,6 +492,7 @@ export class PluginWorkerHost {
   /** Tear the worker down. */
   terminate(): Promise<void> {
     this.terminated = true;
+    this.inFlightDispatches.clear();
     return this.channel.terminate();
   }
 
@@ -586,10 +629,26 @@ export class PluginWorkerHost {
       this.channel.postMessage({ kind: 'cap-result', id: message.id, ok: false, error: 'no capability dispatcher' });
       return;
     }
+    let dispatchContext: SandboxDispatchContext | undefined;
+    if (message.dispatchId !== undefined) {
+      if (typeof message.dispatchId !== 'string' || !this.inFlightDispatches.has(message.dispatchId)) {
+        this.channel.postMessage({
+          kind: 'cap-result',
+          id: message.id,
+          ok: false,
+          error: 'capability call rejected: unknown or expired dispatch context',
+        });
+        return;
+      }
+      dispatchContext = this.inFlightDispatches.get(message.dispatchId);
+    }
     this.inFlightCaps++;
     try {
       const dispatcher = this.capDispatcher;
-      const run = (): Promise<unknown> => dispatcher(message.verb, message.args);
+      const run = (): Promise<unknown> =>
+        dispatchContext
+          ? dispatcher(message.verb, message.args, dispatchContext)
+          : dispatcher(message.verb, message.args);
       // Run inside the in-flight hook context of the dispatch whose handler issued this call, so a
       // capability that re-fires that event is short-circuited by HookManager's re-entrancy guard
       // (which otherwise can't see across the IPC boundary). Only that causal chain is guarded: a call
@@ -667,6 +726,7 @@ export class PluginWorkerHost {
 
   private handleExit(code: number): void {
     this.dead = true;
+    this.inFlightDispatches.clear();
     if (this.probe) {
       clearTimeout(this.probe.timer);
       this.probe = undefined;

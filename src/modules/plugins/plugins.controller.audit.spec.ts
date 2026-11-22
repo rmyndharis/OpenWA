@@ -22,7 +22,7 @@ describe('PluginsController audit trail', () => {
       enable: jest.fn().mockResolvedValue(done),
       disable: jest.fn().mockResolvedValue(done),
       uninstall: jest.fn().mockResolvedValue(done),
-      updateConfig: jest.fn().mockReturnValue(done),
+      updateConfig: jest.fn().mockResolvedValue(done),
       updateSessionConfig: jest.fn().mockReturnValue(done),
       updateSessions: jest.fn().mockReturnValue(plugin),
     };
@@ -67,8 +67,8 @@ describe('PluginsController audit trail', () => {
     expect(logInfo).toHaveBeenCalledWith(action, { sessionId: undefined, metadata: { pluginId: 'relay' } });
   });
 
-  it('records a configuration change by field name, never by value', () => {
-    controller.updateConfig('relay', { config: { apiKey: 'sk-live-123', baseUrl: 'https://crm.example.com' } });
+  it('records a configuration change by field name, never by value', async () => {
+    await controller.updateConfig('relay', { config: { apiKey: 'sk-live-123', baseUrl: 'https://crm.example.com' } });
 
     const [action, context] = logInfo.mock.calls[0] as [AuditAction, { metadata: Record<string, unknown> }];
     expect(action).toBe(AuditAction.PLUGIN_CONFIG_UPDATED);
@@ -106,12 +106,12 @@ describe('PluginsController audit trail', () => {
 
   // The service answers a refused configuration change with 200 and success false (a masked secret list it
   // cannot restore, for one), so the audit row has to follow the outcome and not the call.
-  it('writes no row for a configuration change the service refused', () => {
+  it('writes no row for a configuration change the service refused', async () => {
     const refused = { success: false, message: 'could not restore the masked secret' };
-    service.updateConfig.mockReturnValueOnce(refused);
+    service.updateConfig.mockResolvedValueOnce(refused);
     service.updateSessionConfig.mockReturnValueOnce(refused);
 
-    controller.updateConfig('relay', { config: { apiKeys: ['********'] } });
+    await controller.updateConfig('relay', { config: { apiKeys: ['********'] } });
     controller.updateSessionConfig('relay', 'sess-1', { config: { apiKeys: ['********'] } });
 
     expect(logInfo).not.toHaveBeenCalled();

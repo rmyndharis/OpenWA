@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { pluginsApi } from '../services/api';
 import type { Plugin, CatalogPlugin, PluginConfigField } from '../services/api';
-import { injectConfigUiCsp } from '../utils/pluginFrameSecurity';
+import { hardenConfigUiHtml } from '../utils/pluginFrameSecurity';
 import { onTabListKeyDown } from '../utils/tabKeys';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useTheme } from '../hooks/useTheme';
@@ -272,20 +272,7 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
   const [handshakeReceived, setHandshakeReceived] = useState(false);
   const [handshakeError, setHandshakeError] = useState<string | null>(null);
 
-  const hardenConfigUiHtml = (source: string): string => {
-    const nonce = document.querySelector<HTMLMetaElement>('meta[name="openwa-csp-nonce"]')?.content ?? '';
-    const doc = new DOMParser().parseFromString(source, 'text/html');
-    if (nonce && nonce !== '__OPENWA_CSP_NONCE__') {
-      // Vite development has no production CSP, so there is nothing to stamp. Config UIs are
-      // required to be self-contained. Nonce only inline scripts; a plugin-supplied external
-      // `src` must still satisfy the parent's host allow-list rather than bypassing it via nonce.
-      for (const script of doc.querySelectorAll('script:not([src])')) script.setAttribute('nonce', nonce);
-    }
-    // Lock down media/connection egress for the frame's document — independent of the parent
-    // CSP, so it protects Vite dev sessions too. See utils/pluginFrameSecurity.
-    injectConfigUiCsp(doc);
-    return `<!doctype html>\n${doc.documentElement.outerHTML}`;
-  };
+  const hardenedHtml = useMemo(() => (html === null ? null : hardenConfigUiHtml(html)), [html]);
 
   useEffect(() => {
     let cancelled = false;
@@ -363,7 +350,7 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
   }, [plugin, sessionId, queryClient, t, i18n.language, toast, resolvedTheme]);
 
   if (error) return <div className="config-ui-status config-ui-error">{error}</div>;
-  if (html === null)
+  if (hardenedHtml === null)
     return (
       <div className="config-ui-status">
         <Loader2 size={24} className="animate-spin" />
@@ -376,7 +363,7 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
         ref={iframeRef}
         className="plugin-config-ui-frame"
         sandbox="allow-scripts"
-        srcDoc={hardenConfigUiHtml(html)}
+        srcDoc={hardenedHtml}
         title={localizePlugin(plugin, i18n.language).name}
         style={{ height: plugin.configUi?.height ?? 600 }}
       />

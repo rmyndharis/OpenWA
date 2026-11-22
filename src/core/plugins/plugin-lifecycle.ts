@@ -10,7 +10,63 @@ import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { unregisterPluginSearchProvider } from './search-provider-registration.util';
 import { resolvePluginMainPath } from './plugin-paths';
 import { assertNotUninstalling } from './plugin-uninstaller';
-import { deepMerge } from './plugin-activation';
+import {
+  deepMerge,
+  redirectedHostKeys,
+  restorableConfig,
+  sanitizeSessionConfigsForBaseRedirect,
+} from './plugin-activation';
+
+/** Env-derived base config registered for each built-in PluginInstance, readable by config write helpers. */
+const builtInBaseByPlugin = new WeakMap<PluginInstance, Record<string, unknown>>();
+
+/** WeakRefs to live PluginLifecycle instances so durable async config updates resolve their owner without leaking. */
+const activeLifecycles = new Set<WeakRef<PluginLifecycle>>();
+
+/**
+ * Thrown when persisting secret-stripping updates to `plugin_instances` fails before a base-host
+ * redirect commits to registry.json, so the redirect aborts rather than persisting a split state.
+ */
+export class PluginInstanceSanitizationError extends Error {
+  constructor(pluginId: string, cause: unknown) {
+    super(
+      `Failed to sanitize plugin instances for ${pluginId} before redirecting base host: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+    this.name = 'PluginInstanceSanitizationError';
+  }
+}
+
+/** Return the env-derived base config of a registered built-in plugin, or undefined for extensions. */
+export function getBuiltInBaseConfig(plugin: PluginInstance): Record<string, unknown> | undefined {
+  return builtInBaseByPlugin.get(plugin);
+}
+
+/**
+ * Apply a base config update durably through the plugin's owning PluginLifecycle: any persisted
+ * `plugin_instances` rows inheriting a redirected host key are sanitized in the database BEFORE
+ * registry.json is written. Returns `false` when `plugin` does not belong to a live PluginLifecycle
+ * (for example, in unit tests using a mocked PluginLoaderService).
+ */
+export async function updatePluginConfigDurable(
+  plugin: PluginInstance,
+  config: Record<string, unknown>,
+  opts?: RegistryWriteOptions,
+): Promise<boolean> {
+  for (const ref of activeLifecycles) {
+    const lifecycle = ref.deref();
+    if (!lifecycle) {
+      activeLifecycles.delete(ref);
+      continue;
+    }
+    if (lifecycle.ownsPlugin(plugin)) {
+      await lifecycle.updatePluginConfigDurable(plugin.manifest.id, config, opts);
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * The runtime half of the plugin loader: everything that happens to a plugin AFTER the boot scan has
@@ -54,7 +110,14 @@ export class PluginLifecycle {
     private readonly sandboxHosts: Map<string, PluginWorkerHost>,
     private readonly lastSandboxHookError: Map<string, { event: string; error: string; at: Date }>,
     private readonly pluginsDir: string,
-  ) {}
+  ) {
+    activeLifecycles.add(new WeakRef(this));
+  }
+
+  /** Whether this lifecycle's plugin registry map holds `plugin` by identity. */
+  ownsPlugin(plugin: PluginInstance): boolean {
+    return this.plugins.get(plugin.manifest.id) === plugin;
+  }
 
   async enablePlugin(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
@@ -218,13 +281,7 @@ export class PluginLifecycle {
     });
   }
 
-  updatePluginConfig(pluginId: string, config: Record<string, unknown>, opts?: RegistryWriteOptions): void {
-    const plugin = this.plugins.get(pluginId);
-    if (!plugin) {
-      throw new Error(`Plugin ${pluginId} not found`);
-    }
-    assertNotUninstalling(pluginId, plugin);
-
+  private planConfigUpdate(plugin: PluginInstance, pluginId: string, config: Record<string, unknown>) {
     // Persist only the operator's keys on top of what was persisted before, not the effective merge:
     // a built-in's effective config carries its env-derived defaults, and storing those would freeze
     // them over later .env changes (see registerBuiltInPlugin). Persisted first: a write that must be stored
@@ -232,10 +289,39 @@ export class PluginLifecycle {
     // On a built-in a null at any depth removes the stored key, so the key goes back to its env-derived value; a
     // stored null would outrank .env on every boot. An extension plugin stores the null as sent.
     const base = this.builtInBase.get(pluginId);
-    const previous = this.pluginStorage.getPluginConfig(pluginId) ?? {};
+    const previousEffective = plugin.config;
+    const previous =
+      restorableConfig(this.pluginStorage.getPluginConfig(pluginId) ?? {}, config, plugin.manifest, base, {
+        nullRevertsToBeneath: Boolean(base),
+      }) ?? {};
     const stored = base ? deepMerge(previous, config, true) : { ...previous, ...config };
-    this.pluginStorage.setPluginConfig(pluginId, stored, opts);
-    plugin.config = base ? deepMerge(base, stored) : { ...plugin.config, ...config };
+    const current = restorableConfig(previousEffective, config, plugin.manifest) ?? {};
+    const nextConfig = base
+      ? deepMerge(restorableConfig(base, stored, plugin.manifest) ?? {}, stored)
+      : { ...current, ...config };
+    const redirected = redirectedHostKeys(previousEffective, nextConfig, plugin.manifest);
+    const nextSessionConfig = sanitizeSessionConfigsForBaseRedirect(
+      plugin.sessionConfig,
+      previousEffective,
+      nextConfig,
+      plugin.manifest,
+    );
+    return { previousEffective, stored, nextConfig, redirected, nextSessionConfig };
+  }
+
+  private commitPlannedConfigUpdate(
+    plugin: PluginInstance,
+    pluginId: string,
+    plan: ReturnType<PluginLifecycle['planConfigUpdate']>,
+    opts?: RegistryWriteOptions,
+  ): void {
+    if (plan.nextSessionConfig !== undefined) {
+      this.pluginStorage.setPluginConfigAndSessionConfig(pluginId, plan.stored, plan.nextSessionConfig, opts);
+      plugin.sessionConfig = plan.nextSessionConfig;
+    } else {
+      this.pluginStorage.setPluginConfig(pluginId, plan.stored, opts);
+    }
+    plugin.config = plan.nextConfig;
 
     // Notify the running plugin of the config change (fire and forget). A sandboxed plugin's
     // onConfigChange lives in the worker (plugin.instance is null), so route it through the live worker
@@ -253,6 +339,92 @@ export class PluginLifecycle {
     this.logger.debug(`Plugin config updated: ${pluginId}`, {
       pluginId,
       action: 'plugin_config_updated',
+    });
+  }
+
+  private getPluginInstancePortOrUndefined(): ReturnType<PluginHostServices['getPluginInstancePort']> | undefined {
+    try {
+      return this.hostServices.getPluginInstancePort();
+    } catch {
+      return undefined;
+    }
+  }
+
+  updatePluginConfig(pluginId: string, config: Record<string, unknown>, opts?: RegistryWriteOptions): void {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) {
+      throw new Error(`Plugin ${pluginId} not found`);
+    }
+    assertNotUninstalling(pluginId, plugin);
+
+    const plan = this.planConfigUpdate(plugin, pluginId, config);
+    this.commitPlannedConfigUpdate(plugin, pluginId, plan, opts);
+    if (plan.redirected.length > 0) {
+      this.sanitizeInstancesAfterBaseRedirect(pluginId, plan.previousEffective, plan.nextConfig, plugin.manifest);
+    }
+  }
+
+  /**
+   * Async durable counterpart to {@link updatePluginConfig}: sanitizes persisted `plugin_instances`
+   * rows in the database BEFORE committing a redirected base host to registry.json so a DB failure
+   * aborts cleanly and an immediate restart after return cannot resurrect stripped instance secrets.
+   */
+  async updatePluginConfigDurable(
+    pluginId: string,
+    config: Record<string, unknown>,
+    opts?: RegistryWriteOptions,
+  ): Promise<void> {
+    let plugin = this.plugins.get(pluginId);
+    if (!plugin) {
+      throw new Error(`Plugin ${pluginId} not found`);
+    }
+    assertNotUninstalling(pluginId, plugin);
+
+    const sanitizedKeys = new Set<string>();
+    let plan = this.planConfigUpdate(plugin, pluginId, config);
+    while (plan.redirected.some(key => !sanitizedKeys.has(key))) {
+      const port = this.getPluginInstancePortOrUndefined();
+      if (!port?.sanitizeForBaseRedirect) break;
+      try {
+        await port.sanitizeForBaseRedirect(pluginId, plan.previousEffective, plan.nextConfig, plugin.manifest, {
+          retryOnFailure: false,
+        });
+      } catch (error) {
+        throw new PluginInstanceSanitizationError(pluginId, error);
+      }
+      for (const key of plan.redirected) sanitizedKeys.add(key);
+
+      plugin = this.plugins.get(pluginId);
+      if (!plugin) {
+        throw new Error(`Plugin ${pluginId} not found`);
+      }
+      assertNotUninstalling(pluginId, plugin);
+      plan = this.planConfigUpdate(plugin, pluginId, config);
+    }
+
+    this.commitPlannedConfigUpdate(plugin, pluginId, plan, opts);
+  }
+
+  /**
+   * Strip secrets from persisted plugin_instances rows that inherit a redirected base host key for
+   * synchronous callers. PluginInstanceService tracks the in-flight promise synchronously before
+   * returning, so subsequent instance reads wait for it and retry fail-closed if the write fails.
+   */
+  private sanitizeInstancesAfterBaseRedirect(
+    pluginId: string,
+    previousBase: Record<string, unknown>,
+    nextBase: Record<string, unknown>,
+    manifest: PluginManifest,
+  ): void {
+    const port = this.getPluginInstancePortOrUndefined();
+    if (!port?.sanitizeForBaseRedirect) return;
+    void port.sanitizeForBaseRedirect(pluginId, previousBase, nextBase, manifest).catch((error: unknown) => {
+      this.logger.warn(
+        `Failed to sanitize plugin instances for ${pluginId} after base host redirect: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { pluginId, action: 'plugin_instance_redirect_sanitize_failed' },
+      );
     });
   }
 
@@ -353,9 +525,11 @@ export class PluginLifecycle {
     // persisted overrides win for the keys they actually set. Engine plugin config can carry such an
     // override too (PUT /api/plugins/:id/config), except the auth-dir bases, which EngineFactory
     // passes to every createEngine call from the env config.
-    const effectiveConfig = deepMerge(config, this.pluginStorage.getPluginConfig(manifest.id) ?? {});
+    const stored = this.pluginStorage.getPluginConfig(manifest.id) ?? {};
+    const effectiveConfig = deepMerge(restorableConfig(config, stored, manifest) ?? {}, stored);
     // Kept so a stored key the operator removes can fall back to it (updatePluginConfig).
-    this.builtInBase.set(manifest.id, { ...config });
+    const baseCopy = { ...config };
+    this.builtInBase.set(manifest.id, baseCopy);
 
     const pluginInstance: PluginInstance = {
       manifest,
@@ -370,6 +544,7 @@ export class PluginLifecycle {
       activeSessions: this.pluginStorage.getPluginSessions(manifest.id) ?? undefined,
       sessionConfig: this.pluginStorage.getPluginSessionConfig(manifest.id) ?? undefined,
     };
+    builtInBaseByPlugin.set(pluginInstance, baseCopy);
 
     this.plugins.set(manifest.id, pluginInstance);
 

@@ -1,9 +1,20 @@
-import { Repository } from 'typeorm';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { ConfigService } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
+import { DataSource, Repository } from 'typeorm';
 import { ScopeBindingService } from './scope-binding.service';
 import { PluginInstanceService } from './plugin-instance.service';
+import { PluginInstance } from './entities/plugin-instance.entity';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
+import { PluginStorageService } from '../../core/plugins/plugin-storage.service';
+import { PLUGIN_INSTANCE_PORT } from '../../core/plugins/plugin-host-ports';
+import { HookManager } from '../../core/hooks';
+import { PluginsService } from '../plugins/plugins.service';
 import { AuditService } from '../audit/audit.service';
-import { Session } from '../session/entities/session.entity';
+import { Session, SessionStatus } from '../session/entities/session.entity';
+import type { PluginWorkerHost } from '../../core/plugins/sandbox/plugin-worker-host';
 
 // The boot-time reconciler re-derives each ENABLED instance's runtime scope binding from the persisted
 // plugin_instances rows, so a binding lost at provisioning time (plugin momentarily unloaded) is
@@ -759,5 +770,332 @@ describe('ScopeBindingService.applyScopeBinding retracts a secret an instance no
 
     expect(updatePluginConfig).not.toHaveBeenCalled();
     expect(setPluginSessionConfig).toHaveBeenCalledWith('chatwoot', 'sess-1', { baseUrl: 'https://crm' });
+  });
+});
+
+describe('Base host redirect sanitizes persisted plugin_instances rows across ingress dispatch and restart', () => {
+  const PLUGIN_ID = 'crm-adapter';
+  const manifestJson = {
+    id: PLUGIN_ID,
+    name: 'CRM Adapter',
+    version: '1.0.0',
+    type: 'extension',
+    main: 'index.js',
+    permissions: ['webhook:ingress', 'net:fetch'],
+    ingress: [{ route: 'events', signature: { scheme: 'hmac-sha256', header: 'x-signature' } }],
+    net: { allowConfigHosts: ['baseUrl'] },
+    configSchema: {
+      type: 'object',
+      properties: {
+        baseUrl: { type: 'string' },
+        apiKey: { type: 'string', secret: true },
+        label: { type: 'string' },
+      },
+    },
+  };
+
+  async function buildStack() {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-inst-redirect-'));
+    const pluginDir = path.join(tmpDir, 'plugins', PLUGIN_ID);
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, 'manifest.json'), JSON.stringify(manifestJson));
+    fs.writeFileSync(path.join(pluginDir, 'index.js'), 'module.exports = {};');
+
+    const ds = new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [PluginInstance, Session],
+      synchronize: true,
+    });
+    await ds.initialize();
+    const sessionsRepo = ds.getRepository(Session);
+    for (const sid of ['sess-A', 'sess-B']) {
+      await sessionsRepo.save(
+        sessionsRepo.create({ id: sid, name: sid, status: SessionStatus.DISCONNECTED, config: {} }),
+      );
+    }
+
+    const instances = new PluginInstanceService(ds.getRepository(PluginInstance));
+    const audit = { logInfo: jest.fn(), logWarn: jest.fn() } as unknown as AuditService;
+    const configService = new ConfigService({
+      dataDir: tmpDir,
+      plugins: { directory: path.join(tmpDir, 'plugins') },
+    });
+    const moduleRef = {
+      get: jest.fn((token: unknown) => {
+        if (token === PLUGIN_INSTANCE_PORT) return instances;
+        throw new Error(`Unexpected token: ${String(token)}`);
+      }),
+    } as unknown as ModuleRef;
+
+    const bootLoader = () => {
+      const storage = new PluginStorageService(configService);
+      const loader = new PluginLoaderService(configService, new HookManager(), storage, moduleRef);
+      loader.loadPlugin(pluginDir);
+      const pluginsService = new PluginsService(loader, configService);
+      const scopeBinding = new ScopeBindingService(instances, loader, audit, sessionsRepo);
+      const webhookCalls: Array<{ instanceId: string; config?: Record<string, unknown> }> = [];
+      (loader as unknown as { sandboxHosts: Map<string, PluginWorkerHost> }).sandboxHosts.set(PLUGIN_ID, {
+        dispatchWebhook: (payload: { instanceId: string; config?: Record<string, unknown> }) => {
+          webhookCalls.push({ instanceId: payload.instanceId, config: payload.config });
+          return Promise.resolve({ ok: true, status: 200 });
+        },
+        sendConfigChange: jest.fn(),
+      } as unknown as PluginWorkerHost);
+      return { storage, loader, pluginsService, scopeBinding, webhookCalls };
+    };
+
+    const cleanup = async () => {
+      if (ds.isInitialized) await ds.destroy();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    };
+
+    return { instances, ds, bootLoader, cleanup };
+  }
+
+  it('strips inherited secrets from concrete and wildcard instances on base config redirect, blocks ingress leakage, and prevents resurrection on restart reconcile', async () => {
+    const { instances, bootLoader, cleanup } = await buildStack();
+    try {
+      const first = bootLoader();
+      expect(
+        (
+          await first.pluginsService.updateConfig(PLUGIN_ID, {
+            baseUrl: 'https://good.example',
+            apiKey: 'BASE-SECRET',
+          })
+        ).success,
+      ).toBe(true);
+
+      const instConcrete = await instances.create(PLUGIN_ID, 'inst-1', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', label: 'A' },
+      });
+      const instWild = await instances.create(PLUGIN_ID, 'inst-wild', {
+        config: { apiKey: 'WILD-SECRET', label: 'W' },
+      });
+      const instOwn = await instances.create(PLUGIN_ID, 'inst-own', {
+        sessionScope: 'sess-B',
+        config: { baseUrl: 'https://own.example', apiKey: 'OWN-SECRET', label: 'B' },
+      });
+
+      await first.scopeBinding.applyScopeBinding(PLUGIN_ID, instConcrete.sessionScope, instConcrete.config!, true);
+      await first.scopeBinding.applyScopeBinding(PLUGIN_ID, instOwn.sessionScope, instOwn.config!, true);
+      await first.scopeBinding.applyScopeBinding(PLUGIN_ID, instWild.sessionScope, instWild.config!, true);
+
+      // Redirect the base host away from good.example.
+      expect(
+        (await first.pluginsService.updateConfig(PLUGIN_ID, { baseUrl: 'https://attacker.example' })).success,
+      ).toBe(true);
+
+      // Immediate next ingress dispatches must never carry INST-SECRET or WILD-SECRET to attacker.example.
+      await first.loader.dispatchWebhookForInstance({
+        pluginId: PLUGIN_ID,
+        instanceId: 'inst-1',
+        route: 'events',
+        deliveryId: 'd-1',
+        sessionId: 'sess-A',
+        payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+      });
+      await first.loader.dispatchWebhookForInstance({
+        pluginId: PLUGIN_ID,
+        instanceId: 'inst-wild',
+        route: 'events',
+        deliveryId: 'd-wild',
+        payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+      });
+      await first.loader.dispatchWebhookForInstance({
+        pluginId: PLUGIN_ID,
+        instanceId: 'inst-own',
+        route: 'events',
+        deliveryId: 'd-own',
+        sessionId: 'sess-B',
+        payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+      });
+
+      expect(first.webhookCalls[0]).toEqual({
+        instanceId: 'inst-1',
+        config: { baseUrl: 'https://attacker.example', label: 'A' },
+      });
+      expect(first.webhookCalls[1]).toEqual({
+        instanceId: 'inst-wild',
+        config: { baseUrl: 'https://attacker.example', label: 'W' },
+      });
+      expect(first.webhookCalls[2]).toEqual({
+        instanceId: 'inst-own',
+        config: { baseUrl: 'https://own.example', apiKey: 'OWN-SECRET', label: 'B' },
+      });
+
+      // Persisted instance rows must reflect the stripped secrets while preserving inst-own.
+      expect((await instances.resolve(PLUGIN_ID, 'inst-1'))?.config).toEqual({ label: 'A' });
+      expect((await instances.resolve(PLUGIN_ID, 'inst-wild'))?.config).toEqual({ label: 'W' });
+      expect((await instances.resolve(PLUGIN_ID, 'inst-own'))?.config).toEqual({
+        baseUrl: 'https://own.example',
+        apiKey: 'OWN-SECRET',
+        label: 'B',
+      });
+
+      // Simulated restart + ScopeBindingService.reconcile() must NOT resurrect INST-SECRET or WILD-SECRET.
+      const restarted = bootLoader();
+      await restarted.scopeBinding.reconcile();
+      const pluginAfterRestart = restarted.loader.getPlugin(PLUGIN_ID)!;
+      expect(pluginAfterRestart.config).toEqual({ baseUrl: 'https://attacker.example', label: 'W' });
+      expect(pluginAfterRestart.sessionConfig?.['sess-A']).toEqual({ label: 'A' });
+      expect(pluginAfterRestart.sessionConfig?.['sess-B']).toEqual({
+        baseUrl: 'https://own.example',
+        apiKey: 'OWN-SECRET',
+        label: 'B',
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('strips inherited secrets from sibling instances when a wildcard instance projection redirects the base host', async () => {
+    const { instances, bootLoader, cleanup } = await buildStack();
+    try {
+      const stack = bootLoader();
+      expect(
+        (
+          await stack.pluginsService.updateConfig(PLUGIN_ID, {
+            baseUrl: 'https://good.example',
+            apiKey: 'BASE-SECRET',
+          })
+        ).success,
+      ).toBe(true);
+
+      const instConcrete = await instances.create(PLUGIN_ID, 'inst-1', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', label: 'A' },
+      });
+      const instWildOld = await instances.create(PLUGIN_ID, 'inst-wild-old', {
+        config: { apiKey: 'OLD-WILD-SECRET', label: 'W1' },
+      });
+      const instOwn = await instances.create(PLUGIN_ID, 'inst-own', {
+        sessionScope: 'sess-B',
+        config: { baseUrl: 'https://own.example', apiKey: 'OWN-SECRET', label: 'B' },
+      });
+      await stack.scopeBinding.applyScopeBinding(PLUGIN_ID, instConcrete.sessionScope, instConcrete.config!, true);
+      await stack.scopeBinding.applyScopeBinding(PLUGIN_ID, instOwn.sessionScope, instOwn.config!, true);
+      await stack.scopeBinding.applyScopeBinding(PLUGIN_ID, instWildOld.sessionScope, instWildOld.config!, true);
+
+      // Provision a new wildcard instance pointing at a different origin with its own secret.
+      const instWildNew = await instances.create(PLUGIN_ID, 'inst-wild-new', {
+        config: { baseUrl: 'https://moved.example', apiKey: 'NEW-WILD-SECRET', label: 'W2' },
+      });
+      const sanitizeSpy = jest.spyOn(instances, 'sanitizeForBaseRedirect');
+      await stack.scopeBinding.applyScopeBinding(PLUGIN_ID, instWildNew.sessionScope, instWildNew.config!, true);
+
+      expect(sanitizeSpy).toHaveBeenCalledTimes(1);
+      sanitizeSpy.mockRestore();
+
+      expect((await instances.resolve(PLUGIN_ID, 'inst-1'))?.config).toEqual({ label: 'A' });
+      expect((await instances.resolve(PLUGIN_ID, 'inst-wild-old'))?.config).toEqual({ label: 'W1' });
+      expect((await instances.resolve(PLUGIN_ID, 'inst-wild-new'))?.config).toEqual({
+        baseUrl: 'https://moved.example',
+        apiKey: 'NEW-WILD-SECRET',
+        label: 'W2',
+      });
+      expect((await instances.resolve(PLUGIN_ID, 'inst-own'))?.config).toEqual({
+        baseUrl: 'https://own.example',
+        apiKey: 'OWN-SECRET',
+        label: 'B',
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('rejects a base host redirect and leaves registry.json untouched when instance DB sanitization fails', async () => {
+    const { instances, ds, bootLoader, cleanup } = await buildStack();
+    try {
+      const stack = bootLoader();
+      expect(
+        (
+          await stack.pluginsService.updateConfig(PLUGIN_ID, {
+            baseUrl: 'https://good.example',
+            apiKey: 'BASE-SECRET',
+          })
+        ).success,
+      ).toBe(true);
+
+      const instConcrete = await instances.create(PLUGIN_ID, 'inst-1', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', label: 'A' },
+      });
+      await stack.scopeBinding.applyScopeBinding(PLUGIN_ID, instConcrete.sessionScope, instConcrete.config!, true);
+
+      const repo = ds.getRepository(PluginInstance);
+      const updateSpy = jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('db write unavailable'));
+
+      await expect(
+        stack.pluginsService.updateConfig(PLUGIN_ID, { baseUrl: 'https://attacker.example' }),
+      ).rejects.toThrow();
+
+      // Neither runtime config nor persisted registry.json may be redirected when DB sanitization failed.
+      expect(stack.loader.getPlugin(PLUGIN_ID)?.config).toMatchObject({ baseUrl: 'https://good.example' });
+      expect(stack.storage.getPluginConfig(PLUGIN_ID)).toMatchObject({ baseUrl: 'https://good.example' });
+
+      // Because the redirect was aborted, a subsequent read must NOT strip INST-SECRET via a phantom retry.
+      updateSpy.mockRestore();
+      expect((await instances.resolve(PLUGIN_ID, 'inst-1'))?.config).toEqual({ apiKey: 'INST-SECRET', label: 'A' });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('durably sanitizes plugin_instances before updateConfig resolves so an immediate cold restart cannot resurrect secrets', async () => {
+    const { instances, ds, bootLoader, cleanup } = await buildStack();
+    try {
+      const first = bootLoader();
+      expect(
+        (
+          await first.pluginsService.updateConfig(PLUGIN_ID, {
+            baseUrl: 'https://good.example',
+            apiKey: 'BASE-SECRET',
+          })
+        ).success,
+      ).toBe(true);
+
+      const instConcrete = await instances.create(PLUGIN_ID, 'inst-1', {
+        sessionScope: 'sess-A',
+        config: { apiKey: 'INST-SECRET', label: 'A' },
+      });
+      const instWild = await instances.create(PLUGIN_ID, 'inst-wild', {
+        config: { apiKey: 'WILD-SECRET', label: 'W' },
+      });
+      await first.scopeBinding.applyScopeBinding(PLUGIN_ID, instConcrete.sessionScope, instConcrete.config!, true);
+      await first.scopeBinding.applyScopeBinding(PLUGIN_ID, instWild.sessionScope, instWild.config!, true);
+
+      // Slow DB updates so a non-awaited background sanitization would still be in flight when updateConfig returns.
+      const repo = ds.getRepository(PluginInstance);
+      const origUpdate = repo.update.bind(repo);
+      const updateSpy = jest.spyOn(repo, 'update').mockImplementation(async (...args) => {
+        await new Promise(resolve => setTimeout(resolve, 40));
+        return origUpdate(...args);
+      });
+
+      const result = await first.pluginsService.updateConfig(PLUGIN_ID, { baseUrl: 'https://attacker.example' });
+      expect(result.success).toBe(true);
+      updateSpy.mockRestore();
+
+      // Simulate a cold restart with a fresh PluginInstanceService (no in-memory barriers) immediately after return.
+      const freshInstances = new PluginInstanceService(ds.getRepository(PluginInstance));
+      const restarted = bootLoader();
+      const restartedScopeBinding = new ScopeBindingService(
+        freshInstances,
+        restarted.loader,
+        { logInfo: jest.fn(), logWarn: jest.fn() } as unknown as AuditService,
+        ds.getRepository(Session),
+      );
+      await restartedScopeBinding.reconcile();
+
+      expect(restarted.loader.getPlugin(PLUGIN_ID)?.config).toEqual({
+        baseUrl: 'https://attacker.example',
+        label: 'W',
+      });
+      expect(restarted.loader.getPlugin(PLUGIN_ID)?.sessionConfig?.['sess-A']).toEqual({ label: 'A' });
+    } finally {
+      await cleanup();
+    }
   });
 });

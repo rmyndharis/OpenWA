@@ -13,7 +13,18 @@ import {
   PluginStatus,
   PluginType,
 } from './plugin.interfaces';
-import { PLUGIN_CONVERSATION_MAPPING_PORT, PLUGIN_MESSAGE_PORT, PLUGIN_SESSION_PORT } from './plugin-host-ports';
+import {
+  PLUGIN_CONVERSATION_MAPPING_PORT,
+  PLUGIN_INSTANCE_PORT,
+  PLUGIN_MESSAGE_PORT,
+  PLUGIN_SESSION_PORT,
+} from './plugin-host-ports';
+import * as pluginNet from './plugin-net';
+import { PluginWorkerHost } from './sandbox/plugin-worker-host';
+import type { HostToWorkerMessage, PluginLogLevel, PluginWorkerChannel, WorkerToHostMessage } from './sandbox/protocol';
+import { WorkerCapabilityClient } from './sandbox/worker-capability';
+import { WorkerHookRegistry } from './sandbox/worker-hooks';
+import { WebhookRegistry } from './sandbox/worker-webhooks';
 
 function makePlugin(
   sessions?: string[],
@@ -400,6 +411,569 @@ describe('PluginLoaderService capability facade — ctx.net', () => {
   it('denies net.fetch when the host is not in the manifest net.allow list', async () => {
     const ctx = contextFor(loaderWith(), netPlugin(['net:fetch'], ['only.example.com:443']));
     await expect(ctx.net.fetch('https://api.example.com/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+  });
+
+  describe('per-session host scoping', () => {
+    let fetchSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      fetchSpy = jest.spyOn(pluginNet, 'performPluginFetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        body: '{}',
+      });
+    });
+
+    afterEach(() => {
+      fetchSpy.mockRestore();
+    });
+
+    const instanceRow = (instanceId: string, sessionScope: string | null, baseUrl: string, enabled = true) => ({
+      id: `net-ext:${instanceId}`,
+      pluginId: 'net-ext',
+      instanceId,
+      sessionScope,
+      secret: 's',
+      verifyToken: null,
+      config: { baseUrl } as Record<string, unknown>,
+      enabled,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    function buildNetLoader(rows: ReturnType<typeof instanceRow>[] = []) {
+      const hookManager = new HookManager();
+      const configService = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
+      const pluginStorage = { createPluginStorage: jest.fn().mockReturnValue({}) } as unknown as PluginStorageService;
+      const moduleRef = {
+        get: jest.fn((token: unknown) =>
+          token === PLUGIN_INSTANCE_PORT
+            ? {
+                list: jest.fn().mockResolvedValue(rows),
+                resolve: jest.fn((_pluginId: string, instanceId: string) =>
+                  Promise.resolve(rows.find(row => row.instanceId === instanceId) ?? null),
+                ),
+              }
+            : undefined,
+        ),
+      } as unknown as ModuleRef;
+      const loader = new PluginLoaderService(configService, hookManager, pluginStorage, moduleRef);
+      return { loader, hookManager };
+    }
+
+    function capabilitiesOf(loader: PluginLoaderService) {
+      return (
+        loader as unknown as {
+          capabilities: {
+            runWithDispatchContext: <T>(ctx: { sessionId?: string; instanceId?: string }, fn: () => T) => T;
+          };
+        }
+      ).capabilities;
+    }
+
+    function scopedNetPlugin(opts: {
+      config?: Record<string, unknown>;
+      sessionConfig?: Record<string, Record<string, unknown>>;
+      activeSessions?: string[];
+      sessions?: string[];
+      sessionScoped?: boolean;
+      allow?: string[];
+    }): PluginInstance {
+      return {
+        manifest: {
+          id: 'net-ext',
+          name: 'Net Extension',
+          version: '1.0.0',
+          type: PluginType.EXTENSION,
+          main: 'index.ts',
+          permissions: ['net:fetch'],
+          sessions: opts.sessions,
+          sessionScoped: opts.sessionScoped,
+          net: { allow: opts.allow ?? [], allowConfigHosts: ['baseUrl'] },
+        },
+        status: PluginStatus.ENABLED,
+        config: opts.config ?? {},
+        sessionConfig: opts.sessionConfig,
+        activeSessions: opts.activeSessions,
+        instance: null,
+      };
+    }
+
+    it('outside dispatch, excludes sessionConfig and instance hosts for inactive sessions', async () => {
+      const { loader } = buildNetLoader([
+        instanceRow('inst-active', 'sess-1', 'https://inst-active.example'),
+        instanceRow('inst-inactive', 'sess-2', 'https://inst-inactive.example'),
+        instanceRow('inst-wild', null, 'https://inst-wild.example'),
+      ]);
+      const plugin = scopedNetPlugin({
+        config: { baseUrl: 'https://base.example' },
+        sessionConfig: {
+          'sess-1': { baseUrl: 'https://active.example' },
+          'sess-2': { baseUrl: 'https://staged.example' },
+        },
+        activeSessions: ['sess-1'],
+      });
+      const ctx = contextFor(loader, plugin);
+
+      await expect(ctx.net.fetch('https://base.example/ping')).resolves.toMatchObject({ ok: true });
+      await expect(ctx.net.fetch('https://active.example/ping')).resolves.toMatchObject({ ok: true });
+      await expect(ctx.net.fetch('https://inst-active.example/ping')).resolves.toMatchObject({ ok: true });
+      await expect(ctx.net.fetch('https://inst-wild.example/ping')).resolves.toMatchObject({ ok: true });
+
+      await expect(ctx.net.fetch('https://staged.example/ping')).rejects.toBeInstanceOf(PluginCapabilityError);
+      await expect(ctx.net.fetch('https://inst-inactive.example/ping')).rejects.toBeInstanceOf(PluginCapabilityError);
+    });
+
+    it('outside dispatch, excludes sessionConfig and instance hosts disallowed by manifest.sessions even when activeSessions is wildcard', async () => {
+      const { loader } = buildNetLoader([
+        instanceRow('inst-allowed', 'sess-1', 'https://inst-allowed.example'),
+        instanceRow('inst-denied', 'sess-2', 'https://inst-denied.example'),
+      ]);
+      const plugin = scopedNetPlugin({
+        sessions: ['sess-1'],
+        activeSessions: ['*'],
+        sessionConfig: {
+          'sess-1': { baseUrl: 'https://allowed.example' },
+          'sess-2': { baseUrl: 'https://denied.example' },
+        },
+      });
+      const ctx = contextFor(loader, plugin);
+
+      await expect(ctx.net.fetch('https://allowed.example/x')).resolves.toMatchObject({ ok: true });
+      await expect(ctx.net.fetch('https://inst-allowed.example/x')).resolves.toMatchObject({ ok: true });
+      await expect(ctx.net.fetch('https://denied.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+      await expect(ctx.net.fetch('https://inst-denied.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+    });
+
+    it('when sessionScoped is false, ignores sessionConfig and concrete-scoped instances completely', async () => {
+      const { loader } = buildNetLoader([
+        instanceRow('inst-concrete', 'sess-1', 'https://inst-concrete.example'),
+        instanceRow('inst-wild', '*', 'https://inst-wild.example'),
+      ]);
+      const plugin = scopedNetPlugin({
+        sessionScoped: false,
+        config: { baseUrl: 'https://base.example' },
+        sessionConfig: { 'sess-1': { baseUrl: 'https://stale-session.example' } },
+        activeSessions: ['*'],
+      });
+      const ctx = contextFor(loader, plugin);
+
+      await expect(ctx.net.fetch('https://base.example/x')).resolves.toMatchObject({ ok: true });
+      await expect(ctx.net.fetch('https://inst-wild.example/x')).resolves.toMatchObject({ ok: true });
+      await expect(ctx.net.fetch('https://stale-session.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+      await expect(ctx.net.fetch('https://inst-concrete.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+    });
+
+    it('inside an in-process hook dispatch, admits only the firing session and wildcard or matching instances', async () => {
+      const { loader, hookManager } = buildNetLoader([
+        instanceRow('inst-1', 'sess-1', 'https://inst-1.example'),
+        instanceRow('inst-2', 'sess-2', 'https://inst-2.example'),
+        instanceRow('inst-wild', null, 'https://inst-wild.example'),
+      ]);
+      const plugin = scopedNetPlugin({
+        config: { baseUrl: 'https://base.example' },
+        sessionConfig: {
+          'sess-1': { baseUrl: 'https://s1.example' },
+          'sess-2': { baseUrl: 'https://s2.example' },
+        },
+        activeSessions: ['sess-1', 'sess-2'],
+      });
+      const ctx = contextFor(loader, plugin);
+
+      const outcomes: Record<string, boolean> = {};
+      ctx.registerHook('message:received', async () => {
+        for (const [label, url] of [
+          ['s1', 'https://s1.example/x'],
+          ['s2', 'https://s2.example/x'],
+          ['inst1', 'https://inst-1.example/x'],
+          ['inst2', 'https://inst-2.example/x'],
+          ['wild', 'https://inst-wild.example/x'],
+        ]) {
+          outcomes[label] = await ctx.net
+            .fetch(url)
+            .then(() => true)
+            .catch(() => false);
+        }
+        return { continue: true };
+      });
+
+      await hookManager.execute('message:received', {}, { sessionId: 'sess-1', source: 'Engine' });
+
+      expect(outcomes).toEqual({
+        s1: true,
+        s2: false,
+        inst1: true,
+        inst2: false,
+        wild: true,
+      });
+    });
+
+    it('inside an ingress dispatch, admits only that enabled instance and isolates sibling instances sharing the same session', async () => {
+      const { loader } = buildNetLoader([
+        instanceRow('inst-a', 'sess-1', 'https://tenant-a.example'),
+        instanceRow('inst-b', 'sess-1', 'https://tenant-b.example'),
+        instanceRow('inst-c', 'sess-2', 'https://tenant-c.example'),
+        instanceRow('inst-off', 'sess-1', 'https://disabled.example', false),
+      ]);
+      const plugin = scopedNetPlugin({
+        config: { baseUrl: 'https://base.example' },
+        // inst-b was projected last onto sess-1; inst-a must still not inherit inst-b's host.
+        sessionConfig: {
+          'sess-1': { baseUrl: 'https://tenant-b.example' },
+          'sess-2': { baseUrl: 'https://tenant-c.example' },
+        },
+        activeSessions: ['sess-1', 'sess-2'],
+      });
+      const ctx = contextFor(loader, plugin);
+      const caps = capabilitiesOf(loader);
+
+      await caps.runWithDispatchContext({ sessionId: 'sess-1', instanceId: 'inst-a' }, async () => {
+        await expect(ctx.net.fetch('https://tenant-a.example/x')).resolves.toMatchObject({ ok: true });
+        await expect(ctx.net.fetch('https://tenant-b.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+        await expect(ctx.net.fetch('https://tenant-c.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+        await expect(ctx.net.fetch('https://disabled.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+      });
+
+      // Disabled instance cannot unlock its own host during ingress dispatch.
+      await caps.runWithDispatchContext({ sessionId: 'sess-1', instanceId: 'inst-off' }, async () => {
+        await expect(ctx.net.fetch('https://disabled.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+      });
+    });
+
+    it('inside an ingress dispatch, admits zero config-derived hosts when the instance is disabled, deleted, or rebound', async () => {
+      const { loader } = buildNetLoader([
+        instanceRow('inst-off', 'sess-1', 'https://disabled.example', false),
+        instanceRow('inst-rebound', 'sess-2', 'https://rebound.example', true),
+      ]);
+      const plugin = scopedNetPlugin({
+        allow: ['static.example:443'],
+        config: { baseUrl: 'https://base.example' },
+        sessionConfig: { 'sess-1': { baseUrl: 'https://s1.example' } },
+        activeSessions: ['sess-1', 'sess-2'],
+      });
+      const ctx = contextFor(loader, plugin);
+      const caps = capabilitiesOf(loader);
+
+      for (const instanceId of ['inst-off', 'inst-deleted', 'inst-rebound']) {
+        await caps.runWithDispatchContext({ sessionId: 'sess-1', instanceId }, async () => {
+          await expect(ctx.net.fetch('https://static.example/ok')).resolves.toMatchObject({ ok: true });
+          await expect(ctx.net.fetch('https://base.example/no')).rejects.toBeInstanceOf(PluginCapabilityError);
+          await expect(ctx.net.fetch('https://s1.example/no')).rejects.toBeInstanceOf(PluginCapabilityError);
+          await expect(ctx.net.fetch('https://disabled.example/no')).rejects.toBeInstanceOf(PluginCapabilityError);
+          await expect(ctx.net.fetch('https://rebound.example/no')).rejects.toBeInstanceOf(PluginCapabilityError);
+        });
+      }
+    });
+
+    it('inside a wildcard ingress dispatch, fails closed when the instance was rebound mid-flight to a concrete session', async () => {
+      const { loader } = buildNetLoader([instanceRow('inst-wild', 'sess-1', 'https://rebound-wild.example', true)]);
+      const plugin = scopedNetPlugin({
+        config: { baseUrl: 'https://base.example' },
+        activeSessions: ['sess-1'],
+      });
+      const ctx = contextFor(loader, plugin);
+      const caps = capabilitiesOf(loader);
+
+      await caps.runWithDispatchContext({ sessionId: undefined, instanceId: 'inst-wild' }, async () => {
+        await expect(ctx.net.fetch('https://rebound-wild.example/no')).rejects.toBeInstanceOf(PluginCapabilityError);
+        await expect(ctx.net.fetch('https://base.example/no')).rejects.toBeInstanceOf(PluginCapabilityError);
+      });
+    });
+
+    it('inside a concrete ingress dispatch, withholds sessionConfig when listing sibling instances fails', async () => {
+      const sparse = {
+        ...instanceRow('inst-a', 'sess-1', 'https://unused.example'),
+        config: { apiToken: 'tok-a' } as Record<string, unknown>,
+      };
+      const hookManager = new HookManager();
+      const configService = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
+      const pluginStorage = { createPluginStorage: jest.fn().mockReturnValue({}) } as unknown as PluginStorageService;
+      const moduleRef = {
+        get: jest.fn((token: unknown) =>
+          token === PLUGIN_INSTANCE_PORT
+            ? {
+                list: jest.fn().mockRejectedValue(new Error('db unavailable')),
+                resolve: jest.fn().mockResolvedValue(sparse),
+              }
+            : undefined,
+        ),
+      } as unknown as ModuleRef;
+      const loader = new PluginLoaderService(configService, hookManager, pluginStorage, moduleRef);
+      const plugin = scopedNetPlugin({
+        config: { baseUrl: 'https://base.example' },
+        sessionConfig: { 'sess-1': { baseUrl: 'https://sibling-projected.example' } },
+        activeSessions: ['sess-1'],
+      });
+      const ctx = contextFor(loader, plugin);
+      const caps = capabilitiesOf(loader);
+
+      await caps.runWithDispatchContext({ sessionId: 'sess-1', instanceId: 'inst-a' }, async () => {
+        await expect(ctx.net.fetch('https://base.example/ok')).resolves.toMatchObject({ ok: true });
+        await expect(ctx.net.fetch('https://sibling-projected.example/no')).rejects.toBeInstanceOf(
+          PluginCapabilityError,
+        );
+      });
+    });
+
+    it('inside an ingress dispatch for a single sparse instance on a session, admits the active session override host', async () => {
+      const sparse = {
+        ...instanceRow('inst-a', 'sess-1', 'https://unused.example'),
+        config: { apiToken: 'tok-a' },
+      };
+      const { loader } = buildNetLoader([sparse]);
+      const plugin = scopedNetPlugin({
+        config: { baseUrl: 'https://base.example' },
+        sessionConfig: {
+          'sess-1': { baseUrl: 'https://operator-s1.example' },
+          'sess-2': { baseUrl: 'https://operator-s2.example' },
+        },
+        activeSessions: ['sess-1', 'sess-2'],
+      });
+      const ctx = contextFor(loader, plugin);
+      const caps = capabilitiesOf(loader);
+
+      await caps.runWithDispatchContext({ sessionId: 'sess-1', instanceId: 'inst-a' }, async () => {
+        await expect(ctx.net.fetch('https://operator-s1.example/x')).resolves.toMatchObject({ ok: true });
+        await expect(ctx.net.fetch('https://operator-s2.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+      });
+    });
+
+    it('denies config-derived hosts when a dispatch context session is inactive while keeping static net.allow', async () => {
+      const { loader } = buildNetLoader([instanceRow('inst-2', 'sess-2', 'https://inst-2.example')]);
+      const plugin = scopedNetPlugin({
+        allow: ['static.example:443'],
+        config: { baseUrl: 'https://base.example' },
+        sessionConfig: { 'sess-2': { baseUrl: 'https://s2.example' } },
+        activeSessions: ['sess-1'],
+      });
+      const ctx = contextFor(loader, plugin);
+      const caps = capabilitiesOf(loader);
+
+      await caps.runWithDispatchContext({ sessionId: 'sess-2' }, async () => {
+        await expect(ctx.net.fetch('https://static.example/ok')).resolves.toMatchObject({ ok: true });
+        await expect(ctx.net.fetch('https://s2.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+        await expect(ctx.net.fetch('https://inst-2.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+        await expect(ctx.net.fetch('https://base.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+      });
+    });
+
+    it('isolates concurrent hook dispatch contexts across interleaved async fetches', async () => {
+      const { loader } = buildNetLoader([]);
+      const plugin = scopedNetPlugin({
+        sessionConfig: {
+          'sess-1': { baseUrl: 'https://s1.example' },
+          'sess-2': { baseUrl: 'https://s2.example' },
+        },
+        activeSessions: ['sess-1', 'sess-2'],
+      });
+      const ctx = contextFor(loader, plugin);
+      const caps = capabilitiesOf(loader);
+
+      const [r1, r2] = await Promise.all([
+        caps.runWithDispatchContext({ sessionId: 'sess-1' }, async () => {
+          await Promise.resolve();
+          const own = await ctx.net
+            .fetch('https://s1.example/ok')
+            .then(() => true)
+            .catch(() => false);
+          const other = await ctx.net
+            .fetch('https://s2.example/no')
+            .then(() => true)
+            .catch(() => false);
+          return { own, other };
+        }),
+        caps.runWithDispatchContext({ sessionId: 'sess-2' }, async () => {
+          await Promise.resolve();
+          const own = await ctx.net
+            .fetch('https://s2.example/ok')
+            .then(() => true)
+            .catch(() => false);
+          const other = await ctx.net
+            .fetch('https://s1.example/no')
+            .then(() => true)
+            .catch(() => false);
+          return { own, other };
+        }),
+      ]);
+
+      expect(r1).toEqual({ own: true, other: false });
+      expect(r2).toEqual({ own: true, other: false });
+    });
+
+    it('enforces Layer 2 net scoping end-to-end across PluginSandboxBridge for sandboxed hooks and webhooks', async () => {
+      const rows = [
+        instanceRow('inst-a', 'sess-1', 'https://inst-a.example'),
+        instanceRow('inst-b', 'sess-1', 'https://inst-b.example'),
+        instanceRow('inst-2', 'sess-2', 'https://inst-2.example'),
+      ];
+      let hostListener: ((m: WorkerToHostMessage) => void) | undefined;
+      const workerSend = (m: WorkerToHostMessage): void => {
+        setImmediate(() => hostListener?.(m));
+      };
+      const capClient = new WorkerCapabilityClient(workerSend);
+      const hookReg = new WorkerHookRegistry(workerSend);
+      const webhookReg = new WebhookRegistry(workerSend);
+
+      const results = {
+        hookOwn: false,
+        hookOther: false,
+        webhookOwn: false,
+        webhookSibling: false,
+        webhookOtherSession: false,
+      };
+
+      const channel: PluginWorkerChannel = {
+        postMessage: (msg: HostToWorkerMessage) => {
+          if (msg.kind === 'load') {
+            workerSend({ kind: 'ready' });
+          } else if (msg.kind === 'lifecycle') {
+            if (msg.method === 'onEnable') {
+              hookReg.register('message:received', async () => {
+                results.hookOwn = await capClient
+                  .call('net.fetch', ['https://s1.example/ok'])
+                  .then(() => true)
+                  .catch(() => false);
+                results.hookOther = await capClient
+                  .call('net.fetch', ['https://s2.example/no'])
+                  .then(() => true)
+                  .catch(() => false);
+                return { continue: true };
+              });
+              webhookReg.register('events', async () => {
+                results.webhookOwn = await capClient
+                  .call('net.fetch', ['https://inst-a.example/ok'])
+                  .then(() => true)
+                  .catch(() => false);
+                results.webhookSibling = await capClient
+                  .call('net.fetch', ['https://inst-b.example/no'])
+                  .then(() => true)
+                  .catch(() => false);
+                results.webhookOtherSession = await capClient
+                  .call('net.fetch', ['https://inst-2.example/no'])
+                  .then(() => true)
+                  .catch(() => false);
+                return { status: 200 };
+              });
+            }
+            workerSend({ kind: 'lifecycle-result', id: msg.id, ok: true });
+          } else if (msg.kind === 'cap-result') {
+            capClient.handleResult(msg);
+          } else if (msg.kind === 'hook') {
+            void hookReg.handleHook(msg);
+          } else if (msg.kind === 'webhook') {
+            void webhookReg.handleWebhook(msg);
+          }
+        },
+        onMessage: cb => {
+          hostListener = cb;
+        },
+        onExit: () => undefined,
+        terminate: () => Promise.resolve(),
+      };
+
+      class LoopbackLoader extends PluginLoaderService {
+        protected createSandboxHost(
+          capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+          onHookSubscribe?: (event: string, priority?: number) => void,
+          onWebhookSubscribe?: (route: string) => void,
+          onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
+          runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
+          onSearchProviderRegister?: () => void,
+          onWorkerExit?: (code: number, intentional: boolean, reason?: string) => void,
+          onUnresponsive?: () => void,
+        ): PluginWorkerHost {
+          return new PluginWorkerHost(
+            channel,
+            capDispatcher,
+            onHookSubscribe,
+            onWebhookSubscribe,
+            onLog,
+            runWithHookGuard,
+            32,
+            onSearchProviderRegister,
+            onWorkerExit,
+            5000,
+            5000,
+            onUnresponsive,
+          );
+        }
+      }
+
+      const hookManager = new HookManager();
+      const configService = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
+      const pluginStorage = {
+        createPluginStorage: jest.fn().mockReturnValue({}),
+        setPluginStatus: jest.fn(),
+      } as unknown as PluginStorageService;
+      const moduleRef = {
+        get: jest.fn((token: unknown) =>
+          token === PLUGIN_INSTANCE_PORT
+            ? {
+                list: jest.fn().mockResolvedValue(rows),
+                resolve: jest.fn((_pluginId: string, instanceId: string) =>
+                  Promise.resolve(rows.find(row => row.instanceId === instanceId) ?? null),
+                ),
+              }
+            : undefined,
+        ),
+      } as unknown as ModuleRef;
+
+      const loader = new LoopbackLoader(configService, hookManager, pluginStorage, moduleRef);
+      const plugin: PluginInstance = {
+        manifest: {
+          id: 'net-ext',
+          name: 'Net Extension',
+          version: '1.0.0',
+          type: PluginType.EXTENSION,
+          main: 'index.js',
+          permissions: ['net:fetch', 'webhook:ingress'],
+          net: { allow: [], allowConfigHosts: ['baseUrl'] },
+          ingress: [
+            {
+              route: 'events',
+              mode: 'async',
+              verify: 'core',
+              maxBodyBytes: 1024,
+              signature: { scheme: 'none' },
+            },
+          ],
+        },
+        status: PluginStatus.INSTALLED,
+        config: {},
+        sessionConfig: {
+          'sess-1': { baseUrl: 'https://s1.example' },
+          'sess-2': { baseUrl: 'https://s2.example' },
+        },
+        activeSessions: ['sess-1', 'sess-2'],
+        instance: null,
+        builtIn: false,
+      };
+      (loader as unknown as { plugins: Map<string, PluginInstance> }).plugins.set('net-ext', plugin);
+
+      await loader.enablePlugin('net-ext');
+      // Wait one turn for hook-subscribe posted from onEnable to register on HookManager.
+      await new Promise(resolve => setImmediate(resolve));
+
+      await hookManager.execute('message:received', {}, { sessionId: 'sess-1', source: 'Engine' });
+      await loader.dispatchWebhookForInstance({
+        pluginId: 'net-ext',
+        instanceId: 'inst-a',
+        route: 'events',
+        deliveryId: 'd-1',
+        sessionId: 'sess-1',
+        payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+      });
+
+      expect(results).toEqual({
+        hookOwn: true,
+        hookOther: false,
+        webhookOwn: true,
+        webhookSibling: false,
+        webhookOtherSession: false,
+      });
+    });
   });
 });
 

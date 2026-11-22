@@ -30,7 +30,7 @@ describe('PluginsService.updateConfig when registry.json cannot be written', () 
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('reports the failure instead of success', () => {
+  it('reports the failure instead of success', async () => {
     const storage = new PluginStorageService(configService);
     storage.setPluginEntry({
       id: 'p1',
@@ -59,7 +59,7 @@ describe('PluginsService.updateConfig when registry.json cannot be written', () 
     // The data volume stops accepting writes (full disk, read-only remount, wrong owner).
     fs.chmodSync(pluginsRoot, 0o500);
 
-    const result = service.updateConfig('p1', { apiKey: 'rotated' });
+    const result = await service.updateConfig('p1', { apiKey: 'rotated' });
 
     // What a restart would load: the registry on disk.
     expect(new PluginStorageService(configService).getPluginConfig('p1')).toEqual({ apiKey: 'old' });
@@ -125,8 +125,8 @@ describe('PluginsService plugin changes when registry.json cannot be written', (
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('keeps the running config when the save is refused', () => {
-    expect(service.updateConfig('p1', { apiKey: 'rotated' }).success).toBe(false);
+  it('keeps the running config when the save is refused', async () => {
+    expect((await service.updateConfig('p1', { apiKey: 'rotated' })).success).toBe(false);
     expect(plugin.config).toEqual({ apiKey: 'old' });
     expect(storage.getPluginConfig('p1')).toEqual({ apiKey: 'old' });
   });

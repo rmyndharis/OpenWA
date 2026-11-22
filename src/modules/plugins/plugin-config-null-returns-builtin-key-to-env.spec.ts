@@ -40,14 +40,14 @@ describe('PUT /plugins/:id/config with null on a key stored over a built-in engi
     return { loader, service: new PluginsService(loader, config) };
   };
 
-  it('hands the key back to the .env value on the next boot', () => {
+  it('hands the key back to the .env value on the next boot', async () => {
     const first = boot({ puppeteer: { executablePath: '/usr/bin/chromium' } });
     // An override stored earlier: by an operator, or by an older release that stored a sent-back mask.
-    expect(first.service.updateConfig('whatsapp-web.js', { puppeteer: { executablePath: '/old/chromium' } })).toEqual(
-      expect.objectContaining({ success: true }),
-    );
+    expect(
+      await first.service.updateConfig('whatsapp-web.js', { puppeteer: { executablePath: '/old/chromium' } }),
+    ).toEqual(expect.objectContaining({ success: true }));
 
-    const removal = first.service.updateConfig('whatsapp-web.js', { puppeteer: null });
+    const removal = await first.service.updateConfig('whatsapp-web.js', { puppeteer: null });
     expect(removal.success).toBe(true);
     expect(first.loader.getRegistryEntry('whatsapp-web.js')?.config).toEqual({});
 
@@ -57,10 +57,10 @@ describe('PUT /plugins/:id/config with null on a key stored over a built-in engi
     });
   });
 
-  it('leaves the .env value in effect when nothing was stored for the key', () => {
+  it('leaves the .env value in effect when nothing was stored for the key', async () => {
     const first = boot({ puppeteer: { executablePath: '/usr/bin/chromium' } });
 
-    expect(first.service.updateConfig('whatsapp-web.js', { puppeteer: null }).success).toBe(true);
+    expect((await first.service.updateConfig('whatsapp-web.js', { puppeteer: null })).success).toBe(true);
 
     const second = boot({ puppeteer: { executablePath: '/usr/bin/chromium' } });
     expect(second.loader.getPlugin('whatsapp-web.js')?.config.puppeteer).toEqual({
@@ -68,17 +68,17 @@ describe('PUT /plugins/:id/config with null on a key stored over a built-in engi
     });
   });
 
-  it('puts the .env value back into the running config at once and keeps the other stored keys', () => {
+  it('puts the .env value back into the running config at once and keeps the other stored keys', async () => {
     const { loader, service } = boot({
       puppeteer: { executablePath: '/usr/bin/chromium' },
       sessionDataPath: './data/sessions',
     });
-    service.updateConfig('whatsapp-web.js', {
+    await service.updateConfig('whatsapp-web.js', {
       puppeteer: { executablePath: '/old/chromium' },
       sessionDataPath: '/srv/sessions',
     });
 
-    service.updateConfig('whatsapp-web.js', { puppeteer: null });
+    await service.updateConfig('whatsapp-web.js', { puppeteer: null });
 
     expect(loader.getPlugin('whatsapp-web.js')?.config).toEqual({
       puppeteer: { executablePath: '/usr/bin/chromium' },
@@ -87,21 +87,21 @@ describe('PUT /plugins/:id/config with null on a key stored over a built-in engi
     expect(loader.getRegistryEntry('whatsapp-web.js')?.config).toEqual({ sessionDataPath: '/srv/sessions' });
   });
 
-  it('drops a key that has no .env value from the running and the stored config', () => {
+  it('drops a key that has no .env value from the running and the stored config', async () => {
     const { loader, service } = boot({ puppeteer: { executablePath: '/usr/bin/chromium' } });
-    service.updateConfig('whatsapp-web.js', { extra: 'x' });
+    await service.updateConfig('whatsapp-web.js', { extra: 'x' });
 
-    service.updateConfig('whatsapp-web.js', { extra: null });
+    await service.updateConfig('whatsapp-web.js', { extra: null });
 
     expect(loader.getPlugin('whatsapp-web.js')?.config).toEqual({ puppeteer: { executablePath: '/usr/bin/chromium' } });
     expect(loader.getRegistryEntry('whatsapp-web.js')?.config).toEqual({});
   });
 
-  it('removes a stored key of the other built-in engine the same way', () => {
+  it('removes a stored key of the other built-in engine the same way', async () => {
     const { loader, service } = boot({ baileys: { authDir: './data/baileys' } });
-    service.updateConfig('baileys', { baileys: { authDir: '/old/baileys' } });
+    await service.updateConfig('baileys', { baileys: { authDir: '/old/baileys' } });
 
-    service.updateConfig('baileys', { baileys: null });
+    await service.updateConfig('baileys', { baileys: null });
 
     expect(loader.getPlugin('baileys')?.config.baileys).toEqual({ authDir: './data/baileys' });
     expect(loader.getRegistryEntry('baileys')?.config).toEqual({});

@@ -67,14 +67,14 @@ describe('GET /plugins with a manifest whose configSchema declares a property as
     expect(service.findOne('relay').config).toEqual(relay.config);
   });
 
-  it('saves a config that holds the key', () => {
+  it('saves a config that holds the key', async () => {
     const { loader, service } = load({
       type: 'object',
       properties: { token: { type: 'string', secret: true }, legacy: null },
     });
     loader.updatePluginConfig('relay', { token: 't0k' });
 
-    expect(service.updateConfig('relay', { token: '***', legacy: 'off' })).toEqual(
+    expect(await service.updateConfig('relay', { token: '***', legacy: 'off' })).toEqual(
       expect.objectContaining({ success: true }),
     );
     expect(loader.getPlugin('relay')?.config).toEqual({ token: 't0k', legacy: 'off' });

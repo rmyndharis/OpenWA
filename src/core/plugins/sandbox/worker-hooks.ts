@@ -11,7 +11,13 @@ import type { HookEvent } from '../../hooks/hook.interfaces';
  * sends back to the host: only a call caused by a hook handler is re-entrancy-guarded, never an
  * unrelated one (an ingress handler, a timer set outside a hook) that merely overlaps a dispatch.
  */
-export const hookConfigStore = new AsyncLocalStorage<{ config?: Record<string, unknown>; inFlight?: string[] }>();
+export interface WorkerDispatchStore {
+  config?: Record<string, unknown>;
+  inFlight?: string[];
+  dispatchId?: string;
+}
+
+export const hookConfigStore = new AsyncLocalStorage<WorkerDispatchStore>();
 
 export interface WorkerHookContext {
   event: string;
@@ -66,14 +72,16 @@ export class WorkerHookRegistry {
     // getter falls back to the base config.
     // The store outlives the dispatch in any timer or detached promise a handler starts; drop the
     // chain once it settles so such a later call is not treated as re-entrant.
-    const store: { config?: Record<string, unknown>; inFlight?: string[] } = {
+    const store: WorkerDispatchStore = {
       config: message.config,
       inFlight: message.inFlight ?? [message.event],
+      dispatchId: message.dispatchId,
     };
     try {
       await hookConfigStore.run(store, () => this.dispatch(message));
     } finally {
       store.inFlight = undefined;
+      store.dispatchId = undefined;
     }
   }
 

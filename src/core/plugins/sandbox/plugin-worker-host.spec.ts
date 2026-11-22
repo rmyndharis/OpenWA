@@ -1,6 +1,9 @@
 import { MessageChannel } from 'worker_threads';
 import { PluginWorkerHost } from './plugin-worker-host';
-import { PluginWorkerChannel, HostToWorkerMessage, WorkerToHostMessage } from './protocol';
+import { PluginWorkerChannel, HostToWorkerMessage, WorkerToHostMessage, SANDBOX_MAX_PENDING_CAPS } from './protocol';
+import { WorkerCapabilityClient } from './worker-capability';
+import { WorkerHookRegistry } from './worker-hooks';
+import { WebhookRegistry } from './worker-webhooks';
 import { HookManager } from '../../hooks/hook-manager.service';
 import { HookEvent } from '../../hooks/hook.interfaces';
 import { leastCpuMsAsync } from '../../../../test/helpers/cpu-time';
@@ -1401,5 +1404,400 @@ describe('the text a worker reports in a result', () => {
     expect(ch.last()).toEqual({ kind: 'cap-result', id: 7, ok: false, error: MARKER });
     expect(dispatcher).not.toHaveBeenCalled();
     expect(calls.count).toBe(0);
+  });
+});
+
+describe('host-authoritative dispatch context propagation for capability calls', () => {
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+  it('propagates hook sessionId via host-generated dispatchId and fails closed on expired dispatchId after hook-result', async () => {
+    const ch = new FakeChannel();
+    const dispatcher = jest.fn().mockResolvedValue({ ok: true });
+    const host = new PluginWorkerHost(ch, dispatcher);
+
+    const pending = host.dispatchHook({
+      event: 'message:received',
+      data: {},
+      sessionId: 'sess-1',
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    const sent = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+    expect(typeof sent.dispatchId).toBe('string');
+    expect(sent.dispatchId).not.toBe('');
+
+    ch.reply({
+      kind: 'cap',
+      id: 1,
+      verb: 'net.fetch',
+      args: ['https://s1.example/a'],
+      dispatchId: sent.dispatchId,
+    });
+    await flush();
+    expect(dispatcher).toHaveBeenNthCalledWith(1, 'net.fetch', ['https://s1.example/a'], { sessionId: 'sess-1' });
+
+    // Reply finishes the dispatch: reusing the expired dispatchId must fail closed without invoking dispatcher.
+    ch.reply({ kind: 'hook-result', id: sent.id, continue: true });
+    await pending;
+
+    ch.reply({
+      kind: 'cap',
+      id: 2,
+      verb: 'net.fetch',
+      args: ['https://s1.example/b'],
+      dispatchId: sent.dispatchId,
+    });
+    await flush();
+    expect(dispatcher).toHaveBeenCalledTimes(1);
+    expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 2)).toMatchObject({
+      kind: 'cap-result',
+      id: 2,
+      ok: false,
+      error: expect.stringMatching(/dispatch context/i) as string,
+    });
+  });
+
+  it('propagates webhook sessionId and instanceId via host-generated dispatchId and fails closed after reply', async () => {
+    const ch = new FakeChannel();
+    const dispatcher = jest.fn().mockResolvedValue({ ok: true });
+    const host = new PluginWorkerHost(ch, dispatcher);
+
+    const pending = host.dispatchWebhook({
+      instanceId: 'inst-A',
+      route: 'events',
+      method: 'POST',
+      headers: {},
+      query: {},
+      body: '{}',
+      rawBody: '{}',
+      verified: true,
+      deliveryId: 'd1',
+      sessionId: 'sess-1',
+      timeoutMs: 5000,
+    });
+    const sent = ch.sent.find(m => m.kind === 'webhook') as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+    expect(typeof sent.dispatchId).toBe('string');
+
+    ch.reply({
+      kind: 'cap',
+      id: 10,
+      verb: 'net.fetch',
+      args: ['https://inst-a.example/x'],
+      dispatchId: sent.dispatchId,
+    });
+    await flush();
+    expect(dispatcher).toHaveBeenNthCalledWith(1, 'net.fetch', ['https://inst-a.example/x'], {
+      sessionId: 'sess-1',
+      instanceId: 'inst-A',
+    });
+
+    ch.reply({ kind: 'webhook-result', id: sent.id, status: 200 });
+    await pending;
+
+    ch.reply({
+      kind: 'cap',
+      id: 11,
+      verb: 'net.fetch',
+      args: ['https://inst-a.example/y'],
+      dispatchId: sent.dispatchId,
+    });
+    await flush();
+    expect(dispatcher).toHaveBeenCalledTimes(1);
+    expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 11)).toMatchObject({
+      kind: 'cap-result',
+      id: 11,
+      ok: false,
+    });
+  });
+
+  it('fails closed on forged dispatchIds, retains late hook dispatchId until reply, and clears on termination', async () => {
+    jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+    try {
+      const ch = new FakeChannel();
+      const dispatcher = jest.fn().mockResolvedValue({ ok: true });
+      const host = new PluginWorkerHost(ch, dispatcher);
+
+      const hook = host.dispatchHook({
+        event: 'message:received',
+        data: {},
+        sessionId: 'sess-1',
+        source: 'Engine',
+        timeoutMs: 200,
+      });
+      const hookSent = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+
+      // Forged dispatchId must fail closed without invoking dispatcher.
+      ch.reply({
+        kind: 'cap',
+        id: 1,
+        verb: 'net.fetch',
+        args: ['https://forged.example'],
+        dispatchId: 'sess-2',
+        sessionId: 'sess-2',
+        instanceId: 'inst-2',
+      } as unknown as WorkerToHostMessage);
+      await flush();
+      expect(dispatcher).not.toHaveBeenCalled();
+      expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toMatchObject({
+        kind: 'cap-result',
+        id: 1,
+        ok: false,
+      });
+
+      // Hook timeout retains dispatchId under late claim so a slow handler stays scoped to sess-1.
+      await jest.advanceTimersByTimeAsync(200);
+      await hook;
+      ch.reply({
+        kind: 'cap',
+        id: 2,
+        verb: 'net.fetch',
+        args: ['https://late-hook.example'],
+        dispatchId: hookSent.dispatchId,
+      });
+      await flush();
+      expect(dispatcher).toHaveBeenNthCalledWith(1, 'net.fetch', ['https://late-hook.example'], {
+        sessionId: 'sess-1',
+      });
+
+      // Late hook-result releases the dispatchId; subsequent reuse fails closed.
+      ch.reply({ kind: 'hook-result', id: hookSent.id, continue: true });
+      ch.reply({
+        kind: 'cap',
+        id: 3,
+        verb: 'net.fetch',
+        args: ['https://after-late-reply.example'],
+        dispatchId: hookSent.dispatchId,
+      });
+      await flush();
+      expect(dispatcher).toHaveBeenCalledTimes(1);
+      expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 3)).toMatchObject({
+        kind: 'cap-result',
+        id: 3,
+        ok: false,
+      });
+
+      // Termination clears in-flight webhook dispatchIds too.
+      void host.dispatchWebhook({
+        instanceId: 'inst-B',
+        route: 'events',
+        method: 'POST',
+        headers: {},
+        query: {},
+        body: '{}',
+        rawBody: '{}',
+        verified: true,
+        deliveryId: 'd2',
+        sessionId: 'sess-2',
+        timeoutMs: 5000,
+      });
+      const webhookSent = ch.sent.find(m => m.kind === 'webhook') as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+      expect(typeof webhookSent.dispatchId).toBe('string');
+
+      await host.terminate();
+      ch.reply({
+        kind: 'cap',
+        id: 4,
+        verb: 'net.fetch',
+        args: ['https://after-terminate.example'],
+        dispatchId: webhookSent.dispatchId,
+      });
+      await flush();
+      expect(dispatcher).toHaveBeenCalledTimes(1);
+      expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 4)).toMatchObject({
+        kind: 'cap-result',
+        id: 4,
+        ok: false,
+      });
+      ch.crash();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('clears inFlightDispatches on unexpected worker crash without prior terminate()', async () => {
+    const ch = new FakeChannel();
+    const dispatcher = jest.fn().mockResolvedValue({ ok: true });
+    const host = new PluginWorkerHost(ch, dispatcher);
+
+    const hook = host.dispatchHook({
+      event: 'message:received',
+      data: {},
+      sessionId: 'sess-1',
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    const hookSent = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+
+    ch.crash(1);
+    await hook;
+
+    ch.reply({
+      kind: 'cap',
+      id: 1,
+      verb: 'net.fetch',
+      args: ['https://after-crash.example'],
+      dispatchId: hookSent.dispatchId,
+    });
+    await flush();
+    expect(dispatcher).not.toHaveBeenCalled();
+    expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toMatchObject({
+      kind: 'cap-result',
+      id: 1,
+      ok: false,
+    });
+  });
+
+  it('cleans up inFlightDispatches, pending maps, inFlightHookEvents, and timers when postMessage throws', async () => {
+    const ch = new FakeChannel();
+    ch.postMessage = () => {
+      throw new Error('DataCloneError: uncloneable value');
+    };
+    const host = new PluginWorkerHost(ch);
+
+    await expect(
+      host.dispatchHook({
+        event: 'message:received',
+        data: {},
+        sessionId: 'sess-1',
+        source: 'Engine',
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow('DataCloneError');
+
+    await expect(
+      host.dispatchWebhook({
+        instanceId: 'inst-A',
+        route: 'events',
+        method: 'POST',
+        headers: {},
+        query: {},
+        body: '{}',
+        rawBody: '{}',
+        verified: true,
+        deliveryId: 'd1',
+        sessionId: 'sess-1',
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow('DataCloneError');
+
+    const internals = host as unknown as {
+      inFlightDispatches: Map<string, unknown>;
+      inFlightHookEvents: Map<string, number>;
+      hookPending: Map<number, unknown>;
+      webhookPending: Map<number, unknown>;
+    };
+    expect(internals.inFlightDispatches.size).toBe(0);
+    expect(internals.inFlightHookEvents.size).toBe(0);
+    expect(internals.hookPending.size).toBe(0);
+    expect(internals.webhookPending.size).toBe(0);
+  });
+
+  it('refuses a held net.fetch that outlives its dispatch instead of posting it without dispatchId', async () => {
+    const sent: WorkerToHostMessage[] = [];
+    const client = new WorkerCapabilityClient(m => sent.push(m));
+    const hooks = new WorkerHookRegistry(m => sent.push(m));
+
+    for (let i = 0; i < SANDBOX_MAX_PENDING_CAPS; i++) {
+      void client.call('storage.get', [i]);
+    }
+    let heldFetch!: Promise<unknown>;
+    hooks.register('message:received', () => {
+      heldFetch = client.call('net.fetch', ['https://s1.example/held']);
+      heldFetch.catch(() => undefined);
+      return { continue: true };
+    });
+
+    await hooks.handleHook({
+      kind: 'hook',
+      id: 1,
+      dispatchId: 'disp-1',
+      event: 'message:received',
+      data: {},
+      source: 'Engine',
+    });
+
+    // Free a slot after the dispatch has already returned.
+    const firstCap = sent[0] as Extract<WorkerToHostMessage, { kind: 'cap' }>;
+    client.handleResult({ kind: 'cap-result', id: firstCap.id, ok: true, result: null });
+
+    await expect(heldFetch).rejects.toThrow(/net\.fetch/);
+    const postedFetches = sent.filter(m => m.kind === 'cap' && m.verb === 'net.fetch');
+    expect(postedFetches).toEqual([]);
+  });
+
+  it('wires worker hook and webhook handlers through WorkerCapabilityClient with automatic dispatchId echo', async () => {
+    const seenContexts: Array<{ verb: string; url: unknown; ctx?: { sessionId?: string; instanceId?: string } }> = [];
+    const dispatcher = jest.fn(
+      (verb: string, args: unknown[], dispatchContext?: { sessionId?: string; instanceId?: string }) => {
+        seenContexts.push({ verb, url: args[0], ctx: dispatchContext });
+        return Promise.resolve({ ok: true });
+      },
+    );
+
+    // Loopback channel connecting real PluginWorkerHost to real WorkerHookRegistry, WebhookRegistry,
+    // and WorkerCapabilityClient without spawning a thread.
+    let hostListener: ((m: WorkerToHostMessage) => void) | undefined;
+    const workerSend = (m: WorkerToHostMessage): void => {
+      setImmediate(() => hostListener?.(m));
+    };
+    const capClient = new WorkerCapabilityClient(workerSend);
+    const hookReg = new WorkerHookRegistry(workerSend);
+    const webhookReg = new WebhookRegistry(workerSend);
+
+    const channel: PluginWorkerChannel = {
+      postMessage: (msg: HostToWorkerMessage) => {
+        if (msg.kind === 'cap-result') capClient.handleResult(msg);
+        else if (msg.kind === 'hook') void hookReg.handleHook(msg);
+        else if (msg.kind === 'webhook') void webhookReg.handleWebhook(msg);
+      },
+      onMessage: cb => {
+        hostListener = cb;
+      },
+      onExit: () => undefined,
+      terminate: () => Promise.resolve(),
+    };
+
+    const host = new PluginWorkerHost(channel, dispatcher);
+
+    let deferredHookFetch!: () => Promise<unknown>;
+    hookReg.register('message:received', async () => {
+      await capClient.call('net.fetch', ['https://hook-s1.example/a']);
+      deferredHookFetch = () => capClient.call('net.fetch', ['https://deferred.example/b']);
+      return { continue: true };
+    });
+
+    // Even when webhook message carries no `config`, dispatchId must still flow through hookConfigStore.
+    webhookReg.register('events', async () => {
+      await capClient.call('net.fetch', ['https://webhook-inst.example/c']);
+      return { status: 200 };
+    });
+
+    await host.dispatchHook({
+      event: 'message:received',
+      data: {},
+      sessionId: 'sess-1',
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    await deferredHookFetch();
+    await host.dispatchWebhook({
+      instanceId: 'inst-A',
+      route: 'events',
+      method: 'POST',
+      headers: {},
+      query: {},
+      body: '{}',
+      rawBody: '{}',
+      verified: true,
+      deliveryId: 'd1',
+      sessionId: 'sess-2',
+      timeoutMs: 5000,
+    });
+
+    expect(seenContexts).toEqual([
+      { verb: 'net.fetch', url: 'https://hook-s1.example/a', ctx: { sessionId: 'sess-1' } },
+      { verb: 'net.fetch', url: 'https://deferred.example/b', ctx: undefined },
+      { verb: 'net.fetch', url: 'https://webhook-inst.example/c', ctx: { sessionId: 'sess-2', instanceId: 'inst-A' } },
+    ]);
   });
 });

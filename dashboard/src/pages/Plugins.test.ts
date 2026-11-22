@@ -51,12 +51,16 @@ let pluginListFails = false;
 // What DELETE /api/plugins/:id answers; the plain answer is the one for a complete removal.
 const UNINSTALLED = `Plugin ${PLUGIN.id} uninstalled successfully`;
 let deleteReply: { success: boolean; message: string } = { success: true, message: UNINSTALLED };
+let configUiHtml: string | null = null;
 
 function installFetchStub(): void {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const path = url.replace(/^https?:\/\/[^/]+/, '');
     const method = init?.method ?? 'GET';
+    if (method === 'GET' && path === `/api/plugins/${PLUGIN.id}/config-ui` && configUiHtml !== null) {
+      return Promise.resolve(new Response(configUiHtml, { status: 200, headers: { 'Content-Type': 'text/html' } }));
+    }
     if (method === 'GET' && path === '/api/plugins') {
       if (pluginListFails) return Promise.resolve(jsonResponse({ message: 'plugin registry unavailable' }, 500));
       return Promise.resolve(jsonResponse([{ ...PLUGIN, sessionConfig, ...pluginOverride }, ...extraPlugins]));
@@ -135,6 +139,8 @@ afterEach(() => {
   disableGate = undefined;
   pluginListFails = false;
   deleteReply = { success: true, message: UNINSTALLED };
+  configUiHtml = null;
+  document.head.querySelectorAll('meta[name="openwa-csp-nonce"]').forEach(el => el.remove());
   rtl.cleanup();
   queryClient?.clear();
   queryClient = undefined;
@@ -511,4 +517,73 @@ test("another plugin's action settling first keeps a pending plugin's buttons di
   assert.equal(within(greeter).getByTitle<HTMLButtonElement>('Uninstall').disabled, true);
 
   releaseDisable();
+});
+
+test('config-UI iframe stamps the CSP nonce only on inline scripts and skips SVG href and xlink:href scripts', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const meta = document.createElement('meta');
+  meta.name = 'openwa-csp-nonce';
+  meta.content = 'nonce-test-123';
+  document.head.appendChild(meta);
+  pluginOverride = { configUi: { entry: 'config/index.html', height: 420 } };
+  configUiHtml = [
+    '<!doctype html><html><body>',
+    '<script id="inline">window.inlineOk = 1;</script>',
+    '<script id="ext-src" src="https://evil.example/src.js"></script>',
+    '<svg><script id="svg-href" href="https://evil.example/href.js"></script></svg>',
+    '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><script id="svg-xlink" xlink:href="https://evil.example/xlink.js"></script></svg>',
+    '</body></html>',
+  ].join('');
+
+  renderPlugins();
+  fireEvent.click(await screen.findByTitle('Configure'));
+
+  const iframe = await waitFor(() => {
+    const el = document.querySelector<HTMLIFrameElement>('iframe.plugin-config-ui-frame');
+    assert.ok(el, 'iframe should be rendered');
+    assert.ok(el.getAttribute('srcdoc'), 'iframe srcdoc should be populated');
+    return el;
+  });
+
+  const parsed = new DOMParser().parseFromString(iframe.getAttribute('srcdoc') ?? '', 'text/html');
+  assert.equal(parsed.getElementById('inline')?.getAttribute('nonce'), 'nonce-test-123');
+  assert.equal(parsed.getElementById('ext-src')?.getAttribute('nonce'), null);
+  assert.equal(parsed.getElementById('svg-href')?.getAttribute('nonce'), null);
+  assert.equal(parsed.getElementById('svg-xlink')?.getAttribute('nonce'), null);
+});
+
+test('config-UI hardening runs DOMParser once per html load and does not re-parse on re-render', async () => {
+  const { screen, fireEvent, waitFor, act } = rtl;
+  pluginOverride = { configUi: { entry: 'config/index.html' } };
+  configUiHtml = '<!doctype html><html><body><script>window.x = 1;</script></body></html>';
+
+  const origParse = DOMParser.prototype.parseFromString;
+  let parseCalls = 0;
+  DOMParser.prototype.parseFromString = function (str: string, type: DOMParserSupportedType) {
+    parseCalls++;
+    return origParse.call(this, str, type);
+  };
+  try {
+    renderPlugins();
+    fireEvent.click(await screen.findByTitle('Configure'));
+    await waitFor(() => {
+      const el = document.querySelector<HTMLIFrameElement>('iframe.plugin-config-ui-frame');
+      assert.ok(el?.getAttribute('srcdoc'));
+    });
+    assert.equal(parseCalls, 1);
+
+    // Trigger a genuine re-render of PluginConfigUi without changing html (handshake message + updated plugin query).
+    const iframe = document.querySelector<HTMLIFrameElement>('iframe.plugin-config-ui-frame');
+    assert.ok(iframe?.contentWindow);
+    await act(async () => {
+      window.dispatchEvent(
+        new window.MessageEvent('message', { data: { type: 'config:get' }, source: iframe.contentWindow }),
+      );
+    });
+    pluginOverride = { configUi: { entry: 'config/index.html', height: 500 } };
+    await act(() => queryClient!.refetchQueries({ queryKey: ['plugins'] }));
+    assert.equal(parseCalls, 1, 'DOMParser should not re-run when html has not changed');
+  } finally {
+    DOMParser.prototype.parseFromString = origParse;
+  }
 });

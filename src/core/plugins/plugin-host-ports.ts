@@ -1,4 +1,5 @@
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { ConfigLayerManifest } from './plugin-activation';
 // Type-only, on purpose: they keep the port signatures aligned with the real services without
 // creating any runtime module edge from core back into a feature module.
 import type { MessageResponseDto } from '../../modules/message/dto';
@@ -95,10 +96,23 @@ export interface PluginInstanceRecord {
   sessionScope?: string | null;
 }
 
-/** Instance lookup verbs: the net-allowlist widening and the ingress per-instance config resolution. */
+/** Instance lookup verbs: the net-allowlist widening, ingress per-instance config resolution, and redirect cleanup. */
 export interface PluginInstancePort {
   list(pluginId: string): Promise<PluginInstanceRecord[]>;
   resolve(pluginId: string, instanceId: string): Promise<PluginInstanceRecord | null>;
+  /**
+   * Strip secrets from persisted instances of `pluginId` whose config leaves any host key
+   * redirected between `previousBase` and `nextBase` unset (inheriting the redirected base host).
+   * Pass `retryOnFailure: false` when called pre-commit so a failed write aborts the redirect
+   * cleanly without queuing a retry against an uncommitted redirect.
+   */
+  sanitizeForBaseRedirect?(
+    pluginId: string,
+    previousBase: Record<string, unknown>,
+    nextBase: Record<string, unknown>,
+    manifest: ConfigLayerManifest,
+    options?: { retryOnFailure?: boolean },
+  ): Promise<void>;
 }
 
 /**

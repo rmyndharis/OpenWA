@@ -17,9 +17,10 @@ interface Waiter {
 interface Call {
   verb: string;
   args: unknown[];
-  // The dispatch a hook handler made the call in, and its chain at that time. Both are absent outside a handler.
-  store?: { inFlight?: string[] };
+  // The dispatch a hook or webhook handler made the call in, and its chain/id at that time. Absent outside a handler.
+  store?: { inFlight?: string[]; dispatchId?: string };
   inFlight?: string[];
+  dispatchId?: string;
   waiter: Waiter;
 }
 
@@ -45,7 +46,14 @@ export class WorkerCapabilityClient {
     return new Promise((resolve, reject) => {
       // Read now: a held call is posted from handleResult, which runs outside the hook dispatch that made it.
       const store = hookConfigStore.getStore();
-      const call: Call = { verb, args, store, inFlight: store?.inFlight, waiter: { resolve, reject } };
+      const call: Call = {
+        verb,
+        args,
+        store,
+        inFlight: store?.inFlight,
+        dispatchId: store?.dispatchId,
+        waiter: { resolve, reject },
+      };
       if (this.pending.size < SANDBOX_MAX_PENDING_CAPS) {
         this.send(call);
         return;
@@ -75,12 +83,14 @@ export class WorkerCapabilityClient {
     while (this.held.length > 0 && this.pending.size < SANDBOX_MAX_PENDING_CAPS) this.send(this.held.shift()!);
   }
 
-  private send({ verb, args, store, inFlight, waiter }: Call): void {
+  private send({ verb, args, store, inFlight, dispatchId: originDispatchId, waiter }: Call): void {
     // The chain is the dispatch's own while it is in flight, and gone once it settles: the host honours it no longer
     // either. A send the handler made and left held then runs outside the re-entrancy guard, so the hooks of the send
     // dispatch the handler again, and each pass holds more sends than the last. Refuse it, as a call past the bound was
-    // before calls were held. Any other verb fires no hook, and goes out without the chain.
+    // before calls were held. A held net.fetch that outlives its dispatch is refused too so it never loses its
+    // dispatchId and widens to the background allowlist.
     const chain = store?.inFlight;
+    const dispatchId = store?.dispatchId;
     if (inFlight && !chain && SEND_CAP_VERBS.has(verb)) {
       waiter.reject(
         new Error(
@@ -90,11 +100,23 @@ export class WorkerCapabilityClient {
       );
       return;
     }
+    if (originDispatchId && !dispatchId && verb === 'net.fetch') {
+      waiter.reject(
+        new Error(
+          `capability call rejected: too many unanswered capability calls (limit ${SANDBOX_MAX_PENDING_CAPS}) ` +
+            `before the dispatch that made this ${verb} call returned`,
+        ),
+      );
+      return;
+    }
     const id = this.nextId++;
     try {
       // Post before registering: an uncloneable arg throws here (rejecting this call alone), and an entry
       // registered first would never be removed, since no cap-result can come back for it.
-      this.post(chain ? { kind: 'cap', id, verb, args, inFlight: chain } : { kind: 'cap', id, verb, args });
+      const message: Extract<WorkerToHostMessage, { kind: 'cap' }> = { kind: 'cap', id, verb, args };
+      if (chain) message.inFlight = chain;
+      if (dispatchId) message.dispatchId = dispatchId;
+      this.post(message);
       this.pending.set(id, waiter);
     } catch (error) {
       waiter.reject(error);

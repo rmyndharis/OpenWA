@@ -22,6 +22,11 @@ import type { PluginConfigSchema } from '../../core/plugins';
 import { PluginDto } from './dto/plugin.dto';
 import { redactSecretConfig, restoreSecretConfig } from './redact-config';
 import { restorableConfig } from '../../core/plugins/plugin-activation';
+import {
+  getBuiltInBaseConfig,
+  PluginInstanceSanitizationError,
+  updatePluginConfigDurable,
+} from '../../core/plugins/plugin-lifecycle';
 import { PluginUninstallingError } from '../../core/plugins/plugin-uninstaller';
 import { DEFAULT_PACKAGE_LIMITS, parsePluginPackage, type ParsedPackage } from './plugin-installer';
 import { assertDownloadSha256, assertPluginInstallUrl, fetchSafeBuffer } from './plugin-download';
@@ -257,7 +262,7 @@ export class PluginsService {
     return this.findOne(id);
   }
 
-  updateConfig(id: string, config: Record<string, unknown>): { success: boolean; message: string } {
+  async updateConfig(id: string, config: Record<string, unknown>): Promise<{ success: boolean; message: string }> {
     const plugin = this.pluginLoader.getPlugin(id);
 
     if (!plugin) {
@@ -268,13 +273,25 @@ export class PluginsService {
       // The dashboard PUTs the whole (redacted) config back, so a sentinel secret means "unchanged":
       // restore the stored value instead of overwriting the real secret with the mask. From the stored
       // config, not the runtime one: a built-in's runtime config carries its env-derived settings, and
-      // restoring a mask from those would store them over every later .env change.
+      // restoring a mask from those would store them over every later .env change. A write that points
+      // an allowConfigHosts key at another origin gets no stored secret back.
       const stored = this.pluginLoader.getRegistryEntry(id)?.config ?? {};
-      const merged = restoreSecretConfig(config, stored, plugin.manifest.configSchema, { mergedOverStored: true });
-      this.pluginLoader.updatePluginConfig(id, merged, { mustPersist: true });
+      const base = getBuiltInBaseConfig(plugin);
+      const merged = restoreSecretConfig(
+        config,
+        restorableConfig(stored, config, plugin.manifest, base, { nullRevertsToBeneath: Boolean(base) }),
+        plugin.manifest.configSchema,
+        { mergedOverStored: true },
+      );
+      if (!(await updatePluginConfigDurable(plugin, merged, { mustPersist: true }))) {
+        this.pluginLoader.updatePluginConfig(id, merged, { mustPersist: true });
+      }
       return { success: true, message: `Plugin ${id} configuration updated` };
     } catch (error) {
       if (error instanceof PluginUninstallingError) throw new ConflictException(error.message);
+      if (error instanceof PluginInstanceSanitizationError) {
+        throw new InternalServerErrorException(error.message);
+      }
       return {
         success: false,
         message: error instanceof Error ? error.message : String(error),

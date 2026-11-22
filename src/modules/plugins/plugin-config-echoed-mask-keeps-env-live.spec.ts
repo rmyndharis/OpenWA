@@ -39,12 +39,12 @@ describe('PUT /plugins/:id/config on a built-in engine with the masked config se
     return { loader, service: new PluginsService(loader, config) };
   };
 
-  it('persists only the key the request set, so the env-derived keys follow the next .env', () => {
+  it('persists only the key the request set, so the env-derived keys follow the next .env', async () => {
     const first = boot({ puppeteer: { executablePath: '/old/chromium' }, sessionDataPath: './data/sessions' });
     const shown = first.service.findOne('whatsapp-web.js').config;
     expect(shown.puppeteer).toBe(SECRET_SENTINEL);
 
-    const res = first.service.updateConfig('whatsapp-web.js', { ...shown, operatorKey: 'set' });
+    const res = await first.service.updateConfig('whatsapp-web.js', { ...shown, operatorKey: 'set' });
     expect(res.success).toBe(true);
 
     const second = boot({ puppeteer: { executablePath: '/new/chromium' }, sessionDataPath: './data/sessions' });
@@ -55,12 +55,12 @@ describe('PUT /plugins/:id/config on a built-in engine with the masked config se
     });
   });
 
-  it('keeps a key the operator stored earlier when its mask is sent back', () => {
+  it('keeps a key the operator stored earlier when its mask is sent back', async () => {
     const first = boot({ puppeteer: { executablePath: '/old/chromium' } });
-    first.service.updateConfig('whatsapp-web.js', { puppeteer: { executablePath: '/pinned/chromium' } });
+    await first.service.updateConfig('whatsapp-web.js', { puppeteer: { executablePath: '/pinned/chromium' } });
     const shown = first.service.findOne('whatsapp-web.js').config;
 
-    expect(first.service.updateConfig('whatsapp-web.js', { ...shown, operatorKey: 'set' }).success).toBe(true);
+    expect((await first.service.updateConfig('whatsapp-web.js', { ...shown, operatorKey: 'set' })).success).toBe(true);
 
     const second = boot({ puppeteer: { executablePath: '/new/chromium' } });
     expect(second.loader.getPlugin('whatsapp-web.js')?.config).toEqual({
@@ -69,7 +69,7 @@ describe('PUT /plugins/:id/config on a built-in engine with the masked config se
     });
   });
 
-  it('keeps the stored secret of a plugin with a schema when its mask is sent back', () => {
+  it('keeps the stored secret of a plugin with a schema when its mask is sent back', async () => {
     const pluginsDir = path.join(tmpDir, 'plugins');
     const dir = path.join(pluginsDir, 'relay');
     fs.mkdirSync(dir, { recursive: true });
@@ -90,11 +90,11 @@ describe('PUT /plugins/:id/config on a built-in engine with the masked config se
     fs.writeFileSync(path.join(dir, 'index.js'), 'module.exports = class {};');
     const { loader, service } = boot({});
     loader.loadPlugin(dir);
-    service.updateConfig('relay', { apiKey: 'sk-live' });
+    await service.updateConfig('relay', { apiKey: 'sk-live' });
     const shown = service.findOne('relay').config;
     expect(shown).toEqual({ apiKey: SECRET_SENTINEL, lang: 'en' });
 
-    expect(service.updateConfig('relay', { ...shown, lang: 'de' }).success).toBe(true);
+    expect((await service.updateConfig('relay', { ...shown, lang: 'de' })).success).toBe(true);
 
     expect(loader.getPlugin('relay')?.config).toEqual({ apiKey: 'sk-live', lang: 'de' });
     expect(loader.getRegistryEntry('relay')?.config).toEqual({ apiKey: 'sk-live', lang: 'de' });
