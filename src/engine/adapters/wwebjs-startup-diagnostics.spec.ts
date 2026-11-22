@@ -15,7 +15,10 @@ jest.mock('./chromium-profile-hygiene', () => ({
   removeStaleSingletonFiles: jest.fn().mockResolvedValue(undefined),
 }));
 // Unpinned: the real pin fetches the version registry and writes a WhatsApp Web build under the data path.
-jest.mock('../wa-web-version', () => ({ resolveWebVersionPin: jest.fn().mockResolvedValue(undefined) }));
+jest.mock('../wa-web-version', () => ({
+  resolveWebVersionPin: jest.fn().mockResolvedValue(undefined),
+  getVerifiedPinnedHtml: jest.fn().mockReturnValue(undefined),
+}));
 
 const problem = backportProblem as jest.Mock;
 const unapplied = unappliedPatches as jest.Mock;
