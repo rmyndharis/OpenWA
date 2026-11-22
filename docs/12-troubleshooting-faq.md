@@ -922,7 +922,7 @@ rm -rf node_modules/whatsapp-web.js && npm ci
   `<status>` stanzas (the status-ack patch is missing, or is the 0.30.1 revision, which only
   acknowledged them)
 
-**Cause:** OpenWA applies fifteen exact source transforms to its engine libraries at install time
+**Cause:** OpenWA applies sixteen exact source transforms to its engine libraries at install time
 (docs/29 §29.3). The Docker image runs them without `--best-effort`, so a source shape a patcher
 cannot recognise fails the image build. Source installs run the Puppeteer compatibility transform
 without best-effort too, because browser teardown depends on it. The other transforms use
