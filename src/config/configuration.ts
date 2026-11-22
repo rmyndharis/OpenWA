@@ -501,6 +501,10 @@ export default () => ({
       const n = parseInt(process.env.SESSION_PROXY_TIMEOUT_MS ?? '', 10);
       return Number.isFinite(n) && n > 0 ? n : 60_000;
     })(),
+    // Shared HMAC secret for authenticating inter-node forwarded hops (opt-in). When configured
+    // identically across peers, the owning node verifies the hop signature and skips its own
+    // throttle pass so forwarded requests are counted once instead of twice.
+    proxySecret: process.env.SESSION_PROXY_SECRET?.trim() || '',
     // How long a claim is honoured without renewal (default 60s). This is the worst-case delay
     // before a peer may take over from a process that died without releasing.
     leaseTtlMs: (() => {

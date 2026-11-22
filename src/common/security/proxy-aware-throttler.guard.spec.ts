@@ -1,7 +1,9 @@
 import type { ExecutionContext } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { ThrottlerException, ThrottlerStorageService } from '@nestjs/throttler';
 import { ProxyAwareThrottlerGuard } from './proxy-aware-throttler.guard';
+import { DEFAULT_FORWARDED_HOP_MAX_SKEW_MS, FORWARDED_HOP_HEADER, signForwardedHop } from './inter-node-proxy-auth';
 
 /**
  * Regression lock: the throttler must bucket on the resolved client IP, not the
@@ -318,5 +320,187 @@ describe('ProxyAwareThrottlerGuard bucket scope', () => {
     }
     await expect(guard.canActivate(contextFor(list))).rejects.toThrow(ThrottlerException);
     await expect(guard.canActivate(contextFor(get))).rejects.toThrow(ThrottlerException);
+  });
+});
+
+describe('ProxyAwareThrottlerGuard authenticated forwarded-hop skip', () => {
+  const SECRET = 'shared-inter-node-secret-32chars!';
+  const PATH = '/api/sessions/s1/messages/send-text?trace=1';
+  const origEnvSecret = process.env.SESSION_PROXY_SECRET;
+  const origTrustedProxies = process.env.TRUSTED_PROXIES;
+
+  class MessagesController {}
+  const sendText = function sendText(): void {};
+
+  let storage: ThrottlerStorageService;
+
+  beforeEach(() => {
+    delete process.env.SESSION_PROXY_SECRET;
+    delete process.env.TRUSTED_PROXIES;
+    storage = new ThrottlerStorageService();
+  });
+
+  afterEach(() => {
+    storage.onApplicationShutdown();
+    if (origEnvSecret === undefined) delete process.env.SESSION_PROXY_SECRET;
+    else process.env.SESSION_PROXY_SECRET = origEnvSecret;
+    if (origTrustedProxies === undefined) delete process.env.TRUSTED_PROXIES;
+    else process.env.TRUSTED_PROXIES = origTrustedProxies;
+  });
+
+  const makeGuard = async (secret?: string): Promise<ProxyAwareThrottlerGuard> => {
+    const configService =
+      secret === undefined
+        ? ({ get: jest.fn().mockReturnValue('') } as unknown as ConfigService)
+        : ({
+            get: jest.fn().mockImplementation((k: string) => (k === 'session.proxySecret' ? secret : undefined)),
+          } as unknown as ConfigService);
+    const guard = new ProxyAwareThrottlerGuard(
+      { throttlers: [{ name: 'short', ttl: 60_000, limit: 1 }] },
+      storage,
+      new Reflector(),
+      configService,
+    );
+    await guard.onModuleInit();
+    return guard;
+  };
+
+  const contextFor = (req: Record<string, unknown>, responseHeaders: Record<string, string> = {}): ExecutionContext =>
+    ({
+      getType: () => 'http',
+      getHandler: () => sendText,
+      getClass: () => MessagesController,
+      switchToHttp: () => ({
+        getRequest: () => req,
+        getResponse: () => ({
+          header: (name: string, value: string | number) => {
+            responseHeaders[name] = String(value);
+          },
+        }),
+      }),
+    }) as unknown as ExecutionContext;
+
+  const baseReq = (headers: Record<string, string | string[] | undefined>, over: Record<string, unknown> = {}) => ({
+    ip: '203.0.113.9',
+    socket: { remoteAddress: '203.0.113.9' },
+    method: 'POST',
+    originalUrl: PATH,
+    headers,
+    ...over,
+  });
+
+  it('skips throttling for a validly signed forwarded hop without consuming tokens or emitting headers', async () => {
+    const guard = await makeGuard(SECRET);
+    const signed = signForwardedHop({ secret: SECRET, nodeId: 'node-a', method: 'POST', path: PATH });
+    const resHeaders: Record<string, string> = {};
+
+    await expect(guard.canActivate(contextFor(baseReq(signed), resHeaders))).resolves.toBe(true);
+    await expect(guard.canActivate(contextFor(baseReq(signed), resHeaders))).resolves.toBe(true);
+    expect(resHeaders).toEqual({});
+
+    // Direct traffic still gets its full limit of 1 because the skipped hops consumed 0 tokens.
+    await expect(guard.canActivate(contextFor(baseReq({})))).resolves.toBe(true);
+    await expect(guard.canActivate(contextFor(baseReq({})))).rejects.toThrow(ThrottlerException);
+  });
+
+  it('falls back to req.url when req.originalUrl is absent', async () => {
+    const guard = await makeGuard(SECRET);
+    const signed = signForwardedHop({ secret: SECRET, nodeId: 'node-a', method: 'GET', path: '/api/sessions/s1' });
+    const req = baseReq(signed, { method: 'GET', originalUrl: undefined, url: '/api/sessions/s1' });
+
+    await expect(guard.canActivate(contextFor(req))).resolves.toBe(true);
+    await expect(guard.canActivate(contextFor(req))).resolves.toBe(true);
+  });
+
+  it('throttles a spoofed x-openwa-forwarded header with no valid signature', async () => {
+    const guard = await makeGuard(SECRET);
+    const spoofed = baseReq({ [FORWARDED_HOP_HEADER]: 'node-a' });
+
+    await expect(guard.canActivate(contextFor(spoofed))).resolves.toBe(true);
+    await expect(guard.canActivate(contextFor(spoofed))).rejects.toThrow(ThrottlerException);
+  });
+
+  it('throttles when SESSION_PROXY_SECRET is unset even if hop signature headers are present', async () => {
+    const guard = await makeGuard(undefined);
+    const signed = signForwardedHop({ secret: SECRET, nodeId: 'node-a', method: 'POST', path: PATH });
+
+    await expect(guard.canActivate(contextFor(baseReq(signed)))).resolves.toBe(true);
+    await expect(guard.canActivate(contextFor(baseReq(signed)))).rejects.toThrow(ThrottlerException);
+  });
+
+  it.each([
+    [
+      'expired timestamp',
+      () =>
+        baseReq(
+          signForwardedHop({
+            secret: SECRET,
+            nodeId: 'node-a',
+            method: 'POST',
+            path: PATH,
+            nowMs: Date.now() - DEFAULT_FORWARDED_HOP_MAX_SKEW_MS - 5_000,
+          }),
+        ),
+    ],
+    [
+      'future-skewed timestamp',
+      () =>
+        baseReq(
+          signForwardedHop({
+            secret: SECRET,
+            nodeId: 'node-a',
+            method: 'POST',
+            path: PATH,
+            nowMs: Date.now() + DEFAULT_FORWARDED_HOP_MAX_SKEW_MS + 5_000,
+          }),
+        ),
+    ],
+    [
+      'tampered path',
+      () =>
+        baseReq(
+          signForwardedHop({
+            secret: SECRET,
+            nodeId: 'node-a',
+            method: 'POST',
+            path: '/api/sessions/other/messages/send-text',
+          }),
+        ),
+    ],
+    [
+      'tampered method',
+      () =>
+        baseReq(
+          signForwardedHop({
+            secret: SECRET,
+            nodeId: 'node-a',
+            method: 'GET',
+            path: PATH,
+          }),
+        ),
+    ],
+    [
+      'tampered nodeId',
+      () => {
+        const signed = signForwardedHop({ secret: SECRET, nodeId: 'node-a', method: 'POST', path: PATH });
+        return baseReq({ ...signed, [FORWARDED_HOP_HEADER]: 'node-spoof' });
+      },
+    ],
+    [
+      'wrong secret',
+      () =>
+        baseReq(
+          signForwardedHop({
+            secret: 'another-secret-not-matching-node!',
+            nodeId: 'node-a',
+            method: 'POST',
+            path: PATH,
+          }),
+        ),
+    ],
+  ])('throttles normally on %s (fail-closed)', async (_label, buildReq) => {
+    const guard = await makeGuard(SECRET);
+    await expect(guard.canActivate(contextFor(buildReq()))).resolves.toBe(true);
+    await expect(guard.canActivate(contextFor(buildReq()))).rejects.toThrow(ThrottlerException);
   });
 });

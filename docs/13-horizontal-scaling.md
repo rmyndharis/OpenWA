@@ -176,11 +176,18 @@
 > local wall time, so while versions are mixed the old cross-zone error above is back for as long as
 > the older node keeps renewing. Running every node in `TZ=UTC` (the image default) removes it.
 >
-> **A forwarded request is throttled on both nodes.** The receiving node counts it before
-> forwarding, and the owner counts it again on arrival; with `REDIS_ENABLED=true`, and each peer
-> node listed in the owner's `TRUSTED_PROXIES` (below), both counts land in the same shared bucket.
-> Without that, the owner counts every request forwarded by a peer in one bucket keyed on that
-> peer's address. Size the rate limits with that in mind for a routed deployment.
+> **Forwarded requests can be single-counted with `SESSION_PROXY_SECRET`.** Without
+> `SESSION_PROXY_SECRET`, a forwarded request is throttled on both nodes: the receiving node counts
+> it before forwarding, and the owner counts it again on arrival (with `REDIS_ENABLED=true` and each
+> peer listed in the owner's `TRUSTED_PROXIES`, both counts land in the same shared bucket; without
+> `TRUSTED_PROXIES`, the owner pools all forwarded traffic from a peer into a bucket keyed on that
+> peer's address). Setting the same `SESSION_PROXY_SECRET` (at least 16 characters) on every node
+> authenticates inter-node hops with an HMAC-SHA256 signature (`x-openwa-forwarded`,
+> `x-openwa-forwarded-ts`, `x-openwa-forwarded-sig`) bound to the forwarding node ID, HTTP method,
+> request path, and a 30-second timestamp window. When the owner verifies that signature, its
+> throttler skips the hop so each forwarded request consumes one token (on the receiving node, whose
+> `X-RateLimit-*` response headers remain intact). Missing, forged, tampered, or expired hop headers
+> fail closed and are throttled normally.
 >
 > Forwards carry the client address in `x-forwarded-for` (inbound chain preserved, the
 > observed peer appended). For an `allowedIps`-restricted key or the per-IP throttler to see

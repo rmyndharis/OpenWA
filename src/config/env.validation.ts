@@ -666,6 +666,20 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     }
   }
 
+  // Shared HMAC secret for inter-node forwarded hops (opt-in). Blank ('') stays legal so a
+  // compose `${SESSION_PROXY_SECRET:-}` forward behaves as unset, while whitespace-only or
+  // trivially short values fail fast at boot without echoing the secret.
+  const rawProxySecret = config.SESSION_PROXY_SECRET;
+  if (rawProxySecret !== undefined && rawProxySecret !== '') {
+    if (typeof rawProxySecret !== 'string') {
+      errors.push('SESSION_PROXY_SECRET must be a string');
+    } else if (rawProxySecret.trim().length === 0) {
+      errors.push('SESSION_PROXY_SECRET must not be whitespace-only; leave it unset or set at least 16 characters');
+    } else if (rawProxySecret.trim().length < 16) {
+      errors.push('SESSION_PROXY_SECRET must be at least 16 characters long');
+    }
+  }
+
   // Boolean feature flags read at module-eval time (app.module.ts) with a bare `=== 'true'` /
   // `!== 'false'` comparison: a typo (`True`, `1`, `yes`) or trailing whitespace/CR silently
   // (dis)ables the feature. Validate the RAW value — NOT a trimmed one — so `'true '` / `'true\r'`

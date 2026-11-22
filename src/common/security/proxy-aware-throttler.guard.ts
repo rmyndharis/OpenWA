@@ -1,7 +1,18 @@
-import { ExecutionContext, Injectable } from '@nestjs/common';
-import { normalizeIp, ThrottlerGuard, ThrottlerLimitDetail } from '@nestjs/throttler';
+import { ExecutionContext, Injectable, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Reflector } from '@nestjs/core';
+import {
+  InjectThrottlerOptions,
+  InjectThrottlerStorage,
+  normalizeIp,
+  ThrottlerGuard,
+  type ThrottlerLimitDetail,
+  type ThrottlerModuleOptions,
+  type ThrottlerStorage,
+} from '@nestjs/throttler';
 import { parseTrustedProxies, resolveClientIp, RequestLike } from '../utils/ip';
 import { createLogger } from '../services/logger.service';
+import { verifyForwardedHop } from './inter-node-proxy-auth';
 
 const logger = createLogger('ProxyAwareThrottlerGuard');
 
@@ -41,6 +52,22 @@ export class ProxyAwareThrottlerGuard extends ThrottlerGuard {
    */
   private warnedSharedProxyBucket = false;
 
+  constructor(
+    @InjectThrottlerOptions() options: ThrottlerModuleOptions,
+    @InjectThrottlerStorage() storageService: ThrottlerStorage,
+    reflector: Reflector,
+    @Optional() private readonly configService?: ConfigService,
+  ) {
+    super(options, storageService, reflector);
+  }
+
+  private resolveProxySecret(): string | undefined {
+    const raw = this.configService
+      ? this.configService.get<unknown>('session.proxySecret')
+      : process.env.SESSION_PROXY_SECRET;
+    return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : undefined;
+  }
+
   protected getTracker(req: Record<string, unknown>): Promise<string> {
     const trustedProxies = parseTrustedProxies(process.env.TRUSTED_PROXIES);
     // An X-Forwarded-For header with an empty TRUSTED_PROXIES is the silent self-DoS this guard
@@ -79,7 +106,37 @@ export class ProxyAwareThrottlerGuard extends ThrottlerGuard {
       context.getHandler(),
       context.getClass(),
     ]);
-    return Promise.resolve(skip === true);
+    if (skip === true) return Promise.resolve(true);
+
+    const secret = this.resolveProxySecret();
+    if (!secret) return Promise.resolve(false);
+    if (typeof context.getType === 'function' && context.getType() !== 'http') {
+      return Promise.resolve(false);
+    }
+
+    const http = typeof context.switchToHttp === 'function' ? context.switchToHttp() : undefined;
+    const req = http?.getRequest<{
+      method?: unknown;
+      originalUrl?: unknown;
+      url?: unknown;
+      headers?: Record<string, string | string[] | undefined>;
+    }>();
+    if (!req || typeof req.method !== 'string') return Promise.resolve(false);
+
+    const path =
+      typeof req.originalUrl === 'string' && req.originalUrl.length > 0
+        ? req.originalUrl
+        : typeof req.url === 'string'
+          ? req.url
+          : '';
+    return Promise.resolve(
+      verifyForwardedHop({
+        secret,
+        headers: req.headers,
+        method: req.method,
+        path,
+      }),
+    );
   }
 
   /**

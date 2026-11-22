@@ -584,3 +584,24 @@ describe('configuration pre-egress hook and browser session settings', () => {
     expect(configuration().auth.dashboardSessionCookieSecure).toBe(false);
   });
 });
+
+describe('configuration session proxy secret', () => {
+  const orig = process.env.SESSION_PROXY_SECRET;
+
+  afterEach(() => {
+    if (orig === undefined) delete process.env.SESSION_PROXY_SECRET;
+    else process.env.SESSION_PROXY_SECRET = orig;
+  });
+
+  it('defaults session.proxySecret to empty string when unset or blank', () => {
+    delete process.env.SESSION_PROXY_SECRET;
+    expect(configuration().session.proxySecret).toBe('');
+    process.env.SESSION_PROXY_SECRET = '   ';
+    expect(configuration().session.proxySecret).toBe('');
+  });
+
+  it('reads and trims SESSION_PROXY_SECRET into session.proxySecret', () => {
+    process.env.SESSION_PROXY_SECRET = '  inter-node-hmac-secret-0123456789  ';
+    expect(configuration().session.proxySecret).toBe('inter-node-hmac-secret-0123456789');
+  });
+});

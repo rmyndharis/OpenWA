@@ -161,6 +161,7 @@ services:
       - SESSION_LEASE_HEARTBEAT_MS=${SESSION_LEASE_HEARTBEAT_MS:-}
       - SESSION_TAKEOVER_SWEEP_MS=${SESSION_TAKEOVER_SWEEP_MS:-}
       - SESSION_PROXY_TIMEOUT_MS=${SESSION_PROXY_TIMEOUT_MS:-}
+      - SESSION_PROXY_SECRET=${SESSION_PROXY_SECRET:-}
       # Security / boot knobs the app reads. Like the blocks above, this list is the only path into
       # the container; compose-parity.spec.ts derives the required set from .env.example.
       - API_MASTER_KEY=${API_MASTER_KEY:-}

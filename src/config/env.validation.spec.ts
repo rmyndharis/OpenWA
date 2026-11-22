@@ -1144,4 +1144,25 @@ describe('validateEnv pre-egress hook and browser session knobs', () => {
       );
     }
   });
+
+  it('validates SESSION_PROXY_SECRET as optional and rejects whitespace-only or trivially short values', () => {
+    for (const ok of [undefined, '', '0123456789abcdef', 'a-strong-shared-secret-value-for-peers']) {
+      expect(() => validateEnv({ SESSION_PROXY_SECRET: ok })).not.toThrow();
+    }
+
+    for (const blank of [' ', '   ', '\t\n']) {
+      expect(() => validateEnv({ SESSION_PROXY_SECRET: blank })).toThrow(/SESSION_PROXY_SECRET/);
+    }
+
+    for (const tooShort of ['short', '123456789012345', '   123456789012345   ']) {
+      expect(() => validateEnv({ SESSION_PROXY_SECRET: tooShort })).toThrow(
+        /SESSION_PROXY_SECRET must be at least 16 characters/,
+      );
+      expect(() => validateEnv({ SESSION_PROXY_SECRET: tooShort })).not.toThrow(tooShort.trim());
+    }
+
+    expect(() => validateEnv({ SESSION_PROXY_SECRET: 1234567890123456 })).toThrow(
+      /SESSION_PROXY_SECRET must be a string/,
+    );
+  });
 });

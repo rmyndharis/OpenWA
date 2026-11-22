@@ -19,6 +19,7 @@ import { SessionOwnershipService } from './session-ownership.service';
 import { SESSION_SCOPED_KEY } from '../auth/decorators/auth.decorators';
 import { extractBrowserSessionCookie } from '../auth/browser-session.util';
 import { presentedApiKey } from '../../common/security/bearer-token';
+import { FORWARDED_HOP_HEADER, signForwardedHop } from '../../common/security/inter-node-proxy-auth';
 import { createLogger } from '../../common/services/logger.service';
 import { getRequestId } from '../../common/services/request-context';
 import { isTransientDbError } from '../../common/utils/db-errors';
@@ -73,7 +74,7 @@ const NOT_DISPATCHED_CODES = new Set([
 ]);
 
 /** Marks a request as already forwarded once. Whatever happens, it is never forwarded again. */
-export const FORWARDED_HEADER = 'x-openwa-forwarded';
+export const FORWARDED_HEADER = FORWARDED_HOP_HEADER;
 
 /**
  * How much of the owner's answer is held whole before it is relayed. An ordinary JSON answer fits, and keeps the
@@ -361,7 +362,14 @@ export class SessionProxyInterceptor implements NestInterceptor {
     const timeoutMs = this.configService?.get<number>('session.proxyTimeoutMs', 60_000) ?? 60_000;
 
     const payload = prepareForwardPayload(request);
-    const headers: Record<string, string> = { [FORWARDED_HEADER]: this.ownership?.nodeId ?? '1' };
+    const nodeId = this.ownership?.nodeId ?? '1';
+    const rawProxySecret = this.configService?.get<unknown>('session.proxySecret');
+    const proxySecret =
+      typeof rawProxySecret === 'string' && rawProxySecret.trim().length > 0 ? rawProxySecret.trim() : undefined;
+    // Client-supplied hop markers and signature headers are never copied from request.headers.
+    // Always write our own nodeId and, when SESSION_PROXY_SECRET is set, sign the exact normalized
+    // wire path built by forwardTarget() below so the owner verifies the path it receives.
+    const headers: Record<string, string> = { [FORWARDED_HEADER]: nodeId };
     for (const name of FORWARDED_REQUEST_HEADERS) {
       const value = request.headers[name];
       if (typeof value === 'string') headers[name] = value;
@@ -397,7 +405,20 @@ export class SessionProxyInterceptor implements NestInterceptor {
       // Inside the try: a NODE_URL that is not a usable absolute URL makes this throw, and that is
       // an unreachable-owner condition (the 503 below names the node and the setting), not a 500
       // on a request that had nothing wrong with it. Boot validation rejects such a value too.
-      target = forwardTarget(request.originalUrl, ownerNodeUrl);
+      const rawPath = request.originalUrl || request.url || '/';
+      target = forwardTarget(rawPath, ownerNodeUrl);
+      if (proxySecret) {
+        const targetUrl = new URL(target);
+        Object.assign(
+          headers,
+          signForwardedHop({
+            secret: proxySecret,
+            nodeId,
+            method: request.method,
+            path: `${targetUrl.pathname}${targetUrl.search}`,
+          }),
+        );
+      }
       const upstream = await fetch(target, {
         method: request.method,
         headers,

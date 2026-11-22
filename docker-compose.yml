@@ -194,6 +194,7 @@ services:
       - SESSION_LEASE_HEARTBEAT_MS=${SESSION_LEASE_HEARTBEAT_MS:-}
       - SESSION_TAKEOVER_SWEEP_MS=${SESSION_TAKEOVER_SWEEP_MS:-}
       - SESSION_PROXY_TIMEOUT_MS=${SESSION_PROXY_TIMEOUT_MS:-}
+      - SESSION_PROXY_SECRET=${SESSION_PROXY_SECRET:-}
       # Autoreply rules per session (0 = unlimited). Blank forwards to the app default (32); an
       # unforwarded key could not be set from .env at all, which is the whole point of this list.
       - AUTOMATION_MAX_PER_SESSION=${AUTOMATION_MAX_PER_SESSION:-}
