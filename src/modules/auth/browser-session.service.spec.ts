@@ -494,6 +494,29 @@ describe('BrowserSessionService & CreateBrowserSessions migration (SQLite)', () 
     expect(await repo.findOneBy({ id: staleRevoked.id })).toBeNull();
   });
 
+  it('uses ConfigService auth.dashboardSessionTtlMs override when provided', async () => {
+    const savedTtl = process.env.DASHBOARD_SESSION_TTL_MS;
+    delete process.env.DASHBOARD_SESSION_TTL_MS;
+    try {
+      const cfg = {
+        get: jest.fn((key: string) => (key === 'auth.dashboardSessionTtlMs' ? 900_000 : undefined)),
+      } as unknown as ConfigService;
+      const configuredService = new BrowserSessionService(
+        ds.getRepository(BrowserSession),
+        authService,
+        moduleRef,
+        keyIndex as unknown as ActiveKeyIndex,
+        cfg,
+      );
+      const created = await configuredService.createSession(activeKey);
+      expect(created.ttlMs).toBe(900_000);
+      expect(created.session.expiresAt.getTime() - created.session.createdAt.getTime()).toBe(900_000);
+    } finally {
+      if (savedTtl === undefined) delete process.env.DASHBOARD_SESSION_TTL_MS;
+      else process.env.DASHBOARD_SESSION_TTL_MS = savedTtl;
+    }
+  });
+
   it('migration down cleanly drops browser_sessions table', async () => {
     const qr = ds.createQueryRunner();
     const migration = new CreateBrowserSessions1792000000000();
@@ -686,5 +709,53 @@ describe('BrowserSessionController', () => {
     );
     expect(resultBehindTlsProxy).toEqual({ ok: true });
     expect(revokeByToken).toHaveBeenCalledWith('tok-proxy-logout');
+  });
+
+  it('honors ConfigService auth.dashboardSessionCookieSecure override on createSession and deleteSession', async () => {
+    const savedSecure = process.env.DASHBOARD_SESSION_COOKIE_SECURE;
+    delete process.env.DASHBOARD_SESSION_COOKIE_SECURE;
+    try {
+      createSession.mockResolvedValue({
+        token: 'cfg-override-token',
+        session: { id: 'bs-cfg' },
+        ttlMs: 3600_000,
+      });
+
+      // Force Secure=true on a plain HTTP request via ConfigService.
+      (configService.get as jest.Mock).mockImplementation((key: string) => {
+        if (key === 'security.trustedProxies') return [];
+        if (key === 'auth.dashboardSessionCookieSecure') return true;
+        return undefined;
+      });
+      const setHeaderTrue = jest.fn();
+      await controller.createSession(
+        { id: 'k-admin', role: ApiKeyRole.ADMIN } as ApiKey,
+        { secure: false, headers: { 'x-api-key': 'ow_raw_secret' } } as unknown as Request,
+        { setHeader: setHeaderTrue } as unknown as Response,
+      );
+      expect(setHeaderTrue).toHaveBeenCalledWith(
+        'Set-Cookie',
+        'openwa_session=cfg-override-token; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600; Secure',
+      );
+
+      // Force Secure=false on an HTTPS request via ConfigService.
+      (configService.get as jest.Mock).mockImplementation((key: string) => {
+        if (key === 'security.trustedProxies') return [];
+        if (key === 'auth.dashboardSessionCookieSecure') return false;
+        return undefined;
+      });
+      const setHeaderFalse = jest.fn();
+      await controller.deleteSession(
+        { method: 'DELETE', secure: true, headers: {} } as unknown as Request,
+        { setHeader: setHeaderFalse } as unknown as Response,
+      );
+      expect(setHeaderFalse).toHaveBeenCalledWith(
+        'Set-Cookie',
+        'openwa_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0',
+      );
+    } finally {
+      if (savedSecure === undefined) delete process.env.DASHBOARD_SESSION_COOKIE_SECURE;
+      else process.env.DASHBOARD_SESSION_COOKIE_SECURE = savedSecure;
+    }
   });
 });

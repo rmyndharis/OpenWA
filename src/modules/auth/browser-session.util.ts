@@ -147,11 +147,16 @@ export function isHttpsTransportRequest(req: CookieRequestLike, trustedProxies: 
 }
 
 /**
- * Whether to attach the `Secure` attribute to `openwa_session`. Explicit
- * `DASHBOARD_SESSION_COOKIE_SECURE` wins (`'true'`/`'false'`); otherwise follows
- * `isHttpsTransportRequest`.
+ * Whether to attach the `Secure` attribute to `openwa_session`. An explicit boolean
+ * `secureOverride` (from `ConfigService`) or `DASHBOARD_SESSION_COOKIE_SECURE` env value
+ * (`'true'`/`'false'`) wins; otherwise follows `isHttpsTransportRequest`.
  */
-export function isSecureCookieRequest(req: CookieRequestLike, trustedProxies: string[]): boolean {
+export function isSecureCookieRequest(
+  req: CookieRequestLike,
+  trustedProxies: string[],
+  secureOverride?: boolean,
+): boolean {
+  if (typeof secureOverride === 'boolean') return secureOverride;
   const override = process.env.DASHBOARD_SESSION_COOKIE_SECURE?.trim();
   if (override === 'true') return true;
   if (override === 'false') return false;

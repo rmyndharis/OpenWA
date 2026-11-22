@@ -530,3 +530,57 @@ describe('configuration SQLite journal mode', () => {
     expect(cfg.dataDatabase.journalMode).toBe('DELETE');
   });
 });
+
+describe('configuration pre-egress hook and browser session settings', () => {
+  const keys = ['HOOK_PRE_EGRESS_FAIL_CLOSED', 'DASHBOARD_SESSION_TTL_MS', 'DASHBOARD_SESSION_COOKIE_SECURE'] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of keys) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  it('exposes safe defaults when hook and browser session env vars are unset', () => {
+    const cfg = configuration() as unknown as {
+      hooks?: { preEgressFailClosed?: boolean };
+      auth?: { dashboardSessionTtlMs?: number; dashboardSessionCookieSecure?: boolean };
+    };
+    expect(cfg.hooks?.preEgressFailClosed).toBe(false);
+    expect(cfg.auth?.dashboardSessionTtlMs).toBe(43_200_000);
+    expect(cfg.auth?.dashboardSessionCookieSecure).toBeUndefined();
+  });
+
+  it('reflects explicit pre-egress hook and browser session overrides', () => {
+    process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+    process.env.DASHBOARD_SESSION_TTL_MS = '3600000';
+    process.env.DASHBOARD_SESSION_COOKIE_SECURE = 'true';
+
+    const cfg = configuration() as unknown as {
+      hooks?: { preEgressFailClosed?: boolean };
+      auth?: { dashboardSessionTtlMs?: number; dashboardSessionCookieSecure?: boolean };
+    };
+    expect(cfg.hooks?.preEgressFailClosed).toBe(true);
+    expect(cfg.auth?.dashboardSessionTtlMs).toBe(3_600_000);
+    expect(cfg.auth?.dashboardSessionCookieSecure).toBe(true);
+
+    process.env.DASHBOARD_SESSION_COOKIE_SECURE = 'false';
+    const insecureCfg = configuration() as unknown as {
+      auth?: { dashboardSessionCookieSecure?: boolean };
+    };
+    expect(insecureCfg.auth?.dashboardSessionCookieSecure).toBe(false);
+
+    process.env.DASHBOARD_SESSION_COOKIE_SECURE = ' true ';
+    expect(configuration().auth.dashboardSessionCookieSecure).toBe(true);
+    process.env.DASHBOARD_SESSION_COOKIE_SECURE = ' false ';
+    expect(configuration().auth.dashboardSessionCookieSecure).toBe(false);
+  });
+});

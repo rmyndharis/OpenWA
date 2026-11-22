@@ -8,6 +8,7 @@ import { DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS, MAX_TIMER_MS } from '../common/servi
 import { parseTrustedProxies } from '../common/utils/ip';
 import { positiveIntFromEnv } from '../common/utils/env-int';
 import { resolveSqliteJournalMode } from '../database/sqlite-pragmas';
+import { resolveBrowserSessionTtlMs } from '../modules/auth/browser-session.util';
 import { parsePuppeteerArgs } from './puppeteer-args';
 
 /**
@@ -345,6 +346,29 @@ export default () => ({
     // is ignored and the direct socket address is used, preventing spoofing of
     // the API-key allowedIps whitelist.
     trustedProxies: parseTrustedProxies(process.env.TRUSTED_PROXIES),
+  },
+
+  // Browser session authentication for the bundled dashboard
+  auth: {
+    // Lifetime of an HttpOnly openwa_session browser cookie (default 12 hours, clamped between
+    // 5 minutes and 30 days by resolveBrowserSessionTtlMs).
+    dashboardSessionTtlMs: resolveBrowserSessionTtlMs(process.env.DASHBOARD_SESSION_TTL_MS),
+    // Optional override for the Secure attribute on openwa_session ('true' or 'false').
+    // Unset follows direct TLS or trusted-proxy X-Forwarded-Proto=https detection.
+    dashboardSessionCookieSecure: (() => {
+      const raw = process.env.DASHBOARD_SESSION_COOKIE_SECURE?.trim();
+      if (raw === 'true') return true;
+      if (raw === 'false') return false;
+      return undefined;
+    })(),
+  },
+
+  // Plugin hook execution policy
+  hooks: {
+    // Pre-egress hooks (message:sending, webhook:before) default to fail-open for backward
+    // compatibility. Set HOOK_PRE_EGRESS_FAIL_CLOSED=true to abort outbound sends and webhook
+    // deliveries when a pre-egress hook throws, times out, crashes, or returns an unusable payload.
+    preEgressFailClosed: process.env.HOOK_PRE_EGRESS_FAIL_CLOSED === 'true',
   },
 
   // Plugin platform configuration

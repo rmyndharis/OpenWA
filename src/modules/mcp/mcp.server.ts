@@ -115,12 +115,6 @@ export function capSdkErrors(server: McpServer, maxResultBytes: number): void {
 }
 
 /**
- * Fallback set of tool names that return external WhatsApp user text even when their descriptor
- * has not yet set `returnsUntrustedContent`.
- */
-const UNTRUSTED_CONTENT_TOOL_NAMES: ReadonlySet<string> = new Set(['SessionGetChats']);
-
-/**
  * Build the MCP server ONCE and register all tools from the registry.
  * The SDK's `registerTool` accepts `AnySchema` (z4.$ZodType) directly, so we
  * pass `tool.inputSchema` verbatim — no `.shape` extraction needed.
@@ -178,7 +172,7 @@ function buildServer(
             extra.signal,
           );
           return smartToolResult(result as object, maxResultBytes, {
-            untrustedContent: tool.returnsUntrustedContent === true || UNTRUSTED_CONTENT_TOOL_NAMES.has(tool.name),
+            untrustedContent: tool.returnsUntrustedContent === true,
           });
         } catch (error) {
           return capToolError(handleToolError(error), maxResultBytes);

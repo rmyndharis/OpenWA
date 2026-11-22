@@ -122,6 +122,7 @@ describe('v1 tool surface snapshot', () => {
       'MessageHistory',
       'MessageSearch',
       'MessageGetReactions',
+      'SessionGetChats',
       'LabelListChats',
       'ContactFindAll',
       'ContactFindOne',

@@ -51,7 +51,8 @@ export class BrowserSessionController {
     }
     const { token, ttlMs } = await this.browserSessionService.createSession(apiKey);
     const trustedProxies = this.configService.get<string[]>('security.trustedProxies') ?? [];
-    const secure = isSecureCookieRequest(req, trustedProxies);
+    const secureOverride = this.configService.get<boolean | undefined>('auth.dashboardSessionCookieSecure');
+    const secure = isSecureCookieRequest(req, trustedProxies, secureOverride);
     res.setHeader('Set-Cookie', formatSessionSetCookie(token, Math.floor(ttlMs / 1000), secure));
     res.setHeader('Cache-Control', 'no-store');
     return {
@@ -100,7 +101,8 @@ export class BrowserSessionController {
       assertBrowserCsrfSafe(req, trustedProxies);
       await this.browserSessionService.revokeByToken(token);
     }
-    const secure = isSecureCookieRequest(req, trustedProxies);
+    const secureOverride = this.configService.get<boolean | undefined>('auth.dashboardSessionCookieSecure');
+    const secure = isSecureCookieRequest(req, trustedProxies, secureOverride);
     res.setHeader('Set-Cookie', formatSessionClearCookie(secure));
     res.setHeader('Cache-Control', 'no-store');
     return { ok: true };

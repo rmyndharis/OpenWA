@@ -1,4 +1,5 @@
 import { Inject, Injectable, OnApplicationBootstrap, OnModuleDestroy, Optional, forwardRef } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
@@ -7,7 +8,12 @@ import { BrowserSession } from './entities/browser-session.entity';
 import { ApiKey } from './entities/api-key.entity';
 import { AuthService, UnresolvedApiKeyException } from './auth.service';
 import { ActiveKeyIndex } from './active-key-index';
-import { hashBrowserSessionToken, resolveBrowserSessionTtlMs } from './browser-session.util';
+import {
+  MAX_BROWSER_SESSION_TTL_MS,
+  MIN_BROWSER_SESSION_TTL_MS,
+  hashBrowserSessionToken,
+  resolveBrowserSessionTtlMs,
+} from './browser-session.util';
 import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
 
@@ -36,6 +42,7 @@ export class BrowserSessionService implements OnApplicationBootstrap, OnModuleDe
     private readonly authService: AuthService,
     @Optional() private readonly moduleRef?: ModuleRef,
     @Optional() private readonly keyIndex?: ActiveKeyIndex,
+    @Optional() private readonly configService?: ConfigService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -69,7 +76,11 @@ export class BrowserSessionService implements OnApplicationBootstrap, OnModuleDe
 
     const token = randomBytes(32).toString('base64url');
     const tokenHash = hashBrowserSessionToken(token, process.env.API_KEY_PEPPER);
-    const ttlMs = resolveBrowserSessionTtlMs(process.env.DASHBOARD_SESSION_TTL_MS);
+    const configuredTtl = this.configService?.get<number>('auth.dashboardSessionTtlMs');
+    const ttlMs =
+      typeof configuredTtl === 'number' && Number.isSafeInteger(configuredTtl) && configuredTtl > 0
+        ? Math.min(MAX_BROWSER_SESSION_TTL_MS, Math.max(MIN_BROWSER_SESSION_TTL_MS, configuredTtl))
+        : resolveBrowserSessionTtlMs(process.env.DASHBOARD_SESSION_TTL_MS);
     const expiresAt = new Date(nowMs + ttlMs);
 
     const entity = this.sessionRepository.create({

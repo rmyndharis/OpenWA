@@ -1115,3 +1115,33 @@ describe('validateEnv WWEBJS_WEB_VERSION integrity policy', () => {
     },
   );
 });
+
+describe('validateEnv pre-egress hook and browser session knobs', () => {
+  it.each(['HOOK_PRE_EGRESS_FAIL_CLOSED', 'DASHBOARD_SESSION_COOKIE_SECURE'])(
+    'accepts unset, blank, "true", and "false" for %s and rejects invalid boolean spellings',
+    key => {
+      for (const ok of [undefined, '', '   ', 'true', 'false']) {
+        expect(() => validateEnv({ [key]: ok })).not.toThrow();
+      }
+      for (const bad of ['1', '0', 'yes', 'TRUE', 'False', ' true ']) {
+        expect(() => validateEnv({ [key]: bad })).toThrow(new RegExp(`${key} must be "true" or "false"`));
+      }
+    },
+  );
+
+  it('validates DASHBOARD_SESSION_TTL_MS as a positive integer within browser session bounds', () => {
+    for (const ok of [undefined, '', '   ', '300000', '43200000', '2592000000']) {
+      expect(() => validateEnv({ DASHBOARD_SESSION_TTL_MS: ok })).not.toThrow();
+    }
+    for (const badInt of ['0', '-1', '12h', 'abc', '43200000.5']) {
+      expect(() => validateEnv({ DASHBOARD_SESSION_TTL_MS: badInt })).toThrow(
+        /DASHBOARD_SESSION_TTL_MS must be a positive integer/,
+      );
+    }
+    for (const outOfRange of ['299999', '1000', '2592000001', '99999999999']) {
+      expect(() => validateEnv({ DASHBOARD_SESSION_TTL_MS: outOfRange })).toThrow(
+        /DASHBOARD_SESSION_TTL_MS must be between 300000 and 2592000000 ms/,
+      );
+    }
+  });
+});

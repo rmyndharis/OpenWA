@@ -85,6 +85,9 @@ services:
       - WWEBJS_AUTH_TIMEOUT_MS=${WWEBJS_AUTH_TIMEOUT_MS:-}
       # Forward the plain-HTTP dashboard CSP override; unset preserves the application default.
       - CSP_UPGRADE_INSECURE_REQUESTS=${CSP_UPGRADE_INSECURE_REQUESTS:-}
+      - DASHBOARD_SESSION_TTL_MS=${DASHBOARD_SESSION_TTL_MS:-}
+      - DASHBOARD_SESSION_COOKIE_SECURE=${DASHBOARD_SESSION_COOKIE_SECURE:-}
+      - HOOK_PRE_EGRESS_FAIL_CLOSED=${HOOK_PRE_EGRESS_FAIL_CLOSED:-}
       - STORAGE_TYPE=${STORAGE_TYPE:-local}
       - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH:-/app/data/media}
       # Install plugins into the writable, persistent data volume (the root FS is read-only). Matches

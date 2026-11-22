@@ -1,6 +1,7 @@
 import { resolve } from 'path';
 import { normalizeS3KeyPrefix } from '../common/storage/s3-key-prefix';
 import { webVersionPinConfigError } from '../engine/wa-web-version';
+import { MAX_BROWSER_SESSION_TTL_MS, MIN_BROWSER_SESSION_TTL_MS } from '../modules/auth/browser-session.util';
 import { namesBundledContainer } from '../modules/docker/bundled-host';
 import { resolveBodyLimit } from './bootstrap-security';
 import { parseBodyLimitBytes } from './inflight-body-budget';
@@ -331,7 +332,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS', // 0 = failure rows keep no payload (no redrive)
     'EXPORT_INLINE_MEDIA_BUDGET_BYTES', // 0 = a data export carries no inline media at all
     'MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES', // 0 = a message list carries no inline media at all
-    'MCP_MAX_RESULT_BYTES', // 0 = no cap on an MCP tool result; `100k` would have read as no cap
+    'MCP_MAX_RESULT_BYTES', // default 100000 bytes (100 KB); explicit 0 disables the cap
     'CHAT_MEDIA_ARCHIVE_TTL_DAYS', // 0 = keep archived chat media forever
     'INGRESS_RETRY_DELAY_MS', // 0 = retry without backoff
     'REDIS_CACHE_DB',
@@ -527,8 +528,21 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'INGRESS_MAX_ATTEMPTS',
     'WEBHOOK_WORKER_CONCURRENCY',
     'INGRESS_WORKER_CONCURRENCY',
+    'DASHBOARD_SESSION_TTL_MS',
   ]) {
     checkPositiveInt(key);
+  }
+
+  // Browser session TTL bounds match resolveBrowserSessionTtlMs so an out-of-range setting fails
+  // fast at boot instead of silently clamping to 5 minutes or 30 days.
+  const dashboardSessionTtlRaw = str('DASHBOARD_SESSION_TTL_MS');
+  if (dashboardSessionTtlRaw !== undefined && DECIMAL_INTEGER.test(dashboardSessionTtlRaw)) {
+    const n = Number(dashboardSessionTtlRaw);
+    if (n >= 1 && (n < MIN_BROWSER_SESSION_TTL_MS || n > MAX_BROWSER_SESSION_TTL_MS)) {
+      errors.push(
+        `DASHBOARD_SESSION_TTL_MS must be between ${MIN_BROWSER_SESSION_TTL_MS} and ${MAX_BROWSER_SESSION_TTL_MS} ms (got "${dashboardSessionTtlRaw}")`,
+      );
+    }
   }
 
   // The body cap takes a unit string. A spelling the parser does not know (`50M`, `50MiB`) silently
@@ -751,6 +765,9 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'ENABLE_SWAGGER',
     'VALIDATION_ERROR_DETAIL',
     'PLUGIN_INSTALL_REQUIRE_PIN',
+    // Pre-egress hook fail-closed toggle and browser session cookie Secure override.
+    'HOOK_PRE_EGRESS_FAIL_CLOSED',
+    'DASHBOARD_SESSION_COOKIE_SECURE',
     // `=== 'true'` in the SSRF guard: a typo keeps redirects refused when the operator allowed them.
     'WEBHOOK_SSRF_REDIRECTS',
     // DELIBERATELY NOT LISTED. `MCP_READONLY` is read `!== 'false'` and mcp.server.spec.ts asserts

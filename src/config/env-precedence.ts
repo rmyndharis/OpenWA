@@ -138,6 +138,9 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'API_MASTER_KEY',
   'TRUSTED_PROXIES',
   'CSP_UPGRADE_INSECURE_REQUESTS',
+  'DASHBOARD_SESSION_TTL_MS',
+  'DASHBOARD_SESSION_COOKIE_SECURE',
+  'HOOK_PRE_EGRESS_FAIL_CLOSED',
   // whatsapp-web.js launch knobs: the WhatsApp Web version pin, its remote HTML template,
   // integrity verification controls, and the first-boot init wait raised for slow hosts.
   'WWEBJS_WEB_VERSION',

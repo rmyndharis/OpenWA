@@ -50,6 +50,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
         'when present, is the number to show.',
       tier: 'read',
       sessionScoped: true,
+      returnsUntrustedContent: true,
       inputSchema: z.object({
         sessionId,
         limit: listLimitSchema,

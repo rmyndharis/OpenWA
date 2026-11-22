@@ -295,6 +295,9 @@ services:
       - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
       # Forward the plain-HTTP dashboard CSP override; unset preserves the application default.
       - CSP_UPGRADE_INSECURE_REQUESTS=${CSP_UPGRADE_INSECURE_REQUESTS:-}
+      - DASHBOARD_SESSION_TTL_MS=${DASHBOARD_SESSION_TTL_MS:-}
+      - DASHBOARD_SESSION_COOKIE_SECURE=${DASHBOARD_SESSION_COOKIE_SECURE:-}
+      - HOOK_PRE_EGRESS_FAIL_CLOSED=${HOOK_PRE_EGRESS_FAIL_CLOSED:-}
       # Security / boot knobs the app reads. This list is the only path into the container, so a
       # knob without a line here is inert no matter what the operator's .env says; compose-parity
       # .spec.ts derives the required set from .env.example so a new knob cannot ship unreachable.
