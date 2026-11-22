@@ -4,6 +4,8 @@ import {
   ingressWorkerConcurrency,
   producerConnectWaitMs,
   producerReady,
+  QUEUE_COMMAND_TIMEOUT_MS,
+  QUEUE_SOCKET_TIMEOUT_MS,
   queueConnectionOptions,
   queuePrefix,
   queueRootOptions,
@@ -26,8 +28,22 @@ describe('workerConnectionOptions (webhook Worker connection)', () => {
     expect(opts.enableOfflineQueue).toBeUndefined();
   });
 
-  it('sets no command timeout: the Worker blocks on Redis by design', () => {
-    expect((workerConnectionOptions() as unknown as Record<string, unknown>).commandTimeout).toBeUndefined();
+  it('sets no command timeout, socket timeout, or autoResend override: the Worker blocks on Redis by design', () => {
+    const opts = workerConnectionOptions() as unknown as Record<string, unknown>;
+    expect(opts.commandTimeout).toBeUndefined();
+    expect(opts.socketTimeout).toBeUndefined();
+    expect(opts.autoResendUnfulfilledCommands).toBeUndefined();
+  });
+
+  it('gives the producer socketTimeout below commandTimeout and disables autoResendUnfulfilledCommands', () => {
+    expect(QUEUE_SOCKET_TIMEOUT_MS).toBe(1500);
+    expect(QUEUE_SOCKET_TIMEOUT_MS).toBeLessThan(QUEUE_COMMAND_TIMEOUT_MS);
+
+    const opts = queueConnectionOptions();
+    expect(opts.enableOfflineQueue).toBe(false);
+    expect(opts.commandTimeout).toBe(QUEUE_COMMAND_TIMEOUT_MS);
+    expect(opts.socketTimeout).toBe(QUEUE_SOCKET_TIMEOUT_MS);
+    expect(opts.autoResendUnfulfilledCommands).toBe(false);
   });
 
   it('reads host/port/username/password/connectTimeout from env with safe defaults', () => {
@@ -66,20 +82,31 @@ describe('workerConnectionOptions (webhook Worker connection)', () => {
   });
 });
 
-/** The command names in a chunk of RESP arrays, lower-cased: `*2\r\n$3\r\nGET\r\n$1\r\na\r\n` is ['get']. */
-function commandNames(chunk: string): string[] {
-  const lines = chunk.split('\r\n');
-  const names: string[] = [];
-  for (let i = 0; i < lines.length;) {
-    const header = /^\*(\d+)$/.exec(lines[i]);
-    if (!header) {
-      i += 1;
-      continue;
+/** Parse complete RESP arrays off the front of `buf`; `keep` receives any incomplete tail. */
+function parseRespCommands(buf: Buffer, keep: (rest: Buffer) => void): string[][] {
+  const commands: string[][] = [];
+  let offset = 0;
+  for (;;) {
+    if (buf[offset] !== 0x2a) break;
+    const eol = buf.indexOf('\r\n', offset);
+    if (eol < 0) break;
+    const count = Number.parseInt(buf.toString('utf8', offset + 1, eol), 10);
+    let cursor = eol + 2;
+    const args: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const lenEnd = buf.indexOf('\r\n', cursor);
+      if (lenEnd < 0) break;
+      const length = Number.parseInt(buf.toString('utf8', cursor + 1, lenEnd), 10);
+      if (buf.length < lenEnd + 2 + length + 2) break;
+      args.push(buf.toString('utf8', lenEnd + 2, lenEnd + 2 + length));
+      cursor = lenEnd + 2 + length + 2;
     }
-    names.push((lines[i + 2] ?? '').toLowerCase());
-    i += 1 + Number(header[1]) * 2;
+    if (args.length < count) break;
+    commands.push(args);
+    offset = cursor;
   }
-  return names;
+  keep(buf.subarray(offset));
+  return commands;
 }
 
 describe('queueConnectionOptions on a Redis that stops answering', () => {
@@ -89,21 +116,36 @@ describe('queueConnectionOptions on a Redis that stops answering', () => {
   let server: Server;
   let sockets: Socket[];
   let answering: boolean;
+  let received: Array<{ socketIndex: number; args: string[] }>;
   let client: Redis;
 
   beforeEach(async () => {
     sockets = [];
     answering = true;
+    received = [];
     server = createServer(socket => {
+      const socketIndex = sockets.length;
       sockets.push(socket);
       socket.on('error', () => undefined);
+      let pending: Buffer = Buffer.alloc(0);
       socket.on('data', chunk => {
-        if (!answering) return;
-        // One reply per command in the chunk, enough RESP for the handshake and a nil GET.
-        for (const name of commandNames(chunk.toString())) {
-          socket.write(
-            name === 'hello' ? "-ERR unknown command 'hello'\r\n" : name === 'client' ? '+OK\r\n' : '$-1\r\n',
-          );
+        pending = Buffer.concat([pending, chunk]);
+        for (const args of parseRespCommands(pending, rest => (pending = rest))) {
+          received.push({ socketIndex, args });
+          if (!answering) continue;
+          const name = (args[0] ?? '').toLowerCase();
+          if (name === 'hello') {
+            socket.write("-ERR unknown command 'hello'\r\n");
+          } else if (name === 'info') {
+            const info = '# Server\r\nredis_version:7.2.0\r\nloading:0\r\n';
+            socket.write(`$${info.length}\r\n${info}\r\n`);
+          } else if (name === 'client') {
+            socket.write('+OK\r\n');
+          } else if (name === 'ping') {
+            socket.write('+PONG\r\n');
+          } else {
+            socket.write('$-1\r\n');
+          }
         }
       });
     });
@@ -112,9 +154,9 @@ describe('queueConnectionOptions on a Redis that stops answering', () => {
       ...queueConnectionOptions(),
       host: '127.0.0.1',
       port: (server.address() as AddressInfo).port,
-      enableReadyCheck: false,
-      retryStrategy: () => null,
+      retryStrategy: () => 50,
     });
+    client.on('error', () => undefined);
     // With no offline queue, a command issued before the connect rejects at once.
     await new Promise(resolve => client.once('ready', resolve));
   });
@@ -129,7 +171,6 @@ describe('queueConnectionOptions on a Redis that stops answering', () => {
     await expect(client.get('first')).resolves.toBeNull();
     answering = false;
 
-    // Read off the options, with the 2 s the producer is held to as the fallback of a build without one.
     const budget = (queueConnectionOptions() as { commandTimeout?: number }).commandTimeout ?? 2000;
     const outcome = await Promise.race([
       client.get('second').then(
@@ -140,7 +181,79 @@ describe('queueConnectionOptions on a Redis that stops answering', () => {
     ]);
 
     expect(outcome).toMatch(/timed out/i);
-  });
+  }, 10_000);
+
+  it('tears down the dead socket at socketTimeout and fast-fails subsequent commands immediately', async () => {
+    await expect(client.get('warm')).resolves.toBeNull();
+    const initialSocket = sockets[0];
+    let socketClosedAt: number | undefined;
+    const socketClosed = new Promise<void>(resolve =>
+      initialSocket.once('close', () => {
+        socketClosedAt = Date.now();
+        resolve();
+      }),
+    );
+
+    answering = false;
+    const startedAt = Date.now();
+    const firstCmd = client.get('stalled-first').catch((err: unknown) => err);
+
+    // Dead socket must be torn down around QUEUE_SOCKET_TIMEOUT_MS (1500ms), before QUEUE_COMMAND_TIMEOUT_MS (2000ms).
+    const closedOutcome = await Promise.race([
+      socketClosed.then(() => 'closed'),
+      new Promise<string>(resolve => setTimeout(resolve, QUEUE_COMMAND_TIMEOUT_MS + 200, 'still-open')),
+    ]);
+    expect(closedOutcome).toBe('closed');
+    const tearDownMs = (socketClosedAt ?? Date.now()) - startedAt;
+    expect(tearDownMs).toBeGreaterThanOrEqual(1300);
+    expect(tearDownMs).toBeLessThan(QUEUE_COMMAND_TIMEOUT_MS + 100);
+
+    // Wait for the first stalled command to settle via commandTimeout.
+    const firstErr = await firstCmd;
+    expect(firstErr).toBeInstanceOf(Error);
+
+    // Because the dead socket was torn down and enableOfflineQueue is false, an immediate second
+    // command fails fast (<50ms) instead of waiting another 2000ms commandTimeout.
+    const secondStart = Date.now();
+    const secondErr = await client.get('fast-fail-second').catch((err: unknown) => err);
+    const secondElapsedMs = Date.now() - secondStart;
+    expect(secondErr).toBeInstanceOf(Error);
+    expect((secondErr as Error).message).toMatch(/enableOfflineQueue|closed/i);
+    expect(secondElapsedMs).toBeLessThan(50);
+  }, 10_000);
+
+  it('does not resend the unfulfilled command after the server accepts a reconnect', async () => {
+    await expect(client.get('warm')).resolves.toBeNull();
+    const initialSocket = sockets[0];
+    const socketClosed = new Promise<void>(resolve => initialSocket.once('close', resolve));
+
+    answering = false;
+    const stalled = client.get('do-not-resend').catch((err: unknown) => err);
+
+    // Wait until the client tears down the stalled socket (or fail if socketTimeout never fired).
+    const closedOutcome = await Promise.race([
+      socketClosed.then(() => 'closed'),
+      new Promise<string>(resolve => setTimeout(resolve, QUEUE_COMMAND_TIMEOUT_MS + 200, 'still-open')),
+    ]);
+    expect(closedOutcome).toBe('closed');
+
+    // Bring the server back so the client reconnects and becomes ready on a fresh socket.
+    const reconnected = new Promise<void>(resolve => client.once('ready', resolve));
+    answering = true;
+    await reconnected;
+
+    // Issue a fresh command to verify the reconnected socket is healthy and flush any buffered pipeline.
+    await expect(client.get('after-reconnect')).resolves.toBeNull();
+
+    // Ensure the original stalled command rejected and was never resent on the new connection.
+    const stalledErr = await stalled;
+    expect(stalledErr).toBeInstanceOf(Error);
+    const sentStalled = received.filter(
+      entry => entry.args[0]?.toLowerCase() === 'get' && entry.args[1] === 'do-not-resend',
+    );
+    expect(sentStalled).toHaveLength(1);
+    expect(sentStalled[0].socketIndex).toBe(0);
+  }, 10_000);
 });
 
 describe('webhookWorkerConcurrency', () => {
