@@ -419,7 +419,7 @@ curl -X POST http://localhost:2785/api/sessions/{sessionId}/webhooks \
 
 OpenWA can expose a **curated set of tools over the [Model Context Protocol](https://modelcontextprotocol.io)** so AI agents (Claude, Cursor, …) can drive WhatsApp. It is **off by default** and **additive** — every REST route keeps working unchanged.
 
-Set `MCP_ENABLED=true` to mount a stateless Streamable-HTTP transport at **`POST /mcp`** on the existing server (same port, no extra process). It mounts **26 read-only tools** by default — session, message, contact, group, webhook, label and automation-rule _reads_ — because the surface is read-only unless you opt out. Add `MCP_READONLY=false` to mount all **52 tools**, adding the write tier (send, reply, group operations). Either way it is a focused surface rather than the full API, so agents aren't overwhelmed.
+Set `MCP_ENABLED=true` to mount a stateless Streamable-HTTP transport at **`POST /mcp`** on the existing server (same port, no extra process). It mounts **25 read-only tools** by default — session, message, contact, group, webhook, label and automation-rule _reads_ — because the surface is read-only unless you opt out. Add `MCP_READONLY=false` to mount all **52 tools**, adding the write tier (send, reply, group operations). Either way it is a focused surface rather than the full API, so agents aren't overwhelmed.
 
 ```bash
 MCP_ENABLED=true npm run start:prod   # or set MCP_ENABLED in your .env / compose
@@ -448,7 +448,7 @@ The key can be passed as `Authorization: Bearer …` or `X-API-Key: …`. Every 
 - Read-only is the default, so leave **`MCP_READONLY`** unset unless the agent must write. **`MCP_READONLY=false`** adds the write tools (sends, replies, group changes).
 - Set **`MCP_RATE_LIMIT_MAX`** (default `60`) to limit tool calls per API key per window.
 - Set **`MCP_RATE_LIMIT_WINDOW_MS`** (default `60000`) to control the sliding window size in milliseconds.
-- Set **`MCP_MAX_RESULT_BYTES`** (default `0`, no cap) for clients such as claude.ai or ChatGPT that put the whole result in the model's context: every tool result is then text, cut at that many bytes; unset, a result over 32 KiB is returned as an embedded base64 resource, which Claude Code saves to a file.
+- Set **`MCP_MAX_RESULT_BYTES`** (default `100000`) to cap each tool result as a single UTF-8 text block, keeping context bounded for clients such as claude.ai or ChatGPT; set `MCP_MAX_RESULT_BYTES=0` to opt out and restore embedded base64 resource offloading above 32 KiB.
 - **Do not expose `/mcp` to the public internet** without a fronting auth proxy. For a self-hosted, locally-reached deployment the static API key is appropriate; public exposure should use OAuth 2.1 (not yet built).
 
 ---

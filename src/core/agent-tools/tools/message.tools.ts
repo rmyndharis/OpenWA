@@ -202,6 +202,7 @@ export function messageTools(message: MessageService, idempotency?: SendIdempote
         '(8 MiB by default; the newest payload is let through whatever its size), which makes a result very large.',
       tier: 'read',
       sessionScoped: true,
+      returnsUntrustedContent: true,
       inputSchema: z.object({
         sessionId,
         chatId: z.string().max(CHAT_ID_MAX_LENGTH).optional().describe('Filter to a specific chat JID'),
@@ -259,6 +260,7 @@ export function messageTools(message: MessageService, idempotency?: SendIdempote
         'Requires the whatsapp-web.js engine; Baileys answers 501 and a retry cannot succeed, so use MessageList for stored messages.',
       tier: 'read',
       sessionScoped: true,
+      returnsUntrustedContent: true,
       inputSchema: z.object({
         sessionId,
         chatId: chatIdSchema.describe('Chat JID (e.g. 1234567890@c.us or groupId@g.us)'),
@@ -283,6 +285,7 @@ export function messageTools(message: MessageService, idempotency?: SendIdempote
         'Requires the whatsapp-web.js engine; Baileys answers 501 and a retry cannot succeed.',
       tier: 'read',
       sessionScoped: true,
+      returnsUntrustedContent: true,
       inputSchema: z.object({
         sessionId,
         chatId: chatIdSchema.describe('Chat JID containing the message'),

@@ -39,6 +39,12 @@ export interface ToolDescriptor<I = unknown> {
   chatScope?: readonly string[] | 'filtered' | 'agnostic';
   /** The quote resolves within the authorized chat, as it does on the REST reply route. */
   chatQuotedAllowed?: boolean;
+  /**
+   * True when the tool returns text authored by external WhatsApp users (messages, captions,
+   * contact/chat names, group subjects/descriptions). MCP frames such results in a randomized
+   * data-boundary envelope so clients treat the payload strictly as untrusted data.
+   */
+  returnsUntrustedContent?: boolean;
   /** Calls the service. Receives validated input + the resolved, scoped key. */
   handler: (input: I, apiKey: ApiKey, chatScope?: ChatScopeService, signal?: AbortSignal) => Promise<unknown>;
 }

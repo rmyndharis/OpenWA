@@ -50,6 +50,7 @@ export function searchTools(search: SearchService | undefined, containsEnabled =
         `${matchHelp} A key restricted to selected chats must pass chatId.`,
       tier: 'read',
       requiredRole: ApiKeyRole.OPERATOR,
+      returnsUntrustedContent: true,
       inputSchema: z.object({
         q: z.string().trim().min(1).max(SEARCH_QUERY_MAX_LENGTH).describe('Search term'),
         match: z

@@ -1,6 +1,7 @@
 import { allAgentTools } from './tools';
 import { ToolRegistryService } from './tool-registry.service';
 import type { ToolDescriptor } from './tool-descriptor';
+import { ApiKeyRole } from '../../modules/auth/entities/api-key.entity';
 import { z } from 'zod';
 
 const r: ToolDescriptor = {
@@ -98,5 +99,41 @@ describe('v1 tool surface snapshot', () => {
 
     expect(actualNames).toEqual(expected);
     expect(expected).toHaveLength(52);
+  });
+
+  it('places GroupGetInviteCode in the write tier so read-only mounts exclude it', () => {
+    const reg = new ToolRegistryService(allAgentTools({} as never));
+    const readOnlyNames = reg.list({ readOnly: true }).map(t => t.name);
+    const fullNames = reg.list({ readOnly: false }).map(t => t.name);
+    const inviteTool = reg.get('GroupGetInviteCode');
+
+    expect(inviteTool).toBeDefined();
+    expect(inviteTool?.tier).toBe('write');
+    expect(inviteTool?.requiredRole).toBe(ApiKeyRole.OPERATOR);
+    expect(inviteTool?.sessionScoped).toBe(true);
+    expect(readOnlyNames).not.toContain('GroupGetInviteCode');
+    expect(fullNames).toContain('GroupGetInviteCode');
+  });
+
+  it('marks read tools returning user-authored WhatsApp text with returnsUntrustedContent', () => {
+    const reg = new ToolRegistryService(allAgentTools({} as never));
+    const untrustedToolNames = [
+      'MessageList',
+      'MessageHistory',
+      'MessageSearch',
+      'MessageGetReactions',
+      'LabelListChats',
+      'ContactFindAll',
+      'ContactFindOne',
+      'GroupFindAll',
+      'GroupFindOne',
+    ];
+    for (const name of untrustedToolNames) {
+      expect(reg.get(name)?.returnsUntrustedContent).toBe(true);
+    }
+
+    for (const name of ['SessionFindAll', 'SessionFindOne', 'SessionGetStats', 'WebhooksList']) {
+      expect(reg.get(name)?.returnsUntrustedContent).toBeFalsy();
+    }
   });
 });

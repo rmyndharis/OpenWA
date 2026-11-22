@@ -132,14 +132,14 @@ describe('groupTools execute handlers', () => {
     expect(out).toEqual({ inviteCode: 'abc123', inviteLink: 'https://chat.whatsapp.com/abc123' });
   });
 
-  it('GroupGetInviteCode requires OPERATOR: a below-role key is refused before the service is called', async () => {
-    // The invite code is a transferable join capability, so this read is gated at OPERATOR even
-    // though the tool stays tier: 'read' (the tier says the call mutates nothing, not who may
-    // extract a credential).
+  it('GroupGetInviteCode requires OPERATOR and write tier: a below-role key is refused before the service is called', async () => {
+    // The invite code is a transferable join capability, so it sits in the write tier and requires
+    // OPERATOR role (excluded from default read-only MCP mounts).
     const getGroupInviteCode = jest.fn().mockResolvedValue('abc123');
     const tool = groupTools({ getGroupInviteCode } as unknown as GroupService, session).find(
       t => t.name === 'GroupGetInviteCode',
     )!;
+    expect(tool.tier).toBe('write');
     expect(tool.requiredRole).toBe(ApiKeyRole.OPERATOR);
 
     const auth = makeAuth();

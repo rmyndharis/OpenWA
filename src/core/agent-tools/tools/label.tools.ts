@@ -44,6 +44,7 @@ export function labelTools(labels: LabelService): AnyToolDescriptor[] {
         'WhatsApp Business only, and whatsapp-web.js only — Baileys answers 501.',
       tier: 'read',
       sessionScoped: true,
+      returnsUntrustedContent: true,
       inputSchema: z.object({ sessionId, labelId }),
       handler: async (input, apiKey, chatScope) => {
         const chats = await labels.getChatsByLabel(input.sessionId, input.labelId);

@@ -15,7 +15,13 @@ import { UnresolvedApiKeyException, type AuthService } from '../auth/auth.servic
 import { allowUnauthenticatedAuditRow } from '../audit/auth-failure-audit-limiter';
 import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
-import { capToolError, handleToolError, readMaxResultBytes, smartToolResult } from './tool-result';
+import {
+  capToolError,
+  DEFAULT_MCP_MAX_RESULT_BYTES,
+  handleToolError,
+  readMaxResultBytes,
+  smartToolResult,
+} from './tool-result';
 import { deriveToolTitle } from './tool-title';
 import type { KeyRateLimiter } from './mcp-rate-limit';
 import { limiterKeyForIp, parseTrustedProxies, resolveClientIp } from '../../common/utils/ip';
@@ -109,6 +115,12 @@ export function capSdkErrors(server: McpServer, maxResultBytes: number): void {
 }
 
 /**
+ * Fallback set of tool names that return external WhatsApp user text even when their descriptor
+ * has not yet set `returnsUntrustedContent`.
+ */
+const UNTRUSTED_CONTENT_TOOL_NAMES: ReadonlySet<string> = new Set(['SessionGetChats']);
+
+/**
  * Build the MCP server ONCE and register all tools from the registry.
  * The SDK's `registerTool` accepts `AnySchema` (z4.$ZodType) directly, so we
  * pass `tool.inputSchema` verbatim — no `.shape` extraction needed.
@@ -122,7 +134,7 @@ function buildServer(
   auditService: AuditService | undefined,
   reqContext: McpRequestContext,
   chatScope?: ChatScopeService,
-  maxResultBytes = 0,
+  maxResultBytes = DEFAULT_MCP_MAX_RESULT_BYTES,
 ): McpServer {
   const server = new McpServer(
     { name: serverInfo.name, version: serverInfo.version },
@@ -165,7 +177,9 @@ function buildServer(
             chatScope,
             extra.signal,
           );
-          return smartToolResult(result as object, maxResultBytes);
+          return smartToolResult(result as object, maxResultBytes, {
+            untrustedContent: tool.returnsUntrustedContent === true || UNTRUSTED_CONTENT_TOOL_NAMES.has(tool.name),
+          });
         } catch (error) {
           return capToolError(handleToolError(error), maxResultBytes);
         }
@@ -182,7 +196,8 @@ export interface MountMcpServerOptions {
   readOnly?: boolean;
   /**
    * A cap on a tool result, in UTF-8 bytes: with one set, every result is text, cut at the cap, and none is
-   * offloaded as a blob. Defaults to `MCP_MAX_RESULT_BYTES`; 0 or unset means no cap.
+   * offloaded as a blob. Defaults to `readMaxResultBytes()` (100000 when `MCP_MAX_RESULT_BYTES` is unset);
+   * pass `0` explicitly to disable the cap and restore base64 resource offloading.
    */
   maxResultBytes?: number;
 }

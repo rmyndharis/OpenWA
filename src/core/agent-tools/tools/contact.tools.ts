@@ -15,6 +15,7 @@ export function contactTools(contact: ContactService): AnyToolDescriptor[] {
       description: 'List all contacts for a session. Use limit/offset to page through large contact lists.',
       tier: 'read',
       sessionScoped: true,
+      returnsUntrustedContent: true,
       inputSchema: z.object({
         sessionId,
         limit: listLimitSchema,
@@ -38,6 +39,7 @@ export function contactTools(contact: ContactService): AnyToolDescriptor[] {
       description: 'Get details for a specific contact by JID (e.g. 628xxx@c.us).',
       tier: 'read',
       sessionScoped: true,
+      returnsUntrustedContent: true,
       inputSchema: z.object({
         sessionId,
         contactId: z.string().min(1).describe('Contact JID (e.g. 628123456789@c.us)'),

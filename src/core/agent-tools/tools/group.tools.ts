@@ -23,6 +23,7 @@ export function groupTools(group: GroupService, session: Pick<SessionService, 'f
         'linkedParentJID (the parent community, or null) when the engine reports them. Use limit/offset to page.',
       tier: 'read',
       sessionScoped: true,
+      returnsUntrustedContent: true,
       inputSchema: z.object({
         sessionId,
         limit: listLimitSchema,
@@ -45,6 +46,7 @@ export function groupTools(group: GroupService, session: Pick<SessionService, 'f
       description: 'Get detailed info for a specific group including participants list.',
       tier: 'read',
       sessionScoped: true,
+      returnsUntrustedContent: true,
       inputSchema: z.object({
         sessionId,
         groupId: z.string().min(1).describe('Group JID (e.g. 120363xxx@g.us)'),
@@ -54,9 +56,9 @@ export function groupTools(group: GroupService, session: Pick<SessionService, 'f
     defineTool({
       name: 'GroupGetInviteCode',
       description:
-        'Get the invite code and link for a group. Requires OPERATOR role: the code is a ' +
-        'transferable join capability, not plain read data.',
-      tier: 'read',
+        'Get the invite code and link for a group. Requires OPERATOR role and write-tier MCP access ' +
+        '(MCP_READONLY=false): the code is a transferable join capability, not plain read data.',
+      tier: 'write',
       requiredRole: ApiKeyRole.OPERATOR,
       sessionScoped: true,
       inputSchema: z.object({
