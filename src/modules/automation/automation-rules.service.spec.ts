@@ -7,6 +7,8 @@ import { DataSource } from 'typeorm';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { AutomationRulesService } from './automation-rules.service';
 import { AutomationRule } from './entities/automation-rule.entity';
+import { EngineRegistry } from '../../engine/engine-registry.service';
+import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import type { MessageService } from '../message/message.service';
 import type { WebhookFilters } from '../webhook/filters/filter-types';
@@ -553,6 +555,345 @@ describe('AutomationRulesService', () => {
       await service.evaluateInbound('sessA', inbound({ chatId: undefined }));
 
       expect(sends).toHaveLength(0);
+    });
+  });
+
+  describe('session rule cache and invalidation', () => {
+    it('serves a burst of 100 inbound messages for the same session from a single DB query', async () => {
+      await service.create('sessA', { name: 'all', replyText: 'ack', cooldownSeconds: 0 });
+      const repo = ds.getRepository(AutomationRule);
+      const findSpy = jest.spyOn(repo, 'find');
+
+      for (let i = 0; i < 100; i++) {
+        await service.evaluateInbound('sessA', inbound({ id: `wamid.${i}` }));
+      }
+
+      expect(sends).toHaveLength(100);
+      expect(findSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('coalesces concurrent inbound evaluations on a cold cache into one DB query', async () => {
+      await service.create('sessA', { name: 'all', replyText: 'ack', cooldownSeconds: 0 });
+      const repo = ds.getRepository(AutomationRule);
+      const realFind = repo.find.bind(repo);
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      const findSpy = jest.spyOn(repo, 'find').mockImplementation(async options => {
+        await gate;
+        return realFind(options);
+      });
+
+      const burst = Promise.all(
+        Array.from({ length: 10 }, (_, i) =>
+          service.evaluateInbound('sessA', inbound({ id: `wamid.${i}`, chatId: `62800${i}@c.us` })),
+        ),
+      );
+      release();
+      await burst;
+
+      expect(findSpy).toHaveBeenCalledTimes(1);
+      expect(sends).toHaveLength(10);
+    });
+
+    it('refreshes cached rules once the 5-second TTL expires', async () => {
+      const rule = await service.create('sessA', { name: 'all', replyText: 'v1', cooldownSeconds: 0 });
+      const repo = ds.getRepository(AutomationRule);
+      const findSpy = jest.spyOn(repo, 'find');
+      const start = Date.now();
+      const now = jest.spyOn(Date, 'now').mockReturnValue(start);
+      try {
+        await service.evaluateInbound('sessA', inbound({ id: 'wamid.1' }));
+        // Direct DB write simulates a change made on another replica.
+        await repo.update(rule.id, { replyText: 'v2' });
+
+        now.mockReturnValue(start + 4_999);
+        await service.evaluateInbound('sessA', inbound({ id: 'wamid.2' }));
+        expect(findSpy).toHaveBeenCalledTimes(1);
+        expect(sends.map(s => s.text)).toEqual(['v1', 'v1']);
+
+        now.mockReturnValue(start + 5_000);
+        await service.evaluateInbound('sessA', inbound({ id: 'wamid.3' }));
+        expect(findSpy).toHaveBeenCalledTimes(2);
+        expect(sends.map(s => s.text)).toEqual(['v1', 'v1', 'v2']);
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it('never caches failed lookups and does not evict a newer entry when an older failure settles', async () => {
+      await service.create('sessA', { name: 'all', replyText: 'ok', cooldownSeconds: 0 });
+      const repo = ds.getRepository(AutomationRule);
+      const realFind = repo.find.bind(repo);
+
+      // Immediate retry after a failed lookup hits the DB again instead of replaying the failure.
+      const retrySpy = jest
+        .spyOn(repo, 'find')
+        .mockRejectedValueOnce(new Error('transient db blip'))
+        .mockImplementationOnce(options => realFind(options));
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.0' }));
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.0b' }));
+      expect(retrySpy).toHaveBeenCalledTimes(2);
+      expect(sends.map(s => s.text)).toEqual(['ok']);
+      retrySpy.mockRestore();
+
+      service.invalidateSession('sessA');
+      let rejectFirst!: (err: Error) => void;
+      const firstPromise = new Promise<AutomationRule[]>((_resolve, reject) => {
+        rejectFirst = reject;
+      });
+      const findSpy = jest
+        .spyOn(repo, 'find')
+        .mockImplementationOnce(() => firstPromise)
+        .mockImplementation(options => realFind(options));
+
+      const firstEval = service.evaluateInbound('sessA', inbound({ id: 'wamid.1' }));
+      // Invalidate while the failing query is in flight, then warm a fresh healthy entry.
+      service.invalidateSession('sessA');
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.2' }));
+
+      rejectFirst(new Error('transient db outage'));
+      await firstEval;
+
+      // The healthy entry warmed after invalidation must remain cached.
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.3' }));
+      expect(findSpy).toHaveBeenCalledTimes(2);
+      expect(sends.map(s => s.text)).toEqual(['ok', 'ok', 'ok']);
+    });
+
+    it('invalidates the session cache after create, update, and remove, and drops rule cooldowns on remove', async () => {
+      const repo = ds.getRepository(AutomationRule);
+      const findSpy = jest.spyOn(repo, 'find');
+
+      // Warm cache with empty rule list.
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.0' }));
+      expect(sends).toHaveLength(0);
+      expect(findSpy).toHaveBeenCalledTimes(1);
+
+      // create() invalidates the cached empty list.
+      const rule = await service.create('sessA', { name: 'r1', replyText: 'first', cooldownSeconds: 300 });
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.1' }));
+      expect(sends.map(s => s.text)).toEqual(['first']);
+      expect(findSpy).toHaveBeenCalledTimes(2);
+
+      // update() invalidates the cached rule so new replyText and cooldown take effect immediately.
+      await service.update('sessA', rule.id, { replyText: 'second', cooldownSeconds: 0 });
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.2' }));
+      expect(sends.map(s => s.text)).toEqual(['first', 'second']);
+      expect(findSpy).toHaveBeenCalledTimes(3);
+
+      // Re-arm cooldown on rule in a fresh chat and also create a rule on sessB to verify remove scopes cleanup.
+      await service.update('sessA', rule.id, { cooldownSeconds: 300 });
+      const otherRule = await service.create('sessB', { name: 'other', replyText: 'b', cooldownSeconds: 300 });
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.3', chatId: '628222@c.us', from: '628222@c.us' }));
+      await service.evaluateInbound('sessB', inbound({ id: 'wamid.4' }));
+      expect(sends.filter(s => s.sessionId === 'sessA')).toHaveLength(3);
+
+      const cooldowns = (service as unknown as { cooldowns: Map<string, number> }).cooldowns;
+      expect([...cooldowns.keys()].some(k => k.startsWith(`sessA:${rule.id}:`))).toBe(true);
+      expect([...cooldowns.keys()].some(k => k.startsWith(`sessB:${otherRule.id}:`))).toBe(true);
+
+      await service.remove('sessA', rule.id);
+      expect([...cooldowns.keys()].some(k => k.startsWith(`sessA:${rule.id}:`))).toBe(false);
+      expect([...cooldowns.keys()].some(k => k.startsWith(`sessB:${otherRule.id}:`))).toBe(true);
+
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.5', chatId: '628333@c.us', from: '628333@c.us' }));
+      expect(sends.filter(s => s.sessionId === 'sessA')).toHaveLength(3);
+      expect(findSpy).toHaveBeenCalledTimes(6);
+    });
+
+    it('forgetSession drops cached rules and cooldowns for that session only, and clearCache drops all', async () => {
+      const ruleA = await service.create('sessA', { name: 'a', replyText: 'a', cooldownSeconds: 300 });
+      const ruleB = await service.create('sessB', { name: 'b', replyText: 'b', cooldownSeconds: 300 });
+      const repo = ds.getRepository(AutomationRule);
+      const findSpy = jest.spyOn(repo, 'find');
+
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.1' }));
+      await service.evaluateInbound('sessB', inbound({ id: 'wamid.2' }));
+      expect(findSpy).toHaveBeenCalledTimes(2);
+
+      const cooldowns = (service as unknown as { cooldowns: Map<string, number> }).cooldowns;
+      service.forgetSession('sessA');
+
+      expect([...cooldowns.keys()].some(k => k.startsWith('sessA:'))).toBe(false);
+      expect([...cooldowns.keys()].some(k => k.startsWith(`sessB:${ruleB.id}:`))).toBe(true);
+
+      // sessB remains cached; sessA re-queries DB and can reply again because its cooldown was dropped.
+      await service.evaluateInbound('sessB', inbound({ id: 'wamid.3' }));
+      expect(findSpy).toHaveBeenCalledTimes(2);
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.4' }));
+      expect(findSpy).toHaveBeenCalledTimes(3);
+      expect(sends.filter(s => s.sessionId === 'sessA')).toHaveLength(2);
+      expect(ruleA.id).toBeDefined();
+
+      // clearCache() drops both caches and all cooldowns across every session.
+      service.clearCache();
+      expect(cooldowns.size).toBe(0);
+      await service.evaluateInbound('sessB', inbound({ id: 'wamid.5' }));
+      expect(findSpy).toHaveBeenCalledTimes(4);
+      expect(sends.filter(s => s.sessionId === 'sessB')).toHaveLength(2);
+    });
+
+    it('invalidates the session cache when its last live engine retires, but keeps it on engine replacement', async () => {
+      const engines = new EngineRegistry();
+      const wired = new AutomationRulesService(
+        ds.getRepository(AutomationRule),
+        ds.getRepository(Session),
+        moduleRefStub,
+        undefined,
+        undefined,
+        engines,
+      );
+      const repo = ds.getRepository(AutomationRule);
+      const findSpy = jest.spyOn(repo, 'find');
+      const engine1 = {} as IWhatsAppEngine;
+      const engine2 = {} as IWhatsAppEngine;
+      engines.set('sessA', engine1);
+
+      const rule = await wired.create('sessA', { name: 'r', replyText: 'v1', cooldownSeconds: 0 });
+      await wired.evaluateInbound('sessA', inbound({ id: 'wamid.1' }));
+      expect(findSpy).toHaveBeenCalledTimes(1);
+
+      // Replacing the engine keeps the session active in EngineRegistry, so the cache stays warm.
+      await repo.update(rule.id, { replyText: 'v2' });
+      engines.set('sessA', engine2);
+      await wired.evaluateInbound('sessA', inbound({ id: 'wamid.2' }));
+      expect(findSpy).toHaveBeenCalledTimes(1);
+      expect(sends.map(s => s.text)).toEqual(['v1', 'v1']);
+
+      // Retiring the last engine for sessA invalidates its cached rules.
+      engines.delete('sessA');
+      await wired.evaluateInbound('sessA', inbound({ id: 'wamid.3' }));
+      expect(findSpy).toHaveBeenCalledTimes(2);
+      expect(sends.map(s => s.text)).toEqual(['v1', 'v1', 'v2']);
+    });
+
+    it('invalidates cached rules when the system clock steps backward', async () => {
+      const rule = await service.create('sessA', { name: 'all', replyText: 'v1', cooldownSeconds: 0 });
+      const repo = ds.getRepository(AutomationRule);
+      const findSpy = jest.spyOn(repo, 'find');
+      const start = Date.now();
+      const now = jest.spyOn(Date, 'now').mockReturnValue(start);
+      try {
+        await service.evaluateInbound('sessA', inbound({ id: 'wamid.1' }));
+        await repo.update(rule.id, { replyText: 'v2' });
+
+        // Backward clock jump must re-query instead of keeping the entry pinned until the old time arrives.
+        now.mockReturnValue(start - 60_000);
+        await service.evaluateInbound('sessA', inbound({ id: 'wamid.2' }));
+        expect(findSpy).toHaveBeenCalledTimes(2);
+        expect(sends.map(s => s.text)).toEqual(['v1', 'v2']);
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it('bounds enabledRulesCache size under distinct session probes and sweeps expired entries on miss', async () => {
+      const repo = ds.getRepository(AutomationRule);
+      jest.spyOn(repo, 'find').mockResolvedValue([]);
+      const cache = (service as unknown as { enabledRulesCache: Map<string, unknown> }).enabledRulesCache;
+      const start = Date.now();
+      const now = jest.spyOn(Date, 'now').mockReturnValue(start);
+      try {
+        // Probe more than the 1,000-entry cap within a single TTL window.
+        for (let i = 0; i < 1_050; i++) {
+          await service.evaluateInbound(`probe-${i}`, inbound({ id: `wamid.${i}` }));
+        }
+        expect(cache.size).toBeLessThanOrEqual(1_000);
+        expect(cache.has('probe-0')).toBe(false);
+        expect(cache.has('probe-1049')).toBe(true);
+
+        // Once the TTL passes, a single miss sweeps all expired entries.
+        now.mockReturnValue(start + 5_000);
+        await service.evaluateInbound('fresh-session', inbound({ id: 'wamid.fresh' }));
+        expect(cache.size).toBe(1);
+        expect(cache.has('fresh-session')).toBe(true);
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it('invalidates the session cache even when create, update, or remove DB writes reject', async () => {
+      const rule = await service.create('sessA', { name: 'r', replyText: 'v1', cooldownSeconds: 0 });
+      const repo = ds.getRepository(AutomationRule);
+      const findSpy = jest.spyOn(repo, 'find');
+
+      // Warm cache, then fail save() in create().
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.1' }));
+      expect(findSpy).toHaveBeenCalledTimes(1);
+      jest.spyOn(repo, 'save').mockRejectedValueOnce(new Error('connection lost after commit'));
+      await expect(service.create('sessA', { name: 'r2', replyText: 'v2' })).rejects.toThrow(
+        'connection lost after commit',
+      );
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.2' }));
+      expect(findSpy).toHaveBeenCalledTimes(2);
+
+      // Fail update().
+      jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('timeout after commit'));
+      await expect(service.update('sessA', rule.id, { replyText: 'v3' })).rejects.toThrow('timeout after commit');
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.3' }));
+      expect(findSpy).toHaveBeenCalledTimes(3);
+
+      // Fail remove().
+      jest.spyOn(repo, 'remove').mockRejectedValueOnce(new Error('socket reset'));
+      await expect(service.remove('sessA', rule.id)).rejects.toThrow('socket reset');
+      await service.evaluateInbound('sessA', inbound({ id: 'wamid.4' }));
+      expect(findSpy).toHaveBeenCalledTimes(4);
+    });
+
+    it('does not fire a removed rule or resurrect cooldowns when remove or forgetSession runs mid-evaluation', async () => {
+      const rule = await service.create('sessA', { name: 'r1', replyText: 'stale', cooldownSeconds: 300 });
+      const repo = ds.getRepository(AutomationRule);
+      const realFind = repo.find.bind(repo);
+      const cooldowns = (service as unknown as { cooldowns: Map<string, number> }).cooldowns;
+
+      // Case 1: remove() runs while evaluateInbound is awaiting the DB rule lookup.
+      let releaseFirst!: () => void;
+      const gateFirst = new Promise<void>(resolve => (releaseFirst = resolve));
+      jest.spyOn(repo, 'find').mockImplementationOnce(async options => {
+        const rows = await realFind(options);
+        await gateFirst;
+        return rows;
+      });
+      const evalDuringRemove = service.evaluateInbound('sessA', inbound({ id: 'wamid.1' }));
+      await service.remove('sessA', rule.id);
+      releaseFirst();
+      await evalDuringRemove;
+
+      expect(sends).toHaveLength(0);
+      expect([...cooldowns.keys()].some(k => k.startsWith('sessA:'))).toBe(false);
+
+      // Case 2: forgetSession() runs while evaluateInbound is awaiting the DB rule lookup.
+      await service.create('sessA', { name: 'r2', replyText: 'stale-2', cooldownSeconds: 300 });
+      let releaseSecond!: () => void;
+      const gateSecond = new Promise<void>(resolve => (releaseSecond = resolve));
+      jest.spyOn(repo, 'find').mockImplementationOnce(async options => {
+        const rows = await realFind(options);
+        await gateSecond;
+        return rows;
+      });
+      const evalDuringForget = service.evaluateInbound('sessA', inbound({ id: 'wamid.2' }));
+      service.forgetSession('sessA');
+      releaseSecond();
+      await evalDuringForget;
+
+      expect(sends).toHaveLength(0);
+      expect([...cooldowns.keys()].some(k => k.startsWith('sessA:'))).toBe(false);
+
+      // Case 3: clearCache() runs while evaluateInbound is awaiting the DB rule lookup.
+      let releaseThird!: () => void;
+      const gateThird = new Promise<void>(resolve => (releaseThird = resolve));
+      jest.spyOn(repo, 'find').mockImplementationOnce(async options => {
+        const rows = await realFind(options);
+        await gateThird;
+        return rows;
+      });
+      const evalDuringClear = service.evaluateInbound('sessA', inbound({ id: 'wamid.3' }));
+      service.clearCache();
+      releaseThird();
+      await evalDuringClear;
+
+      expect(sends).toHaveLength(0);
+      expect(cooldowns.size).toBe(0);
     });
   });
 });

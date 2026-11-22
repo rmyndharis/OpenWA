@@ -357,6 +357,11 @@ export class MessageProjector {
     });
   }
 
+  /** Drop per-session in-memory state held by collaborators when a session row is removed. */
+  forgetSession(sessionId: string): void {
+    this.automationRules?.forgetSession(sessionId);
+  }
+
   /** Stamp the session's last-active time, at most once per {@link LAST_ACTIVE_WRITE_WINDOW_MS} for this engine. */
   private touchLastActive(id: string, engine: IWhatsAppEngine): void {
     const now = Date.now();

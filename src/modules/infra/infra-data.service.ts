@@ -15,6 +15,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { ChatStateStoreService } from '../../engine/adapters/baileys-chat-state-store.service';
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { ScopeBindingService } from '../integration/scope-binding.service';
+import { AutomationRulesService } from '../automation/automation-rules.service';
 import { ReKeyChatStatesBySessionId1786500000000 } from '../../database/migrations/1786500000000-ReKeyChatStatesBySessionId';
 import { ScrubRevokedMessageContent1786900000000 } from '../../database/migrations/1786900000000-ScrubRevokedMessageContent';
 import { ScrubNonPhoneLidMappings1786950000000 } from '../../database/migrations/1786950000000-ScrubNonPhoneLidMappings';
@@ -1108,6 +1109,16 @@ export class InfraDataService {
         committed = true;
         // The replace removed these sessions without a delete, so what this process keeps for them goes here.
         for (const { id } of retired) this.sessionService?.forgetSession(id);
+        // Retained live sessions and force-kept orphans bypass forgetSession() above, so clear all cached
+        // automation rules and pre-import cooldowns immediately after commit.
+        if (this.moduleRef) {
+          try {
+            const automationRules = this.moduleRef.get(AutomationRulesService, { strict: false });
+            if (typeof automationRules?.clearCache === 'function') automationRules.clearCache();
+          } catch {
+            // AutomationModule may be absent in minimal test harnesses; best-effort post-commit.
+          }
+        }
 
         // Runtime reconciliation, part 2 (post-commit): the in-memory lid->phone mirror was warmed from
         // the OLD lid_mappings rows and is write-through only, so the just-restored table would never

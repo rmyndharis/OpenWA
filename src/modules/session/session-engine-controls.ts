@@ -34,6 +34,7 @@ import { type createLogger } from '../../common/services/logger.service';
 import { HookManager } from '../../core/hooks';
 import { SessionLifecycleFences } from './session-lifecycle-fences';
 import { SessionStatusBroadcaster } from './session-status-broadcaster';
+import type { MessageProjector } from './message-projector.service';
 import { sessionNotFound } from './session-id.pipe';
 // The two pure config resolvers stay exported from the lifecycle module (its export surface is
 // unchanged — session.service re-exports them from there), so this unit imports them back. The
@@ -268,6 +269,7 @@ export interface SessionEngineControlsHost {
   sessionErrors: SessionErrorStore;
   sessionRestrictions: SessionRestrictionStore;
   presence: PresenceStore;
+  projector?: Partial<Pick<MessageProjector, 'forgetSession'>>;
   hookManager: HookManager;
   configService?: ConfigService;
   nodeId?: string;
@@ -1220,6 +1222,7 @@ export class SessionEngineControls {
     // delete so a failed/409 delete (the session still exists) keeps the budget intact.
     this.stuckAuthRecoveryUsed.delete(id);
     this.host.forgetBindingEpoch?.(id);
+    this.host.projector?.forgetSession?.(id);
   }
 
   /**

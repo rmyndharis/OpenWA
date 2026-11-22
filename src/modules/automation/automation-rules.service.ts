@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { createLogger } from '../../common/services/logger.service';
+import { EngineRegistry } from '../../engine/engine-registry.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { chatKind } from '../../engine/identity/wa-id';
 import { evaluateFilters, prepareFilterLidResolver } from '../webhook/filters/filter-evaluator';
@@ -22,6 +23,12 @@ import {
  * on every reply.
  */
 const COOLDOWN_SWEEP_THRESHOLD = 10_000;
+
+/** TTL for the per-session cache of enabled automation rules. */
+export const ENABLED_RULES_CACHE_TTL_MS = 5_000;
+
+/** Hard upper bound on distinct session entries kept in the enabled-rules cache. */
+export const MAX_ENABLED_RULES_CACHE_ENTRIES = 1_000;
 
 /**
  * Messages older than this never get an automated answer. A reconnect replays the offline-queued
@@ -54,12 +61,29 @@ export class AutomationRulesService {
   private readonly logger = createLogger('AutomationRulesService');
 
   /**
-   * `${ruleId}:${chatId}` -> when the rule last fired in that chat. The quiet period is judged against
-   * the rule's CURRENT cooldownSeconds, so an edit takes effect on a window already running; the sweep
-   * only drops an entry older than the longest cooldown a rule may have. Per-process.
+   * `${sessionId}:${ruleId}:${chatId}` -> when the rule last fired in that chat. The quiet period
+   * is judged against the rule's CURRENT cooldownSeconds, so an edit takes effect on a window
+   * already running; the sweep only drops an entry older than the longest cooldown a rule may have.
+   * Per-process.
    */
   private readonly cooldowns = new Map<string, number>();
   private nextCooldownSweepAt = COOLDOWN_SWEEP_THRESHOLD;
+
+  /**
+   * Per-session cache of enabled rules. The in-flight promise is cached rather than its resolved
+   * array so a concurrent inbound burst on a cold entry shares a single DB query.
+   */
+  private readonly enabledRulesCache = new Map<
+    string,
+    { rules: Promise<AutomationRule[]>; loadedAt: number; expiresAt: number }
+  >();
+
+  /**
+   * Active inbound evaluations per session. Marked invalidated when rules are mutated, a session
+   * is forgotten, or the cache is cleared so a stale pre-mutation snapshot neither sends nor writes
+   * back removed cooldowns after resuming from an await.
+   */
+  private readonly inFlightEvaluations = new Map<string, Set<{ invalidated: boolean }>>();
 
   private messagePort?: PluginMessagePort;
 
@@ -74,7 +98,47 @@ export class AutomationRulesService {
     private readonly lidMappingStore?: LidMappingStoreService,
     @Optional()
     private readonly configService?: ConfigService,
-  ) {}
+    @Optional()
+    private readonly engines?: EngineRegistry,
+  ) {
+    if (typeof this.engines?.onRetire === 'function') {
+      this.engines.onRetire(id => {
+        if (!this.engines?.has(id)) this.invalidateSession(id);
+      });
+    }
+  }
+
+  /** Drop the cached enabled rules for a session so the next inbound evaluation reads fresh rows. */
+  invalidateSession(sessionId: string): void {
+    this.enabledRulesCache.delete(sessionId);
+    this.markInFlightInvalidated(sessionId);
+  }
+
+  /** Drop cached rules and all per-chat cooldown entries for a deleted or forgotten session. */
+  forgetSession(sessionId: string): void {
+    this.enabledRulesCache.delete(sessionId);
+    this.markInFlightInvalidated(sessionId);
+    const prefix = `${sessionId}:`;
+    for (const key of this.cooldowns.keys()) {
+      if (key.startsWith(prefix)) this.cooldowns.delete(key);
+    }
+  }
+
+  /** Clear all cached rule lists and cooldown state across every session. */
+  clearCache(): void {
+    this.enabledRulesCache.clear();
+    this.cooldowns.clear();
+    this.nextCooldownSweepAt = COOLDOWN_SWEEP_THRESHOLD;
+    for (const tokens of this.inFlightEvaluations.values()) {
+      for (const token of tokens) token.invalidated = true;
+    }
+  }
+
+  private markInFlightInvalidated(sessionId: string): void {
+    const tokens = this.inFlightEvaluations.get(sessionId);
+    if (!tokens) return;
+    for (const token of tokens) token.invalidated = true;
+  }
 
   async create(sessionId: string, dto: CreateAutomationRuleDto): Promise<AutomationRule> {
     // The automation_rules.sessionId FK turns a missing session into a driver error (500) at save
@@ -105,7 +169,11 @@ export class AutomationRulesService {
     });
     // No transaction of its own: on SQLite's single shared connection the rollback of a foreign key failure (the
     // session deleted since the check above) would discard what other callers wrote while it was open.
-    return this.ruleRepository.save(rule, { transaction: false });
+    try {
+      return await this.ruleRepository.save(rule, { transaction: false });
+    } finally {
+      this.invalidateSession(sessionId);
+    }
   }
 
   async findAll(sessionId: string): Promise<AutomationRule[]> {
@@ -136,14 +204,26 @@ export class AutomationRulesService {
     // A conditional UPDATE of the carried fields, not save() of the entity read above: save() would
     // write back stale values of every column this request did not touch (switching a rule off could
     // be undone by an overlapping edit) and re-insert a rule a concurrent DELETE removed.
-    const result = await this.ruleRepository.update({ id, sessionId }, patch);
-    if (!result.affected) throw new NotFoundException(`Automation rule ${id} not found`);
+    try {
+      const result = await this.ruleRepository.update({ id, sessionId }, patch);
+      if (!result.affected) throw new NotFoundException(`Automation rule ${id} not found`);
+    } finally {
+      this.invalidateSession(sessionId);
+    }
     return this.findOne(sessionId, id);
   }
 
   async remove(sessionId: string, id: string): Promise<void> {
     const rule = await this.findOne(sessionId, id);
-    await this.ruleRepository.remove(rule);
+    try {
+      await this.ruleRepository.remove(rule);
+    } finally {
+      this.invalidateSession(sessionId);
+    }
+    const prefix = `${sessionId}:${id}:`;
+    for (const key of this.cooldowns.keys()) {
+      if (key.startsWith(prefix)) this.cooldowns.delete(key);
+    }
   }
 
   /**
@@ -166,80 +246,92 @@ export class AutomationRulesService {
     const timestamp = typeof message.timestamp === 'number' ? message.timestamp : null;
     if (timestamp !== null && Date.now() / 1000 - timestamp > MAX_MESSAGE_AGE_SECONDS) return;
 
-    let rules: AutomationRule[];
+    const token = { invalidated: false };
+    let active = this.inFlightEvaluations.get(sessionId);
+    if (!active) this.inFlightEvaluations.set(sessionId, (active = new Set()));
+    active.add(token);
+
+    let rule: AutomationRule | undefined;
     try {
-      rules = await this.ruleRepository.find({
-        where: { sessionId, enabled: true },
-        order: { createdAt: 'ASC', id: 'ASC' },
-      });
-    } catch (error) {
-      this.logger.warn('Automation rule lookup failed', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
-    if (rules.length === 0) return;
-
-    const resolveLid = await prepareFilterLidResolver(
-      rules.map(rule => rule.conditions),
-      'message.received',
-      message,
-      this.lidMappingStore ? lids => this.lidMappingStore!.phonesForLidsPersisted(lids) : undefined,
-    );
-
-    // Resolved the way the `kind` filter field resolves it, and also checked against `chatKind(chatId)`
-    // so rewriting `message.kind` cannot bypass opt-in fencing on newsletter, broadcast, or status chats.
-    const derivedKind = chatKind(chatId);
-    const kind = typeof message.kind === 'string' && message.kind ? message.kind : derivedKind;
-    const optInOnly = OPT_IN_CHAT_KINDS.has(kind) || OPT_IN_CHAT_KINDS.has(derivedKind);
-    const requiredKinds = [
-      ...(OPT_IN_CHAT_KINDS.has(derivedKind) ? [derivedKind] : []),
-      ...(OPT_IN_CHAT_KINDS.has(kind) && kind !== derivedKind ? [kind] : []),
-    ];
-
-    // First match wins: one inbound message never produces more than one automated reply, and rule
-    // order (creation order) is the tiebreak the operator can reason about. A rule without an
-    // explicit `kind` `is` condition naming this chat kind skips the opt-in chat kinds; opting into
-    // the kind explicitly is how a rule reaches them. A rule whose
-    // stored conditions are malformed (a restore bypasses the DTO) is skipped on its own, so it cannot
-    // silence every other rule of the session. A `conditions` that is not a plain object, or a
-    // non-array `conditions.conditions`, is refused explicitly: evaluateFilters reads either as "no
-    // filter", which would answer every inbound message.
-    const rule = rules.find(candidate => {
+      let rules: AutomationRule[];
       try {
-        const conditions: unknown = candidate.conditions;
-        if (
-          conditions != null &&
-          (typeof conditions !== 'object' ||
-            Array.isArray(conditions) ||
-            (candidate.conditions?.conditions != null && !Array.isArray(candidate.conditions.conditions)))
-        ) {
-          throw new TypeError('conditions must be an object with a conditions array');
-        }
-        return (
-          (!optInOnly ||
-            requiredKinds.every(required =>
-              candidate.conditions?.conditions?.some(
-                c => c.field === 'kind' && c.operator === 'is' && Array.isArray(c.value) && c.value.includes(required),
-              ),
-            )) &&
-          evaluateFilters(candidate.conditions, 'message.received', message, resolveLid)
-        );
+        rules = await this.loadEnabledRules(sessionId);
       } catch (error) {
-        this.logger.warn('Skipping automation rule with malformed conditions', {
+        this.logger.warn('Automation rule lookup failed', {
           sessionId,
-          ruleId: candidate.id,
           error: error instanceof Error ? error.message : String(error),
         });
-        return false;
+        return;
       }
-    });
-    if (!rule) return;
-    if (this.inCooldown(rule, chatId)) return;
-    // Enter the cooldown BEFORE the send: a burst of matching messages must collapse to one reply
-    // even while the first send is still in flight.
-    this.enterCooldown(rule, chatId);
+      if (token.invalidated || rules.length === 0) return;
+
+      const resolveLid = await prepareFilterLidResolver(
+        rules.map(candidate => candidate.conditions),
+        'message.received',
+        message,
+        this.lidMappingStore ? lids => this.lidMappingStore!.phonesForLidsPersisted(lids) : undefined,
+      );
+      if (token.invalidated) return;
+
+      // Resolved the way the `kind` filter field resolves it, and also checked against `chatKind(chatId)`
+      // so rewriting `message.kind` cannot bypass opt-in fencing on newsletter, broadcast, or status chats.
+      const derivedKind = chatKind(chatId);
+      const kind = typeof message.kind === 'string' && message.kind ? message.kind : derivedKind;
+      const optInOnly = OPT_IN_CHAT_KINDS.has(kind) || OPT_IN_CHAT_KINDS.has(derivedKind);
+      const requiredKinds = [
+        ...(OPT_IN_CHAT_KINDS.has(derivedKind) ? [derivedKind] : []),
+        ...(OPT_IN_CHAT_KINDS.has(kind) && kind !== derivedKind ? [kind] : []),
+      ];
+
+      // First match wins: one inbound message never produces more than one automated reply, and rule
+      // order (creation order) is the tiebreak the operator can reason about. A rule without an
+      // explicit `kind` `is` condition naming this chat kind skips the opt-in chat kinds; opting into
+      // the kind explicitly is how a rule reaches them. A rule whose
+      // stored conditions are malformed (a restore bypasses the DTO) is skipped on its own, so it cannot
+      // silence every other rule of the session. A `conditions` that is not a plain object, or a
+      // non-array `conditions.conditions`, is refused explicitly: evaluateFilters reads either as "no
+      // filter", which would answer every inbound message.
+      rule = rules.find(candidate => {
+        try {
+          const conditions: unknown = candidate.conditions;
+          if (
+            conditions != null &&
+            (typeof conditions !== 'object' ||
+              Array.isArray(conditions) ||
+              (candidate.conditions?.conditions != null && !Array.isArray(candidate.conditions.conditions)))
+          ) {
+            throw new TypeError('conditions must be an object with a conditions array');
+          }
+          return (
+            (!optInOnly ||
+              requiredKinds.every(required =>
+                candidate.conditions?.conditions?.some(
+                  c =>
+                    c.field === 'kind' && c.operator === 'is' && Array.isArray(c.value) && c.value.includes(required),
+                ),
+              )) &&
+            evaluateFilters(candidate.conditions, 'message.received', message, resolveLid)
+          );
+        } catch (error) {
+          this.logger.warn('Skipping automation rule with malformed conditions', {
+            sessionId,
+            ruleId: candidate.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return false;
+        }
+      });
+      if (!rule) return;
+      if (this.inCooldown(sessionId, rule, chatId)) return;
+      // Enter the cooldown BEFORE the send: a burst of matching messages must collapse to one reply
+      // even while the first send is still in flight.
+      this.enterCooldown(sessionId, rule, chatId);
+    } finally {
+      active.delete(token);
+      if (active.size === 0 && this.inFlightEvaluations.get(sessionId) === active) {
+        this.inFlightEvaluations.delete(sessionId);
+      }
+    }
 
     try {
       const messagePort = this.resolveMessagePort();
@@ -278,13 +370,44 @@ export class AutomationRulesService {
     return this.messagePort;
   }
 
-  private inCooldown(rule: AutomationRule, chatId: string): boolean {
+  private loadEnabledRules(sessionId: string): Promise<AutomationRule[]> {
+    const now = Date.now();
+    const cached = this.enabledRulesCache.get(sessionId);
+    // Reject entries whose loadedAt is ahead of now so a backward wall-clock jump never pins stale rules.
+    if (cached && now >= cached.loadedAt && now < cached.expiresAt) {
+      return cached.rules;
+    }
+    this.enabledRulesCache.delete(sessionId);
+    for (const [key, entry] of this.enabledRulesCache) {
+      if (now < entry.loadedAt || now >= entry.expiresAt) this.enabledRulesCache.delete(key);
+    }
+    while (this.enabledRulesCache.size >= MAX_ENABLED_RULES_CACHE_ENTRIES) {
+      const oldest = this.enabledRulesCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.enabledRulesCache.delete(oldest);
+    }
+    const rules = this.ruleRepository.find({
+      where: { sessionId, enabled: true },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
+    const entry = { rules, loadedAt: now, expiresAt: now + ENABLED_RULES_CACHE_TTL_MS };
+    this.enabledRulesCache.set(sessionId, entry);
+    // Never cache failures, and evict only if this exact entry is still the current one.
+    rules.catch(() => {
+      if (this.enabledRulesCache.get(sessionId) === entry) {
+        this.enabledRulesCache.delete(sessionId);
+      }
+    });
+    return rules;
+  }
+
+  private inCooldown(sessionId: string, rule: AutomationRule, chatId: string): boolean {
     if (!rule.cooldownSeconds) return false;
-    const firedAt = this.cooldowns.get(`${rule.id}:${chatId}`);
+    const firedAt = this.cooldowns.get(`${sessionId}:${rule.id}:${chatId}`);
     return firedAt !== undefined && firedAt + rule.cooldownSeconds * 1000 > Date.now();
   }
 
-  private enterCooldown(rule: AutomationRule, chatId: string): void {
+  private enterCooldown(sessionId: string, rule: AutomationRule, chatId: string): void {
     if (!rule.cooldownSeconds) return;
     const now = Date.now();
     if (this.cooldowns.size >= this.nextCooldownSweepAt) {
@@ -293,6 +416,6 @@ export class AutomationRulesService {
       }
       this.nextCooldownSweepAt = Math.max(COOLDOWN_SWEEP_THRESHOLD, this.cooldowns.size * 2);
     }
-    this.cooldowns.set(`${rule.id}:${chatId}`, now);
+    this.cooldowns.set(`${sessionId}:${rule.id}:${chatId}`, now);
   }
 }

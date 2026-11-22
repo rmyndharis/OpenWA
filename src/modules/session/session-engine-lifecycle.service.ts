@@ -465,6 +465,7 @@ export class SessionEngineLifecycle {
       sessionErrors: this.sessionErrors,
       sessionRestrictions: this.sessionRestrictions,
       presence: this.presence,
+      projector: this.messages,
       hookManager: this.hookManager,
       configService: this.configService,
       logger: this.logger,
