@@ -248,3 +248,54 @@ describe('WebhookOutboxService retention', () => {
     }
   });
 });
+
+describe('WebhookOutboxService.openBatch dialect paths', () => {
+  it('uses ON CONFLICT DO NOTHING RETURNING on drivers supporting INSERT RETURNING and filters duplicates', async () => {
+    const qb = {
+      insert: jest.fn().mockReturnThis(),
+      into: jest.fn().mockReturnThis(),
+      values: jest.fn().mockReturnThis(),
+      orIgnore: jest.fn().mockReturnThis(),
+      returning: jest.fn().mockReturnThis(),
+      updateEntity: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue({
+        raw: [{ webhookId: 'wh-1', idempotencyKey: 'k1_wh-1' }],
+      }),
+    };
+    const manager = {
+      connection: { driver: { isReturningSqlSupported: (kind: string) => kind === 'insert' } },
+      getRepository: jest.fn().mockReturnValue({ createQueryBuilder: () => qb }),
+      createQueryBuilder: jest.fn().mockReturnValue(qb),
+    };
+    const service = new WebhookOutboxService({} as never);
+
+    const rows = [
+      { ...base, webhookId: 'wh-1', idempotencyKey: 'k1_wh-1', deliveryId: 'd1' },
+      { ...base, webhookId: 'wh-1', idempotencyKey: 'k1_wh-1', deliveryId: 'd1-dup' },
+      { ...base, webhookId: 'wh-2', idempotencyKey: 'k1_wh-2', deliveryId: 'd2' },
+    ];
+    const inserted = await service.openBatch(rows, manager as never);
+
+    expect(qb.orIgnore).toHaveBeenCalledTimes(1);
+    expect(qb.returning).toHaveBeenCalledWith(['webhookId', 'idempotencyKey']);
+    expect(qb.updateEntity).toHaveBeenCalledWith(false);
+    expect(inserted).toEqual([rows[0]]);
+  });
+
+  it('swallows non-conflict errors when called standalone without a transaction manager', async () => {
+    const qb = {
+      insert: jest.fn().mockReturnThis(),
+      into: jest.fn().mockReturnThis(),
+      values: jest.fn().mockReturnThis(),
+      orIgnore: jest.fn().mockReturnThis(),
+      updateEntity: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockRejectedValue(new Error('disk full')),
+    };
+    const service = new WebhookOutboxService({
+      createQueryBuilder: () => qb,
+      manager: { connection: { driver: { isReturningSqlSupported: () => false } } },
+    } as never);
+
+    await expect(service.openBatch([base])).resolves.toBeNull();
+  });
+});
