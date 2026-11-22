@@ -192,8 +192,10 @@ The host enforces these before/after the RPC, so the plugin doesn't have to:
   feeds the plugin health check (`GET /api/plugins/:id/health`); implement it to report your backend's
   reachability.
 - **Selection.** When `SEARCH_PROVIDER=auto` (the default), the plugin supersedes the built-in
-  `builtin-fts` on enable. Set `SEARCH_PROVIDER=builtin-fts` to keep the built-in active. Selection is
-  not health-gated: the plugin stays active while its `healthCheck()` reports unhealthy.
+  `builtin-fts` on enable for unrestricted callers; chat-restricted callers fall back to `builtin-fts`
+  per request when it is registered. Set `SEARCH_PROVIDER=builtin-fts` to keep the built-in active for
+  all callers. Selection is not health-gated: the plugin stays active while its `healthCheck()` reports
+  unhealthy.
 
 ## 27.5 A minimal full example
 
@@ -304,10 +306,12 @@ ctx interface is planned; for now the search contract types above are the stable
   `query.sessionIds` — the plugin should honor it (filter by `sessionIds` in the backend query) for
   correct results + performance. The host re-filters as defense-in-depth, but a plugin that ignores
   `sessionIds` returns more rows than needed (wasteful) and relies on the host to strip them.
-- **Chat-restricted keys require the built-in provider.** Plugin search returns `403` before invoking
-  the worker for these keys. Filtering a plugin's returned page cannot enforce scoped offsets or
-  counts. Use `SEARCH_PROVIDER=builtin-fts` to enable search for chat-restricted keys. A compiled
-  chat scope with no valid ids returns no hits and a zero total without invoking the worker.
+- **Chat-restricted keys require the built-in provider.** Under `SEARCH_PROVIDER=auto`, the host
+  routes chat-restricted searches to `builtin-fts` when it is registered so restricted keys keep
+  working alongside an active search plugin. When `builtin-fts` is unavailable or `SEARCH_PROVIDER` is
+  not `auto`, plugin search returns `403` before invoking the worker because filtering a plugin's
+  returned page cannot enforce scoped offsets or counts. A compiled chat scope with no valid ids
+  returns no hits and a zero total without invoking the worker.
 - **`message:persisted` is fire-and-forget.** An error in the indexing handler is swallowed (it must not
   break the send/receive pipeline). Log errors via `ctx.logger` and retry/mirror in your backend's own
   retry queue if you need stronger delivery guarantees.

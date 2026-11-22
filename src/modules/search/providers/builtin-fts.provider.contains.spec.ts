@@ -411,3 +411,31 @@ describe('trigram schema helpers', () => {
     expect(postgresUnaccentFunctionDdl(`we"ird's`)).toContain(`SELECT "we""ird's".unaccent('"we""ird''s".unaccent'`);
   });
 });
+
+describe('BuiltInFtsProvider match=contains PostgreSQL ctype catalog probe', () => {
+  it.each(['C', 'POSIX'])(
+    'rejects non-ASCII contains queries when probePostgresTrigram discovers %s ctype without buildContainsIndex',
+    async ctype => {
+      const query = jest.fn().mockResolvedValue([]);
+      const managerQuery = jest
+        .fn()
+        .mockResolvedValue([{ trgm: 'public', unaccent: 'public', fn: true, idx: true, ctype }]);
+      const ds = {
+        options: { type: 'postgres' },
+        query,
+        manager: { query: managerQuery },
+      } as unknown as DataSource;
+      const provider = new BuiltInFtsProvider(ds, containsOn);
+
+      const attempt = provider.search({ q: '서울역', match: 'contains' });
+      await expect(attempt).rejects.toBeInstanceOf(BadRequestException);
+      await expect(attempt).rejects.toBeInstanceOf(ContainsTermsRefusedError);
+      await expect(attempt).rejects.toThrow(/3 or more ASCII letters or digits in a row/);
+      expect(query).not.toHaveBeenCalled();
+
+      // An ASCII-foldable term is still allowed and reaches the database.
+      await expect(provider.search({ q: 'café', match: 'contains' })).resolves.toMatchObject({ total: 0 });
+      expect(query).toHaveBeenCalledTimes(1);
+    },
+  );
+});

@@ -6954,7 +6954,7 @@ Search messages across sessions (active search provider).
 `match=contains` query with no term of 3 or more characters (on PostgreSQL, 3 letters or digits in a row) or with more than 64 characters in its terms, or a malformed
 SQLite FTS5 query (unbalanced quote/paren, bare operator) — Postgres's `websearch_to_tsquery` is
 tolerant and has no equivalent · `401` missing/invalid `X-API-Key` · `403` key role below `OPERATOR`, or a chat-restricted key
-that names a `chatId` outside its allowlist or uses a plugin provider ·
+that names a `chatId` outside its allowlist or hits a plugin provider without built-in fallback ·
 `501` no search provider configured (including a non-FTS5 SQLite build, where the provider is absent), or for
 `match=contains` the trigram index is not usable: `SEARCH_CONTAINS_ENABLED` is off, the index is still being built,
 or it cannot be (PostgreSQL without `pg_trgm` and `unaccent`, or SQLite older than 3.45); the message says which ·
@@ -6967,8 +6967,9 @@ retryable). The built-in provider returns neither `502` nor `503`.
 > any session scope at the provider boundary. The same holds for the chat scope: a key restricted to
 > selected chats sees only hits inside its allowlist with the built-in provider (expanded lid-aware
 > before SQL filtering, so `limit`/`offset`/`total` all describe the scoped result set). A compiled
-> chat scope with no valid ids returns no hits and a zero total. Plugin search refuses these keys
-> before invoking the worker. There is no `chatIds` query parameter.
+> chat scope with no valid ids returns no hits and a zero total. Under `SEARCH_PROVIDER=auto`,
+> chat-restricted searches fall back to `builtin-fts` when it is registered; otherwise plugin search
+> refuses these keys before invoking the worker. There is no `chatIds` query parameter.
 
 ### 6.4.13 Profile (own account)
 

@@ -109,14 +109,19 @@ const CONTAINS_COLUMNS = `m."id", m."waMessageId" AS wa_message_id, m."sessionId
 
 /**
  * What the Postgres catalog holds for contains search: the schema of each extension it needs (null when
- * not installed), whether the `openwa_unaccent` wrapper exists, and the trigram index: null when absent,
- * false while a CONCURRENTLY build runs or after one died, true once usable.
+ * not installed), whether the `openwa_unaccent` wrapper exists, the trigram index (null when absent,
+ * false while a CONCURRENTLY build runs or after one died, true once usable), and the database ctype.
  */
 interface TrigramStateRow {
   trgm: string | null;
   unaccent: string | null;
   fn: boolean;
   idx: boolean | null;
+  ctype: string;
+}
+
+function isPostgresAsciiCtype(ctype: string | undefined): boolean {
+  return ctype === 'C' || ctype === 'POSIX';
 }
 
 /** Descending string order for the `id` tiebreak, as `ORDER BY "id" DESC` sorts a UUID column. */
@@ -235,7 +240,7 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
   private readonly inFlightBuilds = new Set<Promise<unknown>>();
   private listenSubscription?: { unsubscribe?: () => void };
 
-  /** Whether the Postgres database has a C or POSIX ctype, read by each build (see postgresCanIndex). */
+  /** Whether the Postgres database has a C or POSIX ctype, read by each build and catalog probe (see postgresCanIndex). */
   private postgresAsciiTrigrams = false;
 
   // OpenWA has two TypeORM connections (main: auth/audit SQLite, data: messages). Bind explicitly to
@@ -646,7 +651,7 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       const [{ ctype }] = await runner.manager.query<Array<{ ctype: string }>>(
         `SELECT datctype AS ctype FROM pg_database WHERE datname = current_database()`,
       );
-      this.postgresAsciiTrigrams = ctype === 'C' || ctype === 'POSIX';
+      this.postgresAsciiTrigrams = isPostgresAsciiCtype(ctype);
       if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
       const [{ locked }] = await runner.manager.query<Array<{ locked: boolean }>>(
         `SELECT pg_try_advisory_lock(${TRIGRAM_BUILD_LOCK}) AS locked`,
@@ -721,7 +726,8 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       `SELECT (SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'pg_trgm') AS trgm,
               (SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'unaccent') AS unaccent,
               to_regprocedure('openwa_unaccent(text)') IS NOT NULL AS fn,
-              (SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = to_regclass('messages') AND c.relname = 'idx_messages_body_trgm') AS idx`,
+              (SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = to_regclass('messages') AND c.relname = 'idx_messages_body_trgm') AS idx,
+              (SELECT datctype FROM pg_database WHERE datname = current_database()) AS ctype`,
     );
   }
 
@@ -731,8 +737,11 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    */
   private async probePostgresTrigram(): Promise<void> {
     try {
-      const [{ trgm, unaccent, fn, idx }] = await this.postgresTrigramState();
-      if (trgm && unaccent && fn && idx) this.containsUnavailable = null;
+      const [{ trgm, unaccent, fn, idx, ctype }] = await this.postgresTrigramState();
+      if (trgm && unaccent && fn && idx) {
+        this.postgresAsciiTrigrams = isPostgresAsciiCtype(ctype);
+        this.containsUnavailable = null;
+      }
     } catch (e) {
       this.logger.warn(
         `Trigram probe failed; treating contains search as unavailable: ${e instanceof Error ? e.message : String(e)}`,

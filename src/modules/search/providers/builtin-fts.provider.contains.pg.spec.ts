@@ -362,5 +362,16 @@ const containsOn = new ConfigService({ search: { containsEnabled: true } });
       expect((await provider.search({ q: 'café', match: 'contains' })).total).toBe(1);
       expect((await provider.search({ q: '서울역 lunch', match: 'contains' })).total).toBe(1);
     });
+
+    it('enforces the ASCII-only rule on a second replica that probes the existing index without running buildContainsIndex', async () => {
+      const builder = new BuiltInFtsProvider(cds, containsOn);
+      await builder.buildContainsIndex();
+
+      const follower = new BuiltInFtsProvider(cds, containsOn);
+      const search = follower.search({ q: '서울역', match: 'contains' });
+      await expect(search).rejects.toBeInstanceOf(BadRequestException);
+      await expect(search).rejects.toThrow(/3 or more ASCII letters or digits in a row/);
+      expect((await follower.search({ q: 'café', match: 'contains' })).total).toBe(1);
+    });
   });
 });

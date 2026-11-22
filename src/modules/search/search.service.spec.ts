@@ -1,6 +1,8 @@
-import { BadRequestException, NotImplementedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotImplementedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SearchService } from './search.service';
 import { SearchProviderRegistry } from './search-provider.registry';
+import { PluginSearchProvider } from './providers/plugin-search-provider';
 import { SEARCH_DEFAULT_LIMIT, SEARCH_LIMIT_MAX, SEARCH_OFFSET_MAX, SEARCH_TERMS_MAX } from './search.constants';
 import type { SearchProvider, SearchResults } from './search.types';
 import type { ChatScopeService } from '../auth/chat-scope.service';
@@ -190,5 +192,78 @@ describe('SearchService', () => {
     const svc = new SearchService(reg);
     await svc.search({ q: 'x', limit: 10, offset: 20 });
     expect(search).toHaveBeenCalledWith(expect.objectContaining({ limit: 10, offset: 20 }));
+  });
+
+  describe('chat-restricted fallback with plugin providers', () => {
+    const mkPlugin = () => {
+      const dispatchSearch = jest.fn().mockResolvedValue({
+        ok: true,
+        results: { hits: [], total: 42, tookMs: 2, provider: 'plugin:meili' },
+      });
+      const plugin = new PluginSearchProvider('meili', 'Meilisearch', { dispatchSearch, healthCheck: jest.fn() }, 1000);
+      return { plugin, dispatchSearch };
+    };
+
+    it('falls back to builtin-fts for a chat-restricted caller when SEARCH_PROVIDER=auto (or omitted)', async () => {
+      for (const config of [undefined, new ConfigService({ search: { provider: 'auto' } })]) {
+        const reg = new SearchProviderRegistry();
+        const builtinSearch = jest.fn().mockResolvedValue(emptyResults);
+        reg.register(mkProvider('builtin-fts', builtinSearch));
+        const { plugin, dispatchSearch } = mkPlugin();
+        reg.register(plugin);
+        reg.setActive(plugin.id);
+
+        const svc = new SearchService(reg, undefined, config);
+        const res = await svc.search({ q: 'hello' }, ['s1'], ['111@c.us', '111@lid']);
+
+        expect(res).toEqual(emptyResults);
+        expect(builtinSearch).toHaveBeenCalledWith(
+          expect.objectContaining({ q: 'hello', sessionIds: ['s1'], chatIds: ['111@c.us', '111@lid'] }),
+        );
+        expect(dispatchSearch).not.toHaveBeenCalled();
+      }
+    });
+
+    it('keeps routing to the active plugin (failing closed with 403) when search.provider is not auto', async () => {
+      const reg = new SearchProviderRegistry();
+      const builtinSearch = jest.fn().mockResolvedValue(emptyResults);
+      reg.register(mkProvider('builtin-fts', builtinSearch));
+      const { plugin, dispatchSearch } = mkPlugin();
+      reg.register(plugin);
+      reg.setActive(plugin.id);
+
+      const svc = new SearchService(reg, undefined, new ConfigService({ search: { provider: 'plugin:meili' } }));
+      await expect(svc.search({ q: 'hello' }, undefined, ['111@c.us'])).rejects.toBeInstanceOf(ForbiddenException);
+      expect(builtinSearch).not.toHaveBeenCalled();
+      expect(dispatchSearch).not.toHaveBeenCalled();
+    });
+
+    it('fails closed with 403 when SEARCH_PROVIDER=auto but builtin-fts is not registered', async () => {
+      const reg = new SearchProviderRegistry();
+      const { plugin, dispatchSearch } = mkPlugin();
+      reg.register(plugin);
+      reg.setActive(plugin.id);
+
+      const svc = new SearchService(reg, undefined, new ConfigService({ search: { provider: 'auto' } }));
+      await expect(svc.search({ q: 'hello' }, undefined, ['111@c.us'])).rejects.toBeInstanceOf(ForbiddenException);
+      expect(dispatchSearch).not.toHaveBeenCalled();
+    });
+
+    it('routes an unrestricted caller to the active plugin provider under SEARCH_PROVIDER=auto', async () => {
+      const reg = new SearchProviderRegistry();
+      const builtinSearch = jest.fn().mockResolvedValue(emptyResults);
+      reg.register(mkProvider('builtin-fts', builtinSearch));
+      const { plugin, dispatchSearch } = mkPlugin();
+      reg.register(plugin);
+      reg.setActive(plugin.id);
+
+      const svc = new SearchService(reg, undefined, new ConfigService({ search: { provider: 'auto' } }));
+      const res = await svc.search({ q: 'hello' });
+
+      expect(res.provider).toBe('plugin:meili');
+      expect(res.total).toBe(42);
+      expect(dispatchSearch).toHaveBeenCalledTimes(1);
+      expect(builtinSearch).not.toHaveBeenCalled();
+    });
   });
 });

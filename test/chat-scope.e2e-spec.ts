@@ -188,22 +188,32 @@ describe('Chat-restricted API keys (e2e)', () => {
     expect(((await get(path, openKey).expect(200)).body as SearchResults).total).toBe(3);
   });
 
-  it('refuses plugin search for a chat-restricted key before invoking the worker', async () => {
+  it('falls back to builtin-fts for chat-restricted keys under SEARCH_PROVIDER=auto, and fails closed when unavailable', async () => {
     const registry = app.get(SearchProviderRegistry);
+    const builtin = registry.get('builtin-fts');
+    expect(builtin).not.toBeNull();
     const dispatchSearch = jest
       .fn()
       .mockResolvedValue({ ok: true, results: { hits: [], total: 731, tookMs: 1, provider: 'plugin:e2e' } });
     registry.register(new PluginSearchProvider('e2e', 'E2E', { dispatchSearch, healthCheck: jest.fn() }, 1000));
     registry.setActive('plugin:e2e');
     try {
+      const fallback = await get(`/api/search?q=scopingprobe&sessionId=${sessionId}`, chatKey).expect(200);
+      const fallbackBody = fallback.body as SearchResults;
+      expect(fallbackBody.provider).toBe('builtin-fts');
+      expect(fallbackBody.total).toBe(2);
+      expect(dispatchSearch).not.toHaveBeenCalled();
+      expect(((await get('/api/search?q=scopingprobe', openKey).expect(200)).body as SearchResults).total).toBe(731);
+      expect(dispatchSearch).toHaveBeenCalledTimes(1);
+
+      registry.unregister('builtin-fts');
       const refused = await get('/api/search?q=scopingprobe', chatKey).expect(403);
       expect((refused.body as { message: string }).message).toBe(
         'Chat-restricted search requires the built-in search provider',
       );
-      expect(dispatchSearch).not.toHaveBeenCalled();
-      expect(((await get('/api/search?q=scopingprobe', openKey).expect(200)).body as SearchResults).total).toBe(731);
       expect(dispatchSearch).toHaveBeenCalledTimes(1);
     } finally {
+      if (builtin && !registry.get('builtin-fts')) registry.register(builtin);
       registry.unregister('plugin:e2e');
       registry.setActive('builtin-fts');
     }
