@@ -1840,19 +1840,25 @@ export class MessageProjector {
     const quoteOwner = {};
     // Execute hook for message sent - plugins can modify or stop processing. Like the inbound path,
     // the hook chain runs concurrently and the commit waits its turn on the chat's queue.
-    const prepared = this.startHookChain(id, engine, turn, messageData, delivery, quoteOwner, messageData =>
-      this.hookManager
-        .execute('message:sent', messageData, {
-          sessionId: id,
-          source: 'Engine',
-          accept: data => {
-            if (!isMessagePayload(data)) return false;
-            if (delivery.entry.quoteOwner === quoteOwner) delivery.entry.quote = quoteOf(data);
-            return true;
-          },
-        })
-        .then(({ data }) => this.messageOrEngineCopy(id, 'message:sent', data, messageData)),
-    ).catch(onFailure);
+    const prepared = this.startHookChain(id, engine, turn, messageData, delivery, quoteOwner, async messageData => {
+      await this.hookManager?.waitForPendingEchoOriginSends?.(id);
+      if (messageData.id && this.hookManager?.consumeEchoOrigin?.(id, messageData.id)) {
+        this.logger.warn(
+          `Hook re-entrancy blocked: message:sent echo suppressed for ${messageData.id} (session: ${id})`,
+        );
+        return messageData;
+      }
+      const { data } = await this.hookManager.execute('message:sent', messageData, {
+        sessionId: id,
+        source: 'Engine',
+        accept: data => {
+          if (!isMessagePayload(data)) return false;
+          if (delivery.entry.quoteOwner === quoteOwner) delivery.entry.quote = quoteOf(data);
+          return true;
+        },
+      });
+      return this.messageOrEngineCopy(id, 'message:sent', data, messageData);
+    }).catch(onFailure);
     this.commitInTurn(id, message, turn, async () => {
       try {
         const finalMessage = await prepared;

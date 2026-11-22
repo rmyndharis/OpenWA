@@ -21,14 +21,9 @@ import {
   resolvePluginConfig,
   sessionScopeKey,
 } from './plugin-activation';
-import { PluginWorkerHost } from './sandbox/plugin-worker-host';
+import { PluginWorkerHost, type CapabilityDispatcher } from './sandbox/plugin-worker-host';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
-import {
-  PluginLogLevel,
-  SANDBOX_LOG_MAX_PER_WINDOW,
-  SANDBOX_LOG_WINDOW_MS,
-  type SandboxDispatchContext,
-} from './sandbox/protocol';
+import { PluginLogLevel, SANDBOX_LOG_MAX_PER_WINDOW, SANDBOX_LOG_WINDOW_MS } from './sandbox/protocol';
 import { shouldDispatchToPlugin } from './handover-gate';
 import { countMetaValues, metaText } from './sandbox-log-meta';
 import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
@@ -53,6 +48,8 @@ const SANDBOX_SEARCH_TIMEOUT_MS = 10000;
  * connections should still finish well under it.
  */
 const SANDBOX_LIFECYCLE_TIMEOUT_MS = 30000;
+/** Periodic idle liveness interval for production sandbox workers. */
+const SANDBOX_LIVENESS_INTERVAL_MS = 30_000;
 
 /**
  * Rate limit for the structured sandboxed-hook error log: at most one line per event per window so a
@@ -82,7 +79,7 @@ interface SandboxLogRelayState {
  * closure and calls it exactly where enableSandboxed used to call the method.
  */
 type CreateSandboxHostFn = (
-  capDispatcher?: (verb: string, args: unknown[], dispatchContext?: SandboxDispatchContext) => Promise<unknown>,
+  capDispatcher?: CapabilityDispatcher,
   onHookSubscribe?: (event: string, priority?: number) => void,
   onWebhookSubscribe?: (route: string) => void,
   onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
@@ -90,6 +87,7 @@ type CreateSandboxHostFn = (
   onSearchProviderRegister?: () => void,
   onWorkerExit?: (code: number, intentional: boolean, reason?: string) => void,
   onUnresponsive?: () => void,
+  livenessIntervalMs?: number,
 ) => PluginWorkerHost;
 
 /**
@@ -409,10 +407,12 @@ export class PluginSandboxBridge {
     };
 
     const host: PluginWorkerHost = this.createHost(
-      (verb, args, dispatchContext) =>
+      (verb, args, dispatchContext, signal) =>
         dispatchContext
-          ? this.capabilities.runWithDispatchContext(dispatchContext, () => dispatchCapabilityVerb(context, verb, args))
-          : dispatchCapabilityVerb(context, verb, args),
+          ? this.capabilities.runWithDispatchContext(dispatchContext, () =>
+              dispatchCapabilityVerb(context, verb, args, signal),
+            )
+          : dispatchCapabilityVerb(context, verb, args, signal),
       onHookSubscribe,
       onWebhookSubscribe,
       onLog,
@@ -422,6 +422,7 @@ export class PluginSandboxBridge {
       onSearchProviderRegister,
       onWorkerExit,
       onUnresponsive,
+      SANDBOX_LIVENESS_INTERVAL_MS,
     );
     this.sandboxHosts.set(pluginId, host);
     // The worker keeps this config as its base until a config-change arrives, and a save made while the

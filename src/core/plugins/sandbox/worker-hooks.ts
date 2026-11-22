@@ -19,6 +19,9 @@ export interface WorkerDispatchStore {
 
 export const hookConfigStore = new AsyncLocalStorage<WorkerDispatchStore>();
 
+/** Worker-local AsyncLocalStorage carrying the active hook event for capability call origin tagging. */
+export const hookOriginStore = new AsyncLocalStorage<{ event?: HookEvent }>();
+
 export interface WorkerHookContext {
   event: string;
   data: unknown;
@@ -132,11 +135,13 @@ export class WorkerHookRegistry {
       inFlight: message.inFlight ?? [message.event],
       dispatchId: message.dispatchId,
     };
+    const originScope: { event?: HookEvent } = { event: message.event as HookEvent };
     try {
-      await hookConfigStore.run(store, () => this.dispatch(message));
+      await hookConfigStore.run(store, () => hookOriginStore.run(originScope, () => this.dispatch(message)));
     } finally {
       store.inFlight = undefined;
       store.dispatchId = undefined;
+      originScope.event = undefined;
     }
   }
 

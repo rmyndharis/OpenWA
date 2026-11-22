@@ -23,9 +23,9 @@ import { PluginSandboxBridge } from './plugin-sandbox-bridge';
 import { PluginPackageScanner } from './plugin-package-scanner';
 import { PluginLifecycle } from './plugin-lifecycle';
 import { PluginUninstaller } from './plugin-uninstaller';
-import { PluginWorkerHost } from './sandbox/plugin-worker-host';
+import { PluginWorkerHost, type CapabilityDispatcher } from './sandbox/plugin-worker-host';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
-import { PluginLogLevel, SANDBOX_MAX_INFLIGHT_CAPS, type SandboxDispatchContext } from './sandbox/protocol';
+import { PluginLogLevel, SANDBOX_MAX_INFLIGHT_CAPS } from './sandbox/protocol';
 import { resolvePluginMainPath } from './plugin-paths';
 import type { IngressJobData } from '../../modules/queue/processors/ingress.processor';
 
@@ -197,6 +197,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
         onSearchProviderRegister,
         onWorkerExit,
         onUnresponsive,
+        livenessIntervalMs,
       ) =>
         this.createSandboxHost(
           capDispatcher,
@@ -207,6 +208,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
           onSearchProviderRegister,
           onWorkerExit,
           onUnresponsive,
+          livenessIntervalMs,
         ),
       // Exported from this module (specs import it here); passed so the bridge never imports back.
       resolvePluginMainPath,
@@ -526,7 +528,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
    * instead of spawning a real OS thread. Production loads the compiled worker bootstrap from dist.
    */
   protected createSandboxHost(
-    capDispatcher?: (verb: string, args: unknown[], dispatchContext?: SandboxDispatchContext) => Promise<unknown>,
+    capDispatcher?: CapabilityDispatcher,
     onHookSubscribe?: (event: string, priority?: number) => void,
     onWebhookSubscribe?: (route: string) => void,
     onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
@@ -534,6 +536,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     onSearchProviderRegister?: () => void,
     onWorkerExit?: (code: number, intentional: boolean, reason?: string) => void,
     onUnresponsive?: () => void,
+    livenessIntervalMs = 30_000,
   ): PluginWorkerHost {
     const workerEntry = path.join(__dirname, 'sandbox', 'worker-bootstrap.js');
     return new PluginWorkerHost(
@@ -554,6 +557,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       this.configService.get<number>('plugins.capTimeoutMs') ?? SANDBOX_CAP_TIMEOUT_MS,
       SANDBOX_LIVENESS_TIMEOUT_MS,
       onUnresponsive,
+      livenessIntervalMs,
     );
   }
 

@@ -485,7 +485,7 @@ export class PluginCapabilityContext {
 
   private buildNetCapability(plugin: PluginInstance): PluginNetCapability {
     return {
-      fetch: async (url, init) => {
+      fetch: async (url, init, signal) => {
         // Two gates: the declared permission, then a two-layer per-session host allowlist.
         // Layer 2 (inside an active hook or ingress dispatch): scope config-derived hosts strictly
         // to the firing session or ingress instance. Layer 1 (outside dispatch, e.g. onEnable or
@@ -545,7 +545,7 @@ export class PluginCapabilityContext {
             `Plugin ${plugin.manifest.id} may not fetch ${url} - add its host to net.allow or net.allowConfigHosts`,
           );
         }
-        return performPluginFetch(url, init);
+        return signal ? performPluginFetch(url, init, { signal }) : performPluginFetch(url, init);
       },
     } satisfies PluginNetCapability;
   }
@@ -602,10 +602,10 @@ export class PluginCapabilityContext {
       // `inFlight.length > 0` check): a send from an ingress handler or any other top-level context
       // carries none, and must NOT suppress message:sending for observers (audit/moderation, or the
       // adapter's own mirror hook), which then see the reply.
-      runGuarded: (events, run) =>
-        (events as HookEvent[]).some(e => this.hookManager.isInFlight(e))
-          ? this.hookManager.runInFlight(events as HookEvent[], run)
-          : run(),
+      runGuarded: (events, run) => {
+        const active = (events as HookEvent[]).filter(e => this.hookManager.isInFlight(e));
+        return active.length > 0 ? this.hookManager.runInFlight(active, run) : run();
+      },
       sendText: (sessionId, opts) => this.hostServices.getMessagePort().sendText(sessionId, opts),
       reply: (sessionId, opts) => this.hostServices.getMessagePort().reply(sessionId, opts),
       sendMedia: (sessionId, opts) => dispatchConversationMedia(this.hostServices.getMessagePort(), sessionId, opts),

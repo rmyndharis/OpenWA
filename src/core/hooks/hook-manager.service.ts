@@ -8,6 +8,11 @@ import { HookEvent, HookHandler, HookContext, HookRegistration } from './hook.in
 /** Pre-egress hook events covered by `HOOK_PRE_EGRESS_FAIL_CLOSED`. */
 export const PRE_EGRESS_HOOK_EVENTS: ReadonlySet<HookEvent> = new Set<HookEvent>(['message:sending', 'webhook:before']);
 
+/** Hard cap on tracked async message:sent echo-origin entries to prevent unbounded memory growth. */
+const MAX_ECHO_ORIGIN_ENTRIES = 10_000;
+/** Time-to-live for an async message:sent echo-origin mark before lazy expiry. */
+const ECHO_ORIGIN_TTL_MS = 5 * 60_000;
+
 /**
  * Internal symbol attached non-enumerably to `HookContext` during `HookManager.runHandlers` so
  * host-side bridges (such as `PluginSandboxBridge`) observe whether the active chain runs in
@@ -176,11 +181,18 @@ export class HookManager {
   private readonly pluginHooks = new Map<string, Set<string>>(); // pluginId -> hookIds
   // Events in-flight on the active async context. A handler that re-fires the SAME event
   // (e.g. a message:sending handler that sends) is short-circuited instead of recursing.
-  // NOTE: the context does not span the async engine `message_create` echo, so this guards
-  // synchronous re-entry only (the async message:sent echo loop is documented, deferred).
+  // Async own-send echoes (`message_create` -> `message:sent`) outlive the send call stack
+  // and are suppressed via markEchoOrigin/consumeEchoOrigin below.
   // Each scope is the event set of one execute()/runInFlight() call. It is emptied when that call settles,
   // because the store also reaches every timer and detached promise the call's handlers start.
   private readonly inFlightEvents = new AsyncLocalStorage<ReadonlyArray<Set<HookEvent>>>();
+  // Bounded TTL map of `${sessionId}\0${waMessageId}` -> expiresAt (ms) for outbound sends initiated
+  // while a `message:sent` hook was in flight, so their async own-send echo skips re-firing `message:sent`.
+  private readonly echoOrigins = new Map<string, number>();
+  // Per-session in-flight sends initiated during a `message:sent` hook whose engine call has not yet
+  // resolved its message ID. Own-send echoes await this barrier before checking `echoOrigins`, closing
+  // the race where an engine (e.g. whatsapp-web.js) emits `message_create` before `send*()` resolves.
+  private readonly pendingEchoOriginSends = new Map<string, Set<Promise<void>>>();
   private nextHookId = 0;
 
   constructor(@Optional() private readonly configService?: ConfigService) {}
@@ -418,6 +430,97 @@ export class HookManager {
    *  of unconditionally seeding the event and suppressing it for unrelated observers on a top-level call. */
   isInFlight(event: HookEvent): boolean {
     return this.inFlightEvents.getStore()?.some(scope => scope.has(event)) ?? false;
+  }
+
+  /** True if `event` is currently in flight on the active async context. */
+  isEventInFlight(event: HookEvent): boolean {
+    return this.isInFlight(event);
+  }
+
+  /**
+   * Register an in-flight outbound send initiated during a `message:sent` hook on `sessionId`.
+   * Callers MUST invoke the returned release callback in a `finally` block (after calling
+   * {@link markEchoOrigin} on success) so waiting own-send echoes never stall on send failures.
+   */
+  beginEchoOriginSend(sessionId: string): () => void {
+    if (!sessionId) return () => undefined;
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    let bucket = this.pendingEchoOriginSends.get(sessionId);
+    if (!bucket) {
+      bucket = new Set();
+      this.pendingEchoOriginSends.set(sessionId, bucket);
+    }
+    bucket.add(pending);
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const current = this.pendingEchoOriginSends.get(sessionId);
+      if (current) {
+        current.delete(pending);
+        if (current.size === 0) {
+          this.pendingEchoOriginSends.delete(sessionId);
+        }
+      }
+      finish();
+    };
+  }
+
+  /**
+   * Await any currently pending echo-origin sends for `sessionId` before checking
+   * {@link consumeEchoOrigin}. Returns immediately when none are pending.
+   */
+  waitForPendingEchoOriginSends(sessionId: string): Promise<void> {
+    if (!sessionId) return Promise.resolve();
+    const bucket = this.pendingEchoOriginSends.get(sessionId);
+    if (!bucket || bucket.size === 0) return Promise.resolve();
+    return Promise.allSettled([...bucket]).then(() => undefined);
+  }
+
+  /**
+   * Record that an outbound message (`sessionId`, `waMessageId`) was sent from inside a
+   * `message:sent` hook handler so its async own-send echo does not re-trigger `message:sent`.
+   */
+  markEchoOrigin(sessionId: string, waMessageId: string): void {
+    if (!sessionId || !waMessageId) return;
+    const now = Date.now();
+    this.pruneExpiredEchoOrigins(now);
+    const key = `${sessionId}\0${waMessageId}`;
+    if (this.echoOrigins.has(key)) {
+      this.echoOrigins.delete(key);
+    }
+    while (this.echoOrigins.size >= MAX_ECHO_ORIGIN_ENTRIES) {
+      const oldest = this.echoOrigins.keys().next().value;
+      if (oldest === undefined) break;
+      this.echoOrigins.delete(oldest);
+    }
+    this.echoOrigins.set(key, now + ECHO_ORIGIN_TTL_MS);
+  }
+
+  /**
+   * One-shot check-and-consume for a marked echo origin. Returns true once if `(sessionId, waMessageId)`
+   * was marked within the TTL window, signaling the projector to skip re-firing `message:sent`.
+   */
+  consumeEchoOrigin(sessionId: string, waMessageId: string): boolean {
+    if (!sessionId || !waMessageId) return false;
+    const now = Date.now();
+    this.pruneExpiredEchoOrigins(now);
+    const key = `${sessionId}\0${waMessageId}`;
+    const expiresAt = this.echoOrigins.get(key);
+    if (expiresAt === undefined) return false;
+    this.echoOrigins.delete(key);
+    return expiresAt > now;
+  }
+
+  private pruneExpiredEchoOrigins(now: number): void {
+    for (const [key, expiresAt] of this.echoOrigins) {
+      if (expiresAt > now) break;
+      this.echoOrigins.delete(key);
+    }
   }
 
   /** Every event in flight on the active async context, for a caller that must carry the chain across a

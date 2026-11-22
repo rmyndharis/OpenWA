@@ -1,6 +1,23 @@
+import { AsyncLocalStorage } from 'async_hooks';
 import * as path from 'path';
+import { ConfigService } from '@nestjs/config';
+import { DataSource, type Repository } from 'typeorm';
 import { WorkerThreadChannel } from './worker-thread-channel';
 import { PluginWorkerHost } from './plugin-worker-host';
+import { HookManager, type HookEvent } from '../../hooks';
+import { EngineRegistry } from '../../../engine/engine-registry.service';
+import type { IncomingMessage, IWhatsAppEngine } from '../../../engine/interfaces/whatsapp-engine.interface';
+import { Message } from '../../../modules/message/entities/message.entity';
+import { MessageSendService } from '../../../modules/message/message-send.service';
+import { SendPacingService } from '../../../modules/message/send-pacing.service';
+import { MessageProjector } from '../../../modules/session/message-projector.service';
+import type { Session } from '../../../modules/session/entities/session.entity';
+import type { SessionService } from '../../../modules/session/session.service';
+import type { TemplateService } from '../../../modules/template/template.service';
+import type { EventsGateway } from '../../../modules/events/events.gateway';
+import type { WebhookService } from '../../../modules/webhook/webhook.service';
+import type { StatusStoreService } from '../../../modules/status-store/status-store.service';
+import type { SessionLidResolver } from '../../../modules/session/session-lid-resolver.service';
 
 // Repo root, from src/core/plugins/sandbox.
 const ROOT = path.resolve(__dirname, '../../../..');
@@ -19,6 +36,8 @@ const SEARCH_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/search-plugin.c
 const UNLOAD_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/unload-plugin.cjs');
 const UNCLONEABLE_LOG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/uncloneable-log-plugin.cjs');
 const CONFIG_THROW_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/config-throw-plugin.cjs');
+const IDLE_SPIN_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/idle-spin-plugin.cjs');
+const SENT_ECHO_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/sent-echo-plugin.cjs');
 const flushAsync = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 // Run the TS bootstrap inside the worker via ts-node. The base tsconfig is nodenext; we pin the
@@ -83,7 +102,7 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
     // so this resolving proves the full worker -> host -> worker round-trip.
     await host.runLifecycle('onEnable');
 
-    expect(dispatcher).toHaveBeenCalledWith('messages.sendText', ['s', 'c', 'hi']);
+    expect(dispatcher).toHaveBeenCalledWith('messages.sendText', ['s', 'c', 'hi'], undefined, expect.any(AbortSignal));
     await host.terminate();
   });
 
@@ -431,5 +450,305 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
     if (empty.ok) expect(empty.results.hits).toEqual([]);
 
     await host.terminate();
+  });
+
+  it('detects an idle worker spinning in while(true) with zero hooks dispatched via periodic livenessIntervalMs', async () => {
+    let reported!: () => void;
+    const unresponsive = new Promise<void>(resolve => (reported = resolve));
+    const host = new PluginWorkerHost(
+      makeChannel(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      300,
+      () => reported(),
+      150,
+    );
+    try {
+      await host.load(IDLE_SPIN_FIXTURE);
+      await host.runLifecycle('onEnable');
+      // Dispatch zero hooks: the worker enters while(true) on its own timer and must be caught by
+      // the periodic idle liveness probe.
+      await unresponsive;
+    } finally {
+      await expect(host.terminate()).resolves.toBeUndefined();
+    }
+  });
+
+  it('suppresses message:sent echo loops for a sandboxed worker plugin calling ctx.messages.sendText', async () => {
+    const db = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Message],
+      synchronize: true,
+    }).initialize();
+    let host: PluginWorkerHost | undefined;
+    try {
+      const repo = db.getRepository(Message);
+      const hm = new HookManager();
+      const engines = new EngineRegistry();
+      const emitMessageSent = jest.fn();
+      const webhookDispatch = jest.fn().mockResolvedValue(undefined);
+      let nextSeq = 2;
+
+      const sendTextMessage = jest.fn((chatId: string, text: string) => {
+        const id = `SANDBOX-MSG-${nextSeq++}`;
+        const timestamp = Math.floor(Date.now() / 1000);
+        setImmediate(() => {
+          const echo: IncomingMessage = {
+            id,
+            chatId,
+            from: '620000@c.us',
+            to: chatId,
+            fromMe: true,
+            body: text,
+            type: 'text',
+            timestamp,
+            isGroup: false,
+            kind: 'individual',
+          };
+          projector.handleOwnSendEcho('s1', engine, echo);
+        });
+        return Promise.resolve({ id, timestamp });
+      });
+      const engine = {
+        sendTextMessage,
+        sendChatState: jest.fn().mockResolvedValue(undefined),
+      } as unknown as IWhatsAppEngine;
+      engines.set('s1', engine);
+
+      const sessionRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as unknown as Repository<Session>;
+      const projector = new MessageProjector(
+        repo,
+        sessionRepo,
+        engines,
+        { emitMessage: jest.fn(), emitMessageSent } as unknown as EventsGateway,
+        { dispatch: webhookDispatch } as unknown as WebhookService,
+        hm,
+        {} as StatusStoreService,
+        { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
+      );
+
+      const config = new ConfigService({ features: { simulateTyping: false } });
+      const sender = new MessageSendService(
+        repo,
+        { findOne: jest.fn().mockResolvedValue({ id: 's1', phone: '620000' }) } as unknown as SessionService,
+        engines,
+        hm,
+        {} as TemplateService,
+        new SendPacingService(repo, sessionRepo),
+        config,
+      );
+
+      const dispatchedToWorker: string[] = [];
+      host = new PluginWorkerHost(
+        makeChannel(),
+        async (verb, args) => {
+          if (verb === 'messages.sendText') {
+            return sender.sendText(args[0] as string, {
+              chatId: args[1] as string,
+              text: args[2] as string,
+            });
+          }
+          throw new Error(`unexpected verb: ${verb}`);
+        },
+        event => {
+          hm.register('sent-echo', event as HookEvent, async hookCtx => {
+            dispatchedToWorker.push((hookCtx.data as IncomingMessage).id);
+            const result = await host!.dispatchHook({
+              event,
+              data: hookCtx.data,
+              sessionId: hookCtx.sessionId,
+              source: hookCtx.source,
+              inFlight: hm.currentInFlight(),
+              timeoutMs: 5000,
+            });
+            return { continue: result.continue, data: result.data };
+          });
+        },
+        undefined,
+        undefined,
+        (events, run) => hm.runInFlight(events as HookEvent[], run),
+      );
+
+      await host.load(SENT_ECHO_FIXTURE);
+      await host.runLifecycle('onEnable');
+      await flushAsync();
+
+      projector.handleOwnSendEcho('s1', engine, {
+        id: 'SANDBOX-MSG-1',
+        chatId: '628111@c.us',
+        from: '620000@c.us',
+        to: '628111@c.us',
+        fromMe: true,
+        body: 'initial',
+        type: 'text',
+        timestamp: 1_700_000_000,
+        isGroup: false,
+        kind: 'individual',
+      });
+
+      // Wait for async worker IPC + echo cycle to settle.
+      const deadline = Date.now() + 5000;
+      while (emitMessageSent.mock.calls.length < 2 && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      expect(dispatchedToWorker).toEqual(['SANDBOX-MSG-1']);
+      expect(sendTextMessage).toHaveBeenCalledTimes(1);
+      expect(emitMessageSent).toHaveBeenCalledTimes(2);
+      expect(webhookDispatch).toHaveBeenCalledTimes(2);
+      const rows = await repo.find({ order: { waMessageId: 'ASC' } });
+      expect(rows.map(r => r.waMessageId)).toEqual(['SANDBOX-MSG-1', 'SANDBOX-MSG-2']);
+    } finally {
+      await host?.terminate();
+      await db.destroy();
+    }
+  });
+
+  it('suppresses early own-send echo arriving before engine.sendTextMessage resolves for a sandboxed worker', async () => {
+    const runAtRoot = AsyncLocalStorage.snapshot();
+    const db = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Message],
+      synchronize: true,
+    }).initialize();
+    let host: PluginWorkerHost | undefined;
+    try {
+      const repo = db.getRepository(Message);
+      const hm = new HookManager();
+      const engines = new EngineRegistry();
+      const emitMessageSent = jest.fn();
+      const webhookDispatch = jest.fn().mockResolvedValue(undefined);
+      let nextSeq = 2;
+
+      const sendTextMessage = jest.fn((chatId: string, text: string) => {
+        const id = `SANDBOX-EARLY-${nextSeq++}`;
+        const timestamp = Math.floor(Date.now() / 1000);
+        // Simulate whatsapp-web.js emitting message_create at 5ms in a root ALS context
+        // before sendTextMessage resolves { id, timestamp } at 40ms.
+        runAtRoot(() => {
+          setTimeout(() => {
+            projector.handleOwnSendEcho('s1', engine, {
+              id,
+              chatId,
+              from: '620000@c.us',
+              to: chatId,
+              fromMe: true,
+              body: text,
+              type: 'text',
+              timestamp,
+              isGroup: false,
+              kind: 'individual',
+            });
+          }, 5);
+        });
+        return new Promise<{ id: string; timestamp: number }>(resolve => {
+          setTimeout(() => resolve({ id, timestamp }), 40);
+        });
+      });
+      const engine = {
+        sendTextMessage,
+        sendChatState: jest.fn().mockResolvedValue(undefined),
+      } as unknown as IWhatsAppEngine;
+      engines.set('s1', engine);
+
+      const sessionRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as unknown as Repository<Session>;
+      const projector = new MessageProjector(
+        repo,
+        sessionRepo,
+        engines,
+        { emitMessage: jest.fn(), emitMessageSent } as unknown as EventsGateway,
+        { dispatch: webhookDispatch } as unknown as WebhookService,
+        hm,
+        {} as StatusStoreService,
+        { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
+      );
+
+      const config = new ConfigService({ features: { simulateTyping: false } });
+      const sender = new MessageSendService(
+        repo,
+        { findOne: jest.fn().mockResolvedValue({ id: 's1', phone: '620000' }) } as unknown as SessionService,
+        engines,
+        hm,
+        {} as TemplateService,
+        new SendPacingService(repo, sessionRepo),
+        config,
+      );
+
+      const dispatchedToWorker: string[] = [];
+      host = new PluginWorkerHost(
+        makeChannel(),
+        async (verb, args) => {
+          if (verb === 'messages.sendText') {
+            return sender.sendText(args[0] as string, {
+              chatId: args[1] as string,
+              text: args[2] as string,
+            });
+          }
+          throw new Error(`unexpected verb: ${verb}`);
+        },
+        event => {
+          hm.register('sent-echo', event as HookEvent, async hookCtx => {
+            dispatchedToWorker.push((hookCtx.data as IncomingMessage).id);
+            if (dispatchedToWorker.length > 3) {
+              return { continue: true, data: hookCtx.data };
+            }
+            const result = await host!.dispatchHook({
+              event,
+              data: hookCtx.data,
+              sessionId: hookCtx.sessionId,
+              source: hookCtx.source,
+              inFlight: hm.currentInFlight(),
+              timeoutMs: 5000,
+            });
+            return { continue: result.continue, data: result.data };
+          });
+        },
+        undefined,
+        undefined,
+        (events, run) => hm.runInFlight(events as HookEvent[], run),
+      );
+
+      await host.load(SENT_ECHO_FIXTURE);
+      await host.runLifecycle('onEnable');
+      await flushAsync();
+
+      projector.handleOwnSendEcho('s1', engine, {
+        id: 'SANDBOX-EARLY-1',
+        chatId: '628111@c.us',
+        from: '620000@c.us',
+        to: '628111@c.us',
+        fromMe: true,
+        body: 'initial',
+        type: 'text',
+        timestamp: 1_700_000_000,
+        isGroup: false,
+        kind: 'individual',
+      });
+
+      const deadline = Date.now() + 5000;
+      while (emitMessageSent.mock.calls.length < 2 && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      expect(dispatchedToWorker).toEqual(['SANDBOX-EARLY-1']);
+      expect(sendTextMessage).toHaveBeenCalledTimes(1);
+      expect(emitMessageSent).toHaveBeenCalledTimes(2);
+      expect(webhookDispatch).toHaveBeenCalledTimes(2);
+      expect(hm.consumeEchoOrigin('s1', 'SANDBOX-EARLY-2')).toBe(false);
+    } finally {
+      await host?.terminate();
+      await db.destroy();
+    }
   });
 });

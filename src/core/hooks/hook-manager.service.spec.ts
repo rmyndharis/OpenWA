@@ -1,9 +1,24 @@
 // Hook handlers must satisfy the async HookHandler signature; the test stubs return synchronously,
 // so the no-await rule doesn't apply to them here.
 /* eslint-disable @typescript-eslint/require-await */
+import { AsyncLocalStorage } from 'async_hooks';
 import { ConfigService } from '@nestjs/config';
+import { DataSource, type Repository } from 'typeorm';
 import { HookExecutionError, HookManager, PRE_EGRESS_HOOK_EVENTS } from './hook-manager.service';
 import { HookContext, HookHandler, HookResult, HookEvent } from './hook.interfaces';
+import { EngineRegistry } from '../../engine/engine-registry.service';
+import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { Message } from '../../modules/message/entities/message.entity';
+import { MessageSendService } from '../../modules/message/message-send.service';
+import { SendPacingService } from '../../modules/message/send-pacing.service';
+import { MessageProjector } from '../../modules/session/message-projector.service';
+import type { Session } from '../../modules/session/entities/session.entity';
+import type { SessionService } from '../../modules/session/session.service';
+import type { TemplateService } from '../../modules/template/template.service';
+import type { EventsGateway } from '../../modules/events/events.gateway';
+import type { WebhookService } from '../../modules/webhook/webhook.service';
+import type { StatusStoreService } from '../../modules/status-store/status-store.service';
+import type { SessionLidResolver } from '../../modules/session/session-lid-resolver.service';
 
 describe('HookManager', () => {
   let hm: HookManager;
@@ -764,5 +779,412 @@ describe('HookManager fail-closed pre-egress mode', () => {
       event: 'message:sending',
       cause,
     });
+  });
+});
+
+describe('HookManager async message:sent echo origin guard', () => {
+  it('tracks isEventInFlight, consumes marked echo origins once, respects TTL, and bounds size with FIFO eviction', () => {
+    jest.useFakeTimers();
+    try {
+      const hm = new HookManager();
+      expect(hm.isEventInFlight('message:sent')).toBe(false);
+      hm.runInFlight(['message:sent'], () => {
+        expect(hm.isEventInFlight('message:sent')).toBe(true);
+        expect(hm.isEventInFlight('message:received')).toBe(false);
+      });
+      expect(hm.isEventInFlight('message:sent')).toBe(false);
+
+      // Empty inputs are no-ops.
+      hm.markEchoOrigin('', 'msg-1');
+      hm.markEchoOrigin('s1', '');
+      expect(hm.consumeEchoOrigin('', 'msg-1')).toBe(false);
+      expect(hm.consumeEchoOrigin('s1', '')).toBe(false);
+
+      // One-shot consume scoped per session.
+      hm.markEchoOrigin('s1', 'msg-1');
+      expect(hm.consumeEchoOrigin('s2', 'msg-1')).toBe(false);
+      expect(hm.consumeEchoOrigin('s1', 'msg-1')).toBe(true);
+      expect(hm.consumeEchoOrigin('s1', 'msg-1')).toBe(false);
+
+      // TTL expiry (5 minutes).
+      hm.markEchoOrigin('s1', 'msg-ttl');
+      jest.advanceTimersByTime(5 * 60_000 - 1);
+      expect(hm.consumeEchoOrigin('s1', 'msg-ttl')).toBe(true);
+
+      hm.markEchoOrigin('s1', 'msg-expired');
+      jest.advanceTimersByTime(5 * 60_000);
+      expect(hm.consumeEchoOrigin('s1', 'msg-expired')).toBe(false);
+
+      // Bounded at 10,000 entries with FIFO eviction.
+      for (let i = 0; i < 10_005; i++) {
+        hm.markEchoOrigin('s1', `m-${i}`);
+      }
+      expect(hm.consumeEchoOrigin('s1', 'm-0')).toBe(false);
+      expect(hm.consumeEchoOrigin('s1', 'm-4')).toBe(false);
+      expect(hm.consumeEchoOrigin('s1', 'm-5')).toBe(true);
+      expect(hm.consumeEchoOrigin('s1', 'm-10004')).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('suppresses second message:sent hook on echo when an in-process message:sent handler sends a message', async () => {
+    const db = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Message],
+      synchronize: true,
+    }).initialize();
+    try {
+      const repo = db.getRepository(Message);
+      const hm = new HookManager();
+      const engines = new EngineRegistry();
+      const emitMessageSent = jest.fn();
+      const webhookDispatch = jest.fn().mockResolvedValue(undefined);
+      let nextMsgSeq = 2;
+
+      const sendTextMessage = jest.fn(async (chatId: string, text: string) => {
+        const id = `WA-MSG-${nextMsgSeq++}`;
+        const timestamp = Math.floor(Date.now() / 1000);
+        // Simulate the asynchronous own-send echo arriving from the WhatsApp engine.
+        setImmediate(() => {
+          const echo: IncomingMessage = {
+            id,
+            chatId,
+            from: '620000@c.us',
+            to: chatId,
+            fromMe: true,
+            body: text,
+            type: 'text',
+            timestamp,
+            isGroup: false,
+            kind: 'individual',
+          };
+          projector.handleOwnSendEcho('s1', engine, echo);
+        });
+        return { id, timestamp };
+      });
+      const engine = {
+        sendTextMessage,
+        sendChatState: jest.fn().mockResolvedValue(undefined),
+      } as unknown as IWhatsAppEngine;
+      engines.set('s1', engine);
+
+      const sessionRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as unknown as Repository<Session>;
+      const projector = new MessageProjector(
+        repo,
+        sessionRepo,
+        engines,
+        { emitMessage: jest.fn(), emitMessageSent } as unknown as EventsGateway,
+        { dispatch: webhookDispatch } as unknown as WebhookService,
+        hm,
+        {} as StatusStoreService,
+        { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
+      );
+
+      const config = new ConfigService({ features: { simulateTyping: false } });
+      const sender = new MessageSendService(
+        repo,
+        { findOne: jest.fn().mockResolvedValue({ id: 's1', phone: '620000' }) } as unknown as SessionService,
+        engines,
+        hm,
+        {} as TemplateService,
+        new SendPacingService(repo, sessionRepo),
+        config,
+      );
+
+      const hookCalls: string[] = [];
+      hm.register('echo-plugin', 'message:sent', async ctx => {
+        const msg = ctx.data as IncomingMessage;
+        hookCalls.push(msg.id);
+        await sender.sendText('s1', { chatId: msg.chatId, text: 'auto-reply' });
+        return { continue: true, data: ctx.data };
+      });
+
+      const firstEcho: IncomingMessage = {
+        id: 'WA-MSG-1',
+        chatId: '628111@c.us',
+        from: '620000@c.us',
+        to: '628111@c.us',
+        fromMe: true,
+        body: 'initial',
+        type: 'text',
+        timestamp: 1_700_000_000,
+        isGroup: false,
+        kind: 'individual',
+      };
+      projector.handleOwnSendEcho('s1', engine, firstEcho);
+      for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+
+      // The message:sent hook ran ONLY for WA-MSG-1; WA-MSG-2's echo was suppressed from re-entering the hook.
+      expect(hookCalls).toEqual(['WA-MSG-1']);
+      expect(sendTextMessage).toHaveBeenCalledTimes(1);
+
+      // Still persisted both messages and emitted webhook + WS message.sent for both.
+      const rows = await repo.find({ order: { waMessageId: 'ASC' } });
+      expect(rows.map(r => r.waMessageId)).toEqual(['WA-MSG-1', 'WA-MSG-2']);
+      expect(emitMessageSent).toHaveBeenCalledTimes(2);
+      expect(webhookDispatch).toHaveBeenCalledTimes(2);
+    } finally {
+      await db.destroy();
+    }
+  });
+
+  it('suppresses early own-send echo arriving before engine.sendTextMessage resolves and releases waiters on failure', async () => {
+    const runAtRoot = AsyncLocalStorage.snapshot();
+    const db = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Message],
+      synchronize: true,
+    }).initialize();
+    try {
+      const repo = db.getRepository(Message);
+      const hm = new HookManager();
+      const engines = new EngineRegistry();
+      const emitMessageSent = jest.fn();
+      const webhookDispatch = jest.fn().mockResolvedValue(undefined);
+      let nextMsgSeq = 2;
+
+      const sendTextMessage = jest.fn((chatId: string, text: string) => {
+        const id = `WA-EARLY-${nextMsgSeq++}`;
+        const timestamp = Math.floor(Date.now() / 1000);
+        // Simulate whatsapp-web.js emitting message_create in a root ALS context at 5ms,
+        // BEFORE engine.sendTextMessage resolves { id, timestamp } at 40ms.
+        runAtRoot(() => {
+          setTimeout(() => {
+            const echo: IncomingMessage = {
+              id,
+              chatId,
+              from: '620000@c.us',
+              to: chatId,
+              fromMe: true,
+              body: text,
+              type: 'text',
+              timestamp,
+              isGroup: false,
+              kind: 'individual',
+            };
+            projector.handleOwnSendEcho('s1', engine, echo);
+          }, 5);
+        });
+        return new Promise<{ id: string; timestamp: number }>(resolve => {
+          setTimeout(() => resolve({ id, timestamp }), 40);
+        });
+      });
+      const engine = {
+        sendTextMessage,
+        sendChatState: jest.fn().mockResolvedValue(undefined),
+      } as unknown as IWhatsAppEngine;
+      engines.set('s1', engine);
+
+      const sessionRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as unknown as Repository<Session>;
+      const projector = new MessageProjector(
+        repo,
+        sessionRepo,
+        engines,
+        { emitMessage: jest.fn(), emitMessageSent } as unknown as EventsGateway,
+        { dispatch: webhookDispatch } as unknown as WebhookService,
+        hm,
+        {} as StatusStoreService,
+        { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
+      );
+
+      const config = new ConfigService({ features: { simulateTyping: false } });
+      const sender = new MessageSendService(
+        repo,
+        { findOne: jest.fn().mockResolvedValue({ id: 's1', phone: '620000' }) } as unknown as SessionService,
+        engines,
+        hm,
+        {} as TemplateService,
+        new SendPacingService(repo, sessionRepo),
+        config,
+      );
+
+      const hookCalls: string[] = [];
+      hm.register('echo-plugin', 'message:sent', async ctx => {
+        const msg = ctx.data as IncomingMessage;
+        hookCalls.push(msg.id);
+        if (hookCalls.length <= 3) {
+          await sender.sendText('s1', { chatId: msg.chatId, text: 'early-reply' });
+        }
+        return { continue: true, data: ctx.data };
+      });
+
+      projector.handleOwnSendEcho('s1', engine, {
+        id: 'WA-EARLY-1',
+        chatId: '628111@c.us',
+        from: '620000@c.us',
+        to: '628111@c.us',
+        fromMe: true,
+        body: 'initial',
+        type: 'text',
+        timestamp: 1_700_000_000,
+        isGroup: false,
+        kind: 'individual',
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 180));
+
+      expect(hookCalls).toEqual(['WA-EARLY-1']);
+      expect(sendTextMessage).toHaveBeenCalledTimes(1);
+      expect(emitMessageSent).toHaveBeenCalledTimes(2);
+      expect(webhookDispatch).toHaveBeenCalledTimes(2);
+      // Echo origin must have been consumed by the early echo, leaving zero stale entries.
+      expect(hm.consumeEchoOrigin('s1', 'WA-EARLY-2')).toBe(false);
+
+      // A failing engine send initiated inside message:sent must release pending waiters so
+      // unrelated echoes on the same session never stall.
+      sendTextMessage.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new Error('engine send failed')), 20);
+          }),
+      );
+      const failingSend = hm.runInFlight(['message:sent'], () =>
+        sender.sendText('s1', { chatId: '628111@c.us', text: 'will-fail' }),
+      );
+      failingSend.catch(() => undefined);
+
+      await new Promise(resolve => setTimeout(resolve, 5));
+      runAtRoot(() => {
+        projector.handleOwnSendEcho('s1', engine, {
+          id: 'WA-UNRELATED-3',
+          chatId: '628222@c.us',
+          from: '620000@c.us',
+          to: '628222@c.us',
+          fromMe: true,
+          body: 'from-phone',
+          type: 'text',
+          timestamp: 1_700_000_010,
+          isGroup: false,
+          kind: 'individual',
+        });
+      });
+
+      await expect(failingSend).rejects.toThrow('engine send failed');
+      await new Promise(resolve => setTimeout(resolve, 120));
+      expect(hookCalls).toEqual(['WA-EARLY-1', 'WA-UNRELATED-3']);
+    } finally {
+      await db.destroy();
+    }
+  });
+
+  it('suppresses echo when an in-process message:sent handler fires sendText or sendTemplate without awaiting', async () => {
+    const runAtRoot = AsyncLocalStorage.snapshot();
+    const db = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Message],
+      synchronize: true,
+    }).initialize();
+    try {
+      const repo = db.getRepository(Message);
+      const hm = new HookManager();
+      const engines = new EngineRegistry();
+      const emitMessageSent = jest.fn();
+      const webhookDispatch = jest.fn().mockResolvedValue(undefined);
+      let nextMsgSeq = 2;
+
+      const sendTextMessage = jest.fn((chatId: string, text: string) => {
+        const id = `WA-FF-${nextMsgSeq++}`;
+        const timestamp = Math.floor(Date.now() / 1000);
+        return new Promise<{ id: string; timestamp: number }>(resolve => {
+          setTimeout(() => {
+            resolve({ id, timestamp });
+            runAtRoot(() => {
+              setTimeout(() => {
+                projector.handleOwnSendEcho('s1', engine, {
+                  id,
+                  chatId,
+                  from: '620000@c.us',
+                  to: chatId,
+                  fromMe: true,
+                  body: text,
+                  type: 'text',
+                  timestamp,
+                  isGroup: false,
+                  kind: 'individual',
+                });
+              }, 5);
+            });
+          }, 25);
+        });
+      });
+      const engine = {
+        sendTextMessage,
+        sendChatState: jest.fn().mockResolvedValue(undefined),
+      } as unknown as IWhatsAppEngine;
+      engines.set('s1', engine);
+
+      const sessionRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as unknown as Repository<Session>;
+      const projector = new MessageProjector(
+        repo,
+        sessionRepo,
+        engines,
+        { emitMessage: jest.fn(), emitMessageSent } as unknown as EventsGateway,
+        { dispatch: webhookDispatch } as unknown as WebhookService,
+        hm,
+        {} as StatusStoreService,
+        { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
+      );
+
+      const templateService = {
+        resolve: jest.fn(
+          () =>
+            new Promise(resolve => {
+              setTimeout(() => resolve({ header: null, body: 'template-reply', footer: null }), 15);
+            }),
+        ),
+      } as unknown as TemplateService;
+
+      const config = new ConfigService({ features: { simulateTyping: false } });
+      const sender = new MessageSendService(
+        repo,
+        { findOne: jest.fn().mockResolvedValue({ id: 's1', phone: '620000' }) } as unknown as SessionService,
+        engines,
+        hm,
+        templateService,
+        new SendPacingService(repo, sessionRepo),
+        config,
+      );
+
+      const hookCalls: string[] = [];
+      const detachedSends: Promise<unknown>[] = [];
+      hm.register('fire-and-forget', 'message:sent', async ctx => {
+        const msg = ctx.data as IncomingMessage;
+        hookCalls.push(msg.id);
+        if (hookCalls.length <= 3) {
+          // Intentionally NOT awaited so HookManager.runInFlight clears its ALS scope immediately.
+          detachedSends.push(sender.sendText('s1', { chatId: msg.chatId, text: 'ff-text' }));
+          detachedSends.push(sender.sendTemplate('s1', { chatId: msg.chatId, templateName: 'welcome' }));
+        }
+        return { continue: true, data: ctx.data };
+      });
+
+      projector.handleOwnSendEcho('s1', engine, {
+        id: 'WA-FF-1',
+        chatId: '628111@c.us',
+        from: '620000@c.us',
+        to: '628111@c.us',
+        fromMe: true,
+        body: 'initial',
+        type: 'text',
+        timestamp: 1_700_000_000,
+        isGroup: false,
+        kind: 'individual',
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 200));
+      await Promise.all(detachedSends);
+      await new Promise(resolve => setTimeout(resolve, 60));
+
+      expect(hookCalls).toEqual(['WA-FF-1']);
+      expect(sendTextMessage).toHaveBeenCalledTimes(2);
+      expect(emitMessageSent).toHaveBeenCalledTimes(3);
+      expect(webhookDispatch).toHaveBeenCalledTimes(3);
+    } finally {
+      await db.destroy();
+    }
   });
 });

@@ -11,6 +11,7 @@
  */
 
 import type { SearchQuery, SearchResults } from '../../../modules/search/search.types';
+import type { HookEvent } from '../../hooks/hook.interfaces';
 
 export type PluginLifecycleMethod = 'onLoad' | 'onEnable' | 'onDisable' | 'onUnload';
 
@@ -141,7 +142,17 @@ export type WorkerToHostMessage =
   // e.g. an ingress handler or a timer); the host trusts only events it actually dispatched.
   // `dispatchId` echoes the host-generated id of the active hook or webhook dispatch so the host can
   // look up its authoritative session/instance context without trusting worker-supplied identifiers.
-  | { kind: 'cap'; id: number; verb: string; args: unknown[]; inFlight?: string[]; dispatchId?: string }
+  // `originHook` names the hook event whose handler initiated the call; the host verifies it against
+  // the active dispatch tracked in inFlightDispatches before re-establishing hook context.
+  | {
+      kind: 'cap';
+      id: number;
+      verb: string;
+      args: unknown[];
+      inFlight?: string[];
+      dispatchId?: string;
+      originHook?: HookEvent;
+    }
   // The worker asks the host to dispatch `event` to it (registered a handler for it).
   | { kind: 'hook-subscribe'; event: string; priority?: number }
   // The worker's handler result for a dispatched hook (continue/modify/error).

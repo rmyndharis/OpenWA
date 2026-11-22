@@ -32,6 +32,7 @@ export async function dispatchCapabilityVerb(
   context: CapabilityContext,
   verb: string,
   args: unknown[],
+  signal?: AbortSignal,
 ): Promise<unknown> {
   // Worker args cross a trust boundary: validate here so a malformed RPC fails the calling plugin
   // with a clear error instead of reaching the ORM with undefined criteria (TypeORM 1.x throws on
@@ -78,7 +79,9 @@ export async function dispatchCapabilityVerb(
     case 'storage.list':
       return context.storage.list(args[0] as string | undefined);
     case 'net.fetch':
-      return context.net.fetch(s(0), args[1] as Parameters<typeof context.net.fetch>[1]);
+      return signal
+        ? context.net.fetch(s(0), args[1] as Parameters<typeof context.net.fetch>[1], signal)
+        : context.net.fetch(s(0), args[1] as Parameters<typeof context.net.fetch>[1]);
     case 'conversation.send':
       return context.conversations.send(args[0] as ConversationSendEnvelope);
     case 'handover.set': {

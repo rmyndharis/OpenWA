@@ -5,7 +5,8 @@ import {
   SANDBOX_MAX_HELD_CAPS,
   SEND_CAP_VERBS,
 } from './protocol';
-import { hookConfigStore } from './worker-hooks';
+import { hookConfigStore, hookOriginStore } from './worker-hooks';
+import type { HookEvent } from '../../hooks/hook.interfaces';
 import { ConversationSendEnvelope } from '../plugin.interfaces';
 import { HandoverState } from '../../../modules/integration/entities/conversation-mapping.entity';
 
@@ -19,6 +20,7 @@ interface Call {
   args: unknown[];
   // The dispatch a hook or webhook handler made the call in, and its chain/id at that time. Absent outside a handler.
   store?: { inFlight?: string[]; dispatchId?: string };
+  originScope?: { event?: HookEvent };
   inFlight?: string[];
   dispatchId?: string;
   waiter: Waiter;
@@ -46,10 +48,12 @@ export class WorkerCapabilityClient {
     return new Promise((resolve, reject) => {
       // Read now: a held call is posted from handleResult, which runs outside the hook dispatch that made it.
       const store = hookConfigStore.getStore();
+      const originScope = hookOriginStore.getStore();
       const call: Call = {
         verb,
         args,
         store,
+        originScope,
         inFlight: store?.inFlight,
         dispatchId: store?.dispatchId,
         waiter: { resolve, reject },
@@ -83,7 +87,7 @@ export class WorkerCapabilityClient {
     while (this.held.length > 0 && this.pending.size < SANDBOX_MAX_PENDING_CAPS) this.send(this.held.shift()!);
   }
 
-  private send({ verb, args, store, inFlight, dispatchId: originDispatchId, waiter }: Call): void {
+  private send({ verb, args, store, originScope, inFlight, dispatchId: originDispatchId, waiter }: Call): void {
     // The chain is the dispatch's own while it is in flight, and gone once it settles: the host honours it no longer
     // either. A send the handler made and left held then runs outside the re-entrancy guard, so the hooks of the send
     // dispatch the handler again, and each pass holds more sends than the last. Refuse it, as a call past the bound was
@@ -91,6 +95,7 @@ export class WorkerCapabilityClient {
     // dispatchId and widens to the background allowlist.
     const chain = store?.inFlight;
     const dispatchId = store?.dispatchId;
+    const originHook = originScope?.event;
     if (inFlight && !chain && SEND_CAP_VERBS.has(verb)) {
       waiter.reject(
         new Error(
@@ -116,6 +121,7 @@ export class WorkerCapabilityClient {
       const message: Extract<WorkerToHostMessage, { kind: 'cap' }> = { kind: 'cap', id, verb, args };
       if (chain) message.inFlight = chain;
       if (dispatchId) message.dispatchId = dispatchId;
+      if (originHook) message.originHook = originHook;
       this.post(message);
       this.pending.set(id, waiter);
     } catch (error) {

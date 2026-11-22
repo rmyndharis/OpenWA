@@ -50,7 +50,7 @@ const isValidLatitude = (v: unknown): v is number => typeof v === 'number' && Nu
 const isValidLongitude = (v: unknown): v is number =>
   typeof v === 'number' && Number.isFinite(v) && v >= -180 && v <= 180;
 
-const MESSAGE_HOOK_EVENTS = ['message:sending'];
+const MESSAGE_HOOK_EVENTS = ['message:sending', 'message:sent'];
 
 export function buildConversationSendFacade(deps: ConversationSendDeps) {
   return {
@@ -59,8 +59,8 @@ export function buildConversationSendFacade(deps: ConversationSendDeps) {
       const sessionId = env.sessionId;
       if (!sessionId) throw new PluginCapabilityError('conversation.send: sessionId is required');
       deps.assertSessionActive(sessionId);
-      const chatId = env.chatId ?? (await deps.resolveChatId(env));
       return deps.runGuarded(MESSAGE_HOOK_EVENTS, async () => {
+        const chatId = env.chatId ?? (await deps.resolveChatId(env));
         // A location envelope is delivered as a native location pin. Without valid coordinates there
         // is NOTHING to send — reject loudly instead of degrading to an empty text message.
         if (env.type === 'location') {
