@@ -140,3 +140,15 @@ the instance sits outside the key's scope, so retained dead-letter rows cannot
 be re-dispatched across the boundary. Per-session routes for the sessions the
 key allows remain available, and keys without an `allowedSessions` restriction
 are unaffected.
+
+### Remote WhatsApp Web HTML pinning (`whatsapp-web.js`)
+
+Remote HTML pinning is disabled by default (`WWEBJS_WEB_VERSION` unset or `off`):
+sessions load the first-party WhatsApp Web page directly with zero third-party
+fetches. Because pinned HTML executes inside the authenticated `web.whatsapp.com`
+origin, configuring an exact build via `WWEBJS_WEB_VERSION` requires a matching
+64-character hex digest in `WWEBJS_WEB_VERSION_SHA256` (verified over raw bytes
+on every fetch and on every disk cache hit; mismatches delete any tampered cache
+file and refuse the pin with `web_version_html_hash_mismatch`). Unverified remote
+pinning (`auto`/`latest`, or an exact build without `WWEBJS_WEB_VERSION_SHA256`)
+is rejected unless `WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true` is set explicitly.

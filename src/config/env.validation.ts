@@ -1,5 +1,6 @@
 import { resolve } from 'path';
 import { normalizeS3KeyPrefix } from '../common/storage/s3-key-prefix';
+import { webVersionPinConfigError } from '../engine/wa-web-version';
 import { namesBundledContainer } from '../modules/docker/bundled-host';
 import { resolveBodyLimit } from './bootstrap-security';
 import { parseBodyLimitBytes } from './inflight-body-budget';
@@ -738,6 +739,8 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'MINIO_BUILTIN',
     // Explicit opt-in for connecting to the local Unix Docker socket (/var/run/docker.sock or unix://).
     'DOCKER_ALLOW_LOCAL_SOCKET',
+    // Explicit opt-in to load remote WhatsApp Web HTML without a WWEBJS_WEB_VERSION_SHA256 digest.
+    'WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED',
     // Perf/observability only, but same silent-typo class.
     'CACHE_ENABLED',
     'DATABASE_LOGGING',
@@ -816,6 +819,13 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   if (typeof rawPuppeteerArgs === 'string' && rawPuppeteerArgs !== '') {
     const argsErr = puppeteerArgsError(rawPuppeteerArgs);
     if (argsErr) errors.push(argsErr);
+  }
+
+  // WWEBJS_WEB_VERSION integrity policy: remote WhatsApp Web HTML is off by default; opting in
+  // requires either an exact build with WWEBJS_WEB_VERSION_SHA256 or WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true.
+  const webVersionError = webVersionPinConfigError(config);
+  if (webVersionError) {
+    errors.push(webVersionError);
   }
 
   if (errors.length > 0) {

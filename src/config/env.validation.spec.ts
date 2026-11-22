@@ -1052,3 +1052,66 @@ describe('validateEnv PUPPETEER_ARGS allowlist', () => {
     expect(() => validateEnv({ PUPPETEER_ARGS: value })).toThrow(/PUPPETEER_ARGS/);
   });
 });
+
+describe('validateEnv WWEBJS_WEB_VERSION integrity policy', () => {
+  const VALID_SHA = 'a'.repeat(64);
+  const VALID_UPPER_SHA = 'ABCDEF0123456789'.repeat(4);
+
+  it.each([undefined, '', '   ', 'off', 'OFF'])('accepts default/native WWEBJS_WEB_VERSION=%j', value => {
+    expect(() => validateEnv({ WWEBJS_WEB_VERSION: value })).not.toThrow();
+  });
+
+  it.each(['1', 'yes', 'TRUE', ' true '])('rejects invalid WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=%j', value => {
+    expect(() => validateEnv({ WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED: value })).toThrow(
+      /WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED must be "true" or "false"/,
+    );
+  });
+
+  it.each(['auto', 'AUTO', 'latest', 'LATEST'])(
+    'rejects WWEBJS_WEB_VERSION=%j without WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true',
+    value => {
+      expect(() => validateEnv({ WWEBJS_WEB_VERSION: value })).toThrow(/WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true/);
+      expect(() => validateEnv({ WWEBJS_WEB_VERSION: value, WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED: 'false' })).toThrow(
+        /WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true/,
+      );
+      expect(() =>
+        validateEnv({ WWEBJS_WEB_VERSION: value, WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED: 'true' }),
+      ).not.toThrow();
+    },
+  );
+
+  it('requires WWEBJS_WEB_VERSION_SHA256 or WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true for an exact pinned build', () => {
+    expect(() => validateEnv({ WWEBJS_WEB_VERSION: '2.3000.1234-alpha' })).toThrow(/WWEBJS_WEB_VERSION_SHA256/);
+    expect(() =>
+      validateEnv({ WWEBJS_WEB_VERSION: '2.3000.1234-alpha', WWEBJS_WEB_VERSION_SHA256: VALID_SHA }),
+    ).not.toThrow();
+    expect(() =>
+      validateEnv({ WWEBJS_WEB_VERSION: '2.3000.1234-alpha', WWEBJS_WEB_VERSION_SHA256: VALID_UPPER_SHA }),
+    ).not.toThrow();
+    expect(() =>
+      validateEnv({ WWEBJS_WEB_VERSION: '2.3000.1234-alpha', WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED: 'true' }),
+    ).not.toThrow();
+  });
+
+  it.each(['abc', 'g'.repeat(64), 'a'.repeat(63), 'a'.repeat(65)])(
+    'rejects malformed WWEBJS_WEB_VERSION_SHA256=%j',
+    badSha => {
+      expect(() => validateEnv({ WWEBJS_WEB_VERSION: '2.3000.1234-alpha', WWEBJS_WEB_VERSION_SHA256: badSha })).toThrow(
+        /WWEBJS_WEB_VERSION_SHA256/,
+      );
+    },
+  );
+
+  it.each([undefined, '', 'off', 'auto', 'latest'])(
+    'rejects WWEBJS_WEB_VERSION_SHA256 when WWEBJS_WEB_VERSION=%j is not an exact build',
+    version => {
+      expect(() =>
+        validateEnv({
+          WWEBJS_WEB_VERSION: version,
+          WWEBJS_WEB_VERSION_SHA256: VALID_SHA,
+          WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED: 'true',
+        }),
+      ).toThrow(/WWEBJS_WEB_VERSION_SHA256/);
+    },
+  );
+});

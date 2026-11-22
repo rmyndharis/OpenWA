@@ -33,6 +33,7 @@ import * as patchStatus from './engine-patch-status';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import * as fs from 'fs';
+import * as os from 'os';
 import { createHash, randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
 import { EngineRegistry } from '../engine-registry.service';
@@ -563,6 +564,90 @@ describe('WhatsAppWebJsAdapter initialize() with an unusable stored proxy', () =
     expect(adapter.getStatus()).toBe(EngineStatus.FAILED);
     expect(onError).toHaveBeenCalledWith(expect.stringMatching(/PUPPETEER_ARGS/));
     expect(clientInitSpy).not.toHaveBeenCalled();
+  });
+
+  it('serves SHA-256-verified in-memory HTML to Client.initWebVersionCache even if on-disk cache is tampered after resolve, and re-verifies on navigation retry', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-wwebjs-toctou-'));
+    const cacheDir = path.join(tmpDir, '.wa-web-cache');
+    const VERSION = '2.3000.999999';
+    const VERIFIED_HTML = `<!DOCTYPE html><html><head></head><body>${'v'.repeat(2048)}</body></html>`;
+    const TAMPERED_HTML = `<!DOCTYPE html><html><head></head><body>${'t'.repeat(2048)}</body></html>`;
+    const EXPECTED_SHA = createHash('sha256').update(Buffer.from(VERIFIED_HTML, 'utf8')).digest('hex');
+
+    const origSha = process.env.WWEBJS_WEB_VERSION_SHA256;
+    const origAllow = process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      const buf = Buffer.from(VERIFIED_HTML, 'utf8');
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: () => Promise.resolve(VERIFIED_HTML),
+        arrayBuffer: () => Promise.resolve(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)),
+      } as unknown as Response);
+    });
+    const clientDestroySpy = jest
+      .spyOn(Client.prototype as unknown as { destroy: () => Promise<void> }, 'destroy')
+      .mockResolvedValue(undefined);
+    let servedBody: string | undefined;
+    let initCalls = 0;
+    clientInitSpy.mockImplementation(async function (this: {
+      initWebVersionCache: () => Promise<void>;
+      pupPage: unknown;
+    }) {
+      initCalls += 1;
+      // Tamper the on-disk cache AFTER resolveWebVersionPin wrote it and BEFORE initWebVersionCache runs!
+      fs.writeFileSync(path.join(cacheDir, `${VERSION}.html`), TAMPERED_HTML);
+      if (initCalls === 1) {
+        // Trigger navigation retry (attempt 2); attempt 2 must re-verify and heal/refetch the tampered cache.
+        throw new Error('Protocol error (Runtime.callFunctionOn): Execution context was destroyed.');
+      }
+      const handlers: Record<string, (req: unknown) => void> = {};
+      this.pupPage = {
+        setRequestInterception: jest.fn().mockResolvedValue(undefined),
+        on: (event: string, fn: (req: unknown) => void) => {
+          handlers[event] = fn;
+        },
+      };
+      await this.initWebVersionCache();
+      handlers.request?.({
+        url: () => 'https://web.whatsapp.com/',
+        respond: (res: { body: string }) => {
+          servedBody = res.body;
+        },
+        continue: jest.fn(),
+      });
+    });
+
+    try {
+      __resetWebVersionCache();
+      process.env.WWEBJS_WEB_VERSION = VERSION;
+      process.env.WWEBJS_WEB_VERSION_SHA256 = EXPECTED_SHA;
+      delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+
+      const adapter = new WhatsAppWebJsAdapter({
+        sessionId: 'sess-sha-toctou',
+        sessionDataPath: tmpDir,
+        puppeteer: {},
+      });
+      await expect(adapter.initialize({})).resolves.toBeUndefined();
+      expect(initCalls).toBe(2);
+      // Even though the disk file was tampered right before attempt 2's initWebVersionCache ran,
+      // Chromium received the verified in-memory bytes, NOT the tampered disk file!
+      expect(servedBody).toBe(VERIFIED_HTML);
+      // And attempt 2 re-verified the tampered file from attempt 1 before launching attempt 2,
+      // triggering a second fetch once the tampered disk file was detected and deleted.
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      __resetWebVersionCache();
+      fetchSpy.mockRestore();
+      clientDestroySpy.mockRestore();
+      if (origSha === undefined) delete process.env.WWEBJS_WEB_VERSION_SHA256;
+      else process.env.WWEBJS_WEB_VERSION_SHA256 = origSha;
+      if (origAllow === undefined) delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+      else process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = origAllow;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -3934,25 +4019,46 @@ describe('WhatsAppWebJsAdapter status methods', () => {
   });
 });
 
-describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve current WA-Web build)', () => {
-  const orig = { v: process.env.WWEBJS_WEB_VERSION, p: process.env.WWEBJS_WEB_VERSION_REMOTE_PATH };
+describe('resolveWebVersionPin (#251/#488: explicit pin + opt-in auto-resolve current WA-Web build)', () => {
+  const orig = {
+    v: process.env.WWEBJS_WEB_VERSION,
+    p: process.env.WWEBJS_WEB_VERSION_REMOTE_PATH,
+    sha: process.env.WWEBJS_WEB_VERSION_SHA256,
+    allow: process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED,
+  };
   const fetcherFor = (currentVersion: unknown, ok = true) =>
     jest.fn(() =>
       Promise.resolve({ ok, status: ok ? 200 : 500, json: () => Promise.resolve({ currentVersion }) }),
     ) as unknown as typeof fetch;
 
-  beforeEach(() => __resetWebVersionCache());
+  beforeEach(() => {
+    __resetWebVersionCache();
+    delete process.env.WWEBJS_WEB_VERSION_SHA256;
+    delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+  });
   afterEach(() => {
     __resetWebVersionCache();
     if (orig.v === undefined) delete process.env.WWEBJS_WEB_VERSION;
     else process.env.WWEBJS_WEB_VERSION = orig.v;
     if (orig.p === undefined) delete process.env.WWEBJS_WEB_VERSION_REMOTE_PATH;
     else process.env.WWEBJS_WEB_VERSION_REMOTE_PATH = orig.p;
+    if (orig.sha === undefined) delete process.env.WWEBJS_WEB_VERSION_SHA256;
+    else process.env.WWEBJS_WEB_VERSION_SHA256 = orig.sha;
+    if (orig.allow === undefined) delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+    else process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = orig.allow;
   });
 
-  it('pins the explicit version without any network call when set', async () => {
+  it('defaults unset WWEBJS_WEB_VERSION to native (undefined) with zero network calls', async () => {
+    delete process.env.WWEBJS_WEB_VERSION;
+    const fetcher = fetcherFor('SHOULD-NOT-BE-USED');
+    expect(await resolveWebVersionPin(fetcher)).toBeUndefined();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('pins the explicit version without any network call when opted into unverified remote HTML', async () => {
     delete process.env.WWEBJS_WEB_VERSION_REMOTE_PATH;
     process.env.WWEBJS_WEB_VERSION = '2.3000.1041203030-alpha';
+    process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = 'true';
     const fetcher = fetcherFor('SHOULD-NOT-BE-USED');
     expect(await resolveWebVersionPin(fetcher)).toEqual({
       webVersion: '2.3000.1041203030-alpha',
@@ -3967,6 +4073,7 @@ describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve curren
 
   it('honors a custom WWEBJS_WEB_VERSION_REMOTE_PATH template ({version} placeholder)', async () => {
     process.env.WWEBJS_WEB_VERSION = '2.9999.0';
+    process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = 'true';
     process.env.WWEBJS_WEB_VERSION_REMOTE_PATH = 'https://cdn.example.com/wa/{version}.html';
     expect((await resolveWebVersionPin(fetcherFor('x')))?.webVersionCache.remotePath).toBe(
       'https://cdn.example.com/wa/2.9999.0.html',
@@ -3980,11 +4087,11 @@ describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve curren
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it.each(['', 'auto', 'latest'])(
-    'auto-resolves the current wa-version build when WWEBJS_WEB_VERSION=%p (the #488 fix)',
+  it.each(['auto', 'latest'])(
+    'auto-resolves the current wa-version build when WWEBJS_WEB_VERSION=%p and WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true',
     async value => {
-      if (value === '') delete process.env.WWEBJS_WEB_VERSION;
-      else process.env.WWEBJS_WEB_VERSION = value;
+      process.env.WWEBJS_WEB_VERSION = value;
+      process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = 'true';
       const pin = await resolveWebVersionPin(fetcherFor('2.3000.1042251103-alpha'));
       expect(pin?.webVersion).toBe('2.3000.1042251103-alpha');
       expect(pin?.webVersionCache.remotePath).toContain('2.3000.1042251103-alpha.html');
@@ -3992,12 +4099,14 @@ describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve curren
   );
 
   it('falls back to native auto-select (undefined) when the wa-version fetch fails', async () => {
-    delete process.env.WWEBJS_WEB_VERSION;
+    process.env.WWEBJS_WEB_VERSION = 'auto';
+    process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = 'true';
     expect(await resolveWebVersionPin(fetcherFor(null, false))).toBeUndefined();
   });
 
   it('caches the resolved current version (fetches once across calls)', async () => {
-    delete process.env.WWEBJS_WEB_VERSION;
+    process.env.WWEBJS_WEB_VERSION = 'auto';
+    process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = 'true';
     const fetcher = fetcherFor('2.3000.1042251103-alpha');
     await resolveWebVersionPin(fetcher);
     await resolveWebVersionPin(fetcher);
@@ -4005,7 +4114,8 @@ describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve curren
   });
 
   it('rate-limits a transient failure (no refetch within the backoff window) but does NOT cache it permanently', async () => {
-    delete process.env.WWEBJS_WEB_VERSION;
+    process.env.WWEBJS_WEB_VERSION = 'auto';
+    process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = 'true';
     expect(await resolveWebVersionPin(fetcherFor(null, false))).toBeUndefined(); // transient failure
 
     // Within the backoff window: a 2nd call returns undefined WITHOUT another network fetch.
@@ -4013,8 +4123,7 @@ describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve curren
     expect(await resolveWebVersionPin(blocked)).toBeUndefined();
     expect(blocked).not.toHaveBeenCalled();
 
-    // After the window elapses (reset simulates it / a process restart): it retries and resolves —
-    // the failure was never permanently cached (#488 must-fix preserved).
+    // After the window elapses (reset simulates it / a process restart): it retries and resolves.
     __resetWebVersionCache();
     const ok = fetcherFor('2.3000.1042251103-alpha');
     const pin = await resolveWebVersionPin(ok);
@@ -4023,7 +4132,8 @@ describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve curren
   });
 
   it('dedupes concurrent in-flight resolves into a single fetch', async () => {
-    delete process.env.WWEBJS_WEB_VERSION;
+    process.env.WWEBJS_WEB_VERSION = 'auto';
+    process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = 'true';
     const fetcher = fetcherFor('2.3000.1042251103-alpha');
     const [a, b] = await Promise.all([resolveWebVersionPin(fetcher), resolveWebVersionPin(fetcher)]);
     expect(a?.webVersion).toBe('2.3000.1042251103-alpha');
@@ -4033,16 +4143,34 @@ describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve curren
 });
 
 describe('getEffectiveWebVersionInfo (#488 — surface the running WA-Web build to the dashboard)', () => {
-  const orig = process.env.WWEBJS_WEB_VERSION;
-  beforeEach(() => __resetWebVersionCache());
+  const orig = {
+    v: process.env.WWEBJS_WEB_VERSION,
+    sha: process.env.WWEBJS_WEB_VERSION_SHA256,
+    allow: process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED,
+  };
+  beforeEach(() => {
+    __resetWebVersionCache();
+    delete process.env.WWEBJS_WEB_VERSION_SHA256;
+    delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+  });
   afterEach(() => {
     __resetWebVersionCache();
-    if (orig === undefined) delete process.env.WWEBJS_WEB_VERSION;
-    else process.env.WWEBJS_WEB_VERSION = orig;
+    if (orig.v === undefined) delete process.env.WWEBJS_WEB_VERSION;
+    else process.env.WWEBJS_WEB_VERSION = orig.v;
+    if (orig.sha === undefined) delete process.env.WWEBJS_WEB_VERSION_SHA256;
+    else process.env.WWEBJS_WEB_VERSION_SHA256 = orig.sha;
+    if (orig.allow === undefined) delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+    else process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = orig.allow;
   });
 
-  it('reports an explicitly pinned env version', () => {
+  it('reports native by default when WWEBJS_WEB_VERSION is unset', () => {
+    delete process.env.WWEBJS_WEB_VERSION;
+    expect(getEffectiveWebVersionInfo()).toEqual({ version: null, source: 'native' });
+  });
+
+  it('reports an explicitly pinned env version when verified or opted in', () => {
     process.env.WWEBJS_WEB_VERSION = '2.3000.1041203030-alpha';
+    process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = 'true';
     expect(getEffectiveWebVersionInfo()).toEqual({ version: '2.3000.1041203030-alpha', source: 'pinned' });
   });
 
@@ -4051,8 +4179,9 @@ describe('getEffectiveWebVersionInfo (#488 — surface the running WA-Web build 
     expect(getEffectiveWebVersionInfo()).toEqual({ version: null, source: 'native' });
   });
 
-  it('reports the auto-resolved current build once resolution has run', async () => {
-    delete process.env.WWEBJS_WEB_VERSION;
+  it('reports the auto-resolved current build once opt-in resolution has run', async () => {
+    process.env.WWEBJS_WEB_VERSION = 'auto';
+    process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = 'true';
     expect(getEffectiveWebVersionInfo()).toEqual({ version: null, source: 'auto' });
     await resolveWebVersionPin(
       jest.fn(() =>

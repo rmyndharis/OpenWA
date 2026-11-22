@@ -406,33 +406,41 @@ stalls the post-link sync. (If you also see `chrome_crashpad_handler: --database
 session never starts at all_, that is a different problem — see "Session fails to launch …" below.)
 
 **Fix:** OpenWA reconciles a missed `ready` event when WhatsApp Web is connected, the injected
-runtime is available, and whatsapp-web.js has populated the linked account identity. If your
-environment still hits a WA-Web compatibility hang, pin a known-good WA-Web version with
-`WWEBJS_WEB_VERSION`:
+runtime is available, and whatsapp-web.js has populated the linked account identity. By default
+(`WWEBJS_WEB_VERSION` unset or `off`), OpenWA disables remote HTML pinning and loads the first-party
+build served by WhatsApp with zero third-party fetches. If your environment still hits a WA-Web
+compatibility hang, pin a known-good WA-Web build together with its SHA-256 digest:
 
 ```bash
-# Optional workaround — substitute a build that the registry currently serves:
+# Optional verified workaround: substitute a build the registry serves and its SHA-256 hex digest:
 WWEBJS_WEB_VERSION=<a build from that registry's html/ folder>
+WWEBJS_WEB_VERSION_SHA256=<64-char hex sha256 of the downloaded HTML>
 ```
 
 Restart the container after changing it. Pick the build from
-[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder) — a
-build the registry no longer serves cannot be fetched, and the session starts on the live build rather
-than the pin you asked for, with a warning at start (action `web_version_html_unavailable`, naming the
-build, the URL and the reason). With
-`WWEBJS_WEB_VERSION` unset, `latest`, or `auto` (the default), OpenWA auto-resolves a settled build
-from that registry and pins its HTML — note this HTML is fetched from a third-party repository and
-executed inside the `web.whatsapp.com` origin without an integrity check. Set
-`WWEBJS_WEB_VERSION=off` to disable pinning and use the first-party build served by WhatsApp. An
-unpinned session (this setting, or an auto-resolve that could not reach the registry) caches nothing to
-disk, so it also works on the image's read-only root filesystem. A pinned build's HTML is downloaded
-at start, with a 10 s bound, into `<SESSION_DATA_PATH>/.wa-web-cache/` on the writable data volume and
-served from there; a build no session has started on for a week is removed. A registry build whose page is
-WhatsApp's logged-out landing page, not the app (its root element is `<html id="whatsapp-web-logged-out">`, the
-value quoted or not), is refused: the auto-resolved pin moves to the next older settled build from the same
-registry read (up to three are tried, with the warning `web_version_html_rejected`), so the fallback needs no
-second registry read. An exact build you set is not swapped, so
-that session starts on the live build with the `web_version_html_unavailable` warning above.
+[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder) or
+an operator-controlled mirror (`WWEBJS_WEB_VERSION_REMOTE_PATH`), compute the SHA-256 digest of that
+HTML file, and set `WWEBJS_WEB_VERSION_SHA256`. OpenWA verifies the digest over the raw fetched bytes
+before writing `<SESSION_DATA_PATH>/.wa-web-cache/<version>.html` and re-verifies the digest on every
+subsequent cache hit. If the cached file was modified, OpenWA deletes it and re-fetches; if fetched
+bytes fail verification, OpenWA refuses the pin with warning `web_version_html_hash_mismatch` and
+starts on the live first-party build. A build the registry no longer serves cannot be fetched, and
+the session starts on the live build rather than the pin you asked for, with a warning at start
+(action `web_version_html_unavailable`, naming the build, the URL and the reason).
+
+To opt into unverified remote HTML (either `WWEBJS_WEB_VERSION=auto` / `latest` or an exact build
+without `WWEBJS_WEB_VERSION_SHA256`), you must also set `WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true`;
+boot validation refuses unverified remote pins without that explicit opt-in because pinned HTML
+executes inside the authenticated `web.whatsapp.com` origin. An unpinned session (default unset/`off`,
+or an opted-in auto-resolve that could not reach the registry) caches nothing to disk, so it works on
+the image's read-only root filesystem. A pinned build's HTML is downloaded at start, with a 10 s
+bound, into `<SESSION_DATA_PATH>/.wa-web-cache/` on the writable data volume and served from there; a
+build no session has started on for a week is removed. A registry build whose page is WhatsApp's
+logged-out landing page, not the app (its root element is `<html id="whatsapp-web-logged-out">`, the
+value quoted or not), is refused: an opted-in auto-resolved pin moves to the next older settled build
+from the same registry read (up to three are tried, with the warning `web_version_html_rejected`), so
+the fallback needs no second registry read. An exact build you set is not swapped, so that session
+starts on the live build with the `web_version_html_unavailable` warning above.
 
 A pin is not guaranteed to hold. whatsapp-web.js applies it by answering the page's document request
 with the pinned HTML, and that can miss in two ways: a pin whose HTML could not be fetched is dropped

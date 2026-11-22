@@ -13,7 +13,7 @@ import { EnginePageError } from '../../common/errors/engine-page.error';
 import { type createLogger } from '../../common/services/logger.service';
 import { DEFAULT_PUPPETEER_ARGS, MAX_TIMER_MS, withPinnedBrowserLocale } from '../../config/configuration';
 import { validatePuppeteerArg } from '../../config/puppeteer-args';
-import { resolveWebVersionPin } from '../wa-web-version';
+import { getVerifiedPinnedHtml, resolveWebVersionPin } from '../wa-web-version';
 import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import { killOrphanedChromiumProcesses, removeStaleSingletonFiles } from './chromium-profile-hygiene';
 import { isSupportedProxyUrl, buildProxyLaunchConfig, bypassServiceWorkerOnLaunch } from './wwebjs-proxy';
@@ -454,16 +454,13 @@ export class WwebjsLifecycle {
       // output later (after a hard kill of the OpenWA process orphaned them).
       puppeteerArgs.push(`--openwa-session=${this.host.config.sessionId}`);
 
-      // Pin the WA-Web version (fixes the 1.34.x "stuck at authenticating" hang on some setups,
-      // #251/#488). DEFAULT: auto-resolve a settled build from the wa-version registry and pin its
-      // remote HTML (no integrity check — resolveWebVersionPin logs a loud warning); only
-      // WWEBJS_WEB_VERSION=off leaves whatsapp-web.js to use the first-party build from WhatsApp.
-      // The pinned HTML is downloaded (bounded) onto the writable data volume and served from there,
-      // so an unreachable mirror is named in the log instead of silently loading the live build.
-      const versionPin = await resolveWebVersionPin(
-        undefined,
-        path.join(path.resolve(this.host.config.sessionDataPath), '.wa-web-cache'),
-      );
+      // Optional WA-Web version pin (workaround for the 1.34.x "stuck at authenticating" hang on
+      // some setups, #251/#488). DEFAULT (unset or "off"): native first-party build served by
+      // WhatsApp with zero third-party fetches. Opting into a remote build requires either a
+      // matching WWEBJS_WEB_VERSION_SHA256 digest (verified on fetch and every cache hit, and served
+      // directly from memory to close disk TOCTOU) or explicit WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true.
+      const webCacheDir = path.join(path.resolve(this.host.config.sessionDataPath), '.wa-web-cache');
+      const versionPin = await resolveWebVersionPin(undefined, webCacheDir);
       // Assigned on every init, including the unpinned case, so a pin from an earlier init is never
       // compared against the page this one loads.
       this.requestedWebVersion = versionPin?.webVersion;
@@ -519,7 +516,15 @@ export class WwebjsLifecycle {
           );
           throw attemptError;
         }
-        await this.runInitAttempt(puppeteerArgs, authTimeoutMs, proxyAuthentication, versionPin);
+        // Re-resolve and re-verify the version pin before attempt 2 so a retry never reuses stale
+        // or tampered cached HTML without integrity verification.
+        const retryVersionPin = await resolveWebVersionPin(undefined, webCacheDir);
+        this.requestedWebVersion = retryVersionPin?.webVersion;
+        if (this.tearingDown) {
+          this.setStatus(EngineStatus.DISCONNECTED);
+          return;
+        }
+        await this.runInitAttempt(puppeteerArgs, authTimeoutMs, proxyAuthentication, retryVersionPin);
       }
     } catch (error) {
       // A stop, delete or force-kill closed the browser under the launch, which is what rejected it:
@@ -631,6 +636,40 @@ export class WwebjsLifecycle {
       // only reads: it persists nothing when the cache served the page.
       ...(versionPin ?? { webVersionCache: { type: 'none' as const } }),
     });
+    // When SHA-256 verification succeeded in resolveWebVersionPin, serve the verified in-memory
+    // bytes directly during Client.initWebVersionCache instead of letting LocalWebCache re-read
+    // the file from disk (eliminates the disk TOCTOU window between verification and launch).
+    const verifiedHtml = getVerifiedPinnedHtml(versionPin);
+    if (
+      verifiedHtml !== undefined &&
+      typeof (client as unknown as { initWebVersionCache?: unknown }).initWebVersionCache === 'function'
+    ) {
+      const target = client as unknown as {
+        initWebVersionCache: () => Promise<void>;
+        pupPage: {
+          setRequestInterception: (enabled: boolean) => Promise<void>;
+          on: (
+            event: string,
+            handler: (req: { url: () => string; respond: (res: unknown) => void; continue: () => void }) => void,
+          ) => void;
+        };
+      };
+      const htmlBody = verifiedHtml.toString('utf8');
+      target.initWebVersionCache = async () => {
+        await target.pupPage.setRequestInterception(true);
+        target.pupPage.on('request', req => {
+          if (req.url() === 'https://web.whatsapp.com/') {
+            req.respond({
+              status: 200,
+              contentType: 'text/html',
+              body: htmlBody,
+            });
+          } else {
+            req.continue();
+          }
+        });
+      };
+    }
     this.client = client;
 
     this.setupEventHandlers();

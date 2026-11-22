@@ -138,10 +138,12 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'API_MASTER_KEY',
   'TRUSTED_PROXIES',
   'CSP_UPGRADE_INSECURE_REQUESTS',
-  // whatsapp-web.js launch knobs: the WhatsApp Web version pin, its remote HTML template, and the
-  // first-boot init wait raised for slow hosts.
+  // whatsapp-web.js launch knobs: the WhatsApp Web version pin, its remote HTML template,
+  // integrity verification controls, and the first-boot init wait raised for slow hosts.
   'WWEBJS_WEB_VERSION',
   'WWEBJS_WEB_VERSION_REMOTE_PATH',
+  'WWEBJS_WEB_VERSION_SHA256',
+  'WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED',
   'WWEBJS_AUTH_TIMEOUT_MS',
   // The remainder of the documented knob set, forwarded blank once the compose forwarding list was
   // completed (compose-parity.spec.ts now derives the required forwards from .env.example, so every
