@@ -2,6 +2,7 @@ import { DataSource, DataSourceOptions } from 'typeorm';
 import * as path from 'path';
 import { loadCliEnv } from './load-cli-env';
 import { postgresUtcExtra } from './postgres-utc';
+import { createSqlitePrepareDatabase, parseStrictSqliteJournalMode } from './sqlite-pragmas';
 import { postgresSchemaError, sqliteDataMainPathCollision } from '../config/env.validation';
 
 // Load env with the same precedence as the app (process.env > .env > data/.env.generated), so the
@@ -56,9 +57,12 @@ const dataEntities = [
 const dataMigrations = [sourceGlob('migrations', '*{.ts,.js}')];
 
 // SQLite configuration
+const sqliteDatabasePath = process.env.DATABASE_NAME || './data/openwa.sqlite';
+const sqliteJournalMode = parseStrictSqliteJournalMode(process.env.SQLITE_JOURNAL_MODE);
 const sqliteDataSourceOptions: DataSourceOptions = {
   type: 'better-sqlite3',
-  database: process.env.DATABASE_NAME || './data/openwa.sqlite',
+  database: sqliteDatabasePath,
+  prepareDatabase: createSqlitePrepareDatabase(sqliteDatabasePath, sqliteJournalMode),
   entities: dataEntities,
   migrations: dataMigrations,
   synchronize: false,

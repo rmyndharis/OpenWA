@@ -196,6 +196,37 @@ describe('main connection', () => {
     expect(mainConnectionOptions(config()).name).toBe('main');
   });
 
+  describe('SQLite journal mode pragmas', () => {
+    it('enables WAL mode and synchronous=NORMAL by default on file-backed SQLite', async () => {
+      const ds = await boot();
+      try {
+        const [{ journal_mode: mode }] = await ds.query<Array<{ journal_mode: string }>>('PRAGMA journal_mode');
+        const [{ synchronous }] = await ds.query<Array<{ synchronous: number }>>('PRAGMA synchronous');
+        expect(mode.toLowerCase()).toBe('wal');
+        expect(synchronous).toBe(1);
+      } finally {
+        await ds.destroy();
+      }
+    });
+
+    it('converts an existing WAL database back to DELETE mode and synchronous=FULL when opted out', async () => {
+      const walDs = await boot();
+      await walDs.destroy();
+
+      const deleteDs = await createMainDataSource(
+        mainConnectionOptions(config({ 'database.database': file, 'database.journalMode': 'DELETE' })),
+      );
+      try {
+        const [{ journal_mode: mode }] = await deleteDs.query<Array<{ journal_mode: string }>>('PRAGMA journal_mode');
+        const [{ synchronous }] = await deleteDs.query<Array<{ synchronous: number }>>('PRAGMA synchronous');
+        expect(mode.toLowerCase()).toBe('delete');
+        expect(synchronous).toBe(2);
+      } finally {
+        await deleteDs.destroy();
+      }
+    });
+  });
+
   describe('schema mismatch', () => {
     /** A file this release migrated, then rebuilt by a release older than the chat-scope column. */
     const rebuiltByOlderRelease = async (): Promise<void> => {

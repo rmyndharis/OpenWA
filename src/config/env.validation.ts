@@ -161,6 +161,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   checkEnum('ENGINE_TYPE', ['whatsapp-web.js', 'baileys']);
   checkEnum('STORAGE_TYPE', ['local', 's3']);
   checkEnum('MESSAGE_INLINE_MEDIA', ['inline', 'archive']);
+  checkEnum('SQLITE_JOURNAL_MODE', ['WAL', 'DELETE']);
   // 'archive' drops the inline copy only after the archiver stored the file; with the archiver off
   // nothing is ever stored, so the mode would silently do nothing. Refuse that rather than let an
   // operator believe the inline copies are being reclaimed.

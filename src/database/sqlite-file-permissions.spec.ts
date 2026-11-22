@@ -10,7 +10,9 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } f
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { ConfigService } from '@nestjs/config';
+import { DataSource } from 'typeorm';
 import { SqlitePermissionsBoot, tightenSqliteFilePermissions } from './sqlite-file-permissions';
+import { createSqlitePrepareDatabase } from './sqlite-pragmas';
 
 const modeOf = (path: string): number => statSync(path).mode & 0o777;
 
@@ -104,5 +106,143 @@ describe('SqlitePermissionsBoot', () => {
     const boot = new SqlitePermissionsBoot(configReturning({}));
     // Must not throw even when neither default file exists (e.g. a fresh checkout before first boot).
     expect(() => boot.onApplicationBootstrap()).not.toThrow();
+  });
+
+  describe('beforeApplicationShutdown WAL checkpoint', () => {
+    const fakeDataSource = (opts: { type: string; database?: string; isInitialized?: boolean; query?: jest.Mock }) =>
+      ({
+        isInitialized: opts.isInitialized ?? true,
+        options: { type: opts.type, database: opts.database },
+        query: opts.query ?? jest.fn().mockResolvedValue([]),
+      }) as unknown;
+
+    it('runs PRAGMA wal_checkpoint(TRUNCATE) on initialized file-backed SQLite DataSources in WAL mode', async () => {
+      const mainQuery = jest.fn().mockResolvedValue([]);
+      const dataQuery = jest.fn().mockResolvedValue([]);
+      const mainDs = fakeDataSource({
+        type: 'better-sqlite3',
+        database: join(dir, 'main.sqlite'),
+        query: mainQuery,
+      });
+      const dataDs = fakeDataSource({
+        type: 'better-sqlite3',
+        database: join(dir, 'openwa.sqlite'),
+        query: dataQuery,
+      });
+      const boot = new SqlitePermissionsBoot(
+        configReturning({ 'database.journalMode': 'WAL' }),
+        mainDs as never,
+        dataDs as never,
+      );
+
+      await (boot as unknown as { beforeApplicationShutdown: () => Promise<void> }).beforeApplicationShutdown();
+
+      expect(mainQuery).toHaveBeenCalledWith('PRAGMA wal_checkpoint(TRUNCATE)');
+      expect(dataQuery).toHaveBeenCalledWith('PRAGMA wal_checkpoint(TRUNCATE)');
+    });
+
+    it('skips checkpoint when journalMode is DELETE, for Postgres, for :memory:, or when uninitialized', async () => {
+      const mainQuery = jest.fn().mockResolvedValue([]);
+      const dataQuery = jest.fn().mockResolvedValue([]);
+
+      const deleteBoot = new SqlitePermissionsBoot(
+        configReturning({ 'database.journalMode': 'DELETE' }),
+        fakeDataSource({ type: 'better-sqlite3', database: join(dir, 'main.sqlite'), query: mainQuery }) as never,
+        fakeDataSource({ type: 'better-sqlite3', database: join(dir, 'openwa.sqlite'), query: dataQuery }) as never,
+      );
+      await (deleteBoot as unknown as { beforeApplicationShutdown: () => Promise<void> }).beforeApplicationShutdown();
+      expect(mainQuery).not.toHaveBeenCalled();
+      expect(dataQuery).not.toHaveBeenCalled();
+
+      const pgAndMemBoot = new SqlitePermissionsBoot(
+        configReturning({ 'database.journalMode': 'WAL' }),
+        fakeDataSource({ type: 'better-sqlite3', database: ':memory:', query: mainQuery }) as never,
+        fakeDataSource({ type: 'postgres', database: 'openwa', query: dataQuery }) as never,
+      );
+      await (pgAndMemBoot as unknown as { beforeApplicationShutdown: () => Promise<void> }).beforeApplicationShutdown();
+      expect(mainQuery).not.toHaveBeenCalled();
+      expect(dataQuery).not.toHaveBeenCalled();
+
+      const uninitBoot = new SqlitePermissionsBoot(
+        configReturning({ 'database.journalMode': 'WAL' }),
+        fakeDataSource({
+          type: 'better-sqlite3',
+          database: join(dir, 'main.sqlite'),
+          isInitialized: false,
+          query: mainQuery,
+        }) as never,
+      );
+      await (uninitBoot as unknown as { beforeApplicationShutdown: () => Promise<void> }).beforeApplicationShutdown();
+      expect(mainQuery).not.toHaveBeenCalled();
+    });
+
+    it('is best-effort: swallows checkpoint errors and still checkpoints remaining connections', async () => {
+      const mainQuery = jest.fn().mockRejectedValue(new Error('SQLITE_BUSY'));
+      const dataQuery = jest.fn().mockResolvedValue([]);
+      const boot = new SqlitePermissionsBoot(
+        configReturning({ 'database.journalMode': 'WAL' }),
+        fakeDataSource({ type: 'better-sqlite3', database: join(dir, 'main.sqlite'), query: mainQuery }) as never,
+        fakeDataSource({ type: 'better-sqlite3', database: join(dir, 'openwa.sqlite'), query: dataQuery }) as never,
+      );
+
+      await expect(
+        (boot as unknown as { beforeApplicationShutdown: () => Promise<void> }).beforeApplicationShutdown(),
+      ).resolves.toBeUndefined();
+      expect(dataQuery).toHaveBeenCalledWith('PRAGMA wal_checkpoint(TRUNCATE)');
+    });
+
+    it('warns when PRAGMA wal_checkpoint(TRUNCATE) reports busy or incomplete checkpoint, and stays silent when complete', async () => {
+      const busyQuery = jest.fn().mockResolvedValue([{ busy: 1, log: 5, checkpointed: 2 }]);
+      const partialQuery = jest.fn().mockResolvedValue([{ busy: 0, log: 4, checkpointed: 1 }]);
+      const bootIncomplete = new SqlitePermissionsBoot(
+        configReturning({ 'database.journalMode': 'WAL' }),
+        fakeDataSource({ type: 'better-sqlite3', database: join(dir, 'main.sqlite'), query: busyQuery }) as never,
+        fakeDataSource({ type: 'better-sqlite3', database: join(dir, 'openwa.sqlite'), query: partialQuery }) as never,
+      );
+      const warnSpy = jest
+        .spyOn((bootIncomplete as unknown as { logger: { warn: (msg: string) => void } }).logger, 'warn')
+        .mockImplementation(() => undefined);
+
+      await bootIncomplete.beforeApplicationShutdown();
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      expect(warnSpy.mock.calls[0]?.[0]).toContain('main');
+      expect(warnSpy.mock.calls[0]?.[0]).toContain('busy=1');
+      expect(warnSpy.mock.calls[1]?.[0]).toContain('data');
+      expect(warnSpy.mock.calls[1]?.[0]).toContain('checkpointed=1');
+
+      const okQuery = jest.fn().mockResolvedValue([{ busy: 0, log: 3, checkpointed: 3 }]);
+      const bootOk = new SqlitePermissionsBoot(
+        configReturning({ 'database.journalMode': 'WAL' }),
+        fakeDataSource({ type: 'better-sqlite3', database: join(dir, 'main.sqlite'), query: okQuery }) as never,
+      );
+      const okWarnSpy = jest
+        .spyOn((bootOk as unknown as { logger: { warn: (msg: string) => void } }).logger, 'warn')
+        .mockImplementation(() => undefined);
+      await bootOk.beforeApplicationShutdown();
+      expect(okWarnSpy).not.toHaveBeenCalled();
+    });
+
+    it('truncates a live WAL sidecar to zero bytes on a real better-sqlite3 DataSource', async () => {
+      const dbPath = join(dir, 'live-wal.sqlite');
+      const ds = new DataSource({
+        type: 'better-sqlite3',
+        database: dbPath,
+        prepareDatabase: createSqlitePrepareDatabase(dbPath, 'WAL'),
+      });
+      await ds.initialize();
+      try {
+        await ds.query('PRAGMA wal_autocheckpoint = 0');
+        await ds.query('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)');
+        await ds.query("INSERT INTO notes (body) VALUES ('uncheckpointed')");
+        expect(statSync(`${dbPath}-wal`).size).toBeGreaterThan(0);
+
+        const boot = new SqlitePermissionsBoot(configReturning({ 'database.journalMode': 'WAL' }), ds);
+        await boot.beforeApplicationShutdown();
+
+        expect(statSync(`${dbPath}-wal`).size).toBe(0);
+      } finally {
+        await ds.destroy();
+      }
+    });
   });
 });

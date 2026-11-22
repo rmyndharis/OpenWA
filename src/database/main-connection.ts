@@ -1,6 +1,7 @@
 import { join } from 'path';
 import type { ConfigService } from '@nestjs/config';
 import { DataSource, MigrationExecutor, type DataSourceOptions } from 'typeorm';
+import { createSqlitePrepareDatabase, resolveSqliteJournalMode } from './sqlite-pragmas';
 
 /**
  * Raised when main.sqlite does not match this release: its migrations ledger records a migration this
@@ -39,12 +40,15 @@ export const retryMainConnection = (err: unknown): boolean => !(err instanceof M
 export function mainConnectionOptions(
   configService: ConfigService,
 ): DataSourceOptions & { name: string; toRetry: (err: unknown) => boolean } {
+  const database = configService.get<string>('database.database', './data/main.sqlite');
+  const journalMode = resolveSqliteJournalMode(configService.get<string>('database.journalMode'));
   return {
     // Nest's TypeOrmCoreModule resolves the DataSource to close at shutdown from these options.
     name: 'main',
     type: 'better-sqlite3',
-    database: configService.get<string>('database.database', './data/main.sqlite'),
+    database,
     timeout: SQLITE_BUSY_TIMEOUT_MS,
+    prepareDatabase: createSqlitePrepareDatabase(database, journalMode),
     entities: [
       join(__dirname, '..', 'modules/auth/**/*.entity{.ts,.js}'),
       join(__dirname, '..', 'modules/audit/**/*.entity{.ts,.js}'),

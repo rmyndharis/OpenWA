@@ -87,6 +87,16 @@ others.
 > - Audit logs must persist even if Data DB fails
 > - Enables switching Data DB type without losing authentication
 
+#### SQLite Journal Mode (WAL)
+
+OpenWA opens all file-backed SQLite databases (`main.sqlite`, `openwa.sqlite`, and CLI migration connections) in **WAL** (`Write-Ahead Logging`) mode with `PRAGMA synchronous = NORMAL` by default, tightening the database file to mode `0600` before enabling WAL so the `-wal` and `-shm` sidecars inherit owner-only permissions. During clean shutdown, OpenWA runs `PRAGMA wal_checkpoint(TRUNCATE)` on each initialized SQLite connection so committed WAL frames are flushed back into the main database file.
+
+For deployments storing SQLite files on network filesystems (such as NFS or SMB) where WAL shared-memory locking is unsupported, set `SQLITE_JOURNAL_MODE=DELETE`. OpenWA explicitly runs `PRAGMA journal_mode = DELETE` and `PRAGMA synchronous = FULL` on open, converting an existing WAL database cleanly back to rollback-journal mode.
+
+| Setting               | Default | Allowed Values  | Description                                                               |
+| --------------------- | ------- | --------------- | ------------------------------------------------------------------------- |
+| `SQLITE_JOURNAL_MODE` | `WAL`   | `WAL`, `DELETE` | SQLite journal mode; use `DELETE` on NFS/SMB mounts that disallow WAL shm |
+
 #### Built-in PostgreSQL Orchestration
 
 With `DATABASE_TYPE=postgres` and `POSTGRES_BUILTIN=true`, `main.ts` starts the managed `postgres` container (creating it if it does not exist) **before** `NestFactory.create`. It has to run that early: the `data` connection is opened while Nest instantiates providers, before any `onModuleInit` hook, so a stopped `openwa-postgres` would otherwise fail every boot. The step is bounded at 15 seconds and never fails boot on its own. `DockerService.onModuleInit()` later runs the same orchestration for `redis` / `minio` when their own `REDIS_BUILTIN` / `MINIO_BUILTIN` flags are set. A flag set for a datastore the configuration does not use starts nothing: `postgres` needs `DATABASE_TYPE=postgres`, `minio` needs `STORAGE_TYPE=s3`, and `redis` needs one of `REDIS_ENABLED`, `QUEUE_ENABLED` or `CACHE_ENABLED`. Neither does one whose host the environment or the project `.env` pins to anything but the bundled container (`DATABASE_HOST`, `REDIS_HOST`, `S3_ENDPOINT`), the early PostgreSQL start included: the app dials the pinned host. A flag decides only that start: whether the app uses the container follows its host. A `*_BUILTIN=true` the environment pins starts the bundled container at every boot whatever host the saved file gives the app, so after the dashboard switched that datastore to an external server the container runs unused until the variable is unset.

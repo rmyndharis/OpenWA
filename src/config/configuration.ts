@@ -7,6 +7,7 @@ import { readWsRateLimitConfig } from '../modules/events/ws-rate-limit';
 import { DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS, MAX_TIMER_MS } from '../common/services/shutdown-budget';
 import { parseTrustedProxies } from '../common/utils/ip';
 import { positiveIntFromEnv } from '../common/utils/env-int';
+import { resolveSqliteJournalMode } from '../database/sqlite-pragmas';
 
 /**
  * Root of the host's persistent state. Relative on purpose: the image sets WORKDIR /app and mounts
@@ -178,6 +179,7 @@ export default () => ({
     // SQLite file for the auth/audit DB. Overridable (e.g. e2e points it at a temp file) so tests
     // never write api keys into the developer's ./data/main.sqlite.
     database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
+    journalMode: resolveSqliteJournalMode(process.env.SQLITE_JOURNAL_MODE),
     // Schema management for the auth/audit DB. By default the main-owned migrations run at boot
     // (they also adopt a file an earlier release built with synchronize); run them by hand with
     // `npm run migration:run:main` (or `migration:run:main:prod` for the compiled image), since the
@@ -192,6 +194,8 @@ export default () => ({
     type: process.env.DATABASE_TYPE || 'sqlite',
     // SQLite path (used when type is sqlite)
     database: process.env.DATABASE_NAME || './data/openwa.sqlite',
+    // SQLite journal mode (used when type is sqlite): WAL (default) or DELETE (NFS/SMB opt-out)
+    journalMode: resolveSqliteJournalMode(process.env.SQLITE_JOURNAL_MODE),
     // Postgres database NAME (used when type is postgres). Resolved from the same
     // DATABASE_NAME env as the migration CLI (data-source.ts) so the runtime factory and
     // migrations never target different databases. Distinct sqlite-vs-pg defaults.

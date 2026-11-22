@@ -11,6 +11,7 @@ import configuration from './config/configuration';
 import { validateEnv } from './config/env.validation';
 import { createBootDataSource } from './database/pg-boot-migrations';
 import { createMainDataSource, mainConnectionOptions, SQLITE_BUSY_TIMEOUT_MS } from './database/main-connection';
+import { createSqlitePrepareDatabase, resolveSqliteJournalMode } from './database/sqlite-pragmas';
 import { SessionModule } from './modules/session/session.module';
 import { MessageModule } from './modules/message/message.module';
 import { TemplateModule } from './modules/template/template.module';
@@ -223,12 +224,15 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
         // DATABASE_SYNCHRONIZE=true for zero-config synchronize instead. Computed once: the resolved
         // value is always a boolean, so a get(..., true) fallback would never fire (and would be a trap).
         const synchronize = configService.get<boolean>('dataDatabase.synchronize', false);
+        const database = configService.get<string>('dataDatabase.database', './data/openwa.sqlite');
+        const journalMode = resolveSqliteJournalMode(configService.get<string>('dataDatabase.journalMode'));
         return {
           ...baseConfig,
           name: 'data',
           type: 'better-sqlite3' as const,
-          database: configService.get<string>('dataDatabase.database', './data/openwa.sqlite'),
+          database,
           timeout: SQLITE_BUSY_TIMEOUT_MS,
+          prepareDatabase: createSqlitePrepareDatabase(database, journalMode),
           synchronize,
           migrationsRun: !synchronize,
         };

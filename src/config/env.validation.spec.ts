@@ -990,3 +990,15 @@ describe('validateEnv built-in Redis connection settings', () => {
     });
   });
 });
+
+describe('validateEnv SQLITE_JOURNAL_MODE', () => {
+  it.each([undefined, '', '   ', 'WAL', 'DELETE'])('accepts SQLITE_JOURNAL_MODE=%j', value => {
+    expect(() => validateEnv({ SQLITE_JOURNAL_MODE: value })).not.toThrow();
+  });
+
+  it.each(['wal', 'delete', 'TRUNCATE', 'MEMORY', 'OFF', ' WAL '])('rejects invalid SQLITE_JOURNAL_MODE=%j', value => {
+    expect(() => validateEnv({ SQLITE_JOURNAL_MODE: value })).toThrow(
+      /SQLITE_JOURNAL_MODE must be one of "WAL", "DELETE"/,
+    );
+  });
+});

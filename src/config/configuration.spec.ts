@@ -479,3 +479,40 @@ describe('configuration — puppeteer locale pin', () => {
     expect(configuration().engine.puppeteer.args).toEqual(['--no-sandbox', '--lang=id-ID']);
   });
 });
+
+describe('configuration SQLite journal mode', () => {
+  const orig = process.env.SQLITE_JOURNAL_MODE;
+
+  afterEach(() => {
+    if (orig === undefined) delete process.env.SQLITE_JOURNAL_MODE;
+    else process.env.SQLITE_JOURNAL_MODE = orig;
+  });
+
+  it('defaults both database and dataDatabase journalMode to WAL when unset or blank', () => {
+    delete process.env.SQLITE_JOURNAL_MODE;
+    const cfg = configuration() as unknown as {
+      database: { journalMode?: string };
+      dataDatabase: { journalMode?: string };
+    };
+    expect(cfg.database.journalMode).toBe('WAL');
+    expect(cfg.dataDatabase.journalMode).toBe('WAL');
+
+    process.env.SQLITE_JOURNAL_MODE = '   ';
+    const blankCfg = configuration() as unknown as {
+      database: { journalMode?: string };
+      dataDatabase: { journalMode?: string };
+    };
+    expect(blankCfg.database.journalMode).toBe('WAL');
+    expect(blankCfg.dataDatabase.journalMode).toBe('WAL');
+  });
+
+  it('honors SQLITE_JOURNAL_MODE=DELETE on both database namespaces', () => {
+    process.env.SQLITE_JOURNAL_MODE = 'DELETE';
+    const cfg = configuration() as unknown as {
+      database: { journalMode?: string };
+      dataDatabase: { journalMode?: string };
+    };
+    expect(cfg.database.journalMode).toBe('DELETE');
+    expect(cfg.dataDatabase.journalMode).toBe('DELETE');
+  });
+});
