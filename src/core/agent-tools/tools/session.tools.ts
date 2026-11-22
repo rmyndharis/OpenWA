@@ -26,10 +26,17 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
         offset: z.number().int().min(0).optional(),
         name: z.string().min(1).describe('Exact session name (case-sensitive)').optional(),
       }),
-      handler: (input, apiKey) =>
-        session
-          .findAll(apiKey.allowedSessions, { limit: input.limit, offset: input.offset, name: input.name })
-          .then(ss => ss.map(s => SessionResponseDto.fromEntity(s, session.engineLoaded(s)))),
+      handler: async (input, apiKey) => {
+        const ss = await session.findAll(apiKey.allowedSessions, {
+          limit: input.limit,
+          offset: input.offset,
+          name: input.name,
+        });
+        const now = await session.leaseClockNow?.();
+        return ss.map(s =>
+          SessionResponseDto.fromEntity(s, now !== undefined ? session.engineLoaded(s, now) : session.engineLoaded(s)),
+        );
+      },
     }),
     defineTool({
       name: 'SessionFindOne',
@@ -38,8 +45,14 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
       tier: 'read',
       sessionScoped: true,
       inputSchema: z.object({ sessionId }),
-      handler: input =>
-        session.findOne(input.sessionId).then(s => SessionResponseDto.fromEntity(s, session.engineLoaded(s))),
+      handler: async input => {
+        const s = await session.findOne(input.sessionId);
+        const now = await session.leaseClockNow?.();
+        return SessionResponseDto.fromEntity(
+          s,
+          now !== undefined ? session.engineLoaded(s, now) : session.engineLoaded(s),
+        );
+      },
     }),
     defineTool({
       name: 'SessionGetChats',

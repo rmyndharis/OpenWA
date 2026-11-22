@@ -242,7 +242,7 @@ describe('a terminal unlink whose first session read cannot be retried', () => {
     expect(f.announced()).toEqual([]);
   });
 
-  it('audits without clearing the phone when the read fails while draining after the lease was lost', async () => {
+  it('suppresses audit, phone clear, and announcement when the read fails while draining after the lease was lost', async () => {
     const f = fixture();
     await f.lifecycle.start(ID);
     f.drain();
@@ -252,9 +252,9 @@ describe('a terminal unlink whose first session read cannot be retried', () => {
     f.callbacksOf(0).onDisconnected?.('UNPAIRED');
     await f.settled();
 
-    expect(f.unlinkAudits()).toHaveLength(1);
+    expect(f.unlinkAudits()).toHaveLength(0);
     expect(f.stored.phone).toBe(BOUND);
-    expect(f.announced()).toEqual(['UNPAIRED']);
+    expect(f.announced()).toEqual([]);
   });
 
   it('is recorded when shutdown runs while the read is in flight and the read then fails', async () => {
@@ -447,7 +447,7 @@ describe('a Baileys unlink reported once its credential cleanup finished', () =>
     expect(f.handled).not.toHaveBeenCalled();
   });
 
-  it('audits without clearing the phone when the lease was lost and the orphan teardown ran during the cleanup', async () => {
+  it('suppresses audit, phone clear, and announcement when the lease was lost and the orphan teardown ran during the cleanup', async () => {
     const f = fixture();
     await f.lifecycle.start(ID);
     const finish = loggedOut(f.callbacksOf(0));
@@ -456,9 +456,9 @@ describe('a Baileys unlink reported once its credential cleanup finished', () =>
     await f.lifecycle.stopOrphanEngines([ID]);
     await finish();
 
-    expect(f.unlinkAudits()).toHaveLength(1);
+    expect(f.unlinkAudits()).toHaveLength(0);
     expect(f.stored.phone).toBe(BOUND);
-    expect(f.announced()).toEqual(['logged out']);
+    expect(f.announced()).toEqual([]);
   });
 
   it('still drops a report that is not an unlink from a retired engine', async () => {

@@ -284,12 +284,15 @@ export class SessionProxyInterceptor implements NestInterceptor {
     // PostgreSQL fail the query, and no id carries one.
     if (!sessionId || sessionId.includes('\0')) return next.handle();
 
+    const usesOwnershipLookup = typeof this.ownership.findLiveOwner === 'function';
     let owner: Pick<Session, 'id' | 'nodeId' | 'nodeUrl' | 'leaseExpiresAt'> | null;
     try {
-      owner = await this.sessions.findOne({
-        where: { id: sessionId },
-        select: { id: true, nodeId: true, nodeUrl: true, leaseExpiresAt: true },
-      });
+      owner = usesOwnershipLookup
+        ? await this.ownership.findLiveOwner(sessionId)
+        : await this.sessions.findOne({
+            where: { id: sessionId },
+            select: { id: true, nodeId: true, nodeUrl: true, leaseExpiresAt: true },
+          });
     } catch (error) {
       // This lookup is the first statement of every session request on a routed node. A database that cannot serve it
       // for the moment (isTransientDbError: a lost, refused or timed-out connection, a failed host lookup, a lock, a
@@ -305,8 +308,10 @@ export class SessionProxyInterceptor implements NestInterceptor {
       throw new ServiceUnavailableException(`Session ${sessionId} could not be routed; nothing was done, retry`);
     }
     if (!owner?.nodeId || owner.nodeId === this.ownership.nodeId) return next.handle();
-    const leaseLive = owner.leaseExpiresAt != null && owner.leaseExpiresAt > new Date();
-    if (!leaseLive) return next.handle();
+    if (!usesOwnershipLookup) {
+      const leaseLive = owner.leaseExpiresAt != null && owner.leaseExpiresAt > new Date();
+      if (!leaseLive) return next.handle();
+    }
 
     // One hop only — but never "execute anywhere": the hop marker is client-settable, so a request
     // marked forwarded that still lands on a live non-owner (forged header, or ownership moved

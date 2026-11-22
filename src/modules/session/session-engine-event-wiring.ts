@@ -63,11 +63,15 @@ export interface SessionEngineWiringHost {
    */
   isOperatorTeardown(id: string, engine: IWhatsAppEngine): boolean;
   /**
-   * Ownership gate: true while this node may still speak for `id`. Orthogonal to isLiveEngine —
+   * Ownership gate: true while this node may still speak for `id`. Orthogonal to isLiveEngine:
    * between a lapsed lease and the teardown the heartbeat schedules, isLiveEngine is still true
    * while this is already false. TRUE when no ownership service is wired (single process).
    */
   ownsSession(id: string): boolean;
+  /** True when SessionOwnershipService is wired so DB-fenced side-effect gating applies. */
+  hasOwnership?(): boolean;
+  /** Confirms against the database that this node still holds a live claim on `id`. */
+  confirmRowOwnership?(id: string): Promise<boolean>;
   handleEngineReady(id: string, engine: IWhatsAppEngine, phone: string, pushName: string): void;
   /** The account's push name learned after ready: stored on the row, announced nowhere. */
   handleEnginePushName(id: string, engine: IWhatsAppEngine, pushName: string): void;
@@ -95,7 +99,7 @@ export interface SessionEngineWiringHost {
    * gone. Optional: a host without it keeps every binding.
    */
   bindingEpoch?(id: string): number;
-  updateStatus(id: string, status: SessionStatus): Promise<void>;
+  updateStatus(id: string, status: SessionStatus): Promise<boolean | void>;
   cancelReconnect(id: string): void;
   /** The live engine reported a non-READY state: record when its READY stretch ended. */
   endReadyStretch(id: string): void;
@@ -217,48 +221,81 @@ export class SessionEngineEventWiring {
     return {
       onQRCode: (qr: string): void => {
         if (!host.isLiveEngine(id, engine)) return;
-        this.logger.log('QR code generated', {
-          sessionId: id,
-          action: 'qr_generated',
-        });
-        // A whatsapp-web.js revocation that happened while the engine was down leaves no other trace:
-        // the engine simply boots into the QR screen, with no LOGOUT, no auth failure and no audit
-        // row. The paths where OpenWA itself discarded the credentials (a LOGOUT close, the
-        // stuck-auth recovery) also end here, but each of those has already logged its own warning,
-        // and starting a session under a different ENGINE_TYPE than it was linked with lands here too.
-        if (previouslyLinked && !relinkWarned) {
-          relinkWarned = true;
-          this.logger.warn(
-            'Previously linked session is asking for a QR again: its stored credentials are missing or no ' +
-              'longer accepted. Unless an earlier warning for this session (LOGOUT, auth_cleared) or a changed ' +
-              'ENGINE_TYPE explains it, WhatsApp dropped the link while the engine was down (unlinked from the ' +
-              "phone, expired while offline, or the engine's stored auth state was lost). Check Linked devices " +
-              'on the phone before re-pairing.',
-            { sessionId: id, action: 'relink_required' },
+        if (!host.ownsSession(id)) {
+          this.logger.warn('Skipped QR handling for a session this node no longer owns', {
+            sessionId: id,
+            action: 'qr_skipped_not_owned',
+          });
+          return;
+        }
+        const emitQrEffects = (): void => {
+          this.logger.log('QR code generated', {
+            sessionId: id,
+            action: 'qr_generated',
+          });
+          // A whatsapp-web.js revocation that happened while the engine was down leaves no other trace:
+          // the engine simply boots into the QR screen, with no LOGOUT, no auth failure and no audit
+          // row. The paths where OpenWA itself discarded the credentials (a LOGOUT close, the
+          // stuck-auth recovery) also end here, but each of those has already logged its own warning,
+          // and starting a session under a different ENGINE_TYPE than it was linked with lands here too.
+          if (previouslyLinked && !relinkWarned) {
+            relinkWarned = true;
+            this.logger.warn(
+              'Previously linked session is asking for a QR again: its stored credentials are missing or no ' +
+                'longer accepted. Unless an earlier warning for this session (LOGOUT, auth_cleared) or a changed ' +
+                'ENGINE_TYPE explains it, WhatsApp dropped the link while the engine was down (unlinked from the ' +
+                "phone, expired while offline, or the engine's stored auth state was lost). Check Linked devices " +
+                'on the phone before re-pairing.',
+              { sessionId: id, action: 'relink_required' },
+            );
+          }
+
+          // A QR shows WhatsApp answered. Left in place, the recorded reconnect text would reappear in every
+          // INITIALIZING gap between QR windows of a session waiting to be paired; if closes keep failing
+          // after the QR, the next attempt from the fifth on writes it again. Any other reason stays.
+          if (host.sessionErrors.get(id)?.startsWith(RECONNECT_LOOP_REASON)) host.sessionErrors.clear(id);
+
+          void host.webhookService.dispatch(id, 'session.qr', { sessionId: id, qr });
+
+          // Push the QR to subscribed dashboard clients over the WebSocket (the `session.qr` event is
+          // advertised + consumed there, so clients can render it live instead of polling GET /qr).
+          host.eventsGateway.emitQRCode(id, qr);
+
+          // Execute hook for QR event
+          void host.hookManager.execute(
+            'session:qr',
+            { sessionId: id },
+            {
+              sessionId: id,
+              source: 'Engine',
+            },
           );
+        };
+
+        if (host.hasOwnership?.()) {
+          void host
+            .updateStatus(id, SessionStatus.QR_READY)
+            .then(updated => {
+              if (updated === false || !host.isLiveEngine(id, engine) || !host.ownsSession(id)) {
+                this.logger.warn('Skipped QR notifications after fenced QR status write matched no owned row', {
+                  sessionId: id,
+                  action: 'qr_notifications_skipped_not_owned',
+                });
+                return;
+              }
+              emitQrEffects();
+            })
+            .catch(err =>
+              this.logger.warn('Failed to persist an engine status', {
+                sessionId: id,
+                status: SessionStatus.QR_READY,
+                error: err instanceof Error ? err.message : String(err),
+              }),
+            );
+          return;
         }
 
-        // A QR shows WhatsApp answered. Left in place, the recorded reconnect text would reappear in every
-        // INITIALIZING gap between QR windows of a session waiting to be paired; if closes keep failing
-        // after the QR, the next attempt from the fifth on writes it again. Any other reason stays.
-        if (host.sessionErrors.get(id)?.startsWith(RECONNECT_LOOP_REASON)) host.sessionErrors.clear(id);
-
-        void host.webhookService.dispatch(id, 'session.qr', { sessionId: id, qr });
-
-        // Push the QR to subscribed dashboard clients over the WebSocket (the `session.qr` event is
-        // advertised + consumed there, so clients can render it live instead of polling GET /qr).
-        host.eventsGateway.emitQRCode(id, qr);
-
-        // Execute hook for QR event
-        void host.hookManager.execute(
-          'session:qr',
-          { sessionId: id },
-          {
-            sessionId: id,
-            source: 'Engine',
-          },
-        );
-
+        emitQrEffects();
         persistStatus(SessionStatus.QR_READY);
       },
       onReady: (phone, pushName): void => {
@@ -379,7 +416,7 @@ export class SessionEngineEventWiring {
         void host.leafEvents.maybeAutoRejectCall(id, engine, event.callId);
       },
       onReconnecting: (attempt: number, nextDelayMs: number, context?: ReconnectContext): void => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine) || !host.ownsSession(id)) return;
         // Count it whichever layer scheduled it: the counter's published meaning is "reconnect
         // attempts scheduled across all sessions", and an engine that retries internally was simply
         // never counted, so the series read 0 on Baileys however long a session looped.
@@ -401,23 +438,37 @@ export class SessionEngineEventWiring {
         host.sessionErrors.set(id, `${RECONNECT_LOOP_REASON} (attempt ${attempt}, down for ${downFor}).${stageNote}`);
         if (attempt % RECONNECT_LOOP_ALERT_INTERVAL_ATTEMPTS !== 0) return;
 
-        // Same cadence, same log shape and the same already-documented webhook the service-level
-        // reconnect path emits, so an operator watching for a stuck session does not have to know
-        // which layer happens to be doing the retrying.
-        this.logger.warn(`Session is reconnect-looping: attempt ${attempt} scheduled`, {
-          sessionId: id,
-          attempts: attempt,
-          nextDelayMs,
-          downForSeconds,
-          ...(context ? { stage: context.stage, statusCode: context.statusCode } : {}),
-          action: 'reconnect_loop',
-        });
-        incrementSessionReconnectLoopAlerts();
-        void host.webhookService.dispatch(id, 'session.reconnect_loop', {
-          sessionId: id,
-          attempts: attempt,
-          nextDelayMs,
-        });
+        const emitReconnectLoop = (): void => {
+          // Same cadence, same log shape and the same already-documented webhook the service-level
+          // reconnect path emits, so an operator watching for a stuck session does not have to know
+          // which layer happens to be doing the retrying.
+          this.logger.warn(`Session is reconnect-looping: attempt ${attempt} scheduled`, {
+            sessionId: id,
+            attempts: attempt,
+            nextDelayMs,
+            downForSeconds,
+            ...(context ? { stage: context.stage, statusCode: context.statusCode } : {}),
+            action: 'reconnect_loop',
+          });
+          incrementSessionReconnectLoopAlerts();
+          void host.webhookService.dispatch(id, 'session.reconnect_loop', {
+            sessionId: id,
+            attempts: attempt,
+            nextDelayMs,
+          });
+        };
+
+        if (host.hasOwnership?.() && host.confirmRowOwnership) {
+          void host
+            .confirmRowOwnership(id)
+            .then(owned => {
+              if (!owned || !host.isLiveEngine(id, engine) || !host.ownsSession(id)) return;
+              emitReconnectLoop();
+            })
+            .catch(() => undefined);
+          return;
+        }
+        emitReconnectLoop();
       },
       onDisconnected: (reason: string): void => {
         if (!host.isLiveEngine(id, engine)) {
@@ -462,18 +513,32 @@ export class SessionEngineEventWiring {
         persist();
       },
       onActionRequired: (reason: string): void => {
-        if (!host.isLiveEngine(id, engine)) return;
-        this.logger.warn(`Session requires operator action: ${reason}`, {
-          sessionId: id,
-          reason,
-          action: 'action_required',
-        });
-        // Record the reason so the last-error projection surfaces it while the session is
-        // ACTION_REQUIRED, then updateStatus (via onStateChanged above) has already written the
-        // status. Set here too to be defensive: the callback order is onStateChanged then
-        // onActionRequired, but persisting the reason here means it is available regardless.
-        host.sessionErrors.set(id, reason);
-        void host.hookManager.execute('session:error', { reason }, { sessionId: id, source: 'Engine' });
+        if (!host.isLiveEngine(id, engine) || !host.ownsSession(id)) return;
+        const applyActionRequired = (): void => {
+          this.logger.warn(`Session requires operator action: ${reason}`, {
+            sessionId: id,
+            reason,
+            action: 'action_required',
+          });
+          // Record the reason so the last-error projection surfaces it while the session is
+          // ACTION_REQUIRED, then updateStatus (via onStateChanged above) has already written the
+          // status. Set here too to be defensive: the callback order is onStateChanged then
+          // onActionRequired, but persisting the reason here means it is available regardless.
+          host.sessionErrors.set(id, reason);
+          void host.hookManager.execute('session:error', { reason }, { sessionId: id, source: 'Engine' });
+        };
+
+        if (host.hasOwnership?.() && host.confirmRowOwnership) {
+          void host
+            .confirmRowOwnership(id)
+            .then(owned => {
+              if (!owned || !host.isLiveEngine(id, engine) || !host.ownsSession(id)) return;
+              applyActionRequired();
+            })
+            .catch(() => undefined);
+          return;
+        }
+        applyActionRequired();
       },
       onCallOutcome: (event: CallOutcomeEvent): void => {
         if (!host.isLiveEngine(id, engine)) return;
@@ -509,47 +574,61 @@ export class SessionEngineEventWiring {
         void host.webhookService.dispatch(id, 'presence.update', payload);
       },
       onAccountRestriction: (restriction: AccountRestriction | null): void => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine) || !host.ownsSession(id)) return;
 
-        // A lift is only news if we were holding a restriction; an engine that reports "no
-        // restriction" on every connect (the Baileys probe does exactly that) must stay quiet.
-        if (!restriction) {
-          const lifted = host.sessionRestrictions.clear(id);
-          if (lifted) host.reportRestrictionLifted(id, lifted);
-          return;
-        }
+        const applyRestriction = (): void => {
+          // A lift is only news if we were holding a restriction; an engine that reports "no
+          // restriction" on every connect (the Baileys probe does exactly that) must stay quiet.
+          if (!restriction) {
+            const lifted = host.sessionRestrictions.clear(id);
+            if (lifted) host.reportRestrictionLifted(id, lifted);
+            return;
+          }
 
-        // Both engines repeat an unchanged restriction — whatsapp-web.js on every reconnect attempt,
-        // Baileys on every connect probe — so only a change reaches an operator.
-        if (!host.sessionRestrictions.set(id, restriction)) return;
+          // Both engines repeat an unchanged restriction (whatsapp-web.js on every reconnect attempt,
+          // Baileys on every connect probe) so only a change reaches an operator.
+          if (!host.sessionRestrictions.set(id, restriction)) return;
 
-        this.logger.warn(`WhatsApp restricted this session's account: ${restriction.kind}`, {
-          sessionId: id,
-          kind: restriction.kind,
-          code: restriction.code,
-          expiresAt: restriction.expiresAt,
-          action: 'account_restricted',
-        });
-        const payload = {
-          active: true,
-          kind: restriction.kind,
-          code: restriction.code,
-          expiresAt: restriction.expiresAt ? new Date(restriction.expiresAt).toISOString() : null,
-        };
-        void host.webhookService.dispatch(id, 'session.restriction', { sessionId: id, ...payload });
-        host.eventsGateway.emitSessionRestriction(id, payload);
-        // Audited, unlike the engine-level connect/disconnect transitions next door: this is rare,
-        // it is not reconnect noise, and the store that serves it to the API is in memory — so this
-        // row is the only durable record of when the account was restricted.
-        void host.auditService?.logWarn(AuditAction.SESSION_RESTRICTED, {
-          sessionId: id,
-          metadata: {
+          this.logger.warn(`WhatsApp restricted this session's account: ${restriction.kind}`, {
+            sessionId: id,
+            kind: restriction.kind,
+            code: restriction.code,
+            expiresAt: restriction.expiresAt,
+            action: 'account_restricted',
+          });
+          const payload = {
+            active: true,
             kind: restriction.kind,
             code: restriction.code,
             expiresAt: restriction.expiresAt ? new Date(restriction.expiresAt).toISOString() : null,
-          },
-          errorMessage: `WhatsApp restricted this account: ${restriction.kind} (${restriction.code})`,
-        });
+          };
+          void host.webhookService.dispatch(id, 'session.restriction', { sessionId: id, ...payload });
+          host.eventsGateway.emitSessionRestriction(id, payload);
+          // Audited, unlike the engine-level connect/disconnect transitions next door: this is rare,
+          // it is not reconnect noise, and the store that serves it to the API is in memory, so this
+          // row is the only durable record of when the account was restricted.
+          void host.auditService?.logWarn(AuditAction.SESSION_RESTRICTED, {
+            sessionId: id,
+            metadata: {
+              kind: restriction.kind,
+              code: restriction.code,
+              expiresAt: restriction.expiresAt ? new Date(restriction.expiresAt).toISOString() : null,
+            },
+            errorMessage: `WhatsApp restricted this account: ${restriction.kind} (${restriction.code})`,
+          });
+        };
+
+        if (host.hasOwnership?.() && host.confirmRowOwnership) {
+          void host
+            .confirmRowOwnership(id)
+            .then(owned => {
+              if (!owned || !host.isLiveEngine(id, engine) || !host.ownsSession(id)) return;
+              applyRestriction();
+            })
+            .catch(() => undefined);
+          return;
+        }
+        applyRestriction();
       },
       onError: (reason: string): void => {
         if (!host.isLiveEngine(id, engine)) return;
@@ -560,28 +639,56 @@ export class SessionEngineEventWiring {
         });
 
         // Remember the reason so findOne/findAll can surface it to the dashboard,
-        // then persist the FAILED status. This is terminal — no reconnect is
-        // scheduled (unlike onDisconnected), since re-scanning is required.
+        // then persist the FAILED status. This is terminal (no reconnect is
+        // scheduled, unlike onDisconnected) since re-scanning is required.
         host.sessionErrors.set(id, reason);
 
         const fail = (): void => {
           // A prior onDisconnected may have scheduled a reconnect. This failure is terminal
-          // (re-scan required), so cancel it — otherwise the pending timer would resurrect a
+          // (re-scan required), so cancel it; otherwise the pending timer would resurrect a
           // session the operator must manually restart.
           host.cancelReconnect(id);
 
-          void host.hookManager.execute(
-            'session:error',
-            { reason },
-            {
+          const emitErrorHook = (): void => {
+            void host.hookManager.execute(
+              'session:error',
+              { reason },
+              {
+                sessionId: id,
+                source: 'Engine',
+              },
+            );
+          };
+
+          if (host.ownsSession(id)) {
+            if (host.hasOwnership?.()) {
+              void host
+                .updateStatus(id, SessionStatus.FAILED)
+                .then(updated => {
+                  if (updated !== false && host.ownsSession(id)) {
+                    emitErrorHook();
+                  }
+                })
+                .catch(err =>
+                  this.logger.warn('Failed to persist an engine status', {
+                    sessionId: id,
+                    status: SessionStatus.FAILED,
+                    error: err instanceof Error ? err.message : String(err),
+                  }),
+                );
+            } else {
+              emitErrorHook();
+              persistStatus(SessionStatus.FAILED);
+            }
+          } else {
+            this.logger.warn('Skipped an engine status write for a session this node no longer owns', {
               sessionId: id,
-              source: 'Engine',
-            },
-          );
+              status: SessionStatus.FAILED,
+              action: 'status_write_skipped_not_owned',
+            });
+          }
 
-          persistStatus(SessionStatus.FAILED);
-
-          // onError is terminal (no reconnect is scheduled — re-scan is required). Evict the dead engine
+          // onError is terminal (no reconnect is scheduled; re-scan is required). Evict the dead engine
           // and SIGKILL its process: leaving it in the map would hold a concurrency slot indefinitely and
           // make the next start() reject the session as "already started" instead of re-initializing it.
           host.evictAndForceDestroy(id, engine);

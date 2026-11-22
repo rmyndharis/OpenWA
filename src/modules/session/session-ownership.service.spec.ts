@@ -972,4 +972,302 @@ describe('SessionOwnershipService', () => {
       expect(duplicateLogs(log)).toHaveLength(0);
     });
   });
+
+  describe('PostgreSQL DB-clock lease arithmetic', () => {
+    interface CapturedQb {
+      kind: 'select' | 'update' | 'unknown';
+      setValues?: Record<string, unknown>;
+      wheres: Array<{ sql: string; params?: Record<string, unknown> }>;
+      params: Record<string, unknown>;
+      returning?: string | string[];
+    }
+
+    function pgHarness(
+      opts: {
+        nodeId?: string;
+        leaseTtlMs?: number;
+        onExecute?: (qb: CapturedQb) => { affected?: number; raw?: unknown };
+        onGetMany?: (qb: CapturedQb) => unknown[];
+        onGetOne?: (qb: CapturedQb) => unknown;
+        onGetRawOne?: (qb: CapturedQb) => unknown;
+        onGetRawMany?: (qb: CapturedQb) => unknown[];
+        onGetCount?: (qb: CapturedQb) => number;
+        onQuery?: (sql: string) => unknown;
+      } = {},
+    ) {
+      const queries: CapturedQb[] = [];
+      const createQueryBuilder = jest.fn(() => {
+        const record: CapturedQb = { kind: 'unknown', wheres: [], params: {} };
+        queries.push(record);
+        const qb: Record<string, jest.Mock> = {};
+        qb.update = jest.fn(() => {
+          record.kind = 'update';
+          return qb;
+        });
+        qb.select = jest.fn(() => {
+          if (record.kind === 'unknown') record.kind = 'select';
+          return qb;
+        });
+        qb.addSelect = jest.fn(() => qb);
+        qb.set = jest.fn((values: Record<string, unknown>) => {
+          record.setValues = values;
+          return qb;
+        });
+        qb.where = jest.fn((sql: unknown, params?: Record<string, unknown>) => {
+          record.wheres.push({ sql: typeof sql === 'string' ? sql : JSON.stringify(sql), params });
+          if (params) Object.assign(record.params, params);
+          return qb;
+        });
+        qb.andWhere = jest.fn((sql: unknown, params?: Record<string, unknown>) => {
+          record.wheres.push({ sql: typeof sql === 'string' ? sql : JSON.stringify(sql), params });
+          if (params) Object.assign(record.params, params);
+          return qb;
+        });
+        qb.setParameter = jest.fn((key: string, value: unknown) => {
+          record.params[key] = value;
+          return qb;
+        });
+        qb.setParameters = jest.fn((params: Record<string, unknown>) => {
+          Object.assign(record.params, params);
+          return qb;
+        });
+        qb.returning = jest.fn((returning: string | string[]) => {
+          record.returning = returning;
+          return qb;
+        });
+        qb.execute = jest.fn(() => Promise.resolve(opts.onExecute?.(record) ?? { affected: 1, raw: [] }));
+        qb.getMany = jest.fn(() => Promise.resolve(opts.onGetMany?.(record) ?? []));
+        qb.getOne = jest.fn(() => Promise.resolve(opts.onGetOne?.(record) ?? null));
+        qb.getRawOne = jest.fn(() => Promise.resolve(opts.onGetRawOne?.(record) ?? null));
+        qb.getRawMany = jest.fn(() => Promise.resolve(opts.onGetRawMany?.(record) ?? []));
+        qb.getCount = jest.fn(() => Promise.resolve(opts.onGetCount?.(record) ?? 0));
+        return qb;
+      });
+      const repo = {
+        manager: {
+          connection: { options: { type: 'postgres' } },
+          query: jest.fn((sql: string) => Promise.resolve(opts.onQuery?.(sql) ?? [{ now: new Date() }])),
+        },
+        createQueryBuilder,
+        find: jest.fn().mockResolvedValue([]),
+        findOne: jest.fn().mockResolvedValue(null),
+        update: jest.fn().mockResolvedValue({ affected: 1 }),
+      };
+      const svc = new SessionOwnershipService(
+        repo as never,
+        nodeConfig(opts.nodeId ?? 'node-a', opts.leaseTtlMs ?? 60_000),
+      );
+      return { svc, repo, queries };
+    }
+
+    const renderedSetSql = (qb: CapturedQb): string =>
+      Object.values(qb.setValues ?? {})
+        .map(v => (typeof v === 'function' ? String((v as () => unknown)()) : ''))
+        .join(' | ');
+
+    const allWhereSql = (qb: CapturedQb): string => qb.wheres.map(w => w.sql).join(' AND ');
+
+    const hasDateParam = (qb: CapturedQb): boolean =>
+      Object.values(qb.params).some(v => v instanceof Date) ||
+      Object.values(qb.setValues ?? {}).some(v => v instanceof Date);
+
+    it('detects postgres dialect and uses DB clock with RETURNING in claimOnce (both new claim and re-claim)', async () => {
+      const dbExpiry1 = new Date('2026-11-22T12:01:00.000Z');
+      const dbExpiry2 = new Date('2026-11-22T12:02:00.000Z');
+      let calls = 0;
+      const { svc, repo, queries } = pgHarness({
+        onExecute: () => {
+          calls++;
+          return { affected: 1, raw: [{ id: 's1', leaseExpiresAt: calls === 1 ? dbExpiry1 : dbExpiry2 }] };
+        },
+      });
+
+      expect(svc.isPostgres).toBe(true);
+      await expect(svc.claim('s1')).resolves.toBe(true);
+      await expect(svc.claim('s1')).resolves.toBe(true);
+
+      // Zero Repository.update() calls with JS Date on Postgres.
+      expect(repo.update).not.toHaveBeenCalled();
+      expect(queries).toHaveLength(2);
+      for (const qb of queries) {
+        expect(qb.kind).toBe('update');
+        expect(renderedSetSql(qb)).toContain("NOW() AT TIME ZONE 'UTC'");
+        expect(renderedSetSql(qb)).toContain("interval '1 millisecond'");
+        expect(qb.returning).toBe('"id", "leaseExpiresAt"');
+        expect(qb.params.ttlMs).toBe(60_000);
+        expect(hasDateParam(qb)).toBe(false);
+      }
+      expect(allWhereSql(queries[0])).toContain("NOW() AT TIME ZONE 'UTC'");
+      const lastSeen = (svc as unknown as { lastSeenLease: Map<string, number> }).lastSeenLease;
+      expect(lastSeen.get('s1')).toBe(dbExpiry2.getTime());
+    });
+
+    it('uses DB clock in prepareStart and ignores static clock skew between app and DB', async () => {
+      // DB clock is 2 minutes behind the app clock.
+      const dbNow = Date.now() - 120_000;
+      const dbExpiry = new Date(dbNow + 60_000);
+      const { svc, repo, queries } = pgHarness({
+        onExecute: () => ({ affected: 1, raw: [{ id: 's1', leaseExpiresAt: dbExpiry }] }),
+      });
+
+      await expect(svc.prepareStart('s1', null)).resolves.toBe(true);
+      expect(repo.update).not.toHaveBeenCalled();
+      expect(queries).toHaveLength(1);
+      expect(renderedSetSql(queries[0])).toContain("NOW() AT TIME ZONE 'UTC'");
+      expect(allWhereSql(queries[0])).toContain("NOW() AT TIME ZONE 'UTC'");
+      expect(queries[0].returning).toBe('"id", "leaseExpiresAt"');
+      expect(hasDateParam(queries[0])).toBe(false);
+      const lastSeen = (svc as unknown as { lastSeenLease: Map<string, number> }).lastSeenLease;
+      expect(lastSeen.get('s1')).toBe(dbExpiry.getTime());
+    });
+
+    it('uses DB clock in stopExpiredForeignClaim, release/clearRow, lapsedHeldByOthers, isHeldByOtherNode, heldByOtherNodes, findLiveOwner, and hasLiveOwnClaim', async () => {
+      const { svc, repo, queries } = pgHarness({
+        onExecute: qb => {
+          // For release/clearRow: first update (own claim) misses so second update (lapsed foreign) runs.
+          if (allWhereSql(qb).includes('"nodeId" = :me') && !allWhereSql(qb).includes('<> :me')) {
+            return { affected: 0, raw: [] };
+          }
+          return { affected: 1, raw: [] };
+        },
+        onGetOne: () => ({ id: 's1', nodeId: 'peer', nodeUrl: 'http://peer:2785', leaseExpiresAt: new Date(0) }),
+        onGetCount: () => 1,
+      });
+
+      await expect(svc.stopExpiredForeignClaim('s1')).resolves.toBe(true);
+      await svc.release('s1');
+      await svc.lapsedHeldByOthers();
+      await expect(svc.isHeldByOtherNode('s1')).resolves.toBe(true);
+      await svc.heldByOtherNodes();
+      await expect(svc.findLiveOwner('s1')).resolves.toMatchObject({ id: 's1', nodeId: 'peer' });
+      await expect(svc.hasLiveOwnClaim('s1')).resolves.toBe(true);
+
+      expect(repo.update).not.toHaveBeenCalled();
+      // Every query except clearRow's own-claim release uses NOW() AT TIME ZONE 'UTC' and zero Date params.
+      const leaseQueries = queries.filter(
+        qb =>
+          !(qb.kind === 'update' && allWhereSql(qb).includes('"nodeId" = :me') && !allWhereSql(qb).includes('<> :me')),
+      );
+      expect(leaseQueries.length).toBeGreaterThanOrEqual(7);
+      for (const qb of leaseQueries) {
+        expect(allWhereSql(qb)).toContain("NOW() AT TIME ZONE 'UTC'");
+        expect(hasDateParam(qb)).toBe(false);
+      }
+
+      const claimable = svc.claimableWhere();
+      expect(claimable).toHaveLength(3);
+      const expiryClause = claimable[2].leaseExpiresAt as { type?: string; getSql?: (alias: string) => string };
+      expect(expiryClause.type).toBe('raw');
+      expect(expiryClause.getSql?.('"leaseExpiresAt"')).toContain("NOW() AT TIME ZONE 'UTC'");
+
+      const cutoffOp = svc.expiredBeforeOperator(new Date(Date.now() - 120_000), 120_000) as unknown as {
+        type?: string;
+        getSql?: (alias: string) => string;
+        objectLiteralParameters?: Record<string, unknown>;
+      };
+      expect(cutoffOp.type).toBe('raw');
+      expect(cutoffOp.getSql?.('"leaseExpiresAt"')).toContain("NOW() AT TIME ZONE 'UTC'");
+      expect(cutoffOp.getSql?.('"leaseExpiresAt"')).toContain("interval '1 millisecond'");
+      expect(cutoffOp.objectLiteralParameters?.graceMs).toBe(120_000);
+    });
+
+    it('keeps noteForeignRenewals quiet on PostgreSQL when node clock is skewed +120s ahead or -120s behind DB time', async () => {
+      // Simulate DB clock lagging 120s behind app clock: on each update DB writes dbNow + 60s.
+      let dbNow = Date.now() - 120_000;
+      let storedExpiry = new Date(dbNow + 60_000);
+      const { svc, repo, queries } = pgHarness({
+        onGetMany: () => [{ id: 's1', leaseExpiresAt: new Date(storedExpiry.getTime()) }],
+        onExecute: () => {
+          dbNow += 20_000;
+          storedExpiry = new Date(dbNow + 60_000);
+          return { affected: 1, raw: [{ id: 's1', leaseExpiresAt: new Date(storedExpiry.getTime()) }] };
+        },
+      });
+      repo.find.mockResolvedValue([{ id: 's1' }]);
+
+      const errorSpy = jest
+        .spyOn((svc as unknown as { logger: { error: (...a: unknown[]) => void } }).logger, 'error')
+        .mockImplementation(() => undefined);
+
+      await expect(svc.claim('s1')).resolves.toBe(true);
+      for (let i = 0; i < 5; i++) {
+        await svc.renew();
+      }
+
+      const duplicateLogs = errorSpy.mock.calls.filter(
+        c => (c[2] as { action?: string } | undefined)?.action === 'duplicate_node_id',
+      );
+      expect(duplicateLogs).toHaveLength(0);
+
+      // Verify renew SELECT filtered on DB clock and UPDATE used RETURNING with DB clock.
+      const selectQueries = queries.filter(q => q.kind === 'select');
+      expect(selectQueries.length).toBe(5);
+      for (const q of selectQueries) {
+        expect(allWhereSql(q)).toContain("NOW() AT TIME ZONE 'UTC'");
+      }
+      const updateQueries = queries.filter(q => q.kind === 'update');
+      for (const q of updateQueries) {
+        expect(q.returning).toBe('"id", "leaseExpiresAt"');
+        expect(renderedSetSql(q)).toContain("NOW() AT TIME ZONE 'UTC'");
+        expect(hasDateParam(q)).toBe(false);
+      }
+
+      // Now simulate a real twin advancing the DB lease outside this node's writes on 2 consecutive ticks.
+      storedExpiry = new Date(storedExpiry.getTime() + 5_000);
+      await svc.renew();
+      storedExpiry = new Date(storedExpiry.getTime() + 5_000);
+      await svc.renew();
+
+      const afterTwin = errorSpy.mock.calls.filter(
+        c => (c[2] as { action?: string } | undefined)?.action === 'duplicate_node_id',
+      );
+      expect(afterTwin).toHaveLength(1);
+    });
+
+    it('prepareStart on PostgreSQL treats nullish desiredState as IS NULL and guards elapsed time monotonically', async () => {
+      const dbExpiry = new Date(Date.now() + 60_000);
+      let dateNowCalls = 0;
+      const realNow = Date.now.bind(Date);
+      // Simulate a +120s wall-clock NTP jump between prepareStart entry and query completion:
+      // monotonic performance.now() barely moved, so prepareStart must still admit the engine.
+      jest.spyOn(Date, 'now').mockImplementation(() => realNow() + ++dateNowCalls * 120_000);
+
+      const { svc, queries } = pgHarness({
+        leaseTtlMs: 60_000,
+        onExecute: () => ({ affected: 1, raw: [{ id: 's1', leaseExpiresAt: dbExpiry }] }),
+      });
+
+      await expect(svc.prepareStart('s1', undefined as unknown as null)).resolves.toBe(true);
+      expect(allWhereSql(queries[0])).toContain('"desiredState" IS NULL');
+      expect(allWhereSql(queries[0])).not.toContain('"desiredState" = :desiredState');
+
+      // Conversely, when monotonic elapsed time exceeds leaseTtlMs, prepareStart rejects even if Date.now() stepped backward.
+      let perfCall = 0;
+      jest.spyOn(performance, 'now').mockImplementation(() => (++perfCall === 1 ? 1_000 : 62_000));
+      jest.spyOn(Date, 'now').mockImplementation(() => realNow() - 60_000);
+
+      await expect(svc.prepareStart('s1', null)).resolves.toBe(false);
+    });
+
+    it('getDbNow queries NOW() AT TIME ZONE UTC on PostgreSQL so heldByOtherLiveNode agrees under +120s skew', async () => {
+      const realDbNow = new Date('2026-11-22T12:00:00.000Z');
+      const { svc, repo } = pgHarness({
+        onQuery: () => [{ now: realDbNow }],
+      });
+
+      // Local clock skewed +120s ahead of DB time.
+      jest.spyOn(Date, 'now').mockReturnValue(realDbNow.getTime() + 120_000);
+
+      const dbNow = await svc.getDbNow();
+      expect(repo.manager.query).toHaveBeenCalledWith(expect.stringContaining("NOW() AT TIME ZONE 'UTC'"));
+      expect(dbNow.getTime()).toBe(realDbNow.getTime());
+
+      const peerSession = {
+        nodeId: 'peer-node',
+        leaseExpiresAt: new Date(realDbNow.getTime() + 60_000),
+      };
+      // Using DB-fetched now agrees with findLiveOwner despite +120s local clock skew.
+      expect(svc.heldByOtherLiveNode(peerSession, dbNow)).toBe(true);
+    });
+  });
 });

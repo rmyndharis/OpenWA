@@ -234,6 +234,41 @@ describe('SessionProxyInterceptor', () => {
       const { interceptor, context, next } = build({ row: ownerRow });
       expect(await ranLocally(await interceptor.intercept(context, next))).toBe(true);
     });
+
+    it('uses ownership.findLiveOwner when available instead of comparing leaseExpiresAt against local Date', async () => {
+      const port = await closedPort();
+      const findOne = jest.fn();
+      // Even when leaseExpiresAt looks expired relative to this node's skewed local clock,
+      // findLiveOwner already proved liveness on the DB clock and must trigger forwarding.
+      const findLiveOwner = jest.fn().mockResolvedValue({
+        id: SID,
+        nodeId: 'peer-node',
+        nodeUrl: `http://127.0.0.1:${port}`,
+        leaseExpiresAt: new Date(Date.now() - 120_000),
+      });
+      const res = makeResponse();
+      const req = request();
+      const interceptor = new SessionProxyInterceptor(
+        { getAllAndOverride: jest.fn().mockReturnValue(false) } as never,
+        { findOne } as never,
+        { nodeId: 'me', nodeUrl: 'http://127.0.0.1:2785', findLiveOwner } as never,
+        { get: jest.fn().mockReturnValue(5000) } as never,
+      );
+      const context = {
+        getType: () => 'http',
+        getHandler: () => undefined,
+        getClass: () => undefined,
+        switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }),
+      } as unknown as ExecutionContext;
+      const handle = jest.fn(() => of('handled-locally'));
+
+      await interceptor.intercept(context, { handle });
+
+      expect(findLiveOwner).toHaveBeenCalledWith(SID);
+      expect(findOne).not.toHaveBeenCalled();
+      expect(handle).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(503);
+    });
   });
 
   describe('the forward itself (real upstream server)', () => {

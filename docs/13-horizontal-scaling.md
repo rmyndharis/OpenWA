@@ -158,23 +158,29 @@
 > begun can no longer answer `502`: the connection to the client is cut, so a short body
 > cannot pass for the whole one, and the client should repeat the download.
 >
-> **The lease compares timestamps written by different nodes, so their clocks must agree.** Each
-> node writes `leaseExpiresAt` from its own clock and reads every other node's the same way. Just
-> before each renewal the holder's lease is only one TTL minus one heartbeat ahead, so a node whose
-> clock runs more than about `SESSION_LEASE_TTL_MS - SESSION_LEASE_HEARTBEAT_MS` ahead (40s at
-> defaults, 20s once one renewal is missed) sees healthy peers as lapsed and
-> will take their sessions over. Run NTP (or any time sync) on every node — the default on ordinary
-> server images — and treat any skew near that margin as a misconfiguration.
-> The status correction reads the same timestamps: a node whose clock runs more than three TTLs minus
-> one heartbeat ahead (160s at defaults) marks a healthy peer's sessions disconnected, even with
-> `AUTO_START_SESSIONS` off, and nothing writes them back. The zone each node runs in is no longer
-> part of this: on PostgreSQL the data connection binds, parses and defaults every timestamp in UTC
-> ([05 - Database Design](./05-database-design.md#timestamps-on-postgresql-are-utc)), so two nodes in
-> different zones, or one zone that observes daylight saving, still
-> read each other's leases as the instants they were written at. Only the clocks have to agree.
-> One exception, during an upgrade: a node still on 0.23.5 or earlier writes the lease in its own
-> local wall time, so while versions are mixed the old cross-zone error above is back for as long as
-> the older node keeps renewing. Running every node in `TZ=UTC` (the image default) removes it.
+> **On PostgreSQL, leases and expiry checks use the database clock (`NOW() AT TIME ZONE 'UTC'`).**
+> Every lease write (`claimedAt`, `leaseExpiresAt`) and every lease predicate (claiming, starting,
+> renewing, releasing, proxy owner lookup, `engineLoaded` reads, retirement checks, takeover
+> sweeps, and stranded-row status corrections) is evaluated against PostgreSQL's UTC clock
+> ([05 - Database Design](./05-database-design.md#timestamps-on-postgresql-are-utc)), and `renew()`
+> records the DB-written expiry via `UPDATE ... RETURNING` so duplicate-`NODE_ID` detection compares
+> database timestamps against database timestamps. A node whose local clock drifts ahead or behind
+> the database cannot falsely steal a healthy peer's session, mark it disconnected, or log false
+> `duplicate_node_id` alerts. SQLite remains a single-node dialect and uses the local process clock.
+> Keep ordinary NTP sync enabled on peer nodes anyway, both for mixed-version rolling upgrades
+> (older nodes write local process timestamps) and for the 30-second timestamp window of
+> `SESSION_PROXY_SECRET` inter-node hop signatures.
+>
+> **Hot-path engine status, metadata writes, and notifications are SQL-fenced on `nodeId`.** In
+> addition to checking in-memory ownership before acting, `SessionStatusBroadcaster.updateStatus`,
+> `SessionEngineControls.logout`, `SessionEngineEventWiring`, and `SessionEngineLifecycle`
+> (`handleEngineReady`, `handleEngineDisconnected`, `handleEnginePushName`, `initializeEngine`,
+> `rejectRebind`, `scheduleReconnect`, `executeReconnect`, and terminal unlink handling) fence row
+> updates on `{ id, nodeId }` (with `nodeId IS NULL` permitted only on retirement/cleanup paths
+> where a claim may already have been released) and confirm live row ownership before launching
+> reconnect engines or emitting external side effects. When a peer takes over a row mid-flight, a
+> stale node's write matches zero rows and suppresses status, QR, ready, disconnect, restriction,
+> reconnect-loop, and error webhooks, WebSocket events, audits, and hooks.
 >
 > **Forwarded requests can be single-counted with `SESSION_PROXY_SECRET`.** Without
 > `SESSION_PROXY_SECRET`, a forwarded request is throttled on both nodes: the receiving node counts
@@ -258,14 +264,12 @@
 > **What does not exist yet, and is why one replica is still the answer.** The cross-replica gap just
 > named (WS rate-limit state) remains process-local. API keys and the audit log are per node: each
 > node keeps them in its own main SQLite file, so a key created, revoked or narrowed on one node is
-> unchanged on the others (see the routing paragraph above). Leases are timed by each node's own
-> clock, not the database's (see the clock paragraph above). Not every lifecycle path is fenced: the
-> liveness watchdog and reconnect timers still act on whatever is in the local
-> registry. `BulkMessageService` keeps its live batch state in process, so a takeover cannot resume
-> a batch — only fail it. MCP/agent tool invocations execute on the node that received them rather
-> than being forwarded. A key restricted to selected chats matches a chat's `@lid` and phone forms
-> through the shared `lid_mappings` table; while a node cannot read that table, it matches with the
-> pairings it holds in memory, which another node may have changed since.
+> unchanged on the others (see the routing paragraph above). `BulkMessageService` keeps its live
+> batch state in process, so a takeover cannot resume a batch, only fail it. MCP/agent tool
+> invocations execute on the node that received them rather than being forwarded. A key restricted
+> to selected chats matches a chat's `@lid` and phone forms through the shared `lid_mappings` table;
+> while a node cannot read that table, it matches with the pairings it holds in memory, which
+> another node may have changed since.
 >
 > Everything below (node affinity, `replicas: 3`) remains a **design sketch** until those
 > land.

@@ -141,10 +141,11 @@ export class SessionTakeoverService implements OnApplicationBootstrap, OnModuleD
     // INITIALIZING written by start() afterwards, so the correction can never land on a live engine.
     // Idempotent, because DISCONNECTED is not one of the statuses it acts on. A failure leaves no
     // write pending, so the adopt loop still runs; the next pass retries the correction.
-    const goneBefore = new Date(Date.now() - this.ownership.leaseTtlMs * STRANDED_LEASE_TTL_MULTIPLE);
+    const strandedGraceMs = this.ownership.leaseTtlMs * STRANDED_LEASE_TTL_MULTIPLE;
+    const goneBefore = new Date(Date.now() - strandedGraceMs);
     let corrected: string[] = [];
     try {
-      corrected = await this.sessionService.markLapsedDisconnected(lapsed, goneBefore);
+      corrected = await this.sessionService.markLapsedDisconnected(lapsed, goneBefore, strandedGraceMs);
     } catch (error) {
       this.logger.warn('Lapsed session status correction failed', {
         error: error instanceof Error ? error.message : String(error),

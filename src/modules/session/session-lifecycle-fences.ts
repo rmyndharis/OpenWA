@@ -25,13 +25,13 @@ export const ENGINE_TEARDOWN_TIMEOUT_MS = 10_000;
 export class SessionLifecycleFences {
   private readonly engines: EngineRegistry;
   private readonly pendingTeardowns: Map<string, Promise<void>>;
-  private readonly pendingInitialStatuses: Map<string, { engine: IWhatsAppEngine; promise: Promise<void> }>;
+  private readonly pendingInitialStatuses: Map<string, { engine: IWhatsAppEngine; promise: Promise<unknown> }>;
   private readonly logger: ReturnType<typeof createLogger>;
 
   constructor(deps: {
     engines: EngineRegistry;
     pendingTeardowns: Map<string, Promise<void>>;
-    pendingInitialStatuses: Map<string, { engine: IWhatsAppEngine; promise: Promise<void> }>;
+    pendingInitialStatuses: Map<string, { engine: IWhatsAppEngine; promise: Promise<unknown> }>;
     logger: ReturnType<typeof createLogger>;
   }) {
     this.engines = deps.engines;

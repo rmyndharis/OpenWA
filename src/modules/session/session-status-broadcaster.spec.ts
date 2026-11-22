@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { SessionStatusBroadcaster } from './session-status-broadcaster';
 
@@ -137,5 +137,52 @@ describe('SessionStatusBroadcaster', () => {
     expect(canAnnounce).not.toHaveBeenCalled();
     expect(emitSessionStatus).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('fences the DB update on ownerNodeId and returns true while announcing when a row matches', async () => {
+    const { broadcaster, update, emitSessionStatus, dispatch } = make();
+    const updated = await broadcaster.updateStatus('s1', SessionStatus.READY, { ownerNodeId: 'node-a' });
+
+    expect(updated).toBe(true);
+    expect(update).toHaveBeenCalledWith({ id: 's1', nodeId: 'node-a' }, { status: SessionStatus.READY });
+    expect(emitSessionStatus).toHaveBeenCalledWith('s1', SessionStatus.READY);
+    expect(dispatch).toHaveBeenCalledWith('s1', 'session.status', {
+      sessionId: 's1',
+      status: SessionStatus.READY,
+    });
+  });
+
+  it('allows unowned rows when allowUnowned is enabled for retirement cleanup', async () => {
+    const { broadcaster, update } = make();
+    const updated = await broadcaster.updateStatus('s1', SessionStatus.DISCONNECTED, {
+      ownerNodeId: 'node-a',
+      allowUnowned: true,
+    });
+
+    expect(updated).toBe(true);
+    expect(update).toHaveBeenCalledWith(
+      [
+        { id: 's1', nodeId: 'node-a' },
+        { id: 's1', nodeId: IsNull() },
+      ],
+      { status: SessionStatus.DISCONNECTED },
+    );
+  });
+
+  it('returns false and skips WS/webhook announcement when the fenced update affects 0 rows', async () => {
+    const { broadcaster, update, emitSessionStatus, dispatch } = make();
+    update.mockResolvedValueOnce({ affected: 0 });
+    const canAnnounce = jest.fn(() => true);
+
+    const updated = await broadcaster.updateStatus('s1', SessionStatus.READY, {
+      ownerNodeId: 'node-a',
+      canAnnounce,
+    });
+
+    expect(updated).toBe(false);
+    expect(canAnnounce).not.toHaveBeenCalled();
+    expect(emitSessionStatus).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(broadcaster.lastDispatchedStatus.has('s1')).toBe(false);
   });
 });

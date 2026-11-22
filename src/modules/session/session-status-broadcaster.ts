@@ -1,8 +1,20 @@
-import { Repository } from 'typeorm';
+import { FindOptionsWhere, IsNull, Repository } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { type createLogger } from '../../common/services/logger.service';
+
+export interface UpdateStatusOptions {
+  /** Checked after the write settles; returning false suppresses WS/webhook announcement. */
+  canAnnounce?: () => boolean;
+  /**
+   * When set, fences the SQL UPDATE on `{ id, nodeId: ownerNodeId }` so a node that lost
+   * ownership cannot overwrite a peer's row. When `allowUnowned` is also true (retirement/cleanup
+   * paths where the claim may already have been released), matches `nodeId = ownerNodeId OR nodeId IS NULL`.
+   */
+  ownerNodeId?: string;
+  allowUnowned?: boolean;
+}
 
 /**
  * The session-status fan-out extracted from SessionEngineLifecycle: persist the status, then
@@ -40,18 +52,45 @@ export class SessionStatusBroadcaster {
   }
 
   /**
-   * `canAnnounce`, when given, is asked once the write has settled: a caller whose engine can retire
-   * while the write is in flight keeps a late reply from announcing a status that is no longer current.
+   * Persist a status transition and mirror it to WS/webhooks when the write actually matched a row.
+   *
+   * Accepts either a bare `canAnnounce` callback or an `UpdateStatusOptions` object carrying an
+   * optional `ownerNodeId` SQL fence. Returns `true` when the UPDATE matched (`affected !== 0`),
+   * and `false` (skipping announcement) when `affected === 0`.
    */
-  async updateStatus(id: string, status: SessionStatus, canAnnounce?: () => boolean): Promise<void> {
-    await this.sessionRepository.update(id, { status });
+  async updateStatus(
+    id: string,
+    status: SessionStatus,
+    options?: (() => boolean) | UpdateStatusOptions,
+  ): Promise<boolean> {
+    const resolved: UpdateStatusOptions = typeof options === 'function' ? { canAnnounce: options } : (options ?? {});
+    const where: string | FindOptionsWhere<Session> | FindOptionsWhere<Session>[] =
+      resolved.ownerNodeId !== undefined
+        ? resolved.allowUnowned
+          ? [
+              { id, nodeId: resolved.ownerNodeId },
+              { id, nodeId: IsNull() },
+            ]
+          : { id, nodeId: resolved.ownerNodeId }
+        : id;
+    const result = await this.sessionRepository.update(where, { status });
+    const updated = (result as { affected?: number } | undefined)?.affected !== 0;
+    if (!updated) {
+      this.logger.debug(`Skipped status announcement for ${status} (0 rows updated)`, {
+        sessionId: id,
+        status,
+        action: 'status_update_skipped',
+      });
+      return false;
+    }
     this.logger.debug(`Session status updated to ${status}`, {
       sessionId: id,
       status,
       action: 'status_update',
     });
-    if (canAnnounce?.() === false) return;
+    if (resolved.canAnnounce?.() === false) return true;
     this.announce(id, status);
+    return true;
   }
 
   /**

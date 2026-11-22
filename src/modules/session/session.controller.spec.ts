@@ -431,6 +431,50 @@ describe('SessionController findAll name filter', () => {
     await expect(controller.findAll(apiKey, undefined, undefined, name)).rejects.toBeInstanceOf(BadRequestException);
     expect(sessionService.findAll).not.toHaveBeenCalled();
   });
+
+  it('passes DB-fetched leaseClockNow into engineLoaded for findAll and findOne', async () => {
+    const dbNow = new Date('2026-11-22T12:00:00.000Z');
+    const row: Session = {
+      id: 'sess-uuid-1',
+      name: 'peer-bot',
+      status: SessionStatus.READY,
+      phone: '628111',
+      pushName: 'Peer Bot',
+      config: {},
+      proxyUrl: null,
+      proxyType: null,
+      connectedAt: null,
+      lastActiveAt: null,
+      nodeId: 'peer-node',
+      claimedAt: null,
+      nodeUrl: 'http://peer:2785',
+      leaseExpiresAt: new Date(dbNow.getTime() + 60_000),
+      desiredState: null,
+      createdAt: dbNow,
+      updatedAt: dbNow,
+    };
+    const svc = {
+      findAll: jest.fn().mockResolvedValue([row]),
+      findOne: jest.fn().mockResolvedValue(row),
+      leaseClockNow: jest.fn().mockResolvedValue(dbNow),
+      engineLoaded: jest.fn().mockReturnValue(true),
+    };
+    const ctrl = new SessionControllerClass(
+      svc as unknown as SessionService,
+      { logInfo: jest.fn() } as unknown as AuditService,
+      new ChatScopeService(),
+    );
+
+    const list = await ctrl.findAll(apiKey);
+    expect(list[0].engineLoaded).toBe(true);
+    expect(svc.leaseClockNow).toHaveBeenCalledTimes(1);
+    expect(svc.engineLoaded).toHaveBeenCalledWith(row, dbNow);
+
+    const one = await ctrl.findOne('sess-uuid-1');
+    expect(one.engineLoaded).toBe(true);
+    expect(svc.leaseClockNow).toHaveBeenCalledTimes(2);
+    expect(svc.engineLoaded).toHaveBeenLastCalledWith(row, dbNow);
+  });
 });
 
 // GET /sessions/stats/overview names no :sessionId, so the guard has nothing to scope it against and the
