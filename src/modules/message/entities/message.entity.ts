@@ -44,6 +44,9 @@ export enum MessageStatus {
 @Index('IDX_messages_session_timestamp_id', ['sessionId', 'timestamp', 'id'])
 @Index('IDX_messages_session_chat_timestamp_id', ['sessionId', 'chatId', 'timestamp', 'id'])
 @Index('IDX_messages_session_direction_timestamp_id', ['sessionId', 'direction', 'timestamp', 'id'])
+@Index('IDX_messages_sessionId_status', ['sessionId', 'status'])
+@Index('IDX_messages_sessionId_direction_createdAt', ['sessionId', 'direction', 'createdAt'])
+@Index('IDX_messages_status_createdAt', ['status', 'createdAt'])
 // Composite index for the ack-driven status UPDATE (scoped by sessionId + waMessageId).
 // Without it every ack does a full table scan of a hot table.
 @Index('UQ_messages_sessionId_waMessageId', ['sessionId', 'waMessageId'], { unique: true })

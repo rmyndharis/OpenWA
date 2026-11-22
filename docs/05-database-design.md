@@ -579,6 +579,9 @@ CREATE INDEX "IDX_messages_sessionId_chatId_createdAt" ON messages("sessionId", 
 CREATE INDEX "IDX_messages_session_timestamp_id" ON messages("sessionId", "timestamp", "id");   -- message-time reads: orderBy=timestamp, since / until windows
 CREATE INDEX "IDX_messages_session_chat_timestamp_id" ON messages("sessionId", "chatId", "timestamp", "id");   -- the same, within one chat
 CREATE INDEX "IDX_messages_session_direction_timestamp_id" ON messages("sessionId", "direction", "timestamp", "id");   -- the same, filtered by direction
+CREATE INDEX "IDX_messages_sessionId_status" ON messages("sessionId", status);   -- per-session status counts
+CREATE INDEX "IDX_messages_sessionId_direction_createdAt" ON messages("sessionId", direction, "createdAt");   -- send-pacing daily outgoing counts
+CREATE INDEX "IDX_messages_status_createdAt" ON messages(status, "createdAt");   -- pending-message reaper sweep
 CREATE INDEX "IDX_befd307485dbf0559d17e4a4d2" ON messages(status);
 CREATE INDEX "IDX_messages_createdAt" ON messages("createdAt");   -- createdAt-only stats aggregates
 CREATE INDEX "IDX_messages_mediaPath" ON messages("mediaPath") WHERE "mediaPath" IS NOT NULL;   -- partial; chat-media orphan sweep
@@ -727,6 +730,9 @@ CREATE TABLE message_batches (
     completed_at TIMESTAMP WITH TIME ZONE,
     CONSTRAINT "UQ_message_batches_session_id_batch_id" UNIQUE (session_id, batch_id)
 );
+
+CREATE INDEX "IDX_message_batches_status_created_at" ON message_batches(status, created_at);   -- startup orphan recovery and retention prune
+CREATE INDEX "IDX_message_batches_session_id_status" ON message_batches(session_id, status);   -- per-session unfinished batch reap
 ```
 
 > [!NOTE]
@@ -778,20 +784,26 @@ On SQLite that index can stop matching `messages` after a table rebuild, and a s
 
 These indexes are the ones declared on the entities (see §5.3); the rows below map them to the hot query paths.
 
-| Query Pattern                    | Index Used                                                            | Frequency |
-| -------------------------------- | --------------------------------------------------------------------- | --------- |
-| Get session by ID                | `sessions.id` (PK)                                                    | Very High |
-| Get session by name              | `sessions.name` (UNIQUE)                                              | High      |
-| List messages by session (paged) | `("sessionId", "createdAt")` composite                                | Very High |
-| List a chat's messages (paged)   | `IDX_messages_sessionId_chatId_createdAt`                             | Very High |
-| Send-pacing chat history probes  | `IDX_messages_sessionId_chatId_createdAt`                             | Very High |
-| List messages by message time    | `IDX_messages_session_timestamp_id` and its chat / direction variants | High      |
-| Search / stats by chat           | `"chatId"`                                                            | Medium    |
-| Ack/dedup a message              | `UQ_messages_sessionId_waMessageId` (UNIQUE)                          | Very High |
-| Message stats over a date range  | `IDX_messages_createdAt`                                              | Medium    |
-| Find a session's webhooks        | `IDX_webhooks_sessionId`                                              | Very High |
-| Authenticate API key             | UNIQUE on `api_keys("keyHash")`, main DB                              | Very High |
-| Filter audit logs                | `audit_logs` indexes on `action` / `apiKeyId` / `sessionId`           | Medium    |
+| Query Pattern                                      | Index Used                                                                                                                                | Frequency |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Get session by ID                                  | `sessions.id` (PK)                                                                                                                        | Very High |
+| Get session by name                                | `sessions.name` (UNIQUE)                                                                                                                  | High      |
+| List messages by session (paged)                   | `("sessionId", "createdAt")` composite                                                                                                    | Very High |
+| List a chat's messages (paged)                     | `IDX_messages_sessionId_chatId_createdAt`                                                                                                 | Very High |
+| Send-pacing chat history probes                    | `IDX_messages_sessionId_chatId_createdAt`                                                                                                 | Very High |
+| Send-pacing daily outgoing counts                  | `IDX_messages_sessionId_direction_createdAt`                                                                                              | Very High |
+| Per-session message status counts                  | `IDX_messages_sessionId_status`                                                                                                           | Medium    |
+| Pending-message reaper sweep                       | `IDX_messages_status_createdAt`                                                                                                           | High      |
+| List messages by message time                      | `IDX_messages_session_timestamp_id` and its chat / direction variants                                                                     | High      |
+| Search / stats by chat                             | `"chatId"`                                                                                                                                | Medium    |
+| Ack/dedup a message                                | `UQ_messages_sessionId_waMessageId` (UNIQUE)                                                                                              | Very High |
+| Message stats over a date range                    | `IDX_messages_createdAt`                                                                                                                  | Medium    |
+| Find a session's webhooks                          | `IDX_webhooks_sessionId`                                                                                                                  | Very High |
+| Webhook delivery-failure prune and list            | `IDX_webhook_delivery_failures_createdAt`, `IDX_webhook_delivery_failures_sessionId_createdAt`                                            | Medium    |
+| Batch orphan recovery, prune, and session reap     | `IDX_message_batches_status_created_at`, `IDX_message_batches_session_id_status`                                                          | Medium    |
+| Integration DLQ prune, session delete, and redrive | `IDX_integration_delivery_failures_createdAt`, `IDX_integration_delivery_failures_sessionId`, `IDX_integration_delivery_failures_redrive` | Medium    |
+| Authenticate API key                               | UNIQUE on `api_keys("keyHash")`, main DB                                                                                                  | Very High |
+| Filter audit logs                                  | `audit_logs` indexes on `action` / `apiKeyId` / `sessionId`                                                                               | Medium    |
 
 ### Composite & Unique Indexes (as implemented)
 
@@ -802,17 +814,32 @@ CREATE INDEX        "IDX_messages_sessionId_chatId_createdAt" ON messages("sessi
 CREATE INDEX        "IDX_messages_session_timestamp_id"   ON messages("sessionId", "timestamp", "id");
 CREATE INDEX        "IDX_messages_session_chat_timestamp_id" ON messages("sessionId", "chatId", "timestamp", "id");
 CREATE INDEX        "IDX_messages_session_direction_timestamp_id" ON messages("sessionId", "direction", "timestamp", "id");
+CREATE INDEX        "IDX_messages_sessionId_status"       ON messages("sessionId", status);
+CREATE INDEX        "IDX_messages_sessionId_direction_createdAt" ON messages("sessionId", direction, "createdAt");
+CREATE INDEX        "IDX_messages_status_createdAt"       ON messages(status, "createdAt");
 CREATE UNIQUE INDEX "UQ_messages_sessionId_waMessageId"   ON messages("sessionId", "waMessageId");
 CREATE INDEX        "IDX_messages_createdAt"              ON messages("createdAt");
 
 -- webhooks: the dispatch path filters by session on every emitted event
 CREATE INDEX "IDX_webhooks_sessionId" ON webhooks("sessionId");
 
+-- webhook_delivery_failures: retention prune and per-session failure listing
+CREATE INDEX "IDX_webhook_delivery_failures_sessionId"           ON webhook_delivery_failures("sessionId");
+CREATE INDEX "IDX_webhook_delivery_failures_createdAt"           ON webhook_delivery_failures("createdAt");
+CREATE INDEX "IDX_webhook_delivery_failures_sessionId_createdAt" ON webhook_delivery_failures("sessionId", "createdAt");
+
 -- message_batches: batch ids are unique per session, not globally.
 -- Note the snake_case: this table really is named that way — see the naming note in §5.3.
 -- This is a UNIQUE constraint, not a standalone index: on PostgreSQL drop it with ALTER TABLE ... DROP CONSTRAINT;
 -- SQLite cannot drop a constraint in place and needs a table rebuild.
 ALTER TABLE message_batches ADD CONSTRAINT "UQ_message_batches_session_id_batch_id" UNIQUE (session_id, batch_id);
+CREATE INDEX "IDX_message_batches_status_created_at" ON message_batches(status, created_at);
+CREATE INDEX "IDX_message_batches_session_id_status" ON message_batches(session_id, status);
+
+-- integration_delivery_failures: retention prune, session deletion, and DLQ redrive ordering
+CREATE INDEX "IDX_integration_delivery_failures_createdAt" ON integration_delivery_failures("createdAt");
+CREATE INDEX "IDX_integration_delivery_failures_sessionId" ON integration_delivery_failures("sessionId");
+CREATE INDEX "IDX_integration_delivery_failures_redrive"   ON integration_delivery_failures("pluginId", "instanceId", redriven, attempts, "createdAt");
 
 -- audit_logs (main DB): filter by action / key / session, ordered by time
 CREATE INDEX "IDX_audit_logs_action" ON audit_logs(action);
@@ -976,7 +1003,8 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1791400000000-AddLidMappingReportSource.ts   # distinguishes mapping reports from cached display data
 ├── 1791600000000-RepairSqliteMessageFts.ts   # rebuilds the SQLite full-text index when it no longer matches messages
 ├── 1791700000000-AddChatStateDeletedAt.ts   # chat_states.deletedAt (when WhatsApp deleted the chat)
-└── 1791800000000-AddStatusMediaPathIndex.ts   # partial index on status_updates.mediaPath (orphan sweep)
+├── 1791800000000-AddStatusMediaPathIndex.ts   # partial index on status_updates.mediaPath (orphan sweep)
+└── 1791900000000-AddHighVolumeQueryIndexes.ts   # composite and retention indexes across messages, webhook_delivery_failures, message_batches, and integration_delivery_failures
 ```
 
 > [!NOTE]

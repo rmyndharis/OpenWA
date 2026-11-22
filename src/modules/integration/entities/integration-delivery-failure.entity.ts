@@ -9,6 +9,9 @@ import { NulFreeTransformer } from '../../../common/transformers/nul-free.transf
 @Index('IDX_integration_delivery_failures_instance', ['pluginId', 'instanceId'])
 // The per-delivery guards (open dead-letter count, tie-break, retire) filter on deliveryId as well.
 @Index('IDX_integration_delivery_failures_instance_delivery', ['pluginId', 'instanceId', 'deliveryId'])
+@Index('IDX_integration_delivery_failures_createdAt', ['createdAt'])
+@Index('IDX_integration_delivery_failures_sessionId', ['sessionId'])
+@Index('IDX_integration_delivery_failures_redrive', ['pluginId', 'instanceId', 'redriven', 'attempts', 'createdAt'])
 export class IntegrationDeliveryFailure {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
