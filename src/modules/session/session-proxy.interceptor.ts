@@ -18,12 +18,14 @@ import { Session } from './entities/session.entity';
 import { SessionOwnershipService } from './session-ownership.service';
 import { SESSION_SCOPED_KEY } from '../auth/decorators/auth.decorators';
 import { createLogger } from '../../common/services/logger.service';
+import { getRequestId } from '../../common/services/request-context';
 import { isTransientDbError } from '../../common/utils/db-errors';
 import { normalizeIp } from '../../common/utils/ip';
 
 /**
  * The request headers a forwarded call carries over. Everything else is this hop's business.
- * content-type is not among them: forward() sends every body as JSON and labels it so itself.
+ * content-type is handled alongside the forwarded body (raw wire bytes, form-encoded body, JSON,
+ * or omitted on bodyless requests), and x-request-id is propagated from the active request context.
  * idempotency-key travels so the OWNER claims it: the claim is part of the request's meaning, not
  * of this hop.
  */
@@ -97,6 +99,104 @@ async function* relayBody(
 
 /** The longest delay a Node timer takes; a longer one fires after 1 ms. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/** Matches requestContextMiddleware's client-supplied X-Request-ID validation so invalid headers never reach fetch(). */
+const CLIENT_REQUEST_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
+
+interface ForwardPayload {
+  body?: BodyInit;
+  contentType?: string;
+}
+
+function mediaTypeOf(contentType: string | undefined): string | undefined {
+  return contentType?.split(';', 1)[0].trim().toLowerCase();
+}
+
+function appendFormValue(params: URLSearchParams, key: string, value: unknown): void {
+  if (value === undefined) return;
+  if (value === null) {
+    params.append(key, '');
+    return;
+  }
+  if (Array.isArray(value)) {
+    const allPrimitive = value.every(item => item === null || item === undefined || typeof item !== 'object');
+    value.forEach((item, index) => appendFormValue(params, allPrimitive ? `${key}[]` : `${key}[${index}]`, item));
+    return;
+  }
+  if (typeof value === 'object') {
+    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+      appendFormValue(params, `${key}[${childKey}]`, childValue);
+    }
+    return;
+  }
+  if (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    typeof value === 'bigint'
+  ) {
+    params.append(key, String(value));
+  }
+}
+
+function serializeFormBody(body: unknown): string {
+  if (typeof body === 'string') return body;
+  if (body === null || typeof body !== 'object') return '';
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+    appendFormValue(params, key, value);
+  }
+  return params.toString();
+}
+
+function prepareForwardPayload(request: Request): ForwardPayload {
+  if (['GET', 'HEAD'].includes(request.method)) return {};
+
+  const rawContentType =
+    typeof request.headers['content-type'] === 'string' ? request.headers['content-type'] : undefined;
+  const rawBody = (request as Request & { rawBody?: unknown }).rawBody;
+
+  if (Buffer.isBuffer(rawBody) && rawBody.length > 0) {
+    return {
+      body: rawBody as unknown as BodyInit,
+      contentType: rawContentType,
+    };
+  }
+
+  if (request.method === 'DELETE') {
+    if ((Buffer.isBuffer(rawBody) && rawBody.length === 0) || request.body === undefined || request.body === '') {
+      return {};
+    }
+    const rawContentLength = request.headers['content-length'];
+    const contentLength = rawContentLength !== undefined ? Number(rawContentLength) : Number.NaN;
+    const hasTransferEncoding = Boolean(request.headers['transfer-encoding']);
+    const explicitlyEmptyLength = !hasTransferEncoding && Number.isFinite(contentLength) && contentLength === 0;
+    const hasExplicitBodyHeader =
+      !explicitlyEmptyLength &&
+      (Boolean(rawContentType) || (Number.isFinite(contentLength) && contentLength > 0) || hasTransferEncoding);
+    const isEmptyDefaultObject =
+      request.body !== null &&
+      typeof request.body === 'object' &&
+      !Array.isArray(request.body) &&
+      Object.keys(request.body as Record<string, unknown>).length === 0;
+    if (isEmptyDefaultObject && !hasExplicitBodyHeader) {
+      return {};
+    }
+  }
+
+  const mediaType = mediaTypeOf(rawContentType);
+  if (mediaType === 'application/x-www-form-urlencoded') {
+    return {
+      body: serializeFormBody(request.body),
+      contentType: 'application/x-www-form-urlencoded; charset=utf-8',
+    };
+  }
+
+  return {
+    body: JSON.stringify(request.body ?? {}),
+    contentType: 'application/json; charset=utf-8',
+  };
+}
 
 /**
  * The URL to forward to: ALWAYS the owner's origin (under its NODE_URL path, if it has one),
@@ -242,15 +342,19 @@ export class SessionProxyInterceptor implements NestInterceptor {
   ): Promise<void> {
     const timeoutMs = this.configService?.get<number>('session.proxyTimeoutMs', 60_000) ?? 60_000;
 
-    const hasBody = !['GET', 'HEAD'].includes(request.method);
+    const payload = prepareForwardPayload(request);
     const headers: Record<string, string> = { [FORWARDED_HEADER]: this.ownership?.nodeId ?? '1' };
     for (const name of FORWARDED_REQUEST_HEADERS) {
       const value = request.headers[name];
       if (typeof value === 'string') headers[name] = value;
     }
-    // Label the bytes actually sent: a form-encoded request, relabelled as the client sent it, would
-    // have the owner's urlencoded parser read the JSON text as one form key and answer 400.
-    if (hasBody) headers['content-type'] = 'application/json';
+    const rawHeaderRequestId =
+      typeof request.headers['x-request-id'] === 'string' ? request.headers['x-request-id'] : undefined;
+    const headerRequestId =
+      rawHeaderRequestId && CLIENT_REQUEST_ID_PATTERN.test(rawHeaderRequestId) ? rawHeaderRequestId : undefined;
+    const requestId = getRequestId() ?? headerRequestId;
+    if (requestId) headers['x-request-id'] = requestId;
+    if (payload.contentType) headers['content-type'] = payload.contentType;
 
     // The owner re-authenticates the forwarded call (allowedIps) and throttles per client IP, so
     // the chain must carry what this hop observed — without it every forwarded call shows up as
@@ -279,10 +383,7 @@ export class SessionProxyInterceptor implements NestInterceptor {
       const upstream = await fetch(target, {
         method: request.method,
         headers,
-        // The body has already been parsed by this hop's JSON or urlencoded body-parser; re-serialising
-        // it as JSON keeps the parsed values the owner's DTOs would have seen (there are no multipart
-        // session routes).
-        body: hasBody ? JSON.stringify(request.body ?? {}) : undefined,
+        body: payload.body,
         signal: abort.signal,
         redirect: 'manual',
       });

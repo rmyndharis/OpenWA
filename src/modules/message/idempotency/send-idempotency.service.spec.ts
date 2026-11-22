@@ -27,7 +27,7 @@ describe('SendIdempotencyService (sqlite)', () => {
   });
 
   afterEach(async () => {
-    service.onModuleDestroy();
+    await service.onModuleDestroy();
     await ds.destroy();
   });
 
@@ -134,6 +134,22 @@ describe('SendIdempotencyService (sqlite)', () => {
     expect(await repo.count()).toBe(1);
   });
 
+  it('reclaims a key at the exact expiresAt === now boundary instead of returning in_progress', async () => {
+    const fixedNow = new Date('2026-06-01T12:00:00.000Z');
+    jest.useFakeTimers({ now: fixedNow });
+    try {
+      const first = await service.claim(input);
+      if (first.kind !== 'claimed') throw new Error('expected a claim');
+      await repo.update({ id: first.id }, { expiresAt: fixedNow });
+
+      const reclaimed = await service.claim({ ...input, requestHash: 'h2' });
+      expect(reclaimed.kind).toBe('claimed');
+      expect(await repo.count()).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('prunes only expired keys', async () => {
     await service.claim(input);
     const old = await service.claim({ ...input, key: 'k-old' });
@@ -142,6 +158,79 @@ describe('SendIdempotencyService (sqlite)', () => {
 
     expect(await service.pruneExpired()).toBe(1);
     expect((await repo.find()).map(r => r.idempotencyKey)).toEqual(['k-1']);
+  });
+
+  it('prunes a key whose expiresAt equals now', async () => {
+    const exactNow = new Date('2026-06-01T12:00:00.000Z');
+    const claim = await service.claim(input);
+    if (claim.kind !== 'claimed') throw new Error('expected a claim');
+    await repo.update({ id: claim.id }, { expiresAt: exactNow });
+
+    expect(await service.pruneExpired(exactNow)).toBe(1);
+    expect(await repo.count()).toBe(0);
+  });
+
+  it('coalesces concurrent pruneExpired calls into a single pass', async () => {
+    const expired = await service.claim(input);
+    if (expired.kind !== 'claimed') throw new Error('expected a claim');
+    await repo.update({ id: expired.id }, { expiresAt: new Date(Date.now() - 1000) });
+
+    const realFind = repo.find.bind(repo);
+    let releaseFind!: () => void;
+    const findGate = new Promise<void>(resolve => (releaseFind = resolve));
+    let enteredFind!: () => void;
+    const findStarted = new Promise<void>(resolve => (enteredFind = resolve));
+    const findSpy = jest.spyOn(repo, 'find').mockImplementationOnce(async options => {
+      enteredFind();
+      await findGate;
+      return realFind(options);
+    });
+
+    const first = service.pruneExpired();
+    const second = service.pruneExpired();
+    await findStarted;
+    expect(findSpy).toHaveBeenCalledTimes(1);
+
+    releaseFind();
+    expect(await Promise.all([first, second])).toEqual([1, 1]);
+    expect(await repo.count()).toBe(0);
+  });
+
+  it('drains an in-flight pruneExpired call during onModuleDestroy and skips subsequent prunes', async () => {
+    const expired = await service.claim(input);
+    if (expired.kind !== 'claimed') throw new Error('expected a claim');
+    await repo.update({ id: expired.id }, { expiresAt: new Date(Date.now() - 1000) });
+
+    const realFind = repo.find.bind(repo);
+    let releaseFind!: () => void;
+    const findGate = new Promise<void>(resolve => (releaseFind = resolve));
+    let enteredFind!: () => void;
+    const findStarted = new Promise<void>(resolve => (enteredFind = resolve));
+    const findSpy = jest.spyOn(repo, 'find').mockImplementationOnce(async options => {
+      enteredFind();
+      await findGate;
+      return realFind(options);
+    });
+
+    const inFlight = service.pruneExpired();
+    await findStarted;
+
+    let destroyDone = false;
+    const destroying = service.onModuleDestroy().then(() => {
+      destroyDone = true;
+    });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(destroyDone).toBe(false);
+
+    releaseFind();
+    await inFlight;
+    await destroying;
+    expect(destroyDone).toBe(true);
+
+    // After destroy, pruneExpired returns 0 immediately without touching the repository.
+    findSpy.mockClear();
+    expect(await service.pruneExpired()).toBe(0);
+    expect(findSpy).not.toHaveBeenCalled();
   });
 
   it('rethrows a storage error that is not a duplicate key', async () => {
@@ -158,7 +247,7 @@ describe('SendIdempotencyService (sqlite)', () => {
       jest.useRealTimers();
     });
 
-    it('starts at module init, runs every hour, and stops at module destroy', () => {
+    it('starts at module init, runs every hour, and stops at module destroy', async () => {
       jest.useFakeTimers();
       const prune = jest.spyOn(service, 'pruneExpired').mockResolvedValue(0);
 
@@ -170,7 +259,7 @@ describe('SendIdempotencyService (sqlite)', () => {
       jest.advanceTimersByTime(hour);
       expect(prune).toHaveBeenCalledTimes(2);
 
-      service.onModuleDestroy();
+      await service.onModuleDestroy();
       jest.advanceTimersByTime(2 * hour);
       expect(prune).toHaveBeenCalledTimes(2);
     });

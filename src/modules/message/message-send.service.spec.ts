@@ -1108,19 +1108,19 @@ describe('MessageSendService', () => {
       expect(mockEngine.sendImageMessage).not.toHaveBeenCalled();
     });
 
-    it('threads a plugin-modified media input through to the engine', async () => {
+    it('threads plugin-modified media content through to the engine while keeping chatId pinned', async () => {
       (hookManager.execute as jest.Mock).mockResolvedValueOnce({
         continue: true,
         data: {
           sessionId: 'sess-1',
           type: 'image',
-          input: { chatId: '999@c.us', url: 'https://e.com/mod.jpg', caption: 'edited' },
+          input: { chatId: '999@c.us', url: 'https://e.com/mod.jpg', caption: 'edited', quotedMessageId: 'injected' },
         },
       });
       await service.sendImage('sess-1', { chatId: '628@c.us', url: 'https://e.com/i.jpg', caption: 'orig' });
       expect(mockEngine.sendImageMessage).toHaveBeenCalledWith(
-        '999@c.us',
-        expect.objectContaining({ data: 'https://e.com/mod.jpg', caption: 'edited' }),
+        '628@c.us',
+        expect.objectContaining({ data: 'https://e.com/mod.jpg', caption: 'edited', quotedMessageId: undefined }),
       );
     });
 
@@ -2611,5 +2611,38 @@ describe('MessageSendService', () => {
 
       expect(archive.archive).not.toHaveBeenCalled();
     });
+
+    it('never archives a FAILED row', async () => {
+      const archive = { archive: jest.fn() };
+      const svc = withFlag(true, archive);
+
+      await svc.saveOutgoingMessage('sess-1', {
+        waMessageId: 'wa-failed',
+        chatId: '621@c.us',
+        type: 'image',
+        status: MessageStatus.FAILED,
+        metadata: { media: { mimetype: 'image/png' } },
+      });
+
+      expect(archive.archive).not.toHaveBeenCalled();
+    });
+
+    it.each([MessageStatus.DELIVERED, MessageStatus.READ])(
+      'archives an outbound row whose merged echo status already reached %s',
+      async status => {
+        const archive = { archive: jest.fn().mockResolvedValue('chat-media/k') };
+        const svc = withFlag(true, archive);
+
+        await svc.saveOutgoingMessage('sess-1', {
+          waMessageId: `wa-${status}`,
+          chatId: '621@c.us',
+          type: 'image',
+          status,
+          metadata: { media: { mimetype: 'image/png', data: 'QUJD' } },
+        });
+
+        expect(archive.archive).toHaveBeenCalledWith(expect.objectContaining({ waMessageId: `wa-${status}`, status }));
+      },
+    );
   });
 });

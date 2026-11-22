@@ -14,11 +14,70 @@ export function normalizeHookPriority(priority: unknown): number {
   return typeof priority === 'number' && Number.isFinite(priority) ? priority : 100;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === null || Object.getPrototypeOf(proto) === null;
+}
+
+function deepCloneFallback(value: unknown, seen: WeakMap<object, unknown>): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (seen.has(value)) return seen.get(value);
+  if (Array.isArray(value)) {
+    const copy: unknown[] = [];
+    seen.set(value, copy);
+    for (const item of value) {
+      copy.push(deepCloneFallback(item, seen));
+    }
+    return copy;
+  }
+  if (Buffer.isBuffer(value)) {
+    return Buffer.from(value);
+  }
+  if (value instanceof Date) {
+    return new Date(value.getTime());
+  }
+  if (value instanceof RegExp) {
+    return new RegExp(value.source, value.flags);
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  const copy: Record<string, unknown> = {};
+  seen.set(value, copy);
+  for (const [key, entry] of Object.entries(value)) {
+    Object.defineProperty(copy, key, {
+      value: deepCloneFallback(entry, seen),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return copy;
+}
+
+function formatHookError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function cloneHookData<T>(value: T): T {
+  if (value === null || typeof value !== 'object') return value;
+  try {
+    return structuredClone(value);
+  } catch {
+    return deepCloneFallback(value, new WeakMap()) as T;
+  }
+}
+
 export interface HookExecuteOptions<T> {
   sessionId?: string;
   source: string;
   /** Adopt a handler's `data` only when this returns true; a rejected result is skipped, not applied. */
   accept?: (data: T) => boolean;
+  /** Pass a deep clone of `currentData` to each handler so in-place mutations on error or no-data cannot leak. */
+  isolateData?: boolean;
+  /** Normalize an accepted handler result before passing `currentData` to subsequent handlers. */
+  normalizeData?: (data: T) => T;
 }
 
 @Injectable()
@@ -192,7 +251,7 @@ export class HookManager {
       return { continue: true, data };
     }
 
-    let currentData = data;
+    let currentData = options.isolateData ? cloneHookData(data) : data;
     const ctx: HookContext<T> = {
       event,
       data: currentData,
@@ -202,37 +261,43 @@ export class HookManager {
     };
 
     for (const registration of registrations) {
+      let shouldContinue: boolean;
+      let resultData: unknown;
+      let resultError: unknown;
       try {
-        ctx.data = currentData;
+        ctx.data = options.isolateData ? cloneHookData(currentData) : currentData;
         const result = await registration.handler(ctx);
-
-        // A handler that reports an error discards its output: do NOT apply its (possibly partial or
-        // corrupted) data mutation, even though HookResult allows returning data and error together.
-        // A result the caller cannot use is dropped the same way, so the chain keeps the last usable
-        // value (an earlier handler's redaction included) instead of the caller falling back to the input.
-        if (result.error === undefined && result.data !== undefined) {
-          if (options.accept && !options.accept(result.data as T)) {
-            this.logger.warn(
-              `Hook result from ${registration.pluginId} for ${event} is not usable; keeping the previous data`,
-            );
-          } else {
-            currentData = result.data as T;
-          }
-        }
-
-        if (!result.continue) {
-          this.logger.debug(`Hook chain stopped by ${registration.pluginId} at event ${event}`);
-          return { continue: false, data: currentData };
-        }
-
-        if (result.error) {
-          throw result.error;
-        }
+        shouldContinue = result.continue;
+        resultData = result.data;
+        resultError = result.error;
       } catch (error) {
-        this.logger.error(
-          `Hook error in ${registration.pluginId} for ${event}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${formatHookError(error)}`);
         // Continue to next handler, don't break the chain on error
+        continue;
+      }
+
+      // A handler that reports an error discards its output: do NOT apply its (possibly partial or
+      // corrupted) data mutation, even though HookResult allows returning data and error together.
+      // A result the caller cannot use is dropped the same way, so the chain keeps the last usable
+      // value (an earlier handler's redaction included) instead of the caller falling back to the input.
+      if (resultError === undefined && resultData !== undefined) {
+        if (options.accept && !options.accept(resultData as T)) {
+          this.logger.warn(
+            `Hook result from ${registration.pluginId} for ${event} is not usable; keeping the previous data`,
+          );
+        } else {
+          const adopted = resultData as T;
+          currentData = options.normalizeData ? options.normalizeData(adopted) : adopted;
+        }
+      }
+
+      if (!shouldContinue) {
+        this.logger.debug(`Hook chain stopped by ${registration.pluginId} at event ${event}`);
+        return { continue: false, data: currentData };
+      }
+
+      if (resultError) {
+        this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${formatHookError(resultError)}`);
       }
     }
 

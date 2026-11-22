@@ -1,9 +1,11 @@
 import http from 'http';
 import { AddressInfo } from 'net';
+import express from 'express';
 import { of, lastValueFrom } from 'rxjs';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
 import { SessionProxyInterceptor, FORWARDED_HEADER, forwardTarget } from './session-proxy.interceptor';
 import type { Session } from './entities/session.entity';
+import { runWithRequestId } from '../../common/services/request-context';
 
 /**
  * The forwarding decision IS the security surface: forwarding when the session is local answers a
@@ -31,6 +33,7 @@ describe('SessionProxyInterceptor', () => {
     method: string;
     originalUrl: string;
     body?: unknown;
+    rawBody?: Buffer;
     socket?: { remoteAddress?: string };
   };
 
@@ -255,19 +258,213 @@ describe('SessionProxyInterceptor', () => {
       expect(JSON.parse(String(sentBody))).toEqual({ servedBy: 'the-owner' });
     });
 
-    it('labels a re-serialised form body as JSON, so the owner parses what was sent', async () => {
+    it('preserves application/x-www-form-urlencoded and serializes parsed form bodies with bracket notation when rawBody is absent', async () => {
+      const mentions = Array.from({ length: 25 }, (_, i) => `628${i}@c.us`);
       const req = request({
         method: 'POST',
         originalUrl: `/api/sessions/${SID}/messages/send-text`,
-        headers: { 'x-api-key': 'k-123', 'content-type': 'application/x-www-form-urlencoded' },
-        body: { chatId: '628@c.us', text: 'hi & bye' },
+        headers: { 'x-api-key': 'k-123', 'content-type': 'application/x-www-form-urlencoded; charset=iso-8859-1' },
+        body: {
+          chatId: '628@c.us',
+          text: 'hi & bye café',
+          mentions,
+          items: [
+            { id: '1', qty: '2' },
+            { id: '3', qty: '4' },
+          ],
+          meta: { source: 'web', nested: { flag: true } },
+        },
       });
       const { interceptor, context, next } = build({ req, row: row({ nodeUrl: serverUrl }) });
 
       await interceptor.intercept(context, next);
 
-      expect(seen[0].headers['content-type']).toBe('application/json');
-      expect(JSON.parse(seen[0].body)).toEqual({ chatId: '628@c.us', text: 'hi & bye' });
+      // Re-serialised UTF-8 form bytes always declare charset=utf-8 rather than a mismatched caller charset.
+      expect(seen[0].headers['content-type']).toBe('application/x-www-form-urlencoded; charset=utf-8');
+      const params = new URLSearchParams(seen[0].body);
+      expect(params.get('chatId')).toBe('628@c.us');
+      expect(params.get('text')).toBe('hi & bye café');
+      expect(params.getAll('mentions[]')).toEqual(mentions);
+      expect(params.get('items[0][id]')).toBe('1');
+      expect(params.get('items[1][qty]')).toBe('4');
+      expect(params.get('meta[source]')).toBe('web');
+      expect(params.get('meta[nested][flag]')).toBe('true');
+
+      // Verify end-to-end parsing through Express's extended urlencoded parser (matching the owner node).
+      const ownerApp = express();
+      ownerApp.use(express.urlencoded({ extended: true }));
+      let parsedOnOwner: Record<string, unknown> | undefined;
+      ownerApp.post('/echo', (ownerReq, ownerRes) => {
+        parsedOnOwner = ownerReq.body as Record<string, unknown>;
+        ownerRes.json({ ok: true });
+      });
+      const ownerServer = ownerApp.listen(0, '127.0.0.1');
+      await new Promise<void>(resolve => ownerServer.once('listening', resolve));
+      try {
+        const ownerUrl = `http://127.0.0.1:${(ownerServer.address() as AddressInfo).port}`;
+        const ownerFwd = build({
+          req: { ...req, originalUrl: '/echo' },
+          row: row({ nodeUrl: ownerUrl }),
+        });
+        await ownerFwd.interceptor.intercept(ownerFwd.context, ownerFwd.next);
+        expect(Array.isArray(parsedOnOwner?.mentions)).toBe(true);
+        expect(parsedOnOwner?.mentions).toEqual(mentions);
+        expect(parsedOnOwner?.items).toEqual([
+          { id: '1', qty: '2' },
+          { id: '3', qty: '4' },
+        ]);
+        expect(parsedOnOwner?.text).toBe('hi & bye café');
+      } finally {
+        await new Promise<void>(resolve => ownerServer.close(() => resolve()));
+      }
+    });
+
+    it('normalizes mismatched non-UTF-8 JSON charset to utf-8 when re-serializing without rawBody', async () => {
+      const req = request({
+        method: 'POST',
+        originalUrl: `/api/sessions/${SID}/messages/send-text`,
+        headers: { 'x-api-key': 'k-123', 'content-type': 'application/json; charset=utf-16le' },
+        body: { chatId: '628@c.us', text: 'café' },
+      });
+      const { interceptor, context, next } = build({ req, row: row({ nodeUrl: serverUrl }) });
+
+      await interceptor.intercept(context, next);
+
+      expect(seen[0].headers['content-type']).toBe('application/json; charset=utf-8');
+      expect(JSON.parse(seen[0].body)).toEqual({ chatId: '628@c.us', text: 'café' });
+    });
+
+    it('forwards non-empty rawBody bytes and original content-type verbatim on non-GET/HEAD requests', async () => {
+      const rawJson = Buffer.from('{  "text": "halo",  "chatId": "628@c.us" }');
+      const jsonReq = request({
+        method: 'POST',
+        originalUrl: `/api/sessions/${SID}/messages/send-text`,
+        headers: { 'x-api-key': 'k-123', 'content-type': 'application/json; charset=utf-8' },
+        body: { chatId: '628@c.us', text: 'halo' },
+        rawBody: rawJson,
+      });
+      const first = build({ req: jsonReq, row: row({ nodeUrl: serverUrl }) });
+      await first.interceptor.intercept(first.context, first.next);
+
+      expect(seen[0].headers['content-type']).toBe('application/json; charset=utf-8');
+      expect(seen[0].body).toBe(rawJson.toString('utf8'));
+
+      const rawForm = Buffer.from('chatId=628%40c.us&text=hi+%26+bye');
+      const formReq = request({
+        method: 'POST',
+        originalUrl: `/api/sessions/${SID}/messages/send-text`,
+        headers: { 'x-api-key': 'k-123', 'content-type': 'application/x-www-form-urlencoded' },
+        body: { chatId: '628@c.us', text: 'hi & bye' },
+        rawBody: rawForm,
+      });
+      const second = build({ req: formReq, row: row({ nodeUrl: serverUrl }) });
+      await second.interceptor.intercept(second.context, second.next);
+
+      expect(seen[1].headers['content-type']).toBe('application/x-www-form-urlencoded');
+      expect(seen[1].body).toBe(rawForm.toString('utf8'));
+    });
+
+    it('omits content-type and body on bodyless DELETE requests while keeping bodies on DELETE with payload', async () => {
+      // Bodyless DELETE with Express default empty object and no content-type / content-length > 0.
+      const defaultEmpty = build({
+        req: request({
+          method: 'DELETE',
+          originalUrl: `/api/sessions/${SID}`,
+          headers: { 'x-api-key': 'k-123' },
+          body: {},
+        }),
+        row: row({ nodeUrl: serverUrl }),
+      });
+      await defaultEmpty.interceptor.intercept(defaultEmpty.context, defaultEmpty.next);
+      expect(seen[0].method).toBe('DELETE');
+      expect(seen[0].headers['content-type']).toBeUndefined();
+      expect(seen[0].body).toBe('');
+
+      // Bodyless DELETE with undefined body.
+      const undefinedBody = build({
+        req: request({
+          method: 'DELETE',
+          originalUrl: `/api/sessions/${SID}`,
+          headers: { 'x-api-key': 'k-123' },
+          body: undefined,
+        }),
+        row: row({ nodeUrl: serverUrl }),
+      });
+      await undefinedBody.interceptor.intercept(undefinedBody.context, undefinedBody.next);
+      expect(seen[1].headers['content-type']).toBeUndefined();
+      expect(seen[1].body).toBe('');
+
+      // Bodyless DELETE with 0-byte chunked rawBody does not fabricate "{}".
+      const zeroByteChunked = build({
+        req: request({
+          method: 'DELETE',
+          originalUrl: `/api/sessions/${SID}`,
+          headers: { 'x-api-key': 'k-123', 'transfer-encoding': 'chunked', 'content-type': 'application/json' },
+          body: {},
+          rawBody: Buffer.alloc(0),
+        }),
+        row: row({ nodeUrl: serverUrl }),
+      });
+      await zeroByteChunked.interceptor.intercept(zeroByteChunked.context, zeroByteChunked.next);
+      expect(seen[2].headers['content-type']).toBeUndefined();
+      expect(seen[2].body).toBe('');
+
+      // Bodyless DELETE with empty-string body does not fabricate '""'.
+      const emptyStringBody = build({
+        req: request({
+          method: 'DELETE',
+          originalUrl: `/api/sessions/${SID}`,
+          headers: { 'x-api-key': 'k-123', 'content-type': 'application/json' },
+          body: '',
+        }),
+        row: row({ nodeUrl: serverUrl }),
+      });
+      await emptyStringBody.interceptor.intercept(emptyStringBody.context, emptyStringBody.next);
+      expect(seen[3].headers['content-type']).toBeUndefined();
+      expect(seen[3].body).toBe('');
+
+      // DELETE carrying an actual JSON payload still forwards it.
+      const withPayload = build({
+        req: request({
+          method: 'DELETE',
+          originalUrl: `/api/sessions/${SID}/messages/m1`,
+          headers: { 'x-api-key': 'k-123', 'content-type': 'application/json' },
+          body: { everyone: true },
+        }),
+        row: row({ nodeUrl: serverUrl }),
+      });
+      await withPayload.interceptor.intercept(withPayload.context, withPayload.next);
+      expect(seen[4].headers['content-type']).toBe('application/json; charset=utf-8');
+      expect(JSON.parse(seen[4].body)).toEqual({ everyone: true });
+    });
+
+    it('forwards x-request-id from request context or falls back to a valid inbound header while dropping invalid ones', async () => {
+      const fromContext = build({
+        req: request({ headers: { 'x-api-key': 'k-123', 'x-request-id': 'header-id' } }),
+        row: row({ nodeUrl: serverUrl }),
+      });
+      await runWithRequestId('ctx-req-42', () =>
+        fromContext.interceptor.intercept(fromContext.context, fromContext.next),
+      );
+      expect(seen[0].headers['x-request-id']).toBe('ctx-req-42');
+
+      const fromHeader = build({
+        req: request({ headers: { 'x-api-key': 'k-123', 'x-request-id': 'inbound-req-99' } }),
+        row: row({ nodeUrl: serverUrl }),
+      });
+      await fromHeader.interceptor.intercept(fromHeader.context, fromHeader.next);
+      expect(seen[1].headers['x-request-id']).toBe('inbound-req-99');
+
+      // Malformed CRLF or non-ByteString inbound headers must be dropped instead of crashing fetch() into 502.
+      for (const badId of ['bad\r\nX-Injected: 1', 'req-\u2603', 'x'.repeat(129)]) {
+        const bad = build({
+          req: request({ headers: { 'x-api-key': 'k-123', 'x-request-id': badId } }),
+          row: row({ nodeUrl: serverUrl }),
+        });
+        await bad.interceptor.intercept(bad.context, bad.next);
+        expect(bad.res.status).toHaveBeenCalledWith(201);
+        expect(seen.at(-1)?.headers['x-request-id']).toBeUndefined();
+      }
     });
 
     it('a GET carries no body', async () => {

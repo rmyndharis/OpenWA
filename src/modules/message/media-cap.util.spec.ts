@@ -1,5 +1,10 @@
 import { BadRequestException, PayloadTooLargeException } from '@nestjs/common';
-import { assertBase64WithinMediaCap, resolveMediaBody, stripBase64DataUri } from './media-cap.util';
+import {
+  assertBase64WithinMediaCap,
+  extractDataUriMimetype,
+  resolveMediaBody,
+  stripBase64DataUri,
+} from './media-cap.util';
 
 describe('assertBase64WithinMediaCap', () => {
   const orig = process.env.MEDIA_DOWNLOAD_MAX_BYTES;
@@ -103,5 +108,30 @@ describe('resolveMediaBody', () => {
     expect(() => resolveMediaBody({ base64: big }, { ...FALLBACK, requireMimetypeForBase64: true })).toThrow(
       'mimetype is required',
     );
+  });
+});
+
+describe('extractDataUriMimetype', () => {
+  it('extracts and normalizes a mimetype from a base64 data URI', () => {
+    expect(extractDataUriMimetype('data:image/png;base64,QUJD')).toBe('image/png');
+    expect(extractDataUriMimetype('data:IMAGE/WEBP;base64,QUJD')).toBe('image/webp');
+    expect(extractDataUriMimetype('data:audio/ogg; codecs=opus;base64,QUJD')).toBe('audio/ogg; codecs=opus');
+    expect(extractDataUriMimetype('data:application/pdf;base64,JVBERi0=')).toBe('application/pdf');
+    expect(extractDataUriMimetype(`data:image/png;base64,${'A'.repeat(2048)}`)).toBe('image/png');
+  });
+
+  it('returns undefined for plain base64, empty values, or malformed prefixes', () => {
+    expect(extractDataUriMimetype(undefined)).toBeUndefined();
+    expect(extractDataUriMimetype(null)).toBeUndefined();
+    expect(extractDataUriMimetype('')).toBeUndefined();
+    expect(extractDataUriMimetype('QUJD')).toBeUndefined();
+    expect(extractDataUriMimetype('data:;base64,QUJD')).toBeUndefined();
+    expect(extractDataUriMimetype('data:notamime;base64,QUJD')).toBeUndefined();
+    expect(extractDataUriMimetype('data:image/png\r\nX-Test: 1;base64,QUJD')).toBeUndefined();
+    expect(extractDataUriMimetype('data:image/png;\r\nX-Test: 1;base64,QUJD')).toBeUndefined();
+    expect(extractDataUriMimetype('data:image/png;name=a\x00b;base64,QUJD')).toBeUndefined();
+    expect(extractDataUriMimetype('data:image/png;name=a\x1fb;base64,QUJD')).toBeUndefined();
+    expect(extractDataUriMimetype('data:image/png;name=a\x7fb;base64,QUJD')).toBeUndefined();
+    expect(extractDataUriMimetype(`data:image/png;p=${'x'.repeat(260)};base64,QUJD`)).toBeUndefined();
   });
 });

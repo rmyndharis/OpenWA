@@ -1,8 +1,177 @@
 import { BadRequestException } from '@nestjs/common';
-import { HookManager } from './hook-manager.service';
+import { cloneHookData, HookExecuteOptions, HookManager } from './hook-manager.service';
 import { createLogger } from '../../common/services/logger.service';
 
 const logger = createLogger('SendingGate');
+
+/**
+ * Routing and targeting fields that plugins may inspect during `message:sending` but must never
+ * retarget, remove, or inject onto the gated send input.
+ */
+const PINNED_ROUTING_FIELDS = ['chatId', 'toChatId', 'fromChatId', 'quotedMessageId', 'messageId'] as const;
+
+const PROTOTYPE_POLLUTION_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+
+const MAX_SANITIZE_DEPTH = 64;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  // Check the prototype chain's root rather than identity with this realm's Object.prototype so
+  // plain objects cloned across realms (e.g. structuredClone inside a VM context) still match.
+  return proto === null || Object.getPrototypeOf(proto) === null;
+}
+
+function isRecordObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function cloneGateInput<T extends object>(input: T): T {
+  return cloneHookData(input);
+}
+
+function sanitizeNestedValue(value: unknown, seen: WeakMap<object, unknown>, depth: number): unknown {
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  if (seen.has(value)) {
+    return seen.get(value);
+  }
+  if (depth >= MAX_SANITIZE_DEPTH) {
+    throw new BadRequestException('Outbound message blocked: plugin hook payload exceeds maximum nesting depth');
+  }
+  if (Array.isArray(value)) {
+    const cleanArray: unknown[] = [];
+    seen.set(value, cleanArray);
+    for (const item of value) {
+      cleanArray.push(sanitizeNestedValue(item, seen, depth + 1));
+    }
+    return cleanArray;
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  const cleanObject: Record<string, unknown> = {};
+  seen.set(value, cleanObject);
+  for (const [key, entry] of Object.entries(value)) {
+    if (!PROTOTYPE_POLLUTION_KEYS.has(key)) {
+      cleanObject[key] = sanitizeNestedValue(entry, seen, depth + 1);
+    }
+  }
+  return cleanObject;
+}
+
+/**
+ * Recursively strip own `__proto__`, `constructor`, and `prototype` keys across a gated input
+ * object and any nested plain objects or arrays, preserving non-plain values (such as Buffers and
+ * Dates) and guarding against circular references.
+ */
+export function sanitizeGateInputObject(raw: Record<string, unknown>): Record<string, unknown> {
+  const seen = new WeakMap<object, unknown>();
+  const clean: Record<string, unknown> = {};
+  seen.set(raw, clean);
+  for (const [key, value] of Object.entries(raw)) {
+    if (!PROTOTYPE_POLLUTION_KEYS.has(key)) {
+      clean[key] = sanitizeNestedValue(value, seen, 1);
+    }
+  }
+  return clean;
+}
+
+export interface PinnedRoutingSnapshot {
+  fields: Array<{ field: string; present: boolean; value: unknown }>;
+  optionsRecipients: { present: boolean; value: unknown };
+}
+
+/** Capture caller-owned routing fields (including StatusService `options.recipients`) before running hooks. */
+export function capturePinnedRouting(input: object): PinnedRoutingSnapshot {
+  const original = input as Record<string, unknown>;
+  const fields = PINNED_ROUTING_FIELDS.map(field => ({
+    field,
+    present: Object.hasOwn(original, field) && original[field] !== undefined,
+    value: original[field],
+  }));
+
+  let optionsRecipients: { present: boolean; value: unknown } = { present: false, value: undefined };
+  if (Object.hasOwn(original, 'options') && isRecordObject(original.options)) {
+    const origOptions = original.options;
+    if (Object.hasOwn(origOptions, 'recipients') && origOptions.recipients !== undefined) {
+      optionsRecipients = {
+        present: true,
+        value: cloneHookData(origOptions.recipients),
+      };
+    }
+  }
+
+  return { fields, optionsRecipients };
+}
+
+/** Recursively sanitize a gated input object and restore/strip all pinned routing fields from `snapshot`. */
+export function applyPinnedRouting(
+  raw: Record<string, unknown>,
+  snapshot: PinnedRoutingSnapshot,
+): Record<string, unknown> {
+  const gated = sanitizeGateInputObject(raw);
+  for (const { field, present, value } of snapshot.fields) {
+    if (present) {
+      gated[field] = value;
+    } else {
+      delete gated[field];
+    }
+  }
+  if (Object.hasOwn(gated, 'options') && isRecordObject(gated.options)) {
+    const gatedOptions = sanitizeGateInputObject(gated.options);
+    if (snapshot.optionsRecipients.present) {
+      gatedOptions.recipients = cloneHookData(snapshot.optionsRecipients.value);
+    } else {
+      delete gatedOptions.recipients;
+    }
+    gated.options = gatedOptions;
+  } else if (snapshot.optionsRecipients.present) {
+    gated.options = { recipients: cloneHookData(snapshot.optionsRecipients.value) };
+  }
+  return gated;
+}
+
+/**
+ * Re-pin routing fields and sanitize nested keys on a valid `message:sending` envelope between
+ * handlers in a chain. Malformed envelopes pass through untouched so the gate's fail-closed check
+ * refuses them with 400.
+ */
+export function normalizeSendingEnvelope<T>(envelope: T, snapshot: PinnedRoutingSnapshot): T {
+  if (typeof envelope !== 'object' || envelope === null || Array.isArray(envelope) || !('input' in envelope)) {
+    return envelope;
+  }
+  const record = envelope as Record<string, unknown>;
+  if (typeof record.input !== 'object' || record.input === null || Array.isArray(record.input)) {
+    return envelope;
+  }
+  return {
+    ...record,
+    input: applyPinnedRouting(record.input as Record<string, unknown>, snapshot),
+  } as T;
+}
+
+/**
+ * Build HookExecuteOptions for `message:sending` with per-handler data isolation and inter-handler
+ * routing normalization attached non-enumerably so `{ sessionId, source }` keeps its exact
+ * enumerable context shape.
+ */
+export function buildSendingExecuteOptions<T>(
+  sessionId: string,
+  source: string,
+  snapshot: PinnedRoutingSnapshot,
+): HookExecuteOptions<T> {
+  const options: HookExecuteOptions<T> = { sessionId, source };
+  Object.defineProperties(options, {
+    isolateData: { value: true, enumerable: false },
+    normalizeData: {
+      value: (data: T) => normalizeSendingEnvelope(data, snapshot),
+      enumerable: false,
+    },
+  });
+  return options;
+}
 
 /**
  * Run the pre-send `message:sending` plugin gate for one piece of outbound content and return the
@@ -12,8 +181,7 @@ const logger = createLogger('SendingGate');
  * A second copy of a moderation chokepoint is a chokepoint that will eventually disagree with itself.
  *
  * Current callers: `MessageSendService` (every sender), `MessageService` (edit), both reporting source
- * `'MessageService'`, `StatusService` (the three posts) and `CatalogService` (`sendProduct`, which
- * ignores a rewritten `chatId` as bulk does).
+ * `'MessageService'`, `StatusService` (the three posts) and `CatalogService` (`sendProduct`).
  * `BulkMessageService` still runs its own inlined copy — it has to flag a plugin block separately
  * from a delivery failure so the per-item `message:failed` hook is skipped, which this signature
  * cannot express. If you change the gate's semantics here, change it there too
@@ -31,10 +199,10 @@ const logger = createLogger('SendingGate');
  * post without inspecting the payload shape — which matters because the shapes differ: a
  * MessageService `input` is a send DTO carrying `chatId`, a StatusService `input` is not.
  *
- * A bulk item's `message:sending` and `message:failed` input carries that item's recipient `chatId`
- * as well, so a plugin reads the recipient of a bulk item the same way as a single send's. The
- * difference is on the way back: a single send goes to whatever `chatId` the gate returns, while a
- * `chatId` rewritten by the gate is ignored for a bulk item, which is always sent to its own recipient.
+ * Routing fields (`chatId`, `toChatId`, `fromChatId`, `quotedMessageId`, `messageId`) are pinned to
+ * the caller's original pre-gate values after the hook returns (and removed if absent or `undefined`
+ * on the caller's input). Both single sends and bulk items therefore always deliver to the caller's
+ * original target while still allowing plugins to inspect routing fields and rewrite message content.
  */
 export async function applySendingGate<T extends object>(
   hookManager: HookManager,
@@ -43,10 +211,11 @@ export async function applySendingGate<T extends object>(
   input: T,
   source: string,
 ): Promise<T> {
+  const pinnedRouting = capturePinnedRouting(input);
   const { continue: shouldContinue, data: hookData } = await hookManager.execute(
     'message:sending',
-    { sessionId, input, type },
-    { sessionId, source },
+    { sessionId, input: cloneGateInput(input), type },
+    buildSendingExecuteOptions(sessionId, source, pinnedRouting),
   );
   if (!shouldContinue) {
     throw new BadRequestException('Message sending blocked by plugin');
@@ -72,8 +241,10 @@ export async function applySendingGate<T extends object>(
   if (
     typeof envelope !== 'object' ||
     envelope === null ||
+    Array.isArray(envelope) ||
     typeof envelope.input !== 'object' ||
-    envelope.input === null
+    envelope.input === null ||
+    Array.isArray(envelope.input)
   ) {
     // The 400 reaches the API caller, who cannot fix a plugin. This refusal stops EVERY send on the
     // session, so the operator needs it in the server log — with the session and call site, since
@@ -88,6 +259,6 @@ export async function applySendingGate<T extends object>(
       'A message:sending handler returned a payload without a usable `input`; the send was refused rather than sent unmoderated',
     );
   }
-  // Use the potentially plugin-modified input.
-  return envelope.input as T;
+  // Use the potentially plugin-modified content while stripping dangerous keys and pinning caller routing fields.
+  return applyPinnedRouting(envelope.input as Record<string, unknown>, pinnedRouting) as T;
 }
