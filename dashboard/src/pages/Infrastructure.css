@@ -588,6 +588,19 @@
   font-size: 0.75rem;
   margin-top: 0.15rem;
 }
+.infrastructure-page .data-migration-secrets-optin {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.infrastructure-page .data-migration-secrets-hint {
+  margin-top: 0.15rem;
+}
 .infrastructure-page .data-migration-actions {
   display: flex;
   flex-wrap: wrap;

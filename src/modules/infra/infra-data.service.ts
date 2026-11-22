@@ -16,6 +16,8 @@ import { ChatStateStoreService } from '../../engine/adapters/baileys-chat-state-
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { ScopeBindingService } from '../integration/scope-binding.service';
 import { AutomationRulesService } from '../automation/automation-rules.service';
+import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
+import type { PluginConfigSchema } from '../../core/plugins/plugin.interfaces';
 import { ReKeyChatStatesBySessionId1786500000000 } from '../../database/migrations/1786500000000-ReKeyChatStatesBySessionId';
 import { ScrubRevokedMessageContent1786900000000 } from '../../database/migrations/1786900000000-ScrubRevokedMessageContent';
 import { ScrubNonPhoneLidMappings1786950000000 } from '../../database/migrations/1786950000000-ScrubNonPhoneLidMappings';
@@ -23,9 +25,9 @@ import { BackfillLegacyMessageTypes1791300000000 } from '../../database/migratio
 import { Session as SessionEntity, SessionStatus } from '../session/entities/session.entity';
 import { In } from 'typeorm';
 import { DateUtils } from 'typeorm/util/DateUtils';
-import type { MigrationTables, TableCounts } from './migration-tables.types';
-import { EXPORT_TABLES, EXPORT_TABLE_EXCLUSIONS, type AnyExportTable } from './export-tables';
-import { TABLE_IMPORTERS, deduplicateArchivedWebhookFailures } from './table-importers';
+import type { MigrationTables, PluginInstanceRow, TableCounts } from './migration-tables.types';
+import { EXPORT_TABLES, EXPORT_TABLE_EXCLUSIONS, type AnyExportTable, type ExportReadContext } from './export-tables';
+import { TABLE_IMPORTERS, deduplicateArchivedWebhookFailures, isRedactedPluginSecret } from './table-importers';
 
 /**
  * The ownership quartet SessionOwnershipService maintains: which process holds a session's engine and
@@ -376,7 +378,7 @@ export class InfraDataService {
     }
   }
 
-  async exportData(): Promise<InfraExportDataResult> {
+  async exportData(options?: { includePluginSecrets?: boolean }): Promise<InfraExportDataResult> {
     this.assertExportRegistryMatchesMetadata();
     if (this.importInFlight) {
       throw new ConflictException({
@@ -388,14 +390,27 @@ export class InfraDataService {
     }
     this.exportsInFlight++;
     try {
-      return await this.runExport();
+      return await this.runExport(options?.includePluginSecrets === true);
     } finally {
       this.exportsInFlight--;
     }
   }
 
+  private resolvePluginConfigSchema(pluginId: string): PluginConfigSchema | undefined {
+    if (!this.moduleRef) return undefined;
+    try {
+      const loader = this.moduleRef.get<
+        typeof PluginLoaderService,
+        { getPlugin?: (id: string) => { manifest?: { configSchema?: PluginConfigSchema } } | undefined } | undefined
+      >(PluginLoaderService, { strict: false });
+      return loader?.getPlugin?.(pluginId)?.manifest?.configSchema;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** The table reads behind exportData, entered only through its import guard. */
-  private async runExport(): Promise<InfraExportDataResult> {
+  private async runExport(includePluginSecrets: boolean): Promise<InfraExportDataResult> {
     // The tables below may legitimately not exist yet (created by migrations an older DB has not run).
     // Only a GENUINE missing-table error (isMissingTableError) may be tolerated — anything else (lock,
     // I/O, timeout, aborted connection) must FAIL the export. The old blind `catch { debug-log }`
@@ -425,6 +440,11 @@ export class InfraDataService {
     const tables = {} as MigrationTables;
     const counts = {} as TableCounts;
 
+    const exportContext: ExportReadContext = {
+      includePluginSecrets,
+      resolvePluginConfigSchema: pluginId => this.resolvePluginConfigSchema(pluginId),
+    };
+
     for (const entry of EXPORT_TABLES) {
       const droppedBefore = inlineMediaBudget.droppedPayloads();
       const rows: unknown[] = entry.inlineMedia
@@ -435,8 +455,8 @@ export class InfraDataService {
           );
       // `rows` was read for exactly this entry's table, so it holds the row type the entry's hooks
       // declare. That correlation is what the erased entry type cannot carry, and this loop is the
-      // one place it is known — so the casts live here rather than at each hook.
-      entry.afterRead?.(rows as never[]);
+      // one place it is known, so the casts live here rather than at each hook.
+      entry.afterRead?.(rows as never[], exportContext);
       if (entry.inlineMedia) {
         droppedByBucket[entry.inlineMedia.bucket] = inlineMediaBudget.droppedPayloads() - droppedBefore;
       }
@@ -455,10 +475,11 @@ export class InfraDataService {
       counts[entry.key] = kept.length;
     }
 
-    // Audit the full-DB export: this payload carries plugin-instance secrets, so WHO pulled
-    // a dump (and the per-table row counts) must land in the audit log. Data itself is never
-    // logged — only counts.
-    await this.auditService?.logInfo(AuditAction.INFRA_DATA_EXPORTED, { metadata: { counts } });
+    // Record who pulled a full-DB export, the per-table row counts, and whether plugin instance
+    // secrets were opted in. Data itself is never logged.
+    await this.auditService?.logInfo(AuditAction.INFRA_DATA_EXPORTED, {
+      metadata: { counts, includePluginSecrets },
+    });
 
     return {
       exportedAt: new Date().toISOString(),
@@ -928,6 +949,7 @@ export class InfraDataService {
         // carry each table's INSERT text, param mapping, and per-row skip guard; a missing or empty
         // table keeps its 0 count and contributes no warnings.
         const counts = Object.fromEntries(TABLE_IMPORTERS.map(importer => [importer.key, 0] as const)) as TableCounts;
+        const regeneratedPluginInstances: string[] = [];
         // SQLite only: archived datetime values are normalized to the form TypeORM writes there, so a
         // PostgreSQL-made backup compares and sorts like rows the app wrote itself.
         const datetimeColumns = isPostgres ? undefined : sqliteDatetimeColumns(this.dataDataSource);
@@ -950,7 +972,7 @@ export class InfraDataService {
             };
             // `rows` was read from `data.tables[importer.key]`, so it holds exactly the row type this
             // descriptor's id/map/skip declare. That correlation is what the erased importer type
-            // cannot carry, and this loop is the one place it is known — so the cast lives here rather
+            // cannot carry, and this loop is the one place it is known, so the cast lives here rather
             // than at each of the three uses below.
             const row = untypedRow as never;
             const skipWarning = importer.skip?.(row, rows as never);
@@ -961,6 +983,12 @@ export class InfraDataService {
             try {
               await insert(importer.sql, importer.map(row));
               counts[importer.key]++;
+              if (
+                importer.key === 'pluginInstances' &&
+                isRedactedPluginSecret((untypedRow as unknown as PluginInstanceRow).secret)
+              ) {
+                regeneratedPluginInstances.push(importer.id(row));
+              }
             } catch (err) {
               warnings.push(
                 `Failed to import ${importer.label} ${importer.id(row)}: ${err instanceof Error ? err.message : String(err)}`,
@@ -1088,6 +1116,13 @@ export class InfraDataService {
           notices.push(
             `${normalized.affected} imported session(s) carried an active status (the source host's engines): ` +
               'restored as disconnected - start them via POST /api/sessions/:id/start or let auto-start adopt them.',
+          );
+        }
+        if (regeneratedPluginInstances.length > 0) {
+          notices.push(
+            `${regeneratedPluginInstances.length} imported plugin instance(s) had redacted or missing ingress secrets ` +
+              `(${regeneratedPluginInstances.join(', ')}): regenerated fresh secrets and restored them disabled. ` +
+              'Re-sync regenerated ingress secrets and any redacted plugin config secrets before re-enabling them.',
           );
         }
 

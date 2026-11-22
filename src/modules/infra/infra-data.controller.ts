@@ -1,5 +1,5 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Post, Query } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { InfraExportDataResponseDto, InfraImportDataResponseDto } from './dto/infra-response.dto';
 import { ImportDataDto } from './dto/import-data.dto';
 import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
@@ -25,13 +25,34 @@ export class InfraDataController {
   @Get('export-data')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Export all data from Data DB for migration' })
+  @ApiQuery({
+    name: 'includePluginSecrets',
+    required: false,
+    type: Boolean,
+    description:
+      'Include plaintext plugin instance ingress secrets, verify tokens, and secret config fields (default: false)',
+  })
   @ApiResponse({ status: 200, description: 'Exported data as JSON', type: InfraExportDataResponseDto })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid query parameter: includePluginSecrets must be "true" or "false".',
+  })
   @ApiResponse({
     status: 409,
     description: 'Refused with code IMPORT_ALREADY_RUNNING: a data import is running; export after it finishes.',
   })
-  async exportData(): Promise<InfraExportDataResult> {
-    return this.infraData.exportData();
+  async exportData(@Query('includePluginSecrets') includePluginSecrets?: string): Promise<InfraExportDataResult> {
+    let includeSecrets = false;
+    if (includePluginSecrets !== undefined) {
+      if (includePluginSecrets === 'true') {
+        includeSecrets = true;
+      } else if (includePluginSecrets === 'false') {
+        includeSecrets = false;
+      } else {
+        throw new BadRequestException('includePluginSecrets must be "true" or "false"');
+      }
+    }
+    return this.infraData.exportData({ includePluginSecrets: includeSecrets });
   }
 
   @Post('import-data')

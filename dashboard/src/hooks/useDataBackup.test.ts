@@ -16,6 +16,7 @@ let ToastContext: typeof ToastContextType;
 
 // Answer of the export route, per test; a pending one is an export still in flight.
 let exportAnswer: Promise<Response> = new Promise(() => {});
+const exportUrls: string[] = [];
 const saved: HTMLAnchorElement[] = [];
 // Answers of the import route in order, and what it was sent.
 let importAnswers: Array<Response | Promise<Response>> = [];
@@ -47,9 +48,11 @@ before(async () => {
       importBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
       return Promise.resolve(importAnswers.shift() ?? json({ imported: true, counts: {}, warnings: [] }, 201));
     }
-    return url.endsWith('/api/infra/export-data')
-      ? exportAnswer
-      : Promise.resolve(new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    if (url.endsWith('/api/infra/export-data') || url.endsWith('/api/infra/export-data?includePluginSecrets=true')) {
+      exportUrls.push(url);
+      return exportAnswer;
+    }
+    return Promise.resolve(new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } }));
   };
   URL.createObjectURL = () => 'blob:backup';
   URL.revokeObjectURL = () => {};
@@ -61,6 +64,7 @@ before(async () => {
 afterEach(() => {
   rtl.cleanup();
   saved.length = 0;
+  exportUrls.length = 0;
   exportAnswer = new Promise(() => {});
   window.sessionStorage.removeItem('openwa_api_key');
   document.createElement = createElementOriginal;
@@ -104,6 +108,15 @@ test('an export that completes while signed in saves the backup file', async () 
     saved.map(link => link.download),
     ['openwa-backup-2026-10-09.json'],
   );
+  assert.ok(exportUrls[0]?.endsWith('/api/infra/export-data'));
+});
+
+test('exportBackup(true) appends includePluginSecrets=true to the export request', async () => {
+  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  exportAnswer = Promise.resolve(dump());
+  const { result } = renderBackup();
+  await rtl.act(() => result.current.exportBackup(true));
+  assert.ok(exportUrls[0]?.endsWith('/api/infra/export-data?includePluginSecrets=true'));
 });
 
 test('an export answered after sign-out saves no file', async () => {

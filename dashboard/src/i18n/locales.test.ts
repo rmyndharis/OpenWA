@@ -273,16 +273,18 @@ test('English unlink success/incomplete copy does not claim handset Linked-Devic
   assert.ok(/incomplete/i.test(incomplete), `incomplete copy lost the "incomplete" framing: "${incomplete}"`);
 });
 
-// The data export drops webhook secrets and headers and strips proxy userinfo, but carries
-// integration instance secrets as-is (src/modules/infra/export-tables.ts). The hint must say which.
-test('English backup hint says which credentials the export leaves out and which it carries', () => {
+// The data export drops webhook secrets and headers, strips proxy userinfo, and omits
+// integration instance secrets by default unless explicitly opted in (src/modules/infra/export-tables.ts).
+test('English backup hint says which credentials the export leaves out by default', () => {
   const hint = i18n.t('infrastructure.migration.backupHint', { lng: 'en' });
   assert.ok(!/contains webhook secrets/i.test(hint), `hint claims webhook secrets are exported: "${hint}"`);
   assert.ok(/webhook signing secrets[^.]*not included/i.test(hint), `hint lost the webhook omission: "${hint}"`);
   assert.ok(
-    /integration instance secrets[^.]*included in plaintext/i.test(hint),
-    `hint lost the plaintext note: "${hint}"`,
+    /integration instance secrets[^.]*omitted by default/i.test(hint),
+    `hint lost the default plugin secret redaction note: "${hint}"`,
   );
+  const optInHint = i18n.t('infrastructure.migration.includePluginSecretsHint', { lng: 'en' });
+  assert.ok(/plaintext/i.test(optInHint), `opt-in hint lost the plaintext warning: "${optInHint}"`);
 });
 
 test("English '*' event description names the one event the wildcard leaves out", () => {

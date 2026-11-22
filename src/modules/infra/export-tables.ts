@@ -4,9 +4,92 @@ import type {
   WebhookRow,
   MessageRow,
   MessageBatchRow,
+  PluginInstanceRow,
   WebhookDeliveryFailureRow,
 } from './migration-tables.types';
+import type { PluginConfigField, PluginConfigSchema } from '../../core/plugins/plugin.interfaces';
 import { renderTemplate, templateVariableNames } from '../../common/utils/template-render';
+
+export interface ExportReadContext {
+  includePluginSecrets: boolean;
+  resolvePluginConfigSchema: (pluginId: string) => PluginConfigSchema | undefined;
+}
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+function stripSecretConfigValue(value: unknown, field: PluginConfigField): unknown {
+  if (field.type === 'object' && field.properties && isPlainObject(value)) {
+    return stripSecretConfigObject(value, field.properties);
+  }
+  if (field.type === 'array' && field.items && Array.isArray(value)) {
+    const itemField = field.items;
+    if (itemField.secret) return [];
+    return value.map(item => stripSecretConfigValue(item, itemField));
+  }
+  return value;
+}
+
+function stripSecretConfigObject(
+  config: Record<string, unknown>,
+  properties: Record<string, PluginConfigField>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...config };
+  for (const [key, field] of Object.entries(properties)) {
+    if (!(key in out) || !field) continue;
+    if (field.secret) {
+      delete out[key];
+      continue;
+    }
+    if (field.type === 'array' && field.items?.secret) {
+      delete out[key];
+      continue;
+    }
+    out[key] = stripSecretConfigValue(out[key], field);
+  }
+  return out;
+}
+
+/**
+ * Redact plugin instance secrets unless explicitly opted in. Deletes `secret` and `verifyToken`,
+ * and strips `secret: true` fields from `config` using the plugin's manifest `configSchema`.
+ * When the plugin is unloaded or has no `configSchema.properties`, fails closed by deleting
+ * `config` instead of emitting mask sentinels.
+ */
+function redactPluginInstanceSecrets(rows: PluginInstanceRow[], context?: ExportReadContext): void {
+  if (context?.includePluginSecrets) return;
+  for (const row of rows) {
+    const mutable = row as Partial<PluginInstanceRow>;
+    delete mutable.secret;
+    delete mutable.verifyToken;
+    if (row.config == null) continue;
+    const schema = context?.resolvePluginConfigSchema(row.pluginId);
+    if (!schema || !isPlainObject(schema.properties) || Object.keys(schema.properties).length === 0) {
+      delete mutable.config;
+      continue;
+    }
+    const wasString = typeof row.config === 'string';
+    let parsed: unknown = row.config;
+    if (wasString) {
+      try {
+        parsed = JSON.parse(row.config as string);
+      } catch {
+        delete mutable.config;
+        continue;
+      }
+    }
+    if (parsed === null) {
+      row.config = null;
+      continue;
+    }
+    if (!isPlainObject(parsed)) {
+      delete mutable.config;
+      continue;
+    }
+    const stripped = stripSecretConfigObject(parsed, schema.properties);
+    row.config = wasString ? JSON.stringify(stripped) : stripped;
+  }
+}
 
 /**
  * A `data` value that is a POINTER rather than bytes. `metadata.media.data` holds `base64 || dto.url!`
@@ -217,7 +300,7 @@ export interface ExportTable<K extends keyof MigrationTables = keyof MigrationTa
    */
   sessionFk?: boolean;
   /** In-place row mutation applied right after the read (redaction, artifact stripping). */
-  afterRead?: (rows: MigrationTables[K]) => void;
+  afterRead?: (rows: MigrationTables[K], context?: ExportReadContext) => void;
   /**
    * Spends the export's shared inline-media budget on this table's payloads. Such a table is never
    * read whole: the export reads `id`, `recencyColumn` and the stored size of `payloadColumn` for
@@ -248,7 +331,7 @@ export interface ExportTable<K extends keyof MigrationTables = keyof MigrationTa
  * entry rows it read for that entry's own table).
  */
 export type AnyExportTable = Omit<ExportTable, 'afterRead' | 'inlineMedia'> & {
-  afterRead?: (rows: never[]) => void;
+  afterRead?: (rows: never[], context?: ExportReadContext) => void;
   inlineMedia?: {
     bucket: 'messages' | 'messageBatches';
     recencyColumn: string;
@@ -329,7 +412,12 @@ export const EXPORT_TABLES: AnyExportTable[] = [
   // Integration Fabric + both DLQs: none carry an FK constraint to sessions (sessionId is
   // provenance), so the import clears them explicitly before the sessions DELETE to keep the
   // replace-semantics complete.
-  defineExportTable({ key: 'pluginInstances', table: 'plugin_instances', optional: true }),
+  defineExportTable({
+    key: 'pluginInstances',
+    table: 'plugin_instances',
+    optional: true,
+    afterRead: redactPluginInstanceSecrets,
+  }),
   defineExportTable({ key: 'conversationMappings', table: 'conversation_mappings', optional: true }),
   defineExportTable({ key: 'ingressEvents', table: 'ingress_events', optional: true }),
   defineExportTable({

@@ -1432,7 +1432,7 @@ export const infraApi = {
     request<{ status: 'ok' | 'error'; details: Record<string, { status: string }> }>('/health/ready', { signal }),
   // Data migration: export all Data-DB tables (call while still on the OLD database, before switching),
   // then import after the switch + restart. Used by the DB-switch migration guard so data isn't lost.
-  exportData: () =>
+  exportData: (includePluginSecrets = false) =>
     request<{
       exportedAt: string;
       dataDbType: string;
@@ -1445,7 +1445,7 @@ export const infraApi = {
       // all there but some of their media is not — a state a restored archive cannot express, since
       // the omitted marker is the same one media skipped on the way in gets.
       omittedInlineMedia: { messages: number; messageBatches: number };
-    }>('/infra/export-data'),
+    }>(includePluginSecrets ? '/infra/export-data?includePluginSecrets=true' : '/infra/export-data'),
   // 200 contract includes the orphan-engine reconciliation result (restartRequired / notices /
   // stopped+failed ids). 409 has several causes and the error's `code` distinguishes them:
   // IMPORT_WOULD_ORPHAN_ENGINES (live engines exist for sessions the backup would remove; the
