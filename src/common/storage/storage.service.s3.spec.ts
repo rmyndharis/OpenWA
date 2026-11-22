@@ -19,7 +19,15 @@ jest.mock('@aws-sdk/client-s3', () => {
   };
 });
 
-import { S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadBucketCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
+import { Readable } from 'stream';
 import { LoggerService } from '../services/logger.service';
 import { S3_CONNECT_TIMEOUT_MS, S3_SOCKET_TIMEOUT_MS, StorageService } from './storage.service';
 
@@ -252,5 +260,81 @@ describe('StorageService (s3) local directory modes', () => {
     expect(modeOf(path.join(root, 'chat-media/session-b'))).toBe(0o700);
     expect(modeOf(path.join(root, 'chat-media/session-b/clip.bin'))).toBe(0o600);
     expect((await svc.getFile('chat-media/session-b/clip.bin')).toString()).toBe('written during the outage');
+  });
+
+  it('waits for the boot bucket probe in onModuleInit and before storage operations', async () => {
+    let releaseProbe!: () => void;
+    const probePending = new Promise<void>(resolve => (releaseProbe = resolve));
+    const commands: unknown[] = [];
+    const send = jest.fn(async (cmd: unknown) => {
+      commands.push(cmd);
+      if (cmd instanceof HeadBucketCommand) {
+        await probePending;
+        return {};
+      }
+      if (cmd instanceof GetObjectCommand) {
+        return { Body: Readable.from([Buffer.from('from-s3')]), ContentLength: 7 };
+      }
+      if (cmd instanceof ListObjectsV2Command) {
+        return { Contents: [{ Key: 'media/statuses/s1/item.bin' }] };
+      }
+      return {};
+    });
+    const client = { send };
+    mockedS3Client.mockImplementationOnce(() => client).mockImplementationOnce(() => client);
+
+    const root = upgradedRoot();
+    const svc = build(root);
+
+    let initResolved = false;
+    const initP = (svc as unknown as { onModuleInit?: () => Promise<void> }).onModuleInit?.().then(() => {
+      initResolved = true;
+    });
+    expect(initP).toBeDefined();
+
+    const putP = svc.putFile('statuses/s1/item.bin', Buffer.from('hello'));
+    const getP = svc.getFile('statuses/s1/item.bin');
+    const openP = svc.openFile('statuses/s1/item.bin');
+    const delP = svc.deleteFile('statuses/s1/item.bin');
+    const listP = (async () => {
+      const files: string[] = [];
+      for await (const file of svc.iterateFiles('statuses/')) files.push(file);
+      return files;
+    })();
+
+    await flush();
+    expect(initResolved).toBe(false);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toBeInstanceOf(HeadBucketCommand);
+
+    releaseProbe();
+    await initP;
+    await putP;
+    expect((await getP).toString()).toBe('from-s3');
+    const opened = await openP;
+    opened.stream.destroy();
+    await delP;
+    expect(await listP).toEqual(['statuses/s1/item.bin']);
+
+    expect(commands.some(cmd => cmd instanceof PutObjectCommand)).toBe(true);
+    expect(commands.some(cmd => cmd instanceof GetObjectCommand)).toBe(true);
+    expect(commands.some(cmd => cmd instanceof DeleteObjectCommand)).toBe(true);
+    expect(commands.some(cmd => cmd instanceof ListObjectsV2Command)).toBe(true);
+    expect(fs.existsSync(path.join(root, 'statuses/s1/item.bin'))).toBe(false);
+  });
+
+  it('fails closed in deleteFile while S3 is unavailable instead of deleting only the local copy', async () => {
+    const unreachable = { send: jest.fn().mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:9000')) };
+    mockedS3Client.mockImplementationOnce(() => unreachable).mockImplementationOnce(() => unreachable);
+    const root = upgradedRoot();
+    const svc = build(root);
+    await flush();
+    expect(s3AvailableOf(svc)).toBe(false);
+
+    const key = 'chat-media/session-a/old.bin';
+    await expect(svc.deleteFile(key)).rejects.toThrow(
+      `S3 storage is currently unavailable; refusing local-only delete for ${key}`,
+    );
+    expect(fs.existsSync(path.join(root, key))).toBe(true);
   });
 });

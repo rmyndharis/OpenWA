@@ -145,7 +145,7 @@ const containsOn = new ConfigService({ search: { containsEnabled: true } });
 
         expect((await waiting.search({ q: 'voic', match: 'contains' })).total).toBe(2);
       } finally {
-        waiting.onModuleDestroy();
+        await waiting.onModuleDestroy();
         await other.release();
       }
     });
@@ -167,7 +167,7 @@ const containsOn = new ConfigService({ search: { containsEnabled: true } });
         expect(await trigramState()).toEqual({ extensions: 2, fn: true, idx: true });
         expect((await waiting.search({ q: 'voic', match: 'contains' })).total).toBe(2);
       } finally {
-        waiting.onModuleDestroy();
+        await waiting.onModuleDestroy();
         await other.release();
       }
     }, 60_000);

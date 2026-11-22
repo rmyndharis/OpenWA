@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import type { Socket } from 'net';
@@ -131,7 +131,7 @@ function withIdleBound(body: Readable, idleMs: number, readerIdleMs: number): Re
 }
 
 @Injectable()
-export class StorageService implements OnModuleDestroy {
+export class StorageService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('StorageService');
   private readonly storageType: string;
   private readonly localPath: string;
@@ -147,6 +147,7 @@ export class StorageService implements OnModuleDestroy {
   private s3Bucket = 'openwa';
   private s3KeyRoot = DEFAULT_S3_KEY_PREFIX;
   private s3Available = false;
+  private s3InitPromise: Promise<void> | null = null;
   private s3ReprobeTimer: NodeJS.Timeout | null = null;
   private readonly s3ReprobeIntervalMs = positiveIntFromEnv('S3_REPROBE_INTERVAL_MS', DEFAULT_S3_REPROBE_INTERVAL_MS);
 
@@ -187,7 +188,7 @@ export class StorageService implements OnModuleDestroy {
         const keyRoot = normalizeS3KeyPrefix(process.env.S3_KEY_PREFIX || s3Config.keyPrefix);
         if (!keyRoot) throw new Error('S3_KEY_PREFIX is not a safe relative key prefix');
         this.s3KeyRoot = keyRoot;
-        void this.initializeS3Bucket();
+        this.s3InitPromise = this.initializeS3Bucket();
         this.startS3Reprobe();
       } else {
         // Every other degradation in this service announces itself, but this one could not: the
@@ -243,6 +244,10 @@ export class StorageService implements OnModuleDestroy {
         `as uid ${process.getuid?.()}. Own the directory as the gateway's user (chown it, then restart), or restrict ` +
         `it from outside: a stricter mode or ACL on the mount, or a parent directory only that user can enter.`,
     );
+  }
+
+  async onModuleInit(): Promise<void> {
+    await this.s3InitPromise;
   }
 
   onModuleDestroy(): void {
@@ -397,6 +402,7 @@ export class StorageService implements OnModuleDestroy {
    * sweep): the directory is named in a warning and left alone.
    */
   async *iterateFiles(prefix = '', options: { skipUnreadable?: boolean } = {}): AsyncGenerator<string> {
+    if (this.s3InitPromise) await this.s3InitPromise;
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
       const local = new Set<string>();
       for await (const file of this.iterateLocalFiles(prefix, options.skipUnreadable)) {
@@ -412,6 +418,7 @@ export class StorageService implements OnModuleDestroy {
   }
 
   async getFile(filePath: string): Promise<Buffer> {
+    if (this.s3InitPromise) await this.s3InitPromise;
     // Mirror putFile: getLocalFile has its own isPathWithin guard, but getS3File builds
     // `${s3KeyRoot}${filePath}` with none, so contain both read backends at this boundary.
     if (!isSafeStorageKey(filePath)) {
@@ -429,6 +436,7 @@ export class StorageService implements OnModuleDestroy {
    * On S3 a download past S3_MAX_OPEN_DOWNLOADS is refused at once with a 503.
    */
   async openFile(filePath: string): Promise<ExportFileSource> {
+    if (this.s3InitPromise) await this.s3InitPromise;
     return this.openStoredFile(filePath, this.s3StreamClient);
   }
 
@@ -443,6 +451,7 @@ export class StorageService implements OnModuleDestroy {
   }
 
   async putFile(filePath: string, data: Buffer): Promise<void> {
+    if (this.s3InitPromise) await this.s3InitPromise;
     // Centralized containment so BOTH backends inherit it: putLocalFile has its own isPathWithin
     // guard, but putS3File builds `${s3KeyRoot}${filePath}` with none, so reject a traversing key here.
     if (!isSafeStorageKey(filePath)) {
@@ -464,16 +473,22 @@ export class StorageService implements OnModuleDestroy {
    * S3 DeleteObject is idempotent by design) so a caller doesn't have to special-case "already gone".
    */
   async deleteFile(filePath: string): Promise<void> {
+    if (this.s3InitPromise) await this.s3InitPromise;
     if (!isSafeStorageKey(filePath)) {
       throw new Error(`Refusing to delete an unsafe storage key: ${filePath}`);
     }
-    if (this.storageType === 's3' && this.s3Client && this.s3Available) {
+    if (this.storageType === 's3' && this.s3Client) {
+      if (!this.s3Available) {
+        throw new Error(`S3 storage is currently unavailable; refusing local-only delete for ${filePath}`);
+      }
       await this.deleteS3File(filePath);
+      return this.deleteLocalFile(filePath);
     }
     return this.deleteLocalFile(filePath);
   }
 
   async getFileCount(): Promise<{ count: number; sizeBytes: number }> {
+    if (this.s3InitPromise) await this.s3InitPromise;
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
       // Union with the local fallback dir (media written locally while S3 was down is not in the
       // bucket listing): a local-only file counts with its real on-disk size; for a key present in

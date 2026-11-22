@@ -237,6 +237,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    */
   private readonly optInStages = new Map<string, OptInStage>();
   private readonly optInSessionStages = new Map<string, { gate: ConcurrencyLimiter; stages: number }>();
+  /** Aborted at the start of onModuleDestroy so retry backoff sleeps wake immediately. */
+  private readonly shutdownAbort = new AbortController();
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -301,13 +303,14 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * so the bound limits this hook only; the whole teardown is the sum in shutdown-budget.ts.
    */
   async onModuleDestroy(): Promise<void> {
+    this.shutdownAbort.abort();
     // Opt-in events still waiting for their stage hold nothing durable (no outbox row yet) and are best effort,
     // so they are let go in both modes; the ones already running finish with the rest.
     for (const { stage } of this.optInStages.values()) stage.close();
     for (const { gate } of this.optInSessionStages.values()) gate.close();
+    for (const gate of this.degradedSessionGates.values()) gate.close();
     if (!this.queueEnabled) {
       this.dispatchLimiter.close();
-      for (const gate of this.degradedSessionGates.values()) gate.close();
     }
     const drainMs = Math.max(
       0,
@@ -323,6 +326,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       if (remaining <= 0) break;
       await setTimeout(Math.min(50, remaining));
     }
+    this.dispatchLimiter.close();
     for (const lost of this.inFlightDeliveries.values()) {
       this.logger.error('Webhook delivery abandoned during shutdown', undefined, {
         ...lost,
@@ -808,6 +812,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     ctx: DispatchEventContext,
   ): Promise<WebhookDeliveryOutcome> {
     const { sessionId, event } = ctx;
+    let markedQueued = false;
     try {
       // No headers are stored: the processor builds them and the signature from the current row on
       // every attempt, so custom headers (which may carry receiver credentials) never reach Redis.
@@ -822,6 +827,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       };
 
       await producerReady(this.webhookQueue!);
+      await this.outbox.markQueued(webhook.id, idempotencyKey, deliveryId);
+      markedQueued = true;
       await this.webhookQueue!.add(`webhook-${webhook.id}`, jobData, {
         // jobId = deliveryId makes this add() idempotent within BullMQ (same precedent as the ingress
         // producer). It does not dedup a crash replay: if the process dies before the outbox row is
@@ -836,8 +843,6 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           delay: this.configService.get<number>('webhook.retryDelay', 5000),
         },
       });
-
-      await this.outbox.markQueued(webhook.id, idempotencyKey, deliveryId);
 
       // Execute hook after successful queue (NOT delivery - that happens in processor)
       await this.hookManager.execute(
@@ -854,10 +859,12 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         action: 'webhook_queued',
       });
     } catch (error) {
-      // A replay whose owner stopped while the add was out (it can wait for a first connect, or on a
-      // stalled Redis) must not POST or run hooks after the drain: the reconciler reads the abort as
-      // interrupted.
+      if (markedQueued) await this.outbox.markPending(webhook.id, idempotencyKey, deliveryId);
+      // A replay or dispatch whose owner stopped while the add was out (it can wait for a first
+      // connect, or on a stalled Redis) must not POST or run hooks after the drain: the caller
+      // keeps the outbox row pending for the next start.
       ctx.signal?.throwIfAborted();
+      this.shutdownAbort.signal.throwIfAborted();
       // Execute hook on queue error (not delivery error - that happens in processor)
       await this.hookManager.execute(
         'webhook:error',
@@ -874,6 +881,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       // producer's enableOfflineQueue:false). This is at-least-once — if add() actually reached
       // Redis before rejecting, the queued job AND this fallback may both POST. Both paths carry the
       // same X-OpenWA-Idempotency-Key / X-OpenWA-Delivery-Id, so a conformant receiver dedupes.
+      ctx.signal?.throwIfAborted();
+      this.shutdownAbort.signal.throwIfAborted();
       try {
         // Removed, disabled or unsubscribed before a retry: nothing to report, as on the queued path.
         if (!(await this.deliverWebhook(webhook, finalPayload, body, this.directOptions(ctx)))) return 'cancelled';
@@ -890,9 +899,15 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           { sessionId, source: 'WebhookService' },
         );
       } catch (fallbackError) {
-        // Shutdown closed the limiter or aborted the replay during a retry backoff: not a delivery
+        // Shutdown closed the limiter or aborted the delivery/replay during a retry backoff: not a delivery
         // failure. runLimited or the replay's caller keeps the outbox row pending for the next start.
-        if (isLimiterClosed(fallbackError) || isAbortedBackoff(fallbackError, ctx.signal)) throw fallbackError;
+        if (
+          isLimiterClosed(fallbackError) ||
+          isAbortedBackoff(fallbackError, ctx.signal) ||
+          isAbortedBackoff(fallbackError, this.shutdownAbort.signal)
+        ) {
+          throw fallbackError;
+        }
         await this.hookManager.execute(
           'webhook:error',
           {
@@ -944,9 +959,15 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         { sessionId, source: 'WebhookService' },
       );
     } catch (error) {
-      // Shutdown closed the limiter or aborted the replay during a retry backoff: not a delivery
+      // Shutdown closed the limiter or aborted the delivery/replay during a retry backoff: not a delivery
       // failure. runLimited or the replay's caller keeps the outbox row pending for the next start.
-      if (isLimiterClosed(error) || isAbortedBackoff(error, ctx.signal)) throw error;
+      if (
+        isLimiterClosed(error) ||
+        isAbortedBackoff(error, ctx.signal) ||
+        isAbortedBackoff(error, this.shutdownAbort.signal)
+      ) {
+        throw error;
+      }
       // Execute hook on error
       await this.hookManager.execute(
         'webhook:error',
@@ -1135,7 +1156,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         );
         return;
       }
-      if (error instanceof Error && error.message === 'ConcurrencyLimiter closed') {
+      if (isLimiterClosed(error) || isAbortedBackoff(error, this.shutdownAbort.signal)) {
         // Rejected by the shutdown drain before dispatching, or woken from a retry backoff after
         // it: record it like any other undelivered delivery, and track the write so
         // onModuleDestroy can await it (the limiter slot bookkeeping no longer covers this task).
@@ -1177,18 +1198,25 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     options: { singleAttempt?: boolean; oneDirectAttempt?: boolean; signal?: AbortSignal } = {},
   ): Promise<WebhookDeliveryOutcome> {
     const deliveryId = generateDeliveryId();
-    const outcome = await this.deliverOne(webhook, deliveryId, idempotencyKey, {
-      sessionId,
-      event,
-      baseData: data,
-      singleAttempt: options.singleAttempt,
-      oneDirectAttempt: options.oneDirectAttempt,
-      signal: options.signal,
-    });
-    // The receiver has the event. An operator redrive of a failure row can find the same delivery
-    // still pending in the outbox, which the next sweep would otherwise POST again.
-    if (outcome === 'delivered') await this.outbox.close(webhook.id, idempotencyKey, 'dispatched');
-    return outcome;
+    try {
+      const outcome = await this.deliverOne(webhook, deliveryId, idempotencyKey, {
+        sessionId,
+        event,
+        baseData: data,
+        singleAttempt: options.singleAttempt,
+        oneDirectAttempt: options.oneDirectAttempt,
+        signal: options.signal,
+      });
+      // The receiver has the event. An operator redrive of a failure row can find the same delivery
+      // still pending in the outbox, which the next sweep would otherwise POST again.
+      if (outcome === 'delivered') await this.outbox.close(webhook.id, idempotencyKey, 'dispatched');
+      return outcome;
+    } catch (error) {
+      if (!options.signal?.aborted && isAbortedBackoff(error, this.shutdownAbort.signal)) {
+        return 'unrecorded';
+      }
+      throw error;
+    }
   }
 
   /** A live or unreadable job still owns its queued delivery; never replay alongside it. */
@@ -1315,6 +1343,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   ): Promise<boolean> {
     const yieldSlot = options.yieldSlot ?? (<R>(fn: () => Promise<R>): Promise<R> => fn());
     const delay = this.configService.get<number>('webhook.retryDelay', 5000);
+    const backoffSignal = options.signal
+      ? AbortSignal.any([this.shutdownAbort.signal, options.signal])
+      : this.shutdownAbort.signal;
     let current = webhook;
     for (let attempt = 1; ; attempt++) {
       try {
@@ -1340,12 +1371,12 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           body,
           attempt - 1,
         );
-        // A retry gives way once its replay's owner has stopped, even when the backoff ended first.
-        if (attempt > 1) options.signal?.throwIfAborted();
+        // A retry gives way once its replay's owner or shutdown has stopped, even when the backoff ended first.
+        if (attempt > 1) backoffSignal.throwIfAborted();
         await postWebhookPayload(current.url, body, headers, this.configService.get<number>('webhook.timeout', 10000));
         this.failingWebhooks.delete(webhook.id);
 
-        // The receiver already answered 2xx — the delivery SUCCEEDED. A bookkeeping failure here (e.g.
+        // The receiver already answered 2xx: the delivery SUCCEEDED. A bookkeeping failure here (e.g.
         // the lastTriggeredAt update on a flaky DB) must not reach the catch below: it would retry an
         // already-delivered webhook (duplicate POST) and, on the last attempt, file a false dead-letter
         // row. Log it and keep the success outcome.
@@ -1371,7 +1402,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         });
         return true;
       } catch (error) {
-        if (isAbortedBackoff(error, options.signal)) throw error;
+        if (isAbortedBackoff(error, backoffSignal)) throw error;
         this.failingWebhooks.add(webhook.id);
         this.logger.error(`Webhook delivery failed for ${webhook.id}`, String(error), {
           webhookId: webhook.id,
@@ -1384,8 +1415,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           // Without the dispatch slot: a backoff sends nothing, and holding the slot through it let
           // a few failing receivers stall every other delivery. Taking it back throws once shutdown
           // closed the limiter, which skips the terminal record below: the event was not given up.
-          // An aborted replay signal ends the backoff the same way.
-          await yieldSlot(() => setTimeout(delay * 2 ** (attempt - 1), undefined, { signal: options.signal }));
+          // An aborted shutdown or replay signal ends the backoff the same way.
+          await yieldSlot(() => setTimeout(delay * 2 ** (attempt - 1), undefined, { signal: backoffSignal }));
           continue;
         }
         // All direct-path retries exhausted — persist a durable failure record before giving up, mirroring

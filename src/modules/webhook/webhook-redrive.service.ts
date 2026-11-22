@@ -22,6 +22,14 @@ export const MAX_WEBHOOK_REDRIVE_LIMIT = 500;
  */
 const REDRIVE_CONCURRENCY = 4;
 
+/**
+ * PostgreSQL 12-18 portable POSIX ARE matching a JSON array of plain event-name strings with exact
+ * RFC 8259 whitespace (space, tab, CR, LF only; PostgreSQL `\s` also matches `\x0b`, `\x0c`, and
+ * U+00A0 which `::json` rejects with 22P02). Bound as a query parameter so
+ * `standard_conforming_strings = off` cannot alter its backslashes.
+ */
+const PG_JSON_STRING_ARRAY_PATTERN = String.raw`^[ \t\r\n]*\[([ \t\r\n]*"[^"\\[:cntrl:]]*"([ \t\r\n]*,[ \t\r\n]*"[^"\\[:cntrl:]]*")*)?[ \t\r\n]*\][ \t\r\n]*$`;
+
 export interface WebhookRedriveRequest {
   sessionId?: string;
   webhookId?: string;
@@ -139,12 +147,11 @@ export class WebhookRedriveService implements OnModuleDestroy {
     const cutoff = new Date(Date.now() - retentionHours * 60 * 60 * 1000);
     // Join eligible subscriptions before taking a batch. A single membership predicate also avoids
     // an OR expression and repeated ids parameters for every active webhook across all sessions.
-    const subscriptions =
-      this.failureRepository.manager.connection.options.type === 'postgres'
-        ? "json_array_elements_text(CASE WHEN json_typeof(webhook.events::json) = 'array' THEN webhook.events::json ELSE '[]'::json END) AS subscribed(event)"
-        : "json_each(CASE WHEN json_type(webhook.events) = 'array' THEN webhook.events ELSE '[]' END) AS subscribed";
-    const subscribedEvent =
-      this.failureRepository.manager.connection.options.type === 'postgres' ? 'subscribed.event' : 'subscribed.value';
+    const isPostgres = this.failureRepository.manager.connection.options.type === 'postgres';
+    const subscriptions = isPostgres
+      ? "json_array_elements_text(CASE WHEN webhook.events ~ :eventsPattern THEN webhook.events::json ELSE '[]'::json END) AS subscribed(event)"
+      : "json_each(CASE WHEN json_valid(webhook.events) AND json_type(webhook.events) = 'array' THEN webhook.events ELSE '[]' END) AS subscribed";
+    const subscribedEvent = isPostgres ? 'subscribed.event' : 'subscribed.value';
     const query = this.failureRepository
       .createQueryBuilder('failure')
       .innerJoin(
@@ -168,7 +175,10 @@ export class WebhookRedriveService implements OnModuleDestroy {
       .andWhere(
         `EXISTS (SELECT 1 FROM ${subscriptions} WHERE ${subscribedEvent} = failure.event` +
           ` OR (${subscribedEvent} = '*' AND failure.event NOT IN (:...wildcardExcluded)))`,
-        { wildcardExcluded: [...WILDCARD_EXCLUDED_EVENTS] },
+        {
+          wildcardExcluded: [...WILDCARD_EXCLUDED_EVENTS],
+          ...(isPostgres ? { eventsPattern: PG_JSON_STRING_ARRAY_PATTERN } : {}),
+        },
       );
     const limit = Math.min(Math.max(1, request.limit ?? DEFAULT_WEBHOOK_REDRIVE_LIMIT), MAX_WEBHOOK_REDRIVE_LIMIT);
     // A call still queued when shutdown starts reads no rows (or their payloads); it only counts them.

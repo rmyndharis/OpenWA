@@ -36,6 +36,8 @@ const SWEEP_CHUNK_SIZE = 500;
 const MEDIA_URL_POINTER = /^https?:\/\//i;
 /** Largest stored metadata the purge checks for an archived marker in bulk; a larger one is checked on its own. */
 const ARCHIVED_MARKER_MAX_METADATA_BYTES = 64 * 1024;
+/** Upper bound on waiting for in-flight maintenance passes during shutdown. */
+const MAINTENANCE_SHUTDOWN_WAIT_MS = 1_000;
 
 /** The inline media shape carried on a persisted row's `metadata.media`. */
 interface InlineMedia {
@@ -74,6 +76,8 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
   private purgeCursor?: string;
   /** Set on module destroy: the schedule stops, and a purge already running stops at its next check. */
   private stopping = false;
+  /** Active purge and orphan sweep runs, awaited (bounded) by onModuleDestroy. */
+  private readonly inFlightMaintenance = new Set<Promise<unknown>>();
 
   constructor(
     @InjectRepository(Message, 'data')
@@ -110,15 +114,43 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
     ];
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.stopping = true;
     for (const stop of this.stopMaintenance) stop();
     this.stopMaintenance = [];
+    if (this.inFlightMaintenance.size === 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        Promise.all([...this.inFlightMaintenance]),
+        new Promise<void>(resolve => {
+          timer = setTimeout(resolve, MAINTENANCE_SHUTDOWN_WAIT_MS);
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private trackMaintenance<T>(promise: Promise<T>): Promise<T> {
+    const settled = promise.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.inFlightMaintenance.add(settled);
+    void settled.finally(() => this.inFlightMaintenance.delete(settled));
+    return promise;
+  }
+
+  /** The data source has already closed; no further repository queries or updates may run. */
+  private get dbClosed(): boolean {
+    return this.repository.manager?.connection?.isInitialized === false;
   }
 
   /** The gateway is stopping or the data source has closed: a purge in flight keeps its remaining rows. */
   private get closed(): boolean {
-    return this.stopping || this.repository.manager?.connection?.isInitialized === false;
+    return this.stopping || this.dbClosed;
   }
 
   /**
@@ -258,8 +290,12 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
    * StorageService), so an already-gone file never wedges its row. Returns the count cleared.
    */
   async purgeExpired(now: number): Promise<number> {
+    return this.trackMaintenance(this.runPurgeExpired(now));
+  }
+
+  private async runPurgeExpired(now: number): Promise<number> {
     const ttlDays = this.configService.get<number>('chatMedia.ttlDays', 0);
-    if (ttlDays <= 0) return 0; // 0 = keep forever
+    if (ttlDays <= 0 || this.closed) return 0; // 0 = keep forever
 
     const cutoff = new Date(now - ttlDays * 24 * 60 * 60 * 1000);
     let cleared = 0;
@@ -283,6 +319,7 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
     let after = this.purgeCursor;
     this.purgeCursor = undefined;
     for (let batch = 0; batch < PURGE_MAX_BATCHES_PER_RUN; batch++) {
+      if (this.closed) break;
       const qb = this.repository
         .createQueryBuilder('m')
         .select(['m.id', 'm.mediaPath'])
@@ -297,7 +334,12 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
       after = expired[expired.length - 1].id;
 
       const clearableIds: string[] = [];
+      let stoppedMidBatch = false;
       for (const row of expired) {
+        if (this.closed) {
+          stoppedMidBatch = true;
+          break;
+        }
         try {
           await this.storageService.deleteFile(row.mediaPath!);
           clearableIds.push(row.id);
@@ -309,21 +351,22 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (clearableIds.length === 0) {
-        this.purgeCursor = after;
+        if (!stoppedMidBatch) this.purgeCursor = after;
         break;
       }
+      if (this.dbClosed) break;
       // Rows whose delete failed keep their columns; they are retried once the walk wraps around. So does a row
       // whose archived marker could not be dropped, which the next run then retries with the file already gone.
       const markerKept = await this.dropArchivedMarkers(clearableIds);
       const clearedIds = clearableIds.filter(id => !markerKept.has(id));
-      if (clearedIds.length > 0) {
+      if (clearedIds.length > 0 && !this.dbClosed) {
         await this.repository.update(clearedIds, {
           mediaPath: null as unknown as undefined,
           mediaMimetype: null as unknown as undefined,
         });
+        cleared += clearedIds.length;
       }
-      cleared += clearedIds.length;
-      if (this.closed) break;
+      if (stoppedMidBatch || this.closed) break;
 
       // A short batch means the backlog is drained and the next run starts over from the lowest id;
       // a run that hits the batch cap resumes where it stopped.
@@ -350,6 +393,7 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
    * rows for the next run. Returns the ids whose marker is still there.
    */
   private async dropArchivedMarkers(ids: string[]): Promise<Set<string>> {
+    if (this.dbClosed) return new Set(ids);
     const marker = '%"archived":true%';
     const candidates = await this.repository
       .createQueryBuilder('m')
@@ -364,11 +408,25 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
       .getRawMany<{ id: string; bytes: number | string }>();
     const kept = new Set<string>();
     for (const [index, { id, bytes }] of candidates.entries()) {
-      const large = Number(bytes) > ARCHIVED_MARKER_MAX_METADATA_BYTES;
-      if (large) await yieldToEventLoop();
-      if (this.closed) {
+      if (this.dbClosed) {
         for (const rest of candidates.slice(index)) kept.add(rest.id);
         break;
+      }
+      const large = Number(bytes) > ARCHIVED_MARKER_MAX_METADATA_BYTES;
+      if (large) {
+        if (this.stopping) {
+          kept.add(id);
+          continue;
+        }
+        await yieldToEventLoop();
+        if (this.dbClosed) {
+          for (const rest of candidates.slice(index)) kept.add(rest.id);
+          break;
+        }
+        if (this.stopping) {
+          kept.add(id);
+          continue;
+        }
       }
       try {
         if (large) {
@@ -406,11 +464,16 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
    * a file mid-write is never reaped. Returns the count removed.
    */
   async sweepOrphanedMedia(now: number = Date.now()): Promise<number> {
+    return this.trackMaintenance(this.runSweepOrphanedMedia(now));
+  }
+
+  private async runSweepOrphanedMedia(now: number): Promise<number> {
+    if (this.closed) return 0;
     const graceMs = this.configService.get<number>('chatMedia.orphanGraceMs', DEFAULT_ORPHAN_GRACE_MS);
     // Reconciled in chunks rather than as two whole-store sets: with the default TTL of 0 the
     // archive grows without bound, so collecting every key AND every archived row into memory would
     // turn the hourly sweep into a memory spike. Each chunk asks the DB only which of ITS keys are
-    // referenced — an indexed lookup over a bounded key list.
+    // referenced (an indexed lookup over a bounded key list).
     const removed = await sweepOrphanedFiles({
       storage: this.storageService,
       prefix: CHAT_MEDIA_PREFIX,
@@ -424,6 +487,7 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
       },
       onDeleteFailed: (file, err) =>
         this.logger.warn(`Failed to delete orphaned chat media ${file}`, { error: String(err) }),
+      stopped: () => this.closed,
     });
     if (removed > 0) this.logger.log(`Chat media orphan sweep removed ${removed} file(s)`);
     return removed;

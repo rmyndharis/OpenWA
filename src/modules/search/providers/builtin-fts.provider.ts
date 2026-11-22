@@ -68,6 +68,8 @@ export const TRIGRAM_BUILD_LOCK = `$1, to_regclass('messages')::oid::int`;
 
 /** How long a build kept from running (see retryContainsBuild) waits before trying again. */
 const TRIGRAM_BUILD_RETRY_MS = 30_000;
+/** Upper bound on waiting for an active trigram index build during shutdown. */
+const TRIGRAM_BUILD_SHUTDOWN_WAIT_MS = 1_000;
 
 /** Why match=contains answers 501, one message per cause, each naming what to change. */
 const CONTAINS_UNAVAILABLE = {
@@ -230,6 +232,8 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
   private containsBuildRetry?: NodeJS.Timeout;
   private readonly containsBuildRetryMs = TRIGRAM_BUILD_RETRY_MS;
   private destroyed = false;
+  private readonly inFlightBuilds = new Set<Promise<unknown>>();
+  private listenSubscription?: { unsubscribe?: () => void };
 
   /** Whether the Postgres database has a C or POSIX ctype, read by each build (see postgresCanIndex). */
   private postgresAsciiTrigrams = false;
@@ -277,9 +281,13 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * probe would restart the pod in a loop (docs/14).
    */
   onApplicationBootstrap(): void {
-    if (!this.containsEnabled || !this.adapterHost) return;
+    if (!this.containsEnabled || !this.adapterHost || this.destroyed) return;
     if (this.adapterHost.listening) void this.buildContainsIndex();
-    else this.adapterHost.listen$.subscribe(() => void this.buildContainsIndex());
+    else {
+      this.listenSubscription = this.adapterHost.listen$.subscribe(() => {
+        if (!this.destroyed) void this.buildContainsIndex();
+      });
+    }
   }
 
   /**
@@ -396,22 +404,24 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * tokenizer, so both get the same repair guarantees. Idempotent: on a healthy index every step is a
    * no-op or a trigger replaced by an identical one.
    */
-  private async ensureSqliteIndex({ table, tokenize, batched }: Fts5Index): Promise<void> {
+  private async ensureSqliteIndex({ table, tokenize, batched }: Fts5Index): Promise<boolean> {
+    if (this.destroyed) return false;
     const docsize = `${table}_docsize`;
     await this.dataSource.query(
       `CREATE VIRTUAL TABLE IF NOT EXISTS "${table}" USING fts5(body, content='messages', content_rowid='rowid'${tokenize ? `, tokenize='${tokenize}'` : ''})`,
     );
+    if (this.destroyed) return false;
     // Backfill the rows this index does not hold. NOT an emptiness test: the index is an FTS5
     // external-content table, so `count(*)` on it scans `messages` and returns THAT table's row
-    // count, never the number of indexed documents — a "the index is empty" probe written that way
-    // is unsatisfiable, because a zero count means `messages` itself is empty. The indexed documents
+    // count, never the number of indexed documents (a "the index is empty" probe written that way
+    // is unsatisfiable, because a zero count means `messages` itself is empty). The indexed documents
     // live in the `<table>_docsize` shadow table, so completeness is a rowid-level anti-join.
     //
     // It has to hold on a PARTIALLY populated index, not just an empty one: once a box has booted
     // once without the backfill, its later writes are indexed by the triggers below while its older
     // rows stay missing, and an emptiness test is false there and repairs nothing. Until those rows
     // are indexed the AFTER UPDATE/DELETE triggers issue FTS5 'delete' commands for documents that
-    // were never added, and SQLite rejects the whole statement — so ordinary edits and deletes on
+    // were never added, and SQLite rejects the whole statement, so ordinary edits and deletes on
     // them fail, not merely searches. Reads `d."rowid"` rather than `d."id"`: same query plan,
     // without depending on the shadow table's column naming.
     //
@@ -425,9 +435,11 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       `SELECT EXISTS(SELECT 1 FROM "${docsize}" d
          WHERE NOT EXISTS (SELECT 1 FROM "messages" m WHERE m."rowid" = d."rowid")) AS orphan`,
     );
+    if (this.destroyed) return false;
     if (Number((orphanRow as Array<{ orphan: number }>)[0]?.orphan)) {
       this.logger.warn(`${table} holds rows the messages table no longer has; re-indexing every message`);
       await this.dataSource.query(`INSERT INTO "${table}"("${table}") VALUES ('delete-all')`);
+      if (this.destroyed) return false;
     }
     // A batched index is filled after its triggers exist instead (backfillSqliteIndexInBatches). It is built
     // only once the HTTP listener is up, while a table rebuild at boot (synchronize) drops its triggers with
@@ -441,14 +453,17 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
            (SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'messages'
              AND name IN ('${table}_ai', '${table}_ad', '${table}_au')) AS triggers`,
       );
+      if (this.destroyed) return false;
       if (Number(counts.messages) !== Number(counts.indexed) || Number(counts.triggers) !== 3) {
         await this.dataSource.query(`INSERT INTO "${table}"("${table}") VALUES ('delete-all')`);
+        if (this.destroyed) return false;
       }
     } else {
       const gapRow: unknown[] = await this.dataSource.query(
         `SELECT EXISTS(SELECT 1 FROM "messages" m WHERE m."body" IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM "${docsize}" d WHERE d."rowid" = m."rowid")) AS missing`,
       );
+      if (this.destroyed) return false;
       if (Number((gapRow as Array<{ missing: number }>)[0]?.missing)) {
         // `body IS NOT NULL` mirrors the migration's own backfill exactly: a repair that indexed a NULL
         // body as an empty document would leave the index disagreeing with the schema it repairs.
@@ -457,6 +472,7 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
            SELECT m."rowid", m."body" FROM "messages" m WHERE m."body" IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM "${docsize}" d WHERE d."rowid" = m."rowid")`,
         );
+        if (this.destroyed) return false;
       }
     }
     // While a batched backfill runs, an edited or deleted row may not be indexed yet, and an FTS5
@@ -475,15 +491,17 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       ${deleteOld}
     END`);
     await this.dataSource.query(`DROP TRIGGER IF EXISTS ${table}_au`);
-    // WHEN clause skips re-indexing on body-unchanged updates (acks/reactions/status) — mirrors the
-    // migration. NULL-safe via `IS NOT` so NULL↔non-NULL body transitions still fire.
+    // WHEN clause skips re-indexing on body-unchanged updates (acks/reactions/status), mirroring the
+    // migration. NULL-safe via `IS NOT` so NULL to non-NULL body transitions still fire.
     await this.dataSource.query(
       `CREATE TRIGGER ${table}_au AFTER UPDATE ON "messages" WHEN OLD.body IS NOT NEW.body BEGIN
       ${deleteOld}
       INSERT INTO "${table}"("rowid", "body") VALUES (new."rowid", new."body");
     END`,
     );
-    if (batched) await this.backfillSqliteIndexInBatches(table);
+    if (this.destroyed) return false;
+    if (batched) return this.backfillSqliteIndexInBatches(table);
+    return true;
   }
 
   /**
@@ -491,14 +509,18 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * between batches so requests and sessions keep being served through a build of seconds per million
    * messages. The triggers already index every row stored meanwhile.
    */
-  private async backfillSqliteIndexInBatches(table: string): Promise<void> {
+  private async backfillSqliteIndexInBatches(table: string): Promise<boolean> {
+    if (this.destroyed) return false;
     const [{ last }] = await this.dataSource.query<Array<{ last: number | null }>>(
       `SELECT max("rowid") AS last FROM "messages"`,
     );
     for (let from = 0; from < (last ?? 0); from += TRIGRAM_BACKFILL_BATCH) {
+      if (this.destroyed) return false;
       if (!(await awaitNoOpenTransaction(this.dataSource))) {
+        if (this.destroyed) return false;
         throw new ConnectionBusyError('Another database transaction stayed open');
       }
+      if (this.destroyed) return false;
       await this.dataSource.query(
         `INSERT INTO "${table}"("rowid", "body")
            SELECT m."rowid", m."body" FROM "messages" m
@@ -506,8 +528,10 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
            AND NOT EXISTS (SELECT 1 FROM "${table}_docsize" d WHERE d."rowid" = m."rowid")`,
         [from, from + TRIGRAM_BACKFILL_BATCH],
       );
+      if (this.destroyed) return false;
       await setImmediate();
     }
+    return !this.destroyed;
   }
 
   /**
@@ -516,14 +540,28 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * Public so a spec can await the build onApplicationBootstrap leaves running.
    */
   async buildContainsIndex(): Promise<void> {
-    if (!this.containsEnabled) return;
+    if (!this.containsEnabled || this.destroyed) return;
+    const run = this.runContainsIndexBuild();
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.inFlightBuilds.add(settled);
+    void settled.finally(() => this.inFlightBuilds.delete(settled));
+    await run;
+  }
+
+  private async runContainsIndexBuild(): Promise<void> {
     const start = Date.now();
     try {
-      this.containsUnavailable =
+      const unavailable =
         this.dataSource.options.type === 'postgres'
           ? await this.buildPostgresTrigramIndex()
           : await this.buildSqliteTrigramIndex();
+      if (this.destroyed) return;
+      this.containsUnavailable = unavailable;
     } catch (e) {
+      if (this.destroyed) return;
       if (!(e instanceof ConnectionBusyError)) {
         this.containsUnavailable = CONTAINS_UNAVAILABLE.failed;
         this.logger.error(`Failed to build the trigram index: ${e instanceof Error ? e.message : String(e)}`);
@@ -532,6 +570,7 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       this.containsUnavailable = CONTAINS_UNAVAILABLE.building;
       this.logger.warn(`Trigram index build postponed: ${e.message}`);
     }
+    if (this.destroyed) return;
     if (this.containsUnavailable === CONTAINS_UNAVAILABLE.building) this.retryContainsBuild();
     else if (this.containsUnavailable) this.logger.warn(this.containsUnavailable);
     else this.logger.log(`Trigram index ready in ${Date.now() - start} ms`);
@@ -549,26 +588,46 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
   private retryContainsBuild(): void {
     if (this.destroyed) return;
     this.containsBuildRetry = setTimeout(() => {
-      if (this.containsUnavailable === CONTAINS_UNAVAILABLE.building) void this.buildContainsIndex();
+      if (!this.destroyed && this.containsUnavailable === CONTAINS_UNAVAILABLE.building) void this.buildContainsIndex();
     }, this.containsBuildRetryMs);
     this.containsBuildRetry.unref();
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.destroyed = true;
+    this.listenSubscription?.unsubscribe?.();
+    this.listenSubscription = undefined;
     clearTimeout(this.containsBuildRetry);
+    if (this.inFlightBuilds.size === 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        Promise.all([...this.inFlightBuilds]),
+        new Promise<void>(resolve => {
+          timer = setTimeout(resolve, TRIGRAM_BUILD_SHUTDOWN_WAIT_MS);
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Returns why this SQLite library cannot hold the index, or null once the index is complete. */
   private async buildSqliteTrigramIndex(): Promise<string | null> {
+    if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
     if (!(await this.sqliteHasFts5())) return CONTAINS_UNAVAILABLE.sqliteTrigram;
+    if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
     const rows: Array<{ version: string }> = await this.dataSource.query(`SELECT sqlite_version() AS version`);
+    if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
     if (!sqliteSupportsTrigramDiacritics(rows[0]?.version ?? '')) return CONTAINS_UNAVAILABLE.sqliteTrigram;
     if (!(await awaitNoOpenTransaction(this.dataSource))) {
+      if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
       throw new ConnectionBusyError('Another database transaction stayed open');
     }
-    await this.ensureSqliteIndex(TRIGRAM_INDEX);
-    return null;
+    if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
+    const completed = await this.ensureSqliteIndex(TRIGRAM_INDEX);
+    return completed && !this.destroyed ? null : CONTAINS_UNAVAILABLE.building;
   }
 
   /**
@@ -579,13 +638,16 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * valid.
    */
   private async buildPostgresTrigramIndex(): Promise<string | null> {
+    if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
     const runner = this.dataSource.createQueryRunner();
     await runner.connect();
     try {
+      if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
       const [{ ctype }] = await runner.manager.query<Array<{ ctype: string }>>(
         `SELECT datctype AS ctype FROM pg_database WHERE datname = current_database()`,
       );
       this.postgresAsciiTrigrams = ctype === 'C' || ctype === 'POSIX';
+      if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
       const [{ locked }] = await runner.manager.query<Array<{ locked: boolean }>>(
         `SELECT pg_try_advisory_lock(${TRIGRAM_BUILD_LOCK}) AS locked`,
         [TRIGRAM_BUILD_LOCK_KEY],
@@ -593,8 +655,10 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       if (!locked) return CONTAINS_UNAVAILABLE.building;
       let bound: string | undefined;
       try {
+        if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
         const [shown] = await runner.manager.query<Array<{ statement_timeout?: string }>>('SHOW statement_timeout');
         bound = shown?.statement_timeout;
+        if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
         await runner.query('SET statement_timeout = 0');
         return await this.createPostgresTrigramSchema(runner);
       } finally {
@@ -614,27 +678,37 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * INVALID index is what a killed build left behind rather than one in progress, so it is rebuilt.
    */
   private async createPostgresTrigramSchema(runner: QueryRunner): Promise<string | null> {
+    if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
     try {
       // IF NOT EXISTS returns before any privilege check, so a role that may not create the extensions
       // still gets past once an operator has.
       await runner.query('CREATE EXTENSION IF NOT EXISTS pg_trgm');
+      if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
       await runner.query('CREATE EXTENSION IF NOT EXISTS unaccent');
     } catch (e) {
+      if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
       this.logger.warn(
         `Cannot create the pg_trgm and unaccent extensions: ${e instanceof Error ? e.message : String(e)}`,
       );
       return CONTAINS_UNAVAILABLE.postgresExtensions;
     }
+    if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
     const [{ trgm, unaccent, fn, idx }] = await this.postgresTrigramState(runner);
+    if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
     if (!trgm || !unaccent) return CONTAINS_UNAVAILABLE.postgresExtensions;
-    if (!fn) await runner.query(postgresUnaccentFunctionDdl(unaccent));
+    if (!fn) {
+      if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
+      await runner.query(postgresUnaccentFunctionDdl(unaccent));
+    }
+    if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
     if (idx === false) await runner.query(`DROP INDEX CONCURRENTLY IF EXISTS "idx_messages_body_trgm"`);
+    if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
     if (idx !== true) {
       await runner.query(
         `CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_messages_body_trgm" ON "messages" USING GIN (openwa_unaccent("body") ${quoteIdent(trgm)}.gin_trgm_ops)`,
       );
     }
-    return null;
+    return this.destroyed ? CONTAINS_UNAVAILABLE.building : null;
   }
 
   /**

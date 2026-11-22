@@ -7,6 +7,8 @@ import { pruneInBatches } from '../../common/utils/batched-prune';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
 
 const DEFAULT_OUTBOX_RETENTION_DAYS = 7;
+/** Upper bound on waiting for an active outbox prune pass during shutdown. */
+const OUTBOX_PRUNE_SHUTDOWN_WAIT_MS = 1_000;
 
 /**
  * How long a stranded delivery whose stored payload cannot be read is left out of the page reads, as the ingress sweep
@@ -39,6 +41,7 @@ export interface ReplayableDelivery {
 export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookOutboxService');
   private pruneTimer?: ReturnType<typeof setInterval>;
+  private readonly inFlightPrunes = new Set<Promise<unknown>>();
   private stopped = false;
   // Row id to the time it may be read again, for rows whose stored payload could not be read.
   private readonly unreadableUntil = new Map<string, number>();
@@ -82,20 +85,44 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     this.pruneTimer.unref?.();
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.stopped = true;
     if (this.pruneTimer) clearInterval(this.pruneTimer);
+    if (this.inFlightPrunes.size === 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        Promise.all([...this.inFlightPrunes]),
+        new Promise<void>(resolve => {
+          timer = setTimeout(resolve, OUTBOX_PRUNE_SHUTDOWN_WAIT_MS);
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  /** Delete settled rows older than the window, a batch at a time. Returns the number removed. */
+  /** Delete settled and legacy null-state rows older than the window, a batch at a time. Returns the number removed. */
   async pruneSettled(olderThanDays: number): Promise<number> {
+    if (this.stopped) return 0;
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - olderThanDays);
-    return pruneInBatches({
+    const task = pruneInBatches({
       repository: this.outbox,
-      where: { state: Not(In(['pending', 'queued'])), createdAt: LessThan(cutoff) },
+      where: [
+        { state: Not(In(['pending', 'queued'])), createdAt: LessThan(cutoff) },
+        { state: IsNull(), createdAt: LessThan(cutoff) },
+      ],
       stopped: () => this.stopped,
     });
+    const settled = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.inFlightPrunes.add(settled);
+    void settled.finally(() => this.inFlightPrunes.delete(settled));
+    return task;
   }
 
   /**
@@ -150,6 +177,18 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       );
     } catch (error) {
       this.logger.warn(`Could not record queued outbound delivery: ${String(error)}`);
+    }
+  }
+
+  /** Revert a pre-enqueue 'queued' mark back to 'pending' when queue.add rejects, keeping deliveryId intact. */
+  async markPending(webhookId: string, idempotencyKey: string, deliveryId: string): Promise<void> {
+    try {
+      await this.outbox.update(
+        { webhookId, idempotencyKey, state: 'queued', deliveryId, payload: Not(IsNull()) },
+        { state: 'pending' },
+      );
+    } catch (error) {
+      this.logger.warn(`Could not revert queued outbound delivery: ${String(error)}`);
     }
   }
 

@@ -42,6 +42,9 @@ const DEFAULT_ORPHAN_GRACE_MS = 60 * 60 * 1000;
 /** Storage key prefix owned by the status store; the media bucket is shared with chat media. */
 const STATUS_MEDIA_PREFIX = 'statuses/';
 
+/** Upper bound on waiting for in-flight maintenance passes during shutdown. */
+const MAINTENANCE_SHUTDOWN_WAIT_MS = 1_000;
+
 /**
  * Persists inbound status/story broadcasts (`StatusUpdate` rows) with a 24h TTL, storing any attached
  * media through `StorageService`. Runs two recurring sweeps: the TTL purge (once at startup, then
@@ -53,6 +56,10 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('StatusStoreService');
   /** Stops the TTL purge and the orphan sweep; set while the service is running. */
   private stopMaintenance: Array<() => void> = [];
+  /** Set on module destroy: the schedule stops, and maintenance already running stops at its next check. */
+  private stopping = false;
+  /** Active purge and orphan sweep runs, awaited (bounded) by onModuleDestroy. */
+  private readonly inFlightMaintenance = new Set<Promise<unknown>>();
   /** First sweep sighting (epoch ms) of each unreferenced status media file, for the grace window. */
   private readonly orphanFirstSeenAt = new Map<string, number>();
   /** Last row id the TTL purge walked past; the next run resumes after it. */
@@ -91,9 +98,43 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
     ];
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
+    this.stopping = true;
     for (const stop of this.stopMaintenance) stop();
     this.stopMaintenance = [];
+    if (this.inFlightMaintenance.size === 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        Promise.all([...this.inFlightMaintenance]),
+        new Promise<void>(resolve => {
+          timer = setTimeout(resolve, MAINTENANCE_SHUTDOWN_WAIT_MS);
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** The data source has already closed; no further repository writes may run. */
+  private get dbClosed(): boolean {
+    return this.repository.manager?.connection?.isInitialized === false;
+  }
+
+  /** The gateway is stopping or the data source has closed: maintenance in flight stops cleanly. */
+  private get closed(): boolean {
+    return this.stopping || this.dbClosed;
+  }
+
+  private trackMaintenance<T>(promise: Promise<T>): Promise<T> {
+    const settled = promise.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.inFlightMaintenance.add(settled);
+    void settled.finally(() => this.inFlightMaintenance.delete(settled));
+    return promise;
   }
 
   /**
@@ -442,10 +483,15 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
    * only repeat the failure.
    */
   async purgeExpired(now: number): Promise<number> {
+    return this.trackMaintenance(this.runPurgeExpired(now));
+  }
+
+  private async runPurgeExpired(now: number): Promise<number> {
     let removed = 0;
     let after = this.purgeCursor;
     this.purgeCursor = undefined;
     for (let batch = 0; batch < PURGE_MAX_BATCHES_PER_RUN; batch++) {
+      if (this.closed) break;
       const expired = await this.repository.find({
         where: { expiresAt: LessThan(now), ...(after ? { id: MoreThan(after) } : {}) },
         select: { id: true, mediaPath: true },
@@ -456,7 +502,12 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
       after = expired[expired.length - 1].id;
 
       const deletableIds: string[] = [];
+      let stoppedMidBatch = false;
       for (const row of expired) {
+        if (this.closed) {
+          stoppedMidBatch = true;
+          break;
+        }
         try {
           if (row.mediaPath) await this.storageService.deleteFile(row.mediaPath);
           deletableIds.push(row.id);
@@ -470,11 +521,13 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
 
       // Rows whose delete failed are kept; they are retried once the walk wraps around.
       if (deletableIds.length === 0) {
-        this.purgeCursor = after;
+        if (!stoppedMidBatch) this.purgeCursor = after;
         break;
       }
+      if (this.dbClosed) break;
       const result = await this.repository.delete(deletableIds);
       removed += result.affected ?? deletableIds.length;
+      if (stoppedMidBatch || this.closed) break;
       // A short batch means the backlog is drained and the next run starts over from the lowest id;
       // a run that hits the batch cap resumes where it stopped.
       if (expired.length < PURGE_BATCH_SIZE) break;
@@ -486,14 +539,19 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
   /**
    * Reconcile the media store with the status rows: delete `statuses/` files no row references.
    * Orphans arise from the narrow crash window between the media write and its row update (row-first
-   * ingest keeps every other path consistent). Scoped to the statuses/ prefix — the media store is
-   * shared with chat media, which this sweep must never touch.
+   * ingest keeps every other path consistent). Scoped to the statuses/ prefix (the media store is
+   * shared with chat media, which this sweep must never touch).
    *
    * A file is deleted only after the sweep has seen it unreferenced for at least the grace window:
    * first-seen is tracked in memory (a restart simply restarts the grace clock, which fails safe),
    * so a file mid-ingest or freshly written is never reaped. Returns the count removed.
    */
   async sweepOrphanedMedia(now: number = Date.now()): Promise<number> {
+    return this.trackMaintenance(this.runSweepOrphanedMedia(now));
+  }
+
+  private async runSweepOrphanedMedia(now: number): Promise<number> {
+    if (this.closed) return 0;
     const graceMs = this.configService.get<number>('status.orphanGraceMs', DEFAULT_ORPHAN_GRACE_MS);
     // Reconciled in chunks, as the chat-media archive does: the rows are bounded by the 24h TTL, but the files under the
     // prefix are not (a session delete leaves every file of the session behind), and listing them all before asking
@@ -511,6 +569,7 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
       },
       onDeleteFailed: (file, err) =>
         this.logger.warn(`Failed to delete orphaned status media ${file}`, { error: String(err) }),
+      stopped: () => this.closed,
     });
     if (removed > 0) this.logger.log(`Status media orphan sweep removed ${removed} file(s)`);
     return removed;

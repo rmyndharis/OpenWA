@@ -22,6 +22,29 @@ describe('ShutdownService (draining flag)', () => {
     svc.markShuttingDown(); // no throw, stays true
     expect(svc.isShuttingDown()).toBe(true);
   });
+
+  it('isolates a throwing onShutdown listener so remaining listeners still run', () => {
+    const svc = new ShutdownService();
+    const warn = jest.spyOn(svc['logger'], 'warn').mockImplementation(() => undefined);
+    const second = jest.fn();
+    const third = jest.fn();
+
+    svc.onShutdown(() => {
+      throw new Error('listener boom');
+    });
+    svc.onShutdown(second);
+    svc.onShutdown(third);
+
+    expect(() => svc.markShuttingDown()).not.toThrow();
+    expect(svc.isShuttingDown()).toBe(true);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(third).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('listener'),
+      expect.objectContaining({ error: 'listener boom' }),
+    );
+    warn.mockRestore();
+  });
 });
 
 describe('ShutdownService.shutdown (idempotent, bounded grace)', () => {

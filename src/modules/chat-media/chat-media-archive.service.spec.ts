@@ -746,6 +746,180 @@ describe('ChatMediaArchiveService', () => {
       expect(await repository.count({ where: { mediaPath: Not(IsNull()) } })).toBe(3);
       del.mockRestore();
     });
+
+    it('stops purgeExpired mid-batch on destroy, commits DB clearing for already-deleted files, and awaits the active delete', async () => {
+      await seedExpired(3);
+      const svc = enabled({ 'chatMedia.ttlDays': 7 });
+      const realDelete = storageService.deleteFile.bind(storageService);
+      let releaseSecond!: () => void;
+      const secondGate = new Promise<void>(resolve => (releaseSecond = resolve));
+      let enteredSecond!: () => void;
+      const onSecond = new Promise<void>(resolve => (enteredSecond = resolve));
+      let calls = 0;
+
+      const del = jest.spyOn(storageService, 'deleteFile').mockImplementation(async (key: string) => {
+        calls += 1;
+        if (calls === 2) {
+          enteredSecond();
+          await secondGate;
+        }
+        return realDelete(key);
+      });
+
+      try {
+        const purgeP = svc.purgeExpired(Date.now());
+        await onSecond;
+
+        let destroyed = false;
+        const destroyP = Promise.resolve(svc.onModuleDestroy()).then(() => {
+          destroyed = true;
+        });
+        await new Promise(resolve => setImmediate(resolve));
+        expect(destroyed).toBe(false);
+
+        releaseSecond();
+        await destroyP;
+        const cleared = await purgeP;
+
+        expect(destroyed).toBe(true);
+        expect(cleared).toBe(2);
+        expect(calls).toBe(2);
+        expect(await repository.count({ where: { mediaPath: Not(IsNull()) } })).toBe(1);
+      } finally {
+        del.mockRestore();
+      }
+    });
+
+    it('clears mediaPath and archived metadata markers for already-deleted archive-mode rows on mid-batch destroy', async () => {
+      const seeded: Message[] = [];
+      for (let i = 0; i < 3; i++) {
+        const key = `${CHAT_MEDIA_PREFIX}sess-1/arch-${i}.png`;
+        const row = await saveRow(
+          { mimetype: 'image/png', omitted: true, sizeBytes: PNG.length, archived: true },
+          { mediaPath: key, mediaMimetype: 'image/png' },
+        );
+        await storageService.putFile(key, PNG);
+        await backdate(row.id, 10);
+        seeded.push(row);
+      }
+
+      const svc = enabled({ 'chatMedia.ttlDays': 7, 'chatMedia.inlineMode': 'archive' });
+      const realDelete = storageService.deleteFile.bind(storageService);
+      let releaseSecond!: () => void;
+      const secondGate = new Promise<void>(resolve => (releaseSecond = resolve));
+      let enteredSecond!: () => void;
+      const onSecond = new Promise<void>(resolve => (enteredSecond = resolve));
+      let calls = 0;
+
+      const del = jest.spyOn(storageService, 'deleteFile').mockImplementation(async (key: string) => {
+        calls += 1;
+        if (calls === 2) {
+          enteredSecond();
+          await secondGate;
+        }
+        return realDelete(key);
+      });
+
+      try {
+        const purgeP = svc.purgeExpired(Date.now());
+        await onSecond;
+
+        const destroyP = svc.onModuleDestroy();
+        releaseSecond();
+        await destroyP;
+        const cleared = await purgeP;
+
+        expect(cleared).toBe(2);
+        expect(calls).toBe(2);
+        const rows = await repository.find({ order: { id: 'ASC' } });
+        expect(rows).toHaveLength(3);
+        const clearedRows = rows.filter(r => r.mediaPath === null);
+        const keptRows = rows.filter(r => r.mediaPath !== null);
+        expect(clearedRows).toHaveLength(2);
+        expect(keptRows).toHaveLength(1);
+        for (const row of clearedRows) {
+          const media = row.metadata?.media as Record<string, unknown> | undefined;
+          expect(media?.omitted).toBe(true);
+          expect(media).not.toHaveProperty('archived');
+        }
+        expect((keptRows[0].metadata?.media as Record<string, unknown> | undefined)?.archived).toBe(true);
+      } finally {
+        del.mockRestore();
+      }
+    });
+
+    it('exits cleanly without writing to a closed data source when the connection closes mid-batch', async () => {
+      const localDs = new DataSource({
+        type: 'better-sqlite3',
+        database: ':memory:',
+        entities: [Message],
+        synchronize: true,
+      });
+      await localDs.initialize();
+      const localRepo = localDs.getRepository(Message);
+      const localSvc = new ChatMediaArchiveService(
+        localRepo,
+        storageService,
+        fakeConfigService({ 'chatMedia.archiveEnabled': true, 'chatMedia.ttlDays': 7 }),
+      );
+      try {
+        for (let i = 0; i < 3; i++) {
+          const key = `${CHAT_MEDIA_PREFIX}sess-1/closed-${i}.png`;
+          const row = await localRepo.save(
+            localRepo.create({
+              sessionId: 'sess-1',
+              chatId: '628111@c.us',
+              waMessageId: `closed-${i}`,
+              from: '628111@c.us',
+              to: 'me@c.us',
+              body: '',
+              type: 'image',
+              direction: MessageDirection.INCOMING,
+              status: MessageStatus.SENT,
+              timestamp: 1,
+              mediaPath: key,
+              mediaMimetype: 'image/png',
+              metadata: { media: { mimetype: 'image/png', omitted: true, archived: true } },
+            }),
+          );
+          await storageService.putFile(key, PNG);
+          await localRepo.query('UPDATE messages SET createdAt = ? WHERE id = ?', [
+            new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+            row.id,
+          ]);
+        }
+
+        const realDelete = storageService.deleteFile.bind(storageService);
+        let releaseSecond!: () => void;
+        const secondGate = new Promise<void>(resolve => (releaseSecond = resolve));
+        let enteredSecond!: () => void;
+        const onSecond = new Promise<void>(resolve => (enteredSecond = resolve));
+        let calls = 0;
+        const del = jest.spyOn(storageService, 'deleteFile').mockImplementation(async (key: string) => {
+          calls += 1;
+          if (calls === 2) {
+            enteredSecond();
+            await secondGate;
+          }
+          return realDelete(key);
+        });
+        const updateSpy = jest.spyOn(localRepo, 'update');
+
+        try {
+          const purgeP = localSvc.purgeExpired(Date.now());
+          await onSecond;
+          await localDs.destroy();
+          releaseSecond();
+
+          await expect(purgeP).resolves.toBe(0);
+          expect(updateSpy).not.toHaveBeenCalled();
+        } finally {
+          del.mockRestore();
+        }
+      } finally {
+        if (localDs.isInitialized) await localDs.destroy();
+      }
+    });
   });
 
   describe('sweepOrphanedMedia', () => {
@@ -829,6 +1003,49 @@ describe('ChatMediaArchiveService', () => {
       expect(await svc.sweepOrphanedMedia(Date.now() + 1_000_000)).toBe(0);
       expect(await storageService.getFile('statuses/sess-1/story.jpg')).toEqual(PNG);
     });
+
+    it('stops sweepOrphanedMedia on destroy and awaits the active delete in onModuleDestroy', async () => {
+      await storageService.putFile(`${CHAT_MEDIA_PREFIX}sess-1/orphan-a.png`, PNG);
+      await storageService.putFile(`${CHAT_MEDIA_PREFIX}sess-1/orphan-b.png`, PNG);
+      const svc = enabled({ 'chatMedia.orphanGraceMs': 0 });
+      const realDelete = storageService.deleteFile.bind(storageService);
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>(resolve => (releaseFirst = resolve));
+      let enteredFirst!: () => void;
+      const onFirst = new Promise<void>(resolve => (enteredFirst = resolve));
+      let calls = 0;
+
+      const del = jest.spyOn(storageService, 'deleteFile').mockImplementation(async (key: string) => {
+        calls += 1;
+        if (calls === 1) {
+          enteredFirst();
+          await firstGate;
+        }
+        return realDelete(key);
+      });
+
+      try {
+        const sweepP = svc.sweepOrphanedMedia(Date.now());
+        await onFirst;
+
+        let destroyed = false;
+        const destroyP = Promise.resolve(svc.onModuleDestroy()).then(() => {
+          destroyed = true;
+        });
+        await new Promise(resolve => setImmediate(resolve));
+        expect(destroyed).toBe(false);
+
+        releaseFirst();
+        await destroyP;
+        const removed = await sweepP;
+
+        expect(destroyed).toBe(true);
+        expect(removed).toBe(1);
+        expect(calls).toBe(1);
+      } finally {
+        del.mockRestore();
+      }
+    });
   });
 
   describe('sweep scheduling', () => {
@@ -848,7 +1065,7 @@ describe('ChatMediaArchiveService', () => {
       // archiving leaves every file and every pointer in place, so the maintenance the sweeps
       // perform — TTL expiry and orphan reclamation — is exactly what still has work to do.
       expect(setInterval).toHaveBeenCalledTimes(2);
-      svc.onModuleDestroy();
+      void svc.onModuleDestroy();
       setInterval.mockRestore();
     });
 
@@ -866,7 +1083,7 @@ describe('ChatMediaArchiveService', () => {
         expect(logError).toHaveBeenCalledWith('Chat media purge failed', expect.stringContaining('db gone'));
         expect(logError).toHaveBeenCalledWith('Chat media orphan sweep failed', expect.stringContaining('bucket gone'));
       } finally {
-        svc.onModuleDestroy();
+        await svc.onModuleDestroy();
       }
     });
 
@@ -914,7 +1131,7 @@ describe('ChatMediaArchiveService', () => {
         await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
         expect(select.mock.calls.length).toBeGreaterThan(1);
       } finally {
-        svc.onModuleDestroy();
+        void svc.onModuleDestroy();
         releaseDelete();
         [del, sweep, select].forEach(spy => spy.mockRestore());
         jest.useRealTimers();
@@ -940,7 +1157,7 @@ describe('ChatMediaArchiveService', () => {
         await jest.advanceTimersByTimeAsync(60_000);
         expect(sweep).toHaveBeenCalledTimes(2);
       } finally {
-        svc.onModuleDestroy();
+        void svc.onModuleDestroy();
         release();
         [sweep, purge].forEach(spy => spy.mockRestore());
         jest.useRealTimers();
@@ -955,7 +1172,7 @@ describe('ChatMediaArchiveService', () => {
       svc.onModuleInit();
       expect(setInterval).toHaveBeenCalledTimes(2);
 
-      svc.onModuleDestroy();
+      void svc.onModuleDestroy();
       expect(clearInterval).toHaveBeenCalledTimes(2);
       setInterval.mockRestore();
       clearInterval.mockRestore();

@@ -842,6 +842,84 @@ describe('StatusStoreService.purgeExpired', () => {
     await purger.purgeExpired(Date.now());
     expect(deleteFile.mock.calls[515][0]).toBe('bad/0');
   }, 30_000);
+
+  it('stops purgeExpired mid-batch on destroy, commits DB deletes for already-deleted files, and awaits the active delete', async () => {
+    const a = await ingestWithMedia('expired-a', 1000);
+    const b = await ingestWithMedia('expired-b', 2000);
+    const c = await ingestWithMedia('expired-c', 3000);
+
+    const realDelete = storageService.deleteFile.bind(storageService);
+    let releaseSecond!: () => void;
+    const secondGate = new Promise<void>(resolve => (releaseSecond = resolve));
+    let enteredSecond!: () => void;
+    const onSecond = new Promise<void>(resolve => (enteredSecond = resolve));
+    let calls = 0;
+
+    jest.spyOn(storageService, 'deleteFile').mockImplementation(async (key: string) => {
+      calls += 1;
+      if (calls === 2) {
+        enteredSecond();
+        await secondGate;
+      }
+      return realDelete(key);
+    });
+
+    const now = 3000 + 24 * 60 * 60 * 1000 + 1;
+    const purgeP = service.purgeExpired(now);
+    await onSecond;
+
+    let destroyed = false;
+    const destroyP = Promise.resolve(service.onModuleDestroy()).then(() => {
+      destroyed = true;
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(destroyed).toBe(false);
+
+    releaseSecond();
+    await destroyP;
+    const removed = await purgeP;
+
+    const [first, second, third] = [a, b, c].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+    expect(destroyed).toBe(true);
+    expect(removed).toBe(2);
+    expect(calls).toBe(2);
+    expect(fs.existsSync(path.join(baseDir, 'media', first.mediaPath!))).toBe(false);
+    expect(fs.existsSync(path.join(baseDir, 'media', second.mediaPath!))).toBe(false);
+    expect(fs.existsSync(path.join(baseDir, 'media', third.mediaPath!))).toBe(true);
+    expect((await repository.find()).map(r => r.waStatusId)).toEqual([third.waStatusId]);
+  });
+
+  it('exits cleanly without deleting from a closed data source when the connection closes mid-batch', async () => {
+    await ingestWithMedia('expired-a', 1000);
+    await ingestWithMedia('expired-b', 2000);
+    await ingestWithMedia('expired-c', 3000);
+
+    const realDelete = storageService.deleteFile.bind(storageService);
+    let releaseSecond!: () => void;
+    const secondGate = new Promise<void>(resolve => (releaseSecond = resolve));
+    let enteredSecond!: () => void;
+    const onSecond = new Promise<void>(resolve => (enteredSecond = resolve));
+    let calls = 0;
+
+    jest.spyOn(storageService, 'deleteFile').mockImplementation(async (key: string) => {
+      calls += 1;
+      if (calls === 2) {
+        enteredSecond();
+        await secondGate;
+      }
+      return realDelete(key);
+    });
+    const repoDelete = jest.spyOn(repository, 'delete');
+
+    const now = 3000 + 24 * 60 * 60 * 1000 + 1;
+    const purgeP = service.purgeExpired(now);
+    await onSecond;
+    await ds.destroy();
+    releaseSecond();
+
+    await expect(purgeP).resolves.toBe(0);
+    expect(repoDelete).not.toHaveBeenCalled();
+  });
 });
 
 describe('StatusStoreService.sweepOrphanedMedia', () => {
@@ -969,6 +1047,49 @@ describe('StatusStoreService.sweepOrphanedMedia', () => {
     expect(await service.sweepOrphanedMedia(t0 + 61 * 60 * 1000)).toBe(1_200);
     expect(deleteFile).not.toHaveBeenCalledWith(live.mediaPath);
   });
+
+  it('stops sweepOrphanedMedia on destroy and awaits the active delete in onModuleDestroy', async () => {
+    writeFile('statuses/sess/orphan-a.jpg', 'a');
+    writeFile('statuses/sess/orphan-b.jpg', 'b');
+    const shortGrace = new StatusStoreService(
+      repository,
+      storageService,
+      fakeConfigService({ 'status.orphanGraceMs': 0 }),
+    );
+    const realDelete = storageService.deleteFile.bind(storageService);
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>(resolve => (releaseFirst = resolve));
+    let enteredFirst!: () => void;
+    const onFirst = new Promise<void>(resolve => (enteredFirst = resolve));
+    let calls = 0;
+
+    jest.spyOn(storageService, 'deleteFile').mockImplementation(async (key: string) => {
+      calls += 1;
+      if (calls === 1) {
+        enteredFirst();
+        await firstGate;
+      }
+      return realDelete(key);
+    });
+
+    const sweepP = shortGrace.sweepOrphanedMedia(Date.now());
+    await onFirst;
+
+    let destroyed = false;
+    const destroyP = Promise.resolve(shortGrace.onModuleDestroy()).then(() => {
+      destroyed = true;
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(destroyed).toBe(false);
+
+    releaseFirst();
+    await destroyP;
+    const removed = await sweepP;
+
+    expect(destroyed).toBe(true);
+    expect(removed).toBe(1);
+    expect(calls).toBe(1);
+  });
 });
 
 describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', () => {
@@ -993,7 +1114,7 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
       await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
       expect(purgeSpy).toHaveBeenCalledTimes(1);
 
-      service.onModuleDestroy();
+      await service.onModuleDestroy();
       purgeSpy.mockClear();
       await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
       expect(purgeSpy).not.toHaveBeenCalled();
@@ -1022,7 +1143,7 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
       await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
       expect(purgeSpy).toHaveBeenCalledTimes(2);
     } finally {
-      service.onModuleDestroy();
+      void service.onModuleDestroy();
       release();
       jest.useRealTimers();
     }
@@ -1053,7 +1174,7 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
       await jest.advanceTimersByTimeAsync(60_000);
       expect(sweepSpy).toHaveBeenCalledTimes(2);
     } finally {
-      service.onModuleDestroy();
+      void service.onModuleDestroy();
       release();
       jest.useRealTimers();
     }
@@ -1076,7 +1197,7 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
       await jest.advanceTimersByTimeAsync(45 * 60 * 1000);
       expect(sweepSpy).toHaveBeenCalledTimes(1);
 
-      service.onModuleDestroy();
+      await service.onModuleDestroy();
       sweepSpy.mockClear();
       await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
       expect(sweepSpy).not.toHaveBeenCalled();
@@ -1100,7 +1221,7 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
       sweepSpy.mockClear();
       await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
       expect(sweepSpy).toHaveBeenCalledTimes(1);
-      service.onModuleDestroy();
+      await service.onModuleDestroy();
     } finally {
       jest.useRealTimers();
     }

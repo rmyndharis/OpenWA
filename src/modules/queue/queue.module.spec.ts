@@ -41,8 +41,8 @@ describe('WEBHOOK_QUEUE_JOB_OPTIONS', () => {
   it('auto-evicts completed jobs on a bounded count and age', () => {
     const opts = WEBHOOK_QUEUE_JOB_OPTIONS.removeOnComplete;
     expect(typeof opts).toBe('object'); // a bounded window, not `false` (keep forever) / `true` (drop all)
-    expect(opts.count).toBeGreaterThan(0);
-    expect(opts.age).toBeGreaterThan(0);
+    expect(opts.count).toBe(10_000);
+    expect(opts.age).toBe(3600);
   });
 
   it('auto-evicts failed jobs on a bounded count and age', () => {

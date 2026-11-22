@@ -1,4 +1,5 @@
 import type { WorkerHost } from '@nestjs/bullmq';
+import { LoggerService } from '../../../common/services/logger.service';
 import { closeWorkerIfStarted, MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
 
 describe('closeWorkerIfStarted', () => {
@@ -32,16 +33,39 @@ describe('closeWorkerIfStarted', () => {
     await expect(host.worker.close()).resolves.toBeUndefined();
   });
 
-  // A destroy hook that rejects makes Nest skip every hook after it (plugin onDisable, the usage flush).
-  it('lets the teardown go on when the close rejects, and leaves the rejection to the later close', async () => {
+  // A destroy hook or later BullModule close that rejects makes Nest skip every hook after it,
+  // including DataSource.destroy(). Patching worker.close after a rejection settles that later await too.
+  it('lets the teardown go on when the close rejects, and settles the later BullModule close', async () => {
     const failure = new Error('connection lost');
     const close = jest.fn().mockRejectedValue(failure);
     const worker = { name: 'q', close };
 
     await expect(closeWorkerIfStarted({ worker } as unknown as WorkerHost, 1_000)).resolves.toBeUndefined();
 
-    expect(worker.close).toBe(close);
-    await expect(worker.close()).rejects.toBe(failure);
+    expect(worker.close).not.toBe(close);
+    await expect(worker.close()).resolves.toBeUndefined();
+  });
+
+  it('catches synchronous throws from worker.close(), logs a warning, and patches worker.close to resolve', async () => {
+    const failure = new Error('sync close failure');
+    const close = jest.fn(() => {
+      throw failure;
+    });
+    const worker = { name: 'q', close };
+    const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(closeWorkerIfStarted({ worker } as unknown as WorkerHost, 1_000)).resolves.toBeUndefined();
+
+      expect(worker.close).not.toBe(close);
+      await expect(worker.close()).resolves.toBeUndefined();
+      expect(jest.getTimerCount()).toBe(0);
+      expect(warn).toHaveBeenCalledWith('Queue worker close failed; continuing shutdown', {
+        queue: 'q',
+        error: 'sync close failure',
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('leaves no timer running once the worker has closed', async () => {

@@ -301,7 +301,12 @@ describe('archive-only media after retention removes the file', () => {
 
   it.each([
     ['the data source closes', (): Promise<void> => ds.destroy()],
-    ['the module is destroyed', (archive: ChatMediaArchiveService): void => archive.onModuleDestroy()],
+    [
+      'the module is destroyed',
+      (archive: ChatMediaArchiveService): void => {
+        void archive.onModuleDestroy();
+      },
+    ],
   ])(
     'stops when %s during the marker lookups and leaves the rest for the next run',
     async (_label, shutDown: (archive: ChatMediaArchiveService) => unknown) => {
