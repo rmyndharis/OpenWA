@@ -96,11 +96,12 @@ class Client
         // A key read from a secret file usually ends in a newline, which the HTTP layer refuses with an error
         // that quotes the whole key. Trim it, and refuse a control or non-ASCII character left inside: the
         // gateway takes any printable ASCII, a space included, and the other clients send it as it is.
-        $apiKey = is_string($config['apiKey'] ?? null) ? trim($config['apiKey']) : ($config['apiKey'] ?? '');
-        if (empty($apiKey)) {
+        $rawApiKey = $config['apiKey'] ?? null;
+        if (!is_string($rawApiKey) || trim($rawApiKey) === '') {
             throw new OpenWAException('OpenWA Client: apiKey is required');
         }
-        if (!is_string($apiKey) || preg_match('/\A[\x20-\x7e]+\z/', $apiKey) !== 1) {
+        $apiKey = trim($rawApiKey);
+        if (preg_match('/\A[\x20-\x7e]+\z/', $apiKey) !== 1) {
             throw new OpenWAException(
                 'OpenWA Client: apiKey contains a control or non-ASCII character; check for a stray newline'
             );
@@ -173,13 +174,19 @@ class Client
     /**
      * Issue a raw request against the API (advanced use).
      *
-     * @param string              $path   Path beginning with /, e.g. /api/sessions.
-     * @param array<string,mixed> $query  Query parameters (null values skipped).
-     * @param mixed|null          $body   JSON-serializable request body.
+     * @param string              $path           Path beginning with /, e.g. /api/sessions.
+     * @param array<string,mixed> $query          Query parameters (null values skipped).
+     * @param mixed|null          $body           JSON-serializable request body.
+     * @param ?string             $idempotencyKey Optional Idempotency-Key header for keyed sends.
      * @return mixed Decoded JSON, or null for empty/204 responses.
      */
-    public function request(string $method, string $path, array $query = [], mixed $body = null): mixed
-    {
-        return $this->http->request($method, $path, $query, $body, null, true);
+    public function request(
+        string $method,
+        string $path,
+        array $query = [],
+        mixed $body = null,
+        ?string $idempotencyKey = null
+    ): mixed {
+        return $this->http->request($method, $path, $query, $body, $idempotencyKey, true);
     }
 }

@@ -355,7 +355,7 @@ class SessionStatsOverview(TypedDict):
     ready: int
     disconnected: int
     byStatus: dict[str, int]
-    memoryUsage: MemoryUsage
+    memoryUsage: NotRequired[MemoryUsage]
 
 
 # ── Message ───────────────────────────────────────────────────────

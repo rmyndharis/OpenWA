@@ -599,6 +599,121 @@
         ]
       }
     },
+    "/api/auth/session": {
+      "post": {
+        "operationId": "BrowserSessionController_createSession",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "description": "API key to exchange for a browser session",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Browser session established",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is valid but refused here: its allowedIps exclude this client, or it is restricted to selected chats. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Exchange an API key header for an HttpOnly browser session cookie",
+        "tags": [
+          "auth"
+        ]
+      },
+      "get": {
+        "operationId": "BrowserSessionController_getSession",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Active session details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Session key refused by IP or chat restrictions. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Validate the active browser session cookie or API key header",
+        "tags": [
+          "auth"
+        ]
+      },
+      "delete": {
+        "operationId": "BrowserSessionController_deleteSession",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Session cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionLogoutResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF check failed for a cookie-authenticated logout request"
+          }
+        },
+        "summary": "Revoke the current browser session and clear the session cookie",
+        "tags": [
+          "auth"
+        ],
+        "security": []
+      }
+    },
     "/api/sessions": {
       "post": {
         "operationId": "SessionController_create",
@@ -1126,7 +1241,7 @@
             }
           },
           "403": {
-            "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "description": "Key lacks the ADMIN role, or is restricted to specific sessions. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3263,7 +3378,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Session statistics including counts and memory usage",
+            "description": "Session statistics including counts, plus process memory usage for unscoped ADMIN keys",
             "content": {
               "application/json": {
                 "schema": {
@@ -6065,6 +6180,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional. Makes the send safe to retry: within 24 hours, a retry with the same key and body replays the first response (marked `Idempotent-Replayed: true`) instead of sending again. 1-255 visible ASCII characters, unique per session. While the first request runs a retry gets 409 `IDEMPOTENCY_KEY_IN_PROGRESS`; after a failure that may have sent the message it gets 409 `IDEMPOTENCY_OUTCOME_UNKNOWN`. A 4xx or 501 refusal before the engine call frees the key. Errors from an engine send keep it taken whatever their HTTP status, including 409, unless the engine proves that nothing was sent: a transport failure or a not-ready 409 before the message was handed over (the session not ready, WhatsApp Web reloading its page, or a Baileys connection replaced or stopped meanwhile), a WhatsApp rate limit, media it could not fetch, a sticker it could not read or convert (on whatsapp-web.js, one that is neither an image nor a video, or a video its host could not convert), a quoted, replied-to or forwarded message it does not hold (on Baileys, or holds under another chat), a send the engine cannot make (a 501), or, on Baileys, a preview image it could not read, a media upload that WhatsApp's media host refused, or a recipient WhatsApp reports as not registered.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -6130,6 +6254,16 @@
           },
           "409": {
             "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A send whose first attempt had already run when the session left `ready` (or WhatsApp Web reloaded its page) is the exception: it answers a `409` with no `code` that says the message may or may not have been sent, so check the chat before sending it again (a retry with the same `Idempotency-Key` answers `IDEMPOTENCY_OUTCOME_UNKNOWN`). A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and until it has the answer is a `409` naming the reload, with `code` `ENGINE_PAGE_RELOADING` and `retryAfterSeconds`. That takes seconds on most reloads and can take a few minutes, and no event marks its end: ask again at that interval.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`IDEMPOTENCY_KEY_REUSED`: the Idempotency-Key was already used with a different route or body.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8624,7 +8758,17 @@
     "/api/infra/export-data": {
       "get": {
         "operationId": "InfraDataController_exportData",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "includePluginSecrets",
+            "required": false,
+            "in": "query",
+            "description": "Include plaintext plugin instance ingress secrets, verify tokens, and secret config fields (default: false)",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Exported data as JSON",
@@ -8632,6 +8776,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/InfraExportDataResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameter: includePluginSecrets must be \"true\" or \"false\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -19301,6 +19455,57 @@
           "valid"
         ]
       },
+      "BrowserSessionResponseDto": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "description": "Whether the presented API key is valid.",
+            "example": true
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "operator",
+              "viewer"
+            ],
+            "description": "The key's role; present only when valid."
+          },
+          "engineType": {
+            "type": "string",
+            "description": "Engine the process resolved at boot; present only when valid.",
+            "example": "baileys"
+          },
+          "scoped": {
+            "type": "boolean",
+            "description": "Whether the key is restricted to selected sessions; present only when valid.",
+            "example": false
+          },
+          "apiKeyId": {
+            "type": "string",
+            "description": "ID of the API key bound to this browser session.",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          }
+        },
+        "required": [
+          "valid",
+          "apiKeyId"
+        ]
+      },
+      "BrowserSessionLogoutResponseDto": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "Always true once the session cookie has been cleared.",
+            "example": true
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
       "CreateSessionDto": {
         "type": "object",
         "properties": {
@@ -20072,7 +20277,7 @@
             }
           },
           "memoryUsage": {
-            "description": "Process memory usage of this gateway.",
+            "description": "Process memory usage of this gateway. Returned only to unscoped ADMIN callers.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/SessionMemoryUsageDto"
@@ -20085,8 +20290,7 @@
           "active",
           "ready",
           "disconnected",
-          "byStatus",
-          "memoryUsage"
+          "byStatus"
         ]
       },
       "WebhookFilterConditionDto": {

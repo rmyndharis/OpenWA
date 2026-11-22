@@ -21,7 +21,7 @@ func TestIdempotencyKeyReachesOnlyRoutesThatHonorIt(t *testing.T) {
 		{"reply", func() error { _, err := c.Messages.Reply(ctx, "s", ReplyMessageRequest{}); return err }, "order-1"},
 		{"forward", func() error { _, err := c.Messages.Forward(ctx, "s", ForwardMessageRequest{}); return err }, "order-1"},
 		{"send-bulk", func() error { _, err := c.Messages.SendBulk(ctx, "s", SendBulkRequest{}); return err }, ""},
-		{"click-button", func() error { _, err := c.Messages.ClickButton(ctx, "s", ClickButtonRequest{}); return err }, ""},
+		{"click-button", func() error { _, err := c.Messages.ClickButton(ctx, "s", ClickButtonRequest{}); return err }, "order-1"},
 		{"status", func() error { _, err := c.Status.SendText(ctx, "s", SendTextStatusRequest{}); return err }, ""},
 		{"do on a keyed route", func() error {
 			return c.Do(ctx, "POST", "/api/sessions/s/messages/send-text", nil, map[string]string{}, nil)

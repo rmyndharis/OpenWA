@@ -90,10 +90,15 @@ class MessagesResource:
     def reply(self, session_id: str, body: ReplyMessageRequest, *, idempotency_key: str | None = None) -> MessageResponse:
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/messages/reply", body=body, idempotency_key=idempotency_key)
 
-    def click_button(self, session_id: str, body: ClickButtonRequest) -> MessageResponse:
+    def click_button(
+        self, session_id: str, body: ClickButtonRequest, *, idempotency_key: str | None = None
+    ) -> MessageResponse:
         """Click a button on a WhatsApp Business prompt. Baileys only (whatsapp-web.js returns 501)."""
         return self._http.request(
-            "POST", f"/api/sessions/{quote_segment(session_id)}/messages/click-button", body=body
+            "POST",
+            f"/api/sessions/{quote_segment(session_id)}/messages/click-button",
+            body=body,
+            idempotency_key=idempotency_key,
         )
 
     def forward(self, session_id: str, body: ForwardMessageRequest, *, idempotency_key: str | None = None) -> MessageResponse:

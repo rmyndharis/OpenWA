@@ -29,6 +29,7 @@ from openwa.resources.messages import MessagesResource
 from openwa.types import (
     AuthValidateResponse,
     BatchCancelResponse,
+    ClickButtonRequest,
     HealthReadyResponse,
     ForwardMessageRequest,
     ReplyMessageRequest,
@@ -622,6 +623,7 @@ class TestMessages:
         template: SendTemplateRequest = {"chatId": "a@c.us", "templateId": "t", "vars": {}}
         poll: SendPollRequest = {"chatId": "a@c.us", "name": "Q", "options": ["A", "B"]}
         reply: ReplyMessageRequest = {"chatId": "a@c.us", "quotedMessageId": "q", "text": "reply"}
+        click: ClickButtonRequest = {"chatId": "a@c.us", "messageId": "p", "buttonId": "yes", "text": "Yes"}
         forward: ForwardMessageRequest = {"fromChatId": "a@c.us", "toChatId": "b@c.us", "messageId": "m"}
 
         client.messages.send_text("s", text, idempotency_key=key)
@@ -635,13 +637,14 @@ class TestMessages:
         client.messages.send_template("s", template, idempotency_key=key)
         client.messages.send_poll("s", poll, idempotency_key=key)
         client.messages.reply("s", reply, idempotency_key=key)
+        client.messages.click_button("s", click, idempotency_key=key)
         client.messages.forward("s", forward, idempotency_key=key)
 
         expected = [
             ("send-text", text), ("send-image", media), ("send-video", media), ("send-audio", audio),
             ("send-document", media), ("send-sticker", media), ("send-location", location),
             ("send-contact", contact), ("send-template", template), ("send-poll", poll),
-            ("reply", reply), ("forward", forward),
+            ("reply", reply), ("click-button", click), ("forward", forward),
         ]
         assert len(backend.calls) == len(expected)
         for call, (segment, body) in zip(backend.calls, expected):

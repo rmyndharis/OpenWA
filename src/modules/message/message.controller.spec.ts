@@ -1,5 +1,5 @@
 import { StreamableFile } from '@nestjs/common';
-import { RESPONSE_PASSTHROUGH_METADATA } from '@nestjs/common/constants';
+import { INTERCEPTORS_METADATA, RESPONSE_PASSTHROUGH_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { Server } from 'http';
@@ -9,6 +9,7 @@ import { MessageController } from './message.controller';
 import { MessageService } from './message.service';
 import { BulkMessageService } from './bulk-message.service';
 import { ChatScopeService } from '../auth/chat-scope.service';
+import { SendIdempotencyInterceptor } from './idempotency/send-idempotency.interceptor';
 import { SendIdempotencyService } from './idempotency/send-idempotency.service';
 import { CHAT_SCOPED_KEY } from '../auth/decorators/auth.decorators';
 import type { ApiKey } from '../auth/entities/api-key.entity';
@@ -478,5 +479,98 @@ describe('MessageController OpenAPI error responses', () => {
     expect(responses['400'].description).toBe('Session not active or invalid request');
     expect(responses['400'].description).not.toMatch(/not found/i);
     expect(Object.keys(responses)).toContain('404');
+  });
+});
+
+describe('MessageController - clickButton send idempotency', () => {
+  it('declares @IdempotentSend() interceptor, Idempotency-Key header, and 422 response metadata', () => {
+    const handler = Object.getOwnPropertyDescriptor(MessageController.prototype, 'clickButton')!.value as object;
+    const interceptors = (Reflect.getMetadata(INTERCEPTORS_METADATA, handler) ?? []) as unknown[];
+    const params = (Reflect.getMetadata('swagger/apiParameters', handler) ?? []) as Array<{
+      name?: string;
+      in?: string;
+    }>;
+    const responses = (Reflect.getMetadata('swagger/apiResponse', handler) ?? {}) as Record<string, unknown>;
+
+    expect(interceptors).toContain(SendIdempotencyInterceptor);
+    expect(params).toContainEqual(expect.objectContaining({ name: 'Idempotency-Key', in: 'header' }));
+    expect(Object.keys(responses)).toContain('422');
+  });
+
+  it('replays identical click-button retries and rejects key reuse with a different body (422)', async () => {
+    const records = new Map<string, { id: string; requestHash: string; status: string; body?: unknown }>();
+    const store: Pick<SendIdempotencyService, 'claim' | 'complete' | 'markFailed' | 'release'> = {
+      claim: jest.fn(({ sessionId, key, requestHash }: { sessionId: string; key: string; requestHash: string }) => {
+        const composite = `${sessionId}:${key}`;
+        const existing = records.get(composite);
+        if (!existing) {
+          const id = `id-${records.size + 1}`;
+          records.set(composite, { id, requestHash, status: 'pending' });
+          return Promise.resolve({ kind: 'claimed' as const, id });
+        }
+        if (existing.requestHash !== requestHash) return Promise.resolve({ kind: 'mismatch' as const });
+        if (existing.status === 'completed') return Promise.resolve({ kind: 'replay' as const, body: existing.body });
+        return Promise.resolve({ kind: 'in_progress' as const });
+      }),
+      complete: jest.fn((id: string, body: unknown) => {
+        for (const rec of records.values()) {
+          if (rec.id === id) {
+            rec.status = 'completed';
+            rec.body = body;
+          }
+        }
+        return Promise.resolve();
+      }),
+      markFailed: jest.fn(() => Promise.resolve()),
+      release: jest.fn((id: string) => {
+        for (const [k, rec] of records.entries()) {
+          if (rec.id === id) records.delete(k);
+        }
+        return Promise.resolve();
+      }),
+    };
+
+    const clickButton = jest.fn().mockResolvedValue({ messageId: 'btn-reply-1', timestamp: 1700000000 });
+    const moduleRef = await Test.createTestingModule({
+      controllers: [MessageController],
+      providers: [
+        { provide: MessageService, useValue: { clickButton } },
+        { provide: BulkMessageService, useValue: {} },
+        ChatScopeService,
+        { provide: SendIdempotencyService, useValue: store },
+      ],
+    }).compile();
+    const app = moduleRef.createNestApplication();
+    await app.init();
+    try {
+      const payload = { chatId: '628123@c.us', messageId: 'prompt-1', buttonId: 'yes' };
+      const first = await request(app.getHttpServer() as Server)
+        .post('/sessions/s1/messages/click-button')
+        .set('Idempotency-Key', 'click-key-1')
+        .send(payload)
+        .expect(201);
+      expect(first.body).toEqual({ messageId: 'btn-reply-1', timestamp: 1700000000 });
+      expect(first.headers['idempotent-replayed']).toBeUndefined();
+      expect(clickButton).toHaveBeenCalledTimes(1);
+
+      const replay = await request(app.getHttpServer() as Server)
+        .post('/sessions/s1/messages/click-button')
+        .set('Idempotency-Key', 'click-key-1')
+        .send(payload)
+        .expect(201);
+      expect(replay.body).toEqual({ messageId: 'btn-reply-1', timestamp: 1700000000 });
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(clickButton).toHaveBeenCalledTimes(1);
+
+      const conflict = await request(app.getHttpServer() as Server)
+        .post('/sessions/s1/messages/click-button')
+        .set('Idempotency-Key', 'click-key-1')
+        .send({ ...payload, buttonId: 'no' })
+        .expect(422);
+      expect((conflict.body as { code?: string }).code).toBe('IDEMPOTENCY_KEY_REUSED');
+      expect(clickButton).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
   });
 });

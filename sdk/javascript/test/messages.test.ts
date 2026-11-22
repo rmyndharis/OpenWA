@@ -35,6 +35,10 @@ describe('MessagesResource idempotency keys', () => {
     ['send-template', (c, key) => c.messages.sendTemplate('s', { chatId: 'c@c.us', templateName: 'welcome', vars: { name: 'A' } }, key)],
     ['send-poll', (c, key) => c.messages.sendPoll('s', { chatId: 'c@c.us', name: 'Question', options: ['A', 'B'] }, key)],
     ['reply', (c, key) => c.messages.reply('s', { chatId: 'c@c.us', quotedMessageId: 'q', text: 'reply' }, key)],
+    [
+      'click-button',
+      (c, key) => c.messages.clickButton('s', { chatId: 'c@c.us', messageId: 'p', buttonId: 'yes', text: 'Yes' }, key),
+    ],
     ['forward', (c, key) => c.messages.forward('s', { fromChatId: 'a@c.us', toChatId: 'b@c.us', messageId: 'm' }, key)],
   ];
 

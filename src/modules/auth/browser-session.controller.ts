@@ -91,6 +91,7 @@ export class BrowserSessionController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Revoke the current browser session and clear the session cookie' })
   @ApiResponse({ status: 200, description: 'Session cleared', type: BrowserSessionLogoutResponseDto })
+  @ApiResponse({ status: 403, description: 'CSRF check failed for a cookie-authenticated logout request' })
   async deleteSession(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,

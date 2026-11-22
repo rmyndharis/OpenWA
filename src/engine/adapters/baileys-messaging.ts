@@ -860,7 +860,7 @@ export class BaileysMessaging {
    * native-flow prompt.
    */
   async clickButton(chatId: string, messageId: string, buttonId: string, text?: string): Promise<MessageResult> {
-    this.host.ensureReady();
+    this.ensureReadyToSend();
     const socket = this.sock();
     const quoted = await this.requireStored(messageId);
     await this.assertStoredInChat(quoted, chatId, messageId, socket);
@@ -871,12 +871,14 @@ export class BaileysMessaging {
     const resolved = resolveBaileysButtonClick(normalized, contentType, buttonId, text);
     if (!resolved.ok) {
       if (resolved.error === 'unknown_button') {
-        throw new BadRequestException(
-          `buttonId "${buttonId}" is not among the clickable choices on message ${messageId}`,
+        throw markNothingSent(
+          new BadRequestException(`buttonId "${buttonId}" is not among the clickable choices on message ${messageId}`),
         );
       }
-      throw new BadRequestException(
-        `message ${messageId} is not a WhatsApp Business button/list prompt that can be clicked`,
+      throw markNothingSent(
+        new BadRequestException(
+          `message ${messageId} is not a WhatsApp Business button/list prompt that can be clicked`,
+        ),
       );
     }
 

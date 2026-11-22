@@ -499,6 +499,7 @@ export class MessageController {
 
   @ChatScoped('fenced')
   @Post('click-button')
+  @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({
     summary: 'Click a button on a WhatsApp Business prompt (Baileys only)',

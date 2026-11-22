@@ -545,13 +545,18 @@ describe('BrowserSessionController', () => {
     (configService.get as jest.Mock).mockReturnValue(['10.0.0.1']);
   });
 
-  it('marks POST /auth/session as @HeaderAuthOnly() and DELETE /auth/session as @Public()', () => {
+  it('marks POST /auth/session as @HeaderAuthOnly() and DELETE /auth/session as @Public() with 403 CSRF OpenAPI response', () => {
     const createHandler = Object.getOwnPropertyDescriptor(BrowserSessionController.prototype, 'createSession')
       ?.value as object;
     const deleteHandler = Object.getOwnPropertyDescriptor(BrowserSessionController.prototype, 'deleteSession')
       ?.value as object;
+    const deleteResponses = (Reflect.getMetadata('swagger/apiResponse', deleteHandler) ?? {}) as Record<
+      string,
+      unknown
+    >;
     expect(Reflect.getMetadata(HEADER_AUTH_ONLY_KEY, createHandler)).toBe(true);
     expect(Reflect.getMetadata(PUBLIC_KEY, deleteHandler)).toBe(true);
+    expect(Object.keys(deleteResponses)).toContain('403');
   });
 
   it('POST /auth/session mints opaque cookie with HttpOnly SameSite=Strict and never leaks secrets in body', async () => {

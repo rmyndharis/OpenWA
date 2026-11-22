@@ -164,8 +164,23 @@ class HttpExecutorTest extends TestCase
             'no additions' => ['/api/sessions#tab', [], '', 'tab'],
             'null omitted' => ['/api/sessions?offset=0#tab', ['limit' => null], 'offset=0', 'tab'],
             'encoded hashes' => ['/api/sessions?label=a%23b#tab', ['name' => 'x#y'], 'label=a%23b&name=x%23y', 'tab'],
-            'empty fragment and zero values' => ['/api/sessions#', ['offset' => 0, 'active' => false, 'unused' => null], 'offset=0&active=0', ''],
+            'empty fragment and zero values' => ['/api/sessions#', ['offset' => 0, 'active' => false, 'unused' => null], 'offset=0&active=false', ''],
         ];
+    }
+
+    public function testBooleanQueryParamsSerializeAsTrueAndFalseStrings(): void
+    {
+        $backend = (new MockBackend())->on(200, []);
+        $client = $backend->makeClient();
+
+        $client->request('GET', '/api/sessions/s1/messages', [
+            'inlineMedia' => false,
+            'includeDeleted' => true,
+            'limit' => 0,
+            'skip' => null,
+        ]);
+
+        $this->assertSame('inlineMedia=false&includeDeleted=true&limit=0', $backend->lastCall()['query']);
     }
 
     public function testEncodedIdentityHashesStayInThePath(): void

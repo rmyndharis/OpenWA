@@ -202,12 +202,17 @@ public final class MessagesResource {
      * Sends a structured reply proto quoted to the prompt, not a native UI tap.
      */
     public MessageResponse clickButton(String sessionId, ClickButtonRequest body) {
+        return clickButton(sessionId, body, null);
+    }
+
+    public MessageResponse clickButton(String sessionId, ClickButtonRequest body, String idempotencyKey) {
         return client.request(
             HttpMethod.POST,
             "/api/sessions/" + encodeSegment(sessionId) + "/messages/click-button",
             null,
             body,
-            MessageResponse.class);
+            MessageResponse.class,
+            idempotencyKey);
     }
 
     /** Forward a message to another chat. */

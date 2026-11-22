@@ -2,7 +2,10 @@ package com.rmyndharis.openwa.model;
 
 import java.util.Map;
 
-/** Aggregate statistics across the API key's sessions. */
+/**
+ * Aggregate statistics across the API key's sessions.
+ * {@code memoryUsage} is {@code null} unless the caller uses an unscoped ADMIN key.
+ */
 public record SessionStatsOverview(
     int total,
     int active,
