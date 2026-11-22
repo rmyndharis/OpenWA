@@ -383,7 +383,12 @@ curl -X POST "$BASE/api/sessions/{sessionId}/start" -H "X-API-Key: $API_KEY"
 
 > ℹ️ Proxy egress, on either engine, is configured **per session** via the
 > `proxyUrl` field on `POST /api/sessions` or `PATCH /api/sessions/:sessionId/proxy` (ADMIN key for
-> both), not via environment variables.
+> both), not via environment variables. When using an `http://` or `https://` proxy with the default
+> `SESSION_PROXY_URL_FETCH=true`, the proxy resolves caller-supplied media and link-preview hostnames
+> itself, so DNS rebinding or split-horizon internal DNS can bypass OpenWA's DNS pinning. Configure
+> proxy-side egress ACLs blocking loopback (`127.0.0.0/8`, `::1`), RFC 1918 (`10.0.0.0/8`,
+> `172.16.0.0/12`, `192.168.0.0/16`), link-local and cloud metadata (`169.254.169.254`, `fe80::/10`),
+> and IPv6 unique-local (`fc00::/7`), or use a SOCKS proxy or `SESSION_PROXY_URL_FETCH=false`.
 
 > ℹ️ A `504` whose body starts with `Engine initialization timed out after ...` is a **different**
 > failure with a different fix: initialization never finished at all. That happens when WhatsApp Web,

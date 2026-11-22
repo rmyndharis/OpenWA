@@ -152,3 +152,24 @@ on every fetch and on every disk cache hit; mismatches delete any tampered cache
 file and refuse the pin with `web_version_html_hash_mismatch`). Unverified remote
 pinning (`auto`/`latest`, or an exact build without `WWEBJS_WEB_VERSION_SHA256`)
 is rejected unless `WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true` is set explicitly.
+
+### Session egress proxies and SSRF
+
+When `SESSION_PROXY_URL_FETCH=true` (the default) and a session is configured with
+an `http://` or `https://` `proxyUrl`, caller-supplied URL fetches (outbound media
+URLs, `POST /api/sessions/:sessionId/media/convert/voice|video`, and text link
+previews) are forwarded through the proxy, which performs its own hostname DNS
+resolution. OpenWA's SSRF guard still pre-validates the URL before issuing the
+request, but it cannot pin the proxy's DNS resolution, so a DNS rebinding record
+or a split-horizon internal DNS name can resolve to an internal host on the proxy
+side.
+
+If you route caller-supplied URL fetches through an `http://` or `https://`
+session proxy, enforce proxy-side egress ACLs that deny loopback (`127.0.0.0/8`,
+`::1`), RFC 1918 private networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`),
+link-local and cloud metadata addresses (`169.254.0.0/16`, including
+`169.254.169.254`, and `fe80::/10`), and IPv6 unique-local ranges (`fc00::/7`).
+Alternatively, use a SOCKS proxy (`socks4://` or `socks5://`), where OpenWA
+resolves and pins the validated IP before dialing through the proxy, or set
+`SESSION_PROXY_URL_FETCH=false` so caller-supplied URL fetches bypass the proxy
+and use OpenWA's direct DNS-pinned SSRF guard.
