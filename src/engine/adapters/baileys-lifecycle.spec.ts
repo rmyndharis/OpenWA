@@ -1,6 +1,8 @@
 jest.mock('qrcode', () => ({ toDataURL: jest.fn() }));
 jest.mock('@whiskeysockets/baileys', () => ({
   __esModule: true,
+  default: jest.fn(),
+  DisconnectReason: { loggedOut: 401, forbidden: 403, restartRequired: 515, connectionReplaced: 440 },
   initAuthCreds: jest.fn(),
   makeCacheableSignalKeyStore: jest.fn((keys: unknown) => keys),
 }));
@@ -8,6 +10,8 @@ jest.mock('./baileys-auth-store', () => ({
   useAtomicMultiFileAuthState: jest.fn().mockRejectedValue(new Error('stop after auth load')),
 }));
 
+import { EventEmitter } from 'events';
+import * as fs from 'fs';
 import * as qrcode from 'qrcode';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import * as BaileysLib from '@whiskeysockets/baileys';
@@ -324,5 +328,453 @@ describe('BaileysLifecycle proxy fetch dispatcher', () => {
       await init;
       expect(engine.sock).toBeNull();
     });
+  });
+});
+
+describe('BaileysLifecycle socket fencing, one-shot remote logout, held chats, and proxy agent cleanup', () => {
+  const makeFakeSock = () => {
+    const ev = new EventEmitter();
+    const ws = Object.assign(new EventEmitter(), { isOpen: true, isConnecting: false });
+    const removeAllListenersSpy = jest.spyOn(ev, 'removeAllListeners');
+    const end = jest.fn();
+    return {
+      ev,
+      ws,
+      removeAllListenersSpy,
+      end,
+      user: { id: '628999:1@s.whatsapp.net', name: 'Tester' },
+      authState: { creds: { me: { id: '628999:1@s.whatsapp.net', name: 'Tester' }, account: {} } },
+      query: jest.fn().mockResolvedValue({ tag: 'iq' }),
+      generateMessageTag: () => 'tag-1',
+      fetchAccountReachoutTimelock: jest.fn().mockResolvedValue(undefined),
+      requestPairingCode: jest.fn().mockResolvedValue('ABCD1234'),
+    };
+  };
+
+  function makeConnectedHost(overrides: Partial<BaileysLifecycleHost> = {}) {
+    const noCallback = (): undefined => undefined;
+    const upsertChats = jest.fn();
+    const onReady = jest.fn();
+    const onDisconnected = jest.fn();
+    const onError = jest.fn();
+    const onAccountRestriction = jest.fn();
+    const onCredentialTeardownStarted = jest.fn();
+    const fenceStoredWrites = jest.fn();
+    const clearSession = jest.fn().mockResolvedValue(undefined);
+    const host = {
+      authPath: '/nonexistent/openwa-lifecycle-fence-spec/session-1',
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+      config: {
+        sessionId: 'sess-fence',
+        dbSessionId: 'db-fence',
+        proxyUrl: 'http://user:pass@proxy.example:8080',
+        messageStore: { clearSession },
+      },
+      liveCalls: new Map(),
+      extractPhone: (id?: string) => (id ? id.split(':')[0].split('@')[0] : null),
+      toNeutralJid: (jid: string) => jid,
+      upsertContacts: jest.fn(),
+      upsertChats,
+      removeChats: jest.fn(),
+      seedStoredPreviews: jest.fn(),
+      addLidMappings: jest.fn(),
+      handleMessagesUpsert: jest.fn(),
+      handleMessagesUpdate: jest.fn(),
+      handleMessageReceiptUpdate: jest.fn(),
+      logContactEvent: jest.fn(),
+      handleGroupParticipantsUpdate: jest.fn(),
+      handleGroupsUpdate: jest.fn(),
+      handleGroupsUpsert: jest.fn(),
+      handleGroupJoinRequest: jest.fn(),
+      handleCallEvents: jest.fn(),
+      handlePresenceUpdate: jest.fn(),
+      fenceStoredWrites,
+      captureHistoryMessages: jest.fn().mockResolvedValue(undefined),
+      hydrateNames: jest.fn().mockResolvedValue(undefined),
+      restoreAddressbookSnapshot: jest.fn().mockResolvedValue(undefined),
+      getOnQRCode: noCallback,
+      getOnReady: () => onReady,
+      getOnPushNameChanged: noCallback,
+      getOnDisconnected: () => onDisconnected,
+      getOnReconnecting: noCallback,
+      getOnError: () => onError,
+      getOnStateChanged: noCallback,
+      getOnCredentialTeardownStarted: () => onCredentialTeardownStarted,
+      getOnAccountRestriction: () => onAccountRestriction,
+      ...overrides,
+    } as unknown as BaileysLifecycleHost;
+    return {
+      host,
+      upsertChats,
+      onReady,
+      onDisconnected,
+      onError,
+      onAccountRestriction,
+      onCredentialTeardownStarted,
+      fenceStoredWrites,
+      clearSession,
+    };
+  }
+
+  async function initLifecycleWithSocks(
+    socks: ReturnType<typeof makeFakeSock>[],
+    hostOverrides: Partial<BaileysLifecycleHost> = {},
+  ) {
+    const mocks = makeConnectedHost(hostOverrides);
+    const engine = new BaileysLifecycle(mocks.host);
+    const createdAgents: Array<{ destroy: jest.Mock }> = [];
+    let sockIdx = 0;
+    jest.mocked(BaileysLib.default).mockImplementation((opts: { agent?: { destroy: () => void } }) => {
+      if (opts.agent) {
+        const destroySpy = jest.spyOn(opts.agent, 'destroy') as unknown as jest.Mock;
+        createdAgents.push({ destroy: destroySpy });
+      }
+      return socks[sockIdx++] as unknown as ReturnType<typeof BaileysLib.default>;
+    });
+    jest.mocked(useAtomicMultiFileAuthState).mockResolvedValue({
+      state: { creds: { me: { id: '628999:1@s.whatsapp.net', name: 'Tester' }, account: {} }, keys: {} },
+      saveCreds: jest.fn().mockResolvedValue(undefined),
+    } as unknown as Awaited<ReturnType<typeof useAtomicMultiFileAuthState>>);
+    const resolver = (engine as unknown as { versionResolver: BaileysVersionResolver }).versionResolver;
+    jest.spyOn(resolver, 'resolve').mockResolvedValue([2, 3000, 1]);
+
+    await engine.initialize();
+    return { engine, createdAgents, ...mocks };
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.mocked(useAtomicMultiFileAuthState).mockRejectedValue(new Error('stop after auth load'));
+  });
+
+  it.each([
+    ['disconnect', (engine: BaileysLifecycle) => engine.disconnect()],
+    ['destroy', (engine: BaileysLifecycle) => engine.destroy()],
+    ['logout', (engine: BaileysLifecycle) => engine.logout()],
+    [
+      'handleRemoteLoggedOut',
+      (engine: BaileysLifecycle) =>
+        (engine as unknown as { handleRemoteLoggedOut(): Promise<void> }).handleRemoteLoggedOut(),
+    ],
+  ])('detaches all 18 socket event listeners before end() and destroys the proxy agent on %s', async (_name, stop) => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    const sock = makeFakeSock();
+    const { engine, createdAgents } = await initLifecycleWithSocks([sock]);
+    sock.removeAllListenersSpy.mockClear();
+
+    await stop(engine);
+
+    expect(sock.removeAllListenersSpy).toHaveBeenCalledTimes(18);
+    expect(sock.end).toHaveBeenCalledWith(undefined);
+    const lastDetachOrder = Math.max(...sock.removeAllListenersSpy.mock.invocationCallOrder);
+    expect(lastDetachOrder).toBeLessThan(sock.end.mock.invocationCallOrder[0]);
+    expect(createdAgents[0].destroy).toHaveBeenCalledTimes(1);
+    rmSpy.mockRestore();
+  });
+
+  it('ignores stale socket connection.update and ws events, and ignores non-close updates during intentionalClose', async () => {
+    const sock1 = makeFakeSock();
+    const sock2 = makeFakeSock();
+    const { engine, onReady, onAccountRestriction, createdAgents } = await initLifecycleWithSocks([sock1, sock2]);
+
+    // Trigger reconnect by invoking connect() directly to swap sock1 -> sock2.
+    await (engine as unknown as { connect(): Promise<void> }).connect();
+    expect(engine.sock).toBe(sock2);
+    // Previous socket's proxy agent is destroyed when replaced.
+    expect(createdAgents[0].destroy).toHaveBeenCalledTimes(1);
+
+    // Late ws events on stale sock1 must be ignored.
+    sock1.end.mockClear();
+    sock1.ws.emit('CB:notification,type:passkey_prologue_request');
+    sock1.ws.emit('unexpected-response', {}, { statusCode: 503 });
+    expect(onAccountRestriction).not.toHaveBeenCalled();
+    expect(sock1.end).not.toHaveBeenCalled();
+
+    // Direct connection.update for stale sock1 must be ignored.
+    (
+      engine as unknown as {
+        handleConnectionUpdate: (update: { connection?: string }, sock?: unknown) => void;
+      }
+    ).handleConnectionUpdate({ connection: 'open' }, sock1);
+    expect(onReady).not.toHaveBeenCalled();
+
+    // During intentionalClose (e.g. while logout() awaits IQ response), non-close updates are ignored
+    // while connection === 'close' transitions to DISCONNECTED.
+    let resolveLogout!: (v: unknown) => void;
+    sock2.query.mockReturnValueOnce(new Promise(r => (resolveLogout = r)));
+    const logoutPromise = engine.logout();
+    sock2.ev.emit('connection.update', { connection: 'open' });
+    expect(onReady).not.toHaveBeenCalled();
+    expect(engine.getStatus()).not.toBe(EngineStatus.READY);
+
+    sock2.ev.emit('connection.update', { connection: 'close' });
+    expect(engine.getStatus()).toBe(EngineStatus.DISCONNECTED);
+
+    resolveLogout({ tag: 'iq' });
+    await logoutPromise;
+    expect(createdAgents[1].destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes handleRemoteLoggedOut one-shot and clears pending timers', async () => {
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    try {
+      const sock = makeFakeSock();
+      const { engine, onDisconnected, onCredentialTeardownStarted, fenceStoredWrites } = await initLifecycleWithSocks(
+        [sock],
+        {
+          config: {
+            sessionId: 'sess-fence',
+            dbSessionId: 'db-fence',
+            messageStore: { clearSession: jest.fn().mockResolvedValue(undefined) },
+          } as unknown as BaileysLifecycleHost['config'],
+        },
+      );
+
+      // Arm pairing window (2 timers), addressbook restore (1 timer), and reconnect timer (1 timer),
+      // in addition to connectingTimer (1 timer) armed by connectInner.
+      (engine as unknown as { status: EngineStatus }).status = EngineStatus.QR_READY;
+      await engine.requestPairingCode('628123456789');
+      (engine as unknown as { scheduleAddressbookRestore(s: unknown): void }).scheduleAddressbookRestore(sock);
+      (engine as unknown as { scheduleReconnect(): void }).scheduleReconnect();
+      expect(jest.getTimerCount()).toBe(5);
+
+      const handleRemote = (engine as unknown as { handleRemoteLoggedOut(): Promise<void> }).handleRemoteLoggedOut.bind(
+        engine,
+      );
+      await Promise.all([handleRemote(), handleRemote()]);
+
+      expect(jest.getTimerCount()).toBe(0);
+      expect(fenceStoredWrites).toHaveBeenCalledTimes(1);
+      expect(onCredentialTeardownStarted).toHaveBeenCalledTimes(1);
+      expect(onDisconnected).toHaveBeenCalledTimes(1);
+      expect(rmSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSpy.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  it('drops queued held-chat microtasks when torn down before the microtask runs', async () => {
+    const sock = makeFakeSock();
+    const { engine, upsertChats } = await initLifecycleWithSocks([sock]);
+
+    (engine as unknown as { hold(chat: { id: string }, merged: boolean): void }).hold(
+      { id: '628111@s.whatsapp.net' },
+      false,
+    );
+    await engine.disconnect();
+    await Promise.resolve();
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(upsertChats).not.toHaveBeenCalled();
+  });
+
+  it('drops stale held-chat microtasks across a real reconnect swap while allowing the new socket to flush', async () => {
+    const sock1 = makeFakeSock();
+    const sock2 = makeFakeSock();
+    const { engine, upsertChats } = await initLifecycleWithSocks([sock1, sock2]);
+    const resolver = (engine as unknown as { versionResolver: BaileysVersionResolver }).versionResolver;
+    let releaseVersion!: (v: [number, number, number]) => void;
+    jest.spyOn(resolver, 'resolve').mockImplementationOnce(
+      () =>
+        new Promise<[number, number, number]>(resolve => {
+          releaseVersion = resolve;
+        }),
+    );
+
+    const reconnect = (engine as unknown as { connect(): Promise<void> }).connect();
+    while (!releaseVersion) await new Promise(resolve => setImmediate(resolve));
+
+    // Resolve version first (queues connectInner continuation to swap sock1 -> sock2 and call resetHeldChats),
+    // then synchronously queue a held chat from sock1 in the same turn so its microtask runs AFTER the swap.
+    releaseVersion([2, 3000, 1]);
+    (engine as unknown as { hold(chat: { id: string }, merged: boolean): void }).hold(
+      { id: '628111@s.whatsapp.net' },
+      false,
+    );
+    await reconnect;
+    expect(engine.sock).toBe(sock2);
+    await Promise.resolve();
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(upsertChats).not.toHaveBeenCalled();
+
+    // A held chat queued on the new socket still flushes normally.
+    (engine as unknown as { hold(chat: { id: string }, merged: boolean): void }).hold(
+      { id: '628222@s.whatsapp.net' },
+      false,
+    );
+    await Promise.resolve();
+    await new Promise(resolve => setImmediate(resolve));
+
+    const flattened = upsertChats.mock.calls.flatMap(([batch]) => batch as Array<{ id?: string }>);
+    expect(flattened.map(c => c.id)).toEqual(['628222@s.whatsapp.net']);
+  });
+
+  it('destroys a newly created proxy agent if connectInner fails before adopting it', async () => {
+    const { host } = makeConnectedHost();
+    const engine = new BaileysLifecycle(host);
+    const { HttpsProxyAgent } = await import('https-proxy-agent');
+    const destroySpy = jest.spyOn(HttpsProxyAgent.prototype, 'destroy');
+    jest.mocked(useAtomicMultiFileAuthState).mockRejectedValueOnce(new Error('auth failed'));
+
+    await expect(engine.initialize()).rejects.toThrow('auth failed');
+
+    expect(destroySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('destroys the proxy agent and cleans up socket if listener wiring throws during connectInner', async () => {
+    const { host } = makeConnectedHost();
+    const engine = new BaileysLifecycle(host);
+    const { HttpsProxyAgent } = await import('https-proxy-agent');
+    const destroySpy = jest.spyOn(HttpsProxyAgent.prototype, 'destroy');
+    const brokenSock = makeFakeSock();
+    jest.spyOn(brokenSock.ev, 'on').mockImplementationOnce(() => {
+      throw new Error('ev wire failure');
+    });
+    jest.mocked(BaileysLib.default).mockReturnValueOnce(brokenSock as unknown as ReturnType<typeof BaileysLib.default>);
+    jest.mocked(useAtomicMultiFileAuthState).mockResolvedValueOnce({
+      state: { creds: {}, keys: {} },
+      saveCreds: jest.fn().mockResolvedValue(undefined),
+    } as unknown as Awaited<ReturnType<typeof useAtomicMultiFileAuthState>>);
+    const resolver = (engine as unknown as { versionResolver: BaileysVersionResolver }).versionResolver;
+    jest.spyOn(resolver, 'resolve').mockResolvedValueOnce([2, 3000, 1]);
+
+    await expect(engine.initialize()).rejects.toThrow('ev wire failure');
+
+    expect(engine.sock).toBeNull();
+    expect(destroySpy).toHaveBeenCalledTimes(1);
+    expect(brokenSock.end).toHaveBeenCalledWith(undefined);
+  });
+
+  it('destroys a newly created proxy agent if teardown occurs before connectInner adopts it', async () => {
+    const { host } = makeConnectedHost();
+    const engine = new BaileysLifecycle(host);
+    const { HttpsProxyAgent } = await import('https-proxy-agent');
+    const destroySpy = jest.spyOn(HttpsProxyAgent.prototype, 'destroy');
+    let releaseAuth!: () => void;
+    jest.mocked(useAtomicMultiFileAuthState).mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          releaseAuth = () =>
+            resolve({
+              state: { creds: {}, keys: {} },
+              saveCreds: jest.fn(),
+            } as unknown as Awaited<ReturnType<typeof useAtomicMultiFileAuthState>>);
+        }),
+    );
+
+    const init = engine.initialize();
+    while (!releaseAuth) await new Promise(resolve => setImmediate(resolve));
+    await engine.disconnect();
+    releaseAuth();
+    await init;
+
+    expect(destroySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([440, 403])(
+    'detaches listeners, nulls sock, closes dispatcher, destroys proxy agent, and blocks follow-up close on terminal %i',
+    async statusCode => {
+      const sock = makeFakeSock();
+      const { engine, createdAgents, onError } = await initLifecycleWithSocks([sock]);
+      const dispatcher = engine.fetchDispatcher();
+      if (!dispatcher) throw new Error('Expected proxy dispatcher');
+      const closeDispatcher = jest.spyOn(dispatcher, 'close');
+      sock.removeAllListenersSpy.mockClear();
+
+      sock.ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode } } },
+      });
+
+      expect(engine.getStatus()).toBe(EngineStatus.FAILED);
+      expect(engine.sock).toBeNull();
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(sock.removeAllListenersSpy).toHaveBeenCalledTimes(18);
+      expect(sock.end).toHaveBeenCalledWith(undefined);
+      const lastDetachOrder = Math.max(...sock.removeAllListenersSpy.mock.invocationCallOrder);
+      expect(lastDetachOrder).toBeLessThan(sock.end.mock.invocationCallOrder[0]);
+      expect(createdAgents[0].destroy).toHaveBeenCalledTimes(1);
+      expect(closeDispatcher).toHaveBeenCalledTimes(1);
+
+      // Duplicate terminal close or a subsequent plain close must neither re-emit onError nor schedule reconnect.
+      sock.ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode } } },
+      });
+      sock.ev.emit('connection.update', { connection: 'close' });
+      (engine as unknown as { handleConnectionUpdate(update: { connection?: string }): void }).handleConnectionUpdate({
+        connection: 'close',
+      });
+
+      expect(engine.getStatus()).toBe(EngineStatus.FAILED);
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect((engine as unknown as { reconnectTimer?: unknown }).reconnectTimer).toBeUndefined();
+    },
+  );
+
+  it('aborts teardown on handleRemoteLoggedOut so concurrent connect and re-initialize cannot open a new socket', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    try {
+      const sock1 = makeFakeSock();
+      const sock2 = makeFakeSock();
+      const { engine } = await initLifecycleWithSocks([sock1, sock2]);
+      jest.mocked(BaileysLib.default).mockClear();
+
+      await (engine as unknown as { handleRemoteLoggedOut(): Promise<void> }).handleRemoteLoggedOut();
+
+      // Re-initializing a single-use logged-out adapter must be a no-op.
+      await engine.initialize();
+      expect(engine.sock).toBeNull();
+      expect(BaileysLib.default).not.toHaveBeenCalled();
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it('discards an in-flight QR render if intentionalClose latches or status becomes FAILED or DISCONNECTED', async () => {
+    const renderQr = jest.mocked(qrcode.toDataURL as (qr: string) => Promise<string>);
+    const onQRCode = jest.fn();
+    const sock = makeFakeSock();
+    (sock as { user?: unknown }).user = undefined;
+    const { engine } = await initLifecycleWithSocks([sock], { getOnQRCode: () => onQRCode });
+
+    let finishRender!: (img: string) => void;
+    renderQr.mockImplementationOnce(
+      () =>
+        new Promise<string>(resolve => {
+          finishRender = resolve;
+        }),
+    );
+
+    const pending = (engine as unknown as { handleQrCode(qr: string): Promise<void> }).handleQrCode('raw-qr');
+    // Abort teardown while sock is still assigned and open (as during logout()).
+    (engine as unknown as { teardown: AbortController }).teardown.abort();
+    finishRender('data:image/png;base64,LATE');
+    await pending;
+
+    expect(engine.getQRCode()).toBeNull();
+    expect(onQRCode).not.toHaveBeenCalled();
+
+    // Also guard against terminal FAILED / DISCONNECTED even if teardown has not aborted.
+    const sock2 = makeFakeSock();
+    (sock2 as { user?: unknown }).user = undefined;
+    const { engine: engine2 } = await initLifecycleWithSocks([sock2], { getOnQRCode: () => onQRCode });
+    let finishRender2!: (img: string) => void;
+    renderQr.mockImplementationOnce(
+      () =>
+        new Promise<string>(resolve => {
+          finishRender2 = resolve;
+        }),
+    );
+    const pending2 = (engine2 as unknown as { handleQrCode(qr: string): Promise<void> }).handleQrCode('raw-qr-2');
+    (engine2 as unknown as { status: EngineStatus }).status = EngineStatus.FAILED;
+    finishRender2('data:image/png;base64,LATE2');
+    await pending2;
+
+    expect(engine2.getQRCode()).toBeNull();
+    expect(onQRCode).not.toHaveBeenCalled();
   });
 });

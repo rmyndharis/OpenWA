@@ -734,9 +734,9 @@ export class WwebjsLifecycle {
     this.qrCode = null;
     this.setStatus(EngineStatus.INITIALIZING);
     if (!failed) return true;
-    // The old client may still emit late events from persisted page bindings. The qr, authenticated
-    // and ready listeners fence on the source client, but disconnected, auth_failure and the domain
-    // events do not, so silence it before the new attempt starts.
+    // The old client may still emit late events from persisted page bindings. Connection-state
+    // listeners (qr, authenticated, ready, disconnected, auth_failure) fence on the source client,
+    // but domain events do not, so silence it before the new attempt starts.
     failed.removeAllListeners();
     // Bounded DIRECT destroy — never this.destroy()/forceDestroy(), both of which latch the
     // teardown flags above.
@@ -881,6 +881,8 @@ export class WwebjsLifecycle {
     this.host.attachDomainEvents(this.client);
 
     this.client.on('disconnected', reason => {
+      // Drop everything from a superseded client once a newer client owns this adapter.
+      if (this.client !== null && this.client !== source) return;
       // A LOGOUT means whatsapp-web.js is ABOUT to delete this session's profile. The only site that
       // emits this reason is the `framenavigated` listener, which emits and THEN awaits
       // `authStrategy.logout()` → `LocalAuth.logout()` → `fs.rm(userDataDir)` — with the browser still
@@ -913,7 +915,7 @@ export class WwebjsLifecycle {
       // duplicate native 'disconnected' (whatsapp-web.js can fire it more than once for one drop) must
       // no-op HERE — before log/status/callback — otherwise clearReadyReconcile(), setStatus, and
       // onDisconnected re-run and the lifecycle schedules a second reconnect.
-      if (this.tearingDown || this.disconnectReported) return;
+      if (this.client !== source || this.tearingDown || this.disconnectReported) return;
       this.host.clearReadyReconcile();
       // #982: LOGOUT is not a transient drop. The lifecycle's reconnect cannot restore the link; it
       // can only come back with a fresh QR. Say that here rather than leaving the operator with an
@@ -937,6 +939,14 @@ export class WwebjsLifecycle {
     });
 
     this.client.on('auth_failure', (message?: string) => {
+      if (
+        this.client !== source ||
+        this.tearingDown ||
+        this.disconnectReported ||
+        this.status === EngineStatus.FAILED
+      ) {
+        return;
+      }
       this.host.clearReadyReconcile();
       this.setStatus(EngineStatus.FAILED);
       // Authentication failure is terminal: the stored credentials are invalid and
@@ -1241,20 +1251,33 @@ export class WwebjsLifecycle {
     this.host.getCallbacks().onStateChanged?.(status);
   }
 
-  private beginClientTeardown(): Client | null {
-    this.tearingDown = true;
-    // The cached ringing call ids belong to the client that is going away, so drop them all.
+  markCredentialTeardownStarted(): void {
+    this.credentialTeardownStarted = true;
+  }
+
+  clearTimersAndTransientState(): void {
+    this.host.clearReadyReconcile();
+    this.host.clearOnboardingWatcher();
     this.host.clearLiveCalls();
-    // Before the clientless early-return: a teardown must always close the navigation window, or a
-    // stale stamp could grace the next generation's probe (single-use contract notwithstanding).
     this.clearNavigationReinjectWindow();
     this.reinjectUnverifiedSince = 0;
     this.pageWithoutHelpers = false;
-    const client = this.client;
-    if (!client) return null;
+  }
 
-    this.host.clearReadyReconcile();
-    this.host.clearOnboardingWatcher();
+  private beginClientTeardown(): Client | null {
+    this.tearingDown = true;
+    // Before the clientless early-return: a teardown must always drop timers, transient watchers,
+    // live calls, and the navigation window, and move any active non-terminal status to
+    // DISCONNECTED so teardown during pre-launch or stuck-auth recovery never leaves a stale state.
+    this.clearTimersAndTransientState();
+    const client = this.client;
+    if (!client) {
+      if (this.status !== EngineStatus.DISCONNECTED && this.status !== EngineStatus.FAILED) {
+        this.setStatus(EngineStatus.DISCONNECTED);
+      }
+      return null;
+    }
+
     if (this.status !== EngineStatus.DISCONNECTED) {
       this.setStatus(EngineStatus.DISCONNECTED);
     }

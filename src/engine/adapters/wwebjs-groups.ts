@@ -12,7 +12,7 @@ import {
   ParticipantOperationResult,
 } from '../interfaces/whatsapp-engine.interface';
 import { GroupChat, GroupMetadataRaw, SerializedWid, readWid } from '../types/whatsapp-web-js.types';
-import { toParticipantWid } from '../identity/wa-id';
+import { parseWaId, toParticipantWid, userPart } from '../identity/wa-id';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EnginePageReloadingError } from '../../common/errors/engine-page-reloading.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
@@ -329,12 +329,150 @@ export function normalizeWwebjsRequestMethod(raw: string | undefined): GroupMemb
   return undefined;
 }
 
+export type ReadSelfLidResult = { ok: true; lid: string | null } | { ok: false };
+
+/**
+ * Read the account's own LID from WhatsApp Web's user-prefs module.
+ * Distinguishes a loaded module (`{ ok: true, lid: string | null }`) from a page that is
+ * mid-reload or has not yet loaded `window.require` / `WAWebUserPrefsMeUser` (`{ ok: false }`).
+ * Self-contained so Puppeteer can serialize it into the page context.
+ */
+export function readSelfLidInPage(): ReadSelfLidResult {
+  type Wid = { _serialized?: string; $1?: string };
+  type MePrefs = { getMaybeMeLidUser?: () => Wid | null | undefined };
+  const w = window as unknown as { require?: (m: string) => unknown };
+  if (typeof w.require !== 'function') return { ok: false };
+  try {
+    const prefs = w.require('WAWebUserPrefsMeUser') as MePrefs | undefined;
+    if (typeof prefs?.getMaybeMeLidUser !== 'function') return { ok: false };
+    const lid = prefs.getMaybeMeLidUser();
+    const serialized = lid?._serialized ?? lid?.$1 ?? null;
+    return { ok: true, lid: typeof serialized === 'string' && serialized.length > 0 ? serialized : null };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function matchesSelfId(id: string | undefined, selfIds: ReadonlySet<string>): boolean {
+  if (!id) return false;
+  if (selfIds.has(id)) return true;
+  const parsed = parseWaId(id);
+  if (parsed.kind === 'user') return selfIds.has(`${parsed.userPart}@c.us`);
+  if (parsed.kind === 'lid') return selfIds.has(`${parsed.userPart}@lid`);
+  return false;
+}
+
 export class WwebjsGroups {
+  private readonly selfLidCache = new WeakMap<Client, string>();
+
   constructor(private readonly host: WwebjsEngineHost) {}
 
   /** Post-ensureReady client handle. */
   private client(): Client {
     return this.host.getClient();
+  }
+
+  private async resolveSelfIds(
+    client: Client,
+    participantIds: readonly string[],
+    context: string,
+    findPersistedLids?: (phone: string) => Promise<string[]>,
+    pageLookupState?: { attempted: boolean },
+  ): Promise<Set<string>> {
+    const selfIds = new Set<string>();
+    const addLid = (raw: string | null | undefined): void => {
+      if (!raw) return;
+      selfIds.add(raw);
+      const lidUser = userPart(raw);
+      if (lidUser) selfIds.add(`${lidUser}@lid`);
+    };
+
+    const info = client.info as { wid?: SerializedWid & { user?: string }; lid?: SerializedWid | string } | undefined;
+    const selfWid = readWid(info?.wid);
+    if (selfWid) {
+      selfIds.add(selfWid);
+    }
+    const parsedWid = selfWid ? parseWaId(selfWid) : undefined;
+    const phone =
+      (parsedWid?.kind === 'user' ? parsedWid.userPart : undefined) ??
+      (typeof info?.wid?.user === 'string' && info.wid.user ? info.wid.user : undefined);
+    if (phone) {
+      selfIds.add(`${phone}@c.us`);
+      selfIds.add(`${phone}@s.whatsapp.net`);
+    }
+    addLid(readWid(info?.lid));
+
+    const lidStore = this.host.config?.lidMappingStore;
+    if (phone && lidStore) {
+      for (const lid of lidStore.lidsForPhone(phone)) {
+        addLid(lid);
+      }
+    }
+    const cachedLid = this.selfLidCache.get(client);
+    if (cachedLid) {
+      addLid(cachedLid);
+    }
+
+    const hasMatch = (): boolean => participantIds.some(id => matchesSelfId(id, selfIds));
+    const hasLidParticipant = participantIds.some(id => parseWaId(id).kind === 'lid');
+    if (!hasLidParticipant || hasMatch()) {
+      return selfIds;
+    }
+
+    if (phone && (findPersistedLids || lidStore?.findLidsForPhone)) {
+      const persistedLids = await (
+        findPersistedLids ? findPersistedLids(phone) : lidStore!.findLidsForPhone!(phone)
+      ).catch(() => []);
+      for (const lid of persistedLids) {
+        addLid(lid);
+      }
+      if (hasMatch()) {
+        return selfIds;
+      }
+    }
+
+    if (!this.selfLidCache.has(client) && !pageLookupState?.attempted) {
+      const page = (client as unknown as { pupPage?: EvaluatePage }).pupPage;
+      if (typeof page?.evaluate === 'function') {
+        if (pageLookupState) pageLookupState.attempted = true;
+        const since = navigationsSeen(this.host);
+        let result: ReadSelfLidResult = { ok: false };
+        try {
+          const raw: unknown = await page.evaluate(readSelfLidInPage);
+          if (raw && typeof raw === 'object' && 'ok' in raw) {
+            const parsed = raw as ReadSelfLidResult;
+            result = parsed.ok
+              ? { ok: true, lid: typeof parsed.lid === 'string' && parsed.lid.length > 0 ? parsed.lid : null }
+              : { ok: false };
+          } else if (typeof raw === 'string' && raw.length > 0) {
+            result = { ok: true, lid: raw };
+          }
+        } catch (error) {
+          if (typeof this.host.isPageTransportError === 'function') {
+            rethrowIfNavigation(this.host, error, since);
+            if (this.host.isPageTransportError(error)) {
+              this.host.reportIfPageTransportError(error, context);
+              throw new EngineTransportError(`Transport died during ${context}`);
+            }
+          }
+          // Transient evaluation failure: do not poison selfLidCache with null.
+          result = { ok: false };
+        }
+        if (!result.ok || result.lid === null) {
+          throwIfNavigatedSince(this.host, since);
+        } else {
+          this.selfLidCache.set(client, result.lid);
+          addLid(result.lid);
+          if (phone && lidStore) {
+            void Promise.resolve(lidStore.remember(userPart(result.lid), phone, this.host.config?.sessionId)).catch(
+              () => undefined,
+            );
+          }
+        }
+      }
+    }
+
+    return selfIds;
   }
 
   async getGroups(): Promise<Group[]> {
@@ -345,23 +483,43 @@ export class WwebjsGroups {
     // Filter only group chats
     const groups = chats.filter(chat => chat.isGroup);
 
+    const lidStore = this.host.config?.lidMappingStore;
+    let persistedLidsPromise: Promise<string[]> | undefined;
+    const findPersistedLids = lidStore?.findLidsForPhone
+      ? (phone: string): Promise<string[]> =>
+          (persistedLidsPromise ??= lidStore.findLidsForPhone!(phone).catch(() => []))
+      : undefined;
+    const pageLookupState = { attempted: false };
+
     // List path: read linkedParentJID synchronously from whatever metadata the chat list
     // already loaded. We deliberately do NOT fall back to getChatById per group here:
     // that would be an N+1 round-trip across every group on every list call. Groups
     // whose metadata isn't loaded report null; the single-group endpoint (getGroupInfo,
     // which loads full metadata via getChatById) is the authoritative source.
-    return groups.map(g => {
+    const results: Group[] = [];
+    for (const g of groups) {
       const groupChat = g as unknown as GroupChat;
-      return {
+      const participantIds = (groupChat.participants ?? [])
+        .map(p => readWid(p.id))
+        .filter((id): id is string => id !== undefined);
+      const selfIds = await this.resolveSelfIds(
+        client,
+        participantIds,
+        'getGroups',
+        findPersistedLids,
+        pageLookupState,
+      );
+      results.push({
         id: g.id._serialized,
         name: g.name,
         participantsCount: groupChat.participants?.length,
         isAdmin: groupChat.participants?.some(
-          p => p.isAdmin && readWid(p.id) !== undefined && readWid(p.id) === readWid(client.info?.wid),
+          p => (p.isAdmin || p.isSuperAdmin) && matchesSelfId(readWid(p.id), selfIds),
         ),
         linkedParentJID: extractLinkedParentJID(groupChat.groupMetadata),
-      };
-    });
+      });
+    }
+    return results;
   }
 
   async getGroupInfo(groupId: string): Promise<GroupInfo | null> {
@@ -397,8 +555,12 @@ export class WwebjsGroups {
       // (`WWebJS.getChatModel` in Injected/Utils.js), which tells an admin of an announce-only group they cannot post.
       // Derive both from the metadata, as the Baileys mapper does.
       const announce = Boolean(groupChat.groupMetadata?.announce);
-      const selfWid = readWid(this.client().info?.wid);
-      const selfIsAdmin = participants.some(p => p.isAdmin && selfWid !== undefined && p.id === selfWid);
+      const selfIds = await this.resolveSelfIds(
+        this.client(),
+        participants.map(p => p.id),
+        'getGroupInfo',
+      );
+      const selfIsAdmin = participants.some(p => (p.isAdmin || p.isSuperAdmin) && matchesSelfId(p.id, selfIds));
 
       return {
         id: chat.id._serialized,
@@ -416,9 +578,9 @@ export class WwebjsGroups {
         linkedParentJID: extractLinkedParentJID(groupChat.groupMetadata),
       };
     } catch (error) {
-      // A session that went away during the read (the client is read again after the lookup) is not a
-      // missing group either: the retryable 409, not a 404.
-      if (error instanceof EngineNotReadyError) {
+      // A session that went away during the read (the client is read again after the lookup), or a
+      // transport death classified by resolveSelfIds, is not a missing group: propagate instead of 404.
+      if (error instanceof EngineNotReadyError || error instanceof EngineTransportError) {
         throw error;
       }
       // A dead page and a genuinely-missing group both land in this catch; only the second may
@@ -535,7 +697,7 @@ export class WwebjsGroups {
     participants: string[],
   ): Promise<ParticipantOperationResult[]> {
     const chat = await this.requireGroupChat(groupId, op);
-    this.refuseNonAdmin(chat, op, groupId);
+    await this.refuseNonAdmin(chat, op, groupId);
     const participantIds = participants.map(toParticipantWid);
     const res = await this.runParticipantBatch(op, groupId, chat, participantIds);
     if (res?.status !== 200) {
@@ -924,9 +1086,14 @@ export class WwebjsGroups {
    * promote and demote page bodies answer a fixed status whatever WhatsApp decided, so the routes' documented 403 can
    * only come from here. An account the participant list does not name (another id dialect) goes ahead as before.
    */
-  private refuseNonAdmin(chat: GroupChat, op: string, groupId: string): void {
-    const self = readWid(this.client().info?.wid);
-    const me = self === undefined ? undefined : chat.participants?.find(p => readWid(p.id) === self);
+  private async refuseNonAdmin(chat: GroupChat, op: string, groupId: string): Promise<void> {
+    const participantIds = (chat.participants ?? [])
+      .map(p => readWid(p.id))
+      .filter((id): id is string => id !== undefined);
+    const selfIds = await this.resolveSelfIds(this.client(), participantIds, op);
+    // Teardown or disconnect can land during async self-LID resolution; fail before mutating participants.
+    this.host.ensureReady();
+    const me = selfIds.size === 0 ? undefined : chat.participants?.find(p => matchesSelfId(readWid(p.id), selfIds));
     if (me && !me.isAdmin && !me.isSuperAdmin) {
       throw new EngineRefusedError(`${op} refused for group ${groupId}: this account is not an admin of the group`);
     }
@@ -1034,7 +1201,7 @@ export class WwebjsGroups {
     // requests" rather than "there is no such group"; Baileys answers the refusal.
     const chat = await this.requireGroupChat(groupId, 'getGroupMembershipRequests');
     // The library reads the page's own request store, which answers a non-admin without asking WhatsApp.
-    this.refuseNonAdmin(chat, 'getGroupMembershipRequests', groupId);
+    await this.refuseNonAdmin(chat, 'getGroupMembershipRequests', groupId);
     return withPageWrite(this.host, 'getGroupMembershipRequests', async () => {
       const raw = await this.client().getGroupMembershipRequests(groupId);
       // Raw page-context store objects: wids can arrive as {_serialized} OR {$1} (the #747
@@ -1090,7 +1257,7 @@ export class WwebjsGroups {
     const chat = await this.requireGroupChat(groupId, op);
     // Naming nobody takes every pending request from the page's own store, which answers a non-admin with an empty
     // list, as the read above does. Named requesters get the server's per-requester answer.
-    if (!participants) this.refuseNonAdmin(chat, op, groupId);
+    if (!participants) await this.refuseNonAdmin(chat, op, groupId);
     const options = {
       // Qualified like every other participant write in this file: the service blesses a bare phone
       // number, and the page maps requesterIds straight through `createWid` (Injected/Utils.js) —

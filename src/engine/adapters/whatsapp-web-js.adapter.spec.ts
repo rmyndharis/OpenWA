@@ -2,7 +2,7 @@ import { Client, MessageMedia, WAState } from 'whatsapp-web.js';
 import { EventEmitter } from 'events';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
 import { runChannelWriteInPage } from './wwebjs-channels';
-import { extractLinkedParentJID, joinInviteInPage } from './wwebjs-groups';
+import { extractLinkedParentJID, joinInviteInPage, readSelfLidInPage } from './wwebjs-groups';
 import {
   downloadMediaInPage,
   isHttpUrl,
@@ -48,6 +48,7 @@ import * as vm from 'vm';
 import * as qrcode from 'qrcode';
 import { InternalServerErrorException, UnprocessableEntityException, BadRequestException } from '@nestjs/common';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EnginePageReloadingError } from '../../common/errors/engine-page-reloading.error';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { ChannelMediaNotSupportedError } from '../../common/errors/channel-media-not-supported.error';
@@ -10866,5 +10867,594 @@ describe('WhatsAppWebJsAdapter per-action log lines', () => {
 
     expect(JSON.stringify(log.mock.calls)).not.toContain(id);
     expect(debug).toHaveBeenCalledWith(message, expect.objectContaining(meta));
+  });
+});
+
+describe('WhatsAppWebJsAdapter client event fencing and stuck-auth teardown', () => {
+  const newAdapter = (): WhatsAppWebJsAdapter =>
+    new WhatsAppWebJsAdapter({ sessionId: 'sess-fence', sessionDataPath: './data/sessions', puppeteer: {} });
+
+  const makeClient = (extra: Record<string, unknown> = {}) =>
+    Object.assign(new EventEmitter(), {
+      destroy: jest.fn().mockResolvedValue(undefined),
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      ...extra,
+    });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('ignores disconnected (including LOGOUT) and auth_failure from a superseded client', () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    const adapter = newAdapter();
+    const oldClient = makeClient();
+    const newClient = makeClient();
+    const onDisconnected = jest.fn();
+    const onError = jest.fn();
+    const onCredentialTeardownStarted = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = {
+      onDisconnected,
+      onError,
+      onCredentialTeardownStarted,
+    };
+    (adapter as unknown as { client: unknown }).client = oldClient;
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    // Superseded by a newer client instance.
+    (adapter as unknown as { client: unknown }).client = newClient;
+
+    oldClient.emit('disconnected', 'LOGOUT');
+    oldClient.emit('auth_failure', 'stale');
+
+    expect(onCredentialTeardownStarted).not.toHaveBeenCalled();
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+    expect(rmSpy).not.toHaveBeenCalled();
+  });
+
+  it('ignores non-LOGOUT disconnected and auth_failure once this.client is null or finished', () => {
+    const adapter = newAdapter();
+    const client = makeClient();
+    const onDisconnected = jest.fn();
+    const onError = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onDisconnected, onError };
+    (adapter as unknown as { client: unknown }).client = client;
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.AUTHENTICATING;
+    // Client nulled while recovery or teardown is in progress.
+    (adapter as unknown as { client: unknown }).client = null;
+
+    client.emit('disconnected', 'NAVIGATION');
+    client.emit('auth_failure', 'late failure');
+
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+  });
+
+  it('ignores duplicate or post-teardown auth_failure events', () => {
+    const adapter = newAdapter();
+    const client = makeClient();
+    const onError = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onError };
+    (adapter as unknown as { client: unknown }).client = client;
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.INITIALIZING;
+
+    client.emit('auth_failure', 'first');
+    client.emit('auth_failure', 'second');
+
+    expect(adapter.getStatus()).toBe(EngineStatus.FAILED);
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // Also ignored when teardown already latched on a fresh adapter.
+    const adapter2 = newAdapter();
+    const client2 = makeClient();
+    const onError2 = jest.fn();
+    (adapter2 as unknown as { callbacks: unknown }).callbacks = { onError: onError2 };
+    (adapter2 as unknown as { client: unknown }).client = client2;
+    (adapter2 as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
+    (adapter2 as unknown as { tearingDown: boolean }).tearingDown = true;
+
+    client2.emit('auth_failure', 'after teardown');
+    expect(onError2).not.toHaveBeenCalled();
+  });
+
+  it('skips stuck-auth recovery entirely when teardown is already in progress', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    const adapter = newAdapter();
+    const claimStuckAuthRecovery = jest.fn(() => true);
+    const onDisconnected = jest.fn();
+    const onError = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = {
+      claimStuckAuthRecovery,
+      onDisconnected,
+      onError,
+    };
+    (adapter as unknown as { tearingDown: boolean }).tearingDown = true;
+
+    await (adapter as unknown as { recoverFromStuckAuth: () => Promise<void> }).recoverFromStuckAuth.call(adapter);
+
+    expect(claimStuckAuthRecovery).not.toHaveBeenCalled();
+    expect(rmSpy).not.toHaveBeenCalled();
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('detaches listeners, marks credential teardown, and skips duplicate disconnect when torn down mid-removal', async () => {
+    let releaseRm!: () => void;
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockReturnValue(new Promise<void>(r => (releaseRm = r)));
+    const adapter = newAdapter();
+    const destroy = jest.fn().mockResolvedValue(undefined);
+    const kill = jest.fn();
+    const client = makeClient({
+      destroy,
+      pupBrowser: { process: () => ({ kill }) },
+    });
+    const onDisconnected = jest.fn();
+    const onCredentialTeardownStarted = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = {
+      claimStuckAuthRecovery: () => true,
+      onDisconnected,
+      onCredentialTeardownStarted,
+    };
+    (adapter as unknown as { client: unknown }).client = client;
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.AUTHENTICATING;
+
+    const recovery = (adapter as unknown as { recoverFromStuckAuth: () => Promise<void> }).recoverFromStuckAuth.call(
+      adapter,
+    );
+
+    // Listeners were detached and credential teardown was already marked before killing Chromium.
+    expect(client.listenerCount('disconnected')).toBe(0);
+    expect(client.listenerCount('auth_failure')).toBe(0);
+    expect(kill).toHaveBeenCalledWith('SIGKILL');
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+    expect(onCredentialTeardownStarted).toHaveBeenCalledTimes(1);
+
+    // A teardown lands while awaiting profile removal.
+    await adapter.destroy();
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    releaseRm();
+    await recovery;
+
+    // Background client.destroy() still runs, status remains DISCONNECTED, and no duplicate onDisconnected fires.
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(rmSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WhatsAppWebJsAdapter LID self-admin resolution in groups', () => {
+  const GROUP = '120363999000@g.us';
+  const SELF_PHONE = '628111222333';
+  const SELF_WID = `${SELF_PHONE}@c.us`;
+  const SELF_LID = '777888999@lid';
+
+  const makeReady = (client: unknown, lidMappingStore?: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-lid-groups',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+      ...(lidMappingStore ? { lidMappingStore: lidMappingStore as never } : {}),
+    });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  it('matches isSuperAdmin in getGroups and getGroupInfo without extra pupPage.evaluate when no @lid participants exist', async () => {
+    const evaluate = jest.fn().mockResolvedValueOnce([
+      {
+        id: { _serialized: GROUP, server: 'g.us', user: '120363999000' },
+        name: 'Phone Group',
+        isGroup: true,
+        groupMetadata: {
+          participants: [{ id: { _serialized: SELF_WID, user: SELF_PHONE }, isAdmin: false, isSuperAdmin: true }],
+        },
+      },
+    ]);
+    const getChatById = jest.fn().mockResolvedValue({
+      id: { _serialized: GROUP },
+      name: 'Phone Group',
+      isGroup: true,
+      participants: [{ id: { _serialized: SELF_WID, user: SELF_PHONE }, isAdmin: false, isSuperAdmin: true }],
+      groupMetadata: { announce: true },
+    });
+    const adapter = makeReady({
+      info: { wid: { _serialized: SELF_WID, user: SELF_PHONE } },
+      getChatById,
+      pupPage: { evaluate },
+    });
+
+    const groups = await adapter.getGroups();
+    expect(groups).toEqual([expect.objectContaining({ id: GROUP, isAdmin: true })]);
+    // Only the single readChatModels evaluate ran; no self-LID evaluate was invoked.
+    expect(evaluate).toHaveBeenCalledTimes(1);
+
+    const info = await adapter.getGroupInfo(GROUP);
+    expect(info?.isAnnounce).toBe(true);
+    expect(info?.isReadOnly).toBe(false);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves self LID via client.info.lid, lidMappingStore, and lazy WAWebUserPrefsMeUser evaluate', async () => {
+    // 1. Via client.info.lid
+    const evaluate1 = jest.fn();
+    const adapter1 = makeReady({
+      info: { wid: { _serialized: SELF_WID, user: SELF_PHONE }, lid: { _serialized: SELF_LID } },
+      getChatById: jest.fn().mockResolvedValue({
+        id: { _serialized: GROUP },
+        name: 'LID Group',
+        isGroup: true,
+        participants: [{ id: { _serialized: SELF_LID, user: '777888999' }, isAdmin: true, isSuperAdmin: false }],
+        groupMetadata: { announce: true },
+      }),
+      pupPage: { evaluate: evaluate1 },
+    });
+    const info1 = await adapter1.getGroupInfo(GROUP);
+    expect(info1?.isReadOnly).toBe(false);
+    expect(evaluate1).not.toHaveBeenCalled();
+
+    // 2. Via async lidMappingStore.findLidsForPhone when sync lidsForPhone misses
+    const evaluate2 = jest.fn();
+    const lidStore2 = {
+      getCached: jest.fn(() => undefined),
+      resolveLid: jest.fn(() => null),
+      lidsForPhone: jest.fn(() => []),
+      findLidsForPhone: jest.fn().mockResolvedValue(['777888999']),
+      remember: jest.fn().mockResolvedValue(true),
+    };
+    const adapter2 = makeReady(
+      {
+        info: { wid: { _serialized: SELF_WID, user: SELF_PHONE } },
+        getChatById: jest.fn().mockResolvedValue({
+          id: { _serialized: GROUP },
+          name: 'LID Group',
+          isGroup: true,
+          participants: [{ id: { _serialized: SELF_LID, user: '777888999' }, isAdmin: false, isSuperAdmin: false }],
+          removeParticipants: jest.fn().mockResolvedValue({ status: 200 }),
+        }),
+        pupPage: { evaluate: evaluate2 },
+      },
+      lidStore2,
+    );
+    await expect(adapter2.removeParticipants(GROUP, ['628999000@c.us'])).rejects.toBeInstanceOf(EngineRefusedError);
+    expect(lidStore2.findLidsForPhone).toHaveBeenCalledWith(SELF_PHONE);
+    expect(evaluate2).not.toHaveBeenCalled();
+
+    // 3. Via lazy pupPage.evaluate reading WAWebUserPrefsMeUser, cached per Client and persisted via remember()
+    const g = globalThis as unknown as { window?: Record<string, unknown> };
+    g.window = {
+      require: (name: string) =>
+        name === 'WAWebUserPrefsMeUser' ? { getMaybeMeLidUser: () => ({ _serialized: SELF_LID }) } : undefined,
+    };
+    try {
+      const evaluate3 = jest.fn((fn: () => unknown) => Promise.resolve().then(() => fn()));
+      const lidStore3 = {
+        getCached: jest.fn(() => undefined),
+        resolveLid: jest.fn(() => null),
+        lidsForPhone: jest.fn(() => []),
+        findLidsForPhone: jest.fn().mockResolvedValue([]),
+        remember: jest.fn().mockResolvedValue(true),
+      };
+      const adapter3 = makeReady(
+        {
+          info: { wid: { _serialized: SELF_WID, user: SELF_PHONE } },
+          getChatById: jest.fn().mockResolvedValue({
+            id: { _serialized: GROUP },
+            name: 'LID Group',
+            isGroup: true,
+            participants: [{ id: { _serialized: SELF_LID, user: '777888999' }, isAdmin: true, isSuperAdmin: false }],
+            groupMetadata: { announce: true },
+          }),
+          pupPage: { evaluate: evaluate3 },
+        },
+        lidStore3,
+      );
+
+      const info3a = await adapter3.getGroupInfo(GROUP);
+      expect(info3a?.isReadOnly).toBe(false);
+      expect(evaluate3).toHaveBeenCalledTimes(1);
+      expect(lidStore3.remember).toHaveBeenCalledWith('777888999', SELF_PHONE, 'sess-lid-groups');
+
+      // Second call hits the per-Client WeakMap cache with zero additional pupPage.evaluate calls.
+      const info3b = await adapter3.getGroupInfo(GROUP);
+      expect(info3b?.isReadOnly).toBe(false);
+      expect(evaluate3).toHaveBeenCalledTimes(1);
+    } finally {
+      delete g.window;
+    }
+  });
+
+  it('resolves LID admin in getGroups for mixed phone and LID groups and refuses LID non-admin membership requests', async () => {
+    const GROUP_2 = '120363999001@g.us';
+    const g = globalThis as unknown as { window?: Record<string, unknown> };
+    g.window = {
+      require: (name: string) =>
+        name === 'WAWebUserPrefsMeUser' ? { getMaybeMeLidUser: () => ({ _serialized: SELF_LID }) } : undefined,
+    };
+    try {
+      const evaluate = jest.fn((fn: () => unknown) => {
+        if (fn.name === 'readChatModels') {
+          return Promise.resolve([
+            {
+              id: { _serialized: GROUP, server: 'g.us', user: '120363999000' },
+              name: 'Phone Group',
+              isGroup: true,
+              groupMetadata: {
+                participants: [
+                  {
+                    id: { _serialized: `${SELF_PHONE}@s.whatsapp.net`, user: SELF_PHONE },
+                    isAdmin: true,
+                    isSuperAdmin: false,
+                  },
+                ],
+              },
+            },
+            {
+              id: { _serialized: GROUP_2, server: 'g.us', user: '120363999001' },
+              name: 'LID Group',
+              isGroup: true,
+              groupMetadata: {
+                participants: [
+                  { id: { _serialized: SELF_LID, user: '777888999' }, isAdmin: false, isSuperAdmin: true },
+                ],
+              },
+            },
+          ]);
+        }
+        return Promise.resolve().then(() => fn());
+      });
+      const getGroupMembershipRequests = jest.fn().mockResolvedValue([]);
+      const approveGroupMembershipRequests = jest.fn().mockResolvedValue([]);
+      const adapter = makeReady({
+        info: { wid: { _serialized: SELF_WID, user: SELF_PHONE } },
+        pupPage: { evaluate },
+        getChatById: jest.fn().mockResolvedValue({
+          id: { _serialized: GROUP_2 },
+          name: 'LID Group',
+          isGroup: true,
+          participants: [{ id: { _serialized: SELF_LID, user: '777888999' }, isAdmin: false, isSuperAdmin: false }],
+        }),
+        getGroupMembershipRequests,
+        approveGroupMembershipRequests,
+      });
+
+      const groups = await adapter.getGroups();
+      expect(groups).toEqual([
+        expect.objectContaining({ id: GROUP, isAdmin: true }),
+        expect.objectContaining({ id: GROUP_2, isAdmin: true }),
+      ]);
+      // 1 call for readChatModels + 1 lazy self-LID call for GROUP_2.
+      expect(evaluate).toHaveBeenCalledTimes(2);
+
+      // Non-admin LID is refused on both membership-request reads and approve-all without hitting the library.
+      await expect(adapter.getGroupMembershipRequests(GROUP_2)).rejects.toBeInstanceOf(EngineRefusedError);
+      await expect(adapter.approveGroupMembershipRequests(GROUP_2)).rejects.toBeInstanceOf(EngineRefusedError);
+      expect(getGroupMembershipRequests).not.toHaveBeenCalled();
+      expect(approveGroupMembershipRequests).not.toHaveBeenCalled();
+      // Cached in WeakMap: still 2 evaluate calls total.
+      expect(evaluate).toHaveBeenCalledTimes(2);
+    } finally {
+      delete g.window;
+    }
+  });
+
+  it('does not cache null on transient errors, unloaded modules, or early-boot null LID, and caches once LID resolves', async () => {
+    const g = globalThis as unknown as { window?: Record<string, unknown> };
+    const evaluate = jest
+      .fn()
+      // 1st attempt: transient evaluation error (must not cache null)
+      .mockRejectedValueOnce(new Error('transient eval failure'))
+      // 2nd attempt: page mid-reload (window.require missing -> { ok: false })
+      .mockImplementationOnce((fn: () => unknown) => {
+        g.window = {};
+        return Promise.resolve().then(() => fn());
+      })
+      // 3rd attempt: window.require present, but WAWebUserPrefsMeUser still loading (returns undefined -> { ok: false })
+      .mockImplementationOnce((fn: () => unknown) => {
+        g.window = { require: () => undefined };
+        const res = fn();
+        expect(res).toEqual({ ok: false });
+        return Promise.resolve(res);
+      })
+      // 4th attempt: module loaded but getMaybeMeLidUser() returns null before LID hydrates (must not cache null)
+      .mockImplementationOnce((fn: () => unknown) => {
+        g.window = {
+          require: (name: string) => (name === 'WAWebUserPrefsMeUser' ? { getMaybeMeLidUser: () => null } : undefined),
+        };
+        return Promise.resolve().then(() => fn());
+      })
+      // 5th attempt: LID hydrated and returned (must cache permanently for this Client)
+      .mockImplementationOnce((fn: () => unknown) => {
+        g.window = {
+          require: (name: string) =>
+            name === 'WAWebUserPrefsMeUser' ? { getMaybeMeLidUser: () => ({ _serialized: SELF_LID }) } : undefined,
+        };
+        return Promise.resolve().then(() => fn());
+      });
+    try {
+      // Direct check on unloaded WAWebUserPrefsMeUser module.
+      g.window = { require: () => undefined };
+      expect(readSelfLidInPage()).toEqual({ ok: false });
+
+      const adapter = makeReady({
+        info: { wid: { _serialized: SELF_WID, user: SELF_PHONE } },
+        pupPage: { evaluate },
+        getChatById: jest.fn().mockResolvedValue({
+          id: { _serialized: GROUP },
+          name: 'LID Group',
+          isGroup: true,
+          participants: [{ id: { _serialized: SELF_LID, user: '777888999' }, isAdmin: true, isSuperAdmin: false }],
+          groupMetadata: { announce: true },
+        }),
+      });
+
+      const info1 = await adapter.getGroupInfo(GROUP);
+      expect(info1?.isReadOnly).toBe(true);
+      expect(evaluate).toHaveBeenCalledTimes(1);
+
+      const info2 = await adapter.getGroupInfo(GROUP);
+      expect(info2?.isReadOnly).toBe(true);
+      expect(evaluate).toHaveBeenCalledTimes(2);
+
+      const info3 = await adapter.getGroupInfo(GROUP);
+      expect(info3?.isReadOnly).toBe(true);
+      expect(evaluate).toHaveBeenCalledTimes(3);
+
+      const info4 = await adapter.getGroupInfo(GROUP);
+      expect(info4?.isReadOnly).toBe(true);
+      expect(evaluate).toHaveBeenCalledTimes(4);
+
+      // 5th call retries, resolves the LID, and caches it for subsequent calls.
+      const info5 = await adapter.getGroupInfo(GROUP);
+      expect(info5?.isReadOnly).toBe(false);
+      expect(evaluate).toHaveBeenCalledTimes(5);
+
+      const info6 = await adapter.getGroupInfo(GROUP);
+      expect(info6?.isReadOnly).toBe(false);
+      expect(evaluate).toHaveBeenCalledTimes(5);
+    } finally {
+      delete g.window;
+    }
+  });
+
+  it('throws EnginePageReloadingError when navigation lands during null self-LID read and retries cleanly after', async () => {
+    const g = globalThis as unknown as { window?: Record<string, unknown> };
+    let bumpNavigation!: () => void;
+    const evaluate = jest
+      .fn()
+      // 1st attempt: page navigates while getMaybeMeLidUser() returns null.
+      .mockImplementationOnce((fn: () => unknown) => {
+        g.window = {
+          require: (name: string) => (name === 'WAWebUserPrefsMeUser' ? { getMaybeMeLidUser: () => null } : undefined),
+        };
+        bumpNavigation();
+        return Promise.resolve().then(() => fn());
+      })
+      // 2nd attempt: page booted and returns the real LID.
+      .mockImplementationOnce((fn: () => unknown) => {
+        g.window = {
+          require: (name: string) =>
+            name === 'WAWebUserPrefsMeUser' ? { getMaybeMeLidUser: () => ({ _serialized: SELF_LID }) } : undefined,
+        };
+        return Promise.resolve().then(() => fn());
+      });
+    try {
+      const adapter = makeReady({
+        info: { wid: { _serialized: SELF_WID, user: SELF_PHONE } },
+        pupPage: { evaluate },
+        getChatById: jest.fn().mockResolvedValue({
+          id: { _serialized: GROUP },
+          name: 'LID Group',
+          isGroup: true,
+          participants: [{ id: { _serialized: SELF_LID, user: '777888999' }, isAdmin: true, isSuperAdmin: false }],
+          groupMetadata: { announce: true },
+        }),
+      });
+      const lifecycle = (adapter as unknown as { lifecycle: { navigationCount: number } }).lifecycle;
+      bumpNavigation = () => {
+        lifecycle.navigationCount++;
+      };
+
+      await expect(adapter.getGroupInfo(GROUP)).rejects.toBeInstanceOf(EnginePageReloadingError);
+      expect(evaluate).toHaveBeenCalledTimes(1);
+
+      // Next call retries without stale null cache and caches the resolved LID.
+      const info2 = await adapter.getGroupInfo(GROUP);
+      expect(info2?.isReadOnly).toBe(false);
+      expect(evaluate).toHaveBeenCalledTimes(2);
+
+      const info3 = await adapter.getGroupInfo(GROUP);
+      expect(info3?.isReadOnly).toBe(false);
+      expect(evaluate).toHaveBeenCalledTimes(2);
+    } finally {
+      delete g.window;
+    }
+  });
+
+  it('re-checks ensureReady after awaiting resolveSelfIds in refuseNonAdmin before mutating participants', async () => {
+    let releaseFindLids!: (lids: string[]) => void;
+    const removeParticipants = jest.fn().mockResolvedValue({ status: 200 });
+    const lidStore = {
+      getCached: jest.fn(() => undefined),
+      resolveLid: jest.fn(() => null),
+      lidsForPhone: jest.fn(() => []),
+      findLidsForPhone: jest.fn(
+        () =>
+          new Promise<string[]>(resolve => {
+            releaseFindLids = resolve;
+          }),
+      ),
+      remember: jest.fn().mockResolvedValue(true),
+    };
+    const adapter = makeReady(
+      {
+        info: { wid: { _serialized: SELF_WID, user: SELF_PHONE } },
+        getChatById: jest.fn().mockResolvedValue({
+          id: { _serialized: GROUP },
+          name: 'LID Group',
+          isGroup: true,
+          participants: [{ id: { _serialized: SELF_LID, user: '777888999' }, isAdmin: true, isSuperAdmin: false }],
+          removeParticipants,
+        }),
+      },
+      lidStore,
+    );
+
+    const op = adapter.removeParticipants(GROUP, ['628999000@c.us']);
+    while (!releaseFindLids) await new Promise(resolve => setImmediate(resolve));
+
+    // Adapter disconnects while async self-LID lookup is in flight.
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.DISCONNECTED;
+    releaseFindLids(['777888999']);
+
+    await expect(op).rejects.toBeInstanceOf(EngineNotReadyError);
+    expect(removeParticipants).not.toHaveBeenCalled();
+  });
+
+  it('propagates navigation and transport-death errors from lazy self-LID evaluation without poisoning the cache', async () => {
+    const g = globalThis as unknown as { window?: Record<string, unknown> };
+    const evaluate = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('Execution context was destroyed, most likely because of a navigation.'))
+      .mockRejectedValueOnce(new Error('Protocol error (Runtime.callFunctionOn): Target closed'))
+      .mockImplementationOnce((fn: () => unknown) => {
+        g.window = {
+          require: (name: string) =>
+            name === 'WAWebUserPrefsMeUser' ? { getMaybeMeLidUser: () => ({ _serialized: SELF_LID }) } : undefined,
+        };
+        return Promise.resolve().then(() => fn());
+      });
+    try {
+      const adapter = makeReady({
+        info: { wid: { _serialized: SELF_WID, user: SELF_PHONE } },
+        pupPage: { evaluate, isClosed: () => false },
+        getChatById: jest.fn().mockResolvedValue({
+          id: { _serialized: GROUP },
+          name: 'LID Group',
+          isGroup: true,
+          participants: [{ id: { _serialized: SELF_LID, user: '777888999' }, isAdmin: true, isSuperAdmin: false }],
+          groupMetadata: { announce: true },
+        }),
+      });
+
+      await expect(adapter.getGroupInfo(GROUP)).rejects.toBeInstanceOf(EnginePageReloadingError);
+      await expect(adapter.getGroupInfo(GROUP)).rejects.toBeInstanceOf(EngineTransportError);
+
+      // Re-mark ready (after transport death test) and confirm selfLidCache was not poisoned by either error.
+      (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+      const info = await adapter.getGroupInfo(GROUP);
+      expect(info?.isReadOnly).toBe(false);
+      expect(evaluate).toHaveBeenCalledTimes(3);
+    } finally {
+      delete g.window;
+    }
   });
 });
