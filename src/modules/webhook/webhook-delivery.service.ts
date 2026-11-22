@@ -29,7 +29,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { redactSsrfError } from '../../common/security/ssrf-guard';
 import { HookManager } from '../../core/hooks';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
-import { isWebhookBeforeResult } from '../../core/hooks/hook-results';
+import { isPlainObject, isWebhookBeforeResult } from '../../core/hooks/hook-results';
 import { WILDCARD_EXCLUDED_EVENTS, subscriptionCoversEvent } from '../../common/utils/wildcard-events';
 
 export interface WebhookPayload {
@@ -163,8 +163,6 @@ const describeOptInStage = ({ sessionId, webhookId }: OptInStage): string =>
 export const isAbortedBackoff = (error: unknown, signal: AbortSignal | undefined): boolean =>
   // Matched by name: the AbortError comes from node:timers, so instanceof Error is realm-dependent.
   signal?.aborted === true && (error as Error | undefined)?.name === 'AbortError';
-
-const isPlainObject = (value: unknown): boolean => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
  * The webhook delivery engine: given an event occurrence, fan it out to the session's matching
@@ -639,6 +637,16 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     return recorded !== null;
   }
 
+  private isPreEgressFailClosed(): boolean {
+    if (typeof this.hookManager.isPreEgressFailClosed === 'function') {
+      return this.hookManager.isPreEgressFailClosed();
+    }
+    const configured = this.configService.get<boolean | string>('hooks.preEgressFailClosed');
+    if (typeof configured === 'boolean') return configured;
+    if (typeof configured === 'string') return configured.trim().toLowerCase() === 'true';
+    return process.env.HOOK_PRE_EGRESS_FAIL_CLOSED?.trim().toLowerCase() === 'true';
+  }
+
   /**
    * Build one webhook delivery: payload + webhook:before hooks + identity re-assertion + size gate.
    * Returns null when the delivery must not proceed: either cancelled by a plugin (a debug
@@ -686,20 +694,45 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         return 'cancelled';
       }
 
-      // Null/undefined hook results mean "no override", matching an object without payload. A
-      // payload that is not a plain object (a primitive, which throws on the writes below, or an
-      // array, which drops them from the JSON) is not one either: send the original and say so.
-      const hookPayload = (hookResult as { payload?: unknown } | null | undefined)?.payload ?? payload;
-      const usable = isPlainObject(hookPayload);
-      if (!usable) {
-        this.logger.warn('A webhook:before hook returned a payload that is not an object; sending the original', {
-          webhookId: webhook.id,
-          event,
-          received: Array.isArray(hookPayload) ? 'array' : typeof hookPayload,
-          action: 'hook_payload_discarded',
-        });
+      // In fail-closed mode, require a plain-object hookResult carrying an own plain-object `payload`
+      // without falling back to the unmoderated original payload via `?? payload`.
+      // In fail-open mode, null/undefined or non-object payloads fall back to the original and warn.
+      let finalPayload: WebhookPayload;
+      if (this.isPreEgressFailClosed()) {
+        const hasOwnPayload = isPlainObject(hookResult) && Object.prototype.hasOwnProperty.call(hookResult, 'payload');
+        const candidatePayload = hasOwnPayload ? (hookResult as { payload?: unknown }).payload : undefined;
+        if (!hasOwnPayload || !isPlainObject(candidatePayload)) {
+          const received = !isPlainObject(hookResult)
+            ? Array.isArray(hookResult)
+              ? 'array'
+              : hookResult === null
+                ? 'null'
+                : typeof hookResult
+            : !hasOwnPayload
+              ? 'missing payload'
+              : Array.isArray(candidatePayload)
+                ? 'array payload'
+                : candidatePayload === null
+                  ? 'null payload'
+                  : `${typeof candidatePayload} payload`;
+          throw new Error(
+            `A webhook:before hook returned an unusable payload (${received}) while fail-closed mode is enabled`,
+          );
+        }
+        finalPayload = candidatePayload as unknown as WebhookPayload;
+      } else {
+        const hookPayload = (hookResult as { payload?: unknown } | null | undefined)?.payload ?? payload;
+        const usable = isPlainObject(hookPayload);
+        if (!usable) {
+          this.logger.warn('A webhook:before hook returned a payload that is not an object; sending the original', {
+            webhookId: webhook.id,
+            event,
+            received: Array.isArray(hookPayload) ? 'array' : typeof hookPayload,
+            action: 'hook_payload_discarded',
+          });
+        }
+        finalPayload = usable ? (hookPayload as unknown as WebhookPayload) : payload;
       }
-      const finalPayload = usable ? (hookPayload as WebhookPayload) : payload;
       // Re-assert EVERY identity field after the (untrusted) hook chain. A hook may rewrite data,
       // but event/sessionId/timestamp and the dedupe ids must remain the server's values: the
       // receiver verifies the signature over this body and compares it against the X-OpenWA-*

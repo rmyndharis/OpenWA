@@ -1,4 +1,4 @@
-import { WorkerHookRegistry } from './worker-hooks';
+import { WorkerHookHandler, WorkerHookRegistry } from './worker-hooks';
 import { WorkerToHostMessage } from './protocol';
 
 const collect = () => {
@@ -131,7 +131,7 @@ describe('WorkerHookRegistry', () => {
     });
   });
 
-  it('keeps a veto that comes with an error but does not apply its data', async () => {
+  it('keeps a veto that comes with an error, discards its data, and still reports the error', async () => {
     const { sent, post } = collect();
     const reg = new WorkerHookRegistry(post);
     const message = { id: 'm1', chatId: 'c@c.us', body: 'secret' };
@@ -151,6 +151,7 @@ describe('WorkerHookRegistry', () => {
       id: 1,
       continue: false,
       data: { ...message, body: '[redacted]' },
+      error: 'failed',
     });
   });
 
@@ -197,4 +198,223 @@ describe('WorkerHookRegistry', () => {
 
     expect(sent.find(m => m.kind === 'hook-result')).toMatchObject({ continue: true, error: 'string failure' });
   });
+
+  it.each([
+    ['empty string', ''],
+    ['zero', 0],
+    ['null', null],
+  ])('records falsy result.error (%s) as a non-empty error string and discards its data', async (_label, errVal) => {
+    const { sent, post } = collect();
+    const reg = new WorkerHookRegistry(post);
+    reg.register('message:sending', () => ({
+      continue: true,
+      data: { poisoned: true },
+      error: errVal as unknown as Error,
+    }));
+
+    await reg.handleHook({
+      kind: 'hook',
+      id: 1,
+      event: 'message:sending',
+      data: { orig: true },
+      source: 'MessageService',
+    });
+
+    const res = sent.find(m => m.kind === 'hook-result') as Extract<WorkerToHostMessage, { kind: 'hook-result' }>;
+    expect(res.data).toEqual({ orig: true });
+    expect(typeof res.error).toBe('string');
+    expect(res.error!.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ['empty Error', () => new Error()],
+    ['empty string', () => ''],
+    ['AggregateError with empty message', () => new AggregateError([new Error('ECONNREFUSED')], '')],
+    [
+      'AggregateError with null-prototype name',
+      () => {
+        const err = new AggregateError([new Error('ECONNREFUSED')], '');
+        Object.defineProperty(err, 'name', { value: Object.create(null) });
+        return err;
+      },
+    ],
+    [
+      'AggregateError with Symbol name',
+      () => {
+        const err = new AggregateError([new Error('ECONNREFUSED')], '');
+        Object.defineProperty(err, 'name', { value: Symbol('bad-name') });
+        return err;
+      },
+    ],
+    [
+      'AggregateError with throwing name getter',
+      () => {
+        const err = new AggregateError([new Error('ECONNREFUSED')], '');
+        Object.defineProperty(err, 'name', {
+          get() {
+            throw new Error('name getter exploded');
+          },
+        });
+        return err;
+      },
+    ],
+    [
+      'AggregateError with throwing errors getter',
+      () => {
+        const err = new AggregateError([], '');
+        Object.defineProperty(err, 'errors', {
+          get() {
+            throw new Error('errors getter exploded');
+          },
+        });
+        return err;
+      },
+    ],
+    ['null-prototype object', () => Object.create(null) as unknown],
+    [
+      'object with throwing toString',
+      () => ({
+        toString() {
+          throw new Error('poison');
+        },
+      }),
+    ],
+  ])(
+    'safely formats pathological thrown value (%s) as a non-empty error without rejecting in fail-open and fail-closed modes',
+    async (_label, makeErr) => {
+      for (const failClosed of [false, true]) {
+        const { sent, post } = collect();
+        const reg = new WorkerHookRegistry(post);
+        // eslint-disable-next-line @typescript-eslint/require-await -- async throw exercises promise rejection with non-Error reasons
+        reg.register('message:sending', async () => {
+          throw makeErr();
+        });
+
+        await expect(
+          reg.handleHook({
+            kind: 'hook',
+            id: 1,
+            event: 'message:sending',
+            data: { orig: true },
+            source: 'MessageService',
+            failClosed,
+          }),
+        ).resolves.toBeUndefined();
+
+        const res = sent.find(m => m.kind === 'hook-result') as Extract<WorkerToHostMessage, { kind: 'hook-result' }>;
+        expect(typeof res.error).toBe('string');
+        expect(res.error!.trim().length).toBeGreaterThan(0);
+      }
+    },
+  );
+
+  it.each([
+    ['corrupted payload string', { payload: 'corrupted' }],
+    ['array payload', { payload: [] }],
+    ['Date payload', { payload: new Date('2026-01-01T00:00:00Z') }],
+    ['Map payload', { payload: new Map() }],
+    ['Set payload', { payload: new Set() }],
+    ['RegExp payload', { payload: /re/ }],
+    ['inherited prototype payload', Object.create({ payload: { ok: true } }) as unknown],
+    ['empty object without payload', {}],
+    ['null result data', null],
+    ['null payload field', { payload: null }],
+  ])('fails closed on unusable webhook:before data (%s) and short-circuits later handlers', async (_label, badData) => {
+    const { sent, post } = collect();
+    const reg = new WorkerHookRegistry(post);
+    const later = jest.fn();
+    reg.register('webhook:before', () => ({ continue: true, data: badData }), 10);
+    reg.register(
+      'webhook:before',
+      () => {
+        later();
+        return { continue: true };
+      },
+      20,
+    );
+
+    await reg.handleHook({
+      kind: 'hook',
+      id: 7,
+      event: 'webhook:before',
+      data: { sessionId: 's1', event: 'message.received', payload: { data: { ok: true } } },
+      source: 'WebhookService',
+      failClosed: true,
+    });
+
+    expect(later).not.toHaveBeenCalled();
+    const res = sent.find(m => m.kind === 'hook-result') as Extract<WorkerToHostMessage, { kind: 'hook-result' }>;
+    expect(res.error).toBe('hook handler returned an unusable payload');
+  });
+
+  it('short-circuits remaining worker handlers on throw or result.error when failClosed is true', async () => {
+    const { sent, post } = collect();
+    const reg = new WorkerHookRegistry(post);
+    const later = jest.fn();
+    reg.register('message:sending', () => Promise.reject(new Error('first failed')), 10);
+    reg.register(
+      'message:sending',
+      () => {
+        later();
+        return { continue: true, data: { rewritten: true } };
+      },
+      20,
+    );
+
+    await reg.handleHook({
+      kind: 'hook',
+      id: 9,
+      event: 'message:sending',
+      data: { input: { text: 'hi' } },
+      source: 'MessageService',
+      failClosed: true,
+    });
+
+    expect(later).not.toHaveBeenCalled();
+    expect(sent.find(m => m.kind === 'hook-result')).toMatchObject({
+      continue: true,
+      error: 'first failed',
+    });
+  });
+
+  it.each<[string, unknown]>([
+    ['string continue', { continue: 'false' }],
+    ['numeric continue', { continue: 1 }],
+    ['empty object missing continue', {}],
+    ['string primitive', 'ok'],
+    ['numeric primitive', 42],
+    ['null', null],
+    ['array', []],
+  ])(
+    'fails closed on malformed handler result (%s) without allowing egress or silently cancelling',
+    async (_label, badResult) => {
+      const { sent, post } = collect();
+      const reg = new WorkerHookRegistry(post);
+      const later = jest.fn();
+      reg.register('webhook:before', (() => badResult) as unknown as WorkerHookHandler, 10);
+      reg.register(
+        'webhook:before',
+        () => {
+          later();
+          return { continue: true };
+        },
+        20,
+      );
+
+      await reg.handleHook({
+        kind: 'hook',
+        id: 11,
+        event: 'webhook:before',
+        data: { sessionId: 's1', event: 'message.received', payload: { data: { ok: true } } },
+        source: 'WebhookService',
+        failClosed: true,
+      });
+
+      expect(later).not.toHaveBeenCalled();
+      expect(sent.find(m => m.kind === 'hook-result')).toMatchObject({
+        continue: true,
+        error: 'hook handler returned an invalid result: continue must be a boolean',
+      });
+    },
+  );
 });

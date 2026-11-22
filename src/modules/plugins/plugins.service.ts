@@ -223,9 +223,9 @@ export class PluginsService {
       };
     }
 
-    if (plugin.status !== PluginStatus.ENABLED) {
-      // Clear the decision here too: a plugin sitting in ERROR after a failed restore is not ENABLED,
-      // and disabling it must stop the gateway retrying it on every boot.
+    if (plugin.status !== PluginStatus.ENABLED && plugin.status !== PluginStatus.ERROR) {
+      // Clear the decision here too so disabling an installed/disabled plugin stops the gateway
+      // from retrying it on boot if an older registry entry kept enabledByOperator set.
       this.pluginLoader.setOperatorEnabled(id, false);
       return { success: true, message: `Plugin ${id} is not enabled` };
     }

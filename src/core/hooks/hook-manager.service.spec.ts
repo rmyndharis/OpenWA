@@ -1,8 +1,9 @@
 // Hook handlers must satisfy the async HookHandler signature; the test stubs return synchronously,
 // so the no-await rule doesn't apply to them here.
 /* eslint-disable @typescript-eslint/require-await */
-import { HookManager } from './hook-manager.service';
-import { HookContext, HookResult, HookEvent } from './hook.interfaces';
+import { ConfigService } from '@nestjs/config';
+import { HookExecutionError, HookManager, PRE_EGRESS_HOOK_EVENTS } from './hook-manager.service';
+import { HookContext, HookHandler, HookResult, HookEvent } from './hook.interfaces';
 
 describe('HookManager', () => {
   let hm: HookManager;
@@ -434,5 +435,334 @@ describe('HookManager.isInFlight + selective re-entrancy guard (conversation.sen
       runGuarded(SENDING, () => hm.execute('message:sending', {}, { source: 'reentrant-send' })),
     );
     expect(observerCalls).toBe(0);
+  });
+});
+
+describe('HookManager fail-closed pre-egress mode', () => {
+  const prevEnv = process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+
+  afterEach(() => {
+    if (prevEnv === undefined) delete process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+    else process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = prevEnv;
+  });
+
+  it('defines PRE_EGRESS_HOOK_EVENTS as message:sending and webhook:before', () => {
+    expect([...PRE_EGRESS_HOOK_EVENTS].sort()).toEqual(['message:sending', 'webhook:before']);
+  });
+
+  it('defaults to fail-open on pre-egress hooks when HOOK_PRE_EGRESS_FAIL_CLOSED is unset', async () => {
+    delete process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+    const hm = new HookManager();
+    const later = jest.fn();
+    hm.register(
+      'bad',
+      'message:sending',
+      async () => {
+        throw new Error('boom');
+      },
+      10,
+    );
+    hm.register(
+      'next',
+      'message:sending',
+      async ctx => {
+        later();
+        return { continue: true, data: ctx.data };
+      },
+      20,
+    );
+
+    const res = await hm.execute('message:sending', { text: 'hi' }, { source: 'test' });
+    expect(res).toEqual({ continue: true, data: { text: 'hi' } });
+    expect(later).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the chain and throws HookExecutionError on handler throw when HOOK_PRE_EGRESS_FAIL_CLOSED=true', async () => {
+    process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+    const hm = new HookManager();
+    const later = jest.fn();
+    const cause = new Error('policy db unreachable');
+    hm.register(
+      'compliance',
+      'message:sending',
+      async () => {
+        throw cause;
+      },
+      10,
+    );
+    hm.register(
+      'later',
+      'message:sending',
+      async ctx => {
+        later();
+        return { continue: true, data: ctx.data };
+      },
+      20,
+    );
+
+    let thrown: unknown;
+    try {
+      await hm.execute('message:sending', { text: 'hi' }, { source: 'test' });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(HookExecutionError);
+    expect(thrown).toMatchObject({ pluginId: 'compliance', event: 'message:sending', cause });
+    expect(later).not.toHaveBeenCalled();
+  });
+
+  it('throws HookExecutionError on result.error (even with continue:false) when configured via ConfigService', async () => {
+    delete process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+    const configService = {
+      get: jest.fn((key: string) => (key === 'hooks.preEgressFailClosed' ? true : undefined)),
+    } as unknown as ConfigService;
+    const hm = new HookManager(configService);
+    const later = jest.fn();
+    const cause = new Error('sandbox timeout');
+
+    hm.register('dlp', 'webhook:before', async () => ({ continue: false, error: cause }), 10);
+    hm.register(
+      'later',
+      'webhook:before',
+      async ctx => {
+        later();
+        return { continue: true, data: ctx.data };
+      },
+      20,
+    );
+
+    await expect(
+      hm.execute('webhook:before', { payload: { data: {} } }, { source: 'WebhookService' }),
+    ).rejects.toMatchObject({
+      name: 'HookExecutionError',
+      pluginId: 'dlp',
+      event: 'webhook:before',
+      cause,
+    });
+    expect(later).not.toHaveBeenCalled();
+  });
+
+  it('throws HookExecutionError when accept rejects handler output in fail-closed mode', async () => {
+    process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+    const hm = new HookManager();
+    const later = jest.fn();
+    hm.register('mutator', 'webhook:before', async () => ({ continue: true, data: { payload: 'not-an-object' } }), 10);
+    hm.register(
+      'later',
+      'webhook:before',
+      async ctx => {
+        later();
+        return { continue: true, data: ctx.data };
+      },
+      20,
+    );
+
+    await expect(
+      hm.execute(
+        'webhook:before',
+        { payload: { ok: true } },
+        {
+          source: 'WebhookService',
+          accept: (d: unknown) =>
+            typeof d === 'object' &&
+            d !== null &&
+            typeof (d as { payload?: unknown }).payload === 'object' &&
+            (d as { payload?: unknown }).payload !== null,
+        },
+      ),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+    expect(later).not.toHaveBeenCalled();
+  });
+
+  it('still allows clean plugin veto (continue:false without error) in fail-closed mode', async () => {
+    process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+    const hm = new HookManager();
+    hm.register('blocker', 'message:sending', async () => ({ continue: false }), 10);
+
+    await expect(hm.execute('message:sending', { text: 'hi' }, { source: 'test' })).resolves.toEqual({
+      continue: false,
+      data: { text: 'hi' },
+    });
+  });
+
+  it('keeps non-pre-egress events fail-open under HOOK_PRE_EGRESS_FAIL_CLOSED=true unless overridden per call', async () => {
+    process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+    const hm = new HookManager();
+    hm.register('observer', 'message:received', async () => {
+      throw new Error('analytics crash');
+    });
+
+    await expect(hm.execute('message:received', { body: 'hi' }, { source: 'Engine' })).resolves.toEqual({
+      continue: true,
+      data: { body: 'hi' },
+    });
+
+    await expect(
+      hm.execute('message:received', { body: 'hi' }, { source: 'Engine', failClosed: true }),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+
+    hm.register('sender-guard', 'message:sending', async () => {
+      throw new Error('temporary error');
+    });
+    await expect(
+      hm.execute('message:sending', { body: 'hi' }, { source: 'MessageService', failClosed: false }),
+    ).resolves.toEqual({
+      continue: true,
+      data: { body: 'hi' },
+    });
+  });
+
+  it.each([
+    ['null-prototype object', () => Object.create(null) as unknown],
+    [
+      'object with throwing toString',
+      () => ({
+        toString() {
+          throw new Error('toString exploded');
+        },
+      }),
+    ],
+    ['empty Error', () => new Error()],
+    ['AggregateError with empty message', () => new AggregateError([new Error('ECONNREFUSED')], '')],
+    [
+      'AggregateError with null-prototype name',
+      () => {
+        const err = new AggregateError([new Error('ECONNREFUSED')], '');
+        Object.defineProperty(err, 'name', { value: Object.create(null) });
+        return err;
+      },
+    ],
+    [
+      'AggregateError with Symbol name',
+      () => {
+        const err = new AggregateError([new Error('ECONNREFUSED')], '');
+        Object.defineProperty(err, 'name', { value: Symbol('bad-name') });
+        return err;
+      },
+    ],
+    [
+      'AggregateError with throwing name getter',
+      () => {
+        const err = new AggregateError([new Error('ECONNREFUSED')], '');
+        Object.defineProperty(err, 'name', {
+          get() {
+            throw new Error('name getter exploded');
+          },
+        });
+        return err;
+      },
+    ],
+    [
+      'AggregateError with throwing errors getter',
+      () => {
+        const err = new AggregateError([], '');
+        Object.defineProperty(err, 'errors', {
+          get() {
+            throw new Error('errors getter exploded');
+          },
+        });
+        return err;
+      },
+    ],
+    ['empty string', () => ''],
+  ])(
+    'safely handles pathological thrown value (%s) in both fail-open and fail-closed modes',
+    async (_label, makeErr) => {
+      delete process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+      const failOpenHm = new HookManager();
+      failOpenHm.register('weird', 'message:sending', async () => {
+        throw makeErr();
+      });
+      await expect(
+        failOpenHm.execute('message:sending', { text: 'ok' }, { source: 'MessageService' }),
+      ).resolves.toEqual({
+        continue: true,
+        data: { text: 'ok' },
+      });
+
+      process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+      const failClosedHm = new HookManager();
+      failClosedHm.register('weird', 'message:sending', async () => {
+        throw makeErr();
+      });
+      let thrown: unknown;
+      try {
+        await failClosedHm.execute('message:sending', { text: 'ok' }, { source: 'MessageService' });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(HookExecutionError);
+      expect((thrown as HookExecutionError).message).not.toMatch(/:\s*$/);
+    },
+  );
+
+  it('unregisterPluginExcept retains only specified events and allows later full cleanup via unregisterPlugin', () => {
+    const hm = new HookManager();
+    hm.register('p1', 'message:received', async () => ({ continue: true }));
+    hm.register('p1', 'message:sending', async () => ({ continue: true }));
+    hm.register('p1', 'webhook:before', async () => ({ continue: true }));
+    hm.register('p2', 'message:received', async () => ({ continue: true }));
+
+    hm.unregisterPluginExcept('p1', PRE_EGRESS_HOOK_EVENTS);
+
+    expect(hm.getPluginEvents('p1').sort()).toEqual(['message:sending', 'webhook:before']);
+    expect(hm.getHookCount('message:received')).toBe(1); // p2 untouched
+    expect(hm.getHookCount('message:sending')).toBe(1);
+    expect(hm.getHookCount('webhook:before')).toBe(1);
+
+    hm.unregisterPlugin('p1');
+    expect(hm.getPluginEvents('p1')).toEqual([]);
+    expect(hm.getHookCount('message:sending')).toBe(0);
+    expect(hm.getHookCount('webhook:before')).toBe(0);
+  });
+
+  it.each<[string, unknown]>([
+    ['string continue', { continue: 'false' }],
+    ['numeric continue', { continue: 1 }],
+    ['empty object missing continue', {}],
+    ['string primitive', 'ok'],
+    ['numeric primitive', 42],
+    ['null', null],
+    ['array', []],
+  ])('fails closed with HookExecutionError when handler returns malformed result (%s)', async (_label, badResult) => {
+    process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+    const hm = new HookManager();
+    const later = jest.fn();
+    hm.register('bad', 'message:sending', (() => Promise.resolve(badResult)) as unknown as HookHandler, 10);
+    hm.register(
+      'later',
+      'message:sending',
+      async ctx => {
+        later();
+        return { continue: true, data: ctx.data };
+      },
+      20,
+    );
+
+    let thrown: unknown;
+    try {
+      await hm.execute('message:sending', { text: 'hi' }, { source: 'MessageService' });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(HookExecutionError);
+    expect((thrown as HookExecutionError).message).toContain('continue must be a boolean');
+    expect(later).not.toHaveBeenCalled();
+  });
+
+  it('still propagates explicit result.error cause when continue is omitted in fail-closed mode', async () => {
+    process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+    const hm = new HookManager();
+    const cause = new Error('explicit plugin error');
+    hm.register('bad', 'message:sending', (() => Promise.resolve({ error: cause })) as unknown as HookHandler, 10);
+
+    await expect(hm.execute('message:sending', { text: 'hi' }, { source: 'MessageService' })).rejects.toMatchObject({
+      name: 'HookExecutionError',
+      pluginId: 'bad',
+      event: 'message:sending',
+      cause,
+    });
   });
 });

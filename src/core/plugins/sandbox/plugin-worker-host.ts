@@ -212,14 +212,14 @@ export class PluginWorkerHost {
     // Events already in flight on the host's hook chain when this dispatch fires (the caller's
     // ancestors); forwarded so a capability call the handler makes is guarded against all of them.
     inFlight?: string[];
+    failClosed?: boolean;
     timeoutMs: number;
     onTimeout?: () => void;
   }): Promise<{ continue: boolean; data?: unknown; error?: string }> {
     // Fail fast on a dead worker: a post-crash dispatchHook (the hook shim still holds the stale host
     // reference) would otherwise post to the dead worker and stall the chain for the full timeout before
-    // resolving. The fail-open { continue: true } matches what the per-call timeout + the in-flight
-    // crash-drain already produce.
-    if (this.dead) return Promise.resolve({ continue: true });
+    // resolving. Populating `error` lets fail-closed callers reject the send while fail-open callers continue.
+    if (this.dead) return Promise.resolve({ continue: true, error: 'plugin worker is no longer running' });
     const id = this.nextId++;
     const dispatchId = randomUUID();
     const inFlight = [...new Set([...(options.inFlight ?? []), options.event])];
@@ -248,7 +248,7 @@ export class PluginWorkerHost {
         // a capability call it makes from here on still names this dispatch. Retain both the in-flight
         // re-entrancy claim and the dispatch context until the late result arrives, eviction past
         // MAX_LATE_HOOK_CLAIMS, or worker exit.
-        resolve({ continue: true });
+        resolve({ continue: true, error: `hook timed out after ${options.timeoutMs}ms` });
         this.holdLateClaim(id, release);
       }, options.timeoutMs);
       this.hookPending.set(id, { resolve: settle, timer });
@@ -263,6 +263,7 @@ export class PluginWorkerHost {
           source: options.source,
           config: options.config,
           inFlight,
+          ...(options.failClosed ? { failClosed: true } : {}),
         });
       } catch (error) {
         clearTimeout(timer);
@@ -558,9 +559,16 @@ export class PluginWorkerHost {
         if (!waiter) return;
         this.hookPending.delete(message.id);
         clearTimeout(waiter.timer);
+        if (typeof message.continue !== 'boolean') {
+          waiter.resolve({ continue: true, error: 'malformed hook-result: continue must be a boolean' });
+          break;
+        }
         const result: { continue: boolean; data?: unknown; error?: string } = { continue: message.continue };
         if (message.data !== undefined) result.data = message.data;
-        if (message.error !== undefined) result.error = workerText(message.error);
+        if (message.error !== undefined) {
+          const formatted = workerText(message.error);
+          result.error = formatted.trim().length > 0 ? formatted : 'sandbox hook failed';
+        }
         waiter.resolve(result);
         break;
       }
@@ -748,12 +756,12 @@ export class PluginWorkerHost {
       resolve({ healthy: false, message: 'plugin worker exited' });
     });
     this.healthPending.clear();
-    // Drain in-flight hooks too (symmetry with the maps above): resolve {continue:true} — the same
-    // fail-open value the per-hook timeout already produces — so the host hook chain unblocks
-    // immediately on a worker crash instead of stalling for the full hook timeout per in-flight hook.
+    // Drain in-flight hooks too (symmetry with the maps above): carry an explicit error reason so
+    // fail-closed callers can reject while fail-open callers unblock immediately on a worker crash
+    // instead of stalling for the full hook timeout per in-flight hook.
     this.hookPending.forEach(({ resolve, timer }) => {
       clearTimeout(timer);
-      resolve({ continue: true });
+      resolve({ continue: true, error: 'plugin worker exited during hook dispatch' });
     });
     this.hookPending.clear();
     // Drain in-flight webhooks: a mid-dispatch worker crash returns 502 so the ingress job fails the

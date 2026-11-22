@@ -33,7 +33,7 @@ import { Session } from '../session/entities/session.entity';
 import { WebhookFilters } from './filters/filter-types';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { userPart } from '../../engine/identity/wa-id';
-import { HookManager } from '../../core/hooks';
+import { HookExecutionError, HookManager } from '../../core/hooks';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { producerConnectWaitMs } from '../queue/redis-connection';
 import { getWebhookDeliveryFailuresTotal } from '../../common/metrics/webhook-delivery-metrics';
@@ -717,6 +717,221 @@ describe('WebhookDeliveryService', () => {
       expect(oversizeInsert[0][0].lastError).toContain('exceeding the 1024-byte cap');
       expect(hookManager.execute).toHaveBeenCalledWith('webhook:error', expect.anything(), expect.anything());
     });
+
+    it('records undelivered failure (never cancelled, never POSTed) when webhook:before throws HookExecutionError', async () => {
+      const webhook = createMockWebhook({ events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (hookManager.execute as jest.Mock).mockImplementation((event: string) => {
+        if (event === 'webhook:before') {
+          return Promise.reject(new HookExecutionError('redactor', 'webhook:before', new Error('redaction crashed')));
+        }
+        return Promise.resolve({ continue: true, data: {} });
+      });
+
+      const outcome = await (
+        service as unknown as {
+          deliverOne: (
+            w: Webhook,
+            deliveryId: string,
+            idempotencyKey: string,
+            ctx: { sessionId: string; event: string; baseData: Record<string, unknown> },
+          ) => Promise<string>;
+        }
+      ).deliverOne(webhook, 'del-fail-closed', 'idem-fail-closed', {
+        sessionId: 'sess-1',
+        event: 'message.received',
+        baseData: { from: 'x@c.us' },
+      });
+
+      expect(outcome).toBe('failed');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(failureRepository.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          webhookId: webhook.id,
+          deliveryId: 'del-fail-closed',
+          attempts: 0,
+          lastStatusCode: null,
+        }),
+      );
+      const insertCalls = (failureRepository.insert as jest.Mock).mock.calls as Array<[{ lastError: string }]>;
+      expect(insertCalls[0][0].lastError).toContain("Hook 'webhook:before' failed in plugin 'redactor'");
+      expect(hookManager.execute).toHaveBeenCalledWith('webhook:error', expect.anything(), expect.anything());
+    });
+
+    it.each([
+      ['null hookResult', null],
+      ['string primitive hookResult', 'corrupted-string'],
+      ['numeric primitive hookResult', 42],
+      ['empty object without payload', {}],
+      ['object with null payload', { payload: null }],
+      ['object with array payload', { payload: [] }],
+      ['object with Date payload', { payload: new Date('2026-01-01T00:00:00Z') }],
+      ['object with Map payload', { payload: new Map() }],
+      ['object with Set payload', { payload: new Set() }],
+      ['object with RegExp payload', { payload: /re/ }],
+      ['object with inherited payload', Object.create({ payload: { ok: true } }) as unknown],
+      ['object with corrupted string payload', { payload: 'corrupted-string' }],
+    ])(
+      'records undelivered failure (never posts original) when webhook:before returns %s in fail-closed mode',
+      async (_label, badHookResult) => {
+        const prevEnv = process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+        process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+        try {
+          const webhook = createMockWebhook({ events: ['message.received'] });
+          (repository.find as jest.Mock).mockResolvedValue([webhook]);
+          (hookManager.execute as jest.Mock).mockImplementation((event: string) =>
+            Promise.resolve({ continue: true, data: event === 'webhook:before' ? badHookResult : {} }),
+          );
+
+          const outcome = await (
+            service as unknown as {
+              deliverOne: (
+                w: Webhook,
+                deliveryId: string,
+                idempotencyKey: string,
+                ctx: { sessionId: string; event: string; baseData: Record<string, unknown> },
+              ) => Promise<string>;
+            }
+          ).deliverOne(webhook, 'del-bad-shape', 'idem-bad-shape', {
+            sessionId: 'sess-1',
+            event: 'message.received',
+            baseData: { from: 'x@c.us' },
+          });
+
+          expect(outcome).toBe('failed');
+          expect(mockFetch).not.toHaveBeenCalled();
+          expect(failureRepository.insert).toHaveBeenCalledWith(
+            expect.objectContaining({
+              webhookId: webhook.id,
+              deliveryId: 'del-bad-shape',
+              attempts: 0,
+              lastStatusCode: null,
+            }),
+          );
+          expect(hookManager.execute).toHaveBeenCalledWith('webhook:error', expect.anything(), expect.anything());
+        } finally {
+          if (prevEnv === undefined) delete process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+          else process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = prevEnv;
+        }
+      },
+    );
+
+    it('with a real HookManager in fail-closed mode, records undelivered failure on webhook:before throw and emits webhook:error', async () => {
+      const prevEnv = process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+      process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+      try {
+        const realHooks = new HookManager();
+        const errorEvents: unknown[] = [];
+        realHooks.register('pii-redactor', 'webhook:before', () => {
+          throw new Error('redaction engine unavailable');
+        });
+        realHooks.register('error-observer', 'webhook:error', ctx => {
+          errorEvents.push(ctx.data);
+          return Promise.resolve({ continue: true });
+        });
+        const realService = new WebhookDeliveryService(
+          repository as Repository<Webhook>,
+          failureRepository as Repository<WebhookDeliveryFailure>,
+          configService as ConfigService,
+          realHooks,
+          outboxService as unknown as WebhookOutboxService,
+        );
+        const webhook = createMockWebhook({ events: ['message.received'] });
+        const outcome = await (
+          realService as unknown as {
+            deliverOne: (
+              w: Webhook,
+              deliveryId: string,
+              idempotencyKey: string,
+              ctx: { sessionId: string; event: string; baseData: Record<string, unknown> },
+            ) => Promise<string>;
+          }
+        ).deliverOne(webhook, 'del-real-hm', 'idem-real-hm', {
+          sessionId: 'sess-1',
+          event: 'message.received',
+          baseData: { from: 'x@c.us' },
+        });
+
+        expect(outcome).toBe('failed');
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(failureRepository.insert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            webhookId: webhook.id,
+            deliveryId: 'del-real-hm',
+            attempts: 0,
+            lastStatusCode: null,
+          }),
+        );
+        const insertCalls = (failureRepository.insert as jest.Mock).mock.calls as Array<[{ lastError: string }]>;
+        expect(insertCalls[0][0].lastError).toContain("Hook 'webhook:before' failed in plugin 'pii-redactor'");
+        expect(errorEvents).toHaveLength(1);
+      } finally {
+        if (prevEnv === undefined) delete process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+        else process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = prevEnv;
+      }
+    });
+
+    it.each<[string, unknown]>([
+      ['Date payload', { continue: true, data: { payload: new Date('2026-01-01T00:00:00Z') } }],
+      ['Map payload', { continue: true, data: { payload: new Map() } }],
+      ['Set payload', { continue: true, data: { payload: new Set() } }],
+      ['RegExp payload', { continue: true, data: { payload: /re/ } }],
+      ['empty hook result missing continue', {}],
+      ['string primitive hook result', 'ok'],
+      ['string continue hook result', { continue: 'false' }],
+    ])(
+      'with a real HookManager in fail-closed mode, records undelivered failure (never cancelled or posted) when webhook:before returns %s',
+      async (_label, hookReturn) => {
+        const prevEnv = process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+        process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+        try {
+          const realHooks = new HookManager();
+          const errorEvents: unknown[] = [];
+          realHooks.register('mutator', 'webhook:before', (() => Promise.resolve(hookReturn)) as never);
+          realHooks.register('error-observer', 'webhook:error', ctx => {
+            errorEvents.push(ctx.data);
+            return Promise.resolve({ continue: true });
+          });
+          const realService = new WebhookDeliveryService(
+            repository as Repository<Webhook>,
+            failureRepository as Repository<WebhookDeliveryFailure>,
+            configService as ConfigService,
+            realHooks,
+            outboxService as unknown as WebhookOutboxService,
+          );
+          const webhook = createMockWebhook({ events: ['message.received'] });
+          const outcome = await (
+            realService as unknown as {
+              deliverOne: (
+                w: Webhook,
+                deliveryId: string,
+                idempotencyKey: string,
+                ctx: { sessionId: string; event: string; baseData: Record<string, unknown> },
+              ) => Promise<string>;
+            }
+          ).deliverOne(webhook, 'del-real-bad', 'idem-real-bad', {
+            sessionId: 'sess-1',
+            event: 'message.received',
+            baseData: { from: 'x@c.us' },
+          });
+
+          expect(outcome).toBe('failed');
+          expect(mockFetch).not.toHaveBeenCalled();
+          expect(failureRepository.insert).toHaveBeenCalledWith(
+            expect.objectContaining({
+              webhookId: webhook.id,
+              deliveryId: 'del-real-bad',
+              attempts: 0,
+              lastStatusCode: null,
+            }),
+          );
+          expect(errorEvents).toHaveLength(1);
+        } finally {
+          if (prevEnv === undefined) delete process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+          else process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = prevEnv;
+        }
+      },
+    );
 
     it('replaces over-threshold inline media with the omitted marker before fan-out (input not mutated)', async () => {
       (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | boolean | number => {

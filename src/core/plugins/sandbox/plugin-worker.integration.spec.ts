@@ -121,7 +121,7 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
       timeoutMs: 200,
       onTimeout,
     });
-    expect(result).toEqual({ continue: true });
+    expect(result).toEqual({ continue: true, error: 'hook timed out after 200ms' });
     expect(onTimeout).toHaveBeenCalled();
     await host.terminate();
   });

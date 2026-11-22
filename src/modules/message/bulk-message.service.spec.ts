@@ -2590,6 +2590,63 @@ describe('BulkMessageService.processBatch', () => {
     expect(observedChatIds).toEqual(['c0@c.us', 'c1@c.us', 'c2@c.us']);
     expect(engine.sendTextMessage).not.toHaveBeenCalled();
   });
+
+  it('blocks bulk items without sending or emitting message:failed when message:sending fails in fail-closed mode', async () => {
+    const prevEnv = process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+    process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+    const warnSpy = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const realHooks = new HookManager();
+      const failedHookSpy = jest.fn();
+      realHooks.register('dlp-guard', 'message:sending', () => {
+        throw new Error('policy service down');
+      });
+      realHooks.register('observer', 'message:failed', () => {
+        failedHookSpy();
+        return Promise.resolve({ continue: true });
+      });
+
+      const realBulk = new BulkMessageService(
+        repo as unknown as Repository<MessageBatch>,
+        engines,
+        messageService as unknown as MessageService,
+        realHooks,
+        pacing as unknown as SendPacingService,
+        undefined,
+        undefined,
+        shutdown,
+      );
+
+      const batch = makeBatch(1);
+      repo.findOne.mockResolvedValue(batch);
+
+      await (
+        realBulk as unknown as {
+          processBatch: (id: string, reserved: boolean, lifetime: SessionWriteScope) => Promise<void>;
+        }
+      ).processBatch('b1', false, captureSessionWrites(repo, 's1'));
+
+      expect(engine.sendTextMessage).not.toHaveBeenCalled();
+      expect(failedHookSpy).not.toHaveBeenCalled();
+      expect(pacing.recordSendFailure).not.toHaveBeenCalled();
+      const finalPartial = (repo.update.mock.calls as Array<[unknown, { results: BatchMessageResult[] }]>).at(-1)![1];
+      expect(finalPartial.results[0].status).toBe(BatchMessageStatus.FAILED);
+      expect(finalPartial.results[0].error?.message).toMatch(/pre-send plugin hook failed/i);
+      expect(finalPartial.results[0].error?.message).not.toContain('policy service down');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('message:sending'),
+        expect.objectContaining({
+          pluginId: 'dlp-guard',
+          sessionId: 's1',
+          source: 'BulkMessageService',
+        }),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      if (prevEnv === undefined) delete process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+      else process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = prevEnv;
+    }
+  });
 });
 
 describe('BulkMessageService.cancelBatch', () => {

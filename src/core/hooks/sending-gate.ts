@@ -1,6 +1,7 @@
-import { BadRequestException } from '@nestjs/common';
-import { cloneHookData, HookExecuteOptions, HookManager } from './hook-manager.service';
+import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
+import { cloneHookData, HookExecuteOptions, HookExecutionError, HookManager } from './hook-manager.service';
 import { createLogger } from '../../common/services/logger.service';
+import { markNothingSent } from '../../common/errors/engine-not-sent.error';
 
 const logger = createLogger('SendingGate');
 
@@ -212,11 +213,30 @@ export async function applySendingGate<T extends object>(
   source: string,
 ): Promise<T> {
   const pinnedRouting = capturePinnedRouting(input);
-  const { continue: shouldContinue, data: hookData } = await hookManager.execute(
-    'message:sending',
-    { sessionId, input: cloneGateInput(input), type },
-    buildSendingExecuteOptions(sessionId, source, pinnedRouting),
-  );
+  let gateOutcome: { continue: boolean; data: { sessionId: string; input: T; type: string } };
+  try {
+    gateOutcome = await hookManager.execute(
+      'message:sending',
+      { sessionId, input: cloneGateInput(input), type },
+      buildSendingExecuteOptions(sessionId, source, pinnedRouting),
+    );
+  } catch (error) {
+    if (error instanceof HookExecutionError) {
+      logger.warn('Outbound send blocked: pre-egress message:sending hook failed in fail-closed mode', {
+        pluginId: error.pluginId,
+        event: error.event,
+        sessionId,
+        source,
+        type,
+        error: error.message,
+      });
+      throw markNothingSent(
+        new ServiceUnavailableException('Message sending temporarily blocked: a required pre-send plugin hook failed'),
+      );
+    }
+    throw error;
+  }
+  const { continue: shouldContinue, data: hookData } = gateOutcome;
   if (!shouldContinue) {
     throw new BadRequestException('Message sending blocked by plugin');
   }

@@ -1,8 +1,35 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { createLogger } from '../../common/services/logger.service';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { types } from 'node:util';
 import { HookEvent, HookHandler, HookContext, HookRegistration } from './hook.interfaces';
+
+/** Pre-egress hook events covered by `HOOK_PRE_EGRESS_FAIL_CLOSED`. */
+export const PRE_EGRESS_HOOK_EVENTS: ReadonlySet<HookEvent> = new Set<HookEvent>(['message:sending', 'webhook:before']);
+
+/**
+ * Internal symbol attached non-enumerably to `HookContext` during `HookManager.runHandlers` so
+ * host-side bridges (such as `PluginSandboxBridge`) observe whether the active chain runs in
+ * fail-closed mode without exposing a public field to plugin user code.
+ */
+export const HOOK_FAIL_CLOSED_SYMBOL: unique symbol = Symbol('openwa.hookFailClosed');
+
+/**
+ * Thrown when fail-closed hook execution is active and a plugin handler throws, reports an error,
+ * or returns a payload rejected by `options.accept`.
+ */
+export class HookExecutionError extends Error {
+  constructor(
+    public readonly pluginId: string,
+    public readonly event: HookEvent,
+    cause?: unknown,
+  ) {
+    const suffix = cause !== undefined ? `: ${safeFormatHookError(cause)}` : '';
+    super(`Hook '${event}' failed in plugin '${pluginId}'${suffix}`, cause !== undefined ? { cause } : undefined);
+    this.name = 'HookExecutionError';
+  }
+}
 
 /**
  * The priority a registration actually runs at: a finite number as given, anything else the default
@@ -56,8 +83,64 @@ function deepCloneFallback(value: unknown, seen: WeakMap<object, unknown>): unkn
   return copy;
 }
 
-function formatHookError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/**
+ * Format an arbitrary thrown/reported hook error into a non-empty string without throwing.
+ * Handles null-prototype objects, throwing `toString()` implementations, empty `Error` messages,
+ * and dual-stack `AggregateError` instances whose top-level `message` is empty.
+ */
+export function safeFormatHookError(
+  error: unknown,
+  fallback = 'hook handler error',
+  seen = new WeakSet<object>(),
+): string {
+  if (error === undefined) return fallback;
+  if (typeof error === 'string') {
+    return error.trim().length > 0 ? error : fallback;
+  }
+  if (error instanceof Error) {
+    if (seen.has(error)) return fallback;
+    seen.add(error);
+    let message = '';
+    try {
+      if (typeof error.message === 'string') message = error.message;
+    } catch {
+      message = '';
+    }
+    if (message.trim().length > 0) return message;
+    let name = '';
+    try {
+      if (typeof error.name === 'string') name = error.name.trim();
+    } catch {
+      name = '';
+    }
+    try {
+      if (error instanceof AggregateError && Array.isArray(error.errors) && error.errors.length > 0) {
+        const parts = error.errors
+          .slice(0, 5)
+          .map(sub => safeFormatHookError(sub, '', seen))
+          .filter(part => part.length > 0);
+        if (parts.length > 0) return `${name || 'AggregateError'}: ${parts.join('; ')}`;
+      }
+    } catch {
+      // Fall through to safe name or fallback below when AggregateError getters throw.
+    }
+    return name.length > 0 ? name : fallback;
+  }
+  if (
+    error === null ||
+    typeof error === 'number' ||
+    typeof error === 'boolean' ||
+    typeof error === 'bigint' ||
+    typeof error === 'symbol'
+  ) {
+    return String(error);
+  }
+  try {
+    const text = `${error as string}`;
+    return text.trim().length > 0 ? text : fallback;
+  } catch {
+    return '[unprintable error]';
+  }
 }
 
 export function cloneHookData<T>(value: T): T {
@@ -72,12 +155,18 @@ export function cloneHookData<T>(value: T): T {
 export interface HookExecuteOptions<T> {
   sessionId?: string;
   source: string;
-  /** Adopt a handler's `data` only when this returns true; a rejected result is skipped, not applied. */
+  /** Adopt a handler's `data` only when this returns true; a rejected result is skipped, or throws in fail-closed mode. */
   accept?: (data: T) => boolean;
   /** Pass a deep clone of `currentData` to each handler so in-place mutations on error or no-data cannot leak. */
   isolateData?: boolean;
   /** Normalize an accepted handler result before passing `currentData` to subsequent handlers. */
   normalizeData?: (data: T) => T;
+  /**
+   * Override fail-closed execution for this call. When true, a handler throw, `result.error`, or
+   * rejected `accept` result stops the chain immediately and throws {@link HookExecutionError}.
+   * Defaults to `isPreEgressFailClosed()` for {@link PRE_EGRESS_HOOK_EVENTS} and `false` otherwise.
+   */
+  failClosed?: boolean;
 }
 
 @Injectable()
@@ -93,6 +182,20 @@ export class HookManager {
   // because the store also reaches every timer and detached promise the call's handlers start.
   private readonly inFlightEvents = new AsyncLocalStorage<ReadonlyArray<Set<HookEvent>>>();
   private nextHookId = 0;
+
+  constructor(@Optional() private readonly configService?: ConfigService) {}
+
+  /**
+   * Whether pre-egress hooks (`message:sending`, `webhook:before`) fail closed on handler errors.
+   * Reads `hooks.preEgressFailClosed` from ConfigService when defined, falling back to
+   * `process.env.HOOK_PRE_EGRESS_FAIL_CLOSED === 'true'`. Defaults to `false`.
+   */
+  isPreEgressFailClosed(): boolean {
+    const configured = this.configService?.get<boolean | string>('hooks.preEgressFailClosed');
+    if (typeof configured === 'boolean') return configured;
+    if (typeof configured === 'string') return configured.trim().toLowerCase() === 'true';
+    return process.env.HOOK_PRE_EGRESS_FAIL_CLOSED?.trim().toLowerCase() === 'true';
+  }
 
   /**
    * Register a hook handler
@@ -176,6 +279,92 @@ export class HookManager {
   }
 
   /**
+   * Unregister all hooks for a plugin except events in `keepEvents`. Used when a sandboxed worker
+   * fails under fail-closed pre-egress mode so pre-egress shims stay registered and keep blocking
+   * sends/webhooks until the operator disables, unloads, or re-enables the plugin.
+   */
+  unregisterPluginExcept(pluginId: string, keepEvents: ReadonlySet<HookEvent>): void {
+    const hookIds = this.pluginHooks.get(pluginId);
+    if (!hookIds) return;
+
+    const remainingIds = new Set<string>();
+    for (const [eventKey, registrations] of this.hooks.entries()) {
+      if (keepEvents.has(eventKey)) {
+        for (const registration of registrations) {
+          if (registration.pluginId === pluginId) remainingIds.add(registration.id);
+        }
+        continue;
+      }
+      const filtered = registrations.filter(r => r.pluginId !== pluginId);
+      this.hooks.set(eventKey, filtered);
+    }
+
+    if (remainingIds.size === 0) {
+      this.pluginHooks.delete(pluginId);
+    } else {
+      this.pluginHooks.set(pluginId, remainingIds);
+    }
+    this.logger.debug(`Unregistered non-retained hooks for plugin: ${pluginId}`);
+  }
+
+  /** Snapshot the hook registration IDs currently registered for `pluginId`. */
+  getPluginHookIds(pluginId: string): Set<string> {
+    return new Set(this.pluginHooks.get(pluginId) ?? []);
+  }
+
+  /** Unregister every hook owned by `pluginId` whose ID is in `hookIds`. */
+  unregisterPluginHookIds(pluginId: string, hookIds: ReadonlySet<string>): void {
+    if (hookIds.size === 0) return;
+    const tracked = this.pluginHooks.get(pluginId);
+    if (!tracked) return;
+
+    for (const [eventKey, registrations] of this.hooks.entries()) {
+      const filtered = registrations.filter(r => !(r.pluginId === pluginId && hookIds.has(r.id)));
+      if (filtered.length !== registrations.length) {
+        this.hooks.set(eventKey, filtered);
+      }
+    }
+
+    for (const id of hookIds) {
+      tracked.delete(id);
+    }
+    if (tracked.size === 0) {
+      this.pluginHooks.delete(pluginId);
+    }
+  }
+
+  /** Unregister every hook owned by `pluginId` whose ID is NOT in `keepHookIds`. */
+  unregisterPluginHooksNotIn(pluginId: string, keepHookIds: ReadonlySet<string>): void {
+    if (keepHookIds.size === 0) {
+      this.unregisterPlugin(pluginId);
+      return;
+    }
+    const tracked = this.pluginHooks.get(pluginId);
+    if (!tracked) return;
+
+    const remainingIds = new Set<string>();
+    for (const [eventKey, registrations] of this.hooks.entries()) {
+      const filtered = registrations.filter(r => {
+        if (r.pluginId !== pluginId) return true;
+        if (keepHookIds.has(r.id)) {
+          remainingIds.add(r.id);
+          return true;
+        }
+        return false;
+      });
+      if (filtered.length !== registrations.length) {
+        this.hooks.set(eventKey, filtered);
+      }
+    }
+
+    if (remainingIds.size === 0) {
+      this.pluginHooks.delete(pluginId);
+    } else {
+      this.pluginHooks.set(pluginId, remainingIds);
+    }
+  }
+
+  /**
    * Execute hooks for an event
    * Returns: { continue: boolean, data: T }
    */
@@ -251,6 +440,8 @@ export class HookManager {
       return { continue: true, data };
     }
 
+    const failClosed = options.failClosed ?? (this.isPreEgressFailClosed() && PRE_EGRESS_HOOK_EVENTS.has(event));
+
     let currentData = options.isolateData ? cloneHookData(data) : data;
     const ctx: HookContext<T> = {
       event,
@@ -259,6 +450,12 @@ export class HookManager {
       timestamp: new Date(),
       source: options.source,
     };
+    Object.defineProperty(ctx, HOOK_FAIL_CLOSED_SYMBOL, {
+      value: failClosed,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
 
     for (const registration of registrations) {
       let shouldContinue: boolean;
@@ -266,14 +463,40 @@ export class HookManager {
       let resultError: unknown;
       try {
         ctx.data = options.isolateData ? cloneHookData(currentData) : currentData;
-        const result = await registration.handler(ctx);
-        shouldContinue = result.continue;
-        resultData = result.data;
-        resultError = result.error;
+        const rawResult: unknown = await registration.handler(ctx);
+        if (failClosed) {
+          if (rawResult === null || typeof rawResult !== 'object') {
+            throw new Error('hook handler returned an invalid result: continue must be a boolean');
+          }
+          const result = rawResult as { continue?: unknown; data?: unknown; error?: unknown };
+          resultError = result.error;
+          if (resultError !== undefined) {
+            shouldContinue = true;
+            resultData = undefined;
+          } else if (Array.isArray(rawResult) || typeof result.continue !== 'boolean') {
+            throw new Error('hook handler returned an invalid result: continue must be a boolean');
+          } else {
+            shouldContinue = result.continue;
+            resultData = result.data;
+          }
+        } else {
+          const result = rawResult as { continue: boolean; data?: unknown; error?: unknown };
+          shouldContinue = result.continue;
+          resultData = result.data;
+          resultError = result.error;
+        }
       } catch (error) {
-        this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${formatHookError(error)}`);
+        this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${safeFormatHookError(error)}`);
+        if (failClosed) {
+          throw new HookExecutionError(registration.pluginId, event, error);
+        }
         // Continue to next handler, don't break the chain on error
         continue;
+      }
+
+      if (resultError !== undefined && failClosed) {
+        this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${safeFormatHookError(resultError)}`);
+        throw new HookExecutionError(registration.pluginId, event, resultError);
       }
 
       // A handler that reports an error discards its output: do NOT apply its (possibly partial or
@@ -285,6 +508,13 @@ export class HookManager {
           this.logger.warn(
             `Hook result from ${registration.pluginId} for ${event} is not usable; keeping the previous data`,
           );
+          if (failClosed) {
+            throw new HookExecutionError(
+              registration.pluginId,
+              event,
+              new Error(`Hook result from ${registration.pluginId} for ${event} failed payload validation`),
+            );
+          }
         } else {
           const adopted = resultData as T;
           currentData = options.normalizeData ? options.normalizeData(adopted) : adopted;
@@ -296,8 +526,8 @@ export class HookManager {
         return { continue: false, data: currentData };
       }
 
-      if (resultError) {
-        this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${formatHookError(resultError)}`);
+      if (resultError !== undefined) {
+        this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${safeFormatHookError(resultError)}`);
       }
     }
 

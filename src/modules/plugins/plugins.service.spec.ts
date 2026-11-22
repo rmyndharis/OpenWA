@@ -23,7 +23,7 @@ import { SECRET_SENTINEL } from './redact-config';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { PluginStorageService } from '../../core/plugins/plugin-storage.service';
 import { PluginStatus, PluginType } from '../../core/plugins/plugin.interfaces';
-import { HookManager } from '../../core/hooks';
+import { HookExecutionError, HookManager } from '../../core/hooks';
 
 const manifest = { id: 'svc-plg', name: 'Svc Plugin', version: '1.0.0', type: 'extension', main: 'index.js' };
 
@@ -1764,5 +1764,91 @@ describe('PluginsService remote catalog', () => {
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BadRequestException);
     expect((err as BadRequestException).message).toMatch(/Invalid plugin catalog JSON/);
+  });
+});
+
+describe('PluginsService: disabling a plugin in ERROR state', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-err-disable-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+  });
+
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  it('transitions ERROR to DISABLED, clears enabledByOperator, unregisters retained fail-closed hooks, and unblocks sends', async () => {
+    const config = {
+      get: (k: string) =>
+        k === 'plugins.dir'
+          ? pluginsDir
+          : k === 'dataDir'
+            ? tmpDir
+            : k === 'hooks.preEgressFailClosed'
+              ? true
+              : undefined,
+    } as unknown as ConfigService;
+    const hookManager = new HookManager(config);
+    const storage = new PluginStorageService(config);
+    const loader = new PluginLoaderService(config, hookManager, storage, {} as unknown as ModuleRef);
+    const service = new PluginsService(loader, config);
+
+    service.install({ buffer: pkg() });
+    loader.setOperatorEnabled('svc-plg', true);
+    const plugin = loader.getPlugin('svc-plg')!;
+    plugin.status = PluginStatus.ERROR;
+    plugin.error = 'worker exited unexpectedly (code 1)';
+    hookManager.register('svc-plg', 'message:sending', () =>
+      Promise.resolve({ continue: true, error: new Error('plugin worker is no longer running') }),
+    );
+    hookManager.register('svc-plg', 'webhook:before', () =>
+      Promise.resolve({ continue: true, error: new Error('plugin worker is no longer running') }),
+    );
+
+    await expect(
+      hookManager.execute('message:sending', { input: { text: 'blocked' } }, { sessionId: 's1', source: 'test' }),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+
+    const res = await service.disable('svc-plg');
+
+    expect(res).toEqual({ success: true, message: 'Plugin svc-plg disabled successfully' });
+    expect(plugin.status).toBe(PluginStatus.DISABLED);
+    expect(plugin.error).toBeUndefined();
+    expect(storage.getPluginEntry('svc-plg')?.enabledByOperator).toBe(false);
+    expect(hookManager.getHookCount('message:sending')).toBe(0);
+    expect(hookManager.getHookCount('webhook:before')).toBe(0);
+    await expect(
+      hookManager.execute('message:sending', { input: { text: 'unblocked' } }, { sessionId: 's1', source: 'test' }),
+    ).resolves.toEqual({ continue: true, data: { input: { text: 'unblocked' } } });
+  });
+
+  it('keeps the no-op response for INSTALLED and DISABLED plugins and still refuses active ENGINE in ERROR', async () => {
+    const config = {
+      get: (k: string) =>
+        k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : k === 'engine.type' ? 'baileys' : undefined,
+    } as unknown as ConfigService;
+    const storage = new PluginStorageService(config);
+    const loader = new PluginLoaderService(config, new HookManager(config), storage, {} as unknown as ModuleRef);
+    const service = new PluginsService(loader, config);
+    const disablePluginSpy = jest.spyOn(loader, 'disablePlugin');
+
+    service.install({ buffer: pkg() });
+    await expect(service.disable('svc-plg')).resolves.toEqual({
+      success: true,
+      message: 'Plugin svc-plg is not enabled',
+    });
+    expect(disablePluginSpy).not.toHaveBeenCalled();
+
+    loader.registerBuiltInPlugin(
+      { id: 'baileys', name: 'Baileys', version: '1.0.0', type: PluginType.ENGINE, main: 'index.js' },
+      {},
+    );
+    loader.getPlugin('baileys')!.status = PluginStatus.ERROR;
+    const engineRes = await service.disable('baileys');
+    expect(engineRes.success).toBe(false);
+    expect(engineRes.message).toMatch(/engine\.type/);
+    expect(disablePluginSpy).not.toHaveBeenCalled();
   });
 });

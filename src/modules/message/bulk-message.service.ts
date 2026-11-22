@@ -44,6 +44,7 @@ import {
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { SessionService, linkPreviewDefault } from '../session/session.service';
 import {
+  HookExecutionError,
   HookManager,
   applyPinnedRouting,
   buildSendingExecuteOptions,
@@ -63,6 +64,7 @@ import { renderedLength, renderTemplate, TemplateRenderError } from '../../commo
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { isUniqueViolation } from '../../common/utils/db-errors';
 
 // Type definitions for bulk message content
@@ -774,15 +776,36 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       // decide; a rewritten chatId is ignored, the item always goes to its own msg.chatId.
       const gateInput = { ...content, chatId: msg.chatId };
       const pinnedRouting = capturePinnedRouting(gateInput);
-      const gate = await this.hookManager.execute(
-        'message:sending',
-        {
-          sessionId: batch.sessionId,
-          input: cloneGateInput(gateInput),
-          type: messageTypeOf(msg.type, content),
-        },
-        buildSendingExecuteOptions(batch.sessionId, 'BulkMessageService', pinnedRouting),
-      );
+      let gate: { continue: boolean; data: { sessionId: string; input: typeof gateInput; type: string } };
+      try {
+        gate = await this.hookManager.execute(
+          'message:sending',
+          {
+            sessionId: batch.sessionId,
+            input: cloneGateInput(gateInput),
+            type: messageTypeOf(msg.type, content),
+          },
+          buildSendingExecuteOptions(batch.sessionId, 'BulkMessageService', pinnedRouting),
+        );
+      } catch (error) {
+        if (error instanceof HookExecutionError) {
+          blockedByPlugin = true;
+          this.logger.warn('Bulk outbound send blocked: pre-egress message:sending hook failed in fail-closed mode', {
+            pluginId: error.pluginId,
+            event: error.event,
+            sessionId: batch.sessionId,
+            batchId: batch.batchId,
+            source: 'BulkMessageService',
+            error: error.message,
+          });
+          throw markNothingSent(
+            new ServiceUnavailableException(
+              'Message sending temporarily blocked: a required pre-send plugin hook failed',
+            ),
+          );
+        }
+        throw error;
+      }
       if (!gate.continue) {
         blockedByPlugin = true;
         throw new BadRequestException('Message sending blocked by plugin');

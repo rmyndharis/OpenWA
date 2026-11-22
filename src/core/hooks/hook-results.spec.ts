@@ -12,10 +12,18 @@ describe('hook result checks', () => {
     expect(isMessagePayload('m')).toBe(false);
   });
 
-  it('accepts a webhook:before result only when it carries an object payload', () => {
+  it('accepts a webhook:before result only when it carries an own plain-object payload', () => {
     expect(isWebhookBeforeResult({ payload: { a: 1 } })).toBe(true);
+    expect(
+      isWebhookBeforeResult({ payload: Object.assign(Object.create(null) as Record<string, unknown>, { a: 1 }) }),
+    ).toBe(true);
     expect(isWebhookBeforeResult({ payload: null })).toBe(false);
     expect(isWebhookBeforeResult({ payload: [1] })).toBe(false);
+    expect(isWebhookBeforeResult({ payload: new Date('2026-01-01T00:00:00Z') })).toBe(false);
+    expect(isWebhookBeforeResult({ payload: new Map() })).toBe(false);
+    expect(isWebhookBeforeResult({ payload: new Set() })).toBe(false);
+    expect(isWebhookBeforeResult({ payload: /re/ })).toBe(false);
+    expect(isWebhookBeforeResult(Object.create({ payload: { a: 1 } }))).toBe(false);
     expect(isWebhookBeforeResult({})).toBe(false);
     expect(isWebhookBeforeResult(null)).toBe(false);
   });

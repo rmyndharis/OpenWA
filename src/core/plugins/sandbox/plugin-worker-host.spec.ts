@@ -512,7 +512,7 @@ describe('PluginWorkerHost', () => {
       });
       jest.advanceTimersByTime(100);
 
-      await expect(pending).resolves.toEqual({ continue: true });
+      await expect(pending).resolves.toEqual({ continue: true, error: 'hook timed out after 100ms' });
       expect(onTimeout).toHaveBeenCalled();
       jest.useRealTimers();
     });
@@ -528,7 +528,56 @@ describe('PluginWorkerHost', () => {
       await expect(pending).resolves.toEqual({ continue: true, error: 'handler blew up' });
     });
 
-    it('drains an in-flight hook immediately on worker exit (no stall for the full hook timeout)', async () => {
+    it('dispatchHook forwards failClosed:true on the IPC hook message when requested', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.dispatchHook({
+        event: 'message:sending',
+        data: {},
+        source: 'MessageService',
+        timeoutMs: 1000,
+        failClosed: true,
+      });
+      const sent = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+      expect(sent.failClosed).toBe(true);
+      ch.reply({ kind: 'hook-result', id: sent.id, continue: true });
+      await expect(pending).resolves.toEqual({ continue: true });
+    });
+
+    it.each([undefined, null, 'yes', 1])(
+      'dispatchHook surfaces a malformed-result error when hook-result.continue is non-boolean (%p)',
+      async badContinue => {
+        const ch = new FakeChannel();
+        const host = new PluginWorkerHost(ch);
+
+        const pending = host.dispatchHook({ event: 'message:sending', data: {}, source: 'Engine', timeoutMs: 1000 });
+        const sent = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+
+        ch.reply({
+          kind: 'hook-result',
+          id: sent.id,
+          continue: badContinue as unknown as boolean,
+        });
+        await expect(pending).resolves.toEqual({
+          continue: true,
+          error: 'malformed hook-result: continue must be a boolean',
+        });
+      },
+    );
+
+    it('dispatchHook normalizes an empty error string on hook-result to a non-empty fallback message', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.dispatchHook({ event: 'message:sending', data: {}, source: 'Engine', timeoutMs: 1000 });
+      const sent = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+
+      ch.reply({ kind: 'hook-result', id: sent.id, continue: true, error: '' });
+      await expect(pending).resolves.toEqual({ continue: true, error: 'sandbox hook failed' });
+    });
+
+    it('drains an in-flight hook immediately on worker exit with an error reason', async () => {
       const ch = new FakeChannel();
       const host = new PluginWorkerHost(ch);
 
@@ -536,7 +585,7 @@ describe('PluginWorkerHost', () => {
       const pending = host.dispatchHook({ event: 'message:received', data: {}, source: 'Engine', timeoutMs: 5000 });
       ch.crash(1);
 
-      await expect(pending).resolves.toEqual({ continue: true });
+      await expect(pending).resolves.toEqual({ continue: true, error: 'plugin worker exited during hook dispatch' });
     });
   });
 
@@ -934,7 +983,7 @@ describe('PluginWorkerHost', () => {
         const { ch, dispatch } = build();
         const timedOut = dispatch('message:sending');
         await jest.advanceTimersByTimeAsync(5000);
-        await expect(timedOut).resolves.toEqual({ continue: true });
+        await expect(timedOut).resolves.toEqual({ continue: true, error: 'hook timed out after 5000ms' });
 
         // The late send still short-circuits (true), rather than running the veto chain (false).
         await expect(guardedResult(ch, 1, ['message:sending'])).resolves.toBe(true);
@@ -985,7 +1034,7 @@ describe('PluginWorkerHost', () => {
   });
 
   describe('post-crash dead-check (fail-fast, no stall)', () => {
-    it('dispatchHook resolves {continue:true} immediately when the worker is already dead', async () => {
+    it('dispatchHook resolves immediately with an error reason when the worker is already dead', async () => {
       jest.useFakeTimers();
       try {
         const ch = new FakeChannel();
@@ -999,7 +1048,7 @@ describe('PluginWorkerHost', () => {
           source: 'test',
           timeoutMs: 5000,
         });
-        expect(result).toEqual({ continue: true });
+        expect(result).toEqual({ continue: true, error: 'plugin worker is no longer running' });
       } finally {
         jest.useRealTimers();
       }

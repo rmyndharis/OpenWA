@@ -33,6 +33,61 @@ export interface WorkerHookResult {
   error?: Error;
 }
 
+function safeFormatWorkerHookError(
+  error: unknown,
+  fallback = 'hook handler error',
+  seen = new WeakSet<object>(),
+): string {
+  if (error === undefined) return fallback;
+  if (typeof error === 'string') {
+    return error.trim().length > 0 ? error : fallback;
+  }
+  if (error instanceof Error) {
+    if (seen.has(error)) return fallback;
+    seen.add(error);
+    let message = '';
+    try {
+      if (typeof error.message === 'string') message = error.message;
+    } catch {
+      message = '';
+    }
+    if (message.trim().length > 0) return message;
+    let name = '';
+    try {
+      if (typeof error.name === 'string') name = error.name.trim();
+    } catch {
+      name = '';
+    }
+    try {
+      if (error instanceof AggregateError && Array.isArray(error.errors) && error.errors.length > 0) {
+        const parts = error.errors
+          .slice(0, 5)
+          .map(sub => safeFormatWorkerHookError(sub, '', seen))
+          .filter(part => part.length > 0);
+        if (parts.length > 0) return `${name || 'AggregateError'}: ${parts.join('; ')}`;
+      }
+    } catch {
+      // Fall through to safe name or fallback below when AggregateError getters throw.
+    }
+    return name.length > 0 ? name : fallback;
+  }
+  if (
+    error === null ||
+    typeof error === 'number' ||
+    typeof error === 'boolean' ||
+    typeof error === 'bigint' ||
+    typeof error === 'symbol'
+  ) {
+    return String(error);
+  }
+  try {
+    const text = `${error as string}`;
+    return text.trim().length > 0 ? text : fallback;
+  } catch {
+    return '[unprintable error]';
+  }
+}
+
 export type WorkerHookHandler = (ctx: WorkerHookContext) => Promise<WorkerHookResult> | WorkerHookResult;
 
 /**
@@ -90,34 +145,74 @@ export class WorkerHookRegistry {
     // Guard only a chain that starts from a usable value: there is nothing to keep otherwise.
     const check = HOOK_RESULT_ACCEPT[message.event as HookEvent];
     const accept = check?.(message.data) ? check : undefined;
+    const failClosed = message.failClosed === true;
     let data = message.data;
     let shouldContinue = true;
     let firstError: string | undefined;
     for (const { handler } of list) {
       try {
-        const result = await handler({
+        const rawResult: unknown = await handler({
           event: message.event,
           data,
           sessionId: message.sessionId,
           source: message.source,
           timestamp: new Date(),
         });
-        // Same rules as the host chain: a result that reports an error, or that the event cannot use, is
-        // skipped, so an earlier handler's rewrite (a redaction) survives a later handler of this plugin
-        // returning null or failing.
-        if (result.error === undefined && result.data !== undefined && (accept?.(result.data) ?? true)) {
-          data = result.data;
+        if (failClosed) {
+          if (rawResult === null || typeof rawResult !== 'object') {
+            firstError ??= 'hook handler returned an invalid result: continue must be a boolean';
+            break;
+          }
+          const result = rawResult as Partial<WorkerHookResult>;
+          // Check reported errors BEFORE `continue: false` or shape checks so explicit errors are never dropped.
+          if (result.error !== undefined) {
+            firstError ??= safeFormatWorkerHookError(result.error);
+            break;
+          }
+          if (Array.isArray(rawResult) || typeof result.continue !== 'boolean') {
+            firstError ??= 'hook handler returned an invalid result: continue must be a boolean';
+            break;
+          }
+          if (result.data !== undefined) {
+            if (accept && !accept(result.data)) {
+              firstError ??= 'hook handler returned an unusable payload';
+              break;
+            }
+            data = result.data;
+          }
+          if (!result.continue) {
+            shouldContinue = false;
+            break;
+          }
+          continue;
+        }
+        const result = rawResult as WorkerHookResult;
+        // Check reported errors BEFORE `continue: false` so a handler returning `{ continue: false, error }`
+        // never drops its error. Check `!== undefined` (not truthiness) so falsy error values still record.
+        if (result.error !== undefined) {
+          firstError ??= safeFormatWorkerHookError(result.error);
+          if (!result.continue) {
+            shouldContinue = false;
+            break;
+          }
+          continue;
+        }
+        // Same rules as the host chain: in fail-open mode, an unusable payload is skipped so an earlier
+        // rewrite survives.
+        if (result.data !== undefined) {
+          if (!accept || accept(result.data)) {
+            data = result.data;
+          }
         }
         if (!result.continue) {
           shouldContinue = false;
           break;
         }
-        if (result.error) throw result.error;
       } catch (error) {
-        // A handler error must not break the chain (mirrors the host hook manager). Report the FIRST
-        // failure to the host so a throwing hook is visible to the operator instead of failing open
-        // in silence; later handlers still run.
-        firstError ??= error instanceof Error ? error.message : String(error);
+        firstError ??= safeFormatWorkerHookError(error);
+        if (failClosed) {
+          break;
+        }
       }
     }
     const result: Extract<WorkerToHostMessage, { kind: 'hook-result' }> = {
@@ -137,7 +232,7 @@ export class WorkerHookRegistry {
         kind: 'hook-result',
         id: message.id,
         continue: shouldContinue,
-        error: firstError ?? `hook result could not be sent: ${error instanceof Error ? error.message : String(error)}`,
+        error: firstError ?? `hook result could not be sent: ${safeFormatWorkerHookError(error)}`,
       });
     }
   }

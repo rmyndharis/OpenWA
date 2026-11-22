@@ -90,6 +90,8 @@ export type HostToWorkerMessage =
       // handler led to it). The worker echoes it on every capability call the handler makes, so the
       // host re-establishes the re-entrancy guard for that causal chain only.
       inFlight?: string[];
+      /** True when the host chain is executing in fail-closed mode for this dispatch. */
+      failClosed?: boolean;
     }
   // The plugin's config was updated: refresh ctx.config and invoke onConfigChange (fire-and-forget).
   | { kind: 'config-change'; config: Record<string, unknown> }
