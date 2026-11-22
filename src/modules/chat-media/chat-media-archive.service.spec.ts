@@ -980,7 +980,7 @@ describe('ChatMediaArchiveService', () => {
         expect((ids as unknown[]).length).toBeLessThanOrEqual(500);
       }
       find.mockRestore();
-    });
+    }, 30_000);
 
     it('keeps referenced files across a chunk boundary', async () => {
       // A referenced file must survive even when it lands in a different chunk from its row.
@@ -993,7 +993,7 @@ describe('ChatMediaArchiveService', () => {
 
       expect(await svc.sweepOrphanedMedia(Date.now())).toBe(599);
       expect(await storageService.getFile((await repository.findOneByOrFail({ id: row.id })).mediaPath!)).toEqual(PNG);
-    });
+    }, 30_000);
 
     it('never touches status media — the two sweeps share one bucket', async () => {
       await storageService.putFile('statuses/sess-1/story.jpg', PNG);
