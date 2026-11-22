@@ -19,6 +19,7 @@ import {
   formatSessionClearCookie,
   formatSessionSetCookie,
   isAllowedBrowserOrigin,
+  isAllowedBrowserWsHandshake,
   isCookieAuthDisallowedPath,
   isSecureCookieRequest,
   resolveBrowserSessionTtlMs,
@@ -254,6 +255,194 @@ describe('browser-session.util', () => {
         ['10.0.0.1'],
       ),
     ).toThrow(ForbiddenException);
+  });
+
+  it('validates cookie WebSocket handshakes including Origin-less same-origin polling GET requests', () => {
+    // Modern browser same-origin Socket.IO HTTP polling GET omits Origin and sends Sec-Fetch-Site (+ optional Referer).
+    expect(
+      isAllowedBrowserWsHandshake(
+        {
+          secure: false,
+          headers: {
+            host: '127.0.0.1:2785',
+            'sec-fetch-site': 'same-origin',
+            referer: 'http://127.0.0.1:2785/sessions',
+          },
+        },
+        [],
+        undefined,
+        'production',
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedBrowserWsHandshake(
+        {
+          secure: false,
+          headers: {
+            host: '127.0.0.1:2785',
+            'sec-fetch-site': 'same-origin',
+          },
+        },
+        [],
+        undefined,
+        'production',
+      ),
+    ).toBe(true);
+
+    // Sec-Fetch-Site: same-origin with a foreign, malformed, or downgraded Referer is rejected.
+    expect(
+      isAllowedBrowserWsHandshake(
+        {
+          secure: false,
+          headers: {
+            host: 'wa.example.com',
+            'sec-fetch-site': 'same-origin',
+            referer: 'https://evil.example/page',
+          },
+        },
+        [],
+        undefined,
+        'production',
+      ),
+    ).toBe(false);
+    expect(
+      isAllowedBrowserWsHandshake(
+        {
+          secure: true,
+          headers: {
+            host: 'wa.example.com',
+            'sec-fetch-site': 'same-origin',
+            referer: 'http://wa.example.com/sessions',
+          },
+        },
+        [],
+        undefined,
+        'production',
+      ),
+    ).toBe(false);
+    expect(
+      isAllowedBrowserWsHandshake(
+        {
+          secure: false,
+          headers: {
+            host: 'wa.example.com',
+            'sec-fetch-site': 'same-origin',
+            referer: 'not-a-valid-url',
+          },
+        },
+        [],
+        undefined,
+        'production',
+      ),
+    ).toBe(false);
+
+    // Older browser without Fetch Metadata: same-origin Referer is allowed; foreign or HTTPS downgrade is rejected.
+    expect(
+      isAllowedBrowserWsHandshake(
+        {
+          secure: false,
+          headers: {
+            host: 'wa.example.com',
+            referer: 'https://wa.example.com/sessions',
+          },
+        },
+        [],
+        undefined,
+        'production',
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedBrowserWsHandshake(
+        {
+          secure: false,
+          headers: {
+            host: 'wa.example.com',
+            referer: 'https://evil.example/sessions',
+          },
+        },
+        [],
+        undefined,
+        'production',
+      ),
+    ).toBe(false);
+    expect(
+      isAllowedBrowserWsHandshake(
+        {
+          secure: true,
+          headers: {
+            host: 'wa.example.com',
+            referer: 'http://wa.example.com/sessions',
+          },
+        },
+        [],
+        undefined,
+        'production',
+      ),
+    ).toBe(false);
+
+    // Non-same-origin Sec-Fetch-Site (cross-site, same-site, none) is rejected without explicit CORS_ORIGINS even if Origin matches Host.
+    for (const site of ['cross-site', 'same-site', 'none']) {
+      expect(
+        isAllowedBrowserWsHandshake(
+          {
+            secure: true,
+            headers: {
+              host: 'wa.example.com',
+              origin: 'https://wa.example.com',
+              'sec-fetch-site': site,
+            },
+          },
+          [],
+          undefined,
+          'production',
+        ),
+      ).toBe(false);
+    }
+    // Explicit CORS_ORIGINS allows a cross-site browser handshake.
+    expect(
+      isAllowedBrowserWsHandshake(
+        {
+          secure: true,
+          headers: {
+            host: 'api.example.com',
+            origin: 'https://ui.example.com',
+            'sec-fetch-site': 'cross-site',
+          },
+        },
+        [],
+        'https://ui.example.com',
+        'production',
+      ),
+    ).toBe(true);
+    // Wildcard CORS never authorizes a cross-site cookie handshake.
+    expect(
+      isAllowedBrowserWsHandshake(
+        {
+          secure: false,
+          headers: {
+            host: 'api.example.com',
+            origin: 'https://evil.example',
+            'sec-fetch-site': 'cross-site',
+          },
+        },
+        [],
+        '*',
+        'development',
+      ),
+    ).toBe(false);
+
+    // Header-stripped / non-browser cookie probe lacking Origin, Sec-Fetch-Site, and Referer is rejected.
+    expect(
+      isAllowedBrowserWsHandshake(
+        {
+          secure: false,
+          headers: { host: 'wa.example.com' },
+        },
+        [],
+        undefined,
+        'development',
+      ),
+    ).toBe(false);
   });
 });
 

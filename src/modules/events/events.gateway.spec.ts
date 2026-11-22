@@ -1587,6 +1587,93 @@ describe('EventsGateway rate limiting', () => {
       await gw.handleConnection(asSocket(downgradeOrigin));
       expect(downgradeOrigin.disconnect).toHaveBeenCalledWith(true);
       expect(browserSessionService.validateSessionToken).not.toHaveBeenCalled();
+
+      // Sec-Fetch-Site: cross-site or same-site without explicit CORS_ORIGINS is refused even if Origin matches Host.
+      for (const site of ['cross-site', 'same-site']) {
+        const crossSite = makeCookieSock(
+          `ws-${site}`,
+          {
+            cookie: 'openwa_session=tok-1',
+            host: 'wa.example.com',
+            origin: 'https://wa.example.com',
+            'sec-fetch-site': site,
+          },
+          { secure: true },
+        );
+        await gw.handleConnection(asSocket(crossSite));
+        expect(crossSite.disconnect).toHaveBeenCalledWith(true);
+      }
+
+      // Origin-less polling handshake with Sec-Fetch-Site: same-origin but foreign/downgraded Referer is refused.
+      const foreignReferer = makeCookieSock('ws-foreign-referer', {
+        cookie: 'openwa_session=tok-1',
+        host: 'wa.example.com',
+        'sec-fetch-site': 'same-origin',
+        referer: 'https://evil.example/sessions',
+      });
+      await gw.handleConnection(asSocket(foreignReferer));
+      expect(foreignReferer.disconnect).toHaveBeenCalledWith(true);
+
+      const downgradedReferer = makeCookieSock(
+        'ws-downgraded-referer',
+        {
+          cookie: 'openwa_session=tok-1',
+          host: 'wa.example.com',
+          referer: 'http://wa.example.com/sessions',
+        },
+        { secure: true },
+      );
+      await gw.handleConnection(asSocket(downgradedReferer));
+      expect(downgradedReferer.disconnect).toHaveBeenCalledWith(true);
+      expect(browserSessionService.validateSessionToken).not.toHaveBeenCalled();
+    });
+
+    it('accepts Origin-less same-origin Socket.IO polling cookie handshakes verified by Sec-Fetch-Site or Referer', async () => {
+      const key = {
+        id: 'k-cookie-poll',
+        name: 'Cookie Poll Key',
+        role: 'admin',
+        isActive: true,
+        allowedSessions: null,
+        allowedChats: null,
+        allowedIps: null,
+        expiresAt: null,
+      };
+      browserSessionService.validateSessionToken.mockResolvedValue({
+        session: { id: 'bs-poll', apiKeyId: 'k-cookie-poll' },
+        apiKey: key,
+      });
+
+      const gw = buildCookieGateway();
+
+      // Modern browser HTTP long-polling GET omits Origin and sends Sec-Fetch-Site: same-origin + Referer.
+      const pollingWithReferer = makeCookieSock('ws-poll-sfs-ref', {
+        cookie: 'openwa_session=tok-poll',
+        host: '127.0.0.1:2785',
+        'sec-fetch-site': 'same-origin',
+        referer: 'http://127.0.0.1:2785/sessions',
+      });
+      await gw.handleConnection(asSocket(pollingWithReferer));
+      expect(pollingWithReferer.disconnect).not.toHaveBeenCalled();
+      expect(pollingWithReferer.data.browserSessionId).toBe('bs-poll');
+
+      // Modern browser with Referrer-Policy: no-referrer omits both Origin and Referer, sending Sec-Fetch-Site: same-origin.
+      const pollingNoReferer = makeCookieSock('ws-poll-sfs-only', {
+        cookie: 'openwa_session=tok-poll',
+        host: '127.0.0.1:2785',
+        'sec-fetch-site': 'same-origin',
+      });
+      await gw.handleConnection(asSocket(pollingNoReferer));
+      expect(pollingNoReferer.disconnect).not.toHaveBeenCalled();
+
+      // Older browser without Fetch Metadata omits Origin and Sec-Fetch-Site, sending same-origin Referer.
+      const legacyPolling = makeCookieSock('ws-poll-legacy-ref', {
+        cookie: 'openwa_session=tok-poll',
+        host: 'wa.example.com',
+        referer: 'https://wa.example.com/sessions',
+      });
+      await gw.handleConnection(asSocket(legacyPolling));
+      expect(legacyPolling.disconnect).not.toHaveBeenCalled();
     });
 
     it('authenticates same-origin cookie WS without storing raw keys, re-validates via validateSessionById, and supports evictBrowserSession', async () => {

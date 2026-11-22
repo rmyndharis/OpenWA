@@ -26,9 +26,7 @@ import { BrowserSessionService } from '../auth/browser-session.service';
 import {
   extractBrowserSessionCookie,
   firstHeaderValue,
-  isAllowedBrowserOrigin,
-  isHttpsTransportRequest,
-  resolveEffectiveHost,
+  isAllowedBrowserWsHandshake,
   type CookieRequestLike,
 } from '../auth/browser-session.util';
 import { ChatScopeService } from '../auth/chat-scope.service';
@@ -564,20 +562,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         socket: { remoteAddress: client.handshake.address },
         headers: client.handshake.headers ?? {},
       };
-      const effectiveHost = resolveEffectiveHost(cookieReq, trustedProxies);
-      const expectedProtocol: 'https:' | undefined = isHttpsTransportRequest(cookieReq, trustedProxies)
-        ? 'https:'
-        : undefined;
-      if (
-        !isAllowedBrowserOrigin(
-          origin,
-          effectiveHost,
-          process.env.CORS_ORIGINS,
-          process.env.NODE_ENV,
-          true,
-          expectedProtocol,
-        )
-      ) {
+      if (!isAllowedBrowserWsHandshake(cookieReq, trustedProxies, process.env.CORS_ORIGINS, process.env.NODE_ENV)) {
         this.logger.warn(`Client ${client.id} rejected: Cross-origin cookie WebSocket handshake refused`);
         void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
           ipAddress: clientIp,

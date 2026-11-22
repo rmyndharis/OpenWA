@@ -219,6 +219,65 @@ export function isAllowedBrowserOrigin(
   return isExplicitCorsOrigin(parsed.origin, corsOriginsEnv, nodeEnv);
 }
 
+function extractRefererOrigin(referer: string | undefined): string | undefined {
+  return parseHttpOrigin(referer)?.origin;
+}
+
+/**
+ * CSWSH check for cookie-authenticated WebSocket / Socket.IO handshakes.
+ *
+ * Socket.IO initiates connections over HTTP long-polling (`GET /socket.io/?EIO=4&transport=polling`)
+ * before upgrading, and browsers omit `Origin` on same-origin `GET` requests while sending
+ * `Sec-Fetch-Site: same-origin` and/or `Referer`.
+ */
+export function isAllowedBrowserWsHandshake(
+  req: CookieRequestLike,
+  trustedProxies: string[],
+  corsOriginsEnv?: string,
+  nodeEnv?: string,
+): boolean {
+  const origin = firstHeaderValue(req.headers?.origin);
+  const secFetchSite = firstHeaderValue(req.headers?.['sec-fetch-site'])?.toLowerCase();
+  const referer = firstHeaderValue(req.headers?.referer);
+  const effectiveHost = resolveEffectiveHost(req, trustedProxies);
+  const expectedProtocol: 'https:' | undefined = isHttpsTransportRequest(req, trustedProxies) ? 'https:' : undefined;
+
+  if (secFetchSite && secFetchSite !== 'same-origin') {
+    return isExplicitCorsOrigin(origin, corsOriginsEnv, nodeEnv);
+  }
+
+  if (origin !== undefined) {
+    return isAllowedBrowserOrigin(origin, effectiveHost, corsOriginsEnv, nodeEnv, true, expectedProtocol);
+  }
+
+  if (secFetchSite === 'same-origin') {
+    if (referer !== undefined) {
+      return isAllowedBrowserOrigin(
+        extractRefererOrigin(referer),
+        effectiveHost,
+        corsOriginsEnv,
+        nodeEnv,
+        true,
+        expectedProtocol,
+      );
+    }
+    return true;
+  }
+
+  if (referer !== undefined) {
+    return isAllowedBrowserOrigin(
+      extractRefererOrigin(referer),
+      effectiveHost,
+      corsOriginsEnv,
+      nodeEnv,
+      true,
+      expectedProtocol,
+    );
+  }
+
+  return false;
+}
+
 const SAFE_HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
