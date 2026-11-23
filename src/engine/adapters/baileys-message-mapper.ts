@@ -1446,7 +1446,7 @@ export function buildIncomingMessageFromBaileys(
 
   // The lid check uses the RAW sender (participant in a group, else the chat JID) before normalization.
   const senderJid = fields.participant ? fields.participant : rawChatId;
-  if (senderJid.endsWith('@lid')) {
+  if (!fields.fromMe && senderJid.endsWith('@lid')) {
     incoming.isLidSender = true;
   }
 

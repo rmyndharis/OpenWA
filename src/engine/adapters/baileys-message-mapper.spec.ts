@@ -1866,4 +1866,28 @@ describe('what is no message of its own', () => {
       expect(withoutMergedNonContentMessage(chat, undefined)).toBe(chat);
     });
   });
+
+  describe('isLidSender fromMe guard', () => {
+    it('sets isLidSender only when !fromMe on an @lid sender', () => {
+      const base: BaileysIncomingFields = {
+        id: 'MSG-LID-1',
+        remoteJid: '123456@lid',
+        fromMe: false,
+        body: 'hi',
+        contentType: 'conversation',
+        timestamp: 1_700_000_000,
+        selfJid: '628999@s.whatsapp.net',
+      };
+      expect(buildIncomingMessageFromBaileys({ ...base, fromMe: false }).isLidSender).toBe(true);
+      expect(buildIncomingMessageFromBaileys({ ...base, fromMe: true }).isLidSender).toBeUndefined();
+      expect(
+        buildIncomingMessageFromBaileys({
+          ...base,
+          remoteJid: '120363000@g.us',
+          participant: '999@lid',
+          fromMe: true,
+        }).isLidSender,
+      ).toBeUndefined();
+    });
+  });
 });

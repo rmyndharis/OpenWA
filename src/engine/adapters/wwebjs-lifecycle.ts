@@ -642,7 +642,11 @@ export class WwebjsLifecycle {
           setRequestInterception: (enabled: boolean) => Promise<void>;
           on: (
             event: string,
-            handler: (req: { url: () => string; respond: (res: unknown) => void; continue: () => void }) => void,
+            handler: (req: {
+              url: () => string;
+              respond: (res: unknown) => Promise<unknown> | void;
+              continue: () => Promise<unknown> | void;
+            }) => void,
           ) => void;
         };
       };
@@ -651,13 +655,15 @@ export class WwebjsLifecycle {
         await target.pupPage.setRequestInterception(true);
         target.pupPage.on('request', req => {
           if (req.url() === 'https://web.whatsapp.com/') {
-            req.respond({
-              status: 200,
-              contentType: 'text/html',
-              body: htmlBody,
-            });
+            void Promise.resolve(
+              req.respond({
+                status: 200,
+                contentType: 'text/html',
+                body: htmlBody,
+              }),
+            ).catch(() => undefined);
           } else {
-            req.continue();
+            void Promise.resolve(req.continue()).catch(() => undefined);
           }
         });
       };
@@ -881,23 +887,6 @@ export class WwebjsLifecycle {
       // teardown finished) must be dropped outright: dereferencing this.client would throw, and
       // reading it optionally would promote a client-less adapter to READY.
       if (this.client !== source || this.tearingDown || this.disconnectReported) return;
-      // The library re-emits 'ready' at the end of EVERY completed (re)inject pipeline — for a
-      // post-navigation re-inject this is the completion edge, and the only one it offers. Close the
-      // navigation window HERE, before the guards below: markReadyFromClientInfo early-returns while
-      // already READY, so a clear behind it would never run for the re-inject case (#1081).
-      this.clearNavigationReinjectWindow();
-      // whatsapp-web.js can emit `ready` BEFORE its message listeners are attached: its post-auth
-      // callback runs once per hasSynced trigger, and any run that finds `window.WWebJS` already
-      // defined skips the attach and bare-emits `ready` — including while the first run's attach is
-      // still in flight (observed live). Promoting on that premature emit binds READY to a session
-      // whose inbound bridge may never come up. The patched client's `eventsAttached` flag
-      // (scripts/patch-wwebjs-ready-sync.js) distinguishes the cases: `false` → ignore this emit
-      // and let the attach's own completion re-emit `ready` (it always does), with the readiness
-      // reconciliation as the backstop when the attach failed instead. `undefined` (unpatched
-      // tree) keeps the legacy behaviour. The same holds for a page that reloaded: once the callback has found the
-      // new page without the helpers the flag is false again until its attach completes, so an emit in that span says
-      // nothing about the page now loaded, and it must not close the unverified reload or count as a re-inject of the
-      // page it replaced.
       if (eventBridgeUnattached(source)) {
         this.host.logger.warn('Ignoring premature ready: the message event bridge is not attached yet', {
           sessionId: this.host.config.sessionId,
@@ -905,6 +894,11 @@ export class WwebjsLifecycle {
         });
         return;
       }
+      // The library re-emits 'ready' at the end of EVERY completed (re)inject pipeline — for a
+      // post-navigation re-inject this is the completion edge, and the only one it offers. Close the
+      // navigation window HERE, after verifying the bridge is attached: markReadyFromClientInfo
+      // early-returns while already READY, so a clear behind it would never run for re-inject (#1081).
+      this.clearNavigationReinjectWindow();
       this.lastReadyAt = Date.now();
       // While a reload is unverified, ask the page now loaded for the helpers, as a probe would: a yes closes the episode
       // only when no navigation landed since it was asked, so it speaks for the page it read and nothing later.

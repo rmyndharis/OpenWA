@@ -649,6 +649,81 @@ describe('WhatsAppWebJsAdapter initialize() with an unusable stored proxy', () =
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('swallows rejections from req.respond and req.continue in initWebVersionCache request interception', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-wwebjs-reqcatch-'));
+    const VERSION = '2.3000.999998';
+    const VERIFIED_HTML = `<!DOCTYPE html><html><head></head><body>${'r'.repeat(2048)}</body></html>`;
+    const EXPECTED_SHA = createHash('sha256').update(Buffer.from(VERIFIED_HTML, 'utf8')).digest('hex');
+
+    const origSha = process.env.WWEBJS_WEB_VERSION_SHA256;
+    const origAllow = process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      const buf = Buffer.from(VERIFIED_HTML, 'utf8');
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: () => Promise.resolve(VERIFIED_HTML),
+        arrayBuffer: () => Promise.resolve(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)),
+      } as unknown as Response);
+    });
+    const clientDestroySpy = jest
+      .spyOn(Client.prototype as unknown as { destroy: () => Promise<void> }, 'destroy')
+      .mockResolvedValue(undefined);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (err: unknown) => unhandled.push(err);
+    process.on('unhandledRejection', onUnhandled);
+    clientInitSpy.mockImplementation(async function (this: {
+      initWebVersionCache: () => Promise<void>;
+      pupPage: unknown;
+    }) {
+      const handlers: Record<string, (req: unknown) => void> = {};
+      this.pupPage = {
+        setRequestInterception: jest.fn().mockResolvedValue(undefined),
+        on: (event: string, fn: (req: unknown) => void) => {
+          handlers[event] = fn;
+        },
+      };
+      await this.initWebVersionCache();
+      handlers.request?.({
+        url: () => 'https://web.whatsapp.com/',
+        respond: jest.fn().mockRejectedValue(new Error('Target closed during respond')),
+        continue: jest.fn(),
+      });
+      handlers.request?.({
+        url: () => 'https://web.whatsapp.com/app.js',
+        respond: jest.fn(),
+        continue: jest.fn().mockRejectedValue(new Error('Target closed during continue')),
+      });
+    });
+
+    try {
+      __resetWebVersionCache();
+      process.env.WWEBJS_WEB_VERSION = VERSION;
+      process.env.WWEBJS_WEB_VERSION_SHA256 = EXPECTED_SHA;
+      delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+
+      const adapter = new WhatsAppWebJsAdapter({
+        sessionId: 'sess-req-catch',
+        sessionDataPath: tmpDir,
+        puppeteer: {},
+      });
+      await expect(adapter.initialize({})).resolves.toBeUndefined();
+      await new Promise(resolve => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      __resetWebVersionCache();
+      fetchSpy.mockRestore();
+      clientDestroySpy.mockRestore();
+      if (origSha === undefined) delete process.env.WWEBJS_WEB_VERSION_SHA256;
+      else process.env.WWEBJS_WEB_VERSION_SHA256 = origSha;
+      if (origAllow === undefined) delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+      else process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = origAllow;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('buildProxyLaunchConfig (#628 — proxy credentials must not go into --proxy-server)', () => {

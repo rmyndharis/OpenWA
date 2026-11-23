@@ -4,6 +4,7 @@ import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { countsTowardSendBreaker, sentNothing } from '../../modules/message/send-pacing.service';
+import * as loadRemoteMedia from '../../common/media/load-remote-media';
 
 const CONNECTION_CLOSED = 428;
 
@@ -112,10 +113,17 @@ describe('BaileysAdapter.sendProduct when the connection drops or the socket is 
       }),
     );
     const { adapter, sendMessage } = readyAdapter(getCatalog);
+    const spy = jest.spyOn(loadRemoteMedia, 'loadRemoteMediaBuffer').mockResolvedValueOnce({
+      data: Buffer.from([1, 2, 3]),
+      mimetype: 'image/jpeg',
+    });
+    try {
+      const res = await adapter.sendProduct('628123456789@c.us', 'P1', 'Check this out');
 
-    const res = await adapter.sendProduct('628123456789@c.us', 'P1', 'Check this out');
-
-    expect(res.id).toBe('M1');
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(res.id).toBe('M1');
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

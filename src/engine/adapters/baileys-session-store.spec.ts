@@ -2706,5 +2706,43 @@ describe('BaileysSessionStore', () => {
       expect([...fake.rows.keys()].sort()).toEqual([K(PHONE), K('628222@s.whatsapp.net')]);
       expect(fake.get(SID, PHONE)).toMatchObject({ pinned: true, muteEndTime: -1 });
     });
+
+    it('routes heldChatUpdates twin replay through persistChatState, withoutReadEcho, and markCovered', () => {
+      const fake = new FakeChatStateStore();
+      const s = new BaileysSessionStore(undefined, SID, fake);
+      const T = 1_700_000_000;
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      const markMs = T * 1000;
+      const origNow = Date.now;
+      Date.now = () => markMs;
+      try {
+        // Delete PHONE while both spellings exist, then hold a LID update in the deletion second.
+        s.upsertChats([{ id: PHONE, conversationTimestamp: T - 10 }]);
+        s.removeChats([PHONE]);
+        s.upsertChats([
+          {
+            id: LID,
+            muteEndTime: -1,
+            unreadCount: 0,
+            conversationTimestamp: T,
+            messages: [{ message: { key: { id: 'M-HELD', remoteJid: LID, fromMe: false } } }],
+          },
+        ]);
+        // Re-create the LID entry with an active unread count, seed a state row after deletion forget(), arm a read echo, then record M-HELD.
+        s.upsertChats([{ id: LID, conversationTimestamp: T + 1, unreadCount: 3 }]);
+        s.upsertChats([{ id: LID, archived: true }]);
+        s.expectReadEcho(LID);
+        s.recordMessage({ key: { id: 'M-HELD', remoteJid: LID, fromMe: false }, messageTimestamp: T + 1 }, 'text');
+
+        expect(fake.get(SID, PHONE)).toMatchObject({ archived: true, muteEndTime: -1 });
+        // The read-echo zero held inside the update must not override/clear unread state via raw Object spread.
+        expect(s.listChats().find(chat => chat.id === LID)).toMatchObject({
+          archived: true,
+          unreadCount: 3,
+        });
+      } finally {
+        Date.now = origNow;
+      }
+    });
   });
 });

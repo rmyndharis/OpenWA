@@ -864,7 +864,17 @@ export class BaileysSessionStore {
       const { mark, chatId, update } = held;
       if (mark.cleared && order > mark.order && this.deletionMark(this.markKeys(chatId)) === mark) {
         if (this.chatTwins(chatId).some(k => this.chats.has(k))) {
-          this.chats.set(chatId, { ...this.withoutStaleTimer(update), ...this.chats.get(chatId) });
+          const existing: StoredChat = this.chats.get(chatId) ?? { id: chatId };
+          const applied = this.withoutReadEcho(this.withoutStaleTimer(update), existing);
+          const markCovered = Object.hasOwn(applied, 'unreadCount')
+            ? (applied.unreadCount ?? 0) > 0 && ((existing.unreadCount ?? 0) < 0 || existing.markCovered === true)
+            : existing.markCovered;
+          this.chats.set(chatId, {
+            ...applied,
+            ...existing,
+            ...(markCovered === undefined ? {} : { markCovered }),
+          });
+          this.persistChatState(chatId, applied);
         } else {
           this.upsertChats([update]);
         }

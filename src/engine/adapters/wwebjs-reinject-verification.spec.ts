@@ -638,6 +638,25 @@ describe('liveness of a ready page after a reload', () => {
       expect(lifecycleOf(adapter).isInNavigationReinjectWindow()).toBe(true);
     });
   });
+
+  it('does not clear navigationReinjectWindow when a premature ready arrives before the event bridge attaches', async () => {
+    jest.useFakeTimers();
+    try {
+      jest.setSystemTime(1_786_000_000_000);
+      const { adapter, client } = wire();
+      reload(client);
+      (client as unknown as { eventsAttached?: boolean }).eventsAttached = false;
+      client.emit('ready');
+
+      expect((adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.isInNavigationReinjectWindow()).toBe(
+        true,
+      );
+      jest.setSystemTime(1_786_000_000_000 + NAVIGATION_REINJECT_GRACE_MS - 1_000);
+      await expect(adapter.probeLiveness()).resolves.toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
 
 describe('a re-inject that throws in a reloaded page', () => {

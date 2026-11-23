@@ -115,12 +115,22 @@ export class WwebjsStatus {
       if (eligible.length === 0) {
         continue;
       }
-      const contact = await broadcast.getContact();
+      let contact: { id: { _serialized: string }; name?: string; pushname?: string };
+      try {
+        contact = await broadcast.getContact();
+      } catch (error) {
+        if (this.host.isPageTransportError(error)) {
+          this.host.reportIfPageTransportError(error, 'collectStatuses');
+          break;
+        }
+        throw error;
+      }
       const contactSummary = {
         id: contact.id._serialized,
         ...(contact.name ? { name: contact.name } : {}),
         ...(contact.pushname ? { pushName: contact.pushname } : {}),
       };
+      let aborted = false;
       for (const msg of eligible) {
         const ts = new Date(msg.timestamp * 1000);
         // Reuse the same capped/limited/timeout-bounded inbound media download the live message path
@@ -130,6 +140,11 @@ export class WwebjsStatus {
           try {
             media = await this.host.capInboundMediaFor(msg);
           } catch (error) {
+            if (this.host.isPageTransportError(error)) {
+              this.host.reportIfPageTransportError(error, 'collectStatuses');
+              aborted = true;
+              break;
+            }
             this.host.logger.warn(`Failed to download media for status ${msg.id._serialized}: ${String(error)}`);
           }
         }
@@ -154,6 +169,7 @@ export class WwebjsStatus {
           expiresAt: new Date(ts.getTime() + 24 * 3_600_000),
         });
       }
+      if (aborted) break;
     }
     return statuses;
   }
