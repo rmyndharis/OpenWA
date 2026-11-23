@@ -10,17 +10,24 @@ import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 
 let sentKey: string | null = null;
+let sentUrl: string | null = null;
+let sentCredentials: RequestCredentials | undefined;
 let reply: () => Response = okReply;
 
 function okReply(): Response {
-  return new Response(JSON.stringify({ valid: true, role: 'admin' }), {
-    headers: { 'Content-Type': 'application/json' },
-  });
+  return new Response(
+    JSON.stringify({ valid: true, role: 'admin', engineType: 'baileys', scoped: false, apiKeyId: 'key-admin-1' }),
+    {
+      headers: { 'Content-Type': 'application/json' },
+    },
+  );
 }
 
 function installFetchStub(): void {
-  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    sentUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     sentKey = new Headers(init?.headers).get('X-API-Key');
+    sentCredentials = init?.credentials;
     return Promise.resolve(reply());
   }) as typeof fetch;
 }
@@ -42,21 +49,33 @@ before(async () => {
 
 afterEach(() => {
   sentKey = null;
+  sentUrl = null;
+  sentCredentials = undefined;
   reply = okReply;
+  sessionStorage.clear();
+  localStorage.clear();
   rtl.cleanup();
 });
 
-test('a key pasted with surrounding whitespace is sent and stored trimmed', async () => {
+test('a key pasted with surrounding whitespace is exchanged at /auth/session trimmed and never stored in web storage', async () => {
   const { screen, fireEvent, waitFor } = rtl;
-  const logins: string[] = [];
-  rtl.render(createElement(Login, { onLogin: (key: string) => logins.push(key) }));
+  const logins: unknown[] = [];
+  rtl.render(
+    createElement(Login, {
+      onLogin: ((session: unknown) => logins.push(session)) as never,
+    }),
+  );
 
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: '  owa_k1_secret ' } });
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
   await waitFor(() => assert.equal(logins.length, 1));
-  assert.deepEqual(logins, ['owa_k1_secret']);
+  assert.equal(sentUrl, '/api/auth/session');
   assert.equal(sentKey, 'owa_k1_secret');
+  assert.equal(sentCredentials, 'include');
+  assert.deepEqual(logins, [{ role: 'admin', engineType: 'baileys', scoped: false, apiKeyId: 'key-admin-1' }]);
+  assert.equal(sessionStorage.getItem('openwa_api_key'), null);
+  assert.equal(localStorage.getItem('openwa_api_key'), null);
 });
 
 async function submitAndReadError(): Promise<string> {
@@ -114,8 +133,8 @@ for (const [label, body] of [
     const { screen, fireEvent } = rtl;
     reply = () => new Response(body, { status: 200 });
     // Recorded, not thrown: the form's own catch would turn a throw here into the very error this test expects.
-    const logins: string[] = [];
-    rtl.render(createElement(Login, { onLogin: (key: string) => logins.push(key) }));
+    const logins: unknown[] = [];
+    rtl.render(createElement(Login, { onLogin: ((session: unknown) => logins.push(session)) as never }));
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'owa_k1_secret' } });
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
     await rtl.waitFor(() => assert.ok(logins.length > 0 || document.querySelector('.error-message')));

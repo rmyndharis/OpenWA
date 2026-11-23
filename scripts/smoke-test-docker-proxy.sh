@@ -1,6 +1,6 @@
 #!/bin/sh
 # Smoke test: verify openwa-api can list containers via docker-socket-proxy.
-# Run this after `docker compose up -d` with the stack fully started.
+# Run this after `DOCKER_HOST=tcp://docker-proxy:2375 docker compose --profile docker-proxy up -d`.
 # Usage: ./scripts/smoke-test-docker-proxy.sh <unscoped-admin-api-key>
 set -e
 
@@ -45,7 +45,7 @@ echo ""
 echo "==> Verifying docker-proxy container is running..."
 PROXY_STATE=$(docker inspect --format='{{.State.Status}}' openwa-docker-proxy 2>/dev/null || echo "not_found")
 if [ "$PROXY_STATE" != "running" ]; then
-  echo "FAIL: openwa-docker-proxy is not running (state: $PROXY_STATE)" >&2
+  echo "FAIL: openwa-docker-proxy is not running (state: $PROXY_STATE); start it with: DOCKER_HOST=tcp://docker-proxy:2375 docker compose --profile docker-proxy up -d" >&2
   exit 1
 fi
 echo "PASS: openwa-docker-proxy is running"

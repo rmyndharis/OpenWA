@@ -2811,6 +2811,11 @@ export class BaileysEvents {
     // Hold the stream handle in the outer scope so the timeout can destroy it. A genuine
     // download/read error still rejects (propagating to the caller's catch as before).
     let stream: (AsyncIterable<Buffer> & { destroy?: () => void }) | undefined;
+    // AbortController cancels the underlying HTTP fetch (via patch-baileys-media-signal) and any
+    // pending reuploadRequest when the deadline fires, the byte cap trips, or reading stops early.
+    const abort = new AbortController();
+    const abortReason = (): Error =>
+      abort.signal.reason instanceof Error ? abort.signal.reason : new Error('inbound media download aborted');
     // The timeout can fire before the stream exists (an expired-media re-upload wait, a slow response):
     // the abandoned download must then stop on its own instead of buffering outside the limiter.
     let timedOut = false;
@@ -2824,7 +2829,7 @@ export class BaileysEvents {
       releaseSlot = () => resolve(Buffer.alloc(0));
     });
     const body = async (): Promise<Buffer | { overflowBytes: number }> => {
-      if (timedOut) {
+      if (timedOut || abort.signal.aborted) {
         return Buffer.alloc(0);
       }
       const b = await this.host.loadLib();
@@ -2842,34 +2847,60 @@ export class BaileysEvents {
       // from the nested `options`; a top-level one is ignored. Read after the socket: once the session
       // is torn down getSocket() throws, and a dispatcher built then would never be closed.
       const dispatcher = this.host.getFetchDispatcher();
-      stream = (await b.downloadMediaMessage(
-        msg,
-        'stream',
-        dispatcher ? { options: { dispatcher } as RequestInit } : {},
-        {
-          logger: createSilentLogger(),
-          reuploadRequest: async m => assertWhatsAppSource(await sock.updateMediaMessage(m)),
-        },
-      )) as AsyncIterable<Buffer> & { destroy?: () => void };
-      if (timedOut) {
-        stream.destroy?.();
-        return Buffer.alloc(0);
-      }
-
-      const chunks: Buffer[] = [];
-      let total = 0;
-      for await (const chunk of stream) {
-        if (timedOut) {
-          break;
-        }
-        total += chunk.length;
-        if (total > maxBytes) {
+      try {
+        stream = (await b.downloadMediaMessage(
+          msg,
+          'stream',
+          { options: { ...(dispatcher ? { dispatcher } : {}), signal: abort.signal } },
+          {
+            logger: createSilentLogger(),
+            reuploadRequest: async m => {
+              if (abort.signal.aborted) {
+                throw abortReason();
+              }
+              let onAbort: (() => void) | undefined;
+              const reupload = Promise.resolve(sock.updateMediaMessage(m));
+              // Attach a no-op rejection handler so a late rejection after abort never goes unhandled.
+              reupload.catch(() => undefined);
+              const updated = await new Promise<WAMessage>((resolve, reject) => {
+                onAbort = () => reject(abortReason());
+                abort.signal.addEventListener('abort', onAbort, { once: true });
+                reupload.then(resolve, reject);
+              }).finally(() => {
+                if (onAbort) abort.signal.removeEventListener('abort', onAbort);
+              });
+              if (abort.signal.aborted) {
+                throw abortReason();
+              }
+              return assertWhatsAppSource(updated);
+            },
+          },
+        )) as AsyncIterable<Buffer> & { destroy?: () => void };
+        if (timedOut || abort.signal.aborted) {
           stream.destroy?.();
-          return { overflowBytes: total };
+          return Buffer.alloc(0);
         }
-        chunks.push(chunk);
+
+        const chunks: Buffer[] = [];
+        let total = 0;
+        for await (const chunk of stream) {
+          if (timedOut || abort.signal.aborted) {
+            break;
+          }
+          total += chunk.length;
+          if (total > maxBytes) {
+            abort.abort(new Error('inbound media download exceeded size cap'));
+            stream.destroy?.();
+            return { overflowBytes: total };
+          }
+          chunks.push(chunk);
+        }
+        return Buffer.concat(chunks);
+      } finally {
+        if (!abort.signal.aborted) {
+          abort.abort();
+        }
       }
-      return Buffer.concat(chunks);
     };
     // The wait for the process-wide gate sits inside the deadline below, so a contended gate cannot
     // hold this session's inbound handler longer than MEDIA_DOWNLOAD_TIMEOUT_MS.
@@ -2881,10 +2912,11 @@ export class BaileysEvents {
     });
 
     // A slow/trickling sender never trips the byte cap, so without a deadline it pins a concurrency
-    // slot (and, on Baileys, the whole inbound handler) indefinitely. On timeout, destroy the stream
-    // and treat it as no usable media.
+    // slot (and, on Baileys, the whole inbound handler) indefinitely. On timeout, abort the signal
+    // before destroying the stream so pre-header fetches and pending re-uploads cancel immediately.
     return withInboundDownloadTimeout(download, inboundMediaTimeoutMs(), () => {
       timedOut = true;
+      abort.abort(new Error('inbound media download timed out'));
       stream?.destroy?.();
       releaseSlot();
     });

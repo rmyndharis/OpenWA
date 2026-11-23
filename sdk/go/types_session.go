@@ -259,13 +259,14 @@ type MemoryUsage struct {
 }
 
 // SessionStatsOverview is the aggregate session stats payload.
+// MemoryUsage is nil unless the caller uses an unscoped ADMIN API key.
 type SessionStatsOverview struct {
 	Total        int            `json:"total"`
 	Active       int            `json:"active"`
 	Ready        int            `json:"ready"`
 	Disconnected int            `json:"disconnected"`
 	ByStatus     map[string]int `json:"byStatus"`
-	MemoryUsage  MemoryUsage    `json:"memoryUsage"`
+	MemoryUsage  *MemoryUsage   `json:"memoryUsage,omitempty"`
 }
 
 // SessionConfig is a session's effective runtime configuration. A nil MaxReconnectAttempts means

@@ -10,22 +10,40 @@ import {
 export const QUEUE_COMMAND_TIMEOUT_MS = 2000;
 
 /**
+ * How long the producer's socket may stay silent after a write before it is destroyed. Kept strictly
+ * below QUEUE_COMMAND_TIMEOUT_MS so the dead socket is torn down before the first stalled command's
+ * own deadline: subsequent producer calls then reject immediately through enableOfflineQueue: false
+ * instead of each waiting out another full command timeout on the same silent socket.
+ */
+export const QUEUE_SOCKET_TIMEOUT_MS = 1500;
+
+/**
  * BullMQ connection for the shared producer (`BullModule.forRootAsync` in queue.module.ts): the common
  * Redis fields plus `enableOfflineQueue: false`, so once connected, `queue.add()` fails fast when Redis
  * drops and the dispatch path can fall back to direct delivery instead of buffering forever. Before the
  * first connect that option never applies: see producerReady.
  *
- * `commandTimeout` covers the other failure: a Redis that stays connected and stops answering (a
- * network partition, a frozen process). Nothing is rejected then, so without a deadline the add of a
- * delivery or a job lookup never settles, the dispatch slot or the ingress request holding it never
- * frees, and the direct-delivery fallback never runs. The Worker connection below must not inherit it:
- * its blocking commands wait on Redis by design.
+ * `commandTimeout`, `socketTimeout`, and `autoResendUnfulfilledCommands: false` cover the other failure:
+ * a Redis that stays connected and stops answering (a network partition, a frozen process). `socketTimeout`
+ * tears down the dead socket before `commandTimeout` expires so callers after the first stalled command
+ * fast-fail instead of waiting another 2 s each; `autoResendUnfulfilledCommands: false` prevents an
+ * already-timed-out enqueue from being silently replayed after reconnect while the direct fallback ran;
+ * and `commandTimeout` settles the dropped in-flight command so callers never hang. The Worker connection
+ * below must not inherit any of these: its blocking commands wait on Redis by design.
  */
 export function queueConnectionOptions(): RedisConnectionOptions & {
   enableOfflineQueue: false;
   commandTimeout: number;
+  socketTimeout: number;
+  autoResendUnfulfilledCommands: false;
 } {
-  return { ...redisConnectionOptions(), enableOfflineQueue: false, commandTimeout: QUEUE_COMMAND_TIMEOUT_MS };
+  return {
+    ...redisConnectionOptions(),
+    enableOfflineQueue: false,
+    commandTimeout: QUEUE_COMMAND_TIMEOUT_MS,
+    socketTimeout: QUEUE_SOCKET_TIMEOUT_MS,
+    autoResendUnfulfilledCommands: false,
+  };
 }
 
 /**
@@ -130,14 +148,16 @@ export function webhookWorkerConcurrency(): number {
 const DEFAULT_INGRESS_WORKER_CONCURRENCY = 10;
 
 /**
- * Ingress Worker concurrency. Ordering within a conversation is now guaranteed by the
- * per-conversation KeyedAsyncLock in the processor, not by a single-worker queue, so raising
- * concurrency here parallelizes unrelated conversations. A job waiting on a busy key still holds a
- * slot, though: a burst on one key larger than this value blocks every other key until it drains.
- * Size it above the largest expected per-key burst; the key is the whole instance unless the route
- * declares a conversationId pointer. Override via INGRESS_WORKER_CONCURRENCY; unset or blank uses
- * the default, and any other value that is not a positive integer fails boot validation
- * (env.validation.ts).
+ * Ingress Worker concurrency. Ordering within a conversation is guaranteed per ordering key in
+ * IngressProcessor, not by a single-worker queue, so raising concurrency here parallelizes
+ * unrelated conversations. When a BullMQ job arrives for a key already running in this worker,
+ * IngressProcessor defers it back to the delayed set via DelayedError rather than holding a worker
+ * slot, so a burst on one slow key no longer head-of-line-blocks unrelated keys; KeyedAsyncLock
+ * remains as the in-process fallback for direct or token-less callers. Size this value to the
+ * number of distinct conversations you want executing concurrently; the key is the whole instance
+ * unless the route declares a conversationId pointer. Override via INGRESS_WORKER_CONCURRENCY;
+ * unset or blank uses the default, and any other value that is not a positive integer fails boot
+ * validation (env.validation.ts).
  */
 export function ingressWorkerConcurrency(): number {
   return resolveNonNegativeIntEnv(process.env.INGRESS_WORKER_CONCURRENCY, 0) || DEFAULT_INGRESS_WORKER_CONCURRENCY;

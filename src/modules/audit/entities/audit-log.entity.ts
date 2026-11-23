@@ -100,21 +100,21 @@ export class AuditLog {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Index()
+  @Index('IDX_audit_logs_action')
   @Column({ type: 'varchar', length: 50 })
   action!: AuditAction;
 
   @Column({ type: 'varchar', length: 10, default: AuditSeverity.INFO })
   severity!: AuditSeverity;
 
-  @Index()
+  @Index('IDX_audit_logs_apiKeyId')
   @Column({ type: 'varchar', length: 36, nullable: true })
   apiKeyId!: string | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })
   apiKeyName!: string | null;
 
-  @Index()
+  @Index('IDX_audit_logs_sessionId')
   @Column({ type: 'varchar', length: 36, nullable: true })
   sessionId!: string | null;
 
@@ -144,7 +144,7 @@ export class AuditLog {
   @Column({ type: 'text', nullable: true })
   errorMessage!: string | null;
 
-  @Index()
+  @Index('IDX_audit_logs_createdAt')
   @CreateDateColumn()
   createdAt!: Date;
 }

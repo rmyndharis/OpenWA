@@ -345,7 +345,7 @@ describe('a WhatsApp unlink whose session read fails while the episode timer is 
     expect(f.engines).toHaveLength(2);
   });
 
-  it('keeps the binding on the row and on the armed reconnect when this node no longer owns the session', async () => {
+  it('suppresses audit, phone clear, and binding change when this node no longer owns the session', async () => {
     const f = fixture();
     await f.lifecycle.start(ID);
     const first = f.callbacksOf(0);
@@ -357,8 +357,8 @@ describe('a WhatsApp unlink whose session read fails while the episode timer is 
     first.onDisconnected?.('LOGOUT');
     await f.settled();
 
-    // The audit row is not fenced, as on the path whose read answers; the phone clear is.
-    expect(f.unlinkAudits()).toHaveLength(1);
+    // Both the audit/announcements and the phone clear are fenced on ownership.
+    expect(f.unlinkAudits()).toHaveLength(0);
     expect(f.repository.update).not.toHaveBeenCalledWith(ID, { phone: null });
     expect(f.stored.phone).toBe(BOUND);
     expect(f.reconnectState()?.session?.phone).toBe(BOUND);
@@ -609,19 +609,19 @@ describe('a disconnect whose session read fails while a running reconnect tears 
     expect(f.engines).toHaveLength(2);
   });
 
-  it('keeps the binding when this node no longer owns the session', async () => {
+  it('suppresses audit, phone clear, and replacement launch when this node no longer owns the session', async () => {
     const f = fixture();
     const teardown = await tearDownSlowly(f);
     f.disown();
     await dropWithFailedRead(f, 0, 'LOGOUT');
     teardown.resolve();
-    await until(() => f.unlinkAudits().length > 0, 'the unlink to be recorded');
-    await until(() => !f.reconnectState()?.initInFlight, 'the reconnect to settle');
+    await until(() => f.reconnectState() === undefined, 'the disowned reconnect to abort and cancel');
 
-    // The audit row is not fenced, as on the path whose read answers; the phone clear is.
-    expect(f.unlinkAudits()).toHaveLength(1);
+    // Ownership loss fences audit, phone clear, and replacement engine launch.
+    expect(f.unlinkAudits()).toHaveLength(0);
     expect(f.repository.update).not.toHaveBeenCalledWith(ID, { phone: null });
     expect(f.stored.phone).toBe(BOUND);
+    expect(f.engines).toHaveLength(1);
   });
 });
 

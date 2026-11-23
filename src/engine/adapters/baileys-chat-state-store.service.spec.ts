@@ -918,4 +918,47 @@ describe('ChatStateStoreService', () => {
     expect(written).not.toHaveProperty('pinned');
     expect(svc.get('s', 'c')).toBeUndefined();
   });
+
+  describe('sessionWrites lifecycle cleanup', () => {
+    it('deletes sessionWrites on clearSession without resurrecting via cleared(), and prunes idle entries on reload', async () => {
+      const chatId = '6281234567890@c.us';
+      const repo = makeRepo();
+      const svc = svcWith(repo);
+      const internal = svc as unknown as {
+        sessionWrites: Map<string, { pending: Set<Promise<void>>; seq: number; generation: number }>;
+        cleared: (sessionId: string, generation: number) => boolean;
+      };
+
+      await svc.remember('ephemeral-1', chatId, { pinned: true });
+      await svc.remember('ephemeral-2', chatId, { archived: true });
+      expect(internal.sessionWrites.has('ephemeral-1')).toBe(true);
+      expect(internal.sessionWrites.has('ephemeral-2')).toBe(true);
+
+      // clearSession removes the entry once pending writes settle and repo.delete finishes.
+      await svc.clearSession('ephemeral-1');
+      expect(internal.sessionWrites.has('ephemeral-1')).toBe(false);
+
+      // A pre-clear write checking cleared() observes true AND does not resurrect the deleted entry.
+      expect(internal.cleared('ephemeral-1', 0)).toBe(true);
+      expect(internal.sessionWrites.has('ephemeral-1')).toBe(false);
+
+      // reload() prunes idle entries (pending.size === 0) while preserving entries with active writes.
+      let releaseWrite!: () => void;
+      const blocked = new Promise<void>(resolve => (releaseWrite = resolve));
+      repo.upsert.mockImplementationOnce(async () => {
+        await blocked;
+        return undefined;
+      });
+      const activeWrite = svc.remember('active-session', chatId, { pinned: true });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(internal.sessionWrites.get('active-session')?.pending.size).toBe(1);
+
+      await svc.reload();
+      expect(internal.sessionWrites.has('ephemeral-2')).toBe(false);
+      expect(internal.sessionWrites.has('active-session')).toBe(true);
+
+      releaseWrite();
+      await activeWrite;
+    });
+  });
 });

@@ -44,6 +44,7 @@ import {
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { SessionService, linkPreviewDefault } from '../session/session.service';
 import {
+  HookExecutionError,
   HookManager,
   applyPinnedRouting,
   buildSendingExecuteOptions,
@@ -63,6 +64,7 @@ import { renderedLength, renderTemplate, TemplateRenderError } from '../../commo
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { isUniqueViolation } from '../../common/utils/db-errors';
 
 // Type definitions for bulk message content
@@ -144,6 +146,7 @@ interface BatchExecutionState {
   endedElsewhere: boolean;
   abortSignal: AbortSignal;
   linkPreview?: boolean;
+  initiatedDuringMessageSent: boolean;
 }
 
 /** A terminal status only another writer can have put on a row this run still holds as PROCESSING. */
@@ -355,6 +358,9 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
   }
 
   async createBatch(sessionId: string, dto: SendBulkMessageDto): Promise<MessageBatch> {
+    // Capture synchronously before the first await so batches started from inside a `message:sent`
+    // hook suppress echo re-triggering for all items even after the hook's ALS scope settles.
+    const initiatedDuringMessageSent = this.hookManager?.isEventInFlight?.('message:sent') === true;
     // Validate the session is started (guard only — the batch is sent later, by drainBatch).
     this.engines.require(sessionId, () => new BadRequestException(`Session '${sessionId}' is not active`));
 
@@ -475,7 +481,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       );
 
       // Start processing asynchronously
-      const pickup = this.processBatch(batch.id, true, lifetime).catch(err => {
+      const pickup = this.processBatch(batch.id, true, lifetime, initiatedDuringMessageSent).catch(err => {
         this.logger.error(`Batch ${batchId} processing error: ${String(err)}`);
       });
       handedOff = true;
@@ -577,13 +583,20 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     return batch;
   }
 
-  private processBatch(batchDbId: string, reserved: boolean, lifetime: SessionWriteScope): Promise<void> {
+  private processBatch(
+    batchDbId: string,
+    reserved: boolean,
+    lifetime: SessionWriteScope,
+    initiatedDuringMessageSent = false,
+  ): Promise<void> {
     const controller = new AbortController();
     if (this.processingBatches.get(batchDbId) === false || this.shuttingDown) {
       controller.abort();
     }
     this.batchAborts.set(batchDbId, controller);
-    const run = this.activeBatchContext.run(batchDbId, () => this.runBatch(batchDbId, reserved, lifetime, controller));
+    const run = this.activeBatchContext.run(batchDbId, () =>
+      this.runBatch(batchDbId, reserved, lifetime, controller, initiatedDuringMessageSent),
+    );
     const settled = run.then(
       () => undefined,
       () => undefined,
@@ -600,6 +613,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     reserved: boolean,
     lifetime: SessionWriteScope,
     controller: AbortController,
+    initiatedDuringMessageSent: boolean,
   ): Promise<void> {
     let batch: MessageBatch | null = null;
     // Always release the in-flight marker on every exit path (engine-not-found early return, a thrown
@@ -623,7 +637,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
         return;
       }
       this.processingBatches.set(batch.id, true);
-      await this.executeBatch(batch, lifetime, controller.signal);
+      await this.executeBatch(batch, lifetime, controller.signal, initiatedDuringMessageSent);
     } catch (error) {
       lifetime.assertCurrent();
       // A throw here (a DB error on the pickup read, the start transition or a progress write) would
@@ -649,6 +663,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     batch: MessageBatch,
     lifetime: SessionWriteScope,
     abortSignal: AbortSignal,
+    initiatedDuringMessageSent = false,
   ): Promise<void> {
     if (!(await lifetime.write(() => this.markBatchProcessing(batch)))) return;
     lifetime.assertCurrent();
@@ -672,6 +687,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       endedElsewhere: false,
       abortSignal,
       linkPreview,
+      initiatedDuringMessageSent,
     };
     await this.processBatchMessages(batch, state, lifetime);
     await lifetime.write(() => this.finalizeBatch(batch, state));
@@ -774,15 +790,36 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       // decide; a rewritten chatId is ignored, the item always goes to its own msg.chatId.
       const gateInput = { ...content, chatId: msg.chatId };
       const pinnedRouting = capturePinnedRouting(gateInput);
-      const gate = await this.hookManager.execute(
-        'message:sending',
-        {
-          sessionId: batch.sessionId,
-          input: cloneGateInput(gateInput),
-          type: messageTypeOf(msg.type, content),
-        },
-        buildSendingExecuteOptions(batch.sessionId, 'BulkMessageService', pinnedRouting),
-      );
+      let gate: { continue: boolean; data: { sessionId: string; input: typeof gateInput; type: string } };
+      try {
+        gate = await this.hookManager.execute(
+          'message:sending',
+          {
+            sessionId: batch.sessionId,
+            input: cloneGateInput(gateInput),
+            type: messageTypeOf(msg.type, content),
+          },
+          buildSendingExecuteOptions(batch.sessionId, 'BulkMessageService', pinnedRouting),
+        );
+      } catch (error) {
+        if (error instanceof HookExecutionError) {
+          blockedByPlugin = true;
+          this.logger.warn('Bulk outbound send blocked: pre-egress message:sending hook failed in fail-closed mode', {
+            pluginId: error.pluginId,
+            event: error.event,
+            sessionId: batch.sessionId,
+            batchId: batch.batchId,
+            source: 'BulkMessageService',
+            error: error.message,
+          });
+          throw markNothingSent(
+            new ServiceUnavailableException(
+              'Message sending temporarily blocked: a required pre-send plugin hook failed',
+            ),
+          );
+        }
+        throw error;
+      }
       if (!gate.continue) {
         blockedByPlugin = true;
         throw new BadRequestException('Message sending blocked by plugin');
@@ -829,8 +866,14 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       // this the breaker was blind to bulk, the highest-volume path it exists to protect.
       let messageResult;
       engineAsked = true;
+      const releaseEchoOrigin = state.initiatedDuringMessageSent
+        ? this.hookManager?.beginEchoOriginSend?.(batch.sessionId)
+        : undefined;
       try {
         messageResult = await this.sendMessage(engine, msg.chatId, msg.type, content, state.linkPreview);
+        if (state.initiatedDuringMessageSent && messageResult.id) {
+          this.hookManager?.markEchoOrigin?.(batch.sessionId, messageResult.id);
+        }
       } catch (engineError) {
         // Same filter the single-send path applies: adapters also raise client-fault and
         // engine-state errors from inside this call, and those say nothing about the account.
@@ -841,6 +884,8 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
         // the echo row lands.
         settleAdmission?.(!sentNothing(engineError));
         throw engineError;
+      } finally {
+        releaseEchoOrigin?.();
       }
       settleAdmission?.(true);
       this.pacing.recordSendSuccess(batch.sessionId);

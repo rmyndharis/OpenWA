@@ -123,6 +123,7 @@ export function Infrastructure() {
   }, [savedConfig]);
   const restartFlow = useRestartFlow();
   const dataBackup = useDataBackup();
+  const [includePluginSecrets, setIncludePluginSecrets] = useState(false);
   const exportButtonRef = useRef<HTMLButtonElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const restartBackupButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -303,6 +304,16 @@ export function Infrastructure() {
       <div>
         <strong>{t('infrastructure.migration.backupTitle')}</strong>
         <small>{t('infrastructure.migration.backupHint')}</small>
+        <label className="data-migration-secrets-optin">
+          <input
+            type="checkbox"
+            checked={includePluginSecrets}
+            onChange={e => setIncludePluginSecrets(e.target.checked)}
+            disabled={dataBackup.migrating}
+          />
+          <span>{t('infrastructure.migration.includePluginSecrets')}</span>
+        </label>
+        <small className="data-migration-secrets-hint">{t('infrastructure.migration.includePluginSecretsHint')}</small>
       </div>
       <div className="data-migration-actions">
         <button
@@ -310,7 +321,7 @@ export function Infrastructure() {
           className="btn-secondary btn-sm"
           onClick={() => {
             backupFocusRef.current = 'export';
-            void dataBackup.exportBackup();
+            void dataBackup.exportBackup(includePluginSecrets);
           }}
           disabled={dataBackup.migrating}
         >
@@ -1151,7 +1162,7 @@ export function Infrastructure() {
                         className="btn-secondary btn-sm"
                         onClick={() => {
                           backupFocusRef.current = 'restart-export';
-                          void dataBackup.exportBackup();
+                          void dataBackup.exportBackup(includePluginSecrets);
                         }}
                         disabled={dataBackup.migrating}
                       >

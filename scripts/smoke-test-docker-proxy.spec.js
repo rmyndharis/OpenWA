@@ -48,3 +48,20 @@ test('a server error or no answer carries no key hint', () => {
     assert.equal(infraFailure(code), `FAIL: /api/infra/status returned HTTP ${code} (expected 200)`);
   }
 });
+
+test('missing docker-proxy container tells the operator to enable the docker-proxy profile', () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'docker-proxy-smoke-'));
+  fs.writeFileSync(
+    path.join(bin, 'curl'),
+    '#!/bin/sh\ncase "$*" in\n  */api/health*) printf 200 ;;\n  *) printf \'{}\\n200\' ;;\nesac\n',
+    { mode: 0o755 },
+  );
+  fs.writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const result = spawnSync('sh', [SCRIPT, 'key'], {
+    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+    encoding: 'utf8',
+  });
+  fs.rmSync(bin, { recursive: true, force: true });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /--profile docker-proxy/);
+});

@@ -19,7 +19,7 @@ OpenWA supports two database backends that can be selected at deployment time:
 | **SQLite**     | Development, personal bot, low-resource VPS | 1-5      | ❌                 |
 | **PostgreSQL** | Production, multi-session, high volume      | 5+       | ✅                 |
 
-The PostgreSQL row covers the data database only. The main database (`api_keys`, `audit_logs`) is
+The PostgreSQL row covers the data database only. The main database (`api_keys`, `audit_logs`, `browser_sessions`) is
 always a SQLite file on each node, and running more than one replica is not supported yet; see
 [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md).
 
@@ -48,7 +48,7 @@ OpenWA v0.2+ implements a **dual-database architecture** that separates boot con
 ├─────────────────────────────┼───────────────────────────────────┤
 │ • api_keys                  │ • sessions                        │
 │ • audit_logs                │ • webhooks                        │
-│                             │ • messages                        │
+│ • browser_sessions          │ • messages                        │
 │                             │ • message_batches                 │
 │                             │ • templates                       │
 │                             │ • status_updates                  │
@@ -66,10 +66,10 @@ OpenWA v0.2+ implements a **dual-database architecture** that separates boot con
 └─────────────────────────────┴───────────────────────────────────┘
 ```
 
-| Component   | Database             | Location                       | Purpose                                    |
-| ----------- | -------------------- | ------------------------------ | ------------------------------------------ |
-| **Main DB** | SQLite (always)      | `./data/main.sqlite` (default) | Boot-critical config, API keys, audit logs |
-| **Data DB** | SQLite or PostgreSQL | Configurable                   | User data, sessions, messages, webhooks    |
+| Component   | Database             | Location                       | Purpose                                                      |
+| ----------- | -------------------- | ------------------------------ | ------------------------------------------------------------ |
+| **Main DB** | SQLite (always)      | `./data/main.sqlite` (default) | Boot-critical config, API keys, browser sessions, audit logs |
+| **Data DB** | SQLite or PostgreSQL | Configurable                   | User data, sessions, messages, webhooks                      |
 
 The main DB is unconditionally SQLite, but its _path_ is not fixed: `MAIN_DATABASE_NAME` overrides the
 `./data/main.sqlite` default, and is honoured by both the runtime connection factory
@@ -86,6 +86,16 @@ others.
 > - API keys needed for authentication before any external DB connection
 > - Audit logs must persist even if Data DB fails
 > - Enables switching Data DB type without losing authentication
+
+#### SQLite Journal Mode (WAL)
+
+OpenWA opens all file-backed SQLite databases (`main.sqlite`, `openwa.sqlite`, and CLI migration connections) in **WAL** (`Write-Ahead Logging`) mode with `PRAGMA synchronous = NORMAL` by default, tightening the database file to mode `0600` before enabling WAL so the `-wal` and `-shm` sidecars inherit owner-only permissions. During clean shutdown, OpenWA runs `PRAGMA wal_checkpoint(TRUNCATE)` on each initialized SQLite connection so committed WAL frames are flushed back into the main database file.
+
+For deployments storing SQLite files on network filesystems (such as NFS or SMB) where WAL shared-memory locking is unsupported, set `SQLITE_JOURNAL_MODE=DELETE`. OpenWA explicitly runs `PRAGMA journal_mode = DELETE` and `PRAGMA synchronous = FULL` on open, converting an existing WAL database cleanly back to rollback-journal mode.
+
+| Setting               | Default | Allowed Values  | Description                                                               |
+| --------------------- | ------- | --------------- | ------------------------------------------------------------------------- |
+| `SQLITE_JOURNAL_MODE` | `WAL`   | `WAL`, `DELETE` | SQLite journal mode; use `DELETE` on NFS/SMB mounts that disallow WAL shm |
 
 #### Built-in PostgreSQL Orchestration
 
@@ -172,7 +182,7 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
 ```
 
 > [!IMPORTANT]
-> The export leaves out webhook `secret` and custom `headers` and the `user:pass` of a session `proxyUrl`. Set them again after the import with `PUT /api/sessions/:sessionId/webhooks/:id` and `PATCH /api/sessions/:sessionId/proxy`, or webhooks deliver unsigned and an authenticated proxy fails the session's next start. The import is one request bounded by `BODY_SIZE_LIMIT` (`413` above it). Plugin instance secrets travel in plaintext, so treat the file as a secret. See [14 - Migration Guide: API-Based Migration](./14-migration-guide.md#api-based-migration-recommended-for-v02) for the full procedure.
+> The export leaves out webhook `secret` and custom `headers` and the `user:pass` of a session `proxyUrl`. Set them again after the import with `PUT /api/sessions/:sessionId/webhooks/:id` and `PATCH /api/sessions/:sessionId/proxy`, or webhooks deliver unsigned and an authenticated proxy fails the session's next start. Plugin instance ingress `secret`, `verifyToken`, and `secret: true` config fields are redacted by default (if a plugin manifest is unavailable, `config` is omitted rather than exported unredacted), and restored redacted instances are disabled with freshly generated secrets until reconfigured; pass `?includePluginSecrets=true` when migrating plugin credentials and treat the resulting file as a secret. The import is one request bounded by `BODY_SIZE_LIMIT` (`413` above it). See [14 - Migration Guide: API-Based Migration](./14-migration-guide.md#api-based-migration-recommended-for-v02) for the full procedure.
 
 #### Cross-Database Date Portability
 
@@ -569,6 +579,9 @@ CREATE INDEX "IDX_messages_sessionId_chatId_createdAt" ON messages("sessionId", 
 CREATE INDEX "IDX_messages_session_timestamp_id" ON messages("sessionId", "timestamp", "id");   -- message-time reads: orderBy=timestamp, since / until windows
 CREATE INDEX "IDX_messages_session_chat_timestamp_id" ON messages("sessionId", "chatId", "timestamp", "id");   -- the same, within one chat
 CREATE INDEX "IDX_messages_session_direction_timestamp_id" ON messages("sessionId", "direction", "timestamp", "id");   -- the same, filtered by direction
+CREATE INDEX "IDX_messages_sessionId_status" ON messages("sessionId", status);   -- per-session status counts
+CREATE INDEX "IDX_messages_sessionId_direction_createdAt" ON messages("sessionId", direction, "createdAt");   -- send-pacing daily outgoing counts
+CREATE INDEX "IDX_messages_status_createdAt" ON messages(status, "createdAt");   -- pending-message reaper sweep
 CREATE INDEX "IDX_befd307485dbf0559d17e4a4d2" ON messages(status);
 CREATE INDEX "IDX_messages_createdAt" ON messages("createdAt");   -- createdAt-only stats aggregates
 CREATE INDEX "IDX_messages_mediaPath" ON messages("mediaPath") WHERE "mediaPath" IS NOT NULL;   -- partial; chat-media orphan sweep
@@ -717,6 +730,9 @@ CREATE TABLE message_batches (
     completed_at TIMESTAMP WITH TIME ZONE,
     CONSTRAINT "UQ_message_batches_session_id_batch_id" UNIQUE (session_id, batch_id)
 );
+
+CREATE INDEX "IDX_message_batches_status_created_at" ON message_batches(status, created_at);   -- startup orphan recovery and retention prune
+CREATE INDEX "IDX_message_batches_session_id_status" ON message_batches(session_id, status);   -- per-session unfinished batch reap
 ```
 
 > [!NOTE]
@@ -762,26 +778,53 @@ On SQLite that index can stop matching `messages` after a table rebuild, and a s
 
 ---
 
+### 5.3.9 browser_sessions
+
+Opaque server-side sessions minted by `POST /api/auth/session` for the web dashboard's `HttpOnly; SameSite=Strict` `openwa_session` cookie. Lives on the **main** (always-SQLite) connection so dashboard sessions stay node-local alongside `api_keys`. The raw API key is never stored in the cookie or in this table; every request re-validates the bound `api_keys` row and its current role, IP, and session scopes.
+
+```sql
+CREATE TABLE browser_sessions (
+    id VARCHAR PRIMARY KEY,
+    "tokenHash" VARCHAR(64) NOT NULL,              -- SHA-256(pepper + rawToken), UNIQUE index
+    "apiKeyId" VARCHAR(36) NOT NULL,               -- FK-like reference to api_keys.id on the same node
+    "createdAt" DATETIME NOT NULL DEFAULT (datetime('now')),
+    "expiresAt" DATETIME NOT NULL,                 -- bounded by DASHBOARD_SESSION_TTL_MS (default 12h)
+    "revokedAt" DATETIME                           -- set on logout or when the bound API key is revoked/deleted
+);
+
+CREATE UNIQUE INDEX "UQ_browser_sessions_tokenHash" ON browser_sessions("tokenHash");
+CREATE INDEX "IDX_browser_sessions_apiKeyId" ON browser_sessions("apiKeyId");
+CREATE INDEX "IDX_browser_sessions_expiresAt" ON browser_sessions("expiresAt");
+```
+
+---
+
 ## 5.4 Index Strategy
 
 ### Query Pattern Analysis
 
 These indexes are the ones declared on the entities (see §5.3); the rows below map them to the hot query paths.
 
-| Query Pattern                    | Index Used                                                            | Frequency |
-| -------------------------------- | --------------------------------------------------------------------- | --------- |
-| Get session by ID                | `sessions.id` (PK)                                                    | Very High |
-| Get session by name              | `sessions.name` (UNIQUE)                                              | High      |
-| List messages by session (paged) | `("sessionId", "createdAt")` composite                                | Very High |
-| List a chat's messages (paged)   | `IDX_messages_sessionId_chatId_createdAt`                             | Very High |
-| Send-pacing chat history probes  | `IDX_messages_sessionId_chatId_createdAt`                             | Very High |
-| List messages by message time    | `IDX_messages_session_timestamp_id` and its chat / direction variants | High      |
-| Search / stats by chat           | `"chatId"`                                                            | Medium    |
-| Ack/dedup a message              | `UQ_messages_sessionId_waMessageId` (UNIQUE)                          | Very High |
-| Message stats over a date range  | `IDX_messages_createdAt`                                              | Medium    |
-| Find a session's webhooks        | `IDX_webhooks_sessionId`                                              | Very High |
-| Authenticate API key             | UNIQUE on `api_keys("keyHash")`, main DB                              | Very High |
-| Filter audit logs                | `audit_logs` indexes on `action` / `apiKeyId` / `sessionId`           | Medium    |
+| Query Pattern                                      | Index Used                                                                                                                                | Frequency |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Get session by ID                                  | `sessions.id` (PK)                                                                                                                        | Very High |
+| Get session by name                                | `sessions.name` (UNIQUE)                                                                                                                  | High      |
+| List messages by session (paged)                   | `("sessionId", "createdAt")` composite                                                                                                    | Very High |
+| List a chat's messages (paged)                     | `IDX_messages_sessionId_chatId_createdAt`                                                                                                 | Very High |
+| Send-pacing chat history probes                    | `IDX_messages_sessionId_chatId_createdAt`                                                                                                 | Very High |
+| Send-pacing daily outgoing counts                  | `IDX_messages_sessionId_direction_createdAt`                                                                                              | Very High |
+| Per-session message status counts                  | `IDX_messages_sessionId_status`                                                                                                           | Medium    |
+| Pending-message reaper sweep                       | `IDX_messages_status_createdAt`                                                                                                           | High      |
+| List messages by message time                      | `IDX_messages_session_timestamp_id` and its chat / direction variants                                                                     | High      |
+| Search / stats by chat                             | `"chatId"`                                                                                                                                | Medium    |
+| Ack/dedup a message                                | `UQ_messages_sessionId_waMessageId` (UNIQUE)                                                                                              | Very High |
+| Message stats over a date range                    | `IDX_messages_createdAt`                                                                                                                  | Medium    |
+| Find a session's webhooks                          | `IDX_webhooks_sessionId`                                                                                                                  | Very High |
+| Webhook delivery-failure prune and list            | `IDX_webhook_delivery_failures_createdAt`, `IDX_webhook_delivery_failures_sessionId_createdAt`                                            | Medium    |
+| Batch orphan recovery, prune, and session reap     | `IDX_message_batches_status_created_at`, `IDX_message_batches_session_id_status`                                                          | Medium    |
+| Integration DLQ prune, session delete, and redrive | `IDX_integration_delivery_failures_createdAt`, `IDX_integration_delivery_failures_sessionId`, `IDX_integration_delivery_failures_redrive` | Medium    |
+| Authenticate API key                               | UNIQUE on `api_keys("keyHash")`, main DB                                                                                                  | Very High |
+| Filter audit logs                                  | `audit_logs` indexes on `action` / `apiKeyId` / `sessionId`                                                                               | Medium    |
 
 ### Composite & Unique Indexes (as implemented)
 
@@ -792,17 +835,32 @@ CREATE INDEX        "IDX_messages_sessionId_chatId_createdAt" ON messages("sessi
 CREATE INDEX        "IDX_messages_session_timestamp_id"   ON messages("sessionId", "timestamp", "id");
 CREATE INDEX        "IDX_messages_session_chat_timestamp_id" ON messages("sessionId", "chatId", "timestamp", "id");
 CREATE INDEX        "IDX_messages_session_direction_timestamp_id" ON messages("sessionId", "direction", "timestamp", "id");
+CREATE INDEX        "IDX_messages_sessionId_status"       ON messages("sessionId", status);
+CREATE INDEX        "IDX_messages_sessionId_direction_createdAt" ON messages("sessionId", direction, "createdAt");
+CREATE INDEX        "IDX_messages_status_createdAt"       ON messages(status, "createdAt");
 CREATE UNIQUE INDEX "UQ_messages_sessionId_waMessageId"   ON messages("sessionId", "waMessageId");
 CREATE INDEX        "IDX_messages_createdAt"              ON messages("createdAt");
 
 -- webhooks: the dispatch path filters by session on every emitted event
 CREATE INDEX "IDX_webhooks_sessionId" ON webhooks("sessionId");
 
+-- webhook_delivery_failures: retention prune and per-session failure listing
+CREATE INDEX "IDX_webhook_delivery_failures_sessionId"           ON webhook_delivery_failures("sessionId");
+CREATE INDEX "IDX_webhook_delivery_failures_createdAt"           ON webhook_delivery_failures("createdAt");
+CREATE INDEX "IDX_webhook_delivery_failures_sessionId_createdAt" ON webhook_delivery_failures("sessionId", "createdAt");
+
 -- message_batches: batch ids are unique per session, not globally.
 -- Note the snake_case: this table really is named that way — see the naming note in §5.3.
 -- This is a UNIQUE constraint, not a standalone index: on PostgreSQL drop it with ALTER TABLE ... DROP CONSTRAINT;
 -- SQLite cannot drop a constraint in place and needs a table rebuild.
 ALTER TABLE message_batches ADD CONSTRAINT "UQ_message_batches_session_id_batch_id" UNIQUE (session_id, batch_id);
+CREATE INDEX "IDX_message_batches_status_created_at" ON message_batches(status, created_at);
+CREATE INDEX "IDX_message_batches_session_id_status" ON message_batches(session_id, status);
+
+-- integration_delivery_failures: retention prune, session deletion, and DLQ redrive ordering
+CREATE INDEX "IDX_integration_delivery_failures_createdAt" ON integration_delivery_failures("createdAt");
+CREATE INDEX "IDX_integration_delivery_failures_sessionId" ON integration_delivery_failures("sessionId");
+CREATE INDEX "IDX_integration_delivery_failures_redrive"   ON integration_delivery_failures("pluginId", "instanceId", redriven, attempts, "createdAt");
 
 -- audit_logs (main DB): filter by action / key / session, ordered by time
 CREATE INDEX "IDX_audit_logs_action" ON audit_logs(action);
@@ -897,7 +955,7 @@ OpenWA runs **two separate TypeORM connections**, each with its own migrations d
 
 | Connection | DataSource            | Migrations dir                  | Owns                                                                                                                                                                                                                                                                                                                                                      |
 | ---------- | --------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **main**   | `data-source-main.ts` | `src/database/migrations-main/` | `api_keys`, `audit_logs`, always SQLite (`./data/main.sqlite` by default)                                                                                                                                                                                                                                                                                 |
+| **main**   | `data-source-main.ts` | `src/database/migrations-main/` | `api_keys`, `audit_logs`, `browser_sessions`, always SQLite (`./data/main.sqlite` by default)                                                                                                                                                                                                                                                             |
 | **data**   | `data-source.ts`      | `src/database/migrations/`      | `sessions`, `webhooks`, `messages`, `message_batches`, `templates`, `status_updates`, `automation_rules`, `webhook_delivery_failures`, `webhook_outbox_events`, `send_idempotency_keys`, the integration tables (`plugin_instances`, `ingress_events`, `conversation_mappings`, `integration_delivery_failures`), engine tables, SQLite **or** PostgreSQL |
 
 Migrations are hand-authored and idempotent (`IF NOT EXISTS`) so they are safe to adopt on a database originally created by `synchronize`. The two connections differ in how schema is managed:
@@ -914,7 +972,8 @@ Migrations are hand-authored and idempotent (`IF NOT EXISTS`) so they are safe t
 src/database/migrations-main/      # main connection (auth + audit, SQLite)
 ├── 1779900000000-CreateAuthAuditTables.ts   # creates api_keys + audit_logs
 ├── 1786600000000-AddApiKeyAllowedChats.ts   # adds api_keys.allowedChats
-└── 1786610000000-DropSynchronizeIndexDuplicates.ts  # drops synchronize-named duplicate indexes
+├── 1786610000000-DropSynchronizeIndexDuplicates.ts  # drops synchronize-named duplicate indexes
+└── 1792000000000-CreateBrowserSessions.ts   # creates browser_sessions (HttpOnly dashboard cookie store)
 
 src/database/migrations/           # data connection (pluggable)
 ├── 1770108659848-AddMessageStatus.ts
@@ -966,7 +1025,8 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1791400000000-AddLidMappingReportSource.ts   # distinguishes mapping reports from cached display data
 ├── 1791600000000-RepairSqliteMessageFts.ts   # rebuilds the SQLite full-text index when it no longer matches messages
 ├── 1791700000000-AddChatStateDeletedAt.ts   # chat_states.deletedAt (when WhatsApp deleted the chat)
-└── 1791800000000-AddStatusMediaPathIndex.ts   # partial index on status_updates.mediaPath (orphan sweep)
+├── 1791800000000-AddStatusMediaPathIndex.ts   # partial index on status_updates.mediaPath (orphan sweep)
+└── 1791900000000-AddHighVolumeQueryIndexes.ts   # composite and retention indexes across messages, webhook_delivery_failures, message_batches, and integration_delivery_failures
 ```
 
 > [!NOTE]

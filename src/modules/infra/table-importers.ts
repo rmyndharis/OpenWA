@@ -1,5 +1,7 @@
+import { randomBytes } from 'node:crypto';
 import { NulFreeTransformer } from '../../common/transformers/nul-free.transformer';
 import { isSafeSessionName } from '../../common/utils/path-safety';
+import { SECRET_SENTINEL } from '../plugins/redact-config';
 import { MAX_SESSION_ID_LENGTH } from '../session/session-id.pipe';
 import { collectFilterErrors } from '../webhook/filters/filter-validation';
 import type {
@@ -96,6 +98,16 @@ function invalidJsonWarning(label: string, id: string, row: object, columns: rea
 // exception: no request can look up a name holding NUL, so keeping it would only strand the template.
 function nulFree(value: unknown): unknown {
   return NulFreeTransformer.to(value);
+}
+
+/**
+ * True when an archived plugin instance secret was redacted or omitted and must be regenerated
+ * (with the restored instance forced disabled) rather than stored verbatim or rejected on NOT NULL.
+ */
+export function isRedactedPluginSecret(secret: unknown): boolean {
+  if (typeof secret !== 'string') return true;
+  const trimmed = String(nulFree(secret)).trim();
+  return trimmed.length === 0 || trimmed === SECRET_SENTINEL;
 }
 
 /** Apply the terminal index's keeper order to archives created before that index existed. */
@@ -392,18 +404,28 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     id: (pi: PluginInstanceRow) => pi.id,
     skip: (pi: PluginInstanceRow) => invalidJsonWarning('plugin instance', pi.id, pi, ['config']),
-    map: (pi: PluginInstanceRow) => [
-      pi.id,
-      pi.pluginId,
-      pi.instanceId,
-      pi.sessionScope,
-      nulFree(pi.secret),
-      nulFree(pi.verifyToken),
-      pi.config == null ? null : nulFree(typeof pi.config === 'string' ? pi.config : JSON.stringify(pi.config)),
-      pi.enabled,
-      pi.createdAt,
-      pi.updatedAt,
-    ],
+    map: (pi: PluginInstanceRow) => {
+      const redactedSecret = isRedactedPluginSecret(pi.secret);
+      const secret = redactedSecret ? randomBytes(32).toString('hex') : nulFree(pi.secret);
+      const cleanedVerifyToken = pi.verifyToken == null ? null : nulFree(pi.verifyToken);
+      const verifyToken =
+        cleanedVerifyToken == null ||
+        (typeof cleanedVerifyToken === 'string' && cleanedVerifyToken.trim() === SECRET_SENTINEL)
+          ? null
+          : cleanedVerifyToken;
+      return [
+        pi.id,
+        pi.pluginId,
+        pi.instanceId,
+        pi.sessionScope,
+        secret,
+        verifyToken,
+        pi.config == null ? null : nulFree(typeof pi.config === 'string' ? pi.config : JSON.stringify(pi.config)),
+        redactedSecret ? false : pi.enabled,
+        pi.createdAt,
+        pi.updatedAt,
+      ];
+    },
   }),
 
   // Import conversation mappings (handover state; sessionId is non-FK provenance)

@@ -34,7 +34,10 @@ export class SearchController {
       'unknown "match"; or a "match=contains" query with no term of 3 or more characters (on PostgreSQL, 3 ' +
       `letters or digits in a row) or with more than ${SEARCH_CONTAINS_TERMS_MAX_LENGTH} characters in its terms`,
   })
-  @ApiResponse({ status: 403, description: 'Chat scope denied or chat-restricted search uses a plugin provider' })
+  @ApiResponse({
+    status: 403,
+    description: 'Chat scope denied, or chat-restricted search hits a plugin provider without built-in fallback',
+  })
   @ApiResponse({
     status: 501,
     description:

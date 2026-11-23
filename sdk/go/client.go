@@ -261,7 +261,7 @@ func WithIdempotencyKey(ctx context.Context, key string) context.Context {
 var idempotentSendSegments = map[string]bool{
 	"send-text": true, "send-image": true, "send-video": true, "send-audio": true,
 	"send-document": true, "send-sticker": true, "send-location": true, "send-contact": true,
-	"send-template": true, "send-poll": true, "reply": true, "forward": true,
+	"send-template": true, "send-poll": true, "reply": true, "click-button": true, "forward": true,
 }
 
 // isIdempotentSendPath reports whether path is /api/sessions/{id}/messages/{segment} for one of them.

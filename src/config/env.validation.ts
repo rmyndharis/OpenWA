@@ -1,8 +1,11 @@
 import { resolve } from 'path';
 import { normalizeS3KeyPrefix } from '../common/storage/s3-key-prefix';
+import { webVersionPinConfigError } from '../engine/wa-web-version';
+import { MAX_BROWSER_SESSION_TTL_MS, MIN_BROWSER_SESSION_TTL_MS } from '../modules/auth/browser-session.util';
 import { namesBundledContainer } from '../modules/docker/bundled-host';
 import { resolveBodyLimit } from './bootstrap-security';
 import { parseBodyLimitBytes } from './inflight-body-budget';
+import { puppeteerArgsError } from './puppeteer-args';
 
 type EnvConfig = Record<string, unknown>;
 
@@ -161,6 +164,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   checkEnum('ENGINE_TYPE', ['whatsapp-web.js', 'baileys']);
   checkEnum('STORAGE_TYPE', ['local', 's3']);
   checkEnum('MESSAGE_INLINE_MEDIA', ['inline', 'archive']);
+  checkEnum('SQLITE_JOURNAL_MODE', ['WAL', 'DELETE']);
   // 'archive' drops the inline copy only after the archiver stored the file; with the archiver off
   // nothing is ever stored, so the mode would silently do nothing. Refuse that rather than let an
   // operator believe the inline copies are being reclaimed.
@@ -328,7 +332,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS', // 0 = failure rows keep no payload (no redrive)
     'EXPORT_INLINE_MEDIA_BUDGET_BYTES', // 0 = a data export carries no inline media at all
     'MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES', // 0 = a message list carries no inline media at all
-    'MCP_MAX_RESULT_BYTES', // 0 = no cap on an MCP tool result; `100k` would have read as no cap
+    'MCP_MAX_RESULT_BYTES', // default 100000 bytes (100 KB); explicit 0 disables the cap
     'CHAT_MEDIA_ARCHIVE_TTL_DAYS', // 0 = keep archived chat media forever
     'INGRESS_RETRY_DELAY_MS', // 0 = retry without backoff
     'REDIS_CACHE_DB',
@@ -524,8 +528,21 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'INGRESS_MAX_ATTEMPTS',
     'WEBHOOK_WORKER_CONCURRENCY',
     'INGRESS_WORKER_CONCURRENCY',
+    'DASHBOARD_SESSION_TTL_MS',
   ]) {
     checkPositiveInt(key);
+  }
+
+  // Browser session TTL bounds match resolveBrowserSessionTtlMs so an out-of-range setting fails
+  // fast at boot instead of silently clamping to 5 minutes or 30 days.
+  const dashboardSessionTtlRaw = str('DASHBOARD_SESSION_TTL_MS');
+  if (dashboardSessionTtlRaw !== undefined && DECIMAL_INTEGER.test(dashboardSessionTtlRaw)) {
+    const n = Number(dashboardSessionTtlRaw);
+    if (n >= 1 && (n < MIN_BROWSER_SESSION_TTL_MS || n > MAX_BROWSER_SESSION_TTL_MS)) {
+      errors.push(
+        `DASHBOARD_SESSION_TTL_MS must be between ${MIN_BROWSER_SESSION_TTL_MS} and ${MAX_BROWSER_SESSION_TTL_MS} ms (got "${dashboardSessionTtlRaw}")`,
+      );
+    }
   }
 
   // The body cap takes a unit string. A spelling the parser does not know (`50M`, `50MiB`) silently
@@ -649,6 +666,20 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     }
   }
 
+  // Shared HMAC secret for inter-node forwarded hops (opt-in). Blank ('') stays legal so a
+  // compose `${SESSION_PROXY_SECRET:-}` forward behaves as unset, while whitespace-only or
+  // trivially short values fail fast at boot without echoing the secret.
+  const rawProxySecret = config.SESSION_PROXY_SECRET;
+  if (rawProxySecret !== undefined && rawProxySecret !== '') {
+    if (typeof rawProxySecret !== 'string') {
+      errors.push('SESSION_PROXY_SECRET must be a string');
+    } else if (rawProxySecret.trim().length === 0) {
+      errors.push('SESSION_PROXY_SECRET must not be whitespace-only; leave it unset or set at least 16 characters');
+    } else if (rawProxySecret.trim().length < 16) {
+      errors.push('SESSION_PROXY_SECRET must be at least 16 characters long');
+    }
+  }
+
   // Boolean feature flags read at module-eval time (app.module.ts) with a bare `=== 'true'` /
   // `!== 'false'` comparison: a typo (`True`, `1`, `yes`) or trailing whitespace/CR silently
   // (dis)ables the feature. Validate the RAW value — NOT a trimmed one — so `'true '` / `'true\r'`
@@ -734,6 +765,10 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'POSTGRES_BUILTIN',
     'REDIS_BUILTIN',
     'MINIO_BUILTIN',
+    // Explicit opt-in for connecting to the local Unix Docker socket (/var/run/docker.sock or unix://).
+    'DOCKER_ALLOW_LOCAL_SOCKET',
+    // Explicit opt-in to load remote WhatsApp Web HTML without a WWEBJS_WEB_VERSION_SHA256 digest.
+    'WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED',
     // Perf/observability only, but same silent-typo class.
     'CACHE_ENABLED',
     'DATABASE_LOGGING',
@@ -744,6 +779,9 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'ENABLE_SWAGGER',
     'VALIDATION_ERROR_DETAIL',
     'PLUGIN_INSTALL_REQUIRE_PIN',
+    // Pre-egress hook fail-closed toggle and browser session cookie Secure override.
+    'HOOK_PRE_EGRESS_FAIL_CLOSED',
+    'DASHBOARD_SESSION_COOKIE_SECURE',
     // `=== 'true'` in the SSRF guard: a typo keeps redirects refused when the operator allowed them.
     'WEBHOOK_SSRF_REDIRECTS',
     // DELIBERATELY NOT LISTED. `MCP_READONLY` is read `!== 'false'` and mcp.server.spec.ts asserts
@@ -804,6 +842,21 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     errors.push(
       `LOG_LEVEL must be one of ${LOG_LEVEL_VALUES.map(v => `"${v}"`).join(', ')} (got ${JSON.stringify(rawLogLevel)})`,
     );
+  }
+
+  // PUPPETEER_ARGS: restrict Chromium launch flags to the vetted allowlist (fail-closed) so
+  // command-execution, extension-loading, debugging, or proxy-bypass switches are refused at boot.
+  const rawPuppeteerArgs = config.PUPPETEER_ARGS;
+  if (typeof rawPuppeteerArgs === 'string' && rawPuppeteerArgs !== '') {
+    const argsErr = puppeteerArgsError(rawPuppeteerArgs);
+    if (argsErr) errors.push(argsErr);
+  }
+
+  // WWEBJS_WEB_VERSION integrity policy: remote WhatsApp Web HTML is off by default; opting in
+  // requires either an exact build with WWEBJS_WEB_VERSION_SHA256 or WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true.
+  const webVersionError = webVersionPinConfigError(config);
+  if (webVersionError) {
+    errors.push(webVersionError);
   }
 
   if (errors.length > 0) {

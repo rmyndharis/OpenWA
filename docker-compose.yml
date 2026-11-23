@@ -2,13 +2,27 @@
 # Smart Orchestration with Profiles
 
 services:
-  # ===== CORE: Docker Socket Proxy (sole container with /var/run/docker.sock access) =====
+  # ===== OPTIONAL: Docker Socket Proxy (sole container with /var/run/docker.sock access) =====
+  # Opt-in via `--profile docker-proxy` (and set DOCKER_HOST=tcp://docker-proxy:2375 in .env).
+  # Omitted from default `docker compose up` so deployments that do not use Dashboard > Infrastructure
+  # built-in datastore orchestration never expose a Docker API proxy to the application container.
   docker-proxy:
     # Pinned by release tag and digest: this container holds the Docker socket, so a re-pushed tag
     # must not change what runs here.
     image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     container_name: openwa-docker-proxy
+    profiles: ['docker-proxy']
     restart: unless-stopped
+    security_opt:
+      - 'no-new-privileges:true'
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    mem_limit: 128m
+    pids_limit: 64
     # Only on the isolated internal network, reachable solely by openwa-api (including any
     # plugin loaded into it), NOT the dashboard or any other peer. `internal: true` also denies the proxy
     # outbound access; it only needs the locally-mounted docker socket.
@@ -23,16 +37,11 @@ services:
       # method gate for non-GET requests (haproxy.cfg: `deny unless METH_GET || env(POST)`).
       # Two consequences of the pinned proxy config, accepted and documented in SECURITY.md:
       #  - its `DELETE` env flag is dead config (never read), so it is not set here; DELETE is
-      #    admitted to enabled paths as a side effect of POST — OpenWA itself never issues
+      #    admitted to enabled paths as a side effect of POST; OpenWA itself never issues
       #    deletes (profile teardown is stop-only, see DockerService.stopManagedService).
       #  - the proxy cannot scope container-create payloads, so a compromised API container
-      #    could create containers with host bind-mounts. If you don't use the built-in
-      #    datastore orchestration (Dashboard > Infrastructure built-in toggles), disable
-      #    this service entirely, e.g. via a docker-compose.override.yml:
-      #      services:
-      #        docker-proxy:
-      #          profiles: ['disabled']
-      #    DockerService then reports Docker unavailable and orchestration degrades gracefully.
+      #    could create containers with host bind-mounts. Leave the docker-proxy profile off
+      #    unless you actively use Dashboard > Infrastructure built-in datastore orchestration.
       CONTAINERS: 1
       IMAGES: 1
       VOLUMES: 1
@@ -155,12 +164,14 @@ services:
       - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-}
       - PUPPETEER_ARGS=${PUPPETEER_ARGS:-}
       - PUPPETEER_PROTOCOL_TIMEOUT_MS=${PUPPETEER_PROTOCOL_TIMEOUT_MS:-}
-      # Optional WhatsApp Web version override. DEFAULT (empty, "latest", or "auto"): OpenWA auto-resolves a
-      # settled build from the third-party wppconnect-team/wa-version registry and pins its remote HTML
-      # (fetched into the web.whatsapp.com origin without an integrity check). Set "off" to disable pinning
-      # and use the first-party build served by WhatsApp, or an exact version to pin a specific build.
+      # Optional WhatsApp Web version pin. DEFAULT (empty or "off"): OpenWA uses the native first-party
+      # build served by WhatsApp with zero remote HTML fetches. Setting an exact build requires
+      # WWEBJS_WEB_VERSION_SHA256 (64-char hex, verified on fetch and cache hit) or explicit
+      # WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true. "auto"/"latest" also require ALLOW_UNVERIFIED=true.
       - WWEBJS_WEB_VERSION=${WWEBJS_WEB_VERSION:-}
       - WWEBJS_WEB_VERSION_REMOTE_PATH=${WWEBJS_WEB_VERSION_REMOTE_PATH:-}
+      - WWEBJS_WEB_VERSION_SHA256=${WWEBJS_WEB_VERSION_SHA256:-}
+      - WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=${WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED:-}
       # Raise whatsapp-web.js's first-boot init wait (default 30000ms) on slow boots — e.g. WSL2 or
       # low-resource hosts where the QR can time out before WA Web loads. Empty = default; see
       # docs/12-troubleshooting-faq.md. (Without this line the var in .env never reaches the container.)
@@ -183,6 +194,7 @@ services:
       - SESSION_LEASE_HEARTBEAT_MS=${SESSION_LEASE_HEARTBEAT_MS:-}
       - SESSION_TAKEOVER_SWEEP_MS=${SESSION_TAKEOVER_SWEEP_MS:-}
       - SESSION_PROXY_TIMEOUT_MS=${SESSION_PROXY_TIMEOUT_MS:-}
+      - SESSION_PROXY_SECRET=${SESSION_PROXY_SECRET:-}
       # Autoreply rules per session (0 = unlimited). Blank forwards to the app default (32); an
       # unforwarded key could not be set from .env at all, which is the whole point of this list.
       - AUTOMATION_MAX_PER_SESSION=${AUTOMATION_MAX_PER_SESSION:-}
@@ -284,6 +296,9 @@ services:
       - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
       # Forward the plain-HTTP dashboard CSP override; unset preserves the application default.
       - CSP_UPGRADE_INSECURE_REQUESTS=${CSP_UPGRADE_INSECURE_REQUESTS:-}
+      - DASHBOARD_SESSION_TTL_MS=${DASHBOARD_SESSION_TTL_MS:-}
+      - DASHBOARD_SESSION_COOKIE_SECURE=${DASHBOARD_SESSION_COOKIE_SECURE:-}
+      - HOOK_PRE_EGRESS_FAIL_CLOSED=${HOOK_PRE_EGRESS_FAIL_CLOSED:-}
       # Security / boot knobs the app reads. This list is the only path into the container, so a
       # knob without a line here is inert no matter what the operator's .env says; compose-parity
       # .spec.ts derives the required set from .env.example so a new knob cannot ship unreachable.
@@ -347,6 +362,7 @@ services:
       - DATABASE_IDLE_TIMEOUT_MS=${DATABASE_IDLE_TIMEOUT_MS:-}
       - DATABASE_CONNECTION_TIMEOUT_MS=${DATABASE_CONNECTION_TIMEOUT_MS:-}
       - MAIN_DATABASE_NAME=${MAIN_DATABASE_NAME:-}
+      - SQLITE_JOURNAL_MODE=${SQLITE_JOURNAL_MODE:-}
       - REDIS_USERNAME=${REDIS_USERNAME:-}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_CONNECT_TIMEOUT_MS=${REDIS_CONNECT_TIMEOUT_MS:-}
@@ -404,8 +420,11 @@ services:
       - LOG_FORMAT=${LOG_FORMAT:-}
       - BASE_URL=${BASE_URL:-}
       - DASHBOARD_URL=${DASHBOARD_URL:-}
-      # Docker socket proxy (openwa-api never touches /var/run/docker.sock directly)
-      - DOCKER_HOST=tcp://docker-proxy:2375
+      # Docker orchestration (opt-in). Blank by default so DockerService stays disabled without DNS
+      # retry spam when the docker-proxy profile is off. To enable built-in datastore orchestration,
+      # run with `--profile docker-proxy` and set DOCKER_HOST=tcp://docker-proxy:2375 in .env.
+      - DOCKER_HOST=${DOCKER_HOST:-}
+      - DOCKER_ALLOW_LOCAL_SOCKET=${DOCKER_ALLOW_LOCAL_SOCKET:-}
     volumes:
       - openwa-data:/app/data
     depends_on:
@@ -444,6 +463,16 @@ services:
       - openwa-network
     security_opt:
       - 'no-new-privileges:true'
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    mem_limit: 1g
+    pids_limit: 256
     environment:
       POSTGRES_USER: ${DATABASE_USERNAME:-openwa}
       # No committed default secret. Empty unless the operator sets it; the postgres
@@ -480,13 +509,31 @@ services:
       - openwa-network
     security_opt:
       - 'no-new-privileges:true'
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    mem_limit: 512m
+    pids_limit: 256
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     # noeviction is required by BullMQ: under any other policy Redis may evict queue keys once
-    # maxmemory is reached, silently dropping queued jobs.
-    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    # maxmemory is reached, silently dropping queued jobs. When REDIS_PASSWORD is set, enforce it
+    # via --requirepass; otherwise keep passwordless internal-network mode.
+    command:
+      - sh
+      - -c
+      - 'if [ -n "$$REDIS_PASSWORD" ]; then exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"; else exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory-policy noeviction; fi'
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test:
+        - CMD-SHELL
+        - 'if [ -n "$$REDIS_PASSWORD" ]; then REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping; else redis-cli ping; fi'
       interval: 5s
       timeout: 3s
       retries: 5
@@ -507,6 +554,10 @@ services:
       - openwa-network
     security_opt:
       - 'no-new-privileges:true'
+    cap_drop:
+      - ALL
+    mem_limit: 1g
+    pids_limit: 256
     command: server /data --console-address ":9001"
     environment:
       # No committed default credentials. With both left empty the server would start on its own

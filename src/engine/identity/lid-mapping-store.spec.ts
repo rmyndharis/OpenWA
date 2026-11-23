@@ -5351,3 +5351,69 @@ describe('LidMappingStoreService: the readers agree with the table once overlapp
     120_000,
   );
 });
+
+describe('LidMappingStoreService onMappingLearned notifications', () => {
+  const pg = process.env.DATABASE_TYPE === 'postgres';
+  const server = {
+    type: 'postgres' as const,
+    host: process.env.DATABASE_HOST || 'localhost',
+    port: Number(process.env.DATABASE_PORT || 5432),
+    username: process.env.DATABASE_USERNAME || 'openwa',
+    password: process.env.DATABASE_PASSWORD || 'openwa',
+    database: process.env.DATABASE_NAME || 'openwa',
+  };
+
+  it('notifies listeners when remember() persists a non-null phone, skips null/failed writes, and supports unsubscribe', async () => {
+    const schema = pg ? `lid_learned_${randomUUID().replace(/-/g, '')}` : '';
+    const onServer = async (sql: string): Promise<void> => {
+      const admin = await new DataSource(server).initialize();
+      await admin.query(sql).finally(() => admin.destroy());
+    };
+    if (pg) await onServer(`CREATE SCHEMA "${schema}"`);
+    const ds = await new DataSource(
+      pg
+        ? {
+            ...server,
+            schema,
+            extra: { options: `-c search_path=${schema},public` },
+            entities: [Session, LidMapping],
+            synchronize: true,
+          }
+        : {
+            type: 'better-sqlite3',
+            database: ':memory:',
+            entities: [Session, LidMapping],
+            synchronize: true,
+          },
+    ).initialize();
+    const repo = ds.getRepository(LidMapping);
+    const store = new LidMappingStoreService(repo);
+    const learned: Array<{ lid: string; phone: string }> = [];
+    const unsubscribe = store.onMappingLearned(mapping => {
+      learned.push(mapping);
+    });
+
+    try {
+      await expect(store.remember('123456', '628111000111', 's1')).resolves.toBe(true);
+      expect(learned).toEqual([{ lid: '123456', phone: '628111000111' }]);
+
+      // Persisting null does not fire mapping-learned notifications.
+      await expect(store.remember('123456', null, 's1')).resolves.toBe(true);
+      expect(learned).toHaveLength(1);
+
+      // Failed DB persistence does not fire mapping-learned notifications.
+      jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('write failed'));
+      await expect(store.remember('789012', '628222000222', 's1')).resolves.toBe(false);
+      expect(learned).toHaveLength(1);
+
+      // Unsubscribed listener receives no further notifications.
+      unsubscribe();
+      await expect(store.remember('789012', '628222000222', 's1')).resolves.toBe(true);
+      expect(learned).toHaveLength(1);
+    } finally {
+      store.onModuleDestroy();
+      await ds.destroy();
+      if (pg) await onServer(`DROP SCHEMA "${schema}" CASCADE`);
+    }
+  });
+});

@@ -41,6 +41,7 @@ openwa = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
 
 # This package ships py.typed (see package-data above), so its annotations are a published
 # contract — a consumer's own type checker reads them. pytest cannot see a mistake in one:

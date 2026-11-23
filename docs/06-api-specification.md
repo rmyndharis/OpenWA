@@ -388,7 +388,7 @@ and therefore apply on the next start, leaving a reconnect sequence already in f
 
 Read a session's masked proxy configuration. Credentials embedded in the stored `proxyUrl` are **never** returned — only the parsed `proxyHost:port`, a `proxyType` derived from the URL scheme, and a `hasCredentials` flag.
 
-**Auth:** API key · **Scope:** session-scoped
+**Auth:** API key (ADMIN) that is not restricted to specific sessions (`@RequireRole(ADMIN)`, `@RequireUnscopedKey`)
 
 **Path parameters**
 
@@ -409,13 +409,13 @@ Read a session's masked proxy configuration. Credentials embedded in the stored 
 
 When no proxy is configured, `enabled` is `false` and the other fields are `null`/`false`.
 
-**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session, key lacks ADMIN role, or the key is restricted to specific sessions · `404` session not found
 
 #### PATCH /api/sessions/:sessionId/proxy
 
 Update per-session proxy settings. No restart is required or performed — changes apply on the **next** `POST /start`. Send `proxyUrl: null` to clear the proxy.
 
-**Auth:** API key (ADMIN) that is not restricted to specific sessions. The proxy carries all of the session's egress, including the gateway's fetches of URLs a caller supplies, and its host is trusted egress that is not checked against internal addresses, so setting or clearing it is an administrator's decision. A key below ADMIN, or a session-scoped key, is rejected with `403` (`@RequireRole(ADMIN)`, `@RequireUnscopedKey`). Reading it (`GET` above) stays available to any key and never returns credentials.
+**Auth:** API key (ADMIN) that is not restricted to specific sessions. The proxy carries all of the session's egress, including the gateway's fetches of URLs a caller supplies, and its host is trusted egress that is not checked against internal addresses, so inspecting, setting, or clearing it is an administrator's decision. A key below ADMIN, or a session-scoped key, is rejected with `403` (`@RequireRole(ADMIN)`, `@RequireUnscopedKey`). Reading it (`GET` above) also requires an unscoped ADMIN key and never returns credentials.
 
 **Path parameters**
 
@@ -582,7 +582,7 @@ Get session statistics for multi-session monitoring.
 }
 ```
 
-`byStatus` is keyed by lowercase status values. `memoryUsage` values are megabytes (`Math.round(bytes / 1024 / 1024)`). `active` = count of running engines on the node that answered; in a multi-node deployment it is that node's count, not the cluster's (see docs/13). A scoped key sees only its `allowedSessions` stats.
+`byStatus` is keyed by lowercase status values. `memoryUsage` is optional and returned only for unscoped `ADMIN` keys (omitted for non-admin or session-scoped keys); its values are megabytes (`Math.round(bytes / 1024 / 1024)`). `active` = count of running engines on the node that answered; in a multi-node deployment it is that node's count, not the cluster's (see docs/13). A scoped key sees only its `allowedSessions` stats.
 
 **Errors:** `401` missing/invalid `X-API-Key`
 
@@ -1389,7 +1389,7 @@ A `chatId` (and `fromChatId` / `toChatId` on `forward`) in a send or message-act
 
 #### Idempotent sends
 
-The single-recipient send routes (`send-text`, `send-template`, `send-image`, `send-video`, `send-audio`, `send-document`, `send-location`, `send-contact`, `send-sticker`, `send-poll`, `reply`, `forward`) accept an optional `Idempotency-Key` request header, so a client can retry after a timeout or a dropped connection without sending the message twice. Without the header nothing changes.
+The single-recipient send routes (`send-text`, `send-template`, `send-image`, `send-video`, `send-audio`, `send-document`, `send-location`, `send-contact`, `send-sticker`, `send-poll`, `reply`, `forward`, `click-button`) accept an optional `Idempotency-Key` request header, so a client can retry after a timeout or a dropped connection without sending the message twice. Without the header nothing changes.
 
 The key is 1-255 visible ASCII characters (a UUID works), unique per session, and is held for **24 hours** from the first request. Within that window:
 
@@ -2434,7 +2434,9 @@ Tap a choice on a WhatsApp Business button / list prompt by sending the structur
 > render after the store evicts the prompt, and a tap then 404s. URL/call CTA buttons cannot be
 > clicked this way, only quick-reply style choices and list rows.
 
-**Errors:** `400` validation failure, session not active, the message is not a clickable prompt, or `buttonId` is not among its choices · `401` · `403` · `404` prompt not in the engine store / wrong chat · `501` whatsapp-web.js · `409` conflict or engine not ready (retryable) · `500` engine error · `503` Baileys recipient lookup failed or timed out before the operation was sent, or WhatsApp rate-limited the send (code 429: nothing was sent) or timed out a query it awaits (code 408: the outcome is not proven), or the connection closed before the message was written (nothing was sent)
+**Headers:** optional `Idempotency-Key` (see **Idempotent sends** above).
+
+**Errors:** `400` validation failure, bad `Idempotency-Key`, session not active, the message is not a clickable prompt, or `buttonId` is not among its choices · `401` · `403` · `404` prompt not in the engine store / wrong chat · `409` conflict, engine not ready (retryable), or idempotency key in progress / outcome unknown · `422` `IDEMPOTENCY_KEY_REUSED` · `500` engine error · `501` whatsapp-web.js · `503` Baileys recipient lookup failed or timed out before the operation was sent, or WhatsApp rate-limited the send (code 429: nothing was sent; frees `Idempotency-Key`) or timed out a query it awaits (code 408: the outcome is not proven; keeps `Idempotency-Key`), or the connection closed before the message was written (nothing was sent; frees `Idempotency-Key`)
 
 #### POST /api/sessions/:sessionId/messages/forward
 
@@ -5471,6 +5473,62 @@ The key is read from the `X-API-Key` header, not the body; send an empty body. T
 
 > Implemented by `AuthValidateController` (`@Controller('auth')`), sharing the same `/api/auth` base.
 
+#### POST /api/auth/session
+
+Exchange an API key header (`X-API-Key` or `Authorization: Bearer`) for an opaque server-side browser session stored in `main.sqlite` (`browser_sessions`), setting the `openwa_session` `HttpOnly; SameSite=Strict` cookie (with `Secure` over HTTPS or when `DASHBOARD_SESSION_COOKIE_SECURE=true`). Lifetime defaults to 12 hours (`DASHBOARD_SESSION_TTL_MS`).
+
+**Auth:** API key header only (any valid role, VIEWER+). Cookie authentication is not accepted on this exchange route, and a key restricted with `allowedChats` is refused with `403`. Non-safe cookie-authenticated requests on other routes require `X-Requested-With: OpenWA-Dashboard` and same-origin `Sec-Fetch-Site`/`Origin` verification.
+
+**Response** `200` (`BrowserSessionResponseDto`)
+
+```json
+{
+  "valid": true,
+  "role": "operator",
+  "engineType": "baileys",
+  "scoped": false,
+  "apiKeyId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**Errors:** `401` missing, invalid, revoked, or expired API key header · `403` key refused by `allowedIps` or restricted with `allowedChats`
+
+#### GET /api/auth/session
+
+Validate the active `openwa_session` cookie (or API key header) and return the bound key's live role, scope, `engineType`, and `apiKeyId`. Re-validates the underlying `api_keys` row, IP allow-list, and scopes on every call.
+
+**Auth:** Browser session cookie (`openwa_session`) or API key (any valid role, VIEWER+)
+
+**Response** `200` (`BrowserSessionResponseDto`)
+
+```json
+{
+  "valid": true,
+  "role": "operator",
+  "engineType": "baileys",
+  "scoped": false,
+  "apiKeyId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**Errors:** `401` missing, expired, or revoked browser session or API key · `403` bound key refused by `allowedIps` or restricted with `allowedChats`
+
+#### DELETE /api/auth/session
+
+Revoke the current browser session in `browser_sessions` (when a valid `openwa_session` cookie is present) and clear the `openwa_session` cookie. Active WebSocket connections authenticated by that browser session are evicted. When an `openwa_session` cookie is present, the route enforces the same CSRF check (`X-Requested-With: OpenWA-Dashboard` plus `Sec-Fetch-Site`/`Origin` verification) before revoking the session; requests without a cookie stay idempotent and clear the cookie.
+
+**Auth:** public (`@Public()`)
+
+**Response** `200` (`BrowserSessionLogoutResponseDto`)
+
+```json
+{ "ok": true }
+```
+
+**Errors:** `403` CSRF check failed for a cookie-authenticated logout request
+
+> Implemented by `BrowserSessionController` (`@Controller('auth')`).
+
 ### 6.4.10 System (Health, Metrics, Stats, Settings, Audit)
 
 System endpoints expose operational status, Prometheus metrics, aggregate statistics, runtime settings, and the audit log. Health and metrics use non-standard auth (public / Bearer token); stats, settings and audit use the API key, with several routes gated to `ADMIN`.
@@ -6082,6 +6140,12 @@ Export every row of the 16 migration tables from the Data DB as JSON. Read-only,
 
 **Auth:** API key (ADMIN)
 
+**Query parameters**
+
+| Name                   | Type    | Required | Default | Description                                                                                                                                          |
+| ---------------------- | ------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `includePluginSecrets` | boolean | No       | `false` | Accept `"true"` or `"false"` (any other value answers `400`). When `true`, includes plaintext plugin instance `secret`, `verifyToken`, and `config`. |
+
 > **Inline media is carried up to a budget, then omitted.** `EXPORT_INLINE_MEDIA_BUDGET_BYTES` (8 MiB of encoded base64 by default) bounds how much inline media one export may hold, counted across both `messages` and `messageBatches`. Within each of those tables it is spent newest-first — messages by `timestamp`, batches by `created_at` — so an export that cannot carry everything keeps the most recent media rather than whatever the database happened to return first. Messages are served before batches, so a long history can exhaust the budget before any batch is reached. An over-budget payload on a `messages` row arrives as the omitted marker — `{ mimetype, filename?, omitted: true, sizeBytes }`, the same shape the engine emits when an inbound payload exceeds `MEDIA_DOWNLOAD_MAX_BYTES` — so those messages restore without their pictures. A `messageBatches` entry carries no marker: it simply loses its `base64` and keeps `url`, `mimetype` and `caption`, which is the shape a batch already has once it reaches a terminal state. Without the bound, one 50 MiB attachment becomes 66 MiB of base64 and exceeds the import's own request-body limit (`BODY_SIZE_LIMIT`, 25mb by default), producing a backup this gateway refuses to restore with `413`.
 >
 > An **http/https** payload is never counted or dropped: `metadata.media.data` holds either base64 or the URL a send was given, and such a URL is a pointer worth a few dozen bytes. The scheme is matched case-insensitively, as both engine adapters do when they fetch it; a URL with any other scheme is treated as bytes.
@@ -6152,13 +6216,13 @@ The migration set (`MigrationTables`) is, in payload-key order: `sessions`, `web
 }
 ```
 
-Rows are raw DB column shapes (e.g. `messageBatches` rows use snake_case columns: `batch_id`, `session_id`, `current_index`, `created_at`, …). **`webhooks` rows omit `secret` and `headers`** (webhook credentials are excluded from backups; they restore as `null`/`{}`), while `pluginInstances` rows still carry integration secrets — treat the payload as a credential dump. **`sessions` rows have any `user:pass` stripped from `proxyUrl`** (a value that does not parse as a URL exports as `null`), so a restored authenticated proxy reads `hasCredentials: false` and fails on the session's next start until the credentials are re-entered with `PATCH /api/sessions/:sessionId/proxy`. On Postgres the generated `body_ts` FTS column is stripped from `messages` so archives stay dialect-neutral.
+Rows are raw DB column shapes (e.g. `messageBatches` rows use snake_case columns: `batch_id`, `session_id`, `current_index`, `created_at`, …). **`webhooks` rows omit `secret` and `headers`** (webhook credentials are excluded from backups; they restore as `null`/`{}`). **`pluginInstances` rows redact `secret`, `verifyToken`, and `secret: true` config keys by default** (if the plugin manifest or config schema is unavailable, `config` is omitted rather than exported unredacted), and restored redacted instances are disabled with freshly generated secrets until reconfigured; pass `?includePluginSecrets=true` when migrating plugin credentials and treat the resulting payload as a credential dump. **`sessions` rows have any `user:pass` stripped from `proxyUrl`** (a value that does not parse as a URL exports as `null`), so a restored authenticated proxy reads `hasCredentials: false` and fails on the session's next start until the credentials are re-entered with `PATCH /api/sessions/:sessionId/proxy`. On Postgres the generated `body_ts` FTS column is stripped from `messages` so archives stay dialect-neutral.
 
 `sessions`/`webhooks` are queried directly, so a hard DB error there yields `500`. The other 14 are queried tolerantly: a _genuinely missing_ table (an older DB that has not run the migration) exports as `[]` and its name is listed in `skippedTables`; any other error (lock, I/O, timeout) fails the export rather than reporting the table as empty. Check `skippedTables` before restoring — a skipped table is "not migrated yet", not "exported empty".
 
 `omittedInlineMedia` counts, per table, the inline media payloads the `EXPORT_INLINE_MEDIA_BUDGET_BYTES` budget dropped. Zeroes mean everything fitted; an archive with a non-zero count still restores, but those rows come back without their media.
 
-**Errors:** `401` · `403` · `409` `IMPORT_ALREADY_RUNNING` (a data import is running; export after it finishes) · `500` DB error
+**Errors:** `400` invalid `includePluginSecrets` query parameter (must be `"true"` or `"false"`) · `401` · `403` · `409` `IMPORT_ALREADY_RUNNING` (a data import is running; export after it finishes) · `500` DB error
 
 ---
 
@@ -6759,7 +6823,7 @@ Key facts:
 
 - **Path is exactly `POST /mcp` — no `/api` prefix.** The global `api` prefix applies only to Nest controllers; this route is mounted straight on Express.
 - Gated by **`MCP_ENABLED=true`**. When off, the module/route is never mounted and `POST /mcp` returns `404`.
-- MCP is **read-only by default**: only read-tier tools are registered unless you set `MCP_READONLY=false` to expose write tools. Per-key sliding-window rate limit: `MCP_RATE_LIMIT_MAX` (default 60) per `MCP_RATE_LIMIT_WINDOW_MS` (default 60000). `MCP_MAX_RESULT_BYTES` (default 0, no cap) returns every tool result as one text item, cut at that many bytes, instead of offloading a large one as an embedded base64 resource.
+- MCP is **read-only by default**: only read-tier tools are registered unless you set `MCP_READONLY=false` to expose write tools. Per-key sliding-window rate limit: `MCP_RATE_LIMIT_MAX` (default 60) per `MCP_RATE_LIMIT_WINDOW_MS` (default 60000). `MCP_MAX_RESULT_BYTES` (default 100000 bytes / 100 KB; set to `0` to disable the cap) returns every tool result as one text item, cut at that many bytes, instead of offloading a large one as an embedded base64 resource.
 - Stateless transport: no session id and no standalone stream. Every POST must send `Content-Type: application/json` and `Accept: application/json, text/event-stream` (both types, even though the answer is a single message). A `200` answer is `text/event-stream` carrying one `event: message` frame whose `data:` line is the JSON-RPC envelope; a POST that carries only notifications gets `202` with an empty body. `GET /mcp` and `DELETE /mcp` answer `405` with `Allow: POST` and a JSON-RPC error body.
 - Pre-auth per-IP throttle: `MCP_IP_RATE_LIMIT_MAX` (default 120) JSON-RPC messages per `MCP_IP_RATE_LIMIT_WINDOW_MS` (default 60000). Each element of a batch counts; an over-budget request gets HTTP `429` with a JSON-RPC error body and runs none of its messages, but still spends whatever budget the IP had left.
 
@@ -6890,7 +6954,7 @@ Search messages across sessions (active search provider).
 `match=contains` query with no term of 3 or more characters (on PostgreSQL, 3 letters or digits in a row) or with more than 64 characters in its terms, or a malformed
 SQLite FTS5 query (unbalanced quote/paren, bare operator) — Postgres's `websearch_to_tsquery` is
 tolerant and has no equivalent · `401` missing/invalid `X-API-Key` · `403` key role below `OPERATOR`, or a chat-restricted key
-that names a `chatId` outside its allowlist or uses a plugin provider ·
+that names a `chatId` outside its allowlist or hits a plugin provider without built-in fallback ·
 `501` no search provider configured (including a non-FTS5 SQLite build, where the provider is absent), or for
 `match=contains` the trigram index is not usable: `SEARCH_CONTAINS_ENABLED` is off, the index is still being built,
 or it cannot be (PostgreSQL without `pg_trgm` and `unaccent`, or SQLite older than 3.45); the message says which ·
@@ -6903,8 +6967,9 @@ retryable). The built-in provider returns neither `502` nor `503`.
 > any session scope at the provider boundary. The same holds for the chat scope: a key restricted to
 > selected chats sees only hits inside its allowlist with the built-in provider (expanded lid-aware
 > before SQL filtering, so `limit`/`offset`/`total` all describe the scoped result set). A compiled
-> chat scope with no valid ids returns no hits and a zero total. Plugin search refuses these keys
-> before invoking the worker. There is no `chatIds` query parameter.
+> chat scope with no valid ids returns no hits and a zero total. Under `SEARCH_PROVIDER=auto`,
+> chat-restricted searches fall back to `builtin-fts` when it is registered; otherwise plugin search
+> refuses these keys before invoking the worker. There is no `chatIds` query parameter.
 
 ### 6.4.13 Profile (own account)
 

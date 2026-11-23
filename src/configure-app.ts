@@ -181,8 +181,16 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
     },
     credentials: corsPolicy.credentials,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    // Idempotency-Key is the opt-in retry guard on the send routes (SendIdempotencyInterceptor).
-    allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'X-Request-ID', 'Idempotency-Key'],
+    // Idempotency-Key is the opt-in retry guard on the send routes (SendIdempotencyInterceptor);
+    // X-Requested-With is the dashboard CSRF defense header for cookie-authenticated mutations.
+    allowedHeaders: [
+      'Content-Type',
+      'X-API-Key',
+      'Authorization',
+      'X-Request-ID',
+      'Idempotency-Key',
+      'X-Requested-With',
+    ],
     // The throttlers are named (short/medium/long, plus ingress-ip on ingress), so @nestjs/throttler
     // suffixes every rate-limit header with the throttler name; IngressService emits the per-instance
     // bucket's headers under the same `-instance` suffix. Expose the suffixed names so browser clients
@@ -272,7 +280,7 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
   app.use(
     createInflightBodyBudget(inflightBudgetBytes, {
       trustedProxies: parseTrustedProxies(process.env.TRUSTED_PROXIES),
-      classify: (req, clientIp) => keyIndex?.recognise(req.headers, clientIp),
+      classify: (req, clientIp) => keyIndex?.recognise(req.headers, clientIp, req.path),
       bodyLimitBytes: parseBodyLimitBytes(bodyLimit),
       requestTimeoutMs: resolveRequestTimeoutMs(process.env.REQUEST_TIMEOUT_MS),
     }).middleware,

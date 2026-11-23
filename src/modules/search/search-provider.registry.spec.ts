@@ -44,4 +44,12 @@ describe('SearchProviderRegistry', () => {
         .sort(),
     ).toEqual(['a', 'b']);
   });
+
+  it('get looks up a provider by id and returns null when absent', () => {
+    const r = new SearchProviderRegistry();
+    const a = mk('a');
+    r.register(a);
+    expect(r.get('a')).toBe(a);
+    expect(r.get('missing')).toBeNull();
+  });
 });

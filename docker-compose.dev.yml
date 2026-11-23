@@ -73,16 +73,21 @@ services:
       - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-true}
       - PUPPETEER_ARGS=${PUPPETEER_ARGS:---no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu}
       - PUPPETEER_PROTOCOL_TIMEOUT_MS=${PUPPETEER_PROTOCOL_TIMEOUT_MS:-}
-      # Optional WhatsApp Web version override. DEFAULT (empty, "latest", or "auto"): OpenWA auto-resolves a
-      # settled build from the third-party wppconnect-team/wa-version registry and pins its remote HTML
-      # (fetched into the web.whatsapp.com origin without an integrity check). Set "off" to disable pinning
-      # and use the first-party build served by WhatsApp, or an exact version to pin a specific build.
+      # Optional WhatsApp Web version pin. DEFAULT (empty or "off"): OpenWA uses the native first-party
+      # build served by WhatsApp with zero remote HTML fetches. Setting an exact build requires
+      # WWEBJS_WEB_VERSION_SHA256 (64-char hex, verified on fetch and cache hit) or explicit
+      # WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true. "auto"/"latest" also require ALLOW_UNVERIFIED=true.
       - WWEBJS_WEB_VERSION=${WWEBJS_WEB_VERSION:-}
       - WWEBJS_WEB_VERSION_REMOTE_PATH=${WWEBJS_WEB_VERSION_REMOTE_PATH:-}
+      - WWEBJS_WEB_VERSION_SHA256=${WWEBJS_WEB_VERSION_SHA256:-}
+      - WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=${WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED:-}
       # Raise whatsapp-web.js's first-boot init wait (default 30000ms) on slow boots. Empty = default.
       - WWEBJS_AUTH_TIMEOUT_MS=${WWEBJS_AUTH_TIMEOUT_MS:-}
       # Forward the plain-HTTP dashboard CSP override; unset preserves the application default.
       - CSP_UPGRADE_INSECURE_REQUESTS=${CSP_UPGRADE_INSECURE_REQUESTS:-}
+      - DASHBOARD_SESSION_TTL_MS=${DASHBOARD_SESSION_TTL_MS:-}
+      - DASHBOARD_SESSION_COOKIE_SECURE=${DASHBOARD_SESSION_COOKIE_SECURE:-}
+      - HOOK_PRE_EGRESS_FAIL_CLOSED=${HOOK_PRE_EGRESS_FAIL_CLOSED:-}
       - STORAGE_TYPE=${STORAGE_TYPE:-local}
       - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH:-/app/data/media}
       # Install plugins into the writable, persistent data volume (the root FS is read-only). Matches
@@ -156,6 +161,7 @@ services:
       - SESSION_LEASE_HEARTBEAT_MS=${SESSION_LEASE_HEARTBEAT_MS:-}
       - SESSION_TAKEOVER_SWEEP_MS=${SESSION_TAKEOVER_SWEEP_MS:-}
       - SESSION_PROXY_TIMEOUT_MS=${SESSION_PROXY_TIMEOUT_MS:-}
+      - SESSION_PROXY_SECRET=${SESSION_PROXY_SECRET:-}
       # Security / boot knobs the app reads. Like the blocks above, this list is the only path into
       # the container; compose-parity.spec.ts derives the required set from .env.example.
       - API_MASTER_KEY=${API_MASTER_KEY:-}
@@ -248,6 +254,7 @@ services:
       - DATABASE_IDLE_TIMEOUT_MS=${DATABASE_IDLE_TIMEOUT_MS:-}
       - DATABASE_CONNECTION_TIMEOUT_MS=${DATABASE_CONNECTION_TIMEOUT_MS:-}
       - MAIN_DATABASE_NAME=${MAIN_DATABASE_NAME:-}
+      - SQLITE_JOURNAL_MODE=${SQLITE_JOURNAL_MODE:-}
       # Engine / session tuning.
       - MAX_CONCURRENT_SESSIONS=${MAX_CONCURRENT_SESSIONS:-}
       - BAILEYS_AUTH_DIR=${BAILEYS_AUTH_DIR:-}
@@ -299,6 +306,8 @@ services:
       - LOG_FORMAT=${LOG_FORMAT:-}
       - BASE_URL=${BASE_URL:-}
       - DASHBOARD_URL=${DASHBOARD_URL:-}
+      - DOCKER_HOST=${DOCKER_HOST:-}
+      - DOCKER_ALLOW_LOCAL_SOCKET=${DOCKER_ALLOW_LOCAL_SOCKET:-}
     volumes:
       - ./data:/app/data
     restart: unless-stopped

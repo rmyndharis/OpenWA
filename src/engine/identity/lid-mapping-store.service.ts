@@ -75,6 +75,12 @@ export interface SecondLidReport {
   sessionId: string | null;
 }
 
+/** A non-null lid->phone mapping persisted by {@link LidMappingStoreService.remember}. */
+export interface LearnedLidMapping {
+  lid: string;
+  phone: string;
+}
+
 /** Set a key as the newest, dropping the oldest past `max`; the key dropped, if any. */
 function setNewest<V>(map: Map<string, V>, key: string, value: V, max: number): string | undefined {
   map.delete(key);
@@ -281,6 +287,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
   private readonly secondLidReported = new Map<string, number>();
   private secondLidClosing = false;
   private secondLidListener?: (report: SecondLidReport) => unknown;
+  private readonly mappingLearnedListeners = new Set<(mapping: LearnedLidMapping) => void>();
   /** Monotonic clock in ms (a seam for tests). */
   private readonly now = (): number => performance.now();
   // 0 = unbounded (legacy behaviour). Every other long-lived map in the engine surface is bounded, so
@@ -678,6 +685,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       const again = writing.latestReport === report ? this.secondLidOwed.get(lid) : undefined;
       if (owed && owed.phone === phone) this.queueSecondLid(lid, owed);
       if (again?.phone === phone) this.queueSecondLid(lid, again);
+      if (phone !== null) this.notifyMappingLearned(lid, phone);
       return true;
     } catch (err) {
       writing.failed = true;
@@ -822,6 +830,29 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
   /** Set the one listener told of each second-lid report; the session module audits it. */
   onSecondLid(listener: (report: SecondLidReport) => unknown): void {
     this.secondLidListener = listener;
+  }
+
+  /**
+   * Register a listener notified whenever remember() persists a non-null lid->phone mapping.
+   * Returns an unsubscribe callback so callers can detach on module teardown.
+   */
+  onMappingLearned(listener: (mapping: LearnedLidMapping) => void): () => void {
+    this.mappingLearnedListeners.add(listener);
+    return () => {
+      this.mappingLearnedListeners.delete(listener);
+    };
+  }
+
+  private notifyMappingLearned(lid: string, phone: string): void {
+    if (this.mappingLearnedListeners.size === 0) return;
+    const mapping: LearnedLidMapping = { lid, phone };
+    for (const listener of this.mappingLearnedListeners) {
+      try {
+        listener(mapping);
+      } catch (err) {
+        this.logger.warn(`Mapping-learned listener failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   /**

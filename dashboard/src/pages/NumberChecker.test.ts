@@ -1456,11 +1456,11 @@ async function retireSingleLookup(reason: SingleRetirement) {
     rtl.fireEvent.click(rtl.screen.getByText('Leave'));
     await rtl.screen.findByText('Elsewhere');
   } else if (reason === 'key-change') {
-    sessionStorage.setItem('openwa_api_key', SINGLE_KEY_B);
+    sessionStorage.setItem('openwa_api_key_id', SINGLE_KEY_B);
   } else {
-    sessionStorage.removeItem('openwa_api_key');
+    sessionStorage.removeItem('openwa_api_key_id');
     rtl.cleanup();
-    sessionStorage.setItem('openwa_api_key', SINGLE_KEY_B);
+    sessionStorage.setItem('openwa_api_key_id', SINGLE_KEY_B);
     renderRoutes();
     await rtl.screen.findByRole('option', { name: /Primary Session/ });
   }
@@ -1474,7 +1474,7 @@ for (const reason of ['route', 'key-change', 'logout-login'] as const) {
       const pictures: { path: string; key: string | null }[] = [];
       globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input);
-        const key = new Headers(init?.headers).get('X-API-Key');
+        const key = sessionStorage.getItem('openwa_api_key_id');
         if (path.includes('/contacts/check/')) {
           checks.push({ path, key });
           return pending.promise;
@@ -1485,7 +1485,7 @@ for (const reason of ['route', 'key-change', 'logout-login'] as const) {
         }
         return defaultFetch(input, init);
       }) as typeof fetch;
-      sessionStorage.setItem('openwa_api_key', SINGLE_KEY_A);
+      sessionStorage.setItem('openwa_api_key_id', SINGLE_KEY_A);
       renderRoutes();
       await startSingleLookup();
       assert.deepEqual(checks, [
@@ -1529,12 +1529,12 @@ for (const reason of ['route', 'key-change', 'logout-login'] as const) {
         const path = String(input);
         if (path.includes('/contacts/check/')) return Promise.resolve(registered('6581234567'));
         if (path.includes('/profile-picture')) {
-          pictures.push({ path, key: new Headers(init?.headers).get('X-API-Key') });
+          pictures.push({ path, key: sessionStorage.getItem('openwa_api_key_id') });
           return pending.promise;
         }
         return defaultFetch(input, init);
       }) as typeof fetch;
-      sessionStorage.setItem('openwa_api_key', SINGLE_KEY_A);
+      sessionStorage.setItem('openwa_api_key_id', SINGLE_KEY_A);
       renderRoutes();
       await startSingleLookup();
       await rtl.waitFor(() =>
@@ -1582,7 +1582,7 @@ for (const answer of ['avatar', 'no-avatar', 'profile-failure', 'missing'] as co
         );
       }
       if (path.includes('/profile-picture')) {
-        pictures.push({ path, key: new Headers(init?.headers).get('X-API-Key') });
+        pictures.push({ path, key: sessionStorage.getItem('openwa_api_key_id') });
         return Promise.resolve(
           answer === 'profile-failure'
             ? jsonResponse({ message: 'Optional avatar unavailable' }, 500)
@@ -1591,7 +1591,7 @@ for (const answer of ['avatar', 'no-avatar', 'profile-failure', 'missing'] as co
       }
       return defaultFetch(input, init);
     }) as typeof fetch;
-    sessionStorage.setItem('openwa_api_key', SINGLE_KEY_A);
+    sessionStorage.setItem('openwa_api_key_id', SINGLE_KEY_A);
     renderComponent();
     await startSingleLookup();
     await rtl.screen.findByText(answer === 'missing' ? 'Not Registered' : 'Registered on WhatsApp', {

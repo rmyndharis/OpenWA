@@ -1,10 +1,105 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { BadRequestException } from '@nestjs/common';
-import { DEFAULT_PUPPETEER_ARGS } from '../../config/configuration';
+import { DEFAULT_DATA_DIR, DEFAULT_PUPPETEER_ARGS } from '../../config/configuration';
 import { isEnvPinned } from '../../config/env-precedence';
 import { postgresSchemaError } from '../../config/env.validation';
+import { parsePuppeteerArgs, puppeteerArgsError } from '../../config/puppeteer-args';
 import type { EngineFactory } from '../../engine/engine.factory';
 import { datastoreInUse, hostPinnedElsewhere, namesBundledContainer } from '../docker';
 import { DatabaseConfigDto, EngineConfigDto, RedisConfigDto, StorageConfigDto } from './dto/save-config.dto';
+
+function hasPathControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/**
+ * Resolves a target path via its deepest existing ancestor using `realpathSync`.
+ * Rejects dangling symlinks fail-closed so a symlink pointing to an uncreated path outside the
+ * data directory cannot bypass containment.
+ */
+function resolveCanonicalAncestorPath(targetPath: string): string {
+  const trailing: string[] = [];
+  let cursor = path.resolve(targetPath);
+  while (true) {
+    try {
+      const real = fs.realpathSync(cursor);
+      return trailing.length > 0 ? path.join(real, ...trailing.reverse()) : real;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        let isDanglingSymlink: boolean;
+        try {
+          isDanglingSymlink = fs.lstatSync(cursor).isSymbolicLink();
+        } catch {
+          isDanglingSymlink = false;
+        }
+        if (isDanglingSymlink) {
+          throw new Error('dangling symlink', { cause: error });
+        }
+      }
+      const parent = path.dirname(cursor);
+      if (parent === cursor || (code !== 'ENOENT' && code !== 'ENOTDIR')) {
+        throw error;
+      }
+      trailing.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+function isStrictlyInside(baseDir: string, candidate: string): boolean {
+  const rel = path.relative(baseDir, candidate);
+  return rel !== '' && rel !== '.' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+}
+
+/**
+ * Enforces strict containment of dashboard-submitted data subdirectories (`storage.localPath` and
+ * `engine.sessionDataPath`) inside resolved `DEFAULT_DATA_DIR` (`./data`). Rejects control chars,
+ * raw `..` segments (including `..`-over-symlink escapes), `./data` itself, absolute escapes, and
+ * symlink escapes before any directory probe or write. Returns the trimmed path so persisted and
+ * probed values never diverge on leading/trailing whitespace.
+ */
+function assertContainedDataSubpath(fieldLabel: string, submitted: string): string {
+  if (hasPathControlChar(submitted)) {
+    throw new BadRequestException(
+      `Invalid configuration value for ${fieldLabel}: control characters and line breaks are not allowed`,
+    );
+  }
+  const trimmed = submitted.trim();
+  if (trimmed.split(/[\\/]+/).includes('..')) {
+    throw new BadRequestException(
+      `Refusing to save ${fieldLabel} '${submitted}': parent traversal ('..') segments are not allowed`,
+    );
+  }
+  const cwd = process.cwd();
+  const dataRoot = path.resolve(cwd, DEFAULT_DATA_DIR);
+  const resolvedTarget = path.resolve(cwd, trimmed);
+  if (!isStrictlyInside(dataRoot, resolvedTarget)) {
+    throw new BadRequestException(
+      `Refusing to save ${fieldLabel} '${submitted}': path must be a subdirectory inside ${DEFAULT_DATA_DIR}`,
+    );
+  }
+  try {
+    const canonicalRoot = resolveCanonicalAncestorPath(dataRoot);
+    const canonicalTarget = resolveCanonicalAncestorPath(resolvedTarget);
+    if (!isStrictlyInside(canonicalRoot, canonicalTarget)) {
+      throw new BadRequestException(
+        `Refusing to save ${fieldLabel} '${submitted}': resolved path escapes ${DEFAULT_DATA_DIR}`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof BadRequestException) throw error;
+    throw new BadRequestException(
+      `Refusing to save ${fieldLabel} '${submitted}': path cannot be safely resolved inside ${DEFAULT_DATA_DIR}`,
+    );
+  }
+  return trimmed;
+}
 
 // Mutable accumulator threaded through the pipeline stages and per-section appliers extracted
 // from saveConfig: `updates` collects the values this payload writes, `staleKeys` the keys a mode
@@ -204,9 +299,10 @@ export function applyRedisSection(
   // As for the database, an omitted choice follows the stored host, independently of the flag that starts a container.
   const redisBuiltIn = redis.builtIn ?? namesBundledContainer('redis', existing.REDIS_HOST);
   if (redisBuiltIn && (redis.builtIn !== undefined || !hostPinnedElsewhere('redis'))) {
-    // Built-in Redis - use container name as host. The bundled container runs without
-    // auth, so a password saved by an earlier external setup is stale: leaving it
-    // would make the client AUTH against a passwordless server on the next boot.
+    // Built-in Redis - use container name as host. The bundled container optionally enforces
+    // REDIS_PASSWORD via --requirepass when set, and runs passwordless when unset. Secrets are not
+    // echoed to the form, so a blank resubmission preserves a password already stored for built-in
+    // Redis while clearing a stale password left over from an external Redis server.
     updates.REDIS_HOST = 'redis';
     updates.REDIS_PORT = '6379';
     // It also listens in plaintext and defines no ACL user, so TLS and a username kept from an external
@@ -215,9 +311,32 @@ export function applyRedisSection(
       updates.REDIS_TLS = 'false';
       staleKeys.add('REDIS_USERNAME');
     }
-    if (!redis.password) staleKeys.add('REDIS_PASSWORD');
+    const keepPassword =
+      datastoreInUse('redis', key => existing[key]) &&
+      (namesBundledContainer('redis', existing.REDIS_HOST) ||
+        namesBundledContainer('redis', nextBootValue('REDIS_HOST', existing)));
+    const servesRunning =
+      datastoreInUse('redis', key => process.env[key]) && namesBundledContainer('redis', process.env.REDIS_HOST);
+    const storedBuiltinPassword = keepPassword
+      ? existing.REDIS_PASSWORD
+      : servesRunning
+        ? process.env.REDIS_PASSWORD
+        : undefined;
+    if (!redis.password) {
+      if (storedBuiltinPassword) {
+        updates.REDIS_PASSWORD = storedBuiltinPassword;
+      } else {
+        staleKeys.add('REDIS_PASSWORD');
+      }
+    }
   } else if (!redisBuiltIn) {
-    // External Redis (explicit, or inherited when builtIn is absent)
+    // External Redis (explicit, or inherited when builtIn is absent).
+    // Only an already-selected external Redis owns the stored password; switching away from the
+    // bundled container with a blank password must not leak the built-in REDIS_PASSWORD to the
+    // external server.
+    if (namesBundledContainer('redis', existing.REDIS_HOST) && !redis.password) {
+      staleKeys.add('REDIS_PASSWORD');
+    }
     if (redis.host !== undefined) updates.REDIS_HOST = redis.host.trim() || 'localhost';
     if (redis.port !== undefined) {
       updates.REDIS_PORT = redis.port.trim() ? portValue('redis.port', redis.port) : '6379';
@@ -258,7 +377,8 @@ export function applyStorageSection(
     // there is no bundled MinIO backing a local storage path.
     updates.MINIO_BUILTIN = 'false';
     if (storage.localPath !== undefined) {
-      updates.STORAGE_LOCAL_PATH = storage.localPath || './data/media';
+      const localPath = assertContainedDataSubpath('storage.localPath', storage.localPath || './data/media');
+      updates.STORAGE_LOCAL_PATH = localPath;
     }
     // Switching to local: drop stale S3 keys.
     for (const k of [
@@ -354,11 +474,20 @@ export function applyEngineSection(
     updates.PUPPETEER_HEADLESS = engine.headless ? 'true' : 'false';
   }
   if (engine.sessionDataPath !== undefined) {
-    updates.SESSION_DATA_PATH = engine.sessionDataPath || './data/sessions';
+    const sessionDataPath = assertContainedDataSubpath(
+      'engine.sessionDataPath',
+      engine.sessionDataPath || './data/sessions',
+    );
+    updates.SESSION_DATA_PATH = sessionDataPath;
   }
   if (engine.browserArgs !== undefined) {
-    // Once compose blank-forwards PUPPETEER_ARGS, this saved value wins at runtime, so an empty field
-    // saves the same default configuration.ts applies.
-    updates.PUPPETEER_ARGS = engine.browserArgs || DEFAULT_PUPPETEER_ARGS.join(' ');
+    if (engine.browserArgs) {
+      const argsErr = puppeteerArgsError(engine.browserArgs);
+      if (argsErr) throw new BadRequestException(argsErr);
+    }
+    const parsedArgs = parsePuppeteerArgs(engine.browserArgs);
+    // Once compose blank-forwards PUPPETEER_ARGS, this saved value wins at runtime, so an empty or
+    // delimiter-only field saves the same default configuration.ts applies.
+    updates.PUPPETEER_ARGS = parsedArgs.length > 0 ? engine.browserArgs : DEFAULT_PUPPETEER_ARGS.join(' ');
   }
 }

@@ -62,9 +62,10 @@
 # Failure policy: a missing source database is FATAL (no silent empty backup), and the finished
 # archive must contain every configured database or it is deleted and the run fails. The archive
 # takes its final name only once complete, so a failed tar leaves no truncated
-# openwa-backup-*.tar.gz. When the sqlite3 CLI is unavailable the databases are plain-copied (possibly
-# torn if the app is live) and the archive carries a CONSISTENCY-WARNING marker that restore.sh
-# surfaces.
+# openwa-backup-*.tar.gz. When the sqlite3 CLI is unavailable, backup refuses any database carrying
+# a non-empty -wal sidecar (uncheckpointed WAL data); otherwise the databases are plain-copied
+# (possibly torn if the app is live) and the archive carries a CONSISTENCY-WARNING marker that
+# restore.sh surfaces.
 #
 # Engine authentication state (sessions/, baileys/) is copied, not snapshotted: the engines rewrite
 # it while they run, so an online backup can hold a copy torn mid-write. When a whatsapp-web.js
@@ -141,14 +142,14 @@ trap 'rm -rf "$STAGE" "$ARCHIVE_PARTIAL"' EXIT
 CONSISTENCY_WARNING="$STAGE/CONSISTENCY-WARNING"
 
 # Marker file shipped INSIDE the archive so restore.sh can surface that the database snapshot was
-# plain-copied from a possibly-live app (rollback-journal mode) and may be torn.
+# plain-copied without sqlite3 .backup and may be torn if the app was live.
 record_consistency_warning() {
   if [ ! -f "$CONSISTENCY_WARNING" ]; then
     cat >"$CONSISTENCY_WARNING" <<'EOF'
 This archive was produced WITHOUT sqlite3 .backup (the sqlite3 CLI was not found on the backup
-host). The database file(s) listed below were plain-copied while the app may have been writing
-(SQLite rollback-journal mode), so the snapshot may be TORN (partially committed). Re-take the
-backup with sqlite3 installed — or with the app stopped — before relying on it for recovery.
+host). The database file(s) listed below were plain-copied while the app may have been writing,
+so the snapshot may be TORN (partially committed). Re-take the backup with sqlite3 installed, or
+with OpenWA stopped cleanly, before relying on it for recovery.
 EOF
   fi
   echo "plain-copied: $1" >>"$CONSISTENCY_WARNING"
@@ -194,6 +195,40 @@ copy_live_tree() {
   fi
 }
 
+# Resolve a SQLite database path through symlinks so backup_sqlite finds the real target's -wal
+# sidecar even when MAIN_DATABASE_NAME / DATABASE_NAME is a symlink (SQLite writes <target>-wal
+# beside the resolved file, not the link). Works even under a minimal PATH without node or readlink.
+resolve_sqlite_target() {
+  local cur="$1" dir base link hops=0
+  if command -v node >/dev/null 2>&1; then
+    node -e 'const fs = require("fs"); try { console.log(fs.realpathSync.native(process.argv[1])); } catch { console.log(process.argv[1]); }' "$cur"
+    return
+  fi
+  while [ -L "$cur" ] && [ "$hops" -lt 40 ]; do
+    dir="$(dirname "$cur")"
+    if command -v readlink >/dev/null 2>&1; then
+      link="$(readlink "$cur")"
+    else
+      # shellcheck disable=SC2012
+      link="$(LC_ALL=C ls -ld -- "$cur" | sed -n 's/.* -> //p')"
+    fi
+    [ -z "$link" ] && break
+    case "$link" in
+      /*) cur="$link" ;;
+      *) cur="$dir/$link" ;;
+    esac
+    hops=$((hops + 1))
+  done
+  dir="$(dirname "$cur")"
+  base="${cur##*/}"
+  if [ -d "$dir" ]; then
+    dir="$(cd -P "$dir" && pwd -P)"
+    printf '%s/%s\n' "${dir%/}" "$base"
+  else
+    printf '%s\n' "$cur"
+  fi
+}
+
 # Online SQLite backup (consistent without stopping the app) when sqlite3 is present. A missing
 # source database is FATAL: an archive without the configured databases is not a backup, and a
 # silent skip is how an empty archive gets reported as "Backup complete".
@@ -206,16 +241,30 @@ backup_sqlite() {
     exit 1
   fi
   if command -v sqlite3 >/dev/null 2>&1; then
-    # The app writes in rollback-journal mode, and a bare .backup gave up on the first lock it met and
-    # restarted after every outside write, so a busy gateway never got a backup. The read transaction
-    # lets the copy finish in one pass, but it blocks every app write, and with it the app's event
-    # loop, until the copy ends, and a write that outlasts the app's SQLite busy timeout fails. The
-    # busy timeout here waits out a commit, and -init /dev/null keeps the operator's sqlite3 rc file
-    # out of the run.
+    # Under the default WAL mode, the read transaction pins a consistent WAL snapshot without
+    # blocking concurrent app writers and .backup captures committed frames from -wal into a
+    # self-contained destination file. Under SQLITE_JOURNAL_MODE=DELETE (rollback-journal mode),
+    # the read transaction lets the copy finish in one pass while waiting out locks up to the
+    # 30 s busy timeout. -init /dev/null keeps the operator's sqlite3 rc file out of the run.
     sqlite3 -init /dev/null -cmd ".timeout 30000" "$src" \
       "BEGIN" "SELECT count(*) FROM sqlite_master" ".backup '$dest'" "COMMIT" >/dev/null
   else
-    log "WARN: sqlite3 not found — plain-copying live database $src (the snapshot may be torn)"
+    local wal_found="" real_src=""
+    if [ -s "$src-wal" ]; then
+      wal_found="$src-wal"
+    elif [ -L "$src" ]; then
+      real_src="$(resolve_sqlite_target "$src")"
+      if [ -n "$real_src" ] && [ -s "$real_src-wal" ]; then
+        wal_found="$real_src-wal"
+      fi
+    fi
+    if [ -n "$wal_found" ]; then
+      log "ERROR: sqlite3 CLI is not installed and $wal_found is non-empty (uncheckpointed WAL data)"
+      log "       plain-copying $src alone would silently drop committed transactions in the WAL."
+      log "       Install sqlite3 (recommended for consistent online .backup) or stop OpenWA cleanly first so the WAL is checkpointed."
+      exit 1
+    fi
+    log "WARN: sqlite3 not found; plain-copying live database $src (the snapshot may be torn)"
     cp "$src" "$dest"
     record_consistency_warning "$src"
   fi

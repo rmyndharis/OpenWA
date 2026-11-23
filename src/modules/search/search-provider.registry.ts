@@ -35,6 +35,10 @@ export class SearchProviderRegistry implements PluginSearchRegistryPort {
     return this.activeId === null ? null : (this.providers.get(this.activeId) ?? null);
   }
 
+  get(id: string): SearchProvider | null {
+    return this.providers.get(id) ?? null;
+  }
+
   list(): SearchProvider[] {
     return [...this.providers.values()];
   }

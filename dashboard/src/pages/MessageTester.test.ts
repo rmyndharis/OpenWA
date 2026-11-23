@@ -1041,12 +1041,12 @@ for (const mode of ['text', 'forward'] as const) {
           return jsonResponse({ number: '15550000001', exists: true, whatsappId: 'primary@lid' });
         }
         if (url.includes('/messages/')) {
-          writes.push({ key: new Headers(init?.headers).get('X-API-Key'), body: JSON.parse(String(init?.body)) });
+          writes.push({ key: sessionStorage.getItem('openwa_api_key_id'), body: JSON.parse(String(init?.body)) });
           return jsonResponse({ messageId: 'sent', timestamp: 1 });
         }
         return jsonResponse([]);
       }) as typeof fetch;
-      sessionStorage.setItem('openwa_api_key', 'original-key');
+      sessionStorage.setItem('openwa_api_key_id', 'original-key');
       sessionStorage.setItem('openwa_user_role', 'operator');
       const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
       const tree = () =>
@@ -1062,12 +1062,12 @@ for (const mode of ['text', 'forward'] as const) {
       await rtl.waitFor(() => assert.equal(sendButton().disabled, false));
       rtl.fireEvent.click(sendButton());
       await rtl.waitFor(() => assert.equal(lookups, mode === 'text' ? 1 : 2));
-      if (change === 'replace key') sessionStorage.setItem('openwa_api_key', 'replacement-key');
-      if (change === 'sign out') sessionStorage.removeItem('openwa_api_key');
+      if (change === 'replace key') sessionStorage.setItem('openwa_api_key_id', 'replacement-key');
+      if (change === 'sign out') sessionStorage.removeItem('openwa_api_key_id');
       if (change === 'unmount' || change === 'sign in again') view.unmount();
       if (change === 'sign in again') {
-        sessionStorage.removeItem('openwa_api_key');
-        sessionStorage.setItem('openwa_api_key', 'original-key');
+        sessionStorage.removeItem('openwa_api_key_id');
+        sessionStorage.setItem('openwa_api_key_id', 'original-key');
         client.clear();
         rtl.render(tree());
         await rtl.screen.findByRole('option', { name: /Main/ });
@@ -1078,7 +1078,7 @@ for (const mode of ['text', 'forward'] as const) {
       });
       assert.deepEqual(writes, [], 'the abandoned lookup issued a write');
       client.clear();
-      sessionStorage.removeItem('openwa_api_key');
+      sessionStorage.removeItem('openwa_api_key_id');
     });
   }
 }
@@ -1101,7 +1101,7 @@ for (const [script, zero] of [
       if (path.includes('/messages/')) return jsonResponse({ messageId: 'sent', timestamp: 1 });
       return jsonResponse([]);
     }) as typeof fetch;
-    sessionStorage.setItem('openwa_api_key', 'original-key');
+    sessionStorage.setItem('openwa_api_key_id', 'original-key');
     sessionStorage.setItem('openwa_user_role', 'operator');
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
     const view = rtl.render(
@@ -1120,7 +1120,7 @@ for (const [script, zero] of [
       assert.deepEqual(checked, ['15550000001', '15550000002']);
     } finally {
       client.clear();
-      sessionStorage.removeItem('openwa_api_key');
+      sessionStorage.removeItem('openwa_api_key_id');
     }
   });
 }
@@ -1145,7 +1145,7 @@ for (const field of ['recipient', 'forward target'] as const) {
       }
       return jsonResponse([]);
     }) as typeof fetch;
-    sessionStorage.setItem('openwa_api_key', 'original-key');
+    sessionStorage.setItem('openwa_api_key_id', 'original-key');
     sessionStorage.setItem('openwa_user_role', 'operator');
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
     const view = rtl.render(
@@ -1171,7 +1171,7 @@ for (const field of ['recipient', 'forward target'] as const) {
       assert.deepEqual(sent, [], 'a message was sent');
     } finally {
       client.clear();
-      sessionStorage.removeItem('openwa_api_key');
+      sessionStorage.removeItem('openwa_api_key_id');
     }
   });
 }
@@ -1192,7 +1192,7 @@ function stubPersonalSend(): { checked: string[]; writes: unknown[] } {
     }
     return jsonResponse([]);
   }) as typeof fetch;
-  sessionStorage.setItem('openwa_api_key', 'original-key');
+  sessionStorage.setItem('openwa_api_key_id', 'original-key');
   sessionStorage.setItem('openwa_user_role', 'operator');
   return record;
 }
@@ -1221,7 +1221,7 @@ for (const chatId of ['185290012345678@lid', '628123456789:5@s.whatsapp.net']) {
       assert.deepEqual(writes, [{ chatId, text: 'hello' }]);
     } finally {
       client.clear();
-      sessionStorage.removeItem('openwa_api_key');
+      sessionStorage.removeItem('openwa_api_key_id');
     }
   });
 }
@@ -1245,7 +1245,7 @@ for (const [typed, number] of [
       assert.deepEqual(checked, [`/${number}`]);
     } finally {
       client.clear();
-      sessionStorage.removeItem('openwa_api_key');
+      sessionStorage.removeItem('openwa_api_key_id');
     }
   });
 }
@@ -1274,7 +1274,7 @@ for (const typed of [' abc ', '00', '+00', '0 0', String.fromCharCode(0xff20)]) 
         assert.deepEqual(checked, []);
       } finally {
         client.clear();
-        sessionStorage.removeItem('openwa_api_key');
+        sessionStorage.removeItem('openwa_api_key_id');
       }
     });
   }
@@ -1301,7 +1301,7 @@ test('a forward from a named chat neither needs nor looks up the personal recipi
     ]);
   } finally {
     client.clear();
-    sessionStorage.removeItem('openwa_api_key');
+    sessionStorage.removeItem('openwa_api_key_id');
   }
 });
 
@@ -1317,12 +1317,12 @@ test('an unchanged actor sends to canonical personal and forward destinations', 
         whatsappId: path.endsWith('2') ? 'destination@lid' : 'primary@lid',
       });
     if (path.includes('/messages/')) {
-      writes.push({ path, key: new Headers(init?.headers).get('X-API-Key'), body: JSON.parse(String(init?.body)) });
+      writes.push({ path, key: sessionStorage.getItem('openwa_api_key_id'), body: JSON.parse(String(init?.body)) });
       return jsonResponse({ messageId: 'sent', timestamp: 1 });
     }
     return jsonResponse([]);
   }) as typeof fetch;
-  sessionStorage.setItem('openwa_api_key', 'original-key');
+  sessionStorage.setItem('openwa_api_key_id', 'original-key');
   sessionStorage.setItem('openwa_user_role', 'operator');
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
   const view = rtl.render(
@@ -1348,11 +1348,11 @@ test('an unchanged actor sends to canonical personal and forward destinations', 
     messageId: 'original-message',
   });
   client.clear();
-  sessionStorage.removeItem('openwa_api_key');
+  sessionStorage.removeItem('openwa_api_key_id');
 });
 
 test('replacing the key stops a sequential group send and releases the composer', async () => {
-  sessionStorage.setItem('openwa_api_key', 'original-key');
+  sessionStorage.setItem('openwa_api_key_id', 'original-key');
   const gateway = stubGroupGateway([
     { id: 'g1@g.us', name: 'Family' },
     { id: 'g2@g.us', name: 'Work' },
@@ -1360,12 +1360,12 @@ test('replacing the key stops a sequential group send and releases the composer'
   await renderGroupsAsWriter();
   await sendTextToAllGroups();
   await rtl.waitFor(() => assert.equal(gateway.textSends.length, 1));
-  sessionStorage.setItem('openwa_api_key', 'replacement-key');
+  sessionStorage.setItem('openwa_api_key_id', 'replacement-key');
   await rtl.waitFor(() => assert.equal(sendMessageButton().disabled, false), { timeout: 4000 });
   assert.deepEqual(gateway.textSends, ['g1@g.us']);
   assert.equal(field(window.document.body, '#mt-2').matches(':disabled'), false);
   assert.equal(rtl.screen.queryByText('Success'), null);
-  sessionStorage.removeItem('openwa_api_key');
+  sessionStorage.removeItem('openwa_api_key_id');
 });
 
 test('an old lookup cannot complete a new operation after signing in with the same key', async () => {
@@ -1384,7 +1384,7 @@ test('an old lookup cannot complete a new operation after signing in with the sa
     }
     return jsonResponse([]);
   }) as typeof fetch;
-  sessionStorage.setItem('openwa_api_key', 'same-key');
+  sessionStorage.setItem('openwa_api_key_id', 'same-key');
   sessionStorage.setItem('openwa_user_role', 'operator');
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
   const render = () =>
@@ -1402,8 +1402,8 @@ test('an old lookup cannot complete a new operation after signing in with the sa
   await rtl.waitFor(() => assert.equal(releases.length, 1));
   original.unmount();
   client.clear();
-  sessionStorage.removeItem('openwa_api_key');
-  sessionStorage.setItem('openwa_api_key', 'same-key');
+  sessionStorage.removeItem('openwa_api_key_id');
+  sessionStorage.setItem('openwa_api_key_id', 'same-key');
   const current = render();
   await start(current, 'new operation');
   await rtl.waitFor(() => assert.equal(releases.length, 2));
@@ -1425,7 +1425,7 @@ test('an old lookup cannot complete a new operation after signing in with the sa
   assert.deepEqual(writes, [{ chatId: 'canonical@lid', text: 'new operation' }]);
   assert.ok(rtl.screen.getByText('new-operation'));
   client.clear();
-  sessionStorage.removeItem('openwa_api_key');
+  sessionStorage.removeItem('openwa_api_key_id');
 });
 
 // A phone number or chat id typed into a plain text field is laid out right to left in an Arabic or Hebrew

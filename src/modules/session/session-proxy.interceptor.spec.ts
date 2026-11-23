@@ -3,9 +3,18 @@ import { AddressInfo } from 'net';
 import express from 'express';
 import { of, lastValueFrom } from 'rxjs';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
+import { Reflector } from '@nestjs/core';
+import { ThrottlerException, ThrottlerStorageService } from '@nestjs/throttler';
 import { SessionProxyInterceptor, FORWARDED_HEADER, forwardTarget } from './session-proxy.interceptor';
 import type { Session } from './entities/session.entity';
 import { runWithRequestId } from '../../common/services/request-context';
+import {
+  FORWARDED_HOP_SIG_HEADER,
+  FORWARDED_HOP_TS_HEADER,
+  verifyForwardedHop,
+} from '../../common/security/inter-node-proxy-auth';
+import { ProxyAwareThrottlerGuard } from '../../common/security/proxy-aware-throttler.guard';
 
 /**
  * The forwarding decision IS the security surface: forwarding when the session is local answers a
@@ -72,15 +81,21 @@ describe('SessionProxyInterceptor', () => {
     sessionScoped?: boolean;
     req?: Req;
     timeoutMs?: number;
+    proxySecret?: string;
   }) => {
     const req = opts.req ?? request();
     const res = makeResponse();
     const findOne = jest.fn().mockResolvedValue(opts.row === undefined ? row() : opts.row);
+    const configGet = jest.fn().mockImplementation((key: string, def?: unknown) => {
+      if (key === 'session.proxyTimeoutMs') return opts.timeoutMs ?? 5000;
+      if (key === 'session.proxySecret') return opts.proxySecret ?? '';
+      return def;
+    });
     const interceptor = new SessionProxyInterceptor(
       { getAllAndOverride: jest.fn().mockReturnValue(opts.sessionScoped ?? false) } as never,
       { findOne } as never,
       { nodeId: 'me', nodeUrl: opts.myUrl ?? 'http://127.0.0.1:2785' } as never,
-      { get: jest.fn().mockReturnValue(opts.timeoutMs ?? 5000) } as never,
+      { get: configGet } as never,
     );
     const context = {
       getType: () => 'http',
@@ -119,6 +134,32 @@ describe('SessionProxyInterceptor', () => {
         expect(handle).not.toHaveBeenCalled();
       },
     );
+
+    it('refuses forwarding a cookie-authenticated request (no API key header) to a peer with 409 ConflictException', async () => {
+      const req = request({
+        headers: { cookie: 'openwa_session=node-local-tok', 'content-type': 'application/json' },
+      });
+      const { interceptor, context, next, handle } = build({ req, row: row({ nodeId: 'peer-node' }) });
+      await expect(interceptor.intercept(context, next)).rejects.toMatchObject({
+        status: 409,
+        message: `Session ${SID} is running on another node; browser sessions are node-local, so connect directly to that node or authenticate with an API key header.`,
+      });
+      expect(handle).not.toHaveBeenCalled();
+    });
+
+    it('does not misclassify an unauthenticated request without a browser session cookie as cookie-authenticated', async () => {
+      const port = await closedPort();
+      const req = request({
+        headers: { 'content-type': 'application/json' },
+      });
+      const { interceptor, context, next, res } = build({
+        req,
+        row: row({ nodeId: 'peer-node', nodeUrl: `http://127.0.0.1:${port}` }),
+      });
+      // Proceeds to forwarding (writing 503 on the closed peer port) rather than throwing 409 browser-session refusal.
+      await interceptor.intercept(context, next);
+      expect(res.status).toHaveBeenCalledWith(503);
+    });
 
     it('executes a forwarded request locally when this node hosts (or may host) the session', async () => {
       const req = request({ headers: { [FORWARDED_HEADER]: 'peer-node', 'x-api-key': 'k' } });
@@ -192,6 +233,41 @@ describe('SessionProxyInterceptor', () => {
     ])('handles locally when the owner is not a live routable peer: %s', async (_label, ownerRow) => {
       const { interceptor, context, next } = build({ row: ownerRow });
       expect(await ranLocally(await interceptor.intercept(context, next))).toBe(true);
+    });
+
+    it('uses ownership.findLiveOwner when available instead of comparing leaseExpiresAt against local Date', async () => {
+      const port = await closedPort();
+      const findOne = jest.fn();
+      // Even when leaseExpiresAt looks expired relative to this node's skewed local clock,
+      // findLiveOwner already proved liveness on the DB clock and must trigger forwarding.
+      const findLiveOwner = jest.fn().mockResolvedValue({
+        id: SID,
+        nodeId: 'peer-node',
+        nodeUrl: `http://127.0.0.1:${port}`,
+        leaseExpiresAt: new Date(Date.now() - 120_000),
+      });
+      const res = makeResponse();
+      const req = request();
+      const interceptor = new SessionProxyInterceptor(
+        { getAllAndOverride: jest.fn().mockReturnValue(false) } as never,
+        { findOne } as never,
+        { nodeId: 'me', nodeUrl: 'http://127.0.0.1:2785', findLiveOwner } as never,
+        { get: jest.fn().mockReturnValue(5000) } as never,
+      );
+      const context = {
+        getType: () => 'http',
+        getHandler: () => undefined,
+        getClass: () => undefined,
+        switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }),
+      } as unknown as ExecutionContext;
+      const handle = jest.fn(() => of('handled-locally'));
+
+      await interceptor.intercept(context, { handle });
+
+      expect(findLiveOwner).toHaveBeenCalledWith(SID);
+      expect(findOne).not.toHaveBeenCalled();
+      expect(handle).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(503);
     });
   });
 
@@ -703,6 +779,265 @@ describe('SessionProxyInterceptor', () => {
           expect(res.setHeader).not.toHaveBeenCalled();
         },
       );
+    });
+
+    it('signs forwarded hop headers when session.proxySecret is configured and strips client-supplied sig headers', async () => {
+      const secret = 'shared-inter-node-secret-32chars!';
+      const req = request({
+        method: 'POST',
+        originalUrl: `/api/sessions/${SID}/messages/send-text?trace=1`,
+        headers: {
+          'x-api-key': 'k-123',
+          'content-type': 'application/json',
+          [FORWARDED_HOP_TS_HEADER]: '1111111111111',
+          [FORWARDED_HOP_SIG_HEADER]: '0'.repeat(64),
+        },
+        body: { chatId: '628@c.us', text: 'hello' },
+      });
+
+      const signed = build({ req, row: row({ nodeUrl: serverUrl }), proxySecret: secret });
+      await signed.interceptor.intercept(signed.context, signed.next);
+
+      expect(seen).toHaveLength(1);
+      expect(seen[0].headers[FORWARDED_HEADER]).toBe('me');
+      expect(seen[0].headers[FORWARDED_HOP_TS_HEADER]).not.toBe('1111111111111');
+      expect(seen[0].headers[FORWARDED_HOP_SIG_HEADER]).not.toBe('0'.repeat(64));
+      expect(
+        verifyForwardedHop({
+          secret,
+          headers: seen[0].headers,
+          method: 'POST',
+          path: `/api/sessions/${SID}/messages/send-text?trace=1`,
+        }),
+      ).toBe(true);
+
+      // When proxySecret is unset, client-supplied signature headers must still be stripped.
+      const unsigned = build({ req, row: row({ nodeUrl: serverUrl }), proxySecret: '' });
+      await unsigned.interceptor.intercept(unsigned.context, unsigned.next);
+
+      expect(seen).toHaveLength(2);
+      expect(seen[1].headers[FORWARDED_HEADER]).toBe('me');
+      expect(seen[1].headers[FORWARDED_HOP_TS_HEADER]).toBeUndefined();
+      expect(seen[1].headers[FORWARDED_HOP_SIG_HEADER]).toBeUndefined();
+    });
+
+    it.each([
+      ['trailing empty query string', `/api/sessions/${SID}/messages?`, `/api/sessions/${SID}/messages`],
+      ['dot segment normalization', `/api/sessions/${SID}/./qr`, `/api/sessions/${SID}/qr`],
+      [
+        'HTTP/1.1 absolute-form target',
+        `http://node-a:3000/api/sessions/${SID}/status?foo=1`,
+        `/api/sessions/${SID}/status?foo=1`,
+      ],
+    ])(
+      'signs the normalized wire path for %s so the owner verifies the exact URL received',
+      async (_label, rawUrl, expectedWirePath) => {
+        const secret = 'shared-inter-node-secret-32chars!';
+        const req = request({
+          method: 'GET',
+          originalUrl: rawUrl,
+          headers: { 'x-api-key': 'k-123' },
+        });
+
+        const signed = build({ req, row: row({ nodeUrl: serverUrl }), proxySecret: secret });
+        await signed.interceptor.intercept(signed.context, signed.next);
+
+        expect(seen).toHaveLength(1);
+        expect(seen[0].url).toBe(expectedWirePath);
+        expect(
+          verifyForwardedHop({
+            secret,
+            headers: seen[0].headers,
+            method: 'GET',
+            path: seen[0].url,
+          }),
+        ).toBe(true);
+      },
+    );
+
+    it('still answers 503 when ownerNodeUrl is invalid and session.proxySecret is configured', async () => {
+      const signed = build({
+        req: request({ method: 'GET', originalUrl: `/api/sessions/${SID}/messages` }),
+        row: row({ nodeUrl: 'not-a-valid-url' }),
+        proxySecret: 'shared-inter-node-secret-32chars!',
+      });
+      await signed.interceptor.intercept(signed.context, signed.next);
+
+      expect(signed.res.status).toHaveBeenCalledWith(503);
+    });
+
+    it('preserves Node A rate-limit headers when the owner skips throttling and emits none', async () => {
+      await withOwner(
+        (_req, res) => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        },
+        async ownerUrl => {
+          const app = express();
+          const { interceptor, next } = build({
+            row: row({ nodeUrl: ownerUrl }),
+            proxySecret: 'shared-inter-node-secret-32chars!',
+          });
+          app.get('/api/sessions/:sessionId/messages', (req, res, errNext) => {
+            res.setHeader('X-RateLimit-Limit-short', '10');
+            res.setHeader('X-RateLimit-Remaining-short', '9');
+            res.setHeader('X-RateLimit-Reset-short', '1');
+            const context = {
+              getType: () => 'http',
+              getHandler: () => undefined,
+              getClass: () => undefined,
+              switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }),
+            } as unknown as ExecutionContext;
+            interceptor.intercept(context, next).then(() => undefined, errNext);
+          });
+          const nodeA = http.createServer(app);
+          await new Promise<void>(resolve => nodeA.listen(0, '127.0.0.1', resolve));
+          try {
+            const portA = (nodeA.address() as AddressInfo).port;
+            const resp = await fetch(`http://127.0.0.1:${portA}/api/sessions/${SID}/messages`, {
+              headers: { 'x-api-key': 'k-123' },
+            });
+            expect(resp.status).toBe(200);
+            expect(resp.headers.get('x-ratelimit-limit-short')).toBe('10');
+            expect(resp.headers.get('x-ratelimit-remaining-short')).toBe('9');
+            expect(resp.headers.get('x-ratelimit-reset-short')).toBe('1');
+            expect(resp.headers.get('x-openwa-served-by')).toBe('peer-node');
+          } finally {
+            nodeA.closeAllConnections();
+            await new Promise<void>(resolve => nodeA.close(() => resolve()));
+          }
+        },
+      );
+    });
+
+    it('consumes exactly 1 shared throttle token across a 2-hop A -> B forward when SESSION_PROXY_SECRET matches', async () => {
+      const secret = 'shared-inter-node-secret-32chars!';
+      const origTrusted = process.env.TRUSTED_PROXIES;
+      process.env.TRUSTED_PROXIES = '127.0.0.1/32,::1/128';
+      const sharedStorage = new ThrottlerStorageService();
+
+      class MessagesController {}
+      const sendMessage = function sendMessage(): void {};
+
+      const makeNodeGuard = async (): Promise<ProxyAwareThrottlerGuard> => {
+        const cfg = {
+          get: jest.fn().mockImplementation((k: string) => (k === 'session.proxySecret' ? secret : undefined)),
+        } as unknown as ConfigService;
+        const guard = new ProxyAwareThrottlerGuard(
+          { throttlers: [{ name: 'short', ttl: 60_000, limit: 3 }] },
+          sharedStorage,
+          new Reflector(),
+          cfg,
+        );
+        await guard.onModuleInit();
+        return guard;
+      };
+
+      const guardA = await makeNodeGuard();
+      const guardB = await makeNodeGuard();
+
+      let ownerCalls = 0;
+      const appB = express();
+      appB.use(express.json());
+      appB.post('/api/sessions/:sessionId/messages/send-text', async (req, res) => {
+        const ctx = {
+          getType: () => 'http',
+          getHandler: () => sendMessage,
+          getClass: () => MessagesController,
+          switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }),
+        } as unknown as ExecutionContext;
+        try {
+          await guardB.canActivate(ctx);
+        } catch (err) {
+          if (err instanceof ThrottlerException) {
+            res.status(429).json({ statusCode: 429, message: err.message });
+            return;
+          }
+          throw err;
+        }
+        ownerCalls++;
+        res.status(201).json({ ok: true, ownerCalls });
+      });
+
+      const serverB = http.createServer(appB);
+      await new Promise<void>(resolve => serverB.listen(0, '127.0.0.1', resolve));
+      const urlB = `http://127.0.0.1:${(serverB.address() as AddressInfo).port}`;
+
+      const { interceptor: interceptorA } = build({
+        row: row({ nodeId: 'node-b', nodeUrl: urlB }),
+        proxySecret: secret,
+      });
+
+      const appA = express();
+      appA.use(express.json());
+      appA.post('/api/sessions/:sessionId/messages/send-text', async (req, res, errNext) => {
+        const ctx = {
+          getType: () => 'http',
+          getHandler: () => sendMessage,
+          getClass: () => MessagesController,
+          switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }),
+        } as unknown as ExecutionContext;
+        try {
+          await guardA.canActivate(ctx);
+        } catch (err) {
+          if (err instanceof ThrottlerException) {
+            res.status(429).json({ statusCode: 429, message: err.message });
+            return;
+          }
+          errNext(err);
+          return;
+        }
+        try {
+          await interceptorA.intercept(ctx, { handle: () => of('local') });
+        } catch (err) {
+          errNext(err);
+        }
+      });
+
+      const serverA = http.createServer(appA);
+      await new Promise<void>(resolve => serverA.listen(0, '127.0.0.1', resolve));
+      const urlA = `http://127.0.0.1:${(serverA.address() as AddressInfo).port}`;
+
+      try {
+        // Limit is 3: with single-counting across A -> B, all 3 client requests succeed (1 token each)
+        // and the 4th is rejected with 429 on Node A. Without skip, request #2 would already hit 429 on B.
+        for (let i = 1; i <= 3; i++) {
+          const resp = await fetch(`${urlA}/api/sessions/${SID}/messages/send-text`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': 'k-123',
+              'x-forwarded-for': '203.0.113.55',
+            },
+            body: JSON.stringify({ text: `msg-${i}` }),
+          });
+          expect(resp.status).toBe(201);
+          expect(resp.headers.get('x-openwa-served-by')).toBe('node-b');
+          expect(resp.headers.get('x-ratelimit-limit-short')).toBe('3');
+          expect(resp.headers.get('x-ratelimit-remaining-short')).toBe(String(3 - i));
+        }
+        expect(ownerCalls).toBe(3);
+
+        const fourth = await fetch(`${urlA}/api/sessions/${SID}/messages/send-text`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': 'k-123',
+            'x-forwarded-for': '203.0.113.55',
+          },
+          body: JSON.stringify({ text: 'msg-4' }),
+        });
+        expect(fourth.status).toBe(429);
+        expect(ownerCalls).toBe(3);
+      } finally {
+        sharedStorage.onApplicationShutdown();
+        if (origTrusted === undefined) delete process.env.TRUSTED_PROXIES;
+        else process.env.TRUSTED_PROXIES = origTrusted;
+        serverA.closeAllConnections();
+        serverB.closeAllConnections();
+        await new Promise<void>(resolve => serverA.close(() => resolve()));
+        await new Promise<void>(resolve => serverB.close(() => resolve()));
+      }
     });
   });
 });

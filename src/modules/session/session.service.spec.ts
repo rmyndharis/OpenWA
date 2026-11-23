@@ -52,6 +52,7 @@ import { Message, MessageDirection, MessageStatus } from '../message/entities/me
 import { MessageBatch } from '../message/entities/message-batch.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { Template } from '../template/entities/template.entity';
+import { AutomationRule } from '../automation/entities/automation-rule.entity';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 import { ChatState } from '../../engine/adapters/baileys-chat-state.entity';
 import { StatusUpdate } from '../status-store/entities/status-update.entity';
@@ -1485,6 +1486,7 @@ describe('SessionService', () => {
       expect(managerDelete).toHaveBeenCalledWith(MessageBatch, { sessionId: 'sess-uuid-1' });
       expect(managerDelete).toHaveBeenCalledWith(Webhook, { sessionId: 'sess-uuid-1' });
       expect(managerDelete).toHaveBeenCalledWith(Template, { sessionId: 'sess-uuid-1' });
+      expect(managerDelete).toHaveBeenCalledWith(AutomationRule, { sessionId: 'sess-uuid-1' });
       expect(managerDelete).toHaveBeenCalledWith(BaileysStoredMessage, { sessionId: 'sess-uuid-1' });
       // chat_states and status_updates carry a plain sessionId with no FK at all.
       expect(managerDelete).toHaveBeenCalledWith(ChatState, { sessionId: 'sess-uuid-1' });
@@ -8871,7 +8873,7 @@ describe('SessionService', () => {
       getRawMany: jest.fn().mockResolvedValue(rows),
     });
 
-    it('should return correct session statistics', async () => {
+    it('should return correct session statistics and omit memoryUsage unless explicitly opted in', async () => {
       (repository.createQueryBuilder as jest.Mock) = jest.fn().mockReturnValue(
         makeStatsQb([
           { status: SessionStatus.READY, count: '2' },
@@ -8879,13 +8881,21 @@ describe('SessionService', () => {
         ]),
       );
 
-      const stats = await service.getStats();
+      const defaultStats = await service.getStats();
 
-      expect(stats.total).toBe(3);
-      expect(stats.ready).toBe(2);
-      expect(stats.disconnected).toBe(1);
-      expect(stats.byStatus[SessionStatus.READY]).toBe(2);
-      expect(stats.memoryUsage).toBeDefined();
+      expect(defaultStats.total).toBe(3);
+      expect(defaultStats.ready).toBe(2);
+      expect(defaultStats.disconnected).toBe(1);
+      expect(defaultStats.byStatus[SessionStatus.READY]).toBe(2);
+      expect(defaultStats.memoryUsage).toBeUndefined();
+      expect('memoryUsage' in defaultStats).toBe(false);
+
+      const adminStats = await service.getStats(null, { includeMemoryUsage: true });
+      expect(adminStats.memoryUsage).toEqual({
+        heapUsed: expect.any(Number) as number,
+        heapTotal: expect.any(Number) as number,
+        rss: expect.any(Number) as number,
+      });
     });
 
     it('counts every session via a grouped COUNT, not the bounded findAll (no undercount past the cap)', async () => {

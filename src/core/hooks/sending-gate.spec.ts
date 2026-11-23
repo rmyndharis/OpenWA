@@ -1,7 +1,10 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import { applySendingGate } from './sending-gate';
-import { HookManager } from './hook-manager.service';
+import { HookExecutionError, HookManager } from './hook-manager.service';
 import { LoggerService } from '../../common/services/logger.service';
+import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
+import { sendFailureProvesNothingSent } from '../../modules/message/idempotency/send-idempotency.interceptor';
+import { countsTowardSendBreaker, sentNothing } from '../../modules/message/send-pacing.service';
 
 /**
  * The gate returned `(hookData as { input: T }).input` with no check that the hook chain's reply
@@ -532,6 +535,67 @@ describe('applySendingGate', () => {
     ])('stays silent on %s', async (_label, result) => {
       await gate(result);
       expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('fail-closed HookExecutionError handling', () => {
+    const prevEnv = process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+    let warn: jest.SpyInstance;
+
+    beforeEach(() => {
+      warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      warn.mockRestore();
+      if (prevEnv === undefined) delete process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+      else process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = prevEnv;
+    });
+
+    it('maps HookExecutionError to a nothing-sent 503 that frees idempotency keys and logs structured context', async () => {
+      process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = 'true';
+      const hm = new HookManager();
+      hm.register('dlp-plugin', 'message:sending', () => {
+        throw new Error('internal secret db password leak');
+      });
+
+      let thrown: unknown;
+      try {
+        await applySendingGate(hm, 's1', 'text', dto, 'MessageService');
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(ServiceUnavailableException);
+      expect((thrown as Error).message).not.toContain('internal secret db password leak');
+      expect(provesNothingSent(thrown)).toBe(true);
+      expect(sendFailureProvesNothingSent(thrown)).toBe(true);
+      expect(sentNothing(thrown)).toBe(true);
+      expect(countsTowardSendBreaker(thrown)).toBe(false);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('message:sending'),
+        expect.objectContaining({
+          pluginId: 'dlp-plugin',
+          sessionId: 's1',
+          source: 'MessageService',
+        }),
+      );
+    });
+
+    it('rethrows non-HookExecutionError failures unchanged', async () => {
+      const boom = new HookExecutionError('p1', 'message:sending', new Error('failed'));
+      expect(boom.pluginId).toBe('p1');
+      const other = new Error('unexpected error');
+      await expect(
+        applySendingGate(
+          { execute: jest.fn().mockRejectedValue(other) } as unknown as HookManager,
+          's1',
+          'text',
+          dto,
+          'MessageService',
+        ),
+      ).rejects.toBe(other);
     });
   });
 });

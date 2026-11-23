@@ -209,7 +209,12 @@ describe('PluginWorkerHost', () => {
       ch.reply({ kind: 'cap', id: 5, verb: 'messages.sendText', args: ['s1', 'c1', 'hi'] });
       await flush();
 
-      expect(dispatcher).toHaveBeenCalledWith('messages.sendText', ['s1', 'c1', 'hi']);
+      expect(dispatcher).toHaveBeenCalledWith(
+        'messages.sendText',
+        ['s1', 'c1', 'hi'],
+        undefined,
+        expect.any(AbortSignal),
+      );
       expect(ch.sent).toContainEqual({ kind: 'cap-result', id: 5, ok: true, result: { messageId: 'wamid' } });
     });
 
@@ -512,7 +517,7 @@ describe('PluginWorkerHost', () => {
       });
       jest.advanceTimersByTime(100);
 
-      await expect(pending).resolves.toEqual({ continue: true });
+      await expect(pending).resolves.toEqual({ continue: true, error: 'hook timed out after 100ms' });
       expect(onTimeout).toHaveBeenCalled();
       jest.useRealTimers();
     });
@@ -528,7 +533,56 @@ describe('PluginWorkerHost', () => {
       await expect(pending).resolves.toEqual({ continue: true, error: 'handler blew up' });
     });
 
-    it('drains an in-flight hook immediately on worker exit (no stall for the full hook timeout)', async () => {
+    it('dispatchHook forwards failClosed:true on the IPC hook message when requested', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.dispatchHook({
+        event: 'message:sending',
+        data: {},
+        source: 'MessageService',
+        timeoutMs: 1000,
+        failClosed: true,
+      });
+      const sent = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+      expect(sent.failClosed).toBe(true);
+      ch.reply({ kind: 'hook-result', id: sent.id, continue: true });
+      await expect(pending).resolves.toEqual({ continue: true });
+    });
+
+    it.each([undefined, null, 'yes', 1])(
+      'dispatchHook surfaces a malformed-result error when hook-result.continue is non-boolean (%p)',
+      async badContinue => {
+        const ch = new FakeChannel();
+        const host = new PluginWorkerHost(ch);
+
+        const pending = host.dispatchHook({ event: 'message:sending', data: {}, source: 'Engine', timeoutMs: 1000 });
+        const sent = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+
+        ch.reply({
+          kind: 'hook-result',
+          id: sent.id,
+          continue: badContinue as unknown as boolean,
+        });
+        await expect(pending).resolves.toEqual({
+          continue: true,
+          error: 'malformed hook-result: continue must be a boolean',
+        });
+      },
+    );
+
+    it('dispatchHook normalizes an empty error string on hook-result to a non-empty fallback message', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.dispatchHook({ event: 'message:sending', data: {}, source: 'Engine', timeoutMs: 1000 });
+      const sent = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+
+      ch.reply({ kind: 'hook-result', id: sent.id, continue: true, error: '' });
+      await expect(pending).resolves.toEqual({ continue: true, error: 'sandbox hook failed' });
+    });
+
+    it('drains an in-flight hook immediately on worker exit with an error reason', async () => {
       const ch = new FakeChannel();
       const host = new PluginWorkerHost(ch);
 
@@ -536,7 +590,7 @@ describe('PluginWorkerHost', () => {
       const pending = host.dispatchHook({ event: 'message:received', data: {}, source: 'Engine', timeoutMs: 5000 });
       ch.crash(1);
 
-      await expect(pending).resolves.toEqual({ continue: true });
+      await expect(pending).resolves.toEqual({ continue: true, error: 'plugin worker exited during hook dispatch' });
     });
   });
 
@@ -810,12 +864,13 @@ describe('PluginWorkerHost', () => {
       expect(firstHooks[0].inFlight).toEqual(['message:sending']);
 
       // The worker, mid-handler, issues a capability that re-fires message:sending on the host. A call
-      // made inside a hook handler echoes that dispatch's chain (WorkerCapabilityClient does this).
+      // made inside a hook handler echoes that dispatch's id and chain (WorkerCapabilityClient does this).
       ch.reply({
         kind: 'cap',
         id: 99,
         verb: 'messages.sendText',
         args: ['s1', 'c1', 'hi'],
+        dispatchId: firstHooks[0].dispatchId,
         inFlight: firstHooks[0].inFlight,
       });
       await flush();
@@ -845,13 +900,14 @@ describe('PluginWorkerHost', () => {
         hm.runInFlight(events as HookEvent[], run),
       );
       void host.dispatchHook({ event: pendingEvent, data: {}, source: 'test', timeoutMs: 60_000 });
+      const hook = ch.sent.find((m): m is Extract<HostToWorkerMessage, { kind: 'hook' }> => m.kind === 'hook')!;
       const result = async (id: number): Promise<unknown> => {
         await flush();
         await flush();
         const reply = ch.sent.find(m => m.kind === 'cap-result' && m.id === id);
         return reply && reply.kind === 'cap-result' && reply.ok ? reply.result : reply;
       };
-      return { ch, result };
+      return { ch, result, dispatchId: hook.dispatchId };
     };
 
     it('a capability call outside any hook handler still runs every message:sending veto', async () => {
@@ -862,17 +918,17 @@ describe('PluginWorkerHost', () => {
       ch.crash(); // drains the pending dispatch and its timer
     });
 
-    it('a capability call carrying the pending dispatch chain is still short-circuited', async () => {
-      const { ch, result } = setup();
-      ch.reply({ kind: 'cap', id: 2, verb: 'messages.sendText', args: [], inFlight: ['message:sending'] });
+    it('a capability call carrying the pending dispatch id is still short-circuited', async () => {
+      const { ch, result, dispatchId } = setup();
+      ch.reply({ kind: 'cap', id: 2, verb: 'messages.sendText', args: [], dispatchId, inFlight: ['message:sending'] });
       await expect(result(2)).resolves.toBe(true);
       ch.crash(); // drains the pending dispatch and its timer
     });
 
     it('ignores a claimed event the host never dispatched to this worker', async () => {
       // Only message:sent is pending; the worker claims message:sending, the chain the send would skip.
-      const { ch, result } = setup('message:sent');
-      ch.reply({ kind: 'cap', id: 3, verb: 'messages.sendText', args: [], inFlight: ['message:sending'] });
+      const { ch, result, dispatchId } = setup('message:sent');
+      ch.reply({ kind: 'cap', id: 3, verb: 'messages.sendText', args: [], dispatchId, inFlight: ['message:sending'] });
       await expect(result(3)).resolves.toBe(false);
       ch.crash(); // drains the pending dispatch and its timer
     });
@@ -892,9 +948,16 @@ describe('PluginWorkerHost', () => {
         inFlight: ['message:sending', 'message:sent'],
         timeoutMs: 60_000,
       });
-      const hook = ch.sent.find(m => m.kind === 'hook');
-      expect(hook && hook.kind === 'hook' && hook.inFlight).toEqual(['message:sending', 'message:sent']);
-      ch.reply({ kind: 'cap', id: 4, verb: 'messages.sendText', args: [], inFlight: ['message:sending'] });
+      const hook = ch.sent.find((m): m is Extract<HostToWorkerMessage, { kind: 'hook' }> => m.kind === 'hook')!;
+      expect(hook.inFlight).toEqual(['message:sending', 'message:sent']);
+      ch.reply({
+        kind: 'cap',
+        id: 4,
+        verb: 'messages.sendText',
+        args: [],
+        dispatchId: hook.dispatchId,
+        inFlight: ['message:sending'],
+      });
       await flush();
       await flush();
       expect(ch.sent).toContainEqual({ kind: 'cap-result', id: 4, ok: true, result: true });
@@ -908,8 +971,20 @@ describe('PluginWorkerHost', () => {
       const fakeTimers = (): void => {
         jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
       };
-      const guardedResult = async (ch: FakeChannel, id: number, inFlight: string[]): Promise<unknown> => {
-        ch.reply({ kind: 'cap', id, verb: 'messages.sendText', args: [], inFlight });
+      const guardedResult = async (
+        ch: FakeChannel,
+        id: number,
+        inFlight: string[],
+        dispatchId?: string,
+      ): Promise<unknown> => {
+        ch.reply({
+          kind: 'cap',
+          id,
+          verb: 'messages.sendText',
+          args: [],
+          inFlight,
+          ...(dispatchId === undefined ? {} : { dispatchId }),
+        });
         await flush();
         await flush();
         const reply = ch.sent.find(m => m.kind === 'cap-result' && m.id === id);
@@ -919,12 +994,14 @@ describe('PluginWorkerHost', () => {
         const hm = new HookManager();
         const ch = new FakeChannel();
         hm.register('moderation', SENDING, () => Promise.resolve({ continue: false }));
-        const capDispatcher = async (): Promise<unknown> => (await hm.execute(SENDING, {}, { source: 'cap' })).continue;
+        const capDispatcher = jest.fn(
+          async (): Promise<unknown> => (await hm.execute(SENDING, {}, { source: 'cap' })).continue,
+        );
         const host = new PluginWorkerHost(ch, capDispatcher, undefined, undefined, undefined, (events, run) =>
           hm.runInFlight(events as HookEvent[], run),
         );
         const dispatch = (event: string) => host.dispatchHook({ event, data: {}, source: 'test', timeoutMs: 5000 });
-        return { ch, dispatch, host };
+        return { ch, dispatch, host, capDispatcher };
       };
 
       afterEach(() => jest.useRealTimers());
@@ -933,40 +1010,56 @@ describe('PluginWorkerHost', () => {
         fakeTimers();
         const { ch, dispatch } = build();
         const timedOut = dispatch('message:sending');
+        const hook = ch.sent.find((m): m is Extract<HostToWorkerMessage, { kind: 'hook' }> => m.kind === 'hook')!;
         await jest.advanceTimersByTimeAsync(5000);
-        await expect(timedOut).resolves.toEqual({ continue: true });
+        await expect(timedOut).resolves.toEqual({ continue: true, error: 'hook timed out after 5000ms' });
 
         // The late send still short-circuits (true), rather than running the veto chain (false).
-        await expect(guardedResult(ch, 1, ['message:sending'])).resolves.toBe(true);
+        await expect(guardedResult(ch, 1, ['message:sending'], hook.dispatchId)).resolves.toBe(true);
 
-        // The handler finally returns: the claim is given back, and the same call is no longer guarded.
-        const hook = ch.sent.find(m => m.kind === 'hook');
-        ch.reply({ kind: 'hook-result', id: hook?.kind === 'hook' ? hook.id : -1, continue: true });
-        await expect(guardedResult(ch, 2, ['message:sending'])).resolves.toBe(false);
+        // The handler finally returns: the claim is given back, so the expired dispatchId is refused
+        // and an unguarded call runs the veto chain (false).
+        ch.reply({ kind: 'hook-result', id: hook.id, continue: true });
+        await expect(guardedResult(ch, 2, ['message:sending'], hook.dispatchId)).resolves.toMatchObject({
+          kind: 'cap-result',
+          id: 2,
+          ok: false,
+        });
+        await expect(guardedResult(ch, 3, ['message:sending'])).resolves.toBe(false);
         ch.crash();
       });
 
       it('gives the claim back when the worker exits', async () => {
         fakeTimers();
-        const { ch, dispatch } = build();
+        const { ch, dispatch, host, capDispatcher } = build();
         const timedOut = dispatch('message:sending');
+        const hook = ch.sent.find((m): m is Extract<HostToWorkerMessage, { kind: 'hook' }> => m.kind === 'hook')!;
         await jest.advanceTimersByTimeAsync(5000);
         await timedOut;
-        await expect(guardedResult(ch, 1, ['message:sending'])).resolves.toBe(true);
+        await expect(guardedResult(ch, 1, ['message:sending'], hook.dispatchId)).resolves.toBe(true);
+        expect(capDispatcher).toHaveBeenCalledTimes(1);
 
         ch.crash();
 
-        // Nothing honours a claim on a dead worker's behalf: a call that still arrives runs the chain.
-        await expect(guardedResult(ch, 2, ['message:sending'])).resolves.toBe(false);
+        // Exit drains all in-flight dispatches and ignores any further caps from the dead worker.
+        const internals = host as unknown as {
+          inFlightDispatches: Map<string, unknown>;
+          lateHookClaims: Map<number, unknown>;
+        };
+        expect(internals.inFlightDispatches.size).toBe(0);
+        expect(internals.lateHookClaims.size).toBe(0);
+        await expect(guardedResult(ch, 2, ['message:sending'], hook.dispatchId)).resolves.toBeUndefined();
+        expect(capDispatcher).toHaveBeenCalledTimes(1);
       });
 
       it('holds a bounded number of late claims, giving the oldest back first', async () => {
         fakeTimers();
         const { ch, dispatch, host } = build();
         const first = dispatch('message:sending');
+        const firstHook = ch.sent.find((m): m is Extract<HostToWorkerMessage, { kind: 'hook' }> => m.kind === 'hook')!;
         await jest.advanceTimersByTimeAsync(5000);
         await first;
-        await expect(guardedResult(ch, 1, ['message:sending'])).resolves.toBe(true);
+        await expect(guardedResult(ch, 1, ['message:sending'], firstHook.dispatchId)).resolves.toBe(true);
 
         // 32 more timed-out dispatches of another event push the first one past the bound.
         for (let i = 0; i < 32; i++) {
@@ -975,7 +1068,12 @@ describe('PluginWorkerHost', () => {
           await next;
         }
 
-        await expect(guardedResult(ch, 2, ['message:sending'])).resolves.toBe(false);
+        await expect(guardedResult(ch, 2, ['message:sending'], firstHook.dispatchId)).resolves.toMatchObject({
+          kind: 'cap-result',
+          id: 2,
+          ok: false,
+        });
+        await expect(guardedResult(ch, 3, ['message:sending'])).resolves.toBe(false);
         // The waiter of a dispatch whose claim was given back goes with it: an answer that late is ignored,
         // and one entry per timed-out dispatch would otherwise pile up for as long as the worker lives.
         expect((host as unknown as { hookPending: Map<number, unknown> }).hookPending.size).toBe(32);
@@ -985,7 +1083,7 @@ describe('PluginWorkerHost', () => {
   });
 
   describe('post-crash dead-check (fail-fast, no stall)', () => {
-    it('dispatchHook resolves {continue:true} immediately when the worker is already dead', async () => {
+    it('dispatchHook resolves immediately with an error reason when the worker is already dead', async () => {
       jest.useFakeTimers();
       try {
         const ch = new FakeChannel();
@@ -999,7 +1097,7 @@ describe('PluginWorkerHost', () => {
           source: 'test',
           timeoutMs: 5000,
         });
-        expect(result).toEqual({ continue: true });
+        expect(result).toEqual({ continue: true, error: 'plugin worker is no longer running' });
       } finally {
         jest.useRealTimers();
       }
@@ -1434,7 +1532,13 @@ describe('host-authoritative dispatch context propagation for capability calls',
       dispatchId: sent.dispatchId,
     });
     await flush();
-    expect(dispatcher).toHaveBeenNthCalledWith(1, 'net.fetch', ['https://s1.example/a'], { sessionId: 'sess-1' });
+    expect(dispatcher).toHaveBeenNthCalledWith(
+      1,
+      'net.fetch',
+      ['https://s1.example/a'],
+      { sessionId: 'sess-1' },
+      expect.any(AbortSignal),
+    );
 
     // Reply finishes the dispatch: reusing the expired dispatchId must fail closed without invoking dispatcher.
     ch.reply({ kind: 'hook-result', id: sent.id, continue: true });
@@ -1486,10 +1590,16 @@ describe('host-authoritative dispatch context propagation for capability calls',
       dispatchId: sent.dispatchId,
     });
     await flush();
-    expect(dispatcher).toHaveBeenNthCalledWith(1, 'net.fetch', ['https://inst-a.example/x'], {
-      sessionId: 'sess-1',
-      instanceId: 'inst-A',
-    });
+    expect(dispatcher).toHaveBeenNthCalledWith(
+      1,
+      'net.fetch',
+      ['https://inst-a.example/x'],
+      {
+        sessionId: 'sess-1',
+        instanceId: 'inst-A',
+      },
+      expect.any(AbortSignal),
+    );
 
     ch.reply({ kind: 'webhook-result', id: sent.id, status: 200 });
     await pending;
@@ -1555,9 +1665,15 @@ describe('host-authoritative dispatch context propagation for capability calls',
         dispatchId: hookSent.dispatchId,
       });
       await flush();
-      expect(dispatcher).toHaveBeenNthCalledWith(1, 'net.fetch', ['https://late-hook.example'], {
-        sessionId: 'sess-1',
-      });
+      expect(dispatcher).toHaveBeenNthCalledWith(
+        1,
+        'net.fetch',
+        ['https://late-hook.example'],
+        {
+          sessionId: 'sess-1',
+        },
+        expect.any(AbortSignal),
+      );
 
       // Late hook-result releases the dispatchId; subsequent reuse fails closed.
       ch.reply({ kind: 'hook-result', id: hookSent.id, continue: true });
@@ -1594,6 +1710,7 @@ describe('host-authoritative dispatch context propagation for capability calls',
       expect(typeof webhookSent.dispatchId).toBe('string');
 
       await host.terminate();
+      expect((host as unknown as { inFlightDispatches: Map<string, unknown> }).inFlightDispatches.size).toBe(0);
       ch.reply({
         kind: 'cap',
         id: 4,
@@ -1603,11 +1720,7 @@ describe('host-authoritative dispatch context propagation for capability calls',
       });
       await flush();
       expect(dispatcher).toHaveBeenCalledTimes(1);
-      expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 4)).toMatchObject({
-        kind: 'cap-result',
-        id: 4,
-        ok: false,
-      });
+      expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 4)).toBeUndefined();
       ch.crash();
     } finally {
       jest.useRealTimers();
@@ -1630,6 +1743,7 @@ describe('host-authoritative dispatch context propagation for capability calls',
 
     ch.crash(1);
     await hook;
+    expect((host as unknown as { inFlightDispatches: Map<string, unknown> }).inFlightDispatches.size).toBe(0);
 
     ch.reply({
       kind: 'cap',
@@ -1640,14 +1754,10 @@ describe('host-authoritative dispatch context propagation for capability calls',
     });
     await flush();
     expect(dispatcher).not.toHaveBeenCalled();
-    expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toMatchObject({
-      kind: 'cap-result',
-      id: 1,
-      ok: false,
-    });
+    expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toBeUndefined();
   });
 
-  it('cleans up inFlightDispatches, pending maps, inFlightHookEvents, and timers when postMessage throws', async () => {
+  it('cleans up inFlightDispatches, pending maps, and timers when postMessage throws', async () => {
     const ch = new FakeChannel();
     ch.postMessage = () => {
       throw new Error('DataCloneError: uncloneable value');
@@ -1682,12 +1792,10 @@ describe('host-authoritative dispatch context propagation for capability calls',
 
     const internals = host as unknown as {
       inFlightDispatches: Map<string, unknown>;
-      inFlightHookEvents: Map<string, number>;
       hookPending: Map<number, unknown>;
       webhookPending: Map<number, unknown>;
     };
     expect(internals.inFlightDispatches.size).toBe(0);
-    expect(internals.inFlightHookEvents.size).toBe(0);
     expect(internals.hookPending.size).toBe(0);
     expect(internals.webhookPending.size).toBe(0);
   });
@@ -1799,5 +1907,525 @@ describe('host-authoritative dispatch context propagation for capability calls',
       { verb: 'net.fetch', url: 'https://deferred.example/b', ctx: undefined },
       { verb: 'net.fetch', url: 'https://webhook-inst.example/c', ctx: { sessionId: 'sess-2', instanceId: 'inst-A' } },
     ]);
+  });
+});
+
+describe('capability cancellation, unsettled zombie cap, idle liveness, and originHook guard', () => {
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+  const microFlush = async (): Promise<void> => {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  };
+  const pings = (ch: FakeChannel) =>
+    ch.sent.filter((m): m is Extract<HostToWorkerMessage, { kind: 'ping' }> => m.kind === 'ping');
+
+  it('aborts the AbortSignal passed to capDispatcher on capTimeoutMs timeout', async () => {
+    jest.useFakeTimers();
+    try {
+      const ch = new FakeChannel();
+      let capturedSignal: AbortSignal | undefined;
+      const dispatcher = jest.fn(
+        (_verb: string, _args: unknown[], _ctx?: unknown, signal?: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            capturedSignal = signal;
+            signal?.addEventListener('abort', () => reject(new Error('aborted by host')));
+          }),
+      );
+      new PluginWorkerHost(ch, dispatcher, undefined, undefined, undefined, undefined, 2, undefined, undefined, 100);
+
+      ch.reply({ kind: 'cap', id: 1, verb: 'net.fetch', args: ['https://example.com'] });
+      await microFlush();
+      expect(capturedSignal).toBeInstanceOf(AbortSignal);
+      expect(capturedSignal?.aborted).toBe(false);
+
+      jest.advanceTimersByTime(100);
+      await microFlush();
+      expect(capturedSignal?.aborted).toBe(true);
+      expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toMatchObject({
+        ok: false,
+        error: expect.stringMatching(/timed out after 100ms/) as string,
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('aborts in-flight capability AbortSignals on terminate() and worker exit', async () => {
+    const ch1 = new FakeChannel();
+    let sig1: AbortSignal | undefined;
+    const d1 = jest.fn((_v: string, _a: unknown[], _c?: unknown, signal?: AbortSignal) => {
+      sig1 = signal;
+      return new Promise(() => undefined);
+    });
+    const host1 = new PluginWorkerHost(ch1, d1);
+    ch1.reply({ kind: 'cap', id: 1, verb: 'net.fetch', args: ['https://example.com'] });
+    await flush();
+    expect(sig1?.aborted).toBe(false);
+    await host1.terminate();
+    expect(sig1?.aborted).toBe(true);
+
+    const ch2 = new FakeChannel();
+    let sig2: AbortSignal | undefined;
+    const d2 = jest.fn((_v: string, _a: unknown[], _c?: unknown, signal?: AbortSignal) => {
+      sig2 = signal;
+      return new Promise(() => undefined);
+    });
+    new PluginWorkerHost(ch2, d2);
+    ch2.reply({ kind: 'cap', id: 2, verb: 'net.fetch', args: ['https://example.com'] });
+    await flush();
+    expect(sig2?.aborted).toBe(false);
+    ch2.crash(1);
+    expect(sig2?.aborted).toBe(true);
+  });
+
+  it('bounds repeated hung non-cancellable caps and recovers once zombies settle', async () => {
+    jest.useFakeTimers();
+    try {
+      const ch = new FakeChannel();
+      const settlers: Array<(v: unknown) => void> = [];
+      const dispatcher = jest.fn(() => new Promise(resolve => settlers.push(resolve)));
+      // maxInFlightCaps = 2, capTimeoutMs = 100 -> ceiling for active + unsettled = 4.
+      new PluginWorkerHost(ch, dispatcher, undefined, undefined, undefined, undefined, 2, undefined, undefined, 100);
+
+      // Accumulate 4 hung non-cancellable timed-out calls across 2 rounds.
+      ch.reply({ kind: 'cap', id: 1, verb: 'engine.getContacts', args: [] });
+      ch.reply({ kind: 'cap', id: 2, verb: 'engine.getContacts', args: [] });
+      await microFlush();
+      jest.advanceTimersByTime(100);
+      await microFlush();
+
+      ch.reply({ kind: 'cap', id: 3, verb: 'engine.getContacts', args: [] });
+      ch.reply({ kind: 'cap', id: 4, verb: 'engine.getContacts', args: [] });
+      await microFlush();
+      jest.advanceTimersByTime(100);
+      await microFlush();
+      expect(dispatcher).toHaveBeenCalledTimes(4);
+
+      // 5th call hits the unsettled zombie ceiling and is rejected without invoking dispatcher.
+      ch.reply({ kind: 'cap', id: 5, verb: 'engine.getContacts', args: [] });
+      await microFlush();
+      expect(dispatcher).toHaveBeenCalledTimes(4);
+      expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 5)).toMatchObject({
+        ok: false,
+        error: expect.stringMatching(/timed-out|unsettled|too many/i) as string,
+      });
+
+      // Settling one zombie frees room for a new capability call.
+      settlers[0]({ late: true });
+      await microFlush();
+      ch.reply({ kind: 'cap', id: 6, verb: 'engine.getContacts', args: [] });
+      await microFlush();
+      expect(dispatcher).toHaveBeenCalledTimes(5);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('invokes probeLiveness() when healthCheck() times out', async () => {
+    jest.useFakeTimers();
+    try {
+      const ch = new FakeChannel();
+      const onUnresponsive = jest.fn();
+      const host = new PluginWorkerHost(
+        ch,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        1000,
+        onUnresponsive,
+      );
+
+      const pending = host.healthCheck(250);
+      jest.advanceTimersByTime(250);
+      await expect(pending).resolves.toEqual({ healthy: false, message: 'health check timed out' });
+      expect(pings(ch)).toHaveLength(1);
+
+      jest.advanceTimersByTime(1000);
+      jest.advanceTimersToNextTimer();
+      expect(onUnresponsive).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('probes an idle worker periodically when livenessIntervalMs is set and clears the timer on terminate', async () => {
+    jest.useFakeTimers();
+    try {
+      const ch = new FakeChannel();
+      const onUnresponsive = jest.fn();
+      const host = new PluginWorkerHost(
+        ch,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        500,
+        onUnresponsive,
+        2000,
+      );
+
+      // No periodic ping before load resolves ready.
+      jest.advanceTimersByTime(5000);
+      expect(pings(ch)).toHaveLength(0);
+
+      const loading = host.load('/fake/plugin.js');
+      ch.reply({ kind: 'ready' });
+      await loading;
+
+      // Worker activity resets idle timer; ping fires once idle >= livenessIntervalMs.
+      jest.advanceTimersByTime(1999);
+      expect(pings(ch)).toHaveLength(0);
+
+      jest.advanceTimersByTime(1);
+      expect(pings(ch)).toHaveLength(1);
+
+      // Answering pong keeps the worker healthy and resets activity.
+      ch.reply({ kind: 'pong', id: pings(ch)[0].id });
+      jest.advanceTimersByTime(1500);
+      expect(onUnresponsive).not.toHaveBeenCalled();
+
+      // Next idle window triggers another probe; unanswered triggers onUnresponsive.
+      jest.advanceTimersByTime(500);
+      expect(pings(ch)).toHaveLength(2);
+      jest.advanceTimersByTime(500);
+      jest.advanceTimersToNextTimer();
+      expect(onUnresponsive).toHaveBeenCalledTimes(1);
+
+      await host.terminate();
+      jest.advanceTimersByTime(10_000);
+      expect(pings(ch)).toHaveLength(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('ignores a forged originHook when no matching hook dispatch is in flight', async () => {
+    const ch = new FakeChannel();
+    const hm = new HookManager();
+    const seenInFlight: boolean[] = [];
+    const dispatcher = jest.fn(() => {
+      seenInFlight.push(hm.isEventInFlight('message:sent'));
+      return Promise.resolve({ ok: true });
+    });
+    const host = new PluginWorkerHost(ch, dispatcher, undefined, undefined, undefined, (events, run) =>
+      hm.runInFlight(events as HookEvent[], run),
+    );
+
+    // Case 1: no active dispatch at all -> forged originHook ignored.
+    ch.reply({
+      kind: 'cap',
+      id: 1,
+      verb: 'messages.sendText',
+      args: ['s1', 'c1', 'hi'],
+      originHook: 'message:sent',
+    });
+    await flush();
+
+    // Case 2: active message:received dispatch -> forging originHook: 'message:sent' ignored.
+    const recv = host.dispatchHook({
+      event: 'message:received',
+      data: {},
+      sessionId: 's1',
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    const recvMsg = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+    ch.reply({
+      kind: 'cap',
+      id: 2,
+      verb: 'messages.sendText',
+      args: ['s1', 'c1', 'hi'],
+      dispatchId: recvMsg.dispatchId,
+      originHook: 'message:sent',
+    });
+    await flush();
+    ch.reply({ kind: 'hook-result', id: recvMsg.id, continue: true });
+    await recv;
+
+    // Case 3: active message:sent dispatch -> matching originHook accepted.
+    const sentHook = host.dispatchHook({
+      event: 'message:sent',
+      data: {},
+      sessionId: 's1',
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    const sentMsg = ch.sent
+      .filter((m): m is Extract<HostToWorkerMessage, { kind: 'hook' }> => m.kind === 'hook')
+      .at(-1)!;
+    ch.reply({
+      kind: 'cap',
+      id: 3,
+      verb: 'messages.sendText',
+      args: ['s1', 'c1', 'hi'],
+      dispatchId: sentMsg.dispatchId,
+      originHook: 'message:sent',
+    });
+    await flush();
+    ch.reply({ kind: 'hook-result', id: sentMsg.id, continue: true });
+    await sentHook;
+
+    expect(seenInFlight).toEqual([false, false, true]);
+  });
+
+  it('enforces host-recorded hook guard even when the worker omits originHook and inFlight', async () => {
+    const ch = new FakeChannel();
+    const hm = new HookManager();
+    const seenInFlight: boolean[] = [];
+    const dispatcher = jest.fn(() => {
+      seenInFlight.push(hm.isEventInFlight('message:sent'));
+      return Promise.resolve({ ok: true });
+    });
+    const host = new PluginWorkerHost(ch, dispatcher, undefined, undefined, undefined, (events, run) =>
+      hm.runInFlight(events as HookEvent[], run),
+    );
+
+    const sentHook = host.dispatchHook({
+      event: 'message:sent',
+      data: {},
+      sessionId: 's1',
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    const sentMsg = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+
+    // Worker sends a cap referencing the active message:sent dispatchId while omitting both
+    // originHook and inFlight; the host must still guard using its recorded dispatch chain.
+    ch.reply({
+      kind: 'cap',
+      id: 1,
+      verb: 'messages.sendText',
+      args: ['s1', 'c1', 'hi'],
+      dispatchId: sentMsg.dispatchId,
+    });
+    await flush();
+
+    ch.reply({ kind: 'hook-result', id: sentMsg.id, continue: true });
+    await sentHook;
+
+    expect(seenInFlight).toEqual([true]);
+  });
+
+  it('blocks cross-dispatch inFlight spoofing when message:sent and message:received are concurrently active', async () => {
+    const ch = new FakeChannel();
+    const hm = new HookManager();
+    const observed: Array<{ received: boolean; sent: boolean }> = [];
+    const dispatcher = jest.fn(() => {
+      observed.push({
+        received: hm.isEventInFlight('message:received'),
+        sent: hm.isEventInFlight('message:sent'),
+      });
+      return Promise.resolve({ ok: true });
+    });
+    const host = new PluginWorkerHost(ch, dispatcher, undefined, undefined, undefined, (events, run) =>
+      hm.runInFlight(events as HookEvent[], run),
+    );
+
+    const sentHook = host.dispatchHook({
+      event: 'message:sent',
+      data: {},
+      sessionId: 's1',
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    const recvHook = host.dispatchHook({
+      event: 'message:received',
+      data: {},
+      sessionId: 's1',
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    const webhook = host.dispatchWebhook({
+      instanceId: 'inst-1',
+      route: '/hook',
+      method: 'POST',
+      headers: {},
+      query: {},
+      body: '{}',
+      rawBody: '{}',
+      verified: true,
+      deliveryId: 'd-1',
+      sessionId: 's1',
+      timeoutMs: 5000,
+    });
+
+    const hookMsgs = ch.sent.filter((m): m is Extract<HostToWorkerMessage, { kind: 'hook' }> => m.kind === 'hook');
+    const sentMsg = hookMsgs.find(m => m.event === 'message:sent')!;
+    const recvMsg = hookMsgs.find(m => m.event === 'message:received')!;
+    const webhookMsg = ch.sent.find(m => m.kind === 'webhook') as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+
+    // A cap from message:received attempts to spoof inFlight: ['message:sent'] while a
+    // message:sent dispatch is active on the same worker.
+    ch.reply({
+      kind: 'cap',
+      id: 1,
+      verb: 'messages.sendText',
+      args: ['s1', 'c1', 'reply'],
+      dispatchId: recvMsg.dispatchId,
+      inFlight: ['message:received', 'message:sent'],
+      originHook: 'message:sent',
+    });
+    // A cap from an ingress webhook attempts to spoof inFlight: ['message:sent'].
+    ch.reply({
+      kind: 'cap',
+      id: 2,
+      verb: 'messages.sendText',
+      args: ['s1', 'c1', 'ingress'],
+      dispatchId: webhookMsg.dispatchId,
+      inFlight: ['message:sent'],
+      originHook: 'message:sent',
+    });
+    await flush();
+
+    ch.reply({ kind: 'hook-result', id: recvMsg.id, continue: true });
+    ch.reply({ kind: 'hook-result', id: sentMsg.id, continue: true });
+    ch.reply({ kind: 'webhook-result', id: webhookMsg.id, status: 200 });
+    await Promise.all([sentHook, recvHook, webhook]);
+
+    expect(observed).toEqual([
+      { received: true, sent: false },
+      { received: false, sent: false },
+    ]);
+  });
+
+  it('clears pending withCapTimeout timers on terminate() and worker exit with no late cap-result or warnings', async () => {
+    jest.useFakeTimers();
+    try {
+      for (const mode of ['terminate', 'exit'] as const) {
+        const ch = new FakeChannel();
+        const signals: AbortSignal[] = [];
+        const onLog = jest.fn();
+        const dispatcher = jest.fn((_verb: string, _args: unknown[], _ctx?: unknown, signal?: AbortSignal) => {
+          if (signal) signals.push(signal);
+          // Never settles even after signal aborts (models an un-cancellable capability call).
+          return new Promise(() => undefined);
+        });
+        const host = new PluginWorkerHost(
+          ch,
+          dispatcher,
+          undefined,
+          undefined,
+          onLog,
+          undefined,
+          4,
+          undefined,
+          undefined,
+          1_000,
+        );
+
+        ch.reply({ kind: 'cap', id: 1, verb: 'messages.sendText', args: ['s1', 'c1', 'hi'] });
+        await microFlush();
+        expect(signals).toHaveLength(1);
+        expect(signals[0].aborted).toBe(false);
+        expect(jest.getTimerCount()).toBeGreaterThan(0);
+
+        if (mode === 'terminate') {
+          await host.terminate();
+        } else {
+          ch.crash(1);
+        }
+        await microFlush();
+
+        expect(signals[0].aborted).toBe(true);
+        expect(jest.getTimerCount()).toBe(0);
+
+        jest.advanceTimersByTime(10_000);
+        await microFlush();
+
+        expect(ch.sent.filter(m => m.kind === 'cap-result')).toHaveLength(0);
+        expect(onLog).not.toHaveBeenCalled();
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('ignores worker-claimed inFlight when dispatchId is omitted even while matching hooks are active', async () => {
+    const ch = new FakeChannel();
+    const hm = new HookManager();
+    const observed: Array<{ sending: boolean; sent: boolean }> = [];
+    const dispatcher = jest.fn(() => {
+      observed.push({
+        sending: hm.isEventInFlight('message:sending'),
+        sent: hm.isEventInFlight('message:sent'),
+      });
+      return Promise.resolve({ ok: true });
+    });
+    const host = new PluginWorkerHost(ch, dispatcher, undefined, undefined, undefined, (events, run) =>
+      hm.runInFlight(events as HookEvent[], run),
+    );
+
+    const sendingHook = host.dispatchHook({
+      event: 'message:sending',
+      data: {},
+      sessionId: 's1',
+      source: 'MessageService',
+      timeoutMs: 5000,
+    });
+    const sentHook = host.dispatchHook({
+      event: 'message:sent',
+      data: {},
+      sessionId: 's1',
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    const hookMsgs = ch.sent.filter((m): m is Extract<HostToWorkerMessage, { kind: 'hook' }> => m.kind === 'hook');
+
+    // Worker omits dispatchId and attempts to spoof inFlight: ['message:sent', 'message:sending']
+    // while both hooks are concurrently active on the worker.
+    ch.reply({
+      kind: 'cap',
+      id: 1,
+      verb: 'messages.sendText',
+      args: ['s1', 'c1', 'spoof'],
+      inFlight: ['message:sent', 'message:sending'],
+      originHook: 'message:sent',
+    });
+    await flush();
+
+    for (const msg of hookMsgs) {
+      ch.reply({ kind: 'hook-result', id: msg.id, continue: true });
+    }
+    await Promise.all([sendingHook, sentHook]);
+
+    expect(observed).toEqual([{ sending: false, sent: false }]);
+  });
+
+  it('ignores capability calls arriving while channel.terminate() is pending', async () => {
+    const ch = new FakeChannel();
+    let finishTerminate!: () => void;
+    ch.terminate = () =>
+      new Promise<void>(resolve => {
+        finishTerminate = resolve;
+      });
+    const dispatcher = jest.fn().mockResolvedValue({ ok: true });
+    const host = new PluginWorkerHost(ch, dispatcher);
+
+    const terminating = host.terminate();
+
+    // A late cap arrives from the worker before channel.terminate() finishes.
+    ch.reply({
+      kind: 'cap',
+      id: 1,
+      verb: 'messages.sendText',
+      args: ['s1', 'c1', 'late'],
+    });
+    await flush();
+
+    expect(dispatcher).not.toHaveBeenCalled();
+    expect(ch.sent.filter(m => m.kind === 'cap-result')).toHaveLength(0);
+
+    finishTerminate();
+    await terminating;
   });
 });

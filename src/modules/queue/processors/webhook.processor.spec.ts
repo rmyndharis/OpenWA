@@ -2,7 +2,7 @@ import { DelayedError, Job } from 'bullmq';
 import { FindOperator, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { WebhookOutboxService } from '../../webhook/webhook-outbox.service';
-import { WebhookProcessor } from './webhook.processor';
+import { FAILING_WEBHOOKS_MAX, WebhookProcessor } from './webhook.processor';
 import { MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { WebhookDeliveryFailure } from '../../webhook/entities/webhook-delivery-failure.entity';
@@ -838,6 +838,47 @@ describe('WebhookProcessor', () => {
 
     it('waits no longer than the close cap for a long delivery timeout', async () => {
       expect(await settleAfter(25_000)).toBe(MAX_WORKER_CLOSE_WAIT_MS);
+    });
+  });
+
+  describe('failingWebhooks cap', () => {
+    it('caps failingWebhooks at 10_000, refreshing recency on repeat failure and evicting oldest past cap', async () => {
+      const internal = processor as unknown as { failingWebhooks: Set<string> };
+      for (let i = 0; i < FAILING_WEBHOOKS_MAX; i++) {
+        internal.failingWebhooks.add(`wh-${i}`);
+      }
+      expect(internal.failingWebhooks.size).toBe(FAILING_WEBHOOKS_MAX);
+
+      // Repeat failure on wh-0 refreshes its recency so wh-1 becomes the oldest entry.
+      repo.findOne.mockResolvedValue({
+        id: 'wh-0',
+        sessionId: 'sess-1',
+        url: 'https://8.8.8.8/hook',
+        events: ['message.received'],
+        active: true,
+        secret: null,
+        headers: {},
+      });
+      mockFetch.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
+      await expect(processor.process(makeJob({ webhookId: 'wh-0', maxRetries: 3 }, 0))).rejects.toThrow();
+
+      // Failing a new webhook wh-10000 must evict wh-1 (oldest) and retain wh-0 and wh-10000.
+      repo.findOne.mockResolvedValue({
+        id: 'wh-10000',
+        sessionId: 'sess-1',
+        url: 'https://8.8.8.8/hook',
+        events: ['message.received'],
+        active: true,
+        secret: null,
+        headers: {},
+      });
+      mockFetch.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
+      await expect(processor.process(makeJob({ webhookId: 'wh-10000', maxRetries: 3 }, 0))).rejects.toThrow();
+
+      expect(internal.failingWebhooks.size).toBe(FAILING_WEBHOOKS_MAX);
+      expect(internal.failingWebhooks.has('wh-0')).toBe(true);
+      expect(internal.failingWebhooks.has('wh-1')).toBe(false);
+      expect(internal.failingWebhooks.has('wh-10000')).toBe(true);
     });
   });
 });

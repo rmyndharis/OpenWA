@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes (behavior changes)
+
+- `WWEBJS_WEB_VERSION` defaults to native WhatsApp Web (`off`) instead of fetching remote HTML from GitHub.
+- Exact remote `WWEBJS_WEB_VERSION` pins require a 64-character hex `WWEBJS_WEB_VERSION_SHA256` or `WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true`, while `auto` and `latest` remote modes require `WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true`.
+- `docker-proxy` in `docker-compose.yml` is now opt-in under `--profile docker-proxy`, and local Docker Unix socket fallback requires `DOCKER_ALLOW_LOCAL_SOCKET=true`.
+- `GET /api/sessions/{sessionId}/proxy` now requires an unscoped `ADMIN` key, matching `PATCH`.
+- `GET /api/sessions/stats/overview` omits `memoryUsage` for non-admin and session-scoped keys; Go SDK `SessionStatsOverview.MemoryUsage` is now `*MemoryUsage` (`nil` when omitted).
+- `GET /api/infra/export-data` redacts plugin instance `secret`, `verifyToken`, and `secret: true` config fields by default; pass `?includePluginSecrets=true` when migrating credentials.
+- MCP `GroupGetInviteCode` moved from the `read` tier to the `write` tier and is omitted when `MCP_READONLY=true`.
+- `MCP_MAX_RESULT_BYTES` defaults to `100000` bytes (100 KB); set `MCP_MAX_RESULT_BYTES=0` to restore unlimited results and base64 resource offloading.
+- Dashboard authentication uses an `HttpOnly; SameSite=Strict` `openwa_session` cookie stored in `main.sqlite` (`browser_sessions`) instead of `sessionStorage`.
+- Non-safe dashboard cookie requests require `X-Requested-With: OpenWA-Dashboard` and same-origin verification, and cross-node forwarding returns `409` for cookie-only requests.
+
+### Added
+
+- Browser session cookie endpoints (`POST`, `GET`, `DELETE /api/auth/session`) backed by `browser_sessions` in `main.sqlite`, configurable via `DASHBOARD_SESSION_TTL_MS` and `DASHBOARD_SESSION_COOKIE_SECURE`.
+- `HOOK_PRE_EGRESS_FAIL_CLOSED` opt-in fail-closed mode for `message:sending` and `webhook:before` hooks, releasing send idempotency keys and recording undelivered webhook failures on hook error.
+- Optional `Idempotency-Key` support on `POST /api/sessions/{sessionId}/messages/click-button` across the REST API, `openapi.json`, and all five SDKs.
+- Opt-in `?includePluginSecrets=true` query parameter on `GET /api/infra/export-data` and a matching dashboard checkbox across all 15 locales.
+- `SQLITE_JOURNAL_MODE` (`WAL` default, `DELETE` opt-out for network filesystems), automatic `0600` database permissions before enabling WAL, and shutdown `wal_checkpoint(TRUNCATE)`.
+- High-volume composite and retention indexes across `messages`, `webhook_delivery_failures`, `message_batches`, and `integration_delivery_failures` (`1791900000000-AddHighVolumeQueryIndexes.ts`).
+- Per-session enabled automation rule cache with invalidation on mutations, session retirement, and data imports.
+- `SESSION_PROXY_SECRET` opt-in HMAC-SHA256 authentication for inter-node forwarded hops so owning nodes skip double-throttling.
+- Helm `secretChecksumAnnotation` toggle (default `true`, automatically omitted when `existingSecret` is set) so operators can opt out of Secret digest pod annotations.
+- Install-time Baileys patch `scripts/patch-baileys-media-signal.js` forwarding `options.signal` into `getHttpStream` so timed-out or capped inbound downloads abort immediately.
+
+### Changed
+
+- MCP tool outputs carrying user-authored WhatsApp text are framed in per-response randomized nonce boundary tags that survive truncation.
+- Bundled `postgres`, `redis`, `minio`, and `docker-proxy` sidecars drop Linux capabilities and enforce memory and PID limits.
+- Bundled `redis` supports optional `REDIS_PASSWORD` authentication via `--requirepass`.
+- Restrict `PUPPETEER_ARGS` to an explicit Chromium flag allowlist in boot validation and `PUT /api/infra/config`.
+- Enforce `./data` subdirectory containment on dashboard-configured local storage and session paths.
+- JavaScript, Python, Go, PHP, and Java SDKs make `SessionStatsOverview.memoryUsage` optional and add an optional idempotency key to `clickButton`.
+- Baileys caches positive `onWhatsApp` resolutions on outbound 1:1 sends (5,000-entry LRU, 15-minute TTL) to avoid repeated `usync` round-trips.
+- `EventsGateway` caches unmapped 1:1 chat lookups for 5 seconds with immediate local invalidation when a mapping is learned.
+- `EventsGateway` tracks chat-restricted WebSocket replicas in Redis to skip unnecessary `lid_mappings` lookups when no restricted client is connected.
+- Retire superseded `whatsapp-web.js` install-time patchers (`patch-wwebjs-201832.js` with `wwebjs-201832.patch`, and `patch-wwebjs-group-description.js`) and remove the `wwebjs-backport-check.ts` startup check.
+- Remove the unused GNU `patch` package from the production Docker image.
+- Exclude `src/engine/engine-capability-matrix.ts` from production `tsconfig.build.json` output while keeping it for documentation parity checks.
+- Run dashboard `npm run test:cov` in CI and release workflows.
+- Add a PHP syntax check step for PHP SDK sources in SDK CI.
+- Document HTTP/HTTPS session-proxy DNS rebinding exposure and required egress ACLs alongside `SESSION_PROXY_URL_FETCH`.
+
 ### Fixed
 
 - Baileys: release inbound limiter slots before waiting on preparation room so slow message preparation cannot stall unrelated chats.
@@ -19,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plugins: scope `ctx.net.fetch` allowed hosts to the active session and dispatch context.
 - Plugins: restrict config-UI CSP `script-src` to `'unsafe-inline'` and skip noncing external SVG scripts.
 - Plugins: memoize config-UI HTML hardening to avoid reparsing on every request.
+- Plugins: propagate `AbortSignal` into sandbox capability calls so timed-out or terminated workers cancel in-flight `net.fetch` requests promptly.
+- Plugins: probe idle sandbox workers periodically to detect and reclaim event-loop spins without incoming dispatches.
+- Plugins: suppress hook re-execution on own-send `message:sent` echoes while keeping persistence, WebSockets, and webhooks intact.
 - Security: reject credentialed or malformed SSRF redirect locations and redact IPv6 endpoints in SSRF errors.
 - Security: block deprecated ORCHID and non-public Teredo IPv6 addresses in SSRF host validation.
 - Security: enforce per-object key limits and NUL-byte sanitization on `ImportDataDto` imports.
@@ -29,18 +76,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Messages: harden `BulkMessageService` media handling, abortable delays, shutdown drains, and atomic result persistence.
 - Messages: align idempotency expiry checks to `<=` and drain pending idempotency writes on shutdown.
 - Sessions: preserve `x-request-id`, bodyless `DELETE`, and form-urlencoded bodies in `SessionProxyInterceptor`.
+- Sessions: evaluate PostgreSQL session leases on the database UTC clock (`clock_timestamp() AT TIME ZONE 'UTC'`) and SQL-fence status and metadata writes on `{ id, nodeId }`.
+- Sessions: explicitly delete `automation_rules` rows during session deletion and full data restore instead of relying on SQLite foreign-key cascades.
+- Queue: set `socketTimeout` (1500 ms) and disable `autoResendUnfulfilledCommands` on the Redis producer so silent peers fail fast without replaying stale commands.
+- Queue: defer busy ingress ordering keys via `DelayedError` instead of holding BullMQ worker slots so one hot conversation cannot block unrelated keys.
+- Webhooks: commit persisted message rows and pending `webhook_outbox_events` rows atomically in one transaction so a crash cannot drop webhooks for saved messages.
 - Webhooks: mark outbox rows queued before BullMQ enqueue with rollback on enqueue failure.
 - Webhooks: prune legacy `NULL`-state outbox rows and close outbox entries for deleted webhooks on worker failure.
 - Webhooks: guard PostgreSQL redrive JSON predicates safely across PostgreSQL 12 through 18.
 - Storage: await S3 bucket initialization before purges and fail closed on `deleteFile` when configured S3 is unavailable.
 - Reliability: isolate throwing shutdown listeners and add cooperative bounded shutdown drains across maintenance loops.
+- Reliability: cap in-memory `resolvedSendIds` and `failingWebhooks` maps and clear idle `sessionWrites` and deleted webhook IDs.
+- Events: accept Origin-less same-origin Socket.IO polling handshakes via `Sec-Fetch-Site: same-origin` and same-origin `Referer` validation.
+- Search: read PostgreSQL `datctype` when probing existing trigram indexes on replicas so C/POSIX databases enforce ASCII constraints.
+- Search: route chat-restricted `SEARCH_PROVIDER=auto` requests to `builtin-fts` when a search plugin is enabled.
+- Database: name unnamed entity `@Index` decorators to match existing migrations and eliminate main-connection schema drift.
 - Dashboard: match own chat reactions by exact session phone or `me` across cached message slices.
 - Dashboard: stabilize `ChatThread` scroll listeners and isolate composer draft state to eliminate keystroke re-render churn.
 - Dashboard: cap unbounded list pagination and percent-encode dynamic API path segments.
 - Dashboard: serve inline document downloads through inert `application/octet-stream` Blobs with deferred URL revocation.
 - Dashboard: parse balanced search highlight marks safely with dataset scroll matching.
 - Dashboard: exclude shimmed non-code assets and bound concurrency during coverage runs.
+- PHP SDK: forward `Idempotency-Key` headers, reject empty API keys, and serialize boolean query parameters as `true`/`false` in `Client::request()`.
+- PHP SDK: return an empty array instead of `null` from `WebhooksResource::deliveryFailures()` on empty responses.
+- Python SDK: pin `asyncio_default_fixture_loop_scope = "function"` in test configuration.
 - Tests: raise bulk orphan-sweep Jest timeouts to 30s.
+- Tests: close PostgreSQL import test `DataSource` pools in `try/finally` blocks.
 
 ## [0.31.0] - 2026-11-21
 

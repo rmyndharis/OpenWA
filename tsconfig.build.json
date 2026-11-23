@@ -8,6 +8,13 @@
     // cache, emitted nothing, and `node dist/main` crashed with MODULE_NOT_FOUND (issue #891).
     "tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo"
   },
-  "exclude": ["node_modules", "test", "dist", "**/*spec.ts", "dashboard"],
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "**/*spec.ts",
+    "dashboard",
+    "src/engine/engine-capability-matrix.ts"
+  ],
   "include": ["src"]
 }

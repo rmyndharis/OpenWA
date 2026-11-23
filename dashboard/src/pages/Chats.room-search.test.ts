@@ -133,7 +133,7 @@ before(async () => {
     return Promise.resolve(json({ message: `unstubbed ${path}` }, 404));
   }) as typeof fetch;
   window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
-  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-key');
   const { i18nReady } = await import('../i18n/index.ts');
   await i18nReady;
   rtl = await import('@testing-library/react');

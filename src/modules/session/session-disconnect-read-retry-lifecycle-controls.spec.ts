@@ -266,7 +266,7 @@ describe('terminal unlink carried by a pending disconnect read retry across life
     expect(jest.getTimerCount()).toBe(0);
   });
 
-  it('audits the unlink without clearing phone on the row when stopOrphanEngines() runs after ownership was lost', async () => {
+  it('suppresses audit, phone clear, and announcement when stopOrphanEngines() runs after ownership was lost', async () => {
     const f = fixture();
     await f.lifecycle.start(ID);
     jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask', 'Date'] });
@@ -279,8 +279,8 @@ describe('terminal unlink carried by a pending disconnect read retry across life
     await f.lifecycle.stopOrphanEngines([ID]);
 
     expect(f.stored.phone).toBe(BOUND);
-    expect(f.unlinkAudits()).toHaveLength(1);
-    expect(f.announced()).toEqual(['LOGOUT']);
+    expect(f.unlinkAudits()).toHaveLength(0);
+    expect(f.announced()).toEqual([]);
     expect(jest.getTimerCount()).toBe(0);
   });
 

@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import ts from 'typescript';
 import { engineCapabilityMatrix } from './engine-capability-matrix';
 
 /**
@@ -158,6 +159,7 @@ describe('docs/29 counts match the capability matrix', () => {
       thirteen: 13,
       fourteen: 14,
       fifteen: 15,
+      sixteen: 16,
     };
     const spelled = doc.match(/OpenWA ships (\w+) exact, self-disabling source transforms/);
     const wrongProse: string[] = [];
@@ -302,5 +304,16 @@ describe('docs/29 counts match the capability matrix', () => {
     }
 
     expect(wrong).toEqual([]);
+  });
+
+  it('excludes engine-capability-matrix.ts from the production build', () => {
+    const repoRoot = join(__dirname, '..', '..');
+    const configPath = join(repoRoot, 'tsconfig.build.json');
+    const readResult = ts.readConfigFile(configPath, p => readFileSync(p, 'utf8'));
+    expect(readResult.error).toBeUndefined();
+    const parsed = ts.parseJsonConfigFileContent(readResult.config, ts.sys, repoRoot);
+    expect(parsed.errors).toEqual([]);
+    const matrixPath = join(repoRoot, 'src', 'engine', 'engine-capability-matrix.ts');
+    expect(parsed.fileNames).not.toContain(matrixPath);
   });
 });

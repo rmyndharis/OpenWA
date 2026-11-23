@@ -326,8 +326,8 @@ describe('InfraConfigController.saveConfig local storage path', () => {
   const newController = () => new InfraConfigController({} as never, {} as never, {} as never);
   const actual = jest.requireActual<typeof import('../../config/storage-root')>('../../config/storage-root');
   const useRealProbe = () => (resolveStorageRoot as jest.Mock).mockImplementationOnce(actual.resolveStorageRoot);
-  // A parent that is a file, so the directory cannot be created whoever runs the test.
-  const unwritable = '/dev/null/openwa-media';
+  // A parent that is a file inside ./data, so the directory passes containment and fails creation whoever runs the test.
+  const realFs = jest.requireActual<typeof import('fs')>('fs');
   const localAt = (localPath: string) => ({ storage: { type: 'local', localPath } }) as never;
 
   beforeEach(() => {
@@ -336,52 +336,82 @@ describe('InfraConfigController.saveConfig local storage path', () => {
   });
 
   it('refuses a path the app cannot create, and writes nothing', () => {
-    useRealProbe();
-
-    expect(() => newController().saveConfig(localAt(unwritable))).toThrow(BadRequestException);
-    expect(fs.writeFileSync).not.toHaveBeenCalled();
-  });
-
-  it('names the submitted path, not where it resolves to', () => {
-    // Relative, under a regular file (this one), so its absolute form carries the working directory.
-    const relative = path.relative(process.cwd(), path.join(__filename, 'media'));
-    useRealProbe();
-
-    let message = '';
-    try {
-      newController().saveConfig(localAt(relative));
-    } catch (error) {
-      message = (error as Error).message;
-    }
-
-    expect(message).toContain(`storage path '${relative}'`);
-    expect(message).not.toContain(process.cwd());
-  });
-
-  it('saves a path the app can write', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openwa-storage-'));
+    const origCwd = process.cwd();
+    const work = realFs.mkdtempSync(path.join(os.tmpdir(), 'openwa-storage-unwritable-'));
+    realFs.mkdirSync(path.join(work, 'data'));
+    realFs.writeFileSync(path.join(work, 'data', 'blocker'), '');
+    process.chdir(work);
     try {
       useRealProbe();
 
-      newController().saveConfig(localAt(path.join(root, 'media')));
+      expect(() => newController().saveConfig(localAt('./data/blocker/media'))).toThrow(BadRequestException);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    } finally {
+      process.chdir(origCwd);
+      realFs.rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it('names the submitted path, not where it resolves to', () => {
+    const origCwd = process.cwd();
+    const work = realFs.mkdtempSync(path.join(os.tmpdir(), 'openwa-storage-name-'));
+    realFs.mkdirSync(path.join(work, 'data'));
+    realFs.writeFileSync(path.join(work, 'data', 'blocker'), '');
+    process.chdir(work);
+    try {
+      const relative = './data/blocker/media';
+      useRealProbe();
+
+      let message = '';
+      try {
+        newController().saveConfig(localAt(relative));
+      } catch (error) {
+        message = (error as Error).message;
+      }
+
+      expect(message).toContain(`storage path '${relative}'`);
+      expect(message).not.toContain(work);
+    } finally {
+      process.chdir(origCwd);
+      realFs.rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it('saves a path the app can write', () => {
+    const origCwd = process.cwd();
+    const work = realFs.mkdtempSync(path.join(os.tmpdir(), 'openwa-storage-'));
+    realFs.mkdirSync(path.join(work, 'data'));
+    process.chdir(work);
+    try {
+      useRealProbe();
+
+      newController().saveConfig(localAt('./data/custom-media'));
 
       const content = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
-      expect(content).toContain(`STORAGE_LOCAL_PATH=${path.join(root, 'media')}`);
+      expect(content).toContain('STORAGE_LOCAL_PATH=./data/custom-media');
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      process.chdir(origCwd);
+      realFs.rmSync(work, { recursive: true, force: true });
     }
   });
 
   it('does not judge a path that a value pinned by the host outranks', () => {
     // With no boot snapshot recorded, every key in the environment counts as host-supplied.
+    const origCwd = process.cwd();
+    const work = realFs.mkdtempSync(path.join(os.tmpdir(), 'openwa-storage-pinned-'));
+    realFs.mkdirSync(path.join(work, 'data'));
+    realFs.writeFileSync(path.join(work, 'data', 'blocker'), '');
+    process.chdir(work);
     process.env.STORAGE_LOCAL_PATH = '/srv/openwa/media';
     try {
-      newController().saveConfig(localAt(unwritable));
+      newController().saveConfig(localAt('./data/blocker/media'));
 
       expect(resolveStorageRoot).not.toHaveBeenCalled();
       expect(fs.writeFileSync).toHaveBeenCalledTimes(1);
     } finally {
+      process.chdir(origCwd);
       delete process.env.STORAGE_LOCAL_PATH;
+      realFs.rmSync(work, { recursive: true, force: true });
     }
   });
 
@@ -500,13 +530,13 @@ describe('InfraConfigController.saveConfig env-name correctness and merge (#226)
 
   it('writes the env names the backend actually reads (not the old ignored names)', () => {
     const env = written({
-      engine: { headless: false, sessionDataPath: './sess', browserArgs: '--flag' },
+      engine: { headless: false, sessionDataPath: './data/sess', browserArgs: '--disable-extensions' },
       storage: { type: 's3', s3Bucket: 'b', s3AccessKey: 'ak', s3SecretKey: 'sk' },
     });
     // Correct names (configuration.ts reads these)
     expect(env).toContain('PUPPETEER_HEADLESS=false');
-    expect(env).toContain('SESSION_DATA_PATH=./sess');
-    expect(env).toContain('PUPPETEER_ARGS=--flag');
+    expect(env).toContain('SESSION_DATA_PATH=./data/sess');
+    expect(env).toContain('PUPPETEER_ARGS=--disable-extensions');
     expect(env).toContain('S3_ACCESS_KEY_ID=ak');
     expect(env).toContain('S3_SECRET_ACCESS_KEY=sk');
     // Old, silently-ignored names must be gone
@@ -883,7 +913,7 @@ describe('InfraConfigController.saveConfig byte-identical regression (full dashb
       'S3_REGION=eu-west-1',
       'ENGINE_TYPE=baileys',
       'PUPPETEER_HEADLESS=false',
-      'SESSION_DATA_PATH=/var/lib/openwa/sessions',
+      'SESSION_DATA_PATH=./data/custom-sessions',
       'PUPPETEER_ARGS=--no-sandbox',
       '',
     ].join('\n');
@@ -916,7 +946,7 @@ describe('InfraConfigController.saveConfig byte-identical regression (full dashb
       engine: {
         type: 'baileys',
         headless: false,
-        sessionDataPath: '/var/lib/openwa/sessions',
+        sessionDataPath: './data/custom-sessions',
         browserArgs: '--no-sandbox',
       },
     };
@@ -951,7 +981,7 @@ describe('InfraConfigController.saveConfig byte-identical regression (full dashb
         S3_ENDPOINT: 'https://s3.eu-west-1.amazonaws.com',
         S3_REGION: 'eu-west-1',
         S3_SECRET_ACCESS_KEY: 's3-super-secret',
-        SESSION_DATA_PATH: '/var/lib/openwa/sessions',
+        SESSION_DATA_PATH: './data/custom-sessions',
         STORAGE_TYPE: 's3',
       }),
     );
@@ -1058,11 +1088,11 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
   it('a partial engine save keeps the stored session path and browser args', () => {
     const env = written(
       { engine: { headless: false } },
-      'SESSION_DATA_PATH=./old-path\nPUPPETEER_ARGS=--custom-flag\n',
+      'SESSION_DATA_PATH=./old-path\nPUPPETEER_ARGS=--disable-extensions\n',
     );
     expect(env).toContain('PUPPETEER_HEADLESS=false');
     expect(env).toContain('SESSION_DATA_PATH=./old-path');
-    expect(env).toContain('PUPPETEER_ARGS=--custom-flag');
+    expect(env).toContain('PUPPETEER_ARGS=--disable-extensions');
   });
 
   // The page leaves out a type the environment pins while the operator has not touched it, so the pin is never
@@ -1323,7 +1353,6 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
           S3_ACCESS_KEY_ID: 'StoredKey123456',
           S3_SECRET_ACCESS_KEY: 'StoredSecret1234567890',
         };
-        delete expectedExplicit.REDIS_PASSWORD;
         expect(explicit).toEqual(expectedExplicit);
         expect(dotenv.parse(written({ database: { poolSize: 25 }, redis: {}, storage: {} }, stored))).toEqual({
           ...dotenv.parse(stored),
@@ -3523,5 +3552,127 @@ describe('InfraConfigController built-in Redis username', () => {
     recordPinnedEnvKeys({ REDIS_USERNAME: 'worker' });
     (fs.readFileSync as jest.Mock).mockReturnValue(stored({ REDIS_ENABLED: 'false' }));
     expect(() => write({ enabled: false, builtIn: true })).not.toThrow();
+  });
+
+  it('preserves an already-configured built-in REDIS_PASSWORD when saving built-in Redis with a blank password', () => {
+    (fs.readFileSync as jest.Mock).mockReturnValue(
+      stored({
+        REDIS_BUILTIN: 'true',
+        REDIS_HOST: 'redis',
+        REDIS_PORT: '6379',
+        REDIS_USERNAME: '',
+        REDIS_PASSWORD: 'BuiltinRedisSecret987',
+      }),
+    );
+    const saved = write({ enabled: true, builtIn: true });
+    expect(saved.REDIS_PASSWORD).toBe('BuiltinRedisSecret987');
+    expect(saved.REDIS_HOST).toBe('redis');
+  });
+});
+
+describe('InfraConfigController.saveConfig PUPPETEER_ARGS allowlist and data-dir path containment', () => {
+  const newController = () => new InfraConfigController({} as never, {} as never, {} as never);
+
+  beforeEach(() => {
+    (fs.writeFileSync as jest.Mock).mockClear();
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.readFileSync as jest.Mock).mockReturnValue('');
+    (resolveStorageRoot as jest.Mock).mockClear();
+  });
+
+  it.each([
+    '--gpu-launcher=/bin/sh',
+    '--utility-cmd-prefix=sh',
+    '--renderer-cmd-prefix=sh',
+    '--browser-subprocess-path=/bin/sh',
+    '--load-extension=/tmp/ext',
+    '--disable-extensions-except=/tmp/ext',
+    '--remote-debugging-port=9222',
+    '--user-data-dir=/tmp/profile',
+    '--disk-cache-dir=/tmp/cache',
+    '--proxy-server=http://evil:8080',
+    '--proxy-pac-url=http://evil/pac',
+    '--disable-web-security',
+    '--ignore-certificate-errors',
+    '--js-flags=--expose-gc',
+    '--no-sandbox https://evil.example',
+  ])('rejects disallowed browserArgs %j with BadRequestException before writing', malicious => {
+    expect(() => newController().saveConfig({ engine: { browserArgs: malicious } })).toThrow(BadRequestException);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it.each(['   ', ',,,', ' , , '])(
+    'persists DEFAULT_PUPPETEER_ARGS when browserArgs=%j contains no flags',
+    blankOrCommas => {
+      newController().saveConfig({ engine: { browserArgs: blankOrCommas } });
+      const written = jest.mocked(fs.writeFileSync).mock.calls.at(-1)![1] as string;
+      const parsed = jest.requireActual<typeof import('dotenv')>('dotenv').parse(written);
+      expect(parsed.PUPPETEER_ARGS).toBe('--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu');
+    },
+  );
+
+  it.each([
+    './data',
+    './data/.',
+    './data/ ',
+    './data/.. ',
+    './data/../outside',
+    './data/sub/../other',
+    '../outside',
+    '/etc/passwd',
+    './data/media\0evil',
+  ])('rejects storage.localPath=%j outside ./data before calling resolveStorageRoot', badPath => {
+    expect(() => newController().saveConfig({ storage: { type: 'local', localPath: badPath } } as never)).toThrow(
+      BadRequestException,
+    );
+    expect(resolveStorageRoot).not.toHaveBeenCalled();
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    './data',
+    './data/.',
+    './data/ ',
+    './data/.. ',
+    './data/../outside',
+    './data/sub/../other',
+    '../outside',
+    '/var/lib/openwa/sessions',
+    './data/sess\0x',
+  ])('rejects engine.sessionDataPath=%j outside ./data before writing', badPath => {
+    expect(() => newController().saveConfig({ engine: { sessionDataPath: badPath } })).toThrow(BadRequestException);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('rejects symlink escapes and ..-over-symlink paths out of ./data for both storage.localPath and engine.sessionDataPath', () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-path-contain-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-path-outside-'));
+    fs.mkdirSync(path.join(work, 'data'));
+    fs.symlinkSync(outside, path.join(work, 'data', 'escape'));
+    fs.symlinkSync(path.join(outside, 'nonexistent'), path.join(work, 'data', 'dangling'));
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(work);
+    try {
+      for (const candidate of [
+        './data/escape',
+        './data/escape/sub',
+        './data/escape/../pwn',
+        './data/escape/..',
+        './data/dangling',
+        './data/dangling/sub',
+      ]) {
+        expect(() => newController().saveConfig({ storage: { type: 'local', localPath: candidate } } as never)).toThrow(
+          BadRequestException,
+        );
+        expect(() => newController().saveConfig({ engine: { sessionDataPath: candidate } })).toThrow(
+          BadRequestException,
+        );
+      }
+      expect(resolveStorageRoot).not.toHaveBeenCalled();
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(work, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

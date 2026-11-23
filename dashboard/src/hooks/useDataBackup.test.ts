@@ -16,6 +16,7 @@ let ToastContext: typeof ToastContextType;
 
 // Answer of the export route, per test; a pending one is an export still in flight.
 let exportAnswer: Promise<Response> = new Promise(() => {});
+const exportUrls: string[] = [];
 const saved: HTMLAnchorElement[] = [];
 // Answers of the import route in order, and what it was sent.
 let importAnswers: Array<Response | Promise<Response>> = [];
@@ -43,13 +44,15 @@ before(async () => {
   globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     if (url.endsWith('/api/infra/import-data')) {
-      importKeys.push((init?.headers as Record<string, string> | undefined)?.['X-API-Key'] ?? null);
+      importKeys.push(window.sessionStorage.getItem('openwa_api_key_id'));
       importBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
       return Promise.resolve(importAnswers.shift() ?? json({ imported: true, counts: {}, warnings: [] }, 201));
     }
-    return url.endsWith('/api/infra/export-data')
-      ? exportAnswer
-      : Promise.resolve(new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    if (url.endsWith('/api/infra/export-data') || url.endsWith('/api/infra/export-data?includePluginSecrets=true')) {
+      exportUrls.push(url);
+      return exportAnswer;
+    }
+    return Promise.resolve(new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } }));
   };
   URL.createObjectURL = () => 'blob:backup';
   URL.revokeObjectURL = () => {};
@@ -61,8 +64,9 @@ before(async () => {
 afterEach(() => {
   rtl.cleanup();
   saved.length = 0;
+  exportUrls.length = 0;
   exportAnswer = new Promise(() => {});
-  window.sessionStorage.removeItem('openwa_api_key');
+  window.sessionStorage.removeItem('openwa_api_key_id');
   document.createElement = createElementOriginal;
   importAnswers = [];
   importBodies.length = 0;
@@ -96,7 +100,7 @@ function renderBackup(strict = false) {
 }
 
 test('an export that completes while signed in saves the backup file', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   exportAnswer = Promise.resolve(dump());
   const { result } = renderBackup();
   await rtl.act(() => result.current.exportBackup());
@@ -104,22 +108,31 @@ test('an export that completes while signed in saves the backup file', async () 
     saved.map(link => link.download),
     ['openwa-backup-2026-10-09.json'],
   );
+  assert.ok(exportUrls[0]?.endsWith('/api/infra/export-data'));
+});
+
+test('exportBackup(true) appends includePluginSecrets=true to the export request', async () => {
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
+  exportAnswer = Promise.resolve(dump());
+  const { result } = renderBackup();
+  await rtl.act(() => result.current.exportBackup(true));
+  assert.ok(exportUrls[0]?.endsWith('/api/infra/export-data?includePluginSecrets=true'));
 });
 
 test('an export answered after sign-out saves no file', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   let answer!: (response: Response) => void;
   exportAnswer = new Promise<Response>(resolve => (answer = resolve));
   const { result } = renderBackup();
   const exporting = rtl.act(() => result.current.exportBackup());
-  window.sessionStorage.removeItem('openwa_api_key');
+  window.sessionStorage.removeItem('openwa_api_key_id');
   answer(dump());
   await exporting;
   assert.deepEqual(saved, [], 'a backup of the whole database was saved after the sign-out');
 });
 
 test('an export that dropped inline media warns that the archive restores without those attachments', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   exportAnswer = Promise.resolve(dump({ omittedInlineMedia: { messages: 2, messageBatches: 1 } }));
   const { result } = renderBackup();
   await rtl.act(() => result.current.exportBackup());
@@ -147,7 +160,7 @@ function answerConfirms(...answers: boolean[]): string[] {
 }
 
 test('an import the operator declines at the row-count prompt sends nothing', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   const asked = answerConfirms(false);
   const { result } = renderBackup();
   await rtl.act(() => result.current.importBackup(backupFile({ tables: { sessions: [{ id: 'a' }, { id: 'b' }] } })));
@@ -157,7 +170,7 @@ test('an import the operator declines at the row-count prompt sends nothing', as
 });
 
 test('a file that is not JSON, or holds no tables, is refused before any prompt', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   const asked = answerConfirms(true, true);
   const { result } = renderBackup();
   await rtl.act(() => result.current.importBackup(backupFile('not json')));
@@ -174,7 +187,7 @@ test('a file that is not JSON, or holds no tables, is refused before any prompt'
 });
 
 test('a confirmed import posts the tables and reports success', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   answerConfirms(true);
   const { result } = renderBackup();
   await rtl.act(() => result.current.importBackup(backupFile({ tables: { sessions: [{ id: 'a' }] } })));
@@ -196,7 +209,7 @@ const orphanRefusal = (): Response =>
   );
 
 test('an orphan-engine refusal asks, and retries once with stopOrphans only when the operator agrees', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   importAnswers = [orphanRefusal()];
   const asked = answerConfirms(true, true);
   const { result } = renderBackup();
@@ -211,7 +224,7 @@ test('an orphan-engine refusal asks, and retries once with stopOrphans only when
 });
 
 test('declining the orphan-engine prompt leaves the engines and the data alone', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   importAnswers = [orphanRefusal()];
   answerConfirms(true, false);
   const { result } = renderBackup();
@@ -223,7 +236,7 @@ test('declining the orphan-engine prompt leaves the engines and the data alone',
 });
 
 test('a conflict with another code, or none, is never offered the destructive retry', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   importAnswers = [
     json({ statusCode: 409, message: 'An import is already running', code: 'IMPORT_ALREADY_RUNNING' }, 409),
     json({ statusCode: 409, message: 'Conflict' }, 409),
@@ -241,7 +254,7 @@ test('a conflict with another code, or none, is never offered the destructive re
 });
 
 test('a backup over the request body cap gets the actionable message, not a bare Payload Too Large', async () => {
-  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
   importAnswers = [json({ statusCode: 413, message: 'Payload Too Large' }, 413)];
   answerConfirms(true);
   const { result } = renderBackup();
@@ -281,13 +294,13 @@ async function importTurn(action: () => void): Promise<void> {
 
 const retirements = ['signed-out', 'replacement-key', 'unmounted', 'same-key-relogin'] as const;
 function retireImport(view: ReturnType<typeof renderBackup>, kind: (typeof retirements)[number]) {
-  if (kind === 'signed-out') sessionStorage.removeItem('openwa_api_key');
-  if (kind === 'replacement-key') sessionStorage.setItem('openwa_api_key', 'key-b');
+  if (kind === 'signed-out') sessionStorage.removeItem('openwa_api_key_id');
+  if (kind === 'replacement-key') sessionStorage.setItem('openwa_api_key_id', 'key-b');
   if (kind === 'unmounted') view.unmount();
   if (kind === 'same-key-relogin') {
     view.unmount();
-    sessionStorage.removeItem('openwa_api_key');
-    sessionStorage.setItem('openwa_api_key', 'key-a');
+    sessionStorage.removeItem('openwa_api_key_id');
+    sessionStorage.setItem('openwa_api_key_id', 'key-a');
     renderBackup();
   }
 }
@@ -305,7 +318,7 @@ const importEffects = (prompts: string[]) => ({
 
 for (const kind of retirements) {
   test(`a file read retired by ${kind} causes no prompt, request or toast`, async () => {
-    sessionStorage.setItem('openwa_api_key', 'key-a');
+    sessionStorage.setItem('openwa_api_key_id', 'key-a');
     const read = heldValue<string>(),
       view = renderBackup(),
       prompts = answerConfirms(true, true);
@@ -317,7 +330,7 @@ for (const kind of retirements) {
     assert.deepEqual(importEffects(prompts), { prompts: 0, requests: 0, toasts: 0 });
   });
   test(`a failed file read retired by ${kind} reports no stale error`, async () => {
-    sessionStorage.setItem('openwa_api_key', 'key-a');
+    sessionStorage.setItem('openwa_api_key_id', 'key-a');
     const read = heldValue<string>(),
       view = renderBackup(),
       prompts = answerConfirms(true, true);
@@ -329,7 +342,7 @@ for (const kind of retirements) {
     assert.deepEqual(importEffects(prompts), { prompts: 0, requests: 0, toasts: 0 });
   });
   test(`a refusal after ${kind} opens no orphan retry and is reported only to the same key`, async () => {
-    sessionStorage.setItem('openwa_api_key', 'key-a');
+    sessionStorage.setItem('openwa_api_key_id', 'key-a');
     const answer = heldValue<Response>();
     importAnswers.push(answer.promise);
     const view = renderBackup(),
@@ -349,7 +362,7 @@ for (const kind of retirements) {
   });
   for (const status of [200, 503]) {
     test(`an import answered with ${status} after ${kind} is reported only to the same key`, async () => {
-      sessionStorage.setItem('openwa_api_key', 'key-a');
+      sessionStorage.setItem('openwa_api_key_id', 'key-a');
       const answer = heldValue<Response>();
       importAnswers.push(answer.promise);
       const view = renderBackup(),
@@ -371,8 +384,8 @@ for (const kind of retirements) {
 
 for (const key of [null, '']) {
   test(`an import begun with ${key === null ? 'no' : 'an empty'} key reads and sends nothing`, async () => {
-    if (key === null) sessionStorage.removeItem('openwa_api_key');
-    else sessionStorage.setItem('openwa_api_key', key);
+    if (key === null) sessionStorage.removeItem('openwa_api_key_id');
+    else sessionStorage.setItem('openwa_api_key_id', key);
     let reads = 0;
     const file = backupFile(importBody);
     Object.defineProperty(file, 'text', {
@@ -391,12 +404,12 @@ for (const key of [null, '']) {
 }
 
 test('a row confirmation cannot dispatch with a key changed while it was open', async () => {
-  sessionStorage.setItem('openwa_api_key', 'key-a');
+  sessionStorage.setItem('openwa_api_key_id', 'key-a');
   const view = renderBackup();
   let prompts = 0;
   window.confirm = () => {
     prompts++;
-    sessionStorage.setItem('openwa_api_key', 'key-b');
+    sessionStorage.setItem('openwa_api_key_id', 'key-b');
     return true;
   };
   await importTurn(() => {
@@ -408,12 +421,12 @@ test('a row confirmation cannot dispatch with a key changed while it was open', 
 });
 
 test('an orphan confirmation cannot retry with a key changed while it was open', async () => {
-  sessionStorage.setItem('openwa_api_key', 'key-a');
+  sessionStorage.setItem('openwa_api_key_id', 'key-a');
   importAnswers.push(orphanRefusal());
   const view = renderBackup();
   let prompts = 0;
   window.confirm = () => {
-    if (++prompts === 2) sessionStorage.setItem('openwa_api_key', 'key-b');
+    if (++prompts === 2) sessionStorage.setItem('openwa_api_key_id', 'key-b');
     return true;
   };
   await importTurn(() => {
@@ -427,7 +440,7 @@ test('an orphan confirmation cannot retry with a key changed while it was open',
 
 for (const outcome of ['success', 'read-failure', 'invalid-json'] as const) {
   test(`an older selection ending with ${outcome} cannot replace the newer selection`, async () => {
-    sessionStorage.setItem('openwa_api_key', 'key-a');
+    sessionStorage.setItem('openwa_api_key_id', 'key-a');
     const oldRead = heldValue<string>(),
       freshRead = heldValue<string>();
     const view = renderBackup(),
@@ -450,7 +463,7 @@ for (const outcome of ['success', 'read-failure', 'invalid-json'] as const) {
 }
 
 test('an old response cannot clear the busy state of a newer file read', async () => {
-  sessionStorage.setItem('openwa_api_key', 'key-a');
+  sessionStorage.setItem('openwa_api_key_id', 'key-a');
   const oldAnswer = heldValue<Response>(),
     freshRead = heldValue<string>();
   importAnswers.push(oldAnswer.promise);
@@ -473,7 +486,7 @@ test('an old response cannot clear the busy state of a newer file read', async (
 });
 
 test('a declined newer selection still retires an older file read', async () => {
-  sessionStorage.setItem('openwa_api_key', 'key-a');
+  sessionStorage.setItem('openwa_api_key_id', 'key-a');
   const oldRead = heldValue<string>(),
     view = renderBackup(),
     prompts = answerConfirms(false, true);
@@ -489,7 +502,7 @@ test('a declined newer selection still retires an older file read', async () => 
 });
 
 test('an import remains usable after StrictMode effect replay', async () => {
-  sessionStorage.setItem('openwa_api_key', 'key-a');
+  sessionStorage.setItem('openwa_api_key_id', 'key-a');
   const view = renderBackup(true),
     prompts = answerConfirms(true);
   await importTurn(() => {
@@ -503,7 +516,7 @@ test('an import remains usable after StrictMode effect replay', async () => {
 for (const stage of ['file-read', 'response'] as const) {
   for (const change of ['remove-key', 'replace-key'] as const) {
     test(`a canceled ${stage} after ${change} clears busy state before a fresh B selection`, async () => {
-      sessionStorage.setItem('openwa_api_key', 'key-a');
+      sessionStorage.setItem('openwa_api_key_id', 'key-a');
       const read = heldValue<string>(),
         answer = heldValue<Response>();
       const view = renderBackup(),
@@ -516,14 +529,14 @@ for (const stage of ['file-read', 'response'] as const) {
       });
       assert.equal(view.result.current.migrating, true);
       assert.equal(importBodies.length, stage === 'response' ? 1 : 0);
-      if (change === 'remove-key') sessionStorage.removeItem('openwa_api_key');
-      else sessionStorage.setItem('openwa_api_key', 'key-b');
+      if (change === 'remove-key') sessionStorage.removeItem('openwa_api_key_id');
+      else sessionStorage.setItem('openwa_api_key_id', 'key-b');
       await importTurn(() => {
         if (stage === 'file-read') read.resolve(importBody);
         else answer.resolve(json({ imported: true, counts: {}, warnings: [] }));
       });
       const canceled = { ...importEffects(prompts), migrating: view.result.current.migrating };
-      sessionStorage.setItem('openwa_api_key', 'key-b');
+      sessionStorage.setItem('openwa_api_key_id', 'key-b');
       const fresh = { tables: { dummyRows: [{ label: 'fresh-B-selection' }] } };
       await importTurn(() => {
         void view.result.current.importBackup(backupFile(fresh));

@@ -29,7 +29,7 @@ afterEach(() => {
   rtl.cleanup();
   globalThis.fetch = realFetch;
   window.sessionStorage.removeItem('openwa_user_role');
-  window.sessionStorage.removeItem('openwa_api_key');
+  window.sessionStorage.removeItem('openwa_api_key_id');
 });
 
 const CHAT: Chat = {
@@ -61,7 +61,7 @@ const document_ = (id: string, media: NonNullable<ChatMessageView['metadata']>['
 
 function renderThread(messages: ChatMessageView[]): HTMLElement {
   window.sessionStorage.setItem('openwa_user_role', 'operator');
-  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-key');
   const noop = () => {};
   return rtl.render(
     createElement(

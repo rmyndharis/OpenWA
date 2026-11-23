@@ -1,7 +1,9 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, useContext } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { API_ORIGIN } from '../services/api';
 import { resolveSocketUrl, warnIfInsecureHttpUrl } from '../utils/urlSecurity';
+import { getActiveApiKeyId } from '../utils/authLifecycle';
+import { RoleContext } from './useRole';
 
 interface SessionStatusEvent {
   sessionId: string;
@@ -161,6 +163,11 @@ interface Subscription {
 const subscriptionKey = ({ sessionId, events }: Subscription) => `${sessionId}\n${events.join(',')}`;
 
 export function useWebSocket(events: WebSocketEvents = {}) {
+  const roleContext = useContext(RoleContext);
+  const hasContextApiKeyId = roleContext?.apiKeyId !== undefined;
+  const contextApiKeyId = roleContext?.apiKeyId ?? null;
+  const sessionEpoch = roleContext?.sessionEpoch ?? 0;
+  const lastSessionEpochRef = useRef(sessionEpoch);
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   // True when the connection is dead until the user retries: Socket.IO either exhausted its
@@ -329,11 +336,10 @@ export function useWebSocket(events: WebSocketEvents = {}) {
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return;
 
-    // Get API key from sessionStorage (same as api.ts)
-    const apiKey = sessionStorage.getItem('openwa_api_key');
+    const activeActorId = hasContextApiKeyId ? contextApiKeyId : getActiveApiKeyId();
 
-    if (!apiKey) {
-      console.warn('[WebSocket] No API key found, skipping connection');
+    if (!activeActorId) {
+      console.warn('[WebSocket] No active session found, skipping connection');
       return;
     }
 
@@ -344,14 +350,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
-      // Send the key via `auth` (and a header for proxies). NOT via `query` — a key in the
-      // handshake URL leaks into access logs / Referer. The gateway reads auth first.
-      auth: {
-        apiKey,
-      },
-      extraHeaders: {
-        'X-API-Key': apiKey,
-      },
+      withCredentials: true,
     });
 
     socketRef.current.on('connect', () => {
@@ -368,7 +367,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       // A server-initiated close (handshake rate limit, auth rejection, key eviction) sets
       // Socket.IO's skipReconnect: no auto-reconnect runs, so `reconnect_failed` never fires
       // and without this the tab would silently stop receiving events. Surface the same
-      // recoverable failure state — the banner's manual retry opens a fresh socket, which
+      // recoverable failure state: the banner's manual retry opens a fresh socket, which
       // skipReconnect does not block.
       if (reason === 'io server disconnect') {
         setConnectionFailed(true);
@@ -384,7 +383,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       console.warn('[WebSocket] Reconnection failed after max attempts');
       setConnectionFailed(true);
     });
-  }, [clearSubscribeRetry, noteSubscribeAnswer]);
+  }, [hasContextApiKeyId, contextApiKeyId, clearSubscribeRetry, noteSubscribeAnswer]);
 
   // Manual retry after the socket permanently gave up: tear down the dead socket and reconnect.
   const reconnect = useCallback(() => {
@@ -407,6 +406,14 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       }
     };
   }, [connect, clearSubscribeRetry]);
+
+  // Reconnect when another tab rotates the browser session cookie (even under the same apiKeyId),
+  // recovering sockets that received an `io server disconnect` eviction.
+  useEffect(() => {
+    if (lastSessionEpochRef.current === sessionEpoch) return;
+    lastSessionEpochRef.current = sessionEpoch;
+    reconnect();
+  }, [sessionEpoch, reconnect]);
 
   // Register the single envelope handler and fan out to the typed callbacks.
   useEffect(() => {

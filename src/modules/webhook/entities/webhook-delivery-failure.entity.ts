@@ -14,6 +14,8 @@ import { jsonColumnType } from '../../../common/utils/column-types';
  */
 @Entity('webhook_delivery_failures')
 @Index('IDX_webhook_delivery_failures_sessionId', ['sessionId'])
+@Index('IDX_webhook_delivery_failures_createdAt', ['createdAt'])
+@Index('IDX_webhook_delivery_failures_sessionId_createdAt', ['sessionId', 'createdAt'])
 // Backs the before-insert duplicate lookup that keeps one row per lost delivery rather than one per
 // reconciler replay. See AddWebhookDeliveryFailureLookupIndex1786300000000.
 @Index('IDX_webhook_delivery_failures_delivery', ['webhookId', 'idempotencyKey'])

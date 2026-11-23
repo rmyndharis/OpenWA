@@ -56,6 +56,9 @@ import { recoverGroupChatById } from './wwebjs-chats';
 import { isNotice, isUnlistedContentless } from './wwebjs-message-events';
 import { noteVideoLoadTimeout } from './wwebjs-video-load-timeout';
 
+/** Upper bound on the per-session resolved-recipient LRU cache ({@link WwebjsMessaging}). */
+export const RESOLVED_SEND_IDS_MAX = 5000;
+
 /**
  * Map a whatsapp-web.js MessageAck integer to the neutral DeliveryStatus.
  * wwebjs: -1 ERROR, 0 PENDING, 1 SERVER (sent), 2 DEVICE (delivered), 3 READ, 4 PLAYED.
@@ -509,8 +512,8 @@ export class WwebjsMessaging {
   // confirmed resolution keeps ordinary sends from re-probing on each message (#580). A `@lid` is
   // stable; a stale entry (a contact that migrates mid-session) self-heals via the retry in
   // `sendResolved`.
-  // Unbounded Map, bounded in practice by distinct recipients per session; add an LRU only if a
-  // session ever addresses a truly unbounded set of fresh numbers.
+  // LRU-bounded at RESOLVED_SEND_IDS_MAX entries so a long-lived session addressing fresh numbers
+  // cannot grow memory without bound; evicting an entry also drops it from `unreportedLids`.
   private readonly resolvedSendIds = new Map<string, string>();
   // The `<phone>@c.us` keys of the cache above whose `@lid` the mapping store has not taken (its write failed):
   // the next send reports the pair again, so a failed write costs one more write, not a fresh probe.
@@ -543,19 +546,33 @@ export class WwebjsMessaging {
     const chatId = toNeutralJid(recipient);
     const cached = this.resolvedSendIds.get(chatId);
     if (cached) {
+      // Touch recency so active recipients stay in the cache.
+      this.resolvedSendIds.delete(chatId);
+      this.resolvedSendIds.set(chatId, cached);
       if (this.unreportedLids.delete(chatId)) this.reportLid(chatId, cached);
       return { id: cached, answered: true };
     }
     try {
       const wid = await this.host.getNumberId(chatId);
       if (wid) {
-        this.resolvedSendIds.set(chatId, wid);
+        this.rememberResolvedSendId(chatId, wid);
         if (wid.endsWith('@lid')) this.reportLid(chatId, wid);
         return { id: wid, answered: true };
       }
       return { id: chatId, answered: true };
     } catch (failure) {
       return { id: chatId, answered: false, failure };
+    }
+  }
+
+  private rememberResolvedSendId(chatId: string, wid: string): void {
+    this.resolvedSendIds.delete(chatId);
+    this.resolvedSendIds.set(chatId, wid);
+    while (this.resolvedSendIds.size > RESOLVED_SEND_IDS_MAX) {
+      const oldest = this.resolvedSendIds.keys().next().value;
+      if (oldest === undefined) break;
+      this.resolvedSendIds.delete(oldest);
+      this.unreportedLids.delete(oldest);
     }
   }
 

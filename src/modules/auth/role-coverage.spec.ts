@@ -157,7 +157,7 @@ describe('role of every message and session route', () => {
     findOne: OPEN,
     getConfig: OPEN,
     updateConfig: ApiKeyRole.OPERATOR,
-    getProxy: OPEN,
+    getProxy: ApiKeyRole.ADMIN,
     updateProxy: ApiKeyRole.ADMIN,
     delete: ApiKeyRole.OPERATOR,
     start: ApiKeyRole.OPERATOR,

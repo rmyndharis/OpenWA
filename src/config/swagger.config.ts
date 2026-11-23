@@ -32,6 +32,10 @@ export const PUBLIC_PATHS = [
   '/api/ingress/{pluginId}/{instanceId}/{path}',
 ];
 
+// Single @Public() operations on paths that also host authenticated methods.
+// Clearing only the named method preserves the global X-API-Key requirement on sibling methods.
+export const PUBLIC_OPERATIONS = [{ path: '/api/auth/session', method: 'delete' }] as const;
+
 const HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'options', 'head', 'trace', 'search'] as const;
 
 type PathItem = Record<string, { security?: unknown } | undefined>;
@@ -94,6 +98,11 @@ export function exemptPublicOperations(document: OpenAPIObject): OpenAPIObject {
       const op = item[method];
       if (op) op.security = [];
     }
+  }
+  for (const { path, method } of PUBLIC_OPERATIONS) {
+    const item = document.paths?.[path] as PathItem | undefined;
+    const op = item?.[method];
+    if (op) op.security = [];
   }
   return document;
 }

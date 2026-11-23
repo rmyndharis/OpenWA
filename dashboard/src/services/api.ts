@@ -2,7 +2,14 @@
 // Centralized API client with TypeScript types
 
 import { warnIfInsecureHttpUrl } from '../utils/urlSecurity';
-import { isKeyUnusable } from '../utils/authLifecycle';
+import {
+  broadcastAuthEvent,
+  clearSessionMetadata,
+  DASHBOARD_CSRF_HEADER,
+  DASHBOARD_CSRF_HEADER_VALUE,
+  getActiveApiKeyId,
+  isKeyUnusable,
+} from '../utils/authLifecycle';
 import { fetchAllPages } from '../utils/fetchAllPages';
 
 // Resolve the API base URL. By default this is the same-origin relative path '/api',
@@ -131,7 +138,7 @@ export interface SessionStats {
   ready: number;
   disconnected: number;
   byStatus: Record<string, number>;
-  memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
+  memoryUsage?: { heapUsed: number; heapTotal: number; rss: number };
 }
 
 export type WebhookFilterOperator = 'is' | 'isNot' | 'contains' | 'equals';
@@ -818,25 +825,27 @@ export interface SearchResults {
 // stored it stays silent too rather than reloading the login form under the user. With another key
 // stored, the answer speaks for a key no longer in use and must not sign out the current one, so it
 // fails like any other error.
-async function handleErrorResponse<T>(response: Response, sentKey: string | null): Promise<T> {
+async function handleErrorResponse<T>(response: Response, sentActorId: string | null): Promise<T> {
   // On a non-JSON body (e.g. a reverse-proxy 502/503/504 HTML page) fall through to `HTTP <status>`
   // rather than statusText: the toast folds an exact `HTTP 502`/`HTTP 503` into its connection-lost
   // toast (a 504 keeps its own), and statusText is empty over HTTP/2 anyway.
   const error = await response.json().catch(() => ({}));
-  const storedKey = sessionStorage.getItem('openwa_api_key');
-  if (isKeyUnusable(response.status, error.message) && (storedKey === sentKey || storedKey === null)) {
-    sessionStorage.removeItem('openwa_api_key');
+  const storedActorId = getActiveApiKeyId();
+  if (isKeyUnusable(response.status, error.message) && (storedActorId === sentActorId || storedActorId === null)) {
+    clearSessionMetadata();
+    if (sentActorId !== null && storedActorId === sentActorId) {
+      broadcastAuthEvent({ type: 'logout' });
+    }
     if (typeof window !== 'undefined') {
-      if (sentKey !== null && storedKey === sentKey) window.location.assign('/');
+      if (sentActorId !== null && storedActorId === sentActorId) window.location.assign('/');
       return new Promise<T>(() => {});
     }
   }
   // Carry the HTTP status on the Error (message unchanged, so the toast de-dup still matches) so
   // callers can tell apart a permission 403 from a real server 5xx instead of guessing from text.
   // Carry the machine `code` too: the gateway's stable codes (SESSION_LOGOUT_INCOMPLETE,
-  // SESSION_NAME_TEARDOWN_PENDING, …) drive specific recovery UI, and a reverse-proxy 502 that
-  // never reached the gateway carries no code at all — that distinction is exactly what the unlink
-  // classifier keys on instead of fragile message heuristics.
+  // SESSION_NAME_TEARDOWN_PENDING, ...) drive specific recovery UI, and a reverse-proxy 502 that
+  // never reached the gateway carries no code at all.
   const err = new Error(error.message || `HTTP ${response.status}`) as Error & {
     status?: number;
     code?: string;
@@ -852,22 +861,20 @@ async function handleErrorResponse<T>(response: Response, sentKey: string | null
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
-
-  // Get API key from sessionStorage for authentication
-  const apiKey = sessionStorage.getItem('openwa_api_key');
+  const sentActorId = getActiveApiKeyId();
 
   // For FormData (file uploads) let the browser set multipart/form-data + boundary itself.
   const isFormData = options.body instanceof FormData;
   const headers: HeadersInit = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+    [DASHBOARD_CSRF_HEADER]: DASHBOARD_CSRF_HEADER_VALUE,
     ...options.headers,
   };
 
-  const response = await fetch(url, { ...options, headers });
+  const response = await fetch(url, { ...options, credentials: 'include', headers });
 
   if (!response.ok) {
-    return handleErrorResponse<T>(response, apiKey);
+    return handleErrorResponse<T>(response, sentActorId);
   }
 
   if (response.status === 204) {
@@ -877,39 +884,80 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   return response.json();
 }
 
-/** Like {@link request} but returns the raw response text — e.g. a plugin's HTML config-UI bundle. */
+/** Like {@link request} but returns the raw response text, e.g. a plugin's HTML config-UI bundle. */
 async function requestText(endpoint: string): Promise<string> {
-  const apiKey = sessionStorage.getItem('openwa_api_key');
+  const sentActorId = getActiveApiKeyId();
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    headers: { ...(apiKey ? { 'X-API-Key': apiKey } : {}) },
+    credentials: 'include',
+    headers: { [DASHBOARD_CSRF_HEADER]: DASHBOARD_CSRF_HEADER_VALUE },
   });
 
   if (!response.ok) {
-    return handleErrorResponse<string>(response, apiKey);
+    return handleErrorResponse<string>(response, sentActorId);
   }
 
   return response.text();
 }
 
-/** Like {@link request} but returns a Blob — e.g. for status media downloads. */
+/** Like {@link request} but returns a Blob, e.g. for status media downloads. */
 async function requestBlob(endpoint: string, signal?: AbortSignal): Promise<Blob> {
   const url = `${API_BASE_URL}${endpoint}`;
-
-  // Get API key from sessionStorage for authentication
-  const apiKey = sessionStorage.getItem('openwa_api_key');
+  const sentActorId = getActiveApiKeyId();
 
   const headers: HeadersInit = {
-    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+    [DASHBOARD_CSRF_HEADER]: DASHBOARD_CSRF_HEADER_VALUE,
   };
 
-  const response = await fetch(url, { headers, signal });
+  const response = await fetch(url, { credentials: 'include', headers, signal });
 
   if (!response.ok) {
-    return handleErrorResponse<Blob>(response, apiKey);
+    return handleErrorResponse<Blob>(response, sentActorId);
   }
 
   return response.blob();
 }
+
+let pendingLogout: Promise<void> = Promise.resolve();
+
+export const authApi = {
+  createSession: async (apiKey: string) => {
+    // Wait for any in-flight logout DELETE so a slow Set-Cookie Max-Age=0 response cannot clear
+    // the freshly created session cookie on rapid logout-then-relogin.
+    await pendingLogout;
+    return fetch(`${API_BASE_URL}/auth/session`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': apiKey,
+        [DASHBOARD_CSRF_HEADER]: DASHBOARD_CSRF_HEADER_VALUE,
+      },
+    });
+  },
+  getSession: () =>
+    fetch(`${API_BASE_URL}/auth/session`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        [DASHBOARD_CSRF_HEADER]: DASHBOARD_CSRF_HEADER_VALUE,
+      },
+    }),
+  deleteSession: () => {
+    const req = fetch(`${API_BASE_URL}/auth/session`, {
+      method: 'DELETE',
+      credentials: 'include',
+      keepalive: true,
+      headers: {
+        [DASHBOARD_CSRF_HEADER]: DASHBOARD_CSRF_HEADER_VALUE,
+      },
+    });
+    pendingLogout = req.then(
+      () => undefined,
+      () => undefined,
+    );
+    return req;
+  },
+};
 
 // =============================================================================
 // Session API
@@ -1432,7 +1480,7 @@ export const infraApi = {
     request<{ status: 'ok' | 'error'; details: Record<string, { status: string }> }>('/health/ready', { signal }),
   // Data migration: export all Data-DB tables (call while still on the OLD database, before switching),
   // then import after the switch + restart. Used by the DB-switch migration guard so data isn't lost.
-  exportData: () =>
+  exportData: (includePluginSecrets = false) =>
     request<{
       exportedAt: string;
       dataDbType: string;
@@ -1445,7 +1493,7 @@ export const infraApi = {
       // all there but some of their media is not — a state a restored archive cannot express, since
       // the omitted marker is the same one media skipped on the way in gets.
       omittedInlineMedia: { messages: number; messageBatches: number };
-    }>('/infra/export-data'),
+    }>(includePluginSecrets ? '/infra/export-data?includePluginSecrets=true' : '/infra/export-data'),
   // 200 contract includes the orphan-engine reconciliation result (restartRequired / notices /
   // stopped+failed ids). 409 has several causes and the error's `code` distinguishes them:
   // IMPORT_WOULD_ORPHAN_ENGINES (live engines exist for sessions the backup would remove; the

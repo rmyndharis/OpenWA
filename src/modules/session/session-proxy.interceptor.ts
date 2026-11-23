@@ -17,6 +17,9 @@ import type { Request, Response } from 'express';
 import { Session } from './entities/session.entity';
 import { SessionOwnershipService } from './session-ownership.service';
 import { SESSION_SCOPED_KEY } from '../auth/decorators/auth.decorators';
+import { extractBrowserSessionCookie } from '../auth/browser-session.util';
+import { presentedApiKey } from '../../common/security/bearer-token';
+import { FORWARDED_HOP_HEADER, signForwardedHop } from '../../common/security/inter-node-proxy-auth';
 import { createLogger } from '../../common/services/logger.service';
 import { getRequestId } from '../../common/services/request-context';
 import { isTransientDbError } from '../../common/utils/db-errors';
@@ -71,7 +74,7 @@ const NOT_DISPATCHED_CODES = new Set([
 ]);
 
 /** Marks a request as already forwarded once. Whatever happens, it is never forwarded again. */
-export const FORWARDED_HEADER = 'x-openwa-forwarded';
+export const FORWARDED_HEADER = FORWARDED_HOP_HEADER;
 
 /**
  * How much of the owner's answer is held whole before it is relayed. An ordinary JSON answer fits, and keeps the
@@ -281,12 +284,15 @@ export class SessionProxyInterceptor implements NestInterceptor {
     // PostgreSQL fail the query, and no id carries one.
     if (!sessionId || sessionId.includes('\0')) return next.handle();
 
+    const usesOwnershipLookup = typeof this.ownership.findLiveOwner === 'function';
     let owner: Pick<Session, 'id' | 'nodeId' | 'nodeUrl' | 'leaseExpiresAt'> | null;
     try {
-      owner = await this.sessions.findOne({
-        where: { id: sessionId },
-        select: { id: true, nodeId: true, nodeUrl: true, leaseExpiresAt: true },
-      });
+      owner = usesOwnershipLookup
+        ? await this.ownership.findLiveOwner(sessionId)
+        : await this.sessions.findOne({
+            where: { id: sessionId },
+            select: { id: true, nodeId: true, nodeUrl: true, leaseExpiresAt: true },
+          });
     } catch (error) {
       // This lookup is the first statement of every session request on a routed node. A database that cannot serve it
       // for the moment (isTransientDbError: a lost, refused or timed-out connection, a failed host lookup, a lock, a
@@ -302,8 +308,10 @@ export class SessionProxyInterceptor implements NestInterceptor {
       throw new ServiceUnavailableException(`Session ${sessionId} could not be routed; nothing was done, retry`);
     }
     if (!owner?.nodeId || owner.nodeId === this.ownership.nodeId) return next.handle();
-    const leaseLive = owner.leaseExpiresAt != null && owner.leaseExpiresAt > new Date();
-    if (!leaseLive) return next.handle();
+    if (!usesOwnershipLookup) {
+      const leaseLive = owner.leaseExpiresAt != null && owner.leaseExpiresAt > new Date();
+      if (!leaseLive) return next.handle();
+    }
 
     // One hop only — but never "execute anywhere": the hop marker is client-settable, so a request
     // marked forwarded that still lands on a live non-owner (forged header, or ownership moved
@@ -314,6 +322,22 @@ export class SessionProxyInterceptor implements NestInterceptor {
     }
 
     if (!owner.nodeUrl) return next.handle();
+
+    // Browser sessions live in each node's local main.sqlite and are never shared across replicas.
+    // Forwarding a cookie-authenticated request without an API key header would hit the peer
+    // unauthenticated, produce spurious auth-failure audit logs, and relay a 401 that signs the
+    // dashboard user out. Fail clearly with 409 instead.
+    const isCookieAuthenticated =
+      !presentedApiKey(request.headers) &&
+      Boolean(
+        (request as Request & { browserSessionId?: string }).browserSessionId ||
+        extractBrowserSessionCookie(request.headers.cookie),
+      );
+    if (isCookieAuthenticated) {
+      throw new ConflictException(
+        `Session ${sessionId} is running on another node; browser sessions are node-local, so connect directly to that node or authenticate with an API key header.`,
+      );
+    }
 
     await this.forward(request, context.switchToHttp().getResponse<Response>(), owner.nodeId, owner.nodeUrl);
     // The response has been written and ended here. Emit undefined rather than completing empty:
@@ -343,7 +367,14 @@ export class SessionProxyInterceptor implements NestInterceptor {
     const timeoutMs = this.configService?.get<number>('session.proxyTimeoutMs', 60_000) ?? 60_000;
 
     const payload = prepareForwardPayload(request);
-    const headers: Record<string, string> = { [FORWARDED_HEADER]: this.ownership?.nodeId ?? '1' };
+    const nodeId = this.ownership?.nodeId ?? '1';
+    const rawProxySecret = this.configService?.get<unknown>('session.proxySecret');
+    const proxySecret =
+      typeof rawProxySecret === 'string' && rawProxySecret.trim().length > 0 ? rawProxySecret.trim() : undefined;
+    // Client-supplied hop markers and signature headers are never copied from request.headers.
+    // Always write our own nodeId and, when SESSION_PROXY_SECRET is set, sign the exact normalized
+    // wire path built by forwardTarget() below so the owner verifies the path it receives.
+    const headers: Record<string, string> = { [FORWARDED_HEADER]: nodeId };
     for (const name of FORWARDED_REQUEST_HEADERS) {
       const value = request.headers[name];
       if (typeof value === 'string') headers[name] = value;
@@ -379,7 +410,20 @@ export class SessionProxyInterceptor implements NestInterceptor {
       // Inside the try: a NODE_URL that is not a usable absolute URL makes this throw, and that is
       // an unreachable-owner condition (the 503 below names the node and the setting), not a 500
       // on a request that had nothing wrong with it. Boot validation rejects such a value too.
-      target = forwardTarget(request.originalUrl, ownerNodeUrl);
+      const rawPath = request.originalUrl || request.url || '/';
+      target = forwardTarget(rawPath, ownerNodeUrl);
+      if (proxySecret) {
+        const targetUrl = new URL(target);
+        Object.assign(
+          headers,
+          signForwardedHop({
+            secret: proxySecret,
+            nodeId,
+            method: request.method,
+            path: `${targetUrl.pathname}${targetUrl.search}`,
+          }),
+        );
+      }
       const upstream = await fetch(target, {
         method: request.method,
         headers,

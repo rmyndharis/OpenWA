@@ -642,7 +642,7 @@ export interface PluginEngineReadCapability {
 
 /** Outbound HTTP for a plugin — always through the host SSRF guard, scoped to `manifest.net.allow`. */
 export interface PluginNetCapability {
-  fetch(url: string, init?: PluginNetRequestInit): Promise<PluginNetResponse>;
+  fetch(url: string, init?: PluginNetRequestInit, signal?: AbortSignal): Promise<PluginNetResponse>;
 }
 
 /** Normalized outbound send for a plugin — translated host-side to MessageService.sendText/reply. */

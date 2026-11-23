@@ -259,3 +259,44 @@ describe('table importers: JSON text that does not parse', () => {
     }
   });
 });
+
+describe('pluginInstances table importer: redacted secret and verifyToken handling', () => {
+  const pluginInstances = TABLE_IMPORTERS.find(importer => importer.key === 'pluginInstances')!;
+  const baseRow = {
+    id: 'chatwoot:acct1',
+    pluginId: 'chatwoot',
+    instanceId: 'acct1',
+    sessionScope: 's1',
+    secret: 'hmac-secret',
+    verifyToken: 'vt-1',
+    config: { baseUrl: 'https://x' },
+    enabled: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it.each([undefined, null, '', '   ', '***', ' *** ', '***\n'])(
+    'regenerates secret and disables instance when secret is %j',
+    secret => {
+      const params = pluginInstances.map({ ...baseRow, secret } as never);
+      expect(typeof params[4]).toBe('string');
+      expect(params[4]).toMatch(/^[0-9a-f]{64}$/);
+      expect(params[4]).not.toBe('***');
+      expect(params[7]).toBe(false);
+    },
+  );
+
+  it('stores null when verifyToken is absent or the mask sentinel (including whitespace-padded)', () => {
+    expect(pluginInstances.map({ ...baseRow, verifyToken: undefined } as never)[5]).toBeNull();
+    expect(pluginInstances.map({ ...baseRow, verifyToken: '***' } as never)[5]).toBeNull();
+    expect(pluginInstances.map({ ...baseRow, verifyToken: ' *** ' } as never)[5]).toBeNull();
+    expect(pluginInstances.map({ ...baseRow, verifyToken: '***\n' } as never)[5]).toBeNull();
+    expect(pluginInstances.map({ ...baseRow, verifyToken: 'real-token' } as never)[5]).toBe('real-token');
+  });
+
+  it('keeps plaintext secret and enabled flag when a non-redacted secret is provided', () => {
+    const params = pluginInstances.map(baseRow as never);
+    expect(params[4]).toBe('hmac-secret');
+    expect(params[7]).toBe(true);
+  });
+});

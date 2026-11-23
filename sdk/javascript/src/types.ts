@@ -244,7 +244,8 @@ export interface SessionStatsOverview {
   ready: number;
   disconnected: number;
   byStatus: Record<string, number>;
-  memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
+  /** Process memory snapshot; only returned for unscoped ADMIN keys. */
+  memoryUsage?: { heapUsed: number; heapTotal: number; rss: number };
 }
 
 // ── Message ───────────────────────────────────────────────────────

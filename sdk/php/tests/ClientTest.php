@@ -1040,4 +1040,35 @@ PHP;
             $this->assertSame($refused, $e);
         }
     }
+
+    public function testRawRequestForwardsIdempotencyKey(): void
+    {
+        $backend = (new MockBackend())->on(201, ['messageId' => 'm1', 'timestamp' => 1]);
+        $client = $backend->makeClient();
+
+        $client->request('POST', '/api/sessions/s/messages/click-button', [], ['chatId' => 'a@c.us'], 'raw-key-1');
+        $this->assertSame('raw-key-1', $backend->lastCall()['headers']['idempotency-key'] ?? null);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $client->request('POST', '/api/sessions/s/messages/click-button', [], ['chatId' => 'a@c.us'], 'has space');
+    }
+
+    public function testZeroStringApiKeyIsAcceptedWhileEmptyStringIsRejected(): void
+    {
+        $backend = (new MockBackend())->on(200, ['ok' => true]);
+        $client = $backend->makeClient('http://localhost:2785', '0');
+        $client->request('GET', '/api/anything');
+        $this->assertSame('0', $backend->lastCall()['headers']['x-api-key'] ?? null);
+
+        $this->expectException(\OpenWA\Exceptions\OpenWAException::class);
+        $this->expectExceptionMessage('apiKey is required');
+        new \OpenWA\Client(['baseUrl' => 'http://localhost:2785', 'apiKey' => '']);
+    }
+
+    public function testNonStringZeroApiKeyThrowsRequiredError(): void
+    {
+        $this->expectException(\OpenWA\Exceptions\OpenWAException::class);
+        $this->expectExceptionMessage('apiKey is required');
+        new \OpenWA\Client(['baseUrl' => 'http://localhost:2785', 'apiKey' => 0]);
+    }
 }

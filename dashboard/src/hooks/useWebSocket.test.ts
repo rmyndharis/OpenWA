@@ -15,8 +15,8 @@ let useWebSocket: typeof useWebSocketFn;
 before(async () => {
   const { installJsdomGlobals } = await import('../test-helpers/jsdom.ts');
   await installJsdomGlobals();
-  // The hook opens no socket without a key.
-  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  // The hook opens no socket without an active session actor id.
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-ws-1');
   rtl = await import('@testing-library/react');
   ({ useWebSocket } = await import('./useWebSocket.ts'));
 });
@@ -37,26 +37,80 @@ const withoutRequestId = (frame: unknown) =>
 const subscribeFrames = (socket: NonNullable<ReturnType<typeof lastSocket>>): Frame[] =>
   socket.emitted.map(frame => frame.args[0] as Frame).filter(frame => frame.type === 'subscribe');
 
-test('the handshake carries the API key in auth and in a header, never in the URL', () => {
-  rtl.renderHook(() => useWebSocket());
+test('the handshake uses cookie credentials (withCredentials) and never sends an API key in auth, headers, or URL', () => {
+  window.sessionStorage.setItem('openwa_api_key', 'legacy-secret');
+  try {
+    rtl.renderHook(() => useWebSocket());
 
-  const call = lastIoCall();
-  assert.ok(call, 'expected the hook to open a socket');
-  assert.ok(call.url.endsWith('/events'), `the socket was opened on ${call.url}`);
-  assert.equal(call.url.includes('test-key'), false, 'the key is in the handshake URL');
-  assert.equal(call.options.query, undefined, 'the key is in the handshake query');
-  assert.deepEqual(call.options.auth, { apiKey: 'test-key' });
-  assert.deepEqual(call.options.extraHeaders, { 'X-API-Key': 'test-key' });
+    const call = lastIoCall();
+    assert.ok(call, 'expected the hook to open a socket');
+    assert.ok(call.url.endsWith('/events'), `the socket was opened on ${call.url}`);
+    assert.equal(call.url.includes('legacy-secret'), false, 'a secret appeared in the handshake URL');
+    assert.equal(call.options.query, undefined, 'unexpected handshake query');
+    assert.equal(call.options.withCredentials, true, 'expected withCredentials: true for HttpOnly cookie handshake');
+    assert.equal(call.options.auth, undefined, 'cookie-authenticated WS must not pass raw API key in auth');
+    assert.equal(call.options.extraHeaders, undefined, 'cookie-authenticated WS must not pass X-API-Key extraHeaders');
+  } finally {
+    window.sessionStorage.removeItem('openwa_api_key');
+  }
 });
 
-test('no socket is opened without a key', () => {
-  window.sessionStorage.removeItem('openwa_api_key');
+test('no socket is opened without an active session actor id', () => {
+  window.sessionStorage.removeItem('openwa_api_key_id');
   try {
     rtl.renderHook(() => useWebSocket());
     assert.equal(lastIoCall(), null);
   } finally {
-    window.sessionStorage.setItem('openwa_api_key', 'test-key');
+    window.sessionStorage.setItem('openwa_api_key_id', 'key-ws-1');
   }
+});
+
+test('a RoleContext sessionEpoch bump reconnects a server-disconnected socket even when apiKeyId is unchanged', async () => {
+  const { createElement, useState } = await import('react');
+  const { RoleContext } = await import('./useRole.tsx');
+  holdConnect();
+  let triggerBump!: () => void;
+  let hookResult!: ReturnType<typeof useWebSocket>;
+
+  function Harness() {
+    const [sessionEpoch, setSessionEpoch] = useState(0);
+    triggerBump = () => setSessionEpoch(n => n + 1);
+    const value = {
+      role: 'admin' as const,
+      setRole: () => undefined,
+      isAdmin: true,
+      isOperator: false,
+      isViewer: false,
+      canWrite: true,
+      engineType: 'baileys',
+      setEngineType: () => undefined,
+      scoped: false,
+      setScoped: () => undefined,
+      apiKeyId: 'key-ws-1',
+      setApiKeyId: () => undefined,
+      sessionEpoch,
+      bumpSessionEpoch: triggerBump,
+    };
+    return createElement(RoleContext.Provider, { value }, createElement(Probe));
+  }
+  function Probe() {
+    hookResult = useWebSocket();
+    return null;
+  }
+
+  rtl.render(createElement(Harness));
+  const firstSocket = lastSocket();
+  assert.ok(firstSocket);
+  rtl.act(() => firstSocket.receive('connect'));
+  rtl.act(() => firstSocket.receive('disconnect', 'io server disconnect'));
+  assert.equal(hookResult.connectionFailed, true);
+
+  rtl.act(() => triggerBump());
+  const nextSocket = lastSocket();
+  assert.ok(nextSocket && nextSocket !== firstSocket, 'expected sessionEpoch bump to open a fresh socket');
+  rtl.act(() => nextSocket.receive('connect'));
+  assert.equal(hookResult.connectionFailed, false);
+  assert.equal(hookResult.isConnected, true);
 });
 
 test('a room is joined and left with frames of its own, and only once the handshake is done', () => {

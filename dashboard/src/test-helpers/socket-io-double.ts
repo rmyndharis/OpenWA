@@ -15,7 +15,7 @@
  * Like the real client, a socket is not connected until 'connect' is delivered to it, and is not after
  * 'disconnect' is.
  *
- * Tests that do not set `sessionStorage['openwa_api_key']` never reach `io()` at all (useWebSocket
+ * Tests that do not set `sessionStorage['openwa_api_key_id']` never reach `io()` at all (useWebSocket
  * bails first), so aliasing this in changes nothing for them.
  */
 

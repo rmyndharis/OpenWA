@@ -2,10 +2,19 @@ import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { PluginLoaderService } from './plugin-loader.service';
 import { PluginStorageService } from './plugin-storage.service';
-import { HookContext, HookEvent, HookHandler, HookManager } from '../hooks';
+import {
+  HookContext,
+  HookEvent,
+  HookExecutionError,
+  HookHandler,
+  HookManager,
+  HOOK_FAIL_CLOSED_SYMBOL,
+} from '../hooks';
 import { IPlugin, PluginInstance, PluginManifest, PluginStatus, PluginType } from './plugin.interfaces';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
-import { PluginLogLevel } from './sandbox/protocol';
+import { HostToWorkerMessage, PluginLogLevel, PluginWorkerChannel, WorkerToHostMessage } from './sandbox/protocol';
+import { WorkerHookHandler, WorkerHookRegistry } from './sandbox/worker-hooks';
+import { LoggerService } from '../../common/services/logger.service';
 import { PLUGIN_SEARCH_REGISTRY_PORT } from './plugin-host-ports';
 import { SearchProviderRegistry } from '../../modules/search/search-provider.registry';
 import { redactSecrets } from '../../common/services/logger.service';
@@ -355,8 +364,24 @@ describe('PluginLoaderService — sandbox hook error surfacing', () => {
     await handler(ctx('message:sent'));
     expect(warnSpy).toHaveBeenCalledTimes(1);
 
-    // The chain still fails open: the shim resolves continue:true for the hook manager.
-    await expect(handler(ctx('message:sent'))).resolves.toEqual({ continue: true });
+    // Under fail-open mode, the shim does NOT attach `error` to the HookResult (preserving the
+    // 60s log flood guard and avoiding discarding earlier-handler redactions). Under fail-closed
+    // mode (HOOK_FAIL_CLOSED_SYMBOL), it propagates `error` to HookManager.
+    const failOpenResult = await handler(ctx('message:sent'));
+    expect(failOpenResult).toEqual({ continue: true });
+    const failClosedCtx = ctx('message:sent');
+    Object.defineProperty(failClosedCtx, HOOK_FAIL_CLOSED_SYMBOL, { value: true, enumerable: false });
+    const failClosedResult = await handler(failClosedCtx);
+    expect(failClosedResult.continue).toBe(true);
+    expect(failClosedResult.error).toBeInstanceOf(Error);
+    expect(failClosedResult.error?.message).toBe('boom');
+    const hookManager = (loader as unknown as { hookManager: HookManager }).hookManager;
+    await expect(
+      hookManager.execute('message:sent', { ok: true }, { sessionId: 's1', source: 'Engine' }),
+    ).resolves.toEqual({
+      continue: true,
+      data: { ok: true },
+    });
 
     // The health surface carries the last hook error without overriding the worker's own verdict.
     const health = await loader.checkPluginHealth('p1');
@@ -1053,4 +1078,672 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       expect(logSpy).toHaveBeenCalledWith('[p1] circular', {}, { pluginId: 'p1' });
     });
   });
+});
+
+describe('PluginLoaderService - sandboxed pre-egress hook fail-closed propagation', () => {
+  const prevEnv = process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+
+  afterEach(() => {
+    jest.useRealTimers();
+    if (prevEnv === undefined) delete process.env.HOOK_PRE_EGRESS_FAIL_CLOSED;
+    else process.env.HOOK_PRE_EGRESS_FAIL_CLOSED = prevEnv;
+  });
+
+  class ManualChannel implements PluginWorkerChannel {
+    private msgHandler?: (m: WorkerToHostMessage) => void;
+    private exitHandler?: (code: number) => void;
+    readonly sent: HostToWorkerMessage[] = [];
+    postMessage(m: HostToWorkerMessage): void {
+      this.sent.push(m);
+      if (m.kind === 'load') queueMicrotask(() => this.msgHandler?.({ kind: 'ready' }));
+      if (m.kind === 'lifecycle')
+        queueMicrotask(() => this.msgHandler?.({ kind: 'lifecycle-result', id: m.id, ok: true }));
+    }
+    onMessage(handler: (m: WorkerToHostMessage) => void): void {
+      this.msgHandler = handler;
+    }
+    onExit(handler: (code: number) => void): void {
+      this.exitHandler = handler;
+    }
+    terminate(): Promise<void> {
+      return Promise.resolve();
+    }
+    reply(m: WorkerToHostMessage): void {
+      this.msgHandler?.(m);
+    }
+    crash(code = 1): void {
+      this.exitHandler?.(code);
+    }
+  }
+
+  class RealHostLoader extends PluginLoaderService {
+    readonly channels: ManualChannel[] = [];
+    protected createSandboxHost(
+      capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+      onHookSubscribe?: (event: string, priority?: number) => void,
+      onWebhookSubscribe?: (route: string) => void,
+      onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
+      runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
+      onSearchProviderRegister?: () => void,
+      onWorkerExit?: (code: number, intentional: boolean, reason?: string) => void,
+      onUnresponsive?: () => void,
+    ): PluginWorkerHost {
+      const channel = new ManualChannel();
+      this.channels.push(channel);
+      return new PluginWorkerHost(
+        channel,
+        capDispatcher,
+        onHookSubscribe,
+        onWebhookSubscribe,
+        onLog,
+        runWithHookGuard,
+        undefined,
+        onSearchProviderRegister,
+        onWorkerExit,
+        undefined,
+        undefined,
+        onUnresponsive,
+      );
+    }
+  }
+
+  async function createSandboxedHarness(failClosed: boolean): Promise<{
+    hookManager: HookManager;
+    channel: ManualChannel;
+    loader: RealHostLoader;
+  }> {
+    const configService = {
+      get: jest.fn((key: string) => {
+        if (key === 'hooks.preEgressFailClosed') return failClosed;
+        return undefined;
+      }),
+    } as unknown as ConfigService;
+    const hookManager = new HookManager(configService);
+    const pluginStorage = {
+      createPluginStorage: jest.fn().mockReturnValue({}),
+      getPluginConfig: jest.fn().mockReturnValue(undefined),
+      getPluginEntry: jest.fn().mockReturnValue(undefined),
+      setPluginEntry: jest.fn(),
+      setPluginStatus: jest.fn(),
+    } as unknown as PluginStorageService;
+    const moduleRef = { get: jest.fn().mockReturnValue(undefined) } as unknown as ModuleRef;
+    const loader = new RealHostLoader(configService, hookManager, pluginStorage, moduleRef);
+    const plugin: PluginInstance = {
+      manifest: manifest(),
+      status: PluginStatus.INSTALLED,
+      config: {},
+      instance: null,
+      builtIn: false,
+    };
+    (loader as unknown as { plugins: Map<string, PluginInstance> }).plugins.set('p1', plugin);
+    await loader.enablePlugin('p1');
+    return { hookManager, channel: loader.channels[0], loader };
+  }
+
+  it('fails closed with HookExecutionError when a sandboxed message:sending hook times out', async () => {
+    const { hookManager, channel, loader } = await createSandboxedHarness(true);
+    const warnSpy = jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    channel.reply({ kind: 'hook-subscribe', event: 'message:sending', priority: 10 });
+
+    jest.useFakeTimers();
+    const pending = hookManager.execute('message:sending', { input: { text: 'hi' } }, { sessionId: 's1', source: 't' });
+    jest.advanceTimersByTime(5000);
+
+    await expect(pending).rejects.toBeInstanceOf(HookExecutionError);
+    await expect(pending).rejects.toMatchObject({ pluginId: 'p1', event: 'message:sending' });
+    // Logged once as sandbox_hook_timeout, not double-recorded as sandbox_hook_error.
+    const actions = warnSpy.mock.calls.map(c => (c[1] as { action?: string } | undefined)?.action);
+    expect(actions.filter(a => a === 'sandbox_hook_timeout')).toHaveLength(1);
+    expect(actions.filter(a => a === 'sandbox_hook_error')).toHaveLength(0);
+  });
+
+  it('fails closed with HookExecutionError when a sandboxed worker crashes during webhook:before', async () => {
+    const { hookManager, channel, loader } = await createSandboxedHarness(true);
+    jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    channel.reply({ kind: 'hook-subscribe', event: 'webhook:before', priority: 10 });
+
+    const pending = hookManager.execute(
+      'webhook:before',
+      { payload: { event: 'message.received', data: {} } },
+      { sessionId: 's1', source: 'WebhookService' },
+    );
+    channel.crash(1);
+
+    await expect(pending).rejects.toBeInstanceOf(HookExecutionError);
+    await expect(pending).rejects.toMatchObject({ pluginId: 'p1', event: 'webhook:before' });
+  });
+
+  it('keeps fail-open behavior for sandboxed timeout when preEgressFailClosed is false', async () => {
+    const { hookManager, channel, loader } = await createSandboxedHarness(false);
+    jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    channel.reply({ kind: 'hook-subscribe', event: 'message:sending', priority: 10 });
+
+    jest.useFakeTimers();
+    const pending = hookManager.execute('message:sending', { input: { text: 'hi' } }, { sessionId: 's1', source: 't' });
+    jest.advanceTimersByTime(5000);
+
+    await expect(pending).resolves.toEqual({ continue: true, data: { input: { text: 'hi' } } });
+  });
+
+  it('under default fail-open mode, a sandboxed timeout does not trigger HookManager logger.error', async () => {
+    const { hookManager, channel, loader } = await createSandboxedHarness(false);
+    jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    const errorSpy = jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      channel.reply({ kind: 'hook-subscribe', event: 'message:sending', priority: 10 });
+      jest.useFakeTimers();
+      const pending = hookManager.execute(
+        'message:sending',
+        { input: { text: 'hi' } },
+        { sessionId: 's1', source: 't' },
+      );
+      jest.advanceTimersByTime(5000);
+
+      await expect(pending).resolves.toEqual({ continue: true, data: { input: { text: 'hi' } } });
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  /** Channel wired directly to a real WorkerHookRegistry so worker-side dispatch logic runs end to end. */
+  class WiredWorkerChannel extends ManualChannel {
+    readonly workerHooks: WorkerHookRegistry;
+    constructor() {
+      super();
+      this.workerHooks = new WorkerHookRegistry(msg => this.reply(msg));
+    }
+    override postMessage(m: HostToWorkerMessage): void {
+      super.postMessage(m);
+      if (m.kind === 'hook') {
+        void this.workerHooks.handleHook(m);
+      }
+    }
+  }
+
+  class WiredWorkerLoader extends PluginLoaderService {
+    readonly channels: WiredWorkerChannel[] = [];
+    capturedOnUnresponsive?: () => void;
+    protected createSandboxHost(
+      capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+      onHookSubscribe?: (event: string, priority?: number) => void,
+      onWebhookSubscribe?: (route: string) => void,
+      onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
+      runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
+      onSearchProviderRegister?: () => void,
+      onWorkerExit?: (code: number, intentional: boolean, reason?: string) => void,
+      onUnresponsive?: () => void,
+    ): PluginWorkerHost {
+      const channel = new WiredWorkerChannel();
+      this.channels.push(channel);
+      this.capturedOnUnresponsive = onUnresponsive;
+      return new PluginWorkerHost(
+        channel,
+        capDispatcher,
+        onHookSubscribe,
+        onWebhookSubscribe,
+        onLog,
+        runWithHookGuard,
+        undefined,
+        onSearchProviderRegister,
+        onWorkerExit,
+        undefined,
+        undefined,
+        onUnresponsive,
+      );
+    }
+  }
+
+  async function createWiredHarness(failClosed: boolean): Promise<{
+    hookManager: HookManager;
+    channel: WiredWorkerChannel;
+    loader: WiredWorkerLoader;
+  }> {
+    const configService = {
+      get: jest.fn((key: string) => (key === 'hooks.preEgressFailClosed' ? failClosed : undefined)),
+    } as unknown as ConfigService;
+    const hookManager = new HookManager(configService);
+    const pluginStorage = {
+      createPluginStorage: jest.fn().mockReturnValue({}),
+      getPluginConfig: jest.fn().mockReturnValue(undefined),
+      getPluginEntry: jest.fn().mockReturnValue(undefined),
+      setPluginEntry: jest.fn(),
+      setPluginStatus: jest.fn(),
+    } as unknown as PluginStorageService;
+    const moduleRef = { get: jest.fn().mockReturnValue(undefined) } as unknown as ModuleRef;
+    const loader = new WiredWorkerLoader(configService, hookManager, pluginStorage, moduleRef);
+    const plugin: PluginInstance = {
+      manifest: manifest(),
+      status: PluginStatus.INSTALLED,
+      config: {},
+      instance: null,
+      builtIn: false,
+    };
+    (loader as unknown as { plugins: Map<string, PluginInstance> }).plugins.set('p1', plugin);
+    await loader.enablePlugin('p1');
+    return { hookManager, channel: loader.channels[0], loader };
+  }
+
+  it.each([
+    ['corrupted payload string', { payload: 'corrupted' }],
+    ['empty object', {}],
+    ['null', null],
+    ['null payload', { payload: null }],
+  ])('fails closed when sandboxed webhook:before returns unusable data (%s)', async (_label, badData) => {
+    const { hookManager, channel, loader } = await createWiredHarness(true);
+    jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    channel.workerHooks.register('webhook:before', () => ({ continue: true, data: badData }));
+
+    await expect(
+      hookManager.execute(
+        'webhook:before',
+        { sessionId: 's1', event: 'message.received', payload: { data: { ok: true } } },
+        { sessionId: 's1', source: 'WebhookService' },
+      ),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+  });
+
+  it('fails closed when sandboxed plugin returns { continue: false, error }', async () => {
+    const { hookManager, channel, loader } = await createWiredHarness(true);
+    jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    channel.workerHooks.register('webhook:before', () => ({ continue: false, error: new Error('db error') }));
+
+    await expect(
+      hookManager.execute(
+        'webhook:before',
+        { sessionId: 's1', event: 'message.received', payload: { data: {} } },
+        { sessionId: 's1', source: 'WebhookService' },
+      ),
+    ).rejects.toMatchObject({ name: 'HookExecutionError', pluginId: 'p1', event: 'webhook:before' });
+  });
+
+  it.each<[string, () => unknown]>([
+    ['empty Error', () => new Error()],
+    ['empty string', () => ''],
+    ['AggregateError with empty message', () => new AggregateError([new Error('ECONNREFUSED')], '')],
+    ['null-prototype object', () => Object.create(null) as unknown],
+  ])('fails closed when sandboxed plugin throws pathological value (%s)', async (_label, makeErr) => {
+    const { hookManager, channel, loader } = await createWiredHarness(true);
+    jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    const throwingHandler: WorkerHookHandler = () => {
+      throw makeErr();
+    };
+    channel.workerHooks.register('message:sending', throwingHandler);
+
+    await expect(
+      hookManager.execute('message:sending', { input: { text: 'hi' } }, { sessionId: 's1', source: 'MessageService' }),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+  });
+
+  it('propagates per-call failClosed:true into sandboxed worker even when global flag is false', async () => {
+    const { hookManager, channel, loader } = await createWiredHarness(false);
+    jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    channel.workerHooks.register('message:received', () => Promise.reject(new Error('strict observer failed')));
+
+    await expect(
+      hookManager.execute('message:received', { id: 'm1', chatId: 'c@c.us' }, { source: 'Engine', failClosed: true }),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+  });
+
+  it('under default fail-open mode, does not trigger HookManager logger.error and preserves earlier-handler redactions', async () => {
+    const { hookManager, channel, loader } = await createWiredHarness(false);
+    jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    const errorSpy = jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      channel.workerHooks.register(
+        'message:sending',
+        ctx => ({ continue: true, data: { ...(ctx.data as object), redacted: true } }),
+        10,
+      );
+      channel.workerHooks.register('message:sending', () => Promise.reject(new Error('telemetry down')), 20);
+
+      const res = await hookManager.execute(
+        'message:sending',
+        { input: { text: 'secret' } },
+        { sessionId: 's1', source: 'MessageService' },
+      );
+
+      expect(res).toEqual({ continue: true, data: { input: { text: 'secret' }, redacted: true } });
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('keeps failing closed on subsequent sends/webhooks after worker crash and recovers cleanly on disable, unload, or re-enable', async () => {
+    const { hookManager, channel, loader } = await createWiredHarness(true);
+    jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    channel.workerHooks.register('message:received', () => ({ continue: true }));
+    channel.workerHooks.register('message:sending', () => ({ continue: true }));
+    channel.workerHooks.register('webhook:before', () => ({ continue: true }));
+
+    // Crash the worker: non-pre-egress hooks drop, pre-egress shims stay active in ERROR state.
+    channel.crash(1);
+    expect(pluginOf(loader as unknown as TestableLoader).status).toBe(PluginStatus.ERROR);
+    expect(hookManager.getHookCount('message:received')).toBe(0);
+    expect(hookManager.getHookCount('message:sending')).toBe(1);
+    expect(hookManager.getHookCount('webhook:before')).toBe(1);
+
+    // Subsequent sends and webhooks MUST still fail closed!
+    await expect(
+      hookManager.execute(
+        'message:sending',
+        { input: { text: 'after crash' } },
+        { sessionId: 's1', source: 'MessageService' },
+      ),
+    ).rejects.toMatchObject({ name: 'HookExecutionError', pluginId: 'p1', event: 'message:sending' });
+    await expect(
+      hookManager.execute(
+        'webhook:before',
+        { sessionId: 's1', event: 'message.received', payload: { data: {} } },
+        { sessionId: 's1', source: 'WebhookService' },
+      ),
+    ).rejects.toMatchObject({ name: 'HookExecutionError', pluginId: 'p1', event: 'webhook:before' });
+
+    // Re-enabling replaces the retained shims without duplicating them.
+    await loader.enablePlugin('p1');
+    const secondChannel = loader.channels[1];
+    secondChannel.workerHooks.register('message:sending', () => ({ continue: true }));
+    expect(hookManager.getHookCount('message:sending')).toBe(1);
+    expect(hookManager.getHookCount('webhook:before')).toBe(0);
+    await expect(
+      hookManager.execute(
+        'message:sending',
+        { input: { text: 'recovered' } },
+        { sessionId: 's1', source: 'MessageService' },
+      ),
+    ).resolves.toEqual({ continue: true, data: { input: { text: 'recovered' } } });
+
+    // Mark unresponsive -> still fails closed on subsequent sends, then disablePlugin clears it!
+    loader.capturedOnUnresponsive!();
+    expect(pluginOf(loader as unknown as TestableLoader).status).toBe(PluginStatus.ERROR);
+    await expect(
+      hookManager.execute(
+        'message:sending',
+        { input: { text: 'after hang' } },
+        { sessionId: 's1', source: 'MessageService' },
+      ),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+
+    await loader.disablePlugin('p1');
+    expect(pluginOf(loader as unknown as TestableLoader).status).toBe(PluginStatus.DISABLED);
+    expect(hookManager.getHookCount('message:sending')).toBe(0);
+    await expect(
+      hookManager.execute(
+        'message:sending',
+        { input: { text: 'disabled' } },
+        { sessionId: 's1', source: 'MessageService' },
+      ),
+    ).resolves.toEqual({ continue: true, data: { input: { text: 'disabled' } } });
+
+    // Re-enable, crash again, then unloadPlugin clears retained shims cleanly!
+    await loader.enablePlugin('p1');
+    const thirdChannel = loader.channels[2];
+    thirdChannel.workerHooks.register('message:sending', () => ({ continue: true }));
+    thirdChannel.crash(1);
+    await expect(
+      hookManager.execute(
+        'message:sending',
+        { input: { text: 'before unload' } },
+        { sessionId: 's1', source: 'MessageService' },
+      ),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+
+    await loader.unloadPlugin('p1');
+    expect(hookManager.getHookCount('message:sending')).toBe(0);
+    await expect(
+      hookManager.execute(
+        'message:sending',
+        { input: { text: 'unloaded' } },
+        { sessionId: 's1', source: 'MessageService' },
+      ),
+    ).resolves.toEqual({ continue: true, data: { input: { text: 'unloaded' } } });
+  });
+
+  /** Channel that can pause, fail, or crash during a specific lifecycle hook (such as onEnable). */
+  class ControllableWiredChannel extends WiredWorkerChannel {
+    onEnableBehavior?: (id: number, channel: ControllableWiredChannel) => void;
+    override postMessage(m: HostToWorkerMessage): void {
+      if (m.kind === 'lifecycle' && m.method === 'onEnable' && this.onEnableBehavior) {
+        this.sent.push(m);
+        this.onEnableBehavior(m.id, this);
+        return;
+      }
+      super.postMessage(m);
+    }
+  }
+
+  class ControllableWiredLoader extends PluginLoaderService {
+    readonly channels: ControllableWiredChannel[] = [];
+    nextOnEnableBehavior?: (id: number, channel: ControllableWiredChannel) => void;
+    protected createSandboxHost(
+      capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+      onHookSubscribe?: (event: string, priority?: number) => void,
+      onWebhookSubscribe?: (route: string) => void,
+      onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
+      runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
+      onSearchProviderRegister?: () => void,
+      onWorkerExit?: (code: number, intentional: boolean, reason?: string) => void,
+      onUnresponsive?: () => void,
+    ): PluginWorkerHost {
+      const channel = new ControllableWiredChannel();
+      channel.onEnableBehavior = this.nextOnEnableBehavior;
+      this.nextOnEnableBehavior = undefined;
+      this.channels.push(channel);
+      return new PluginWorkerHost(
+        channel,
+        capDispatcher,
+        onHookSubscribe,
+        onWebhookSubscribe,
+        onLog,
+        runWithHookGuard,
+        undefined,
+        onSearchProviderRegister,
+        onWorkerExit,
+        undefined,
+        undefined,
+        onUnresponsive,
+      );
+    }
+  }
+
+  async function createControllableHarness(failClosed: boolean): Promise<{
+    hookManager: HookManager;
+    channel: ControllableWiredChannel;
+    loader: ControllableWiredLoader;
+  }> {
+    const configService = {
+      get: jest.fn((key: string) => (key === 'hooks.preEgressFailClosed' ? failClosed : undefined)),
+    } as unknown as ConfigService;
+    const hookManager = new HookManager(configService);
+    const pluginStorage = {
+      createPluginStorage: jest.fn().mockReturnValue({}),
+      getPluginConfig: jest.fn().mockReturnValue(undefined),
+      getPluginEntry: jest.fn().mockReturnValue(undefined),
+      setPluginEntry: jest.fn(),
+      setPluginStatus: jest.fn(),
+    } as unknown as PluginStorageService;
+    const moduleRef = { get: jest.fn().mockReturnValue(undefined) } as unknown as ModuleRef;
+    const loader = new ControllableWiredLoader(configService, hookManager, pluginStorage, moduleRef);
+    const plugin: PluginInstance = {
+      manifest: manifest(),
+      status: PluginStatus.INSTALLED,
+      config: {},
+      instance: null,
+      builtIn: false,
+    };
+    (loader as unknown as { plugins: Map<string, PluginInstance> }).plugins.set('p1', plugin);
+    await loader.enablePlugin('p1');
+    return { hookManager, channel: loader.channels[0], loader };
+  }
+
+  it('keeps pre-egress hooks failing closed while re-enable is in flight and swaps cleanly without duplicates', async () => {
+    const { hookManager, channel, loader } = await createControllableHarness(true);
+    jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    channel.workerHooks.register('message:sending', () => ({ continue: true }));
+    channel.workerHooks.register('webhook:before', () => ({ continue: true }));
+
+    // Crash worker -> plugin sits in ERROR with retained pre-egress shims.
+    channel.crash(1);
+    expect(pluginOf(loader as unknown as TestableLoader).status).toBe(PluginStatus.ERROR);
+
+    let enteredOnEnable!: () => void;
+    const onEnableStarted = new Promise<void>(resolve => (enteredOnEnable = resolve));
+    let subscribeNewHooks!: () => void;
+    let finishOnEnable!: () => void;
+    const newSendHandler = jest.fn(() => ({ continue: true }));
+    const newWebhookHandler = jest.fn(() => ({ continue: true }));
+
+    loader.nextOnEnableBehavior = (id, ch) => {
+      enteredOnEnable();
+      subscribeNewHooks = () => {
+        ch.workerHooks.register('message:sending', newSendHandler);
+        ch.workerHooks.register('webhook:before', newWebhookHandler);
+      };
+      finishOnEnable = () => ch.reply({ kind: 'lifecycle-result', id, ok: true });
+    };
+
+    const reEnablePromise = loader.enablePlugin('p1');
+    await onEnableStarted;
+
+    // Phase A: onEnable is paused before the replacement worker subscribes any hooks (only retained
+    // shims exist while sandboxHosts already points at the new worker). Both MUST fail closed.
+    await expect(
+      hookManager.execute(
+        'message:sending',
+        { input: { text: 'mid-enable-before-subscribe' } },
+        { sessionId: 's1', source: 'MessageService' },
+      ),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+    await expect(
+      hookManager.execute(
+        'webhook:before',
+        { sessionId: 's1', event: 'message.received', payload: { data: {} } },
+        { sessionId: 's1', source: 'WebhookService' },
+      ),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+
+    // Phase B: replacement worker subscribes hooks during onEnable before onEnable resolves.
+    // Both MUST still fail closed and MUST NOT dispatch into the half-initialized worker.
+    subscribeNewHooks();
+    await expect(
+      hookManager.execute(
+        'message:sending',
+        { input: { text: 'mid-enable-after-subscribe' } },
+        { sessionId: 's1', source: 'MessageService' },
+      ),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+    await expect(
+      hookManager.execute(
+        'webhook:before',
+        { sessionId: 's1', event: 'message.received', payload: { data: {} } },
+        { sessionId: 's1', source: 'WebhookService' },
+      ),
+    ).rejects.toBeInstanceOf(HookExecutionError);
+    expect(newSendHandler).not.toHaveBeenCalled();
+    expect(newWebhookHandler).not.toHaveBeenCalled();
+
+    // Finish onEnable -> prior shims dropped, fresh shims active with zero duplicates.
+    finishOnEnable();
+    await reEnablePromise;
+
+    expect(pluginOf(loader as unknown as TestableLoader).status).toBe(PluginStatus.ENABLED);
+    expect(hookManager.getHookCount('message:sending')).toBe(1);
+    expect(hookManager.getHookCount('webhook:before')).toBe(1);
+
+    await expect(
+      hookManager.execute(
+        'message:sending',
+        { input: { text: 'after-enable' } },
+        { sessionId: 's1', source: 'MessageService' },
+      ),
+    ).resolves.toEqual({ continue: true, data: { input: { text: 'after-enable' } } });
+    expect(newSendHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it.each<'throw' | 'crash'>(['throw', 'crash'])(
+    'retains fail-closed pre-egress shims without duplicates when re-enable fails via %s in onEnable',
+    async failureMode => {
+      const { hookManager, channel, loader } = await createControllableHarness(true);
+      jest
+        .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+        .mockImplementation(() => undefined);
+      channel.workerHooks.register('message:sending', () => ({ continue: true }));
+      channel.workerHooks.register('webhook:before', () => ({ continue: true }));
+
+      channel.crash(1);
+      expect(pluginOf(loader as unknown as TestableLoader).status).toBe(PluginStatus.ERROR);
+      expect(hookManager.getHookCount('message:sending')).toBe(1);
+      expect(hookManager.getHookCount('webhook:before')).toBe(1);
+
+      loader.nextOnEnableBehavior = (id, ch) => {
+        // Subscribe hooks before failing to ensure partial registrations from the failed attempt are cleaned up.
+        ch.workerHooks.register('message:sending', () => ({ continue: true }));
+        ch.workerHooks.register('message:received', () => ({ continue: true }));
+        if (failureMode === 'throw') {
+          queueMicrotask(() => ch.reply({ kind: 'lifecycle-result', id, ok: false, error: 'onEnable failed' }));
+        } else {
+          queueMicrotask(() => ch.crash(1));
+        }
+      };
+
+      await expect(loader.enablePlugin('p1')).rejects.toThrow();
+
+      // Plugin stays in ERROR, retained shims stay intact with zero duplicates, non-pre-egress partial hooks dropped.
+      expect(pluginOf(loader as unknown as TestableLoader).status).toBe(PluginStatus.ERROR);
+      expect(hookManager.getHookCount('message:received')).toBe(0);
+      expect(hookManager.getHookCount('message:sending')).toBe(1);
+      expect(hookManager.getHookCount('webhook:before')).toBe(1);
+
+      await expect(
+        hookManager.execute(
+          'message:sending',
+          { input: { text: 'still-blocked' } },
+          { sessionId: 's1', source: 'MessageService' },
+        ),
+      ).rejects.toBeInstanceOf(HookExecutionError);
+      await expect(
+        hookManager.execute(
+          'webhook:before',
+          { sessionId: 's1', event: 'message.received', payload: { data: {} } },
+          { sessionId: 's1', source: 'WebhookService' },
+        ),
+      ).rejects.toBeInstanceOf(HookExecutionError);
+
+      // Recovery via disablePlugin clears the retained shims cleanly.
+      await loader.disablePlugin('p1');
+      expect(pluginOf(loader as unknown as TestableLoader).status).toBe(PluginStatus.DISABLED);
+      expect(hookManager.getHookCount('message:sending')).toBe(0);
+      expect(hookManager.getHookCount('webhook:before')).toBe(0);
+      await expect(
+        hookManager.execute(
+          'message:sending',
+          { input: { text: 'recovered-after-disable' } },
+          { sessionId: 's1', source: 'MessageService' },
+        ),
+      ).resolves.toEqual({ continue: true, data: { input: { text: 'recovered-after-disable' } } });
+    },
+  );
 });

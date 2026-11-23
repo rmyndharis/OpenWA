@@ -1,5 +1,6 @@
 import { DataSource } from 'typeorm';
 import { loadCliEnv } from './load-cli-env';
+import { createSqlitePrepareDatabase, parseStrictSqliteJournalMode } from './sqlite-pragmas';
 import { sqliteDataMainPathCollision } from '../config/env.validation';
 
 // Load environment variables with the app's precedence (mirrors data-source.ts / main.ts).
@@ -27,12 +28,16 @@ if (sqlitePathCollision) {
  *
  * Usage: `npm run migration:run:main` (dev) / `migration:run:main:prod` (compiled).
  */
+const mainDatabasePath = process.env.MAIN_DATABASE_NAME || './data/main.sqlite';
+const sqliteJournalMode = parseStrictSqliteJournalMode(process.env.SQLITE_JOURNAL_MODE);
+
 const mainDataSource = new DataSource({
   type: 'better-sqlite3',
-  // Mirrors the runtime main path (configuration.ts) — MAIN_DATABASE_NAME overrides the default
+  // Mirrors the runtime main path (configuration.ts) - MAIN_DATABASE_NAME overrides the default
   // ./data/main.sqlite (e.g. e2e points it at a temp file), so the CLI and the app never target
   // different main databases.
-  database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
+  database: mainDatabasePath,
+  prepareDatabase: createSqlitePrepareDatabase(mainDatabasePath, sqliteJournalMode),
   entities: [__dirname + '/../modules/auth/**/*.entity{.ts,.js}', __dirname + '/../modules/audit/**/*.entity{.ts,.js}'],
   migrations: [__dirname + '/migrations-main/*{.ts,.js}'],
   synchronize: false,

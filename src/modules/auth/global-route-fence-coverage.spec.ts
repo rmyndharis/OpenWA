@@ -37,6 +37,14 @@ const ALLOWLIST = new Map<string, string>([
   // Self-validation only: the route returns {valid, role} for the calling key and reads/writes no
   // resource, so a session-restricted key validating itself is harmless (it cannot broaden scope).
   ['auth-validate.controller.ts :: validate', 'self-validation of the calling key; no resource access'],
+  [
+    'browser-session.controller.ts :: createSession',
+    'exchanges the calling key header for a browser session bound to the same key scope; no resource access',
+  ],
+  [
+    'browser-session.controller.ts :: getSession',
+    'self-validation of the active browser session or calling key; no resource access',
+  ],
 ]);
 
 /**

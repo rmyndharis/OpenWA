@@ -185,6 +185,38 @@ describe('InfraStatusController.getStatus engine (reads the real engine.puppetee
       '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu',
     );
   });
+
+  it('defaults to native WhatsApp Web version with zero remote registry fetches when WWEBJS_WEB_VERSION is unset', async () => {
+    const prevVer = process.env.WWEBJS_WEB_VERSION;
+    const prevAllow = process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+    delete process.env.WWEBJS_WEB_VERSION;
+    delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+    const fetchSpy = jest.spyOn(globalThis, 'fetch');
+    try {
+      const config = { get: (key: string, def?: unknown) => (key === 'engine.type' ? 'whatsapp-web.js' : def) };
+      const ds = { isInitialized: true, query: jest.fn().mockResolvedValue([{ '1': 1 }]) };
+      const controller = new InfraStatusController(
+        config as never,
+        ds as never,
+        ds as never,
+        {} as never,
+        { isDockerAvailable: () => false } as never,
+        { isAvailable: () => Promise.resolve(false) } as never,
+        { refreshS3Availability: () => Promise.resolve(false) } as never,
+      );
+
+      const status = await controller.getStatus();
+      expect(status.engine.webVersion).toBeNull();
+      expect(status.engine.webVersionSource).toBe('native');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      if (prevVer === undefined) delete process.env.WWEBJS_WEB_VERSION;
+      else process.env.WWEBJS_WEB_VERSION = prevVer;
+      if (prevAllow === undefined) delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+      else process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = prevAllow;
+    }
+  });
 });
 
 describe('InfraStatusController.getStatus storage (reads the real storage.localPath key)', () => {

@@ -108,8 +108,16 @@ A session's egress proxy (`proxyUrl` on `POST /api/sessions`, `PATCH /api/sessio
 is set only by an unscoped `admin` key; any other key gets `403`. The proxy is trusted egress chosen by
 the administrator, so its host is deliberately not checked against internal addresses (a loopback or
 private-network proxy sidecar works). The destinations of caller-supplied URLs fetched through it are
-still vetted by the SSRF guard. Reading the proxy (`GET /api/sessions/:sessionId/proxy`) returns only
-the masked host, type and a `hasCredentials` flag.
+still vetted by the SSRF guard. However, when `SESSION_PROXY_URL_FETCH=true` (the default) and the
+proxy uses `http://` or `https://`, the proxy resolves the target hostname itself rather than dialing
+OpenWA's pinned IP, leaving DNS rebinding and split-horizon internal DNS names reachable from the
+proxy's network namespace. Deployments using an HTTP/HTTPS session proxy must configure proxy-side
+egress ACLs blocking loopback (`127.0.0.0/8`, `::1`), RFC 1918 private ranges (`10.0.0.0/8`,
+`172.16.0.0/12`, `192.168.0.0/16`), link-local and cloud metadata addresses (`169.254.0.0/16`
+including `169.254.169.254`, `fe80::/10`), and IPv6 unique-local addresses (`fc00::/7`), or switch to
+a SOCKS proxy (`socks4://` / `socks5://`) or `SESSION_PROXY_URL_FETCH=false` to keep DNS pinning.
+Reading the proxy (`GET /api/sessions/:sessionId/proxy`) returns only the masked host, type and a
+`hasCredentials` flag.
 
 ### Recovering a lost admin key
 

@@ -1981,13 +1981,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   /**
    * Get overall session statistics for multi-session monitoring
    */
-  async getStats(allowedSessions?: string[] | null): Promise<{
+  async getStats(
+    allowedSessions?: string[] | null,
+    options?: { includeMemoryUsage?: boolean },
+  ): Promise<{
     total: number;
     active: number;
     ready: number;
     disconnected: number;
     byStatus: Record<string, number>;
-    memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
+    memoryUsage?: { heapUsed: number; heapTotal: number; rss: number };
   }> {
     // Scope to the caller's allowedSessions so a session-restricted key cannot enumerate the count /
     // status distribution of sessions it has no rights to (matches the scoped GET /sessions route).
@@ -2013,21 +2016,32 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       total += count;
     }
 
-    const memory = process.memoryUsage();
-
-    return {
+    const result: {
+      total: number;
+      active: number;
+      ready: number;
+      disconnected: number;
+      byStatus: Record<string, number>;
+      memoryUsage?: { heapUsed: number; heapTotal: number; rss: number };
+    } = {
       total,
       // engines is keyed by session id; a scoped key sees only its own running engines, not the global count.
       active: scope ? [...this.engines.keys()].filter(id => scope.includes(id)).length : this.engines.size,
       ready: byStatus[SessionStatus.READY] || 0,
       disconnected: byStatus[SessionStatus.DISCONNECTED] || 0,
       byStatus,
-      memoryUsage: {
+    };
+
+    if (options?.includeMemoryUsage) {
+      const memory = process.memoryUsage();
+      result.memoryUsage = {
         heapUsed: Math.round(memory.heapUsed / 1024 / 1024),
         heapTotal: Math.round(memory.heapTotal / 1024 / 1024),
         rss: Math.round(memory.rss / 1024 / 1024),
-      },
-    };
+      };
+    }
+
+    return result;
   }
 
   /**
@@ -2041,10 +2055,23 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * The response's `engineLoaded`: an engine in this process, or a live claim by a peer node. A list
    * is answered by whichever node the request landed on, while the lifecycle routes are forwarded to
    * the owner, so a session a peer runs must not read as stopped. The local precondition checks keep
-   * using {@link isActive}.
+   * using {@link isActive}. Callers serving PostgreSQL read responses pass a DB-fetched `now` from
+   * {@link leaseClockNow} so `engineLoaded` agrees with DB-clock routing under clock skew.
    */
-  engineLoaded(session: Session): boolean {
-    return this.isActive(session.id) || !!this.ownership?.heldByOtherLiveNode(session);
+  engineLoaded(session: Session, now?: Date): boolean {
+    return this.isActive(session.id) || !!this.ownership?.heldByOtherLiveNode(session, now);
+  }
+
+  /**
+   * Reference UTC clock for evaluating `engineLoaded` over one or more loaded session rows.
+   * Queries PostgreSQL's DB clock once per response when running on Postgres; returns undefined on
+   * SQLite so `engineLoaded` uses the local clock with zero extra queries.
+   */
+  async leaseClockNow(): Promise<Date | undefined> {
+    if (this.ownership?.isPostgres && typeof this.ownership.getDbNow === 'function') {
+      return this.ownership.getDbNow();
+    }
+    return undefined;
   }
 
   /**
@@ -2110,8 +2137,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * narrows that case without closing it: a holder cut off from the database for longer than the
    * cutoff is marked too, and does not write its status back once it reconnects.
    */
-  async markLapsedDisconnected(sessions: Session[], goneBefore: Date): Promise<string[]> {
+  async markLapsedDisconnected(sessions: Session[], goneBefore: Date, graceMs?: number): Promise<string[]> {
     const marked: string[] = [];
+    const usePgClock = this.ownership?.isPostgres === true;
     for (const session of sessions) {
       if (!ACTIVE_STATUSES.includes(session.status)) continue;
       // A correction must never change what the takeover sweep adopts. It adopts every other active
@@ -2126,18 +2154,24 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // Both are guaranteed non-null by the lapsed-claim query that produced these rows, and both are
       // load-bearing in the predicate below. TypeORM throws on a null or undefined where value, so a
       // null here would fail this row's write instead of matching on it.
-      if (session.nodeId == null) continue;
-      if (session.leaseExpiresAt == null || session.leaseExpiresAt >= goneBefore) continue;
+      if (session.nodeId == null || session.leaseExpiresAt == null) continue;
+      // On PostgreSQL, the DB clock owns the cutoff so node-to-DB clock skew never skips or
+      // prematurely corrects a row; on SQLite, pre-filter in JS before issuing the UPDATE.
+      if (!usePgClock && session.leaseExpiresAt >= goneBefore) continue;
       // Written on the same predicate the read used, never by id alone: a peer, or this node's own
       // adopt loop, can claim and start this row at any moment, and a claim rewrites `nodeId`, so a
       // row that was taken matches nothing here and keeps the status its start gave it.
+      const leaseCutoff =
+        typeof this.ownership?.expiredBeforeOperator === 'function'
+          ? this.ownership.expiredBeforeOperator(goneBefore, graceMs)
+          : LessThan(goneBefore);
       let affected: number | undefined;
       try {
         ({ affected } = await this.sessionRepository.update(
           {
             id: session.id,
             nodeId: session.nodeId,
-            leaseExpiresAt: LessThan(goneBefore),
+            leaseExpiresAt: leaseCutoff,
             status: session.status,
             ...(unlinkedOnly && { phone: IsNull() }),
           },

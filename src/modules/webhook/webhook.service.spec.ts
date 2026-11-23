@@ -474,7 +474,9 @@ describe('WebhookService', () => {
   // ── delete ────────────────────────────────────────────────────────
 
   describe('delete', () => {
-    it('should remove the webhook', async () => {
+    it('should remove the webhook and drop its delivery failure tracking', async () => {
+      const delivery = testingModule.get<WebhookDeliveryService>(WebhookDeliveryService);
+      const forget = jest.spyOn(delivery, 'forgetWebhook');
       const webhook = createMockWebhook();
       (repository.findOne as jest.Mock).mockResolvedValue(webhook);
       (repository.remove as jest.Mock).mockResolvedValue(webhook);
@@ -482,6 +484,7 @@ describe('WebhookService', () => {
       await service.delete('sess-1', 'wh-uuid-1');
 
       expect(repository.remove).toHaveBeenCalledWith(webhook);
+      expect(forget).toHaveBeenCalledWith('wh-uuid-1');
     });
   });
 

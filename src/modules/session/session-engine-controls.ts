@@ -18,6 +18,7 @@ import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.ent
 import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
 import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 import { Template } from '../template/entities/template.entity';
+import { AutomationRule } from '../automation/entities/automation-rule.entity';
 import { BaileysStoredMessage } from '../../engine';
 import { ChatState } from '../../engine/adapters/baileys-chat-state.entity';
 import { StatusUpdate } from '../status-store/entities/status-update.entity';
@@ -34,6 +35,7 @@ import { type createLogger } from '../../common/services/logger.service';
 import { HookManager } from '../../core/hooks';
 import { SessionLifecycleFences } from './session-lifecycle-fences';
 import { SessionStatusBroadcaster } from './session-status-broadcaster';
+import type { MessageProjector } from './message-projector.service';
 import { sessionNotFound } from './session-id.pipe';
 // The two pure config resolvers stay exported from the lifecycle module (its export surface is
 // unchanged — session.service re-exports them from there), so this unit imports them back. The
@@ -268,6 +270,7 @@ export interface SessionEngineControlsHost {
   sessionErrors: SessionErrorStore;
   sessionRestrictions: SessionRestrictionStore;
   presence: PresenceStore;
+  projector?: Partial<Pick<MessageProjector, 'forgetSession'>>;
   hookManager: HookManager;
   configService?: ConfigService;
   nodeId?: string;
@@ -293,7 +296,7 @@ export interface SessionEngineControlsHost {
   isSessionRetired(id: string): Promise<boolean>;
   prepareStart(id: string, desiredState: Session['desiredState']): Promise<boolean>;
   purgeAuthDirsIfDeleted(id: string): Promise<void>;
-  updateStatus(id: string, status: SessionStatus): Promise<void>;
+  updateStatus(id: string, status: SessionStatus, options?: { allowUnowned?: boolean }): Promise<boolean | void>;
   /** Ownership gate, same contract as SessionEngineWiringHost.ownsSession. */
   ownsSession(id: string): boolean;
   /** True once shutdown() has begun; the lifecycle never reopens. */
@@ -780,7 +783,7 @@ export class SessionEngineControls {
           // settled (Map reconciled, status DISCONNECTED — mirroring logout()'s incomplete path), but
           // the stop is reported as incomplete instead of claimed clean: a retryable 502 with a stable
           // code, and no success log (the controller audits SESSION_STOPPED only after this resolves).
-          await this.host.updateStatus(id, SessionStatus.DISCONNECTED);
+          await this.host.updateStatus(id, SessionStatus.DISCONNECTED, { allowUnowned: true });
           throw new BadGatewayException({
             statusCode: HttpStatus.BAD_GATEWAY,
             message:
@@ -802,7 +805,7 @@ export class SessionEngineControls {
       sessionId: id,
       action: 'stop',
     });
-    await this.host.updateStatus(id, SessionStatus.DISCONNECTED);
+    await this.host.updateStatus(id, SessionStatus.DISCONNECTED, { allowUnowned: true });
     return this.requireSession(id);
   }
 
@@ -906,9 +909,17 @@ export class SessionEngineControls {
       // the session into a QR it can never pass on every restart. onReady rewrites it on the next link.
       // Issued in the step that evicts the engine: a start that finds none registered reads the row only once this
       // clear has been answered, and a READY's number still waiting on an earlier write goes in before it.
-      const clearPhone = (): Promise<unknown> => this.sessionRepository.update(id, { phone: null });
+      const nodeId = this.host.nodeId;
+      const phoneWhere =
+        nodeId === undefined
+          ? id
+          : [
+              { id, nodeId },
+              { id, nodeId: IsNull() },
+            ];
+      const clearPhone = (): Promise<unknown> => this.sessionRepository.update(phoneWhere, { phone: null });
       await (this.host.writePhone?.(id, clearPhone) ?? clearPhone());
-      await this.host.updateStatus(id, SessionStatus.DISCONNECTED);
+      await this.host.updateStatus(id, SessionStatus.DISCONNECTED, { allowUnowned: true });
     } finally {
       if (!teardownLaunched) {
         releaseTeardown();
@@ -998,7 +1009,7 @@ export class SessionEngineControls {
       if (!tornDown) {
         // As in stop(): local state is settled, but a kill that may have left the process alive is
         // reported as incomplete, not claimed clean (the controller audits only after a resolve).
-        await this.host.updateStatus(id, SessionStatus.DISCONNECTED);
+        await this.host.updateStatus(id, SessionStatus.DISCONNECTED, { allowUnowned: true });
         throw new BadGatewayException({
           statusCode: HttpStatus.BAD_GATEWAY,
           message:
@@ -1013,7 +1024,7 @@ export class SessionEngineControls {
         sessionId: id,
         action: 'force_kill',
       });
-      await this.host.updateStatus(id, SessionStatus.DISCONNECTED);
+      await this.host.updateStatus(id, SessionStatus.DISCONNECTED, { allowUnowned: true });
     } finally {
       if (this.operatorTeardowns.get(id) === engine) {
         this.operatorTeardowns.delete(id);
@@ -1080,7 +1091,7 @@ export class SessionEngineControls {
         await this.fences.awaitPendingTeardown(session.name);
       } catch (fenceError) {
         if (engine) {
-          await this.host.updateStatus(id, SessionStatus.DISCONNECTED).catch(() => undefined);
+          await this.host.updateStatus(id, SessionStatus.DISCONNECTED, { allowUnowned: true }).catch(() => undefined);
         }
         throw fenceError;
       }
@@ -1133,6 +1144,7 @@ export class SessionEngineControls {
         await manager.delete(StatusUpdate, { sessionId: id });
         await manager.delete(Webhook, { sessionId: id });
         await manager.delete(Template, { sessionId: id });
+        await manager.delete(AutomationRule, { sessionId: id });
         await manager.delete(BaileysStoredMessage, { sessionId: id });
         await manager.delete(WebhookOutboxEvent, { sessionId: id });
         await manager.delete(WebhookDeliveryFailure, { sessionId: id });
@@ -1220,6 +1232,7 @@ export class SessionEngineControls {
     // delete so a failed/409 delete (the session still exists) keeps the budget intact.
     this.stuckAuthRecoveryUsed.delete(id);
     this.host.forgetBindingEpoch?.(id);
+    this.host.projector?.forgetSession?.(id);
   }
 
   /**

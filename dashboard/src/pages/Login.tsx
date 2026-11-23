@@ -4,11 +4,18 @@ import { Eye, EyeOff, Languages } from 'lucide-react';
 import { GithubIcon } from '../components/GithubIcon';
 import { CustomSelect } from '../components/CustomSelect';
 import { languageOptions, resolveSupportedLanguage, type SupportedLanguage } from '../i18n';
-import { API_BASE_URL } from '../services/api';
+import { authApi } from '../services/api';
 import './Login.css';
 
+export interface LoginSessionResult {
+  role?: string;
+  engineType?: string;
+  scoped?: boolean;
+  apiKeyId?: string;
+}
+
 interface LoginProps {
-  onLogin: (apiKey: string, role?: string, engineType?: string, scoped?: boolean) => void;
+  onLogin: (session: LoginSessionResult) => void;
 }
 
 export function Login({ onLogin }: LoginProps) {
@@ -35,32 +42,31 @@ export function Login({ onLogin }: LoginProps) {
     setError('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/validate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': key,
-        },
-      });
+      const response = await authApi.createSession(key);
 
       if (response.ok) {
-        // The validate body already carries the key's role — hand it up so the app can set it
-        // directly instead of re-validating the same key a second time.
-        const data: { valid?: unknown; role?: string; engineType?: string; scoped?: unknown } = await response
-          .json()
-          .catch(() => ({}));
-        // A 200 is the gateway's answer only if it says the key is valid, as the startup check requires: a reverse proxy
+        // The session exchange sets the HttpOnly browser cookie and returns non-secret session
+        // metadata so the app can hydrate role/scope/engine without a second round-trip.
+        const data: {
+          valid?: unknown;
+          role?: string;
+          engineType?: string;
+          scoped?: unknown;
+          apiKeyId?: unknown;
+        } = await response.json().catch(() => ({}));
+        // A 200 is the gateway's answer only if it says the session is valid: a reverse proxy
         // serving the app's HTML for a misrouted /api would otherwise sign any typed text in as a viewer.
         if (data.valid !== true) {
           setError(t('login.connectionError'));
           return;
         }
-        onLogin(
-          key,
-          data.role,
-          typeof data.engineType === 'string' ? data.engineType : undefined,
-          data.scoped === true,
-        );
+        setApiKey('');
+        onLogin({
+          role: data.role,
+          engineType: typeof data.engineType === 'string' ? data.engineType : undefined,
+          scoped: data.scoped === true,
+          apiKeyId: typeof data.apiKeyId === 'string' && data.apiKeyId.length > 0 ? data.apiKeyId : undefined,
+        });
       } else {
         // A 5xx, or a body that is not the gateway's JSON (a proxy error page while it restarts), says
         // nothing about the key; a refusal keeps the gateway's reason (expired, revoked, rate limited).

@@ -1,16 +1,20 @@
 import type { HookEvent } from './hook.interfaces';
 
-const isPlainObject = (value: unknown): boolean => typeof value === 'object' && value !== null && !Array.isArray(value);
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === null || Object.getPrototypeOf(proto) === null;
+}
 
 /** A message:received / message:sent result the projector can store and dispatch: it keeps `id` and `chatId`. */
 export function isMessagePayload(data: unknown): boolean {
-  const candidate = data as { id?: unknown; chatId?: unknown } | null;
-  return isPlainObject(candidate) && typeof candidate!.id === 'string' && typeof candidate!.chatId === 'string';
+  if (!isPlainObject(data)) return false;
+  return typeof data.id === 'string' && typeof data.chatId === 'string';
 }
 
-/** A webhook:before result whose `payload` can replace the one being sent. */
+/** A webhook:before result whose own plain-object `payload` can replace the one being sent. */
 export function isWebhookBeforeResult(data: unknown): boolean {
-  return isPlainObject(data) && isPlainObject((data as { payload?: unknown }).payload);
+  return isPlainObject(data) && Object.prototype.hasOwnProperty.call(data, 'payload') && isPlainObject(data.payload);
 }
 
 /**

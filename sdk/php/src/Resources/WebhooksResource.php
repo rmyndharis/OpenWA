@@ -52,9 +52,9 @@ class WebhooksResource
      *                                        redriveDeliveryFailures replays it while that webhook is
      *                                        active and subscribed to the event)
      */
-    public function deliveryFailures(array $query = [])
+    public function deliveryFailures(array $query = []): array
     {
-        return $this->http->request('GET', '/api/webhooks/delivery-failures', $query);
+        return $this->http->request('GET', '/api/webhooks/delivery-failures', $query) ?? [];
     }
 
     /**

@@ -12,11 +12,11 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { EnginePageError } from '../../common/errors/engine-page.error';
 import { type createLogger } from '../../common/services/logger.service';
 import { DEFAULT_PUPPETEER_ARGS, MAX_TIMER_MS, withPinnedBrowserLocale } from '../../config/configuration';
-import { resolveWebVersionPin } from '../wa-web-version';
+import { validatePuppeteerArg } from '../../config/puppeteer-args';
+import { getVerifiedPinnedHtml, resolveWebVersionPin } from '../wa-web-version';
 import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import { killOrphanedChromiumProcesses, removeStaleSingletonFiles } from './chromium-profile-hygiene';
 import { isSupportedProxyUrl, buildProxyLaunchConfig, bypassServiceWorkerOnLaunch } from './wwebjs-proxy';
-import { backportProblem } from './wwebjs-backport-check';
 import { unappliedPatches, unappliedPatchesMessage } from './engine-patch-status';
 import { type EvaluatablePage, reportMissingCallHook } from './wwebjs-call-hook-check';
 import { reportRunningWebBuild } from './wwebjs-running-build';
@@ -383,14 +383,7 @@ export class WwebjsLifecycle {
     this.setStatus(EngineStatus.INITIALIZING);
     const initStartedAt = Date.now();
 
-    // An install that skipped the message-id backport fails later with errors that name no cause
-    // (#889) — say so here instead, while the operator is still looking at the startup logs.
-    const backportProblemText = backportProblem();
-    if (backportProblemText) {
-      this.host.logger.error(backportProblemText);
-    }
-
-    // The other whatsapp-web.js patchers fail the same way and were equally silent about it.
+    // Report any unapplied whatsapp-web.js install-time patches while the operator is watching startup logs.
     const unapplied = unappliedPatches('wwebjs');
     if (unapplied.length) {
       this.host.logger.error(unappliedPatchesMessage('wwebjs', unapplied));
@@ -399,13 +392,27 @@ export class WwebjsLifecycle {
     // Set once the launch is known to drop the credentials of a SOCKS proxy URL, for the reason a failed start reports.
     let socksCredentialsDropped = false;
     try {
-      // Build puppeteer args, including proxy if configured
-      // Pin stored argument overrides too: their array replaces the environment list and its locale pin.
-      // A copy, never mutated.
+      // Build puppeteer args, including proxy if configured.
+      // Validate configured args at the launch sink as well as in env/infra validation: plugin
+      // config saved via `PUT /api/plugins/whatsapp-web.js/config` merges directly into engine
+      // config without restarting through validateEnv. Pin stored argument overrides too; never mutate.
       const configuredArgs: unknown = this.host.config.puppeteer?.args;
-      const puppeteerArgs = withPinnedBrowserLocale(
-        Array.isArray(configuredArgs) ? (configuredArgs as string[]) : DEFAULT_PUPPETEER_ARGS,
-      );
+      let validatedArgs: readonly string[];
+      if (Array.isArray(configuredArgs)) {
+        const collected: string[] = [];
+        for (const entry of configuredArgs) {
+          if (typeof entry !== 'string') {
+            throw new Error(`PUPPETEER_ARGS entries must be strings (got ${typeof entry})`);
+          }
+          const argError = validatePuppeteerArg(entry);
+          if (argError) throw new Error(argError);
+          collected.push(entry);
+        }
+        validatedArgs = collected;
+      } else {
+        validatedArgs = DEFAULT_PUPPETEER_ARGS;
+      }
+      const puppeteerArgs = withPinnedBrowserLocale(validatedArgs);
 
       // Add proxy configuration if provided. A stored proxy that does not parse to a supported scheme
       // fails the session, as on Baileys (#859): launching without it would send the session's traffic
@@ -439,16 +446,13 @@ export class WwebjsLifecycle {
       // output later (after a hard kill of the OpenWA process orphaned them).
       puppeteerArgs.push(`--openwa-session=${this.host.config.sessionId}`);
 
-      // Pin the WA-Web version (fixes the 1.34.x "stuck at authenticating" hang on some setups,
-      // #251/#488). DEFAULT: auto-resolve a settled build from the wa-version registry and pin its
-      // remote HTML (no integrity check — resolveWebVersionPin logs a loud warning); only
-      // WWEBJS_WEB_VERSION=off leaves whatsapp-web.js to use the first-party build from WhatsApp.
-      // The pinned HTML is downloaded (bounded) onto the writable data volume and served from there,
-      // so an unreachable mirror is named in the log instead of silently loading the live build.
-      const versionPin = await resolveWebVersionPin(
-        undefined,
-        path.join(path.resolve(this.host.config.sessionDataPath), '.wa-web-cache'),
-      );
+      // Optional WA-Web version pin (workaround for the 1.34.x "stuck at authenticating" hang on
+      // some setups, #251/#488). DEFAULT (unset or "off"): native first-party build served by
+      // WhatsApp with zero third-party fetches. Opting into a remote build requires either a
+      // matching WWEBJS_WEB_VERSION_SHA256 digest (verified on fetch and every cache hit, and served
+      // directly from memory to close disk TOCTOU) or explicit WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true.
+      const webCacheDir = path.join(path.resolve(this.host.config.sessionDataPath), '.wa-web-cache');
+      const versionPin = await resolveWebVersionPin(undefined, webCacheDir);
       // Assigned on every init, including the unpinned case, so a pin from an earlier init is never
       // compared against the page this one loads.
       this.requestedWebVersion = versionPin?.webVersion;
@@ -504,7 +508,15 @@ export class WwebjsLifecycle {
           );
           throw attemptError;
         }
-        await this.runInitAttempt(puppeteerArgs, authTimeoutMs, proxyAuthentication, versionPin);
+        // Re-resolve and re-verify the version pin before attempt 2 so a retry never reuses stale
+        // or tampered cached HTML without integrity verification.
+        const retryVersionPin = await resolveWebVersionPin(undefined, webCacheDir);
+        this.requestedWebVersion = retryVersionPin?.webVersion;
+        if (this.tearingDown) {
+          this.setStatus(EngineStatus.DISCONNECTED);
+          return;
+        }
+        await this.runInitAttempt(puppeteerArgs, authTimeoutMs, proxyAuthentication, retryVersionPin);
       }
     } catch (error) {
       // A stop, delete or force-kill closed the browser under the launch, which is what rejected it:
@@ -616,6 +628,40 @@ export class WwebjsLifecycle {
       // only reads: it persists nothing when the cache served the page.
       ...(versionPin ?? { webVersionCache: { type: 'none' as const } }),
     });
+    // When SHA-256 verification succeeded in resolveWebVersionPin, serve the verified in-memory
+    // bytes directly during Client.initWebVersionCache instead of letting LocalWebCache re-read
+    // the file from disk (eliminates the disk TOCTOU window between verification and launch).
+    const verifiedHtml = getVerifiedPinnedHtml(versionPin);
+    if (
+      verifiedHtml !== undefined &&
+      typeof (client as unknown as { initWebVersionCache?: unknown }).initWebVersionCache === 'function'
+    ) {
+      const target = client as unknown as {
+        initWebVersionCache: () => Promise<void>;
+        pupPage: {
+          setRequestInterception: (enabled: boolean) => Promise<void>;
+          on: (
+            event: string,
+            handler: (req: { url: () => string; respond: (res: unknown) => void; continue: () => void }) => void,
+          ) => void;
+        };
+      };
+      const htmlBody = verifiedHtml.toString('utf8');
+      target.initWebVersionCache = async () => {
+        await target.pupPage.setRequestInterception(true);
+        target.pupPage.on('request', req => {
+          if (req.url() === 'https://web.whatsapp.com/') {
+            req.respond({
+              status: 200,
+              contentType: 'text/html',
+              body: htmlBody,
+            });
+          } else {
+            req.continue();
+          }
+        });
+      };
+    }
     this.client = client;
 
     this.setupEventHandlers();

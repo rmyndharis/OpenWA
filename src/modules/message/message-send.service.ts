@@ -133,7 +133,45 @@ export class MessageSendService {
     private readonly messageProjector?: MessageProjector,
   ) {}
 
-  async sendText(sessionId: string, dto: SendTextMessageDto): Promise<MessageResponseDto> {
+  sendText(sessionId: string, dto: SendTextMessageDto): Promise<MessageResponseDto> {
+    return this.sendTextInternal(sessionId, dto, this.isInitiatedDuringMessageSent());
+  }
+
+  private isInitiatedDuringMessageSent(): boolean {
+    return this.hookManager?.isEventInFlight?.('message:sent') === true;
+  }
+
+  /**
+   * Run an engine send while coordinating async own-send echo suppression.
+   * When the send started inside a `message:sent` hook (captured synchronously at send entry so
+   * fire-and-forget handlers stay covered), holds an echo-origin barrier across the engine call and
+   * records `result.id` BEFORE releasing it so early `message_create` echoes always see the mark.
+   */
+  private async runEngineSend(
+    sessionId: string,
+    initiatedDuringMessageSent: boolean,
+    invoke: () => Promise<MessageResult>,
+  ): Promise<MessageResult> {
+    if (!initiatedDuringMessageSent) {
+      return invoke();
+    }
+    const release = this.hookManager?.beginEchoOriginSend?.(sessionId);
+    try {
+      const result = await invoke();
+      if (result.id) {
+        this.hookManager?.markEchoOrigin?.(sessionId, result.id);
+      }
+      return result;
+    } finally {
+      release?.();
+    }
+  }
+
+  private async sendTextInternal(
+    sessionId: string,
+    dto: SendTextMessageDto,
+    initiatedDuringMessageSent: boolean,
+  ): Promise<MessageResponseDto> {
     assertOnePreviewChoice(dto);
     const {
       message,
@@ -156,6 +194,7 @@ export class MessageSendService {
         assertOnePreviewChoice(d);
         return this.buildCustomPreview(d.customLinkPreview);
       },
+      initiatedDuringMessageSent,
     );
 
     // Humanising "typing…" pause before the actual send (anti-automation signal). On by default;
@@ -176,17 +215,19 @@ export class MessageSendService {
       // three — trailing `undefined`s would be harmless to the engines but would rewrite the call
       // shape of every existing send for no behavioural gain.
       const { quotedMessageId } = finalDto;
-      if (linkPreview !== undefined || customPreview || quotedMessageId) {
-        result = await engine.sendTextMessage(finalDto.chatId, finalDto.text, finalDto.mentions, {
-          ...(linkPreview === undefined ? {} : { linkPreview }),
-          ...(customPreview ? { customPreview } : {}),
-          ...(quotedMessageId ? { quotedMessageId } : {}),
-        });
-      } else if (finalDto.mentions?.length) {
-        result = await engine.sendTextMessage(finalDto.chatId, finalDto.text, finalDto.mentions);
-      } else {
-        result = await engine.sendTextMessage(finalDto.chatId, finalDto.text);
-      }
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () => {
+        if (linkPreview !== undefined || customPreview || quotedMessageId) {
+          return engine.sendTextMessage(finalDto.chatId, finalDto.text, finalDto.mentions, {
+            ...(linkPreview === undefined ? {} : { linkPreview }),
+            ...(customPreview ? { customPreview } : {}),
+            ...(quotedMessageId ? { quotedMessageId } : {}),
+          });
+        }
+        if (finalDto.mentions?.length) {
+          return engine.sendTextMessage(finalDto.chatId, finalDto.text, finalDto.mentions);
+        }
+        return engine.sendTextMessage(finalDto.chatId, finalDto.text);
+      });
     } catch (error) {
       // The SEND itself failed — mark FAILED + fire message:failed (a post-send persistence fault is
       // handled separately by persistSentState and must NOT land here).
@@ -216,13 +257,18 @@ export class MessageSendService {
     input: T,
     buildPending: (finalDto: T, prepared: P) => SaveOutgoingMessageData | Promise<SaveOutgoingMessageData>,
     prepare?: (finalDto: T) => P,
+    initiatedDuringMessageSentOverride?: boolean,
   ): Promise<{
     finalDto: T;
     engine: IWhatsAppEngine;
     prepared: P;
     message: Message;
     sessionLinkPreview?: boolean;
+    initiatedDuringMessageSent: boolean;
   }> {
+    // Capture synchronously before the first await so fire-and-forget `message:sent` handlers
+    // still propagate echo suppression even after HookManager.runInFlight clears its ALS scope.
+    const initiatedDuringMessageSent = initiatedDuringMessageSentOverride ?? this.isInitiatedDuringMessageSent();
     // Pacing runs BEFORE the plugin gate, so a send that policy forbids never reaches a plugin at
     // all — plugins should not be asked to moderate, or given the chance to rewrite, traffic that is
     // not going to be sent. The consequence is deliberate and documented in the hook contract: a
@@ -263,7 +309,7 @@ export class MessageSendService {
       );
       lifetime.assertCurrent();
       persisted = true;
-      return { finalDto, engine, prepared, message, sessionLinkPreview };
+      return { finalDto, engine, prepared, message, sessionLinkPreview, initiatedDuringMessageSent };
     } finally {
       release?.(persisted);
       lifetime.close();
@@ -341,6 +387,7 @@ export class MessageSendService {
    * is measured before anything is rendered, so a refused request never allocates the oversized text.
    */
   async sendTemplate(sessionId: string, dto: SendTemplateMessageDto): Promise<MessageResponseDto> {
+    const initiatedDuringMessageSent = this.isInitiatedDuringMessageSent();
     const template = await this.templateService.resolve(sessionId, {
       templateId: dto.templateId,
       templateName: dto.templateName,
@@ -375,12 +422,16 @@ export class MessageSendService {
     if (rendered.every(part => !part)) throw new BadRequestException('Rendered template is empty');
     const text = rendered.join(separator);
 
-    return this.sendText(sessionId, {
-      chatId: dto.chatId,
-      text,
-      mentions: dto.mentions,
-      linkPreview: dto.linkPreview,
-    });
+    return this.sendTextInternal(
+      sessionId,
+      {
+        chatId: dto.chatId,
+        text,
+        mentions: dto.mentions,
+        linkPreview: dto.linkPreview,
+      },
+      initiatedDuringMessageSent,
+    );
   }
 
   async sendImage(sessionId: string, dto: SendMediaMessageDto): Promise<MessageResponseDto> {
@@ -389,6 +440,7 @@ export class MessageSendService {
       finalDto,
       engine,
       prepared: media,
+      initiatedDuringMessageSent,
     } = await this.applySendingGate(
       sessionId,
       'image',
@@ -407,7 +459,9 @@ export class MessageSendService {
 
     let result: MessageResult;
     try {
-      result = await engine.sendImageMessage(finalDto.chatId, media);
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
+        engine.sendImageMessage(finalDto.chatId, media),
+      );
     } catch (error) {
       return this.failSend(sessionId, 'image', message, finalDto, error);
     }
@@ -420,6 +474,7 @@ export class MessageSendService {
       finalDto,
       engine,
       prepared: media,
+      initiatedDuringMessageSent,
     } = await this.applySendingGate(
       sessionId,
       'video',
@@ -438,7 +493,9 @@ export class MessageSendService {
 
     let result: MessageResult;
     try {
-      result = await engine.sendVideoMessage(finalDto.chatId, media);
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
+        engine.sendVideoMessage(finalDto.chatId, media),
+      );
     } catch (error) {
       return this.failSend(sessionId, 'video', message, finalDto, error);
     }
@@ -454,6 +511,7 @@ export class MessageSendService {
       finalDto,
       engine,
       prepared: { media },
+      initiatedDuringMessageSent,
     } = await this.applySendingGate(
       sessionId,
       dto.ptt ? 'voice' : 'audio',
@@ -479,7 +537,9 @@ export class MessageSendService {
 
     let result: MessageResult;
     try {
-      result = await engine.sendAudioMessage(finalDto.chatId, media);
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
+        engine.sendAudioMessage(finalDto.chatId, media),
+      );
     } catch (error) {
       return this.failSend(sessionId, finalDto.ptt ? 'voice' : 'audio', message, finalDto, error);
     }
@@ -492,6 +552,7 @@ export class MessageSendService {
       finalDto,
       engine,
       prepared: media,
+      initiatedDuringMessageSent,
     } = await this.applySendingGate(
       sessionId,
       'document',
@@ -510,7 +571,9 @@ export class MessageSendService {
 
     let result: MessageResult;
     try {
-      result = await engine.sendDocumentMessage(finalDto.chatId, media);
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
+        engine.sendDocumentMessage(finalDto.chatId, media),
+      );
     } catch (error) {
       return this.failSend(sessionId, 'document', message, finalDto, error);
     }
@@ -528,22 +591,29 @@ export class MessageSendService {
       quotedMessageId?: string;
     },
   ): Promise<MessageResponseDto> {
-    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'location', dto, finalDto => ({
-      chatId: finalDto.chatId,
-      body: `📍 ${finalDto.description || 'Location'}`,
-      type: 'location',
-      quotedMessageId: finalDto.quotedMessageId,
-    }));
+    const { message, finalDto, engine, initiatedDuringMessageSent } = await this.applySendingGate(
+      sessionId,
+      'location',
+      dto,
+      finalDto => ({
+        chatId: finalDto.chatId,
+        body: `📍 ${finalDto.description || 'Location'}`,
+        type: 'location',
+        quotedMessageId: finalDto.quotedMessageId,
+      }),
+    );
 
     let result: MessageResult;
     try {
-      result = await engine.sendLocationMessage(finalDto.chatId, {
-        latitude: finalDto.latitude,
-        longitude: finalDto.longitude,
-        description: finalDto.description,
-        address: finalDto.address,
-        quotedMessageId: finalDto.quotedMessageId,
-      });
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
+        engine.sendLocationMessage(finalDto.chatId, {
+          latitude: finalDto.latitude,
+          longitude: finalDto.longitude,
+          description: finalDto.description,
+          address: finalDto.address,
+          quotedMessageId: finalDto.quotedMessageId,
+        }),
+      );
     } catch (error) {
       return this.failSend(sessionId, 'location', message, finalDto, error);
     }
@@ -554,20 +624,27 @@ export class MessageSendService {
     sessionId: string,
     dto: { chatId: string; contactName: string; contactNumber: string; quotedMessageId?: string },
   ): Promise<MessageResponseDto> {
-    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'contact', dto, finalDto => ({
-      chatId: finalDto.chatId,
-      body: `📇 ${finalDto.contactName}`,
-      type: 'contact',
-      quotedMessageId: finalDto.quotedMessageId,
-    }));
+    const { message, finalDto, engine, initiatedDuringMessageSent } = await this.applySendingGate(
+      sessionId,
+      'contact',
+      dto,
+      finalDto => ({
+        chatId: finalDto.chatId,
+        body: `📇 ${finalDto.contactName}`,
+        type: 'contact',
+        quotedMessageId: finalDto.quotedMessageId,
+      }),
+    );
 
     let result: MessageResult;
     try {
-      result = await engine.sendContactMessage(finalDto.chatId, {
-        name: finalDto.contactName,
-        number: finalDto.contactNumber,
-        quotedMessageId: finalDto.quotedMessageId,
-      });
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
+        engine.sendContactMessage(finalDto.chatId, {
+          name: finalDto.contactName,
+          number: finalDto.contactNumber,
+          quotedMessageId: finalDto.quotedMessageId,
+        }),
+      );
     } catch (error) {
       return this.failSend(sessionId, 'contact', message, finalDto, error);
     }
@@ -578,28 +655,35 @@ export class MessageSendService {
     sessionId: string,
     dto: { chatId: string; name: string; options: string[]; allowMultipleAnswers?: boolean; quotedMessageId?: string },
   ): Promise<MessageResponseDto> {
-    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'poll', dto, finalDto => ({
-      chatId: finalDto.chatId,
-      body: `📊 ${finalDto.name}`,
-      type: 'poll',
-      metadata: {
-        poll: {
-          name: finalDto.name,
-          options: [...finalDto.options],
-          allowMultipleAnswers: finalDto.allowMultipleAnswers === true,
+    const { message, finalDto, engine, initiatedDuringMessageSent } = await this.applySendingGate(
+      sessionId,
+      'poll',
+      dto,
+      finalDto => ({
+        chatId: finalDto.chatId,
+        body: `📊 ${finalDto.name}`,
+        type: 'poll',
+        metadata: {
+          poll: {
+            name: finalDto.name,
+            options: [...finalDto.options],
+            allowMultipleAnswers: finalDto.allowMultipleAnswers === true,
+          },
         },
-      },
-      quotedMessageId: finalDto.quotedMessageId,
-    }));
+        quotedMessageId: finalDto.quotedMessageId,
+      }),
+    );
 
     let result: MessageResult;
     try {
-      result = await engine.sendPollMessage(finalDto.chatId, {
-        name: finalDto.name,
-        options: finalDto.options,
-        allowMultipleAnswers: finalDto.allowMultipleAnswers === true,
-        quotedMessageId: finalDto.quotedMessageId,
-      });
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
+        engine.sendPollMessage(finalDto.chatId, {
+          name: finalDto.name,
+          options: finalDto.options,
+          allowMultipleAnswers: finalDto.allowMultipleAnswers === true,
+          quotedMessageId: finalDto.quotedMessageId,
+        }),
+      );
     } catch (error) {
       return this.failSend(sessionId, 'poll', message, finalDto, error);
     }
@@ -612,6 +696,7 @@ export class MessageSendService {
       finalDto,
       engine,
       prepared: media,
+      initiatedDuringMessageSent,
     } = await this.applySendingGate(
       sessionId,
       'sticker',
@@ -629,7 +714,9 @@ export class MessageSendService {
 
     let result: MessageResult;
     try {
-      result = await engine.sendStickerMessage(finalDto.chatId, media);
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
+        engine.sendStickerMessage(finalDto.chatId, media),
+      );
     } catch (error) {
       return this.failSend(sessionId, 'sticker', message, finalDto, error);
     }
@@ -640,25 +727,32 @@ export class MessageSendService {
     sessionId: string,
     dto: { chatId: string; quotedMessageId: string; text: string; mentions?: string[] },
   ): Promise<MessageResponseDto> {
-    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'reply', dto, async finalDto => {
-      const quotedBody = await this.resolveQuotedBody(sessionId, finalDto.quotedMessageId, finalDto.chatId);
-      return {
-        chatId: finalDto.chatId,
-        body: finalDto.text,
-        type: 'text',
-        metadata: {
-          quotedMessage: { id: finalDto.quotedMessageId, body: quotedBody },
-        },
-      };
-    });
+    const { message, finalDto, engine, initiatedDuringMessageSent } = await this.applySendingGate(
+      sessionId,
+      'reply',
+      dto,
+      async finalDto => {
+        const quotedBody = await this.resolveQuotedBody(sessionId, finalDto.quotedMessageId, finalDto.chatId);
+        return {
+          chatId: finalDto.chatId,
+          body: finalDto.text,
+          type: 'text',
+          metadata: {
+            quotedMessage: { id: finalDto.quotedMessageId, body: quotedBody },
+          },
+        };
+      },
+    );
 
     let result: MessageResult;
     try {
       // Widened only as far as the caller asked, exactly like the send path: a reply with no tags
       // keeps its three-argument shape.
-      result = finalDto.mentions?.length
-        ? await engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text, finalDto.mentions)
-        : await engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text);
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
+        finalDto.mentions?.length
+          ? engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text, finalDto.mentions)
+          : engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text),
+      );
     } catch (error) {
       return this.failSend(sessionId, 'reply', message, finalDto, error);
     }
@@ -669,7 +763,7 @@ export class MessageSendService {
     sessionId: string,
     dto: { chatId: string; messageId: string; buttonId: string; text?: string },
   ): Promise<MessageResponseDto> {
-    const { message, finalDto, engine } = await this.applySendingGate(
+    const { message, finalDto, engine, initiatedDuringMessageSent } = await this.applySendingGate(
       sessionId,
       'click-button',
       dto,
@@ -689,7 +783,9 @@ export class MessageSendService {
 
     let result: MessageResult;
     try {
-      result = await engine.clickButton(finalDto.chatId, finalDto.messageId, finalDto.buttonId, finalDto.text);
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
+        engine.clickButton(finalDto.chatId, finalDto.messageId, finalDto.buttonId, finalDto.text),
+      );
     } catch (error) {
       return this.failSend(sessionId, 'click-button', message, finalDto, error);
     }
@@ -717,17 +813,24 @@ export class MessageSendService {
   ): Promise<MessageResponseDto> {
     // The row carries what is forwarded: the own-send echo that also carries it loses the insert race to this
     // row whenever the send path writes the engine id first, so a placeholder stored here stayed for good.
-    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'forward', dto, async finalDto => ({
-      chatId: finalDto.toChatId,
-      ...((await this.storedForwardContent(sessionId, finalDto.fromChatId, finalDto.messageId)) ?? {
-        body: '[Forwarded]',
-        type: 'forward',
+    const { message, finalDto, engine, initiatedDuringMessageSent } = await this.applySendingGate(
+      sessionId,
+      'forward',
+      dto,
+      async finalDto => ({
+        chatId: finalDto.toChatId,
+        ...((await this.storedForwardContent(sessionId, finalDto.fromChatId, finalDto.messageId)) ?? {
+          body: '[Forwarded]',
+          type: 'forward',
+        }),
       }),
-    }));
+    );
 
     let result: MessageResult;
     try {
-      result = await engine.forwardMessage(finalDto.fromChatId, finalDto.toChatId, finalDto.messageId);
+      result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
+        engine.forwardMessage(finalDto.fromChatId, finalDto.toChatId, finalDto.messageId),
+      );
     } catch (error) {
       return this.failSend(sessionId, 'forward', message, finalDto, error);
     }

@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindManyOptions, In, IsNull, LessThan, MoreThan, Not, Repository } from 'typeorm';
+import { EntityManager, FindManyOptions, In, IsNull, LessThan, MoreThan, Not, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Webhook } from './entities/webhook.entity';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
@@ -20,11 +20,12 @@ import {
   SSRF_BLOCKED_CLIENT_MESSAGE,
   redactSsrfError,
 } from '../../common/security/ssrf-guard';
-import { WebhookDeliveryService, WebhookPayload } from './webhook-delivery.service';
+import { PreparedWebhookDelivery, WebhookDeliveryService, WebhookPayload } from './webhook-delivery.service';
 
 // Delivery-engine types (payload and queue job shapes) live on WebhookDeliveryService; re-exported
 // here so existing importers (the queue processor) keep a single stable path.
-export type { WebhookPayload, WebhookJobData } from './webhook-delivery.service';
+export type { WebhookPayload, WebhookJobData, PreparedWebhookDelivery } from './webhook-delivery.service';
+export type { OutboxOpenRow } from './webhook-outbox.service';
 
 /**
  * Upper bound on how many webhooks one session can register. One inbound event fans out to EVERY
@@ -339,6 +340,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     const webhook = await this.findOne(sessionId, id);
     await this.webhookRepository.remove(webhook);
     this.delivery.invalidateOptInSubscriptions(sessionId);
+    this.delivery.forgetWebhook(id);
   }
 
   async test(sessionId: string, webhookId: string): Promise<{ success: boolean; statusCode?: number; error?: string }> {
@@ -392,5 +394,62 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
    */
   dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
     return this.delivery.dispatch(sessionId, event, data);
+  }
+
+  /** Pre-transaction read-only phase: resolve matching webhooks and build outbox rows. */
+  prepareDeliveries(
+    sessionId: string,
+    event: string,
+    data: Record<string, unknown>,
+    options?: { throwOnLookupError?: boolean },
+  ): Promise<PreparedWebhookDelivery[]> {
+    return this.delivery.prepareDeliveries(sessionId, event, data, null, options);
+  }
+
+  /** Persist prepared outbox rows, optionally bound to the caller's database transaction. */
+  openPreparedDeliveries(
+    prepared: readonly PreparedWebhookDelivery[],
+    manager?: EntityManager,
+  ): Promise<PreparedWebhookDelivery[] | null> {
+    return this.delivery.openPrepared(prepared, manager);
+  }
+
+  /** Reconcile committed outbox rows after a mid-flight edit or REST revoke before dispatch. */
+  reconcilePreparedDeliveries(
+    committed: readonly PreparedWebhookDelivery[],
+    sessionId: string,
+    event: string,
+    finalData: Record<string, unknown>,
+    owned?: readonly PreparedWebhookDelivery[],
+  ): Promise<PreparedWebhookDelivery[]> {
+    return this.delivery.reconcilePrepared(committed, sessionId, event, finalData, owned);
+  }
+
+  /** Post-commit async dispatch phase: run webhook:before hooks and deliver/enqueue prepared rows. */
+  dispatchPreparedDeliveries(prepared: readonly PreparedWebhookDelivery[]): Promise<void> {
+    return this.delivery.dispatchPrepared(prepared);
+  }
+
+  /** Close prepared outbox rows that were suppressed before dispatch (for example, mid-flight revoke). */
+  cancelPreparedDeliveries(prepared: readonly PreparedWebhookDelivery[]): Promise<void> {
+    return this.delivery.cancelPrepared(prepared);
+  }
+
+  /** Close any still-pending message outbox rows when an engine revoke arrives. */
+  closePendingDeliveriesForMessage(
+    sessionId: string,
+    waMessageId: string,
+    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    return this.delivery.closePendingForMessage(sessionId, waMessageId, shouldApply);
+  }
+
+  /** Redact payloads on any still-pending message outbox rows when a REST delete clears a message. */
+  redactPendingDeliveriesForMessage(
+    sessionId: string,
+    waMessageId: string,
+    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    return this.delivery.redactPendingForMessage(sessionId, waMessageId, shouldApply);
   }
 }

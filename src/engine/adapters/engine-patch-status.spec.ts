@@ -4,11 +4,10 @@ import * as path from 'path';
 import { type PatchFamily, unappliedPatches, unappliedPatchesMessage } from './engine-patch-status';
 
 /**
- * Guards the startup diagnostic for engine patches that never applied. The cost runs both ways, as
- * it does for `wwebjs-backport-check.ts`: a missed detection restores the silence the guard exists
- * to break, and a false alarm on every boot sends operators after patches they do not need. The
- * "cannot tell" cases below are the second half of that, and they matter more here than in the
- * single-patcher guard, because this one walks a directory and requires whatever it finds.
+ * Guards the startup diagnostic for engine patches that never applied. The cost runs both ways:
+ * a missed detection restores the silence the guard exists to break, and a false alarm on every
+ * boot sends operators after patches they do not need. The "cannot tell" cases below cover the
+ * second half, since this guard walks a directory and requires whatever patchers it finds.
  */
 describe('unappliedPatches', () => {
   const tmpDirs: string[] = [];
@@ -79,14 +78,13 @@ describe('unappliedPatches', () => {
       'patch-wwebjs-alpha.spec.js': patcher(false),
       'patch-wwebjs-alpha.js': patcher(true),
       'check-audit.mjs': patcher(false),
-      'wwebjs-201832.patch': 'not javascript at all',
+      'sample.patch': 'not javascript at all',
     });
 
     expect(unappliedPatches('wwebjs', scripts, tmp('dep-'))).toEqual([]);
   });
 
   it('skips a patcher that exports no predicate rather than reporting it', () => {
-    // This is patch-wwebjs-201832.js's situation: guarded elsewhere, so it opts out by omission.
     const scripts = scriptsWith({
       'patch-wwebjs-legacy.js': 'module.exports = { applyBackport: () => undefined };\n',
       'patch-wwebjs-alpha.js': patcher(false),
@@ -131,17 +129,15 @@ describe('the patchers this repository actually ships', () => {
     expect(shipped.length).toBeGreaterThanOrEqual(9);
   });
 
-  it('exports a predicate from every patcher except the one guarded elsewhere', () => {
+  it('exports a predicate from every shipped patcher', () => {
     const withoutPredicate = shipped.filter(f => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const patcher = require(path.join(scripts, f)) as { isApplied?: unknown };
       return typeof patcher.isApplied !== 'function';
     });
 
-    // patch-wwebjs-201832.js is covered by wwebjs-backport-check.ts, which has its own predicate,
-    // its own message and its own docs/12 entry. It is the ONLY patcher allowed to opt out: any
-    // other name here is a patcher whose failure to apply would be silent again.
-    expect(withoutPredicate).toEqual(['patch-wwebjs-201832.js']);
+    // Every shipped patcher must export isApplied() so a skipped install-time patch is reported at startup.
+    expect(withoutPredicate).toEqual([]);
   });
 
   it('names a family this guard understands in every patcher filename', () => {

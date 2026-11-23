@@ -4,6 +4,7 @@ import { sessionTools } from './session.tools';
 import type { AnyToolDescriptor } from '../tool-descriptor';
 import type { SessionService } from '../../../modules/session/session.service';
 import type { AuthService } from '../../../modules/auth/auth.service';
+import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 
 // Covers every sessionTools execute() handler via the real invokeTool path (auth → zod → handler).
 // agent-tools.module.ts is pure Nest wiring, stays at 0% coverage, and is intentionally not a target.
@@ -83,12 +84,28 @@ describe('sessionTools', () => {
     expect(out).toEqual([{ id: 'c1' }]);
   });
 
-  it('SessionGetStats scopes by the key allowedSessions', async () => {
+  it('SessionGetStats scopes by allowedSessions and includes memoryUsage only for unscoped ADMIN', async () => {
     const stats = { total: 2, active: 1, ready: 1, disconnected: 1 };
     const getStats = jest.fn().mockResolvedValue(stats);
-    const out = await run(makeTools({ getStats } as unknown as SessionService).get('SessionGetStats')!, {});
-    expect(getStats).toHaveBeenCalledWith(null);
-    expect(out).toEqual(stats);
+    const tool = makeTools({ getStats } as unknown as SessionService).get('SessionGetStats')!;
+
+    const invokeAs = (role: ApiKeyRole, allowedSessions: string[] | null) =>
+      invokeTool(tool, {}, 'key', {
+        validateApiKey: jest.fn().mockResolvedValue({ id: 'k1', role, allowedSessions }),
+        hasPermission: jest.fn().mockReturnValue(true),
+      } as unknown as AuthService);
+
+    await expect(invokeAs(ApiKeyRole.ADMIN, null)).resolves.toEqual(stats);
+    await expect(invokeAs(ApiKeyRole.ADMIN, ['s1'])).resolves.toEqual(stats);
+    await expect(invokeAs(ApiKeyRole.OPERATOR, null)).resolves.toEqual(stats);
+    await expect(invokeAs(ApiKeyRole.VIEWER, null)).resolves.toEqual(stats);
+
+    expect(getStats.mock.calls).toEqual([
+      [null, { includeMemoryUsage: true }],
+      [['s1'], { includeMemoryUsage: false }],
+      [null, { includeMemoryUsage: false }],
+      [null, { includeMemoryUsage: false }],
+    ]);
   });
 
   it('SessionSubscribePresence delegates to subscribeToPresence and reports success', async () => {

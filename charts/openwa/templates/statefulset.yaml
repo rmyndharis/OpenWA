@@ -20,7 +20,9 @@ spec:
       # alters the ConfigMap without altering the values it was built from.
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if and (not .Values.existingSecret) (or (not (hasKey .Values "secretChecksumAnnotation")) .Values.secretChecksumAnnotation) }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
       labels:
         {{- include "openwa.selectorLabels" . | nindent 8 }}
     spec:

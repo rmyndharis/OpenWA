@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { shouldOfferStopOrphansRetry } from '../utils/importRefusal';
-import { keepsSameKey } from '../utils/authLifecycle';
+import { getActiveApiKeyId, keepsSameKey } from '../utils/authLifecycle';
 import { useTranslation } from 'react-i18next';
 import { infraApi } from '../services/api';
 import { useToast } from './useToast';
 
 export interface DataBackup {
   migrating: boolean;
-  exportBackup: () => Promise<void>;
+  exportBackup: (includePluginSecrets?: boolean) => Promise<void>;
   importBackup: (file: File) => Promise<void>;
 }
 
@@ -30,13 +30,13 @@ export function useDataBackup(): DataBackup {
   }, []);
 
   // Download a JSON backup of all Data-DB tables. Called BEFORE a DB switch (while still on the old
-  // database) so the data can be re-imported into the new one — switching otherwise starts empty (#488).
-  const exportBackup = async () => {
+  // database) so the data can be re-imported into the new one (switching otherwise starts empty, #488).
+  const exportBackup = async (includePluginSecrets = false) => {
     setMigrating(true);
     const sameKey = keepsSameKey();
     try {
-      const dump = await infraApi.exportData();
-      // The dump holds every integration instance's secrets in plaintext: not for a signed-out page.
+      const dump = await infraApi.exportData(includePluginSecrets);
+      // Do not save an exported dump onto a signed-out page.
       if (!sameKey()) return;
       const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -135,7 +135,7 @@ export function useDataBackup(): DataBackup {
   // Restore a previously-exported backup into the CURRENT database (use after switching + restart).
   // Import REPLACES all current data, so validate + confirm (showing the row count) before any call.
   const importBackup = async (file: File) => {
-    if (!sessionStorage.getItem('openwa_api_key') || importOwnerRef.current === null) return;
+    if (!getActiveApiKeyId() || importOwnerRef.current === null) return;
     // A newer selection or an unmount retires what has not been sent yet, including a delayed refusal retry.
     const owner = {};
     importOwnerRef.current = owner;

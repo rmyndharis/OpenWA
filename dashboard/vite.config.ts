@@ -10,9 +10,7 @@ import react from '@vitejs/plugin-react';
 // gateway moved on. The sidebar hid the drift by replacing the build-time value with the live
 // version from the API (see Layout.tsx); the Login screen has no session yet, so it shows this
 // constant verbatim. APP_VERSION env still overrides if explicitly provided.
-const { version: pkgVersion } = JSON.parse(
-  readFileSync(new URL('../package.json', import.meta.url), 'utf-8'),
-) as {
+const { version: pkgVersion } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as {
   version: string;
 };
 
@@ -33,7 +31,7 @@ export default defineConfig({
       // captured the SPA route /api-keys and a reload of that page went to the backend.
       '/api/': {
         target: 'http://localhost:2785',
-        changeOrigin: true,
+        changeOrigin: false,
         secure: false,
       },
       // Proxy the WebSocket (socket.io) transport so the dashboard's real-time
@@ -41,7 +39,7 @@ export default defineConfig({
       '/socket.io': {
         target: 'http://localhost:2785',
         ws: true,
-        changeOrigin: true,
+        changeOrigin: false,
       },
     },
   },

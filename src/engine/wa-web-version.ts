@@ -4,7 +4,7 @@
  * pulling in the heavy whatsapp-web.js module and breaking engine lazy-loading.
  */
 
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createLogger } from '../common/services/logger.service';
@@ -59,16 +59,98 @@ let warnedRemoteTrust = false;
 // change, and a pin only moves forward, so older builds are dropped); a failure is not, so the next
 // start retries.
 export const PINNED_HTML_TIMEOUT_MS = 10_000;
+export const MAX_WEB_VERSION_HTML_BYTES = 16 * 1024 * 1024;
 const PINNED_HTML_MIN_LENGTH = 1024;
 const PINNED_HTML_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
-const pinnedHtml = new Map<string, string>();
-const pinnedHtmlInFlight = new Map<string, Promise<string>>();
+const pinnedHtml = new Map<string, Buffer>();
+const pinnedHtmlInFlight = new Map<string, Promise<Buffer>>();
+const verifiedPinHtml = new WeakMap<WebVersionPin, Buffer>();
+
+/**
+ * Returns the exact SHA-256-verified HTML bytes associated with a localized pin so the engine can
+ * serve them directly from memory without re-reading the on-disk cache file (closing disk TOCTOU).
+ */
+export function getVerifiedPinnedHtml(pin: WebVersionPin | undefined): Buffer | undefined {
+  if (!pin || pin.webVersionCache.type !== 'local') return undefined;
+  return verifiedPinHtml.get(pin);
+}
+
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 
 // WhatsApp's logged-out landing page, which the registry has stored as the HTML of a few builds. It passes the
 // length and <html checks, but it holds none of WhatsApp Web's modules, so a session started on it fails at once
 // (`window.require('WAWebSocketModel')` is null). Its root element's id names it.
 const LOGGED_OUT_PAGE = /<html\b[^>]*\bid\s*=\s*["']?whatsapp-web-logged-out["'\s>]/i;
 class LoggedOutPageError extends Error {}
+class HashMismatchError extends Error {
+  constructor(
+    readonly expected: string,
+    readonly actual: string,
+  ) {
+    super(`SHA-256 mismatch (expected ${expected}, got ${actual})`);
+  }
+}
+
+/**
+ * Validate the combined WWEBJS_WEB_VERSION / WWEBJS_WEB_VERSION_SHA256 /
+ * WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED configuration. Shared by boot validation (`validateEnv`)
+ * and runtime resolution (`resolveWebVersionPin` / `getEffectiveWebVersionInfo`).
+ */
+export function webVersionPinConfigError(env: Record<string, unknown>): string | null {
+  const rawVersion = typeof env.WWEBJS_WEB_VERSION === 'string' ? env.WWEBJS_WEB_VERSION.trim() : '';
+  const lc = rawVersion.toLowerCase();
+  const isNative = !rawVersion || lc === 'off';
+  const isAuto = lc === 'auto' || lc === 'latest';
+  const isPinned = !isNative && !isAuto;
+
+  const rawSha = typeof env.WWEBJS_WEB_VERSION_SHA256 === 'string' ? env.WWEBJS_WEB_VERSION_SHA256.trim() : '';
+  const allowUnverified = env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED === 'true';
+
+  if (rawSha !== '') {
+    if (!SHA256_HEX_PATTERN.test(rawSha)) {
+      return `WWEBJS_WEB_VERSION_SHA256 must be a 64-character hexadecimal SHA-256 digest (got ${JSON.stringify(rawSha)})`;
+    }
+    if (!isPinned) {
+      return 'WWEBJS_WEB_VERSION_SHA256 requires WWEBJS_WEB_VERSION to be set to an exact build (never unset, "off", "auto", or "latest")';
+    }
+  }
+
+  if (isAuto && !allowUnverified) {
+    return (
+      `WWEBJS_WEB_VERSION=${rawVersion} fetches remote WhatsApp Web HTML without an integrity check; ` +
+      'set WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true to opt in explicitly, or leave WWEBJS_WEB_VERSION unset for the first-party build'
+    );
+  }
+
+  if (isPinned && rawSha === '' && !allowUnverified) {
+    return (
+      `WWEBJS_WEB_VERSION=${rawVersion} requires WWEBJS_WEB_VERSION_SHA256 (64-char hex) for integrity verification, ` +
+      'or explicit opt-in via WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true'
+    );
+  }
+
+  return null;
+}
+
+function sha256Hex(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function sha256Matches(bytes: Buffer, expectedLowerHex: string): boolean {
+  const actualBuf = createHash('sha256').update(bytes).digest();
+  const expectedBuf = Buffer.from(expectedLowerHex, 'hex');
+  return actualBuf.length === expectedBuf.length && timingSafeEqual(actualBuf, expectedBuf);
+}
+
+function assertValidHtmlBytes(bytes: Buffer): void {
+  const html = bytes.toString('utf8');
+  if (html.length < PINNED_HTML_MIN_LENGTH || !/<html/i.test(html)) {
+    throw new Error('the response is not a WhatsApp Web page');
+  }
+  if (LOGGED_OUT_PAGE.test(html)) {
+    throw new LoggedOutPageError('the response is the WhatsApp Web logged-out page, not the app');
+  }
+}
 // Builds whose page was that one. The next auto-resolve skips them, so the pin moves to an older settled build
 // instead of holding the broken one for CACHE_TTL_MS.
 const rejectedBuilds = new Set<string>();
@@ -256,18 +338,14 @@ export async function resolveCurrentWebVersion(fetcher: typeof fetch = fetch): P
 
 /**
  * Resolve the WhatsApp Web version pin for the whatsapp-web.js client.
- * - Explicit `WWEBJS_WEB_VERSION` (a version string)  → pin it exactly (no network call).
- * - `off`                                             → no pin; whatsapp-web.js native auto-select.
- * - unset / `auto` / `latest`                         → auto-resolve the current known-good build
- *   from the wa-version registry and pin it; if that fetch fails, keep the previously resolved
- *   build, or fall back to native auto-select when none was ever resolved.
+ * - Unset / blank / `off` (default) -> no pin; whatsapp-web.js loads the first-party build served
+ *   by WhatsApp with zero remote HTML fetches.
+ * - Explicit `WWEBJS_WEB_VERSION` (exact build) -> requires `WWEBJS_WEB_VERSION_SHA256` (64-char
+ *   hex, verified on fetch and on every cache hit) or explicit `WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true`.
+ * - `auto` / `latest` -> requires explicit `WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true`; resolves a
+ *   settled build from the wa-version registry and pins it.
  * `WWEBJS_WEB_VERSION_REMOTE_PATH` overrides the HTML URL template (`{version}` placeholder).
- * With `cacheDir`, the pinned HTML is downloaded there first and the pin becomes a strict local cache;
- * a download that fails (or takes over PINNED_HTML_TIMEOUT_MS) drops the pin with a named warning. An auto-resolved
- * build whose page is the logged-out landing page is skipped for the next older settled build (up to
- * MAX_AUTO_BUILDS tried); an exact version the operator set is never swapped.
- * The auto-resolve replaces whatsapp-web.js's unreliable default that caused #488 (scan → stuck →
- * disconnect loop) on Docker setups where no version was pinned.
+ * With `cacheDir`, the pinned HTML is downloaded there first and the pin becomes a strict local cache.
  */
 export function resolveWebVersionPin(fetcher?: typeof fetch): Promise<RemoteWebVersionPin | undefined>;
 export function resolveWebVersionPin(
@@ -280,12 +358,36 @@ export async function resolveWebVersionPin(
 ): Promise<WebVersionPin | undefined> {
   const raw = process.env.WWEBJS_WEB_VERSION?.trim();
   const lc = raw?.toLowerCase();
-  if (raw && lc !== 'off' && lc !== 'latest' && lc !== 'auto') {
+  if (!raw || lc === 'off') return undefined; // default native posture: zero remote fetches
+
+  const configError = webVersionPinConfigError(process.env);
+  if (configError) {
+    logger.warn('Refusing WhatsApp Web remote version pin; continuing with the native first-party build', {
+      action: 'web_version_pin_rejected',
+      reason: configError,
+    });
+    return undefined;
+  }
+
+  const rawSha = process.env.WWEBJS_WEB_VERSION_SHA256?.trim();
+  const expectedSha256 = rawSha ? rawSha.toLowerCase() : undefined;
+
+  if (lc !== 'latest' && lc !== 'auto') {
     const pin = buildRemotePin(raw); // operator-pinned exact version: never swapped for another build
+    if (expectedSha256) {
+      if (!cacheDir) {
+        logger.warn('Cannot verify WWEBJS_WEB_VERSION_SHA256 without a local cache directory; dropping pin', {
+          action: 'web_version_pin_rejected',
+          webVersion: raw,
+        });
+        return undefined;
+      }
+      return localisePin(pin, cacheDir, fetcher, false, expectedSha256);
+    }
     warnRemoteTrustOnce(pin);
     return cacheDir ? localisePin(pin, cacheDir, fetcher, false) : pin;
   }
-  if (lc === 'off') return undefined; // explicit escape hatch → native auto-select
+
   for (let attempt = 1; ; attempt++) {
     const current = await resolveCurrentWebVersion(fetcher);
     if (!current) return undefined;
@@ -298,26 +400,143 @@ export async function resolveWebVersionPin(
   }
 }
 
+function assertSafeCacheDir(cacheDir: string): void {
+  try {
+    const stat = fs.lstatSync(cacheDir);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error('cache directory must be a real directory, not a symlink');
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+}
+
+function readCachedFileNoFollow(
+  filePath: string,
+): { status: 'ok'; bytes: Buffer } | { status: 'missing' } | { status: 'unsafe' } {
+  const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+  let fd: number;
+  try {
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { status: 'missing' };
+    if (code === 'ELOOP') return { status: 'unsafe' };
+    throw err;
+  }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) return { status: 'unsafe' };
+    return { status: 'ok', bytes: fs.readFileSync(fd) };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function removeIfSymlinkOrFile(filePath: string): void {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || stat.isFile()) {
+      fs.rmSync(filePath, { force: true });
+    }
+  } catch {
+    // Already removed or unreachable.
+  }
+}
+
 /**
  * Download the pinned HTML (bounded) into `<cacheDir>/<version>.html` and answer a strict local cache
- * for it. When it cannot be had, say so by name and answer no pin: the session then loads the live
- * build, as the docs promise, instead of hanging on an unbounded fetch that ends the same way.
+ * for it. When `expectedSha256` is configured, re-verifies SHA-256 on every disk cache hit (refusing
+ * symlinks, warning on mismatch, deleting tampered cache files, and re-fetching) and hashes raw
+ * fetched bytes before writing cache.
  */
 async function localisePin(
   pin: RemoteWebVersionPin,
   cacheDir: string,
   fetcher: typeof fetch,
   willRetry: boolean,
+  expectedSha256?: string,
 ): Promise<WebVersionPin | undefined> {
   const { webVersion } = pin;
   const { remotePath } = pin.webVersionCache;
   try {
     // The version becomes a file name, and an operator sets it: no separators, no leading dots.
     if (!/^\d[\w.-]*$/.test(webVersion)) throw new Error('the version is not a WhatsApp Web build number');
-    const html = await fetchPinnedHtml(remotePath, fetcher);
-    writePinnedHtml(cacheDir, webVersion, html);
-    return { webVersion, webVersionCache: { type: 'local', path: cacheDir, strict: true } };
+    assertSafeCacheDir(cacheDir);
+
+    const cachedFile = path.join(cacheDir, `${webVersion}.html`);
+    if (expectedSha256) {
+      const readResult = readCachedFileNoFollow(cachedFile);
+      if (readResult.status === 'unsafe') {
+        logger.warn('Cached WhatsApp Web HTML is a symlink or non-regular file; removing entry and re-fetching', {
+          action: 'web_version_html_hash_mismatch',
+          source: 'cache',
+          reason: 'symlink_or_non_regular',
+          webVersion,
+          expectedSha256,
+          cacheFile: cachedFile,
+        });
+        removeIfSymlinkOrFile(cachedFile);
+        pinnedHtml.delete(remotePath);
+      } else if (readResult.status === 'ok') {
+        const diskBytes = readResult.bytes;
+        if (sha256Matches(diskBytes, expectedSha256)) {
+          assertValidHtmlBytes(diskBytes);
+          const now = new Date();
+          try {
+            fs.chmodSync(cacheDir, 0o700);
+            fs.chmodSync(cachedFile, 0o600);
+            fs.utimesSync(cachedFile, now, now);
+          } catch {
+            // Best-effort permission tightening and mtime refresh for weekly pruning.
+          }
+          pruneStalePinnedHtml(cacheDir, cachedFile);
+          const localPin: LocalWebVersionPin = {
+            webVersion,
+            webVersionCache: { type: 'local', path: cacheDir, strict: true },
+          };
+          verifiedPinHtml.set(localPin, diskBytes);
+          return localPin;
+        }
+        // Stale or tampered cache file: warn loudly, remove it, and clear in-memory cache before re-fetching.
+        logger.warn(
+          'Cached WhatsApp Web HTML failed SHA-256 verification; deleting tampered cache file and re-fetching',
+          {
+            action: 'web_version_html_hash_mismatch',
+            source: 'cache',
+            webVersion,
+            expectedSha256,
+            actualSha256: sha256Hex(diskBytes),
+            cacheFile: cachedFile,
+          },
+        );
+        fs.rmSync(cachedFile, { force: true });
+        pinnedHtml.delete(remotePath);
+      }
+    }
+
+    const rawBytes = await fetchPinnedHtml(remotePath, fetcher, expectedSha256);
+    writePinnedHtml(cacheDir, webVersion, rawBytes);
+    const localPin: LocalWebVersionPin = {
+      webVersion,
+      webVersionCache: { type: 'local', path: cacheDir, strict: true },
+    };
+    if (expectedSha256) {
+      verifiedPinHtml.set(localPin, rawBytes);
+    }
+    return localPin;
   } catch (error) {
+    if (error instanceof HashMismatchError) {
+      logger.warn('Pinned WhatsApp Web HTML failed SHA-256 verification; refusing pin and continuing WITHOUT a pin', {
+        action: 'web_version_html_hash_mismatch',
+        source: 'remote',
+        webVersion,
+        expectedSha256: error.expected,
+        actualSha256: error.actual,
+        remotePath: splitCredentials(remotePath).href,
+      });
+      return undefined;
+    }
     if (error instanceof LoggedOutPageError) {
       const first = !rejectedBuilds.has(webVersion);
       rejectedBuilds.add(webVersion);
@@ -361,36 +580,89 @@ async function localisePin(
   }
 }
 
-function fetchPinnedHtml(remotePath: string, fetcher: typeof fetch): Promise<string> {
+function fetchPinnedHtml(remotePath: string, fetcher: typeof fetch, expectedSha256?: string): Promise<Buffer> {
   const cached = pinnedHtml.get(remotePath);
-  if (cached) return Promise.resolve(cached);
-  let pending = pinnedHtmlInFlight.get(remotePath);
+  if (cached) {
+    if (!expectedSha256 || sha256Matches(cached, expectedSha256)) return Promise.resolve(cached);
+    pinnedHtml.delete(remotePath);
+  }
+  const flightKey = expectedSha256 ? `${remotePath}\0${expectedSha256}` : remotePath;
+  let pending = pinnedHtmlInFlight.get(flightKey);
   if (!pending) {
-    pending = downloadPinnedHtml(remotePath, fetcher).finally(() => pinnedHtmlInFlight.delete(remotePath));
-    pinnedHtmlInFlight.set(remotePath, pending);
+    pending = downloadPinnedHtml(remotePath, fetcher, expectedSha256).finally(() =>
+      pinnedHtmlInFlight.delete(flightKey),
+    );
+    pinnedHtmlInFlight.set(flightKey, pending);
   }
   return pending;
 }
 
-async function downloadPinnedHtml(remotePath: string, fetcher: typeof fetch): Promise<string> {
+async function readBoundedResponseBytes(res: Response, maxBytes: number, controller: AbortController): Promise<Buffer> {
+  const headerLen = res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-length') : null;
+  if (headerLen !== null && /^\d+$/.test(headerLen.trim()) && Number(headerLen.trim()) > maxBytes) {
+    controller.abort();
+    throw new Error(`the response exceeds maximum size of ${maxBytes} bytes`);
+  }
+  const body = res.body as { getReader?: () => ReadableStreamDefaultReader<Uint8Array> } | null | undefined;
+  if (body && typeof body.getReader === 'function') {
+    const reader = body.getReader();
+    const chunks: Buffer[] = [];
+    let total = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || value.byteLength === 0) continue;
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          controller.abort();
+          throw new Error(`the response exceeds maximum size of ${maxBytes} bytes`);
+        }
+        chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+      }
+      return Buffer.concat(chunks, total);
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        // Ignore if stream is already closed or canceled.
+      }
+    }
+  }
+  const rawBytes =
+    typeof res.arrayBuffer === 'function'
+      ? Buffer.from(await res.arrayBuffer())
+      : Buffer.from(await res.text(), 'utf8');
+  if (rawBytes.length > maxBytes) {
+    controller.abort();
+    throw new Error(`the response exceeds maximum size of ${maxBytes} bytes`);
+  }
+  return rawBytes;
+}
+
+async function downloadPinnedHtml(remotePath: string, fetcher: typeof fetch, expectedSha256?: string): Promise<Buffer> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PINNED_HTML_TIMEOUT_MS);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, PINNED_HTML_TIMEOUT_MS);
   try {
     const { href, authorization } = splitCredentials(remotePath);
     const headers: Record<string, string> = authorization ? { Authorization: authorization } : {};
     const res = await fetcher(href, { signal: controller.signal, headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const html = await res.text();
-    if (html.length < PINNED_HTML_MIN_LENGTH || !/<html/i.test(html)) {
-      throw new Error('the response is not a WhatsApp Web page');
+    const rawBytes = await readBoundedResponseBytes(res, MAX_WEB_VERSION_HTML_BYTES, controller);
+    if (expectedSha256 && !sha256Matches(rawBytes, expectedSha256)) {
+      throw new HashMismatchError(expectedSha256, sha256Hex(rawBytes));
     }
-    if (LOGGED_OUT_PAGE.test(html))
-      throw new LoggedOutPageError('the response is the WhatsApp Web logged-out page, not the app');
+    assertValidHtmlBytes(rawBytes);
     pinnedHtml.clear();
-    pinnedHtml.set(remotePath, html);
-    return html;
+    pinnedHtml.set(remotePath, rawBytes);
+    return rawBytes;
   } catch (error) {
-    if (controller.signal.aborted) throw new Error(`no answer within ${PINNED_HTML_TIMEOUT_MS} ms`, { cause: error });
+    if (timedOut) throw new Error(`no answer within ${PINNED_HTML_TIMEOUT_MS} ms`, { cause: error });
     throw error;
   } finally {
     clearTimeout(timer);
@@ -424,26 +696,49 @@ function splitCredentials(remotePath: string): { href: string; authorization?: s
 }
 
 /**
- * Write through a unique temp file and rename it into place: several sessions, or several nodes on
- * one data volume, can write the same build at once, and the strict cache must never read half a file.
+ * Write through a unique temp file (owner-only 0600, O_EXCL | O_NOFOLLOW) and rename it atomically
+ * into place inside a verified 0700 cache directory: several sessions, or several nodes on one data
+ * volume, can write the same build at once, and atomic rename replaces any symlink without following.
  */
-function writePinnedHtml(cacheDir: string, version: string, html: string): void {
-  fs.mkdirSync(cacheDir, { recursive: true });
+function writePinnedHtml(cacheDir: string, version: string, rawBytes: Buffer): void {
+  assertSafeCacheDir(cacheDir);
+  fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+  assertSafeCacheDir(cacheDir);
+  try {
+    fs.chmodSync(cacheDir, 0o700);
+  } catch {
+    // Best-effort permission tightening on platforms/filesystems that ignore chmod.
+  }
   const file = path.join(cacheDir, `${version}.html`);
   const tmp = `${file}.${randomUUID()}.tmp`;
+  const noFollow = fs.constants.O_NOFOLLOW ?? 0;
   try {
-    fs.writeFileSync(tmp, html);
+    const fd = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow, 0o600);
+    try {
+      fs.writeFileSync(fd, rawBytes);
+    } finally {
+      fs.closeSync(fd);
+    }
+    try {
+      fs.chmodSync(tmp, 0o600);
+    } catch {
+      // Best-effort permission tightening against permissive umask.
+    }
     fs.renameSync(tmp, file);
   } catch (error) {
     fs.rmSync(tmp, { force: true });
     throw error;
   }
+  pruneStalePinnedHtml(cacheDir, file);
+}
+
+function pruneStalePinnedHtml(cacheDir: string, keepFile: string): void {
   // The directory sits on the backed-up data volume, and every build pinned over the months would
-  // otherwise stay there. Each start rewrites its own file, so a build any session still starts on
-  // is never a week old: only those that are not get removed.
+  // otherwise stay there. Each start rewrites or refreshes its own file, so a build any session still
+  // starts on is never a week old: only those that are not get removed.
   for (const name of fs.readdirSync(cacheDir)) {
     const other = path.join(cacheDir, name);
-    if (other === file) continue;
+    if (other === keepFile) continue;
     try {
       if (Date.now() - fs.statSync(other).mtimeMs > PINNED_HTML_KEEP_MS) fs.rmSync(other, { force: true });
     } catch {
@@ -458,13 +753,14 @@ function writePinnedHtml(cacheDir: string, version: string, html: string): void 
  * cannot be loaded starts without a pin and logs `web_version_html_unavailable` (see localisePin), and a
  * page can still run another build, which each session logs at READY (./adapters/wwebjs-running-build).
  * It is distinct from the whatsapp-web.js library version.
- * `source`: `pinned` = operator-set exact version; `auto` = resolved from the wa-version registry;
- * `native` = whatsapp-web.js auto-select.
+ * `source`: `pinned` = operator-set exact version; `auto` = resolved from the wa-version registry
+ * (when opted in with WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true); `native` = whatsapp-web.js default.
  */
 export function getEffectiveWebVersionInfo(): { version: string | null; source: 'pinned' | 'auto' | 'native' } {
   const raw = process.env.WWEBJS_WEB_VERSION?.trim();
   const lc = raw?.toLowerCase();
-  if (raw && lc !== 'off' && lc !== 'latest' && lc !== 'auto') return { version: raw, source: 'pinned' };
-  if (lc === 'off') return { version: null, source: 'native' };
-  return { version: cachedCurrentVersion ?? null, source: 'auto' };
+  if (!raw || lc === 'off') return { version: null, source: 'native' };
+  if (webVersionPinConfigError(process.env) !== null) return { version: null, source: 'native' };
+  if (lc === 'latest' || lc === 'auto') return { version: cachedCurrentVersion ?? null, source: 'auto' };
+  return { version: raw, source: 'pinned' };
 }

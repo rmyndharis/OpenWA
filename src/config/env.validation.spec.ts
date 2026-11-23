@@ -990,3 +990,179 @@ describe('validateEnv built-in Redis connection settings', () => {
     });
   });
 });
+
+describe('validateEnv SQLITE_JOURNAL_MODE', () => {
+  it.each([undefined, '', '   ', 'WAL', 'DELETE'])('accepts SQLITE_JOURNAL_MODE=%j', value => {
+    expect(() => validateEnv({ SQLITE_JOURNAL_MODE: value })).not.toThrow();
+  });
+
+  it.each(['wal', 'delete', 'TRUNCATE', 'MEMORY', 'OFF', ' WAL '])('rejects invalid SQLITE_JOURNAL_MODE=%j', value => {
+    expect(() => validateEnv({ SQLITE_JOURNAL_MODE: value })).toThrow(
+      /SQLITE_JOURNAL_MODE must be one of "WAL", "DELETE"/,
+    );
+  });
+});
+
+describe('validateEnv DOCKER_ALLOW_LOCAL_SOCKET', () => {
+  it.each([undefined, '', '   ', 'true', 'false'])('accepts DOCKER_ALLOW_LOCAL_SOCKET=%j', value => {
+    expect(() => validateEnv({ DOCKER_ALLOW_LOCAL_SOCKET: value })).not.toThrow();
+  });
+
+  it.each(['1', 'yes', 'TRUE', ' true '])('rejects invalid DOCKER_ALLOW_LOCAL_SOCKET=%j', value => {
+    expect(() => validateEnv({ DOCKER_ALLOW_LOCAL_SOCKET: value })).toThrow(
+      /DOCKER_ALLOW_LOCAL_SOCKET must be "true" or "false"/,
+    );
+  });
+});
+
+describe('validateEnv PUPPETEER_ARGS allowlist', () => {
+  it.each([
+    undefined,
+    '',
+    '   ',
+    '--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu',
+    '--no-sandbox --disable-software-rasterizer --disable-extensions --no-first-run --no-zygote --mute-audio --hide-scrollbars --headless',
+    '--lang=en-US --window-size=1280,720 --disable-features=IsolateOrigins,site-per-process --enable-features=NetworkService --disable-blink-features=AutomationControlled --headless=new --use-gl=swiftshader --force-color-profile=srgb --font-render-hinting=none',
+  ])('accepts safe PUPPETEER_ARGS=%j', value => {
+    expect(() => validateEnv({ PUPPETEER_ARGS: value })).not.toThrow();
+  });
+
+  it.each([
+    '--gpu-launcher=/bin/sh',
+    '--utility-cmd-prefix=sh',
+    '--renderer-cmd-prefix=sh',
+    '--browser-subprocess-path=/bin/sh',
+    '--load-extension=/tmp/ext',
+    '--disable-extensions-except=/tmp/ext',
+    '--remote-debugging-port=9222',
+    '--remote-debugging-address=0.0.0.0',
+    '--user-data-dir=/tmp/profile',
+    '--disk-cache-dir=/tmp/cache',
+    '--proxy-server=http://evil:8080',
+    '--proxy-pac-url=http://evil/pac',
+    '--disable-web-security',
+    '--ignore-certificate-errors',
+    '--js-flags=--expose-gc',
+    '--no-sandbox https://evil.example',
+    '--lang=en;id',
+    '--window-size=0,720',
+    '--headless=invalid',
+    '--no-sandbox\n--disable-gpu',
+  ])('rejects disallowed PUPPETEER_ARGS=%j', value => {
+    expect(() => validateEnv({ PUPPETEER_ARGS: value })).toThrow(/PUPPETEER_ARGS/);
+  });
+});
+
+describe('validateEnv WWEBJS_WEB_VERSION integrity policy', () => {
+  const VALID_SHA = 'a'.repeat(64);
+  const VALID_UPPER_SHA = 'ABCDEF0123456789'.repeat(4);
+
+  it.each([undefined, '', '   ', 'off', 'OFF'])('accepts default/native WWEBJS_WEB_VERSION=%j', value => {
+    expect(() => validateEnv({ WWEBJS_WEB_VERSION: value })).not.toThrow();
+  });
+
+  it.each(['1', 'yes', 'TRUE', ' true '])('rejects invalid WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=%j', value => {
+    expect(() => validateEnv({ WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED: value })).toThrow(
+      /WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED must be "true" or "false"/,
+    );
+  });
+
+  it.each(['auto', 'AUTO', 'latest', 'LATEST'])(
+    'rejects WWEBJS_WEB_VERSION=%j without WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true',
+    value => {
+      expect(() => validateEnv({ WWEBJS_WEB_VERSION: value })).toThrow(/WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true/);
+      expect(() => validateEnv({ WWEBJS_WEB_VERSION: value, WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED: 'false' })).toThrow(
+        /WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true/,
+      );
+      expect(() =>
+        validateEnv({ WWEBJS_WEB_VERSION: value, WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED: 'true' }),
+      ).not.toThrow();
+    },
+  );
+
+  it('requires WWEBJS_WEB_VERSION_SHA256 or WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true for an exact pinned build', () => {
+    expect(() => validateEnv({ WWEBJS_WEB_VERSION: '2.3000.1234-alpha' })).toThrow(/WWEBJS_WEB_VERSION_SHA256/);
+    expect(() =>
+      validateEnv({ WWEBJS_WEB_VERSION: '2.3000.1234-alpha', WWEBJS_WEB_VERSION_SHA256: VALID_SHA }),
+    ).not.toThrow();
+    expect(() =>
+      validateEnv({ WWEBJS_WEB_VERSION: '2.3000.1234-alpha', WWEBJS_WEB_VERSION_SHA256: VALID_UPPER_SHA }),
+    ).not.toThrow();
+    expect(() =>
+      validateEnv({ WWEBJS_WEB_VERSION: '2.3000.1234-alpha', WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED: 'true' }),
+    ).not.toThrow();
+  });
+
+  it.each(['abc', 'g'.repeat(64), 'a'.repeat(63), 'a'.repeat(65)])(
+    'rejects malformed WWEBJS_WEB_VERSION_SHA256=%j',
+    badSha => {
+      expect(() => validateEnv({ WWEBJS_WEB_VERSION: '2.3000.1234-alpha', WWEBJS_WEB_VERSION_SHA256: badSha })).toThrow(
+        /WWEBJS_WEB_VERSION_SHA256/,
+      );
+    },
+  );
+
+  it.each([undefined, '', 'off', 'auto', 'latest'])(
+    'rejects WWEBJS_WEB_VERSION_SHA256 when WWEBJS_WEB_VERSION=%j is not an exact build',
+    version => {
+      expect(() =>
+        validateEnv({
+          WWEBJS_WEB_VERSION: version,
+          WWEBJS_WEB_VERSION_SHA256: VALID_SHA,
+          WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED: 'true',
+        }),
+      ).toThrow(/WWEBJS_WEB_VERSION_SHA256/);
+    },
+  );
+});
+
+describe('validateEnv pre-egress hook and browser session knobs', () => {
+  it.each(['HOOK_PRE_EGRESS_FAIL_CLOSED', 'DASHBOARD_SESSION_COOKIE_SECURE'])(
+    'accepts unset, blank, "true", and "false" for %s and rejects invalid boolean spellings',
+    key => {
+      for (const ok of [undefined, '', '   ', 'true', 'false']) {
+        expect(() => validateEnv({ [key]: ok })).not.toThrow();
+      }
+      for (const bad of ['1', '0', 'yes', 'TRUE', 'False', ' true ']) {
+        expect(() => validateEnv({ [key]: bad })).toThrow(new RegExp(`${key} must be "true" or "false"`));
+      }
+    },
+  );
+
+  it('validates DASHBOARD_SESSION_TTL_MS as a positive integer within browser session bounds', () => {
+    for (const ok of [undefined, '', '   ', '300000', '43200000', '2592000000']) {
+      expect(() => validateEnv({ DASHBOARD_SESSION_TTL_MS: ok })).not.toThrow();
+    }
+    for (const badInt of ['0', '-1', '12h', 'abc', '43200000.5']) {
+      expect(() => validateEnv({ DASHBOARD_SESSION_TTL_MS: badInt })).toThrow(
+        /DASHBOARD_SESSION_TTL_MS must be a positive integer/,
+      );
+    }
+    for (const outOfRange of ['299999', '1000', '2592000001', '99999999999']) {
+      expect(() => validateEnv({ DASHBOARD_SESSION_TTL_MS: outOfRange })).toThrow(
+        /DASHBOARD_SESSION_TTL_MS must be between 300000 and 2592000000 ms/,
+      );
+    }
+  });
+
+  it('validates SESSION_PROXY_SECRET as optional and rejects whitespace-only or trivially short values', () => {
+    for (const ok of [undefined, '', '0123456789abcdef', 'a-strong-shared-secret-value-for-peers']) {
+      expect(() => validateEnv({ SESSION_PROXY_SECRET: ok })).not.toThrow();
+    }
+
+    for (const blank of [' ', '   ', '\t\n']) {
+      expect(() => validateEnv({ SESSION_PROXY_SECRET: blank })).toThrow(/SESSION_PROXY_SECRET/);
+    }
+
+    for (const tooShort of ['short', '123456789012345', '   123456789012345   ']) {
+      expect(() => validateEnv({ SESSION_PROXY_SECRET: tooShort })).toThrow(
+        /SESSION_PROXY_SECRET must be at least 16 characters/,
+      );
+      expect(() => validateEnv({ SESSION_PROXY_SECRET: tooShort })).not.toThrow(tooShort.trim());
+    }
+
+    expect(() => validateEnv({ SESSION_PROXY_SECRET: 1234567890123456 })).toThrow(
+      /SESSION_PROXY_SECRET must be a string/,
+    );
+  });
+});

@@ -37,6 +37,9 @@ export interface WebhookJobResult {
  */
 const STALL_EXHAUSTION_MESSAGE = 'job stalled more than allowable limit';
 
+/** Upper bound on in-memory degraded-receiver tracking so churned webhook ids cannot grow memory without bound. */
+export const FAILING_WEBHOOKS_MAX = 10_000;
+
 /** Per-attempt delivery context threaded through the process() pipeline stages (was closure state). */
 interface WebhookDeliveryContext {
   job: Job<WebhookJobData>;
@@ -191,10 +194,20 @@ export class WebhookProcessor extends WorkerHost {
         responseTime,
       };
     } catch (error) {
-      this.failingWebhooks.add(webhookId);
+      this.markFailingWebhook(webhookId);
       await this.recordDeliveryFailure(ctx, error);
       // Re-throw to trigger BullMQ retry
       throw error;
+    }
+  }
+
+  private markFailingWebhook(webhookId: string): void {
+    this.failingWebhooks.delete(webhookId);
+    this.failingWebhooks.add(webhookId);
+    while (this.failingWebhooks.size > FAILING_WEBHOOKS_MAX) {
+      const oldest = this.failingWebhooks.values().next().value;
+      if (oldest === undefined) break;
+      this.failingWebhooks.delete(oldest);
     }
   }
 

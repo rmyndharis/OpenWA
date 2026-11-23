@@ -129,9 +129,9 @@ class MessagesResource
      * @param array<string,mixed> $body chatId, messageId, buttonId; text optional.
      * @return array<string,mixed>
      */
-    public function clickButton(string $sessionId, array $body): array
+    public function clickButton(string $sessionId, array $body, ?string $idempotencyKey = null): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/click-button", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/click-button", [], $body, $idempotencyKey);
     }
 
     /** @return array<string,mixed> */

@@ -22,7 +22,11 @@ import type { MessageProjector } from '../session/message-projector.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { SendIdempotencyKey } from './entities/send-idempotency-key.entity';
 import { SendIdempotencyService } from './idempotency/send-idempotency.service';
-import { SendIdempotencyInterceptor } from './idempotency/send-idempotency.interceptor';
+import { SendIdempotencyInterceptor, sendFailureProvesNothingSent } from './idempotency/send-idempotency.interceptor';
+import { BaileysMessaging, type BaileysMessagingHost } from '../../engine/adapters/baileys-messaging';
+import { WhatsAppWebJsAdapter } from '../../engine/adapters/whatsapp-web-js.adapter';
+import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { createLogger } from '../../common/services/logger.service';
 import * as sessionWriteScope from '../../common/utils/session-write-scope';
 import type { SendTextMessageDto } from './dto';
 
@@ -1891,6 +1895,134 @@ describe('MessageSendService', () => {
         expect.objectContaining({ sessionId: 'sess-1', type: 'click-button' }),
         expect.anything(),
       );
+    });
+
+    it('releases Idempotency-Key on Baileys not-ready 409, unknown/non-clickable 400, and wwebjs 501 clickButton refusals', async () => {
+      const makeBaileysHost = (opts: { ready?: boolean; stored?: unknown } = {}): BaileysMessagingHost => {
+        const sock = { sendMessage: jest.fn() };
+        return {
+          ensureReady: () => {
+            if (opts.ready === false) throw new EngineNotReadyError();
+          },
+          sessionProxyUrl: () => undefined,
+          getSocket: () => sock as never,
+          getSocketOrNull: () => sock as never,
+          logger: createLogger('click-button-idempotency-test'),
+          toNeutralJid: (j: string) => j.replace('@s.whatsapp.net', '@c.us'),
+          toEngineJid: (j: string) => j.replace('@c.us', '@s.whatsapp.net'),
+          normalizedSelfJid: () => '628177@s.whatsapp.net',
+          getEphemeralExpiration: () => undefined,
+          toUnixSeconds: (ts: number) => ts,
+          loadLib: () =>
+            Promise.resolve({
+              normalizeMessageContent: (c: unknown) => c,
+              getContentType: (c: Record<string, unknown> | undefined) =>
+                Object.keys(c ?? {}).find(k => k === 'conversation' || k.includes('Message')),
+            } as never),
+          getStoredMessage: jest.fn().mockResolvedValue(opts.stored),
+          wasDeletedForEveryone: () => false,
+          pendingEditOf: () => undefined,
+          markDeletedForEveryone: () => undefined,
+          putStoredMessage: jest.fn(),
+          recordMessage: () => undefined,
+          rememberOwnSend: () => undefined,
+          recordLidMapping: () => undefined,
+          getOnMessageCreate: () => undefined,
+          mapMessage: () => Promise.resolve({} as never),
+        } as unknown as BaileysMessagingHost;
+      };
+
+      const buttonsPrompt = {
+        key: { id: 'PROMPT-1', remoteJid: 'test@s.whatsapp.net', fromMe: false },
+        message: {
+          buttonsMessage: {
+            contentText: 'Choose one',
+            buttons: [{ buttonId: 'yes', buttonText: { displayText: 'Yes' } }],
+          },
+        },
+      };
+      const plainTextPrompt = {
+        key: { id: 'PROMPT-PLAIN', remoteJid: 'test@s.whatsapp.net', fromMe: false },
+        message: { conversation: 'Not a button prompt' },
+      };
+
+      const cases: Array<{
+        label: string;
+        runEngine: () => Promise<unknown>;
+        expectedError: new (...args: never[]) => Error;
+      }> = [
+        {
+          label: 'Baileys not-ready 409',
+          runEngine: () =>
+            new BaileysMessaging(makeBaileysHost({ ready: false })).clickButton('test@c.us', 'PROMPT-1', 'yes'),
+          expectedError: EngineNotReadyError,
+        },
+        {
+          label: 'Baileys unknown buttonId 400',
+          runEngine: () =>
+            new BaileysMessaging(makeBaileysHost({ stored: buttonsPrompt })).clickButton(
+              'test@c.us',
+              'PROMPT-1',
+              'unknown-btn',
+            ),
+          expectedError: BadRequestException,
+        },
+        {
+          label: 'Baileys non-clickable prompt 400',
+          runEngine: () =>
+            new BaileysMessaging(makeBaileysHost({ stored: plainTextPrompt })).clickButton(
+              'test@c.us',
+              'PROMPT-PLAIN',
+              'yes',
+            ),
+          expectedError: BadRequestException,
+        },
+        {
+          label: 'whatsapp-web.js unsupported 501',
+          runEngine: () => WhatsAppWebJsAdapter.prototype.clickButton.call({}),
+          expectedError: EngineNotSupportedError,
+        },
+      ];
+
+      for (const tc of cases) {
+        const claim = jest.fn().mockResolvedValue({ kind: 'claimed', id: `claim-${tc.label}` });
+        const complete = jest.fn().mockResolvedValue(undefined);
+        const release = jest.fn().mockResolvedValue(undefined);
+        const markFailed = jest.fn().mockResolvedValue(undefined);
+        const store = { claim, complete, release, markFailed } as unknown as SendIdempotencyService;
+        const interceptor = new SendIdempotencyInterceptor(store);
+
+        mockEngine.clickButton.mockImplementationOnce(() => tc.runEngine());
+
+        const ctx = {
+          getType: () => 'http',
+          getHandler: () => ({ name: 'clickButton' }),
+          switchToHttp: () => ({
+            getRequest: () => ({
+              headers: { 'idempotency-key': `key-${tc.label.replace(/\s+/g, '-')}` },
+              params: { sessionId: 'sess-1' },
+              body: { chatId: 'test@c.us', messageId: 'PROMPT-1', buttonId: 'yes' },
+            }),
+            getResponse: () => ({ setHeader: jest.fn() }),
+          }),
+        } as unknown as ExecutionContext;
+
+        let caught: unknown;
+        try {
+          const obs = await interceptor.intercept(ctx, {
+            handle: () =>
+              from(service.clickButton('sess-1', { chatId: 'test@c.us', messageId: 'PROMPT-1', buttonId: 'yes' })),
+          });
+          await lastValueFrom(obs);
+        } catch (err) {
+          caught = err;
+        }
+
+        expect(caught).toBeInstanceOf(tc.expectedError);
+        expect(sendFailureProvesNothingSent(caught)).toBe(true);
+        expect(release).toHaveBeenCalledWith(`claim-${tc.label}`);
+        expect(markFailed).not.toHaveBeenCalled();
+      }
     });
   });
 

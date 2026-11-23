@@ -14,7 +14,7 @@ export class ApiKey {
   @Column({ type: 'varchar', length: 100 })
   name!: string;
 
-  @Index({ unique: true })
+  @Index('IDX_api_keys_keyHash', { unique: true })
   @Column({ type: 'varchar', length: 64 })
   keyHash!: string;
 

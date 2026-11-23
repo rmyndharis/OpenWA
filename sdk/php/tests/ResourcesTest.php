@@ -745,6 +745,12 @@ class ResourcesTest extends TestCase
         $this->assertSame('{"ids":[]}', $backend->rawBody(0));
     }
 
+    public function testDeliveryFailuresReturnsEmptyArrayOnEmptyResponse(): void
+    {
+        $backend = (new MockBackend())->on(204, null);
+        $this->assertSame([], $backend->makeClient()->webhooks->deliveryFailures());
+    }
+
     public function testSendMethodsForwardIdempotencyKeysWithoutChangingJson(): void
     {
         $cases = [
@@ -759,6 +765,7 @@ class ResourcesTest extends TestCase
             ['sendTemplate', 'send-template', ['chatId' => 'a@c.us', 'templateId' => 't', 'vars' => []]],
             ['sendPoll', 'send-poll', ['chatId' => 'a@c.us', 'name' => 'Q', 'options' => ['A', 'B']]],
             ['reply', 'reply', ['chatId' => 'a@c.us', 'quotedMessageId' => 'q', 'text' => 'reply']],
+            ['clickButton', 'click-button', ['chatId' => 'a@c.us', 'messageId' => 'p', 'buttonId' => 'yes', 'text' => 'Yes']],
             ['forward', 'forward', ['fromChatId' => 'a@c.us', 'toChatId' => 'b@c.us', 'messageId' => 'm']],
         ];
         foreach ([null, '!', '~', 'a', str_repeat('a', 255)] as $key) {

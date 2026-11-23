@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { ApiKey } from './entities/api-key.entity';
-import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { LearnedLidMapping, LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { ContactDirectory, resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import {
   ChatScope,
@@ -98,6 +98,11 @@ export class ChatScopeService {
     chatIdOf: (item: T) => string | null | undefined,
   ): Promise<T[]> {
     return filterByChatScope(await this.scopeForFilter(apiKey), items, chatIdOf);
+  }
+
+  /** Subscribe to newly persisted lid->phone mappings when backed by a LidMappingStoreService. */
+  onMappingLearned(listener: (mapping: LearnedLidMapping) => void): () => void {
+    return this.lidStore?.onMappingLearned?.(listener) ?? (() => undefined);
   }
 
   private singleDirectory(): ContactDirectory | undefined {

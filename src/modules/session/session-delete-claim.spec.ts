@@ -27,6 +27,7 @@ import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.ent
 import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
 import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 import { Template } from '../template/entities/template.entity';
+import { AutomationRule } from '../automation/entities/automation-rule.entity';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 import { ChatState } from '../../engine/adapters/baileys-chat-state.entity';
 import { StatusUpdate } from '../status-store/entities/status-update.entity';
@@ -57,6 +58,7 @@ const entities = [
   WebhookDeliveryFailure,
   IntegrationDeliveryFailure,
   Template,
+  AutomationRule,
   BaileysStoredMessage,
   ChatState,
   StatusUpdate,
@@ -2547,6 +2549,9 @@ describe('A session deleted on one node while a peer shares the database', () =>
         expect(await b.ownership.claim(id)).toBe(true);
         await sessions.update(id, { leaseExpiresAt: lapsed() });
         await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(SessionStoppedException);
+        // On PostgreSQL claimedAt uses the DB server clock (unaffected by fake JS timers); force the
+        // same-millisecond collision explicitly so ownsClaim() generation fencing is still exercised.
+        if (pg && frozen) await sessions.update(id, { claimedAt: original.claimedAt });
         const reclaimed = await sessions.findOneByOrFail({ id });
         expect(reclaimed.nodeId).toBe('node-a');
         if (frozen) expect(reclaimed.claimedAt).toEqual(original.claimedAt);
@@ -2712,6 +2717,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
       expect(await b.ownership.claim(id)).toBe(true);
       await sessions.update(id, { leaseExpiresAt: lapsed() });
       expect(await a.ownership.claim(id)).toBe(true);
+      if (pg) await sessions.update(id, { claimedAt: original.claimedAt });
       expect((await sessions.findOneByOrFail({ id })).claimedAt).toEqual(original.claimedAt);
       go.resolve();
       expect(await outcome).toBeInstanceOf(ConflictException);
@@ -2767,6 +2773,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
       });
       claiming = a.ownership.claim(id);
       await written.promise;
+      if (pg) await sessions.update(id, { claimedAt: original.claimedAt });
       expect((await sessions.findOneByOrFail({ id })).claimedAt).toEqual(original.claimedAt);
       finish!();
       expect(await outcome).toBeInstanceOf(ConflictException);

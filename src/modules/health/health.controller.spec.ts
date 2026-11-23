@@ -7,6 +7,7 @@ import { HealthController } from './health.controller';
 import { ReadinessResponseDto } from './dto/health-response.dto';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { AuthService } from '../auth/auth.service';
+import { BrowserSessionService } from '../auth/browser-session.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 
@@ -16,6 +17,7 @@ describe('HealthController', () => {
   const dataQuery = jest.fn();
   const isShuttingDown = jest.fn();
   const validateApiKey = jest.fn();
+  const validateSessionToken = jest.fn();
   const logWarn = jest.fn().mockResolvedValue(null);
 
   const reqWith = (headers: Record<string, string> = {}, ip = '127.0.0.1'): Request =>
@@ -33,6 +35,7 @@ describe('HealthController', () => {
         { provide: getDataSourceToken('data'), useValue: { query: dataQuery } },
         { provide: ShutdownService, useValue: { isShuttingDown } },
         { provide: AuthService, useValue: { validateApiKey } },
+        { provide: BrowserSessionService, useValue: { validateSessionToken } },
         { provide: AuditService, useValue: { logWarn } },
         { provide: ConfigService, useValue: { get: () => undefined } },
       ],
@@ -46,6 +49,7 @@ describe('HealthController', () => {
     dataQuery.mockReset();
     isShuttingDown.mockReset();
     validateApiKey.mockReset();
+    validateSessionToken.mockReset();
     logWarn.mockClear(); // keep the resolved value, drop cross-test call history
   });
 
@@ -100,6 +104,47 @@ describe('HealthController', () => {
 
       expect(result.version).toBeDefined();
       expect(validateApiKey).toHaveBeenCalledWith('good-key', '127.0.0.1');
+    });
+
+    it('reports the running version to a valid openwa_session cookie when no API key header is sent', async () => {
+      validateSessionToken.mockResolvedValue({ session: { id: 'bs-1' }, apiKey: { id: 'k1' } });
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { version } = require('../../../package.json') as { version: string };
+
+      const result = await controller.check(reqWith({ cookie: 'openwa_session=valid-cookie-tok' }));
+
+      expect(result.version).toBe(version);
+      expect(validateSessionToken).toHaveBeenCalledWith('valid-cookie-tok', '127.0.0.1');
+      expect(validateApiKey).not.toHaveBeenCalled();
+    });
+
+    it('does not fall back to openwa_session cookie when an invalid X-API-Key header is presented', async () => {
+      validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
+      validateSessionToken.mockResolvedValue({ session: { id: 'bs-1' }, apiKey: { id: 'k1' } });
+
+      const result = await controller.check(
+        reqWith({ 'x-api-key': 'wrong-key', cookie: 'openwa_session=valid-cookie-tok' }),
+      );
+
+      expect(result.status).toBe('ok');
+      expect(result).not.toHaveProperty('version');
+      expect(validateApiKey).toHaveBeenCalledWith('wrong-key', '127.0.0.1');
+      expect(validateSessionToken).not.toHaveBeenCalled();
+    });
+
+    it('withholds version and audits an invalid openwa_session cookie', async () => {
+      validateSessionToken.mockRejectedValue(new UnauthorizedException('Invalid session'));
+
+      const result = await controller.check(reqWith({ cookie: 'openwa_session=bad-cookie-tok' }));
+
+      expect(result.status).toBe('ok');
+      expect(result).not.toHaveProperty('version');
+      expect(logWarn).toHaveBeenCalledWith(AuditAction.API_KEY_AUTH_FAILED, {
+        ipAddress: '127.0.0.1',
+        method: 'GET',
+        path: '/api/health',
+        errorMessage: 'Invalid session',
+      });
     });
   });
 

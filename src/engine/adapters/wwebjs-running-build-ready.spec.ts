@@ -6,7 +6,10 @@ import { reportRunningWebBuild } from './wwebjs-running-build';
 import { reportMissingCallHook } from './wwebjs-call-hook-check';
 import { unappliedPatches } from './engine-patch-status';
 
-jest.mock('../wa-web-version', () => ({ resolveWebVersionPin: jest.fn() }));
+jest.mock('../wa-web-version', () => ({
+  resolveWebVersionPin: jest.fn(),
+  getVerifiedPinnedHtml: jest.fn().mockReturnValue(undefined),
+}));
 jest.mock('./wwebjs-running-build', () => ({ reportRunningWebBuild: jest.fn() }));
 jest.mock('./wwebjs-call-hook-check', () => ({ reportMissingCallHook: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('./engine-patch-status', () => ({

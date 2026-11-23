@@ -1,6 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { And, In, IsNull, LessThan, Not, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
+import { randomUUID } from 'node:crypto';
+import { And, EntityManager, In, IsNull, LessThan, Not, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
 import { WebhookOutboxEvent, WebhookOutboxState } from './entities/webhook-outbox-event.entity';
 import { createLogger } from '../../common/services/logger.service';
 import { pruneInBatches } from '../../common/utils/batched-prune';
@@ -9,6 +10,11 @@ import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-err
 const DEFAULT_OUTBOX_RETENTION_DAYS = 7;
 /** Upper bound on waiting for an active outbox prune pass during shutdown. */
 const OUTBOX_PRUNE_SHUTDOWN_WAIT_MS = 1_000;
+/**
+ * Maximum outbox rows inserted per statement: 9 bound parameters per row yields at most 900
+ * variables per query, safely below SQLite's 999 bind limit and PostgreSQL's 65535 limit.
+ */
+export const OUTBOX_OPEN_BATCH_CHUNK_SIZE = 100;
 
 /**
  * How long a stranded delivery whose stored payload cannot be read is left out of the page reads, as the ingress sweep
@@ -29,6 +35,9 @@ export interface ReplayableDelivery {
   deliveryId?: string;
   state?: WebhookOutboxState | null;
 }
+
+/** Input shape for opening a pending outbox row before delivery starts. */
+export type OutboxOpenRow = Omit<ReplayableDelivery, 'id' | 'attempts'> & { deliveryId: string };
 
 /**
  * Row lifecycle for the outbound delivery record.
@@ -132,7 +141,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
    * existing row is kept rather than duplicated: the stored key is what makes the retry
    * deduplicable at the receiver.
    */
-  async open(row: Omit<ReplayableDelivery, 'id' | 'attempts'> & { deliveryId: string }): Promise<void> {
+  async open(row: OutboxOpenRow): Promise<void> {
     try {
       // A bare INSERT, not save(): save() wraps it in a transaction, and on SQLite's single shared
       // connection the rollback of the unique violation expected here would also discard any other
@@ -153,6 +162,238 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       if (isUniqueViolation(error)) return;
       this.logger.warn(`Could not record outbound delivery ${row.deliveryId}: ${String(error)}`);
     }
+  }
+
+  /**
+   * Record a batch of outbound deliveries as pending using conflict-ignoring inserts
+   * (`ON CONFLICT DO NOTHING` / `INSERT OR IGNORE`) chunked to {@link OUTBOX_OPEN_BATCH_CHUNK_SIZE}
+   * rows so duplicate `(webhookId, idempotencyKey)` entries never abort an enclosing PostgreSQL
+   * transaction or trigger a SQLite shared-connection rollback, and large fan-out batches never
+   * exceed SQL bind-parameter limits.
+   *
+   * When `manager` is provided, writes participate in the caller's transaction and non-conflict
+   * errors propagate so the transaction rolls back atomically. Without `manager`, non-conflict
+   * errors are logged and swallowed like `open()`, returning `null` so callers can distinguish
+   * "standalone DB write failed (fail open)" from "all rows already existed (`[]`)".
+   *
+   * Returns the subset of input rows that were newly inserted, or `null` on a swallowed standalone
+   * DB error.
+   */
+  async openBatch(rows: readonly OutboxOpenRow[], manager?: EntityManager): Promise<OutboxOpenRow[] | null> {
+    if (rows.length === 0) return [];
+    const execute = async (): Promise<OutboxOpenRow[]> => {
+      const targetRepo = manager ? manager.getRepository(WebhookOutboxEvent) : this.outbox;
+      if (!manager && typeof targetRepo.createQueryBuilder !== 'function') {
+        await Promise.all(rows.map(row => this.open(row)));
+        return [...rows];
+      }
+      const connection = manager?.connection ?? this.outbox.manager?.connection;
+      const supportsReturning = connection?.driver?.isReturningSqlSupported?.('insert') === true;
+      const inserted: OutboxOpenRow[] = [];
+
+      for (let offset = 0; offset < rows.length; offset += OUTBOX_OPEN_BATCH_CHUNK_SIZE) {
+        const chunk = rows.slice(offset, offset + OUTBOX_OPEN_BATCH_CHUNK_SIZE);
+        const qb = manager ? manager.createQueryBuilder() : targetRepo.createQueryBuilder();
+        if (supportsReturning) {
+          const result = await qb
+            .insert()
+            .into(WebhookOutboxEvent)
+            .values(
+              chunk.map(row => ({
+                webhookId: row.webhookId,
+                sessionId: row.sessionId,
+                event: row.event,
+                idempotencyKey: row.idempotencyKey,
+                deliveryId: row.deliveryId,
+                payload: row.payload,
+                state: 'pending' as const,
+                attempts: 0,
+              })) as QueryDeepPartialEntity<WebhookOutboxEvent>[],
+            )
+            .orIgnore()
+            .returning(['webhookId', 'idempotencyKey'])
+            .updateEntity(false)
+            .execute();
+          const insertedKeys = new Set(
+            (Array.isArray(result.raw)
+              ? (result.raw as Array<{ webhookId?: string; idempotencyKey?: string }>)
+              : []
+            ).map(r => `${r.webhookId ?? ''}\u0000${r.idempotencyKey ?? ''}`),
+          );
+          for (const row of chunk) {
+            const key = `${row.webhookId}\u0000${row.idempotencyKey}`;
+            if (!insertedKeys.has(key)) continue;
+            insertedKeys.delete(key);
+            inserted.push(row);
+          }
+          continue;
+        }
+        const tagged = chunk.map(row => ({ id: randomUUID(), row }));
+        await qb
+          .insert()
+          .into(WebhookOutboxEvent)
+          .values(
+            tagged.map(({ id, row }) => ({
+              id,
+              webhookId: row.webhookId,
+              sessionId: row.sessionId,
+              event: row.event,
+              idempotencyKey: row.idempotencyKey,
+              deliveryId: row.deliveryId,
+              payload: row.payload,
+              state: 'pending' as const,
+              attempts: 0,
+            })) as QueryDeepPartialEntity<WebhookOutboxEvent>[],
+          )
+          .orIgnore()
+          .updateEntity(false)
+          .execute();
+        if (typeof targetRepo.find !== 'function') {
+          inserted.push(...chunk);
+          continue;
+        }
+        const present = await targetRepo.find({
+          select: { id: true },
+          where: { id: In(tagged.map(t => t.id)) },
+        });
+        const insertedIds = new Set(present.map(r => r.id));
+        for (const entry of tagged) {
+          if (insertedIds.has(entry.id)) inserted.push(entry.row);
+        }
+      }
+      return inserted;
+    };
+
+    if (manager) {
+      return execute();
+    }
+    try {
+      return await execute();
+    } catch (error) {
+      this.logger.warn(`Could not record ${rows.length} outbound delivery record(s): ${String(error)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Update the stored payload of an already-committed pending outbox row (for example, when an
+   * edit or REST revoke changes a message between DB commit and live dispatch). Best-effort.
+   */
+  async updatePendingPayload(
+    webhookId: string,
+    idempotencyKey: string,
+    payload: Record<string, unknown>,
+  ): Promise<boolean> {
+    try {
+      const result = await this.outbox.update({ webhookId, idempotencyKey, state: 'pending', payload: Not(IsNull()) }, {
+        payload,
+      } as QueryDeepPartialEntity<WebhookOutboxEvent>);
+      return (result.affected ?? 0) > 0;
+    } catch (error) {
+      this.logger.warn(`Could not update pending outbound delivery payload: ${String(error)}`);
+      return false;
+    }
+  }
+
+  /**
+   * Close all still-pending outbox rows for one message (`message.received` / `message.sent`) when
+   * an engine revoke arrives, even if the engine retired or crashed before live dispatch, so the
+   * reconciler can never replay unredacted revoked content. Matches exact `msg_<session>_<id>_<wh>`
+   * keys so LIKE wildcards or prefix-sharing message ids cannot match unrelated rows. When
+   * `shouldApply` is supplied, only rows whose stored payload satisfies the predicate are closed.
+   */
+  async closePendingForMessage(
+    sessionId: string,
+    waMessageId: string,
+    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    if (!waMessageId) return;
+    try {
+      const rows = await this.findPendingForMessage(sessionId, waMessageId);
+      if (rows.length === 0) return;
+      const matchingIds: string[] = [];
+      for (const row of rows) {
+        if (shouldApply) {
+          if (!row.payload || !(await shouldApply(row.payload))) continue;
+        }
+        matchingIds.push(row.id);
+      }
+      if (matchingIds.length === 0) return;
+      await this.outbox.update(
+        { id: In(matchingIds), state: 'pending' },
+        { state: 'dispatched', payload: null, lastAttemptAt: new Date() },
+      );
+    } catch (error) {
+      this.logger.warn(`Could not close pending outbound deliveries for message ${waMessageId}: ${String(error)}`);
+    }
+  }
+
+  /**
+   * Redact stored payloads on any still-pending outbox rows for one message when a REST delete
+   * clears the message without suppressing announcement (`announced=false`), so a crash or engine
+   * retire before live dispatch can never replay the deleted content. When `shouldApply` is
+   * supplied, only rows whose stored payload satisfies the predicate are redacted.
+   */
+  async redactPendingForMessage(
+    sessionId: string,
+    waMessageId: string,
+    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    if (!waMessageId) return;
+    try {
+      const rows = await this.findPendingForMessage(sessionId, waMessageId);
+      for (const row of rows) {
+        if (!row.payload) continue;
+        if (shouldApply && !(await shouldApply(row.payload))) continue;
+        /* eslint-disable @typescript-eslint/no-unused-vars */
+        const {
+          media,
+          quotedMessage,
+          call,
+          buttons,
+          button,
+          location,
+          order,
+          product,
+          poll,
+          mentionedIds,
+          isForwarded,
+          forwardingScore,
+          edited,
+          ...kept
+        } = row.payload;
+        /* eslint-enable @typescript-eslint/no-unused-vars */
+        const redacted = { ...kept, body: '', type: 'revoked' };
+        await this.outbox.update({ id: row.id, state: 'pending', payload: Not(IsNull()) }, { payload: redacted });
+      }
+    } catch (error) {
+      this.logger.warn(`Could not redact pending outbound deliveries for message ${waMessageId}: ${String(error)}`);
+    }
+  }
+
+  /** Find still-pending message outbox rows whose idempotencyKey matches `msg_<session>_<waId>_<webhookId>`. */
+  private async findPendingForMessage(sessionId: string, waMessageId: string): Promise<WebhookOutboxEvent[]> {
+    const prefix = `msg_${sessionId}_${waMessageId}_`;
+    const escapedPrefix = prefix.replace(/[\\%_]/g, ch => `\\${ch}`);
+    const candidates =
+      typeof this.outbox.createQueryBuilder === 'function'
+        ? await this.outbox
+            .createQueryBuilder('o')
+            .where('o.sessionId = :sessionId', { sessionId })
+            .andWhere('o.event IN (:...events)', { events: ['message.received', 'message.sent'] })
+            .andWhere('o.state = :state', { state: 'pending' })
+            .andWhere('o.payload IS NOT NULL')
+            .andWhere("o.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern: `${escapedPrefix}%` })
+            .getMany()
+        : await this.outbox.find({
+            where: {
+              sessionId,
+              event: In(['message.received', 'message.sent']),
+              state: 'pending',
+              payload: Not(IsNull()),
+            },
+          });
+    return candidates.filter(row => row.idempotencyKey === `${prefix}${row.webhookId}`);
   }
 
   /** Retire replay data after successful delivery, cancellation or durable failure handoff. */

@@ -15,7 +15,7 @@ import { Column, Entity, Index, PrimaryColumn, UpdateDateColumn } from 'typeorm'
  * outlives any one session.
  */
 @Entity('lid_mappings')
-@Index(['phone']) // reverse lookup: phone -> lids, for the message from-filter
+@Index('IDX_lid_mappings_phone', ['phone']) // reverse lookup: phone -> lids, for the message from-filter
 export class LidMapping {
   /** The lid number (bare, device-stripped - the user-part of `<lid>@lid`). */
   @PrimaryColumn()

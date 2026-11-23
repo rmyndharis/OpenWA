@@ -4109,4 +4109,137 @@ describe('BaileysEvents preparation room and unlink fencing', () => {
       expect(jest.getTimerCount()).toBe(0);
     });
   });
+
+  describe('inbound media download AbortSignal propagation', () => {
+    const savedEnv = {
+      MEDIA_DOWNLOAD_ENABLED: process.env.MEDIA_DOWNLOAD_ENABLED,
+      MEDIA_DOWNLOAD_MAX_BYTES: process.env.MEDIA_DOWNLOAD_MAX_BYTES,
+      MEDIA_DOWNLOAD_TIMEOUT_MS: process.env.MEDIA_DOWNLOAD_TIMEOUT_MS,
+    };
+
+    const imageMsg = (id: string, fileLength = 100): WAMessage => ({
+      key: { id, remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+      messageTimestamp: 1_700_000_000,
+      message: { imageMessage: { mimetype: 'image/png', fileLength } },
+    });
+
+    beforeEach(() => {
+      downloadMediaMessage.mockReset();
+      process.env.MEDIA_DOWNLOAD_ENABLED = 'true';
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    it('passes options.signal to downloadMediaMessage both with and without a proxy dispatcher', async () => {
+      downloadMediaMessage.mockImplementation(() => Promise.resolve(streamOf(Buffer.from('PNG'))));
+
+      const directEvents = new BaileysEvents(makeHost({ getFetchDispatcher: () => undefined }));
+      await directEvents.mapMessage(imageMsg('SIG-DIRECT', 3), 'imageMessage');
+      const calls = downloadMediaMessage.mock.calls as unknown[][];
+      const directOpts = calls[0]?.[2] as { options?: Record<string, unknown> } | undefined;
+      expect(directOpts?.options?.signal).toBeInstanceOf(AbortSignal);
+      expect(directOpts?.options).not.toHaveProperty('dispatcher');
+
+      const dispatcher = { dispatch: jest.fn() };
+      const proxiedEvents = new BaileysEvents(makeHost({ getFetchDispatcher: () => dispatcher as never }));
+      await proxiedEvents.mapMessage(imageMsg('SIG-PROXY', 3), 'imageMessage');
+      const proxyOpts = calls[1]?.[2] as { options?: Record<string, unknown> } | undefined;
+      expect(proxyOpts?.options?.signal).toBeInstanceOf(AbortSignal);
+      expect(proxyOpts?.options?.dispatcher).toBe(dispatcher);
+    });
+
+    it('aborts options.signal on timeout even when downloadMediaMessage is still stalled pre-stream', async () => {
+      jest.useFakeTimers();
+      process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '50';
+
+      let capturedSignal: AbortSignal | undefined;
+      downloadMediaMessage.mockImplementation((_m, _t, opts: { options?: { signal?: AbortSignal } }) => {
+        capturedSignal = opts?.options?.signal;
+        return new Promise(() => undefined); // never resolves stream
+      });
+
+      const events = new BaileysEvents(makeHost());
+      const pending = events.mapMessage(imageMsg('SIG-TIMEOUT', 1024), 'imageMessage');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(capturedSignal).toBeInstanceOf(AbortSignal);
+      expect(capturedSignal?.aborted).toBe(false);
+
+      await jest.advanceTimersByTimeAsync(50);
+      const result = await pending;
+      expect(result.media).toMatchObject({ omitted: true, sizeBytes: 1024 });
+      expect(capturedSignal?.aborted).toBe(true);
+    });
+
+    it('aborts options.signal and destroys the stream when size cap is breached mid-stream', async () => {
+      process.env.MEDIA_DOWNLOAD_MAX_BYTES = '10';
+      let capturedSignal: AbortSignal | undefined;
+      const destroy = jest.fn();
+      downloadMediaMessage.mockImplementation((_m, _t, opts: { options?: { signal?: AbortSignal } }) => {
+        capturedSignal = opts?.options?.signal;
+        return Promise.resolve({
+          // eslint-disable-next-line @typescript-eslint/require-await
+          async *[Symbol.asyncIterator]() {
+            yield Buffer.alloc(6);
+            yield Buffer.alloc(6);
+          },
+          destroy,
+        });
+      });
+
+      const events = new BaileysEvents(makeHost());
+      const result = await events.mapMessage(imageMsg('SIG-CAP', 5), 'imageMessage');
+      expect(result.media).toMatchObject({ omitted: true, sizeBytes: 12 });
+      expect(capturedSignal?.aborted).toBe(true);
+      expect(destroy).toHaveBeenCalled();
+    });
+
+    it('rejects reuploadRequest immediately if aborted and races pending sock.updateMediaMessage against abort', async () => {
+      jest.useFakeTimers();
+      process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '50';
+
+      const updateMediaMessage = jest.fn(() => new Promise(() => undefined));
+      let capturedReupload: ((m: WAMessage) => Promise<WAMessage>) | undefined;
+      downloadMediaMessage.mockImplementation(
+        (_m, _t, _opts, ctx: { reuploadRequest?: (m: WAMessage) => Promise<WAMessage> }) => {
+          capturedReupload = ctx?.reuploadRequest;
+          return new Promise(() => undefined);
+        },
+      );
+
+      const events = new BaileysEvents(
+        makeHost({
+          getSocket: () => ({ updateMediaMessage }) as unknown as WASocket,
+        }),
+      );
+
+      // Start download and kick off a pending reuploadRequest before timeout.
+      const pending = events.mapMessage(imageMsg('SIG-REUPLOAD', 1024), 'imageMessage');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(capturedReupload).toBeDefined();
+
+      const inFlightReupload = capturedReupload!(imageMsg('SIG-REUPLOAD', 1024));
+      expect(updateMediaMessage).toHaveBeenCalledTimes(1);
+
+      // Advance past timeout -> abort signal fires -> pending reuploadRequest rejects promptly.
+      const reuploadRejection = inFlightReupload.then(
+        () => 'resolved',
+        (err: unknown) => (err instanceof Error ? err.message : String(err)),
+      );
+      await jest.advanceTimersByTimeAsync(50);
+      await pending;
+      expect(await reuploadRejection).toMatch(/timed out|aborted/i);
+
+      // Calling reuploadRequest again after abort must reject immediately without invoking updateMediaMessage.
+      await expect(capturedReupload!(imageMsg('SIG-REUPLOAD', 1024))).rejects.toThrow(/timed out|aborted/i);
+      expect(updateMediaMessage).toHaveBeenCalledTimes(1);
+    });
+  });
 });

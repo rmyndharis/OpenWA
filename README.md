@@ -68,7 +68,7 @@ This lets you point an **AI agent or third-party integration at a shared account
 
 Identity is matched through the lid mapping table: a contact allowlisted by phone number also matches the same person's `@lid` privacy id once the table maps the two, and an unmapped `@lid` is refused rather than guessed. A lid's digits are never mistaken for a phone number, so `555000111@lid` does not admit `555000111@c.us`. When a session reports a privacy id new to the gateway for a number the table already maps to another reported id, as when the number passes to someone else, the gateway logs a warning and writes a `phone_second_lid_reported` audit row under that session, so the keys that name either can be reviewed. An id the gateway no longer holds in its mapping cache (`LID_MAPPING_CACHE_MAX`) counts as new, so on a larger table a known pair can be reported again.
 
-The default covers REST routes only. Surfaces that authenticate outside the REST guard do not inherit it, so each one that can return chat data applies the fence with its own check: the `/events` WebSocket delivers only events inside the key's chats, the MCP mount authorizes each tool call against them, and the Bull Board queue dashboard refuses the key. Five list routes are usable, each filtered to the key's chats before paging: `GET /sessions/{sessionId}/chats`, `GET /sessions/{sessionId}/groups` (id, name and community parent id only), `GET /sessions/{sessionId}/contacts`, `GET /sessions/{sessionId}/labels/{labelId}/chats` and `GET /api/search` (the built-in provider; a search plugin answers `403`).
+The default covers REST routes only. Surfaces that authenticate outside the REST guard do not inherit it, so each one that can return chat data applies the fence with its own check: the `/events` WebSocket delivers only events inside the key's chats, the MCP mount authorizes each tool call against them, and the Bull Board queue dashboard refuses the key. Five list routes are usable, each filtered to the key's chats before paging: `GET /sessions/{sessionId}/chats`, `GET /sessions/{sessionId}/groups` (id, name and community parent id only), `GET /sessions/{sessionId}/contacts`, `GET /sessions/{sessionId}/labels/{labelId}/chats` and `GET /api/search` (the built-in provider; under `SEARCH_PROVIDER=auto`, chat-restricted queries fall back to the built-in provider when a search plugin is active, and a search plugin answers `403` when no built-in fallback is available).
 
 The API also accepts `allowedChats` on an admin key, but no admin-only route is open to a chat-scoped key, and the last usable admin key cannot be scoped this way.
 
@@ -239,13 +239,17 @@ disable that policy globally.
 
 ### Docker Socket Proxy
 
-The production stack never exposes `/var/run/docker.sock` directly to the application container. Instead, a dedicated `docker-proxy` sidecar (based on [`tecnativa/docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)) acts as the sole gateway to the Docker daemon:
+The production stack never exposes `/var/run/docker.sock` directly to the application container, and Docker orchestration is off by default (`DockerService` will not fall back to `/var/run/docker.sock` unless `DOCKER_ALLOW_LOCAL_SOCKET=true` is explicitly set). If you want Dashboard > Infrastructure built-in datastore orchestration under Docker Compose, opt in via the dedicated `docker-proxy` profile (based on [`tecnativa/docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)) and set `DOCKER_HOST=tcp://docker-proxy:2375` in `.env`:
+
+```bash
+DOCKER_HOST=tcp://docker-proxy:2375 docker compose --profile docker-proxy up -d
+```
 
 ```
-openwa-api  ──TCP 2375──▶  docker-proxy  ──unix──▶  /var/run/docker.sock
+openwa-api  --TCP 2375-->  docker-proxy  --unix-->  /var/run/docker.sock
 ```
 
-Only the operations needed for container orchestration are enabled (`CONTAINERS`, `IMAGES`, `VOLUMES`, `PING`, plus the `POST` method switch). The application connects via the `DOCKER_HOST=tcp://docker-proxy:2375` environment variable, which `DockerService` detects automatically. Note this is an operational gateway, not a fine-grained privilege boundary: with `POST` enabled the proxy admits every method to the enabled paths and cannot scope container-create payloads, so a compromised API container would be host-root-equivalent — see `SECURITY.md` for the full threat model, mitigations, and how to disable the proxy if you don't use the built-in datastore orchestration.
+Only the operations needed for container orchestration are enabled (`CONTAINERS`, `IMAGES`, `VOLUMES`, `PING`, plus the `POST` method switch), and the sidecar runs hardened (`read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true`, memory/PID limits) on an internal-only network. Note this is an operational gateway, not a fine-grained privilege boundary: with `POST` enabled the proxy admits every method to the enabled paths and cannot scope container-create payloads, so a compromised API container would be host-root-equivalent. See `SECURITY.md` for the full threat model and mitigations.
 
 ### Non-root Container Execution
 
@@ -282,12 +286,13 @@ docker compose --profile postgres up -d
 docker compose --profile full up -d
 ```
 
-| Profile    | Services                                        |
-| ---------- | ----------------------------------------------- |
-| `postgres` | PostgreSQL database                             |
-| `redis`    | Redis (queue, rate limits, WebSocket fan-out)   |
-| `minio`    | S3-compatible storage (MinIO fork `pgsty/silo`) |
-| `full`     | All services above                              |
+| Profile        | Services                                                                         |
+| -------------- | -------------------------------------------------------------------------------- |
+| `docker-proxy` | Opt-in Docker socket proxy for Dashboard > Infrastructure built-in orchestration |
+| `postgres`     | PostgreSQL database                                                              |
+| `redis`        | Redis (queue, rate limits, WebSocket fan-out)                                    |
+| `minio`        | S3-compatible storage (MinIO fork `pgsty/silo`)                                  |
+| `full`         | PostgreSQL, Redis, and MinIO                                                     |
 
 A profile only starts the container; OpenWA keeps using SQLite and local storage until it is told
 to use the new service. The simplest route is **Dashboard > Infrastructure**: pick the built-in
@@ -414,7 +419,7 @@ curl -X POST http://localhost:2785/api/sessions/{sessionId}/webhooks \
 
 OpenWA can expose a **curated set of tools over the [Model Context Protocol](https://modelcontextprotocol.io)** so AI agents (Claude, Cursor, …) can drive WhatsApp. It is **off by default** and **additive** — every REST route keeps working unchanged.
 
-Set `MCP_ENABLED=true` to mount a stateless Streamable-HTTP transport at **`POST /mcp`** on the existing server (same port, no extra process). It mounts **26 read-only tools** by default — session, message, contact, group, webhook, label and automation-rule _reads_ — because the surface is read-only unless you opt out. Add `MCP_READONLY=false` to mount all **52 tools**, adding the write tier (send, reply, group operations). Either way it is a focused surface rather than the full API, so agents aren't overwhelmed.
+Set `MCP_ENABLED=true` to mount a stateless Streamable-HTTP transport at **`POST /mcp`** on the existing server (same port, no extra process). It mounts **25 read-only tools** by default — session, message, contact, group, webhook, label and automation-rule _reads_ — because the surface is read-only unless you opt out. Add `MCP_READONLY=false` to mount all **52 tools**, adding the write tier (send, reply, group operations). Either way it is a focused surface rather than the full API, so agents aren't overwhelmed.
 
 ```bash
 MCP_ENABLED=true npm run start:prod   # or set MCP_ENABLED in your .env / compose
@@ -443,7 +448,7 @@ The key can be passed as `Authorization: Bearer …` or `X-API-Key: …`. Every 
 - Read-only is the default, so leave **`MCP_READONLY`** unset unless the agent must write. **`MCP_READONLY=false`** adds the write tools (sends, replies, group changes).
 - Set **`MCP_RATE_LIMIT_MAX`** (default `60`) to limit tool calls per API key per window.
 - Set **`MCP_RATE_LIMIT_WINDOW_MS`** (default `60000`) to control the sliding window size in milliseconds.
-- Set **`MCP_MAX_RESULT_BYTES`** (default `0`, no cap) for clients such as claude.ai or ChatGPT that put the whole result in the model's context: every tool result is then text, cut at that many bytes; unset, a result over 32 KiB is returned as an embedded base64 resource, which Claude Code saves to a file.
+- Set **`MCP_MAX_RESULT_BYTES`** (default `100000`) to cap each tool result as a single UTF-8 text block, keeping context bounded for clients such as claude.ai or ChatGPT; set `MCP_MAX_RESULT_BYTES=0` to opt out and restore embedded base64 resource offloading above 32 KiB.
 - **Do not expose `/mcp` to the public internet** without a fronting auth proxy. For a self-hosted, locally-reached deployment the static API key is appropriate; public exposure should use OAuth 2.1 (not yet built).
 
 ---

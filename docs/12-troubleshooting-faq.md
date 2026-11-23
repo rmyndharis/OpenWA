@@ -383,7 +383,12 @@ curl -X POST "$BASE/api/sessions/{sessionId}/start" -H "X-API-Key: $API_KEY"
 
 > ℹ️ Proxy egress, on either engine, is configured **per session** via the
 > `proxyUrl` field on `POST /api/sessions` or `PATCH /api/sessions/:sessionId/proxy` (ADMIN key for
-> both), not via environment variables.
+> both), not via environment variables. When using an `http://` or `https://` proxy with the default
+> `SESSION_PROXY_URL_FETCH=true`, the proxy resolves caller-supplied media and link-preview hostnames
+> itself, so DNS rebinding or split-horizon internal DNS can bypass OpenWA's DNS pinning. Configure
+> proxy-side egress ACLs blocking loopback (`127.0.0.0/8`, `::1`), RFC 1918 (`10.0.0.0/8`,
+> `172.16.0.0/12`, `192.168.0.0/16`), link-local and cloud metadata (`169.254.169.254`, `fe80::/10`),
+> and IPv6 unique-local (`fc00::/7`), or use a SOCKS proxy or `SESSION_PROXY_URL_FETCH=false`.
 
 > ℹ️ A `504` whose body starts with `Engine initialization timed out after ...` is a **different**
 > failure with a different fix: initialization never finished at all. That happens when WhatsApp Web,
@@ -406,33 +411,41 @@ stalls the post-link sync. (If you also see `chrome_crashpad_handler: --database
 session never starts at all_, that is a different problem — see "Session fails to launch …" below.)
 
 **Fix:** OpenWA reconciles a missed `ready` event when WhatsApp Web is connected, the injected
-runtime is available, and whatsapp-web.js has populated the linked account identity. If your
-environment still hits a WA-Web compatibility hang, pin a known-good WA-Web version with
-`WWEBJS_WEB_VERSION`:
+runtime is available, and whatsapp-web.js has populated the linked account identity. By default
+(`WWEBJS_WEB_VERSION` unset or `off`), OpenWA disables remote HTML pinning and loads the first-party
+build served by WhatsApp with zero third-party fetches. If your environment still hits a WA-Web
+compatibility hang, pin a known-good WA-Web build together with its SHA-256 digest:
 
 ```bash
-# Optional workaround — substitute a build that the registry currently serves:
+# Optional verified workaround: substitute a build the registry serves and its SHA-256 hex digest:
 WWEBJS_WEB_VERSION=<a build from that registry's html/ folder>
+WWEBJS_WEB_VERSION_SHA256=<64-char hex sha256 of the downloaded HTML>
 ```
 
 Restart the container after changing it. Pick the build from
-[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder) — a
-build the registry no longer serves cannot be fetched, and the session starts on the live build rather
-than the pin you asked for, with a warning at start (action `web_version_html_unavailable`, naming the
-build, the URL and the reason). With
-`WWEBJS_WEB_VERSION` unset, `latest`, or `auto` (the default), OpenWA auto-resolves a settled build
-from that registry and pins its HTML — note this HTML is fetched from a third-party repository and
-executed inside the `web.whatsapp.com` origin without an integrity check. Set
-`WWEBJS_WEB_VERSION=off` to disable pinning and use the first-party build served by WhatsApp. An
-unpinned session (this setting, or an auto-resolve that could not reach the registry) caches nothing to
-disk, so it also works on the image's read-only root filesystem. A pinned build's HTML is downloaded
-at start, with a 10 s bound, into `<SESSION_DATA_PATH>/.wa-web-cache/` on the writable data volume and
-served from there; a build no session has started on for a week is removed. A registry build whose page is
-WhatsApp's logged-out landing page, not the app (its root element is `<html id="whatsapp-web-logged-out">`, the
-value quoted or not), is refused: the auto-resolved pin moves to the next older settled build from the same
-registry read (up to three are tried, with the warning `web_version_html_rejected`), so the fallback needs no
-second registry read. An exact build you set is not swapped, so
-that session starts on the live build with the `web_version_html_unavailable` warning above.
+[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder) or
+an operator-controlled mirror (`WWEBJS_WEB_VERSION_REMOTE_PATH`), compute the SHA-256 digest of that
+HTML file, and set `WWEBJS_WEB_VERSION_SHA256`. OpenWA verifies the digest over the raw fetched bytes
+before writing `<SESSION_DATA_PATH>/.wa-web-cache/<version>.html` and re-verifies the digest on every
+subsequent cache hit. If the cached file was modified, OpenWA deletes it and re-fetches; if fetched
+bytes fail verification, OpenWA refuses the pin with warning `web_version_html_hash_mismatch` and
+starts on the live first-party build. A build the registry no longer serves cannot be fetched, and
+the session starts on the live build rather than the pin you asked for, with a warning at start
+(action `web_version_html_unavailable`, naming the build, the URL and the reason).
+
+To opt into unverified remote HTML (either `WWEBJS_WEB_VERSION=auto` / `latest` or an exact build
+without `WWEBJS_WEB_VERSION_SHA256`), you must also set `WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true`;
+boot validation refuses unverified remote pins without that explicit opt-in because pinned HTML
+executes inside the authenticated `web.whatsapp.com` origin. An unpinned session (default unset/`off`,
+or an opted-in auto-resolve that could not reach the registry) caches nothing to disk, so it works on
+the image's read-only root filesystem. A pinned build's HTML is downloaded at start, with a 10 s
+bound, into `<SESSION_DATA_PATH>/.wa-web-cache/` on the writable data volume and served from there; a
+build no session has started on for a week is removed. A registry build whose page is WhatsApp's
+logged-out landing page, not the app (its root element is `<html id="whatsapp-web-logged-out">`, the
+value quoted or not), is refused: an opted-in auto-resolved pin moves to the next older settled build
+from the same registry read (up to three are tried, with the warning `web_version_html_rejected`), so
+the fallback needs no second registry read. An exact build you set is not swapped, so that session
+starts on the live build with the `web_version_html_unavailable` warning above.
 
 A pin is not guaranteed to hold. whatsapp-web.js applies it by answering the page's document request
 with the pinned HTML, and that can miss in two ways: a pin whose HTML could not be fetched is dropped
@@ -861,41 +874,6 @@ patches are missing" below and "Frequent Disconnections" above. A warning `onboa
 next to the `Page navigated` line means WhatsApp's "What's new" screen is open in a language the gateway does
 not recognise: see "Session stuck at `action_required`" above.
 
-### Issue: Sends return 500 "engine returned no message", and chats or media fail with `r: r`
-
-**Symptoms:**
-
-- `POST /api/sessions/{id}/messages/send-text` returns `{"statusCode":500,"message":"Internal server error"}` — but the message _is_ delivered
-- Logs show `the engine returned no message for this send, so it may not have been delivered`
-- Unrelated operations fail with the minified error `r: r`: `GET /api/sessions/{id}/chats`, media downloads, typing indicators
-- Startup logs may contain `The installed whatsapp-web.js is missing the message-id backport…`, or
-  `The installed whatsapp-web.js carries only part of the message-id backport…` after an interrupted install
-
-**Cause:** WhatsApp Web 2.3000.x renamed the internal message-id property that whatsapp-web.js
-reads. OpenWA ships a backport that restores it, applied at install time by
-`scripts/patch-wwebjs-201832.js`. When the install cannot run it — neither GNU `patch` nor `git`
-available, or `npm install --ignore-scripts` — whatsapp-web.js stays unpatched and every operation
-that reads a message id fails. Source installs only; the Docker image always applies the backport.
-
-**Solution:**
-
-```bash
-# Is the backport missing, or only partly applied? Works on every platform, including Windows without grep.
-node -e "const s=require('./scripts/patch-wwebjs-201832.js').missingSites();const m=require('fs').readFileSync('node_modules/whatsapp-web.js/src/structures/Message.js','utf8');console.log(s.length?'PARTIAL: '+s.join(', '):m.includes('_normalizeId(')?'PATCHED':'NOT PATCHED')"
-
-# Apply it, then restart
-node scripts/patch-wwebjs-201832.js
-```
-
-If that reports a partially patched tree, reinstall the dependency first:
-
-```bash
-rm -rf node_modules/whatsapp-web.js && npm ci
-```
-
-> Pinning `WWEBJS_WEB_VERSION` does **not** work around this — the rename is present in every
-> current WhatsApp Web build, so no pin avoids it.
-
 ### Issue: Startup logs say install-time patches are missing
 
 **Symptoms:**
@@ -914,7 +892,7 @@ rm -rf node_modules/whatsapp-web.js && npm ci
   `<status>` stanzas (the status-ack patch is missing, or is the 0.30.1 revision, which only
   acknowledged them)
 
-**Cause:** OpenWA applies fifteen exact source transforms to its engine libraries at install time
+**Cause:** OpenWA applies fourteen exact source transforms to its engine libraries at install time
 (docs/29 §29.3). The Docker image runs them without `--best-effort`, so a source shape a patcher
 cannot recognise fails the image build. Source installs run the Puppeteer compatibility transform
 without best-effort too, because browser teardown depends on it. The other transforms use
@@ -930,7 +908,7 @@ is actually affected rather than in an install log nobody kept.
 node -e "const fs=require('fs'),p=require('path');for(const f of fs.readdirSync('scripts').filter(n=>n.startsWith('patch-')&&n.endsWith('.js')&&!n.endsWith('.spec.js')).sort()){const m=require('./scripts/'+f);if(typeof m.isApplied!=='function')continue;const k=f.startsWith('patch-wwebjs-')?'whatsapp-web.js':'@whiskeysockets/baileys';try{console.log((m.isApplied(p.dirname(require.resolve(k+'/package.json')))?'APPLIED    ':'NOT APPLIED')+' '+f)}catch{}}"
 
 # Apply each one it named, then restart
-node scripts/patch-wwebjs-group-description.js
+node scripts/patch-wwebjs-media-id.js
 ```
 
 If a patcher answers with an unsupported-shape error instead of applying, the installed library has
@@ -938,9 +916,6 @@ moved and the transform needs re-evaluating against it. Reinstalling will not he
 quoting the message it printed. The one exception is `patch-baileys-pairing.js` saying the backport
 was cut short: an interrupted install left it half applied, and reinstalling `@whiskeysockets/baileys`
 (`rm -rf node_modules/@whiskeysockets/baileys && npm ci`) is the fix.
-
-> `patch-wwebjs-201832.js` is not in that list. It carries its own startup check and its own entry
-> above, because a partially applied backport needs different advice than one that never ran.
 
 > A patch that never applied is not fatal on its own, with two exceptions: without
 > `patch-baileys-media-stream.js`, a Baileys media download abandoned at `MEDIA_DOWNLOAD_TIMEOUT_MS` or

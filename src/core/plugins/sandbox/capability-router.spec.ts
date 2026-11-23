@@ -86,6 +86,14 @@ describe('dispatchCapabilityVerb', () => {
     expect(out).toMatchObject({ ok: true, status: 200, body: 'x' });
   });
 
+  it('forwards an AbortSignal to context.net.fetch when provided', async () => {
+    const ctx = makeContext();
+    const init = { method: 'GET' };
+    const controller = new AbortController();
+    await dispatchCapabilityVerb(ctx, 'net.fetch', ['https://api.example.com/t', init], controller.signal);
+    expect(ctx.net.fetch).toHaveBeenCalledWith('https://api.example.com/t', init, controller.signal);
+  });
+
   it('routes mappings verbs to the context', async () => {
     const calls: Array<[string, unknown[]]> = [];
     const ctx = {

@@ -106,8 +106,8 @@ test('a patcher run in a way that cannot fail the image build is reported', () =
     ),
     [
       // The `;` also joins the patcher before it into one command, whose failure it masks the same way.
-      'patch-wwebjs-group-description.js is not run fatally',
       'patch-wwebjs-media-id.js is not run fatally',
+      'patch-wwebjs-participant-arity.js is not run fatally',
       'the install RUN chains with `;` or `||`',
     ],
   );
@@ -131,6 +131,13 @@ test('every patcher is also wired into postinstall', () => {
     .map(arg => path.basename(arg));
   const missing = patchers.filter(p => !planned.includes(p));
   assert.deepEqual(missing, [], `not wired into postinstall: ${missing.join(', ')}`);
+});
+
+test('production stage does not install the GNU patch package', () => {
+  const aptRuns = production.filter(line => /\bapt-get\s+install\b/.test(line));
+  assert.ok(aptRuns.length > 0, 'no apt-get install RUN found in the production stage');
+  const installsPatch = aptRuns.some(line => /(?:^|\s)patch(?:\s|$)/.test(line));
+  assert.equal(installsPatch, false, 'production stage still installs the unused GNU patch package');
 });
 
 test('docs install the same Chrome for Testing build as the image', () => {

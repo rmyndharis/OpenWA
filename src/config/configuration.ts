@@ -7,6 +7,9 @@ import { readWsRateLimitConfig } from '../modules/events/ws-rate-limit';
 import { DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS, MAX_TIMER_MS } from '../common/services/shutdown-budget';
 import { parseTrustedProxies } from '../common/utils/ip';
 import { positiveIntFromEnv } from '../common/utils/env-int';
+import { resolveSqliteJournalMode } from '../database/sqlite-pragmas';
+import { resolveBrowserSessionTtlMs } from '../modules/auth/browser-session.util';
+import { parsePuppeteerArgs } from './puppeteer-args';
 
 /**
  * Root of the host's persistent state. Relative on purpose: the image sets WORKDIR /app and mounts
@@ -178,6 +181,7 @@ export default () => ({
     // SQLite file for the auth/audit DB. Overridable (e.g. e2e points it at a temp file) so tests
     // never write api keys into the developer's ./data/main.sqlite.
     database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
+    journalMode: resolveSqliteJournalMode(process.env.SQLITE_JOURNAL_MODE),
     // Schema management for the auth/audit DB. By default the main-owned migrations run at boot
     // (they also adopt a file an earlier release built with synchronize); run them by hand with
     // `npm run migration:run:main` (or `migration:run:main:prod` for the compiled image), since the
@@ -192,6 +196,8 @@ export default () => ({
     type: process.env.DATABASE_TYPE || 'sqlite',
     // SQLite path (used when type is sqlite)
     database: process.env.DATABASE_NAME || './data/openwa.sqlite',
+    // SQLite journal mode (used when type is sqlite): WAL (default) or DELETE (NFS/SMB opt-out)
+    journalMode: resolveSqliteJournalMode(process.env.SQLITE_JOURNAL_MODE),
     // Postgres database NAME (used when type is postgres). Resolved from the same
     // DATABASE_NAME env as the migration CLI (data-source.ts) so the runtime factory and
     // migrations never target different databases. Distinct sqlite-vs-pg defaults.
@@ -231,12 +237,10 @@ export default () => ({
       // a single glued token like "--no-sandbox --disable-gpu" silently neuters --no-sandbox.
       // A comma only splits before the next flag, since flag values carry commas of their own
       // (--disable-features=A,B, --window-size=1280,720).
-      args: withPinnedBrowserLocale(
-        (process.env.PUPPETEER_ARGS || DEFAULT_PUPPETEER_ARGS.join(','))
-          .split(/\s+|,+(?=-)/)
-          .map(arg => arg.replace(/^,+|,+$/g, ''))
-          .filter(Boolean),
-      ),
+      args: (() => {
+        const parsed = parsePuppeteerArgs(process.env.PUPPETEER_ARGS ?? '');
+        return withPinnedBrowserLocale(parsed.length > 0 ? parsed : DEFAULT_PUPPETEER_ARGS);
+      })(),
       // Optional path to a system Chromium/Chrome binary. When unset, whatsapp-web.js
       // uses Puppeteer's bundled Chromium. Required on hosts where the bundled binary
       // is missing or incompatible (Alpine, ARM, custom base images).
@@ -342,6 +346,29 @@ export default () => ({
     // is ignored and the direct socket address is used, preventing spoofing of
     // the API-key allowedIps whitelist.
     trustedProxies: parseTrustedProxies(process.env.TRUSTED_PROXIES),
+  },
+
+  // Browser session authentication for the bundled dashboard
+  auth: {
+    // Lifetime of an HttpOnly openwa_session browser cookie (default 12 hours, clamped between
+    // 5 minutes and 30 days by resolveBrowserSessionTtlMs).
+    dashboardSessionTtlMs: resolveBrowserSessionTtlMs(process.env.DASHBOARD_SESSION_TTL_MS),
+    // Optional override for the Secure attribute on openwa_session ('true' or 'false').
+    // Unset follows direct TLS or trusted-proxy X-Forwarded-Proto=https detection.
+    dashboardSessionCookieSecure: (() => {
+      const raw = process.env.DASHBOARD_SESSION_COOKIE_SECURE?.trim();
+      if (raw === 'true') return true;
+      if (raw === 'false') return false;
+      return undefined;
+    })(),
+  },
+
+  // Plugin hook execution policy
+  hooks: {
+    // Pre-egress hooks (message:sending, webhook:before) default to fail-open for backward
+    // compatibility. Set HOOK_PRE_EGRESS_FAIL_CLOSED=true to abort outbound sends and webhook
+    // deliveries when a pre-egress hook throws, times out, crashes, or returns an unusable payload.
+    preEgressFailClosed: process.env.HOOK_PRE_EGRESS_FAIL_CLOSED === 'true',
   },
 
   // Plugin platform configuration
@@ -474,6 +501,10 @@ export default () => ({
       const n = parseInt(process.env.SESSION_PROXY_TIMEOUT_MS ?? '', 10);
       return Number.isFinite(n) && n > 0 ? n : 60_000;
     })(),
+    // Shared HMAC secret for authenticating inter-node forwarded hops (opt-in). When configured
+    // identically across peers, the owning node verifies the hop signature and skips its own
+    // throttle pass so forwarded requests are counted once instead of twice.
+    proxySecret: process.env.SESSION_PROXY_SECRET?.trim() || '',
     // How long a claim is honoured without renewal (default 60s). This is the worst-case delay
     // before a peer may take over from a process that died without releasing.
     leaseTtlMs: (() => {

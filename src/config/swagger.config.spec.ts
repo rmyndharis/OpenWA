@@ -6,6 +6,7 @@ import {
   dropUnexpressibleOperations,
   ERROR_RESPONSE_SCHEMA,
   exemptPublicOperations,
+  PUBLIC_OPERATIONS,
   PUBLIC_PATHS,
   METRICS_BEARER_SCHEME,
 } from './swagger.config';
@@ -65,6 +66,7 @@ describe('exemptPublicOperations', () => {
       info: { title: 't', version: '0' },
       paths: {
         '/api/health': { get: {}, post: {} },
+        '/api/auth/session': { post: {}, get: {}, delete: {} },
         '/api/sessions': { get: {} },
       },
       components: {},
@@ -76,6 +78,14 @@ describe('exemptPublicOperations', () => {
 
     expect(doc.paths['/api/health'].get?.security).toEqual([]);
     expect(doc.paths['/api/health'].post?.security).toEqual([]);
+  });
+
+  it('clears security only on listed public operations while keeping sibling auth methods protected', () => {
+    const doc = exemptPublicOperations(fixtureDoc());
+
+    expect(doc.paths['/api/auth/session'].delete?.security).toEqual([]);
+    expect(doc.paths['/api/auth/session'].post?.security).toBeUndefined();
+    expect(doc.paths['/api/auth/session'].get?.security).toBeUndefined();
   });
 
   it('leaves non-public paths untouched (they inherit the global requirement)', () => {
@@ -212,6 +222,7 @@ describe('documentErrorResponses', () => {
 // requirement) rather than a PUBLIC_PATHS security: [] exemption.
 describe('PUBLIC_PATHS drift guard', () => {
   const EXPECTED_PUBLIC_CONTROLLERS = [
+    'src/modules/auth/browser-session.controller.ts',
     'src/modules/health/health.controller.ts',
     'src/modules/infra/infra-status.controller.ts',
     'src/modules/integration/ingress.controller.ts',
@@ -256,6 +267,7 @@ describe('PUBLIC_PATHS drift guard', () => {
         '/api/ingress/{pluginId}/{instanceId}/{path}',
       ].sort(),
     );
+    expect(PUBLIC_OPERATIONS).toEqual([{ path: '/api/auth/session', method: 'delete' }]);
   });
 });
 

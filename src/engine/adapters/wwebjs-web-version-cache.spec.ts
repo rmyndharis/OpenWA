@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -13,6 +14,8 @@ import { __resetWebVersionCache } from '../wa-web-version';
 describe('whatsapp-web.js web version cache', () => {
   let clientInitSpy: jest.SpyInstance;
   let savedWebVersion: string | undefined;
+  let savedWebVersionSha256: string | undefined;
+  let savedAllowUnverified: string | undefined;
   let dataDir: string;
 
   const launchedCacheOption = async (webVersion: string): Promise<unknown> => {
@@ -30,6 +33,10 @@ describe('whatsapp-web.js web version cache', () => {
     __resetWebVersionCache();
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwebjs-web-version-'));
     savedWebVersion = process.env.WWEBJS_WEB_VERSION;
+    savedWebVersionSha256 = process.env.WWEBJS_WEB_VERSION_SHA256;
+    savedAllowUnverified = process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+    delete process.env.WWEBJS_WEB_VERSION_SHA256;
+    delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
     // Build the real Client, whose options are merged over the library defaults, but launch no browser.
     clientInitSpy = jest
       .spyOn(Client.prototype as unknown as { initialize: () => Promise<void> }, 'initialize')
@@ -46,6 +53,16 @@ describe('whatsapp-web.js web version cache', () => {
     } else {
       process.env.WWEBJS_WEB_VERSION = savedWebVersion;
     }
+    if (savedWebVersionSha256 === undefined) {
+      delete process.env.WWEBJS_WEB_VERSION_SHA256;
+    } else {
+      process.env.WWEBJS_WEB_VERSION_SHA256 = savedWebVersionSha256;
+    }
+    if (savedAllowUnverified === undefined) {
+      delete process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED;
+    } else {
+      process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = savedAllowUnverified;
+    }
   });
 
   it('caches nothing to disk when no build is pinned', async () => {
@@ -56,6 +73,7 @@ describe('whatsapp-web.js web version cache', () => {
   // pinned build's HTML is downloaded first and served as a strict file on the data volume.
   it('serves a pinned build from a strict local cache under the session data path', async () => {
     const html = `<html>${'x'.repeat(2048)}</html>`;
+    process.env.WWEBJS_WEB_VERSION_SHA256 = createHash('sha256').update(html).digest('hex');
     jest
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve(html) } as unknown as Response);
@@ -77,8 +95,10 @@ describe('whatsapp-web.js web version cache', () => {
   });
 
   it('runs unpinned when the pinned build cannot be downloaded', async () => {
-    jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('getaddrinfo ENOTFOUND'));
+    process.env.WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED = 'true';
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('getaddrinfo ENOTFOUND'));
 
     expect(await launchedCacheOption('2.3000.1000000000')).toEqual({ type: 'none' });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

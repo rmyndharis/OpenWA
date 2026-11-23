@@ -185,14 +185,14 @@ describe('BaileysEvents media download through a session proxy', () => {
     expect(downloadMediaMessage).toHaveBeenCalledWith(
       expect.anything(),
       'stream',
-      { options: { dispatcher } },
+      { options: { dispatcher, signal: expect.any(AbortSignal) as AbortSignal } },
       expect.anything(),
     );
   });
 
-  // An unproxied session passes no dispatcher at all, which is Baileys' own default, and the
-  // download must not start carrying an empty options object instead.
-  it('passes no fetch options for an unproxied session', async () => {
+  // An unproxied session passes no dispatcher at all, which is Baileys' own default, while still
+  // forwarding the download AbortSignal.
+  it('passes no proxy dispatcher for an unproxied session while forwarding AbortSignal', async () => {
     downloadMediaMessage.mockResolvedValue({
       // eslint-disable-next-line @typescript-eslint/require-await
       async *[Symbol.asyncIterator]() {
@@ -203,7 +203,15 @@ describe('BaileysEvents media download through a session proxy', () => {
 
     await events.mapMessage(imageMessage('DIRECT', 3), 'imageMessage');
 
-    expect(downloadMediaMessage).toHaveBeenCalledWith(expect.anything(), 'stream', {}, expect.anything());
+    expect(downloadMediaMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'stream',
+      { options: { signal: expect.any(AbortSignal) as AbortSignal } },
+      expect.anything(),
+    );
+    const calls = downloadMediaMessage.mock.calls as unknown[][];
+    const passedOpts = calls[0]?.[2] as { options?: Record<string, unknown> };
+    expect(passedOpts.options).not.toHaveProperty('dispatcher');
   });
 
   // A message still queued when the session is torn down gets its turn afterwards. Reading the

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { lazyWithRetry as lazy } from './utils/lazyWithRetry';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -9,8 +9,18 @@ import { NumberCheckProvider } from './components/NumberCheckProvider';
 import { useRole } from './hooks/useRole';
 import { RoleProvider } from './components/RoleProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { API_BASE_URL } from './services/api';
-import { clearActorState, isUserRole, resolveStartupValidation } from './utils/authLifecycle';
+import { authApi } from './services/api';
+import type { LoginSessionResult } from './pages/Login';
+import {
+  broadcastAuthEvent,
+  clearActorState,
+  clearLegacyApiKeyStorage,
+  clearSessionMetadata,
+  getActiveApiKeyId,
+  isUserRole,
+  resolveStartupValidation,
+  subscribeAuthEvents,
+} from './utils/authLifecycle';
 import './App.css';
 
 const Login = lazy(() => import('./pages/Login').then(m => ({ default: m.Login })));
@@ -37,75 +47,129 @@ const queryClient = new QueryClient({
 });
 
 function AppContent() {
-  // Capture the key ONCE at mount. Read live per render, the null→key transition when
-  // handleLogin stores a fresh key would re-fire the startup re-validation effect below and
-  // double the /auth/validate request on every sign-in — the effect is for genuine page
-  // refreshes with a saved key only.
-  const [savedKey] = useState(() => sessionStorage.getItem('openwa_api_key'));
-  const [isAuthenticated, setIsAuthenticated] = useState(!!savedKey);
-  const [, setApiKey] = useState(savedKey || '');
-  const { setRole, role, setEngineType, setScoped, scoped } = useRole();
+  // Clear any legacy plaintext API key left in sessionStorage by older builds, and read the
+  // non-secret session actor id once at mount so we know whether to render optimistically while
+  // GET /auth/session hydrates live state from the HttpOnly browser session cookie.
+  const [hadSavedSession] = useState(() => {
+    clearLegacyApiKeyStorage();
+    return Boolean(getActiveApiKeyId());
+  });
+  const [isAuthenticated, setIsAuthenticated] = useState(hadSavedSession);
+  const [hydratingSession, setHydratingSession] = useState(!hadSavedSession);
+  const authGenRef = useRef(0);
+  const { setRole, role, setEngineType, setScoped, scoped, setApiKeyId, bumpSessionEpoch } = useRole();
 
-  const handleLogin = (key: string, validatedRole?: string, engineType?: string, scoped = false) => {
-    setApiKey(key);
-    sessionStorage.setItem('openwa_api_key', key);
-
-    // The login page's validate response already carried the role, so no second /auth/validate
-    // round-trip is needed here. An absent or unrecognized role falls back to viewer, the
-    // least-privileged default.
-    setRole(isUserRole(validatedRole) ? validatedRole : 'viewer');
-    setEngineType(engineType ?? null);
-    setScoped(scoped);
-
-    setIsAuthenticated(true);
-  };
-
-  const handleLogout = useCallback(() => {
-    setApiKey('');
+  const clearLocalSession = useCallback(() => {
     setIsAuthenticated(false);
+    setHydratingSession(false);
     setRole(null);
     setEngineType(null);
     setScoped(false);
-    sessionStorage.removeItem('openwa_api_key');
+    setApiKeyId?.(null);
+    clearSessionMetadata();
     // Wipe the React Query cache too: it is keyed by resource, not actor, so without a full
-    // clear a logout → login in the same tab with a different key/scope shows the previous
+    // clear a logout -> login in the same tab with a different key/scope shows the previous
     // actor's sessions/messages/apiKeys/audit rows.
     clearActorState(queryClient);
-  }, [setRole, setEngineType, setScoped]);
+  }, [setRole, setEngineType, setScoped, setApiKeyId]);
 
-  // Re-validate and refresh the role on mount if already authenticated
+  const handleLogin = useCallback(
+    (session: LoginSessionResult) => {
+      authGenRef.current += 1;
+      clearLegacyApiKeyStorage();
+      const effectiveApiKeyId = session.apiKeyId ?? 'session';
+      // The login page's POST /auth/session response already carried the role, scope, engine, and
+      // apiKeyId, so no second round-trip is needed. An absent or unrecognized role falls back to
+      // viewer, the least-privileged default.
+      setRole(isUserRole(session.role) ? session.role : 'viewer');
+      setEngineType(session.engineType ?? null);
+      setScoped(session.scoped === true);
+      setApiKeyId?.(effectiveApiKeyId);
+      setHydratingSession(false);
+      setIsAuthenticated(true);
+      broadcastAuthEvent({ type: 'login', apiKeyId: effectiveApiKeyId });
+    },
+    [setRole, setEngineType, setScoped, setApiKeyId],
+  );
+
+  const handleLogout = useCallback(() => {
+    authGenRef.current += 1;
+    clearLocalSession();
+    broadcastAuthEvent({ type: 'logout' });
+    void authApi.deleteSession().catch(() => undefined);
+  }, [clearLocalSession]);
+
+  const hydrateFromServer = useCallback(
+    (clearOnFailure: boolean, refreshSocket = false) => {
+      const gen = ++authGenRef.current;
+
+      authApi
+        .getSession()
+        .then(async res => {
+          const decision = resolveStartupValidation(res.status, await res.json().catch(() => null));
+          // Ignore stale answers if the user already logged in or logged out while hydration was in flight.
+          if (authGenRef.current !== gen) return;
+          if (decision.action === 'logout') {
+            if (clearOnFailure) {
+              clearLocalSession();
+            } else {
+              setHydratingSession(false);
+            }
+          } else if (decision.action === 'role') {
+            setRole(decision.role);
+            setScoped(decision.scoped);
+            if (decision.engineType) setEngineType(decision.engineType);
+            if (decision.apiKeyId) setApiKeyId?.(decision.apiKeyId);
+            else if (!getActiveApiKeyId()) setApiKeyId?.('session');
+            setHydratingSession(false);
+            setIsAuthenticated(true);
+            if (refreshSocket) bumpSessionEpoch?.();
+          } else {
+            setHydratingSession(false);
+          }
+        })
+        .catch(() => {
+          if (authGenRef.current !== gen) return;
+          // Network failure (API unreachable): keep an already-hydrated session so a transient outage
+          // at page reload doesn't eject the user, while an unauthenticated tab falls through to Login.
+          setHydratingSession(false);
+        });
+    },
+    [setRole, setEngineType, setScoped, setApiKeyId, bumpSessionEpoch, clearLocalSession],
+  );
+
+  // Hydrate and refresh the active browser session once at mount (covers both page reload and a
+  // newly opened tab sharing the browser's HttpOnly session cookie).
   useEffect(() => {
-    if (!savedKey) return;
+    hydrateFromServer(hadSavedSession);
+  }, [hadSavedSession, hydrateFromServer]);
 
-    fetch(`${API_BASE_URL}/auth/validate`, {
-      method: 'POST',
-      headers: { 'X-API-Key': savedKey },
-    })
-      .then(async res => {
-        const decision = resolveStartupValidation(res.status, await res.json().catch(() => null));
-        // Nothing cancels this request on logout. If the user has since signed out, or back in with
-        // another key, the answer is about a key no longer in use: applying it would hand the new
-        // session the old key's role, or log it out over the old key's 401.
-        if (sessionStorage.getItem('openwa_api_key') !== savedKey) return;
-        if (decision.action === 'logout') {
-          handleLogout();
-        } else if (decision.action === 'role') {
-          setRole(decision.role);
-          setScoped(decision.scoped);
-          if (decision.engineType) setEngineType(decision.engineType);
-        }
-      })
-      .catch(() => {
-        // Network failure (API unreachable): keep the cached role so a transient outage at
-        // page load doesn't eject the user — an explicit 401/403 above still logs out.
-      });
-  }, [savedKey, setRole, setEngineType, setScoped, handleLogout]);
+  // Keep sibling tabs aligned on secret-free logout/login broadcasts (never sending secrets).
+  useEffect(() => {
+    return subscribeAuthEvents(event => {
+      if (event.type === 'logout') {
+        authGenRef.current += 1;
+        clearLocalSession();
+        return;
+      }
+      if (event.type === 'login') {
+        // Always re-hydrate and reconnect sockets even when apiKeyId matches, because
+        // POST /api/auth/session rotates and revokes the prior cookie session.
+        clearActorState(queryClient);
+        hydrateFromServer(true, true);
+      }
+    });
+  }, [clearLocalSession, hydrateFromServer]);
 
   const loadingFallback = (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
       <Loader2 className="animate-spin" size={32} />
     </div>
   );
+
+  if (hydratingSession) {
+    return loadingFallback;
+  }
 
   if (!isAuthenticated) {
     return (

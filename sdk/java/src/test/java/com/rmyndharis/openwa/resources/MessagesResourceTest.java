@@ -75,6 +75,8 @@ class MessagesResourceTest {
             "s", SendPollRequest.builder().chatId("c@c.us").name("Question").options(List.of("A", "B")).build(), key));
         sends.put("reply", key -> client.messages.reply(
             "s", ReplyMessageRequest.builder().chatId("c@c.us").quotedMessageId("q").text("reply").build(), key));
+        sends.put("click-button", key -> client.messages.clickButton(
+            "s", ClickButtonRequest.builder().chatId("c@c.us").messageId("p").buttonId("yes").text("Yes").build(), key));
         sends.put("forward", key -> client.messages.forward(
             "s", ForwardMessageRequest.builder().fromChatId("a@c.us").toChatId("b@c.us").messageId("m").build(), key));
 

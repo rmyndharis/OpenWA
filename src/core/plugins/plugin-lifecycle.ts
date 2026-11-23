@@ -149,10 +149,15 @@ export class PluginLifecycle {
       throw new Error(`Plugin ${pluginId} is already being enabled`);
     }
     this.enabling.add(pluginId);
+    const retainPriorShims =
+      plugin.builtIn === false && plugin.status === PluginStatus.ERROR && this.hookManager.isPreEgressFailClosed();
+    const priorHookIds = retainPriorShims ? this.hookManager.getPluginHookIds(pluginId) : new Set<string>();
 
     try {
       if (plugin.builtIn === false) {
-        await this.sandboxBridge.enableSandboxed(pluginId, plugin);
+        await this.sandboxBridge.enableSandboxed(pluginId, plugin, {
+          preserveExistingHooks: priorHookIds.size > 0,
+        });
       } else {
         await this.enableInProcess(pluginId, plugin);
       }
@@ -160,6 +165,9 @@ export class PluginLifecycle {
       plugin.status = PluginStatus.ENABLED;
       plugin.enabledAt = new Date();
       plugin.error = undefined;
+      if (priorHookIds.size > 0) {
+        this.hookManager.unregisterPluginHookIds(pluginId, priorHookIds);
+      }
 
       // Persist status
       this.pluginStorage.setPluginStatus(pluginId, PluginStatus.ENABLED);
@@ -174,12 +182,9 @@ export class PluginLifecycle {
 
       this.pluginStorage.setPluginStatus(pluginId, PluginStatus.ERROR);
 
-      // A plugin that subscribed hooks before its onLoad/onEnable threw would otherwise leave those
-      // registrations live: a later successful enable re-registers them, so each event then dispatches
-      // to the plugin once per failed attempt. Drop them here. Safe on this path only — an
-      // already-enabled plugin returns early above, so the catch only runs for an enable that never
-      // went live, which owns no hooks worth keeping. (Idempotent: no-ops when none were registered.)
-      this.hookManager.unregisterPlugin(pluginId);
+      // Drop any partial hooks registered during the failed attempt while keeping fail-closed
+      // shims that were already retained for an ERROR plugin before this attempt began.
+      this.hookManager.unregisterPluginHooksNotIn(pluginId, priorHookIds);
 
       throw error;
     } finally {
@@ -201,8 +206,8 @@ export class PluginLifecycle {
       throw new Error(`Plugin ${pluginId} not found`);
     }
 
-    if (plugin.status !== PluginStatus.ENABLED) {
-      return; // Not enabled
+    if (plugin.status !== PluginStatus.ENABLED && plugin.status !== PluginStatus.ERROR) {
+      return; // Not enabled or errored
     }
 
     // Status flips to DISABLED only after the teardown awaits, so a second disable arriving meanwhile
@@ -219,23 +224,25 @@ export class PluginLifecycle {
   }
 
   private async teardown(pluginId: string, plugin: PluginInstance, opts?: { unload?: boolean }): Promise<void> {
+    const wasEnabled = plugin.status === PluginStatus.ENABLED;
     try {
       const host = this.sandboxHosts.get(pluginId);
       if (host) {
         await this.sandboxBridge.teardownSandboxed(pluginId, host, opts);
-      } else {
+      } else if (wasEnabled) {
         const context = this.capabilities.createPluginContext(plugin);
         if (plugin.instance?.onDisable) {
           await plugin.instance.onDisable(context);
         }
       }
 
-      // Unregister all hooks for this plugin
+      // Unregister all hooks for this plugin (including any pre-egress shims retained in ERROR)
       this.hookManager.unregisterPlugin(pluginId);
       // Drop the plugin's search-provider entry (if any) so queries don't route to a terminated worker.
       unregisterPluginSearchProvider(this.hostServices.getSearchRegistryPort(), pluginId);
 
       plugin.status = PluginStatus.DISABLED;
+      plugin.error = undefined;
 
       this.pluginStorage.setPluginStatus(pluginId, PluginStatus.DISABLED);
       // A fresh enable starts with a clean hook-error slate (the state is per runtime, not persisted).
@@ -258,14 +265,12 @@ export class PluginLifecycle {
       throw new Error(`Plugin ${pluginId} not found`);
     }
 
-    // Disable first if enabled. `unload: true` so a SANDBOXED plugin also gets its onUnload hook:
-    // disable terminates the worker thread, which would otherwise make onUnload unreachable. An
-    // in-process plugin's onUnload runs below instead (its instance survives disable). A sandboxed
-    // plugin that is already disabled has no live worker left to notify — its resources were
-    // released when the worker terminated, so there is nothing to clean up.
-    if (plugin.status === PluginStatus.ENABLED) {
+    // Disable first if enabled or errored. `unload: true` so a SANDBOXED plugin also gets its
+    // onUnload hook, and an ERROR plugin releases any retained fail-closed pre-egress shims.
+    if (plugin.status === PluginStatus.ENABLED || plugin.status === PluginStatus.ERROR) {
       await this.disablePlugin(pluginId, { unload: true });
     }
+    this.hookManager.unregisterPlugin(pluginId);
 
     // Call onUnload (in-process plugins; a sandboxed one received it above, before terminate)
     if (plugin.instance?.onUnload) {

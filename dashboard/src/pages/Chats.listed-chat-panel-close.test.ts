@@ -44,11 +44,11 @@ let ToastProvider: (typeof import('../components/Toast.tsx'))['ToastProvider'];
 before(async () => {
   const { installJsdomGlobals } = await import('../test-helpers/jsdom.ts');
   await installJsdomGlobals();
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = ((input: RequestInfo | URL): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const path = url.replace(/^https?:\/\/[^/]+/, '');
-    const headers = (init?.headers ?? {}) as Record<string, string>;
-    calls.push({ path, key: headers['X-API-Key'] ?? null });
+    const actorId = window.sessionStorage.getItem('openwa_api_key_id');
+    calls.push({ path, key: actorId });
     if (path === '/api/sessions') return Promise.resolve(json([SESSION]));
     if (/\/chats\?/.test(path)) return Promise.resolve(json(LID_CHATS));
     if (path.includes('/contacts/profile-pictures')) return Promise.resolve(json({ pictures: {} }));
@@ -57,7 +57,7 @@ before(async () => {
     }
     if (/\/contacts\/[^/]+\/phone$/.test(path)) {
       const id = decodeURIComponent(path.split('/contacts/')[1].split('/phone')[0]);
-      if (!headers['X-API-Key']) return Promise.resolve(json({ message: 'API key is required' }, 401));
+      if (!actorId) return Promise.resolve(json({ message: 'API key is required' }, 401));
       return Promise.resolve(json({ contactId: id, phone: null }));
     }
     if (path.includes('/contacts?')) return Promise.resolve(json([]));
@@ -66,7 +66,7 @@ before(async () => {
   }) as typeof fetch;
   window.sessionStorage.setItem('openwa_user_role', 'admin');
   window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
-  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-key');
   const { i18nReady } = await import('../i18n/index.ts');
   await i18nReady;
   rtl = await import('@testing-library/react');
@@ -85,7 +85,7 @@ after(async () => {
 
 test('a privacy-id lookup stops when the New chat panel is closed', async () => {
   calls.length = 0;
-  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  window.sessionStorage.setItem('openwa_api_key_id', 'test-key');
   const { screen, fireEvent, waitFor } = rtl;
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   rtl.render(

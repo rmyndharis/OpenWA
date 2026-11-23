@@ -117,6 +117,9 @@
 > copy of one node's `main.sqlite` taken while it is stopped (never one file shared over network
 > storage), which authenticates only on nodes with the same `API_KEY_PEPPER`, since the copied hashes
 > carry the source node's pepper. Each node's audit log records only the requests it handled.
+> Dashboard browser sessions (`openwa_session` cookies stored in `browser_sessions` inside `main.sqlite`)
+> are also node-local: cross-node forwarding returns `409` for cookie-only requests, because the
+> forwarding node never holds the raw API key to replay to the owner.
 >
 > **List and stats routes answer from the node that received them.** `GET /api/sessions` and
 > `GET /api/sessions/stats/overview` name no session, so they are never forwarded. `lastError`,
@@ -155,29 +158,42 @@
 > begun can no longer answer `502`: the connection to the client is cut, so a short body
 > cannot pass for the whole one, and the client should repeat the download.
 >
-> **The lease compares timestamps written by different nodes, so their clocks must agree.** Each
-> node writes `leaseExpiresAt` from its own clock and reads every other node's the same way. Just
-> before each renewal the holder's lease is only one TTL minus one heartbeat ahead, so a node whose
-> clock runs more than about `SESSION_LEASE_TTL_MS - SESSION_LEASE_HEARTBEAT_MS` ahead (40s at
-> defaults, 20s once one renewal is missed) sees healthy peers as lapsed and
-> will take their sessions over. Run NTP (or any time sync) on every node — the default on ordinary
-> server images — and treat any skew near that margin as a misconfiguration.
-> The status correction reads the same timestamps: a node whose clock runs more than three TTLs minus
-> one heartbeat ahead (160s at defaults) marks a healthy peer's sessions disconnected, even with
-> `AUTO_START_SESSIONS` off, and nothing writes them back. The zone each node runs in is no longer
-> part of this: on PostgreSQL the data connection binds, parses and defaults every timestamp in UTC
-> ([05 - Database Design](./05-database-design.md#timestamps-on-postgresql-are-utc)), so two nodes in
-> different zones, or one zone that observes daylight saving, still
-> read each other's leases as the instants they were written at. Only the clocks have to agree.
-> One exception, during an upgrade: a node still on 0.23.5 or earlier writes the lease in its own
-> local wall time, so while versions are mixed the old cross-zone error above is back for as long as
-> the older node keeps renewing. Running every node in `TZ=UTC` (the image default) removes it.
+> **On PostgreSQL, leases and expiry checks use the database clock (`clock_timestamp() AT TIME ZONE 'UTC'`).**
+> Every lease write (`claimedAt`, `leaseExpiresAt`) and every lease predicate (claiming, starting,
+> renewing, releasing, proxy owner lookup, `engineLoaded` reads, retirement checks, takeover
+> sweeps, and stranded-row status corrections) is evaluated against PostgreSQL's UTC clock
+> ([05 - Database Design](./05-database-design.md#timestamps-on-postgresql-are-utc)), and `renew()`
+> records the DB-written expiry via `UPDATE ... RETURNING` so duplicate-`NODE_ID` detection compares
+> database timestamps against database timestamps. A node whose local clock drifts ahead or behind
+> the database cannot falsely steal a healthy peer's session, mark it disconnected, or log false
+> `duplicate_node_id` alerts. SQLite remains a single-node dialect and uses the local process clock.
+> Keep ordinary NTP sync enabled on peer nodes anyway, both for mixed-version rolling upgrades
+> (older nodes write local process timestamps) and for the 30-second timestamp window of
+> `SESSION_PROXY_SECRET` inter-node hop signatures.
 >
-> **A forwarded request is throttled on both nodes.** The receiving node counts it before
-> forwarding, and the owner counts it again on arrival; with `REDIS_ENABLED=true`, and each peer
-> node listed in the owner's `TRUSTED_PROXIES` (below), both counts land in the same shared bucket.
-> Without that, the owner counts every request forwarded by a peer in one bucket keyed on that
-> peer's address. Size the rate limits with that in mind for a routed deployment.
+> **Hot-path engine status, metadata writes, and notifications are SQL-fenced on `nodeId`.** In
+> addition to checking in-memory ownership before acting, `SessionStatusBroadcaster.updateStatus`,
+> `SessionEngineControls.logout`, `SessionEngineEventWiring`, and `SessionEngineLifecycle`
+> (`handleEngineReady`, `handleEngineDisconnected`, `handleEnginePushName`, `initializeEngine`,
+> `rejectRebind`, `scheduleReconnect`, `executeReconnect`, and terminal unlink handling) fence row
+> updates on `{ id, nodeId }` (with `nodeId IS NULL` permitted only on retirement/cleanup paths
+> where a claim may already have been released) and confirm live row ownership before launching
+> reconnect engines or emitting external side effects. When a peer takes over a row mid-flight, a
+> stale node's write matches zero rows and suppresses status, QR, ready, disconnect, restriction,
+> reconnect-loop, and error webhooks, WebSocket events, audits, and hooks.
+>
+> **Forwarded requests can be single-counted with `SESSION_PROXY_SECRET`.** Without
+> `SESSION_PROXY_SECRET`, a forwarded request is throttled on both nodes: the receiving node counts
+> it before forwarding, and the owner counts it again on arrival (with `REDIS_ENABLED=true` and each
+> peer listed in the owner's `TRUSTED_PROXIES`, both counts land in the same shared bucket; without
+> `TRUSTED_PROXIES`, the owner pools all forwarded traffic from a peer into a bucket keyed on that
+> peer's address). Setting the same `SESSION_PROXY_SECRET` (at least 16 characters) on every node
+> authenticates inter-node hops with an HMAC-SHA256 signature (`x-openwa-forwarded`,
+> `x-openwa-forwarded-ts`, `x-openwa-forwarded-sig`) bound to the forwarding node ID, HTTP method,
+> request path, and a 30-second timestamp window. When the owner verifies that signature, its
+> throttler skips the hop so each forwarded request consumes one token (on the receiving node, whose
+> `X-RateLimit-*` response headers remain intact). Missing, forged, tampered, or expired hop headers
+> fail closed and are throttled normally.
 >
 > Forwards carry the client address in `x-forwarded-for` (inbound chain preserved, the
 > observed peer appended). For an `allowedIps`-restricted key or the per-IP throttler to see
@@ -191,16 +207,20 @@
 > connected to node A receives an event raised on node B. Scope honestly: this distributes event
 > **fan-out only**. The per-key WS rate-limit buckets (counted per replica) and the engine registry
 > are still process-local. Without `REDIS_ENABLED` the adapter is inert and delivery is single-node,
-> exactly as before. With it, an event of a one-to-one chat also costs the emitting node one or two
-> `lid_mappings` lookups (one for a `@lid` chat, none for a group), even when no chat-restricted key
-> exists: it cannot know whether another replica holds a restricted socket, so it names the chat in
-> every form for the rooms to match. Events about one chat of one session that are raised together
-> share a lookup, and an answer that named the chat's other identity is reused for 5 seconds (for up to
-> 1,000 chats). That reuse applies whenever the gateway expands a chat for chat-restricted delivery: with
-> Redis fan-out on, or while a chat-restricted socket is connected to the node. A mapping that arrives can
-> be seen up to 5 seconds late, and after a mapping is removed or moved, events of that chat can keep
-> reaching sockets restricted to the old identity for up to 5 seconds. A chat the table has no other
-> identity for is read again by every event.
+> exactly as before. With it, each replica holding at least one chat-restricted socket registers a
+> lightweight Redis presence lease (`openwa:ws:restricted-nodes` set plus a 30-second per-node TTL
+> key refreshed every 10 seconds and removed on disconnect or shutdown). When Redis confirms zero
+> restricted nodes exist cluster-wide, emitting nodes skip `lid_mappings` lookups and chat-room
+> fan-out completely. If the Redis presence client is absent, disconnected, or errors, the emitting
+> node fails open and expands the chat so restricted subscribers on peers never miss events. When
+> chat-restricted expansion runs (because this node or a peer holds a restricted socket, or during a
+> fail-open fallback), an event of a one-to-one chat costs the emitting node one or two `lid_mappings`
+> lookups (one for a `@lid` chat, none for a group). Events about one chat of one session that are
+> raised together share an in-flight lookup, and both mapped and unmapped answers are reused for 5
+> seconds (for up to 1,000 chats). Newly learned mappings persisted locally immediately evict stale
+> negative entries for both the LID and phone JID; a mapping learned on another replica can be seen up
+> to 5 seconds late, and after a mapping is removed or moved, events of that chat can keep reaching
+> sockets restricted to the old identity for up to 5 seconds.
 >
 > **The fan-out to other replicas is best effort and keeps no replay queue.** A Redis that pauses for less
 > than 10 s (a snapshot fork, a slow fsync) answers afterwards, and every event raised meanwhile reaches the
@@ -248,14 +268,12 @@
 > **What does not exist yet, and is why one replica is still the answer.** The cross-replica gap just
 > named (WS rate-limit state) remains process-local. API keys and the audit log are per node: each
 > node keeps them in its own main SQLite file, so a key created, revoked or narrowed on one node is
-> unchanged on the others (see the routing paragraph above). Leases are timed by each node's own
-> clock, not the database's (see the clock paragraph above). Not every lifecycle path is fenced: the
-> liveness watchdog and reconnect timers still act on whatever is in the local
-> registry. `BulkMessageService` keeps its live batch state in process, so a takeover cannot resume
-> a batch — only fail it. MCP/agent tool invocations execute on the node that received them rather
-> than being forwarded. A key restricted to selected chats matches a chat's `@lid` and phone forms
-> through the shared `lid_mappings` table; while a node cannot read that table, it matches with the
-> pairings it holds in memory, which another node may have changed since.
+> unchanged on the others (see the routing paragraph above). `BulkMessageService` keeps its live
+> batch state in process, so a takeover cannot resume a batch, only fail it. MCP/agent tool
+> invocations execute on the node that received them rather than being forwarded. A key restricted
+> to selected chats matches a chat's `@lid` and phone forms through the shared `lid_mappings` table;
+> while a node cannot read that table, it matches with the pairings it holds in memory, which
+> another node may have changed since.
 >
 > Everything below (node affinity, `replicas: 3`) remains a **design sketch** until those
 > land.

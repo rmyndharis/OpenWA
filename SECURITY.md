@@ -84,34 +84,38 @@ If you operate a fleet of plugins you do not fully trust, do not install them in
 OpenWA process — run them in a separate container/VM with an OS-level sandbox and reach
 OpenWA over the API like any other client.
 
-### Docker socket proxy — scope and residual risk
+### Docker socket proxy - scope and residual risk
 
-The application container never mounts `/var/run/docker.sock`; it reaches the daemon
-only through the bundled `docker-proxy` sidecar (pinned `tecnativa/docker-socket-proxy`),
-which listens solely on an internal Compose network that no other container joins.
-The proxy enables only the endpoint families the built-in datastore orchestration
-needs (`CONTAINERS`, `IMAGES`, `VOLUMES`, `PING`) plus its single `POST`
-method switch.
+The application container never mounts `/var/run/docker.sock`, and `DockerService` does not
+fall back to `/var/run/docker.sock` or `unix://` sockets unless `DOCKER_ALLOW_LOCAL_SOCKET=true`
+is explicitly set. In the bundled `docker-compose.yml`, the `docker-proxy` sidecar (pinned
+`tecnativa/docker-socket-proxy`) is gated behind the opt-in `docker-proxy` profile and omitted
+from a default `docker compose up`. When opted in (`DOCKER_HOST=tcp://docker-proxy:2375` with
+`docker compose --profile docker-proxy up -d`), the proxy runs hardened (`read_only: true`,
+`cap_drop: [ALL]`, `no-new-privileges:true`, `mem_limit: 128m`, `pids_limit: 64`) on an
+isolated `internal: true` Compose network that only `openwa-api` joins, enabling only the
+endpoint families the built-in datastore orchestration needs (`CONTAINERS`, `IMAGES`, `VOLUMES`,
+`PING`) plus its single `POST` method switch.
 
 This is **not** a fine-grained privilege boundary, and we deliberately do not claim
 it as one:
 
 - The proxy's method gate is all-or-nothing (`deny unless METH_GET || env(POST)`):
-  with `POST` enabled, every HTTP method — including `DELETE` — is admitted to the
+  with `POST` enabled, every HTTP method (including `DELETE`) is admitted to the
   enabled paths. Its `DELETE` env flag is dead config and is no longer set.
 - The proxy cannot scope container-create payloads (image, bind mounts, privileges).
   A compromised API container could therefore create a container with a host
   bind-mount, which is host-root-equivalent.
 
-Mitigations in place: the proxy is unreachable except from `openwa-api` (dedicated
-`internal: true` network; any plugin loaded into `openwa-api` shares that reach), the
-orchestration endpoints require an ADMIN-role API key, both teardown and start are
-constrained to the three managed profiles (`postgres`, `redis`, `minio`) — non-managed
-names are dropped before reaching `DockerService` — and OpenWA itself never issues
-deletes (profile teardown is stop-only). If you do not use the built-in datastore
-orchestration (Dashboard → Infrastructure built-in toggles), disable the proxy entirely —
-see the `docker-proxy` comments in `docker-compose.yml`; `DockerService` then reports
-Docker unavailable and orchestration degrades gracefully.
+Mitigations in place: the proxy is off by default (opt-in via the `docker-proxy` Compose
+profile), unreachable except from `openwa-api` when enabled (dedicated `internal: true`
+network; any plugin loaded into `openwa-api` shares that reach), the orchestration endpoints
+require an unscoped ADMIN-role API key, both teardown and start are constrained to the three
+managed profiles (`postgres`, `redis`, `minio`; non-managed names are dropped before reaching
+`DockerService`), and OpenWA itself never issues deletes (profile teardown is stop-only). If
+you do not use the built-in datastore orchestration (Dashboard > Infrastructure built-in
+toggles), leave the `docker-proxy` profile disabled and `DOCKER_HOST` unset; `DockerService`
+then stays disabled with no background retry traffic and orchestration degrades gracefully.
 
 ### Session-restricted API keys
 
@@ -136,3 +140,36 @@ the instance sits outside the key's scope, so retained dead-letter rows cannot
 be re-dispatched across the boundary. Per-session routes for the sessions the
 key allows remain available, and keys without an `allowedSessions` restriction
 are unaffected.
+
+### Remote WhatsApp Web HTML pinning (`whatsapp-web.js`)
+
+Remote HTML pinning is disabled by default (`WWEBJS_WEB_VERSION` unset or `off`):
+sessions load the first-party WhatsApp Web page directly with zero third-party
+fetches. Because pinned HTML executes inside the authenticated `web.whatsapp.com`
+origin, configuring an exact build via `WWEBJS_WEB_VERSION` requires a matching
+64-character hex digest in `WWEBJS_WEB_VERSION_SHA256` (verified over raw bytes
+on every fetch and on every disk cache hit; mismatches delete any tampered cache
+file and refuse the pin with `web_version_html_hash_mismatch`). Unverified remote
+pinning (`auto`/`latest`, or an exact build without `WWEBJS_WEB_VERSION_SHA256`)
+is rejected unless `WWEBJS_WEB_VERSION_ALLOW_UNVERIFIED=true` is set explicitly.
+
+### Session egress proxies and SSRF
+
+When `SESSION_PROXY_URL_FETCH=true` (the default) and a session is configured with
+an `http://` or `https://` `proxyUrl`, caller-supplied URL fetches (outbound media
+URLs, `POST /api/sessions/:sessionId/media/convert/voice|video`, and text link
+previews) are forwarded through the proxy, which performs its own hostname DNS
+resolution. OpenWA's SSRF guard still pre-validates the URL before issuing the
+request, but it cannot pin the proxy's DNS resolution, so a DNS rebinding record
+or a split-horizon internal DNS name can resolve to an internal host on the proxy
+side.
+
+If you route caller-supplied URL fetches through an `http://` or `https://`
+session proxy, enforce proxy-side egress ACLs that deny loopback (`127.0.0.0/8`,
+`::1`), RFC 1918 private networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`),
+link-local and cloud metadata addresses (`169.254.0.0/16`, including
+`169.254.169.254`, and `fe80::/10`), and IPv6 unique-local ranges (`fc00::/7`).
+Alternatively, use a SOCKS proxy (`socks4://` or `socks5://`), where OpenWA
+resolves and pins the validated IP before dialing through the proxy, or set
+`SESSION_PROXY_URL_FETCH=false` so caller-supplied URL fetches bypass the proxy
+and use OpenWA's direct DNS-pinned SSRF guard.
