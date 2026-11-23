@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { DataSource, TableColumn } from 'typeorm';
+import { AddMessagesFts1782400000000 } from '../../../database/migrations/1782400000000-AddMessagesFts';
 import { Message, MessageDirection } from '../../../modules/message/entities/message.entity';
 import { Session } from '../../../modules/session/entities/session.entity';
 import { BuiltInFtsProvider } from './builtin-fts.provider';
@@ -143,16 +144,44 @@ describe('BuiltInFtsProvider — backfilling an index built after the rows', () 
   });
 
   /**
-   * Known-negative. The migration backfills `WHERE "body" IS NOT NULL`; the repair must reproduce
-   * that contents exactly rather than indexing a NULL body as an empty document, which would make
-   * the index disagree with the schema it repairs.
+   * All rows, including NULL-body rows, must be indexed consistently with _ai triggers so FTS5
+   * integrity-check passes and subsequent UPDATE/DELETE operations never throw SQLITE_CORRUPT_VTAB.
    */
-  it('does not index a NULL body, matching what the migration produces', async () => {
-    await ds.getRepository(Message).insert([{ ...row('', 4), body: null as unknown as string }]);
+  it('indexes NULL-body rows consistently, passes integrity-check, and supports clean deletes and search', async () => {
+    await ds.getRepository(Message).insert([
+      { ...row('', 4), id: 'null-a', body: null as unknown as string },
+      { ...row('', 5), id: 'null-b', body: null as unknown as string },
+    ]);
 
-    await new BuiltInFtsProvider(ds).onModuleInit();
+    const provider = new BuiltInFtsProvider(ds);
+    await provider.onModuleInit();
 
-    expect(await docsize()).toBe(2);
+    expect(await docsize()).toBe(4);
+    await expect(
+      ds.query(`INSERT INTO "messages_fts"("messages_fts", "rank") VALUES ('integrity-check', 1)`),
+    ).resolves.toBeDefined();
+    await expect(ds.getRepository(Message).delete({ id: 'null-a' })).resolves.toBeDefined();
+    await expect(
+      ds.getRepository(Message).update({ id: 'null-b' }, { body: 'updated after null' }),
+    ).resolves.toBeDefined();
+    expect(await found('legacy')).toHaveLength(2);
+    expect((await provider.search({ q: 'updated' })).hits.map(h => h.messageId)).toEqual(['null-b']);
+  });
+
+  it('heals a pre-existing corrupt messages_fts index with missing NULL-body entries on boot', async () => {
+    await ds.getRepository(Message).insert([{ ...row('', 4), id: 'null-legacy', body: null as unknown as string }]);
+    await ds.query(`CREATE VIRTUAL TABLE "messages_fts" USING fts5(body, content='messages', content_rowid='rowid')`);
+    await ds.query(
+      `INSERT INTO "messages_fts"("rowid", "body") SELECT "rowid", "body" FROM "messages" WHERE "body" IS NOT NULL`,
+    );
+
+    const provider = new BuiltInFtsProvider(ds);
+    await provider.onModuleInit();
+
+    await expect(
+      ds.query(`INSERT INTO "messages_fts"("messages_fts", "rank") VALUES ('integrity-check', 1)`),
+    ).resolves.toBeDefined();
+    await expect(ds.getRepository(Message).delete({ id: 'null-legacy' })).resolves.toBeDefined();
     expect(await found('legacy')).toHaveLength(2);
   });
 
@@ -199,5 +228,18 @@ describe('BuiltInFtsProvider — backfilling an index built after the rows', () 
 
     expect((await repo.findOneOrFail({ where: { id: target.id } })).body).toBe('alpha edited');
     expect(await found('edited')).toHaveLength(1);
+  });
+
+  it('skips redundant DROP+CREATE TRIGGER when migration already created multiline triggers', async () => {
+    const qr = ds.createQueryRunner();
+    await new AddMessagesFts1782400000000().up(qr);
+    await qr.release();
+
+    const querySpy = jest.spyOn(ds, 'query');
+    await new BuiltInFtsProvider(ds).onModuleInit();
+    const sqls = querySpy.mock.calls.map(([sql]) => String(sql));
+    querySpy.mockRestore();
+
+    expect(sqls.some(sql => /DROP TRIGGER/i.test(sql) || /CREATE TRIGGER/i.test(sql))).toBe(false);
   });
 });

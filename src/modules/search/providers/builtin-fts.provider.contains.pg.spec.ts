@@ -373,5 +373,28 @@ const containsOn = new ConfigService({ search: { containsEnabled: true } });
       await expect(search).rejects.toThrow(/3 or more ASCII letters or digits in a row/);
       expect((await follower.search({ q: 'café', match: 'contains' })).total).toBe(1);
     });
+
+    it('runs word search ts_headline outside the LIMIT/OFFSET CTE and preserves order', async () => {
+      await cds.query('DELETE FROM messages');
+      for (let i = 1; i <= 5; i++) {
+        await cds.query(
+          `INSERT INTO messages ("sessionId", "chatId", "from", "to", "body", "type", "direction", "timestamp")
+           VALUES ('s-cte', 'c1', 'a@c.us', 'b@c.us', $1, 'text', 'in', $2)`,
+          [`outer headline target word row ${i}`, 1000 + i],
+        );
+      }
+
+      const provider = new BuiltInFtsProvider(cds, containsOn);
+      const querySpy = jest.spyOn(cds, 'query');
+      const res = await provider.search({ q: 'headline', sessionId: 's-cte', limit: 2, offset: 1 });
+
+      expect(res.total).toBe(5);
+      expect(res.hits).toHaveLength(2);
+      expect(res.hits[0].snippet).toContain('<mark>');
+      const searchSql = String(querySpy.mock.calls.find(([sql]) => /ts_headline/i.test(String(sql)))?.[0] ?? '');
+      expect(searchSql).toMatch(/\bWITH\b/i);
+      expect(searchSql.search(/\bts_headline\s*\(/i)).toBeGreaterThan(searchSql.search(/\bLIMIT\b/i));
+      querySpy.mockRestore();
+    });
   });
 });
