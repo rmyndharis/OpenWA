@@ -9,6 +9,9 @@ const DEFAULT_DESTINATION_PORTS: Record<string, number> = { 'https:': 443, 'http
 /** Conventional SOCKS port (RFC 1928 section 3), used when the proxy URL names none. */
 const DEFAULT_SOCKS_PORT = 1080;
 
+/** Bounded per-address SOCKS handshake timeout (matches undici's default connect timeout). */
+export const SOCKS_CONNECT_TIMEOUT_MS = 10_000;
+
 export interface ProxyDispatcherOptions {
   /**
    * The destination addresses the SSRF guard already resolved and vetted, in resolver order.
@@ -22,6 +25,8 @@ export interface ProxyDispatcherOptions {
    * ignored: pinning through such a proxy is not expressible in the protocol.
    */
   pinnedAddresses?: string[];
+  /** Optional cancellation signal to abort pending SOCKS connection attempts. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -52,20 +57,68 @@ async function socksDestinations(type: 4 | 5, hostname: string, pinnedAddresses?
   return [(await lookup(hosts[0], { family: 4 })).address];
 }
 
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new DOMException('The operation was aborted', 'AbortError');
+}
+
+function createSocksConnection(proxy: SocksProxy, host: string, port: number, signal?: AbortSignal): Promise<Socket> {
+  if (signal?.aborted) {
+    return Promise.reject(abortError(signal));
+  }
+  return new Promise<Socket>((resolve, reject) => {
+    let settled = false;
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      reject(abortError(signal!));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    SocksClient.createConnection({
+      proxy,
+      command: 'connect',
+      destination: { host, port },
+      timeout: SOCKS_CONNECT_TIMEOUT_MS,
+    }).then(
+      ({ socket }) => {
+        signal?.removeEventListener('abort', onAbort);
+        if (settled) {
+          socket.destroy();
+          return;
+        }
+        settled = true;
+        resolve(socket);
+      },
+      (error: unknown) => {
+        signal?.removeEventListener('abort', onAbort);
+        if (settled) return;
+        settled = true;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
 /**
  * Open a tunnel to the first destination the proxy can reach.
  *
  * The vetted addresses are family-mixed in resolver order, so a proxy with no route to the first
  * family would otherwise sink a request the direct path completes by trying the next address.
  */
-async function connectThroughSocks(proxy: SocksProxy, hosts: string[], port: number): Promise<Socket> {
+async function connectThroughSocks(
+  proxy: SocksProxy,
+  hosts: string[],
+  port: number,
+  signal?: AbortSignal,
+): Promise<Socket> {
   let lastError = new Error('No destination address to reach through the SOCKS proxy');
   for (const host of hosts) {
+    if (signal?.aborted) throw abortError(signal);
     try {
-      const { socket } = await SocksClient.createConnection({ proxy, command: 'connect', destination: { host, port } });
-      return socket;
+      return await createSocksConnection(proxy, host, port, signal);
     } catch (error) {
       lastError = error as Error;
+      if (signal?.aborted) throw lastError;
     }
   }
   throw lastError;
@@ -80,7 +133,11 @@ async function connectThroughSocks(proxy: SocksProxy, hosts: string[], port: num
  * socket is handed to undici's own connector for the TLS upgrade: the request options pass through
  * untouched, so SNI and certificate validation still use the destination hostname, not the proxy's.
  */
-function socksConnector(proxyUrl: URL, pinnedAddresses?: string[]): buildConnector.connector {
+function socksConnector(
+  proxyUrl: URL,
+  pinnedAddresses?: string[],
+  dispatcherSignal?: AbortSignal,
+): buildConnector.connector {
   const type = proxyUrl.protocol === 'socks4:' ? 4 : 5;
   // SOCKS4 has no authentication: `socks` sends the user id in the connect request and drops the
   // password. Credentials are decoded here because URL keeps them percent-encoded.
@@ -96,22 +153,51 @@ function socksConnector(proxyUrl: URL, pinnedAddresses?: string[]): buildConnect
   const upgradeTls = buildConnector({});
 
   return (options, callback) => {
+    const requestSignal = (options as { signal?: AbortSignal }).signal;
+    const signal =
+      dispatcherSignal && requestSignal
+        ? AbortSignal.any([dispatcherSignal, requestSignal])
+        : (dispatcherSignal ?? requestSignal);
+
     // undici's connect callback is a plain callback, not a promise resolver, and it is answered from
     // inside open(): a throw raised after that (by the callback itself, or by the TLS upgrade) would
     // otherwise answer it a second time, with an error, on an already-connected client.
     let answered = false;
+    let onTlsAbort: (() => void) | undefined;
     const answer: typeof callback = (...args: Parameters<typeof callback>) => {
-      if (answered) return;
+      if (onTlsAbort) {
+        signal?.removeEventListener('abort', onTlsAbort);
+        onTlsAbort = undefined;
+      }
+      if (answered) {
+        args[1]?.destroy();
+        return;
+      }
       answered = true;
       callback(...args);
     };
     const open = async (): Promise<void> => {
+      if (signal?.aborted) throw abortError(signal);
+      const destinations = await socksDestinations(type, options.hostname, pinnedAddresses);
+      if (signal?.aborted) throw abortError(signal);
       const socket = await connectThroughSocks(
         proxy,
-        await socksDestinations(type, options.hostname, pinnedAddresses),
+        destinations,
         Number(options.port) || DEFAULT_DESTINATION_PORTS[options.protocol] || 80,
+        signal,
       );
+      if (signal?.aborted) {
+        socket.destroy();
+        throw abortError(signal);
+      }
       if (options.protocol === 'https:') {
+        if (signal) {
+          onTlsAbort = () => {
+            socket.destroy();
+            answer(abortError(signal), null);
+          };
+          signal.addEventListener('abort', onTlsAbort, { once: true });
+        }
         upgradeTls({ ...options, httpSocket: socket }, answer);
         return;
       }
@@ -137,7 +223,25 @@ export function createProxyDispatcher(proxyUrl: string, options: ProxyDispatcher
     return new Dispatcher1Wrapper(new ProxyAgent(proxyUrl));
   }
   if (url.protocol === 'socks4:' || url.protocol === 'socks5:') {
-    return new Dispatcher1Wrapper(new Agent({ connect: socksConnector(url, options.pinnedAddresses) }));
+    const cancel = new AbortController();
+    const onExternalAbort = (): void => cancel.abort(options.signal!.reason);
+    if (options.signal) {
+      if (options.signal.aborted) {
+        cancel.abort(options.signal.reason);
+      } else {
+        options.signal.addEventListener('abort', onExternalAbort, { once: true });
+      }
+    }
+    const agent = new Agent({ connect: socksConnector(url, options.pinnedAddresses, cancel.signal) });
+    if (typeof agent.destroy === 'function') {
+      const origDestroy = agent.destroy.bind(agent);
+      agent.destroy = (...args: Parameters<Agent['destroy']>) => {
+        options.signal?.removeEventListener('abort', onExternalAbort);
+        cancel.abort(new Error('Proxy dispatcher destroyed'));
+        return origDestroy(...args);
+      };
+    }
+    return new Dispatcher1Wrapper(agent);
   }
   throw new Error(`Unsupported proxy protocol: ${url.protocol}`);
 }

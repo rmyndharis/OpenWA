@@ -53,24 +53,67 @@ describe('RedisThrottlerStorage', () => {
     expect(rec.timeToBlockExpire).toBe(1);
   });
 
-  it('fails OPEN on a Redis error (returns a non-blocking record so the limiter never self-DoSes)', async () => {
+  it('falls back to bounded per-process rate limiting when Redis errors', async () => {
     const redis = makeRedis({ hits: 1, ttlMs: 1000 });
     redis.eval.mockRejectedValue(new Error('ECONNREFUSED'));
-    const rec = await new RedisThrottlerStorage(redis as unknown as Redis).increment('k', 1000, 10, 60000, 'short');
-    expect(rec).toEqual({ totalHits: 0, timeToExpire: 0, isBlocked: false, timeToBlockExpire: 0 });
+    const storage = new RedisThrottlerStorage(redis as unknown as Redis);
+
+    const first = await storage.increment('k', 5000, 2, 60000, 'short');
+    const second = await storage.increment('k', 5000, 2, 60000, 'short');
+    const third = await storage.increment('k', 5000, 2, 60000, 'short');
+
+    expect(first).toEqual({ totalHits: 1, timeToExpire: 5, isBlocked: false, timeToBlockExpire: 0 });
+    expect(second).toEqual({ totalHits: 2, timeToExpire: 5, isBlocked: false, timeToBlockExpire: 0 });
+    expect(third.totalHits).toBe(3);
+    expect(third.isBlocked).toBe(true);
+    expect(third.timeToBlockExpire).toBeGreaterThanOrEqual(1);
+    await storage.onModuleDestroy();
   });
 
-  it('fails open FAST when the client rejects while disconnected (no queue/timeout stall)', async () => {
+  it('falls back FAST when the client rejects while disconnected (no queue/timeout stall)', async () => {
     const redis = makeRedis({ hits: 1, ttlMs: 1000 });
-    // The exact rejection ioredis produces with enableOfflineQueue:false — issued commands must not
-    // wait for reconnect; the request is decided on the fail-open path immediately.
+    // The exact rejection ioredis produces with enableOfflineQueue:false: issued commands must not
+    // wait for reconnect; the request is decided on the local fallback path immediately.
     redis.eval.mockRejectedValue(new Error("Stream isn't writeable and enableOfflineQueue options is false"));
     const storage = new RedisThrottlerStorage(redis as unknown as Redis);
     const result = await Promise.race([
       storage.increment('k', 1000, 10, 60000, 'short'),
       new Promise<'slow'>(resolve => setTimeout(() => resolve('slow'), 100)),
     ]);
-    expect(result).toEqual({ totalHits: 0, timeToExpire: 0, isBlocked: false, timeToBlockExpire: 0 });
+    expect(result).toEqual({ totalHits: 1, timeToExpire: 1, isBlocked: false, timeToBlockExpire: 0 });
+    await storage.onModuleDestroy();
+  });
+
+  it('resets local fallback window after ttl expires and bounds distinct keys with LRU eviction', async () => {
+    jest.useFakeTimers();
+    try {
+      const redis = makeRedis({ hits: 1, ttlMs: 1000 });
+      redis.eval.mockRejectedValue(new Error('ECONNREFUSED'));
+      const storage = new RedisThrottlerStorage(redis as unknown as Redis);
+
+      expect((await storage.increment('abuser', 2000, 1, 60000, 'short')).isBlocked).toBe(false);
+      expect((await storage.increment('abuser', 2000, 1, 60000, 'short')).isBlocked).toBe(true);
+
+      // Flood with more distinct keys than the cap; touching 'abuser' keeps it blocked while old keys evict.
+      for (let i = 0; i < 50_005; i++) {
+        if (i === 25_000) {
+          expect((await storage.increment('abuser', 2000, 1, 60000, 'short')).isBlocked).toBe(true);
+        }
+        await storage.increment(`flood-${i}`, 2000, 10, 60000, 'short');
+      }
+      expect((await storage.increment('abuser', 2000, 1, 60000, 'short')).isBlocked).toBe(true);
+      const mapSize = (storage as unknown as { localFallback: Map<string, unknown> }).localFallback.size;
+      expect(mapSize).toBeLessThanOrEqual(50_000);
+
+      jest.advanceTimersByTime(2001);
+      const afterWindow = await storage.increment('abuser', 2000, 1, 60000, 'short');
+      expect(afterWindow).toEqual({ totalHits: 1, timeToExpire: 2, isBlocked: false, timeToBlockExpire: 0 });
+
+      await storage.onModuleDestroy();
+      expect((storage as unknown as { localFallback: Map<string, unknown> }).localFallback.size).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('warns once while Redis stays down, says when it answers again, and warns again on the next outage', async () => {
@@ -83,12 +126,9 @@ describe('RedisThrottlerStorage', () => {
       // Each guarded request checks three throttlers.
       for (let i = 0; i < 100; i++) {
         for (const name of ['short', 'medium', 'long']) {
-          expect(await storage.increment('k', 1000, 10, 60000, name)).toEqual({
-            totalHits: 0,
-            timeToExpire: 0,
-            isBlocked: false,
-            timeToBlockExpire: 0,
-          });
+          const rec = await storage.increment('k', 1000, 10, 60000, name);
+          expect(rec.totalHits).toBe(i + 1);
+          expect(rec.isBlocked).toBe(i + 1 > 10);
         }
       }
       expect(warn).toHaveBeenCalledTimes(1);
@@ -98,10 +138,12 @@ describe('RedisThrottlerStorage', () => {
       await storage.increment('k', 1000, 10, 60000, 'medium');
       expect(log).toHaveBeenCalledTimes(1);
       expect(log.mock.calls[0][0]).toContain('300');
+      expect((storage as unknown as { localFallback: Map<string, unknown> }).localFallback.size).toBe(0);
 
-      redis.eval.mockRejectedValue(new Error('ECONNREFUSED'));
+      redis.eval.mockRejectedValue('socket-reset');
       await storage.increment('k', 1000, 10, 60000, 'short');
       expect(warn).toHaveBeenCalledTimes(2);
+      await storage.onModuleDestroy();
     } finally {
       warn.mockRestore();
       log.mockRestore();

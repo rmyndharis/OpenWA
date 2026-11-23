@@ -1,6 +1,12 @@
+import { INestApplication } from '@nestjs/common';
 import { PATH_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import type { App } from 'supertest/types';
 import { PluginsController } from './plugins.controller';
+import { PluginsService } from './plugins.service';
+import { AuditService } from '../audit/audit.service';
 import { REQUIRED_ROLE_KEY, UNSCOPED_KEY } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
@@ -71,4 +77,49 @@ describe('PluginsController.install() OpenAPI responses', () => {
       expect(responses['400']?.description).toMatch(/validation/i);
     },
   );
+});
+
+describe('PluginsController.install() multipart limits', () => {
+  let app: INestApplication<App>;
+  const installPackage = jest.fn().mockResolvedValue({ id: 'demo', version: '1.0.0' });
+
+  beforeAll(async () => {
+    const mod = await Test.createTestingModule({
+      controllers: [PluginsController],
+      providers: [
+        { provide: PluginsService, useValue: { installPackage } },
+        { provide: AuditService, useValue: { logInfo: jest.fn() } },
+      ],
+    }).compile();
+    app = mod.createNestApplication({ logger: false });
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => installPackage.mockClear());
+
+  it('rejects extra non-file fields and extra files on multipart plugin install while allowing a single file', async () => {
+    const extraField = await request(app.getHttpServer())
+      .post('/plugins/install')
+      .field('extra', 'value')
+      .attach('file', Buffer.from('PKzip'), 'plugin.zip');
+    expect(extraField.status).toBeGreaterThanOrEqual(400);
+    expect(installPackage).not.toHaveBeenCalled();
+
+    const extraFile = await request(app.getHttpServer())
+      .post('/plugins/install')
+      .attach('file', Buffer.from('PKzip1'), 'a.zip')
+      .attach('file', Buffer.from('PKzip2'), 'b.zip');
+    expect(extraFile.status).toBeGreaterThanOrEqual(400);
+    expect(installPackage).not.toHaveBeenCalled();
+
+    const singleFile = await request(app.getHttpServer())
+      .post('/plugins/install')
+      .attach('file', Buffer.from('PKzip'), 'plugin.zip');
+    expect(singleFile.status).toBe(201);
+    expect(installPackage).toHaveBeenCalledTimes(1);
+  });
 });

@@ -2,9 +2,11 @@ import * as http from 'http';
 import * as net from 'net';
 import { networkInterfaces } from 'os';
 import type { AddressInfo } from 'net';
+import { SocksClient } from 'socks';
 import { Dispatcher1Wrapper, fetch as undiciFetch } from 'undici';
 import { createProxyDispatcher, hasUnauthenticatableSocks4Credentials, urlFetchProxy } from './proxy-dispatcher';
 import { startSocks4Proxy, startSocks5Proxy, type SocksProxyServer } from '../../../test/helpers/socks-proxy-servers';
+import { waitUntil } from '../../../test/helpers/wait-until';
 
 /**
  * The session proxy carries every fetch the gateway makes for a session: Baileys' media downloads
@@ -222,5 +224,37 @@ describe('urlFetchProxy', () => {
     expect(urlFetchProxy(undefined)).toBeUndefined();
     process.env.SESSION_PROXY_URL_FETCH = 'false';
     expect(urlFetchProxy(undefined)).toBeUndefined();
+  });
+});
+
+describe('createProxyDispatcher SOCKS cancellation on dispatcher.destroy()', () => {
+  it('stops iterating remaining pinned IPs and destroys any late socket when dispatcher.destroy() runs', async () => {
+    let resolvePending!: (value: { socket: net.Socket }) => void;
+    const destroy = jest.fn();
+    const lateSocket = { destroy, setNoDelay: jest.fn() } as unknown as net.Socket;
+    const createConn = jest.spyOn(SocksClient, 'createConnection').mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolvePending = resolve;
+        }),
+    );
+
+    try {
+      const dispatcher = createProxyDispatcher('socks5://127.0.0.1:1080', {
+        pinnedAddresses: ['203.0.113.1', '203.0.113.2', '203.0.113.3'],
+      });
+      const fetchPromise = undiciFetch('http://example.invalid/file', { dispatcher });
+      await waitUntil(() => createConn.mock.calls.length === 1);
+
+      await dispatcher.destroy();
+      await expect(fetchPromise).rejects.toThrow();
+      expect(createConn).toHaveBeenCalledTimes(1);
+
+      resolvePending({ socket: lateSocket });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(destroy).toHaveBeenCalledTimes(1);
+    } finally {
+      createConn.mockRestore();
+    }
   });
 });
