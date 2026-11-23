@@ -1882,5 +1882,23 @@ describe('redactSecrets', () => {
         dropped: { id: 2 },
       });
     });
+
+    it('redacts cookie, set-cookie, proxyUrl, and x-openwa-forwarded-sig fields', () => {
+      expect(
+        redactSecrets({
+          cookie: 'openwa_session=secret',
+          'set-cookie': ['openwa_session=secret; HttpOnly'],
+          proxyUrl: 'http://user:pass@proxy.internal:8080',
+          'x-openwa-forwarded-sig': 'hmac-sha256-deadbeef',
+          nested: { headers: { Cookie: 'abc', 'X-OpenWA-Forwarded-Sig': 'sig' } },
+        }),
+      ).toEqual({
+        cookie: '[REDACTED]',
+        'set-cookie': '[REDACTED]',
+        proxyUrl: '[REDACTED]',
+        'x-openwa-forwarded-sig': '[REDACTED]',
+        nested: { headers: { Cookie: '[REDACTED]', 'X-OpenWA-Forwarded-Sig': '[REDACTED]' } },
+      });
+    });
   });
 });

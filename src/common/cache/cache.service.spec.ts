@@ -184,4 +184,17 @@ describe('CacheService Redis-outage resilience', () => {
     expect(await service.isAvailable()).toBe(false);
     expect(RedisMock).not.toHaveBeenCalled();
   });
+
+  it('does not lazily create a new Redis client on isAvailable() after onModuleDestroy()', async () => {
+    const ping = jest.fn().mockResolvedValue('PONG');
+    useClient(ping);
+    const service = new CacheService(enabledConfig());
+
+    expect(await service.isAvailable()).toBe(true);
+    expect(RedisMock).toHaveBeenCalledTimes(1);
+
+    await service.onModuleDestroy();
+    expect(await service.isAvailable()).toBe(false);
+    expect(RedisMock).toHaveBeenCalledTimes(1);
+  });
 });

@@ -10,6 +10,9 @@
  *   ingress reconciler wait                  5 s     a pass in flight (worst case)
  *   engine teardown                         10 s     always
  *   auto-start wait                          5 s     shutdown during the boot window
+ *   bulk batch drain                         5 s     an in-flight batch at shutdown
+ *   maintenance prune/index waits (4 x 1s)   4 s     active archive/status/fts/outbox pass
+ *   webhook prune drain                      1 s     an active webhook prune pass
  *   throttler Redis quit                     2 s     REDIS_ENABLED
  *   webhook drain                            5 s     a delivery in flight (worst case; WEBHOOK_SHUTDOWN_DRAIN_MS)
  *   queue worker close                      10 s     QUEUE_ENABLED
@@ -17,14 +20,15 @@
  *   API-key usage flush                      5 s     pending counters
  *   cache Redis quit                         2 s     REDIS_ENABLED
  *   plugin phase (disable + pending enable) 10 s     a plugin is enabled
+ *   WS restricted presence destroy           2 s     REDIS_ENABLED (shared across unregister + quit)
  *   WebSocket adapter Redis quit             2 s     REDIS_ENABLED
  *   HTTP close                               0 s     main.ts sets forceCloseConnections
  *
- * Base (single replica, no plugins): 3 + 5 + 10 + 5 + 5 + 5 = 33 s. With a plugin enabled: 43 s.
- * Clustered (QUEUE + REDIS + plugins): 63 s, of which 3 s is the grace.
+ * Base (single replica, no plugins): 3 + 5 + 10 + 5 + 5 + 4 + 1 + 5 + 5 = 43 s. With a plugin enabled: 53 s.
+ * Clustered (QUEUE + REDIS + plugins): 75 s, of which 3 s is the grace.
  *
- * The teardown after the grace has SHUTDOWN_TEARDOWN_LIMIT_MS (67 s), against 60 s of stages in the
- * clustered case. The 7 s left over is the reserve for the waits that have no cap of their own, before
+ * The teardown after the grace has SHUTDOWN_TEARDOWN_LIMIT_MS (82 s), against 72 s of stages in the
+ * clustered case. The 10 s left over is the reserve for the waits that have no cap of their own, before
  * and after the HTTP close: the database waits listed at the end, the BullModule
  * re-await of the worker close (closeWorkerIfStarted settles it once its cap is hit), the DataSource
  * close and the ffmpeg kill. They take milliseconds when nothing is wedged.
@@ -41,9 +45,9 @@
  * and it adds the excess of WEBHOOK_SHUTDOWN_DRAIN_MS over its 5 s default, the one other
  * operator-set input to a stage. The kill deadline an operator needs is therefore
  *
- *   75 s + (SHUTDOWN_DELAY_MS - 3 s) + (WEBHOOK_SHUTDOWN_DRAIN_MS - 5 s)
+ *   90 s + (SHUTDOWN_DELAY_MS - 3 s) + (WEBHOOK_SHUTDOWN_DRAIN_MS - 5 s)
  *
- * and the shipped 75 s holds for the defaults. A healthy stop exits on its own and never waits. The
+ * and the shipped 90 s holds for the defaults. A healthy stop exits on its own and never waits. The
  * force-exit covers every stop signal (SIGTERM, SIGINT, SIGHUP; stop-signals.ts) and the admin restart. No
  * other signal starts a teardown, and the one after a failed boot is cut at 5 s by bootstrap-fatal.ts.
  *
@@ -66,16 +70,22 @@ export const DEFAULT_SHUTDOWN_DELAY_MS = 3_000;
 /** Default for WEBHOOK_SHUTDOWN_DRAIN_MS, the one other operator-set input to a stage in the table. */
 export const DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS = 5_000;
 
+/** Shared cap of each bounded 1 s maintenance prune/index destroy hook (chat-media, status-store, fts, outbox). */
+export const SHUTDOWN_MAINTENANCE_WAIT_MS = 1_000;
+
+/** Shutdown wait cap for periodic webhook prune drain. */
+export const WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS = 1_000;
+
 /**
  * Must equal docker-compose.yml and docker-compose.dev.yml stop_grace_period and
  * charts/openwa/values.yaml terminationGracePeriodSeconds. It holds for the default delay and drain.
  */
-export const SHUTDOWN_KILL_DEADLINE_MS = 75_000;
+export const SHUTDOWN_KILL_DEADLINE_MS = 90_000;
 
 /** The force-exit fires this long before the kill deadline. */
 export const SHUTDOWN_KILL_MARGIN_MS = 5_000;
 
-/** How long the teardown may run after the grace, with the default drain: 67 s. */
+/** How long the teardown may run after the grace, with the default drain: 82 s. */
 export const SHUTDOWN_TEARDOWN_LIMIT_MS =
   SHUTDOWN_KILL_DEADLINE_MS - DEFAULT_SHUTDOWN_DELAY_MS - SHUTDOWN_KILL_MARGIN_MS;
 

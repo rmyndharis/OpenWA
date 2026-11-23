@@ -15,6 +15,7 @@ export const CACHE_QUIT_TIMEOUT_MS = 2000;
 export class CacheService implements OnModuleDestroy {
   private readonly logger = createLogger('CacheService');
   private redis: Redis | null = null;
+  private destroyed = false;
   private readonly enabled: boolean;
 
   constructor(private readonly configService: ConfigService) {
@@ -36,7 +37,7 @@ export class CacheService implements OnModuleDestroy {
    * a dead client, so a Redis restart left the cache dead until the whole app was restarted.
    */
   private ensureClient(): void {
-    if (this.redis) return;
+    if (this.destroyed || this.redis) return;
 
     const connection = redisConnectionOptions();
     this.logger.log(`Connecting to Redis at ${connection.host}:${connection.port}`);
@@ -88,8 +89,10 @@ export class CacheService implements OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
+    this.destroyed = true;
     if (!this.redis) return;
     const redis = this.redis;
+    this.redis = null;
 
     // Bound the teardown: redis.quit() waits for the QUIT reply, which never arrives on a half-open /
     // partitioned socket — leaving app.close() blocked until the orchestrator SIGKILLs the process.
@@ -115,7 +118,7 @@ export class CacheService implements OnModuleDestroy {
   }
 
   async isAvailable(): Promise<boolean> {
-    if (!this.enabled) return false;
+    if (this.destroyed || !this.enabled) return false;
 
     // Create the client on first use, then let ioredis manage (re)connection. A ping reflects whether
     // the connection is live right now — false during an outage (caller bypasses to the DB), true again
