@@ -351,8 +351,8 @@ describe('WsRestrictedPresenceTracker', () => {
     }
   });
 
-  it.each<unknown>([undefined, null, 'OK', '', Number.NaN, -1, {}])(
-    'fails open to true when atomic prune eval returns non-numeric reply %p',
+  it.each<unknown>([undefined, null, 'OK', '', Number.NaN, -1, {}, '99999999999999999999'])(
+    'fails open to true when atomic prune eval returns non-numeric or unsafe reply %p',
     async badReply => {
       const { client, mocks, sets } = createFakeRedis();
       sets.set(WS_RESTRICTED_NODES_KEY, new Set(['node-stale:1111']));
@@ -362,4 +362,94 @@ describe('WsRestrictedPresenceTracker', () => {
       expect(await tracker.hasRestrictedNodes()).toBe(true);
     },
   );
+
+  it('accepts safe decimal-digit string replies from atomic prune eval', async () => {
+    const { client, mocks, sets } = createFakeRedis();
+    sets.set(WS_RESTRICTED_NODES_KEY, new Set(['node-stale:1111']));
+    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a' });
+
+    mocks.eval.mockResolvedValueOnce('0');
+    expect(await tracker.hasRestrictedNodes()).toBe(false);
+
+    mocks.eval.mockResolvedValueOnce('2');
+    expect(await tracker.hasRestrictedNodes()).toBe(true);
+  });
+
+  it('runs periodic heartbeat renewals and cleanups via bindLocalCheck and ignores post-destroy triggers', async () => {
+    jest.useFakeTimers();
+    try {
+      const { client, mocks } = createFakeRedis();
+      let localRestricted = true;
+      const tracker = new WsRestrictedPresenceTracker(client, { heartbeatMs: 1_000 });
+      tracker.bindLocalCheck(() => localRestricted);
+
+      // Starting twice is idempotent.
+      tracker.start();
+      tracker.start();
+
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(mocks.set).toHaveBeenCalledTimes(1);
+      expect(mocks.sadd).toHaveBeenCalledTimes(1);
+
+      // Heartbeat clears presence once local restricted sockets disconnect, then idles cleanly.
+      localRestricted = false;
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(mocks.srem).toHaveBeenCalledTimes(1);
+      expect(mocks.del).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(mocks.srem).toHaveBeenCalledTimes(1);
+
+      await tracker.destroy();
+      tracker.start();
+      tracker.handleRedisReady();
+      await tracker.syncLocal(true);
+      expect(mocks.set).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('coalesces concurrent hasRestrictedNodes checks and fails open on absent, not-ready, or erroring clients', async () => {
+    const nullTracker = new WsRestrictedPresenceTracker(null);
+    nullTracker.start();
+    expect(await nullTracker.hasRestrictedNodes()).toBe(true);
+    await nullTracker.destroy();
+
+    const { client, mocks } = createFakeRedis();
+    const smembersGate = deferred<string[]>();
+    mocks.smembers.mockImplementationOnce(() => smembersGate.promise);
+
+    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a', ownsClient: true });
+    const p1 = tracker.hasRestrictedNodes();
+    const p2 = tracker.hasRestrictedNodes();
+    smembersGate.resolve([]);
+    expect(await Promise.all([p1, p2])).toEqual([false, false]);
+    expect(mocks.smembers).toHaveBeenCalledTimes(1);
+
+    // Non-Error rejections fail open and preserve resilience across register, unregister, and query.
+    mocks.set.mockRejectedValueOnce('set-failed');
+    await tracker.syncLocal(true);
+    mocks.srem.mockRejectedValueOnce('srem-failed');
+    await tracker.syncLocal(false);
+    mocks.srem.mockRejectedValueOnce(new Error('srem-err'));
+    await tracker.syncLocal(false);
+    mocks.smembers.mockRejectedValueOnce('query-failed');
+    expect(await tracker.hasRestrictedNodes()).toBe(true);
+
+    // Disconnected client skips registerLocal without throwing and fails open on checks.
+    (client as { status?: string }).status = 'connecting';
+    await tracker.syncLocal(true);
+    expect(await tracker.hasRestrictedNodes()).toBe(true);
+
+    // Destroy with ownsClient=true and no quit() method completes cleanly.
+    await tracker.destroy();
+  });
+
+  it('logs createDefault Redis error events without throwing', async () => {
+    const tracker = WsRestrictedPresenceTracker.createDefault('node-err', () => false);
+    const redis = redisInstances[0];
+    expect(() => redis.handlers.error(new Error('socket reset'))).not.toThrow();
+    await tracker.destroy();
+  });
 });
