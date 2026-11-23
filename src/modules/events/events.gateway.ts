@@ -17,6 +17,8 @@ import {
   UnauthorizedException,
   forwardRef,
 } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource, In } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { hostname } from 'os';
 import { createLogger } from '../../common/services/logger.service';
@@ -24,6 +26,8 @@ import { getRequestActor, runWithRequestId } from '../../common/services/request
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from '../auth/auth.service';
 import { BrowserSessionService } from '../auth/browser-session.service';
+import { BrowserSession } from '../auth/entities/browser-session.entity';
+import { allowUnauthenticatedAuditRow } from '../audit/auth-failure-audit-limiter';
 import {
   extractBrowserSessionCookie,
   firstHeaderValue,
@@ -219,6 +223,20 @@ export const WS_MAX_FRAME_BYTES = 8 * 1024;
 export const CHAT_IDS_MEMO_TTL_MS = 5_000;
 /** Most chats the answers are kept for; the oldest go first. */
 export const CHAT_IDS_MEMO_MAX = 1_000;
+/** Maximum queued chat-room fan-out deliveries retained per chat before dropping oldest excess. */
+const MAX_CHAT_DELIVERIES_PER_CHAT = 64;
+/** Total queued fan-out deliveries retained per session across all chats. */
+const MAX_CHAT_DELIVERIES_PER_SESSION = 1_024;
+const CHAT_DELIVERY_DROP_WARN_INTERVAL_MS = 60_000;
+const CHAT_DELIVERY_DROP_WARN_MAX = 1_000;
+
+interface PendingChatDelivery {
+  event: string;
+  chatId: string;
+  sessionId: string;
+  eventMessage: WSEventMessage;
+  idsPromise: Promise<string[] | undefined>;
+}
 
 @WebSocketGateway({
   cors: resolveWsCorsConfig(),
@@ -238,7 +256,10 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
    */
   private readonly socketsByKeyId = new Map<string, Set<Socket>>();
   private readonly socketsByBrowserSessionId = new Map<string, Set<Socket>>();
-  private readonly chatDeliveries = new Map<string, Promise<void>>();
+  private readonly chatDeliveries = new Map<string, PendingChatDelivery[]>();
+  private readonly chatDeliveryActive = new Set<string>();
+  private readonly chatDeliveryDropWarn = new Map<string, { at: number; dropped: number }>();
+  private destroyed = false;
   // The identities of a chat as the lid table gives them, by session and chat. See chatIds.
   private readonly chatIdsMemo = new Map<string, { ids: Promise<string[] | undefined>; expiresAt: number }>();
   // Subscribes still re-validating their key. An unsubscribe answered meanwhile cancels the ones it covers, so
@@ -283,6 +304,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     @Optional()
     @Inject(WS_RESTRICTED_PRESENCE_TRACKER)
     private restrictedPresence?: WsRestrictedPresenceTracker,
+    @Optional()
+    @InjectDataSource('main')
+    private readonly mainDataSource?: DataSource,
   ) {
     this.rateLimits = readWsRateLimitConfig();
     this.frameLimiter = new TokenBucketLimiter(this.rateLimits.framePerSecond, this.rateLimits.frameBurst);
@@ -319,10 +343,14 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   async onModuleDestroy(): Promise<void> {
+    this.destroyed = true;
     if (this.authzSweepTimer) clearInterval(this.authzSweepTimer);
     this.authzSweepTimer = undefined;
     this.unsubscribeMappingLearned?.();
     this.unsubscribeMappingLearned = undefined;
+    this.chatDeliveries.clear();
+    this.chatDeliveryActive.clear();
+    this.chatDeliveryDropWarn.clear();
     await this.restrictedPresence?.destroy();
   }
 
@@ -352,32 +380,72 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     }
     const keyIds = Array.from(this.socketsByKeyId.keys());
     if (keyIds.length > 0) {
-      const current = await this.authService.findAuthorizationStates(keyIds);
-      const byId = new Map(current.map(key => [key.id, key]));
-      for (const keyId of keyIds) {
-        const reason = this.evictionReason(byId.get(keyId), this.socketsByKeyId.get(keyId), now);
-        if (reason) this.evictApiKey(keyId, reason);
+      try {
+        const current = await this.authService.findAuthorizationStates(keyIds);
+        const byId = new Map(current.map(key => [key.id, key]));
+        for (const keyId of keyIds) {
+          const reason = this.evictionReason(byId.get(keyId), this.socketsByKeyId.get(keyId), now);
+          if (reason) this.evictApiKey(keyId, reason);
+        }
+      } catch (error) {
+        this.logger.error(
+          'Failed to sweep WebSocket API key authorization',
+          error instanceof Error ? error.stack : String(error),
+        );
       }
     }
-    if (this.browserSessionService && this.socketsByBrowserSessionId.size > 0) {
+    if (this.socketsByBrowserSessionId.size > 0) {
+      // Enforce stored browser-session expiry offline before hitting the DB, independent of API-key sweep errors.
       for (const [browserSessionId, sockets] of Array.from(this.socketsByBrowserSessionId.entries())) {
-        const sampleSocket = sockets.values().next().value;
-        if (!sampleSocket) continue;
-        const clientIp = this.resolveClientIp(sampleSocket);
+        if (Array.from(sockets).some(client => this.isBrowserSessionExpired(client, now))) {
+          this.evictBrowserSession(browserSessionId, 'expired');
+        }
+      }
+    }
+    const sessionIds = Array.from(this.socketsByBrowserSessionId.keys());
+    if (sessionIds.length > 0) {
+      if (this.mainDataSource) {
         try {
-          await this.browserSessionService.validateSessionById(browserSessionId, clientIp, undefined, {
-            recordUsage: false,
-          });
+          const rows = await this.mainDataSource.getRepository(BrowserSession).findBy({ id: In(sessionIds) });
+          const bySessionId = new Map(rows.map(row => [row.id, row]));
+          for (const browserSessionId of sessionIds) {
+            const row = bySessionId.get(browserSessionId);
+            if (!row || row.revokedAt !== null) {
+              this.evictBrowserSession(browserSessionId, 'revoked');
+              continue;
+            }
+            const expiry = apiKeyExpiryTime(row.expiresAt);
+            if (expiry !== null && expiry <= now) {
+              this.evictBrowserSession(browserSessionId, 'expired');
+            }
+          }
         } catch (error) {
-          if (isKeyRefusal(error)) {
-            const msg = error instanceof Error ? error.message.toLowerCase() : '';
-            const reason: BrowserSessionEvictionReason = msg.includes('expired') ? 'expired' : 'revoked';
-            this.evictBrowserSession(browserSessionId, reason);
-          } else {
-            this.logger.error(
-              `Failed to re-validate browser session ${browserSessionId} during WebSocket sweep`,
-              error instanceof Error ? error.stack : String(error),
-            );
+          this.logger.error(
+            'Failed to batch-sweep WebSocket browser sessions',
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
+      } else if (this.browserSessionService) {
+        for (const browserSessionId of sessionIds) {
+          const sockets = this.socketsByBrowserSessionId.get(browserSessionId);
+          const sampleSocket = sockets?.values().next().value;
+          if (!sampleSocket) continue;
+          const clientIp = this.resolveClientIp(sampleSocket);
+          try {
+            await this.browserSessionService.validateSessionById(browserSessionId, clientIp, undefined, {
+              recordUsage: false,
+            });
+          } catch (error) {
+            if (isKeyRefusal(error)) {
+              const msg = error instanceof Error ? error.message.toLowerCase() : '';
+              const reason: BrowserSessionEvictionReason = msg.includes('expired') ? 'expired' : 'revoked';
+              this.evictBrowserSession(browserSessionId, reason);
+            } else {
+              this.logger.error(
+                `Failed to re-validate browser session ${browserSessionId} during WebSocket sweep`,
+                error instanceof Error ? error.stack : String(error),
+              );
+            }
           }
         }
       }
@@ -422,6 +490,15 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   private isSnapshotExpired(client: Socket, now: number): boolean {
     const snapshot = (client.data as { apiKey?: Pick<ApiKey, 'expiresAt'> } | undefined)?.apiKey;
     const expiry = apiKeyExpiryTime(snapshot?.expiresAt);
+    return expiry !== null && expiry <= now;
+  }
+
+  /** Whether the browser session expiry a cookie socket carries has lapsed, decided without DB access. */
+  private isBrowserSessionExpired(client: Socket, now: number): boolean {
+    const expiresAt = (client.data as { browserSessionExpiresAt?: Date | string | null } | undefined)
+      ?.browserSessionExpiresAt;
+    if (expiresAt === undefined || expiresAt === null) return false;
+    const expiry = apiKeyExpiryTime(expiresAt);
     return expiry !== null && expiry <= now;
   }
 
@@ -588,11 +665,13 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
     if (!apiKey && !(sessionCookie && this.browserSessionService)) {
       this.logger.warn(`Client ${client.id} rejected: No API key provided`);
-      void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
-        ipAddress: clientIp,
-        metadata: { surface: 'websocket' },
-        errorMessage: 'missing API key',
-      });
+      if (allowUnauthenticatedAuditRow(clientIp)) {
+        void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+          ipAddress: clientIp,
+          metadata: { surface: 'websocket' },
+          errorMessage: 'missing API key',
+        });
+      }
       client.emit('message', this.createError('UNAUTHORIZED', 'API key required'));
       client.disconnect(true);
       return;
@@ -609,11 +688,13 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       };
       if (!isAllowedBrowserWsHandshake(cookieReq, trustedProxies, process.env.CORS_ORIGINS, process.env.NODE_ENV)) {
         this.logger.warn(`Client ${client.id} rejected: Cross-origin cookie WebSocket handshake refused`);
-        void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
-          ipAddress: clientIp,
-          metadata: { surface: 'websocket', authMethod: 'cookie', origin: origin ?? null },
-          errorMessage: 'WebSocket origin not allowed for cookie authentication',
-        });
+        if (allowUnauthenticatedAuditRow(clientIp)) {
+          void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+            ipAddress: clientIp,
+            metadata: { surface: 'websocket', authMethod: 'cookie', origin: origin ?? null },
+            errorMessage: 'WebSocket origin not allowed for cookie authentication',
+          });
+        }
         client.emit('message', this.createError('UNAUTHORIZED', 'Authentication failed'));
         client.disconnect(true);
         return;
@@ -630,6 +711,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       // ENFORCED rather than blanket-rejected for "Client IP could not be determined".
       let validKey: ApiKey;
       let browserSessionId: string | undefined;
+      let browserSessionExpiresAt: Date | string | null | undefined;
       if (apiKey) {
         validKey = await runWithRequestId(randomUUID(), () =>
           this.authService.validateApiKey(apiKey, clientIp).catch((error: unknown) => {
@@ -648,6 +730,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         );
         validKey = validated.apiKey;
         browserSessionId = validated.session.id;
+        browserSessionExpiresAt = validated.session.expiresAt ?? null;
       }
 
       // Cap simultaneous sockets per key: each socket holds rooms, engine fan-out, and memory,
@@ -679,6 +762,8 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         (client.data as { rawApiKey: string }).rawApiKey = apiKey;
       } else if (browserSessionId) {
         (client.data as { browserSessionId: string }).browserSessionId = browserSessionId;
+        (client.data as { browserSessionExpiresAt?: Date | string | null }).browserSessionExpiresAt =
+          browserSessionExpiresAt ?? null;
       }
       this.trackSocket(validKey.id, client, browserSessionId);
       // The handshake window is charged pre-auth to keep an unauthenticated flood off the DB. This
@@ -719,12 +804,14 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       });
       // Audit the rejected credential like the REST guard does, so probing over the WS surface leaves
       // a forensic trail too. Fire-and-forget: audit logging must never affect the rejection path.
-      void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
-        apiKey: refusedKey as ApiKey | undefined,
-        ipAddress: clientIp,
-        metadata: { surface: 'websocket' },
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
+      if (refusedKey || allowUnauthenticatedAuditRow(clientIp)) {
+        void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+          apiKey: refusedKey as ApiKey | undefined,
+          ipAddress: clientIp,
+          metadata: { surface: 'websocket' },
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
       client.emit('message', this.createError('UNAUTHORIZED', 'Authentication failed'));
       client.disconnect(true);
     }
@@ -1103,6 +1190,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
    * Emit event to specific rooms based on sessionId and event type
    */
   private emitToRooms(sessionId: string, event: string, data: unknown, exceptRoom?: string): void {
+    if (this.destroyed) return;
     const eventMessage: WSEventMessage = {
       type: 'event',
       payload: { event, sessionId, data },
@@ -1122,6 +1210,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       : named.to(buildRoomName(sessionId, '*')).to(buildRoomName('*', '*'));
     (exceptRoom ? broadcast.except(exceptRoom) : broadcast).emit('message', eventMessage);
     if (!CHAT_EVENTS.has(event) || data === null || typeof data !== 'object') return;
+    if (this.destroyed) return;
     const value = data as Record<string, unknown>;
     const chatId = event.startsWith('group.') ? value.groupId : value.chatId;
     if (typeof chatId !== 'string' || !chatId.trim()) return;
@@ -1134,36 +1223,108 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     // Under REDIS_ENABLED=true without a local restricted socket, consult cluster presence first
     // so replicas skip lid_mappings lookups and chat-room fan-out when Redis confirms zero
     // restricted nodes exist cluster-wide (failing open when Redis is absent, disconnected, or errors).
-    // Resolve identities concurrently, but retain event order within each session, including
-    // after a failed lookup. Other sessions and unrestricted broadcasts remain independent.
-    const chatIdsPromise =
+    // Resolve identities concurrently while retaining FIFO event order within each session (with
+    // per-chat queue bounds so stalled lookups/clients cannot grow heap unboundedly).
+    const idsPromise =
       localRestricted || !this.restrictedPresence
         ? this.chatIds(sessionId, chatId)
         : this.restrictedPresence
             .hasRestrictedNodes()
             .then(hasAny => (hasAny ? this.chatIds(sessionId, chatId) : undefined));
-    const delivery = Promise.allSettled([this.chatDeliveries.get(sessionId), chatIdsPromise])
-      .then(([, resolved]) => {
-        if (resolved.status === 'rejected') throw resolved.reason;
-        const ids = resolved.value;
-        if (!ids?.length) return;
-        const rooms = ids.flatMap(id => {
-          const namedRooms = [chatRoom(sessionId, event, id), chatRoom('*', event, id)];
-          return WILDCARD_EXCLUDED_EVENTS.includes(event)
-            ? namedRooms
-            : [...namedRooms, chatRoom(sessionId, '*', id), chatRoom('*', '*', id)];
-        });
-        this.server.to(rooms).emit('message', eventMessage);
-      })
-      .catch(error =>
-        this.logger.warn('Could not resolve chat identity for WebSocket delivery', {
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      )
-      .finally(() => {
-        if (this.chatDeliveries.get(sessionId) === delivery) this.chatDeliveries.delete(sessionId);
-      });
-    this.chatDeliveries.set(sessionId, delivery);
+    void idsPromise.catch(() => undefined);
+    if (this.destroyed) return;
+    let queue = this.chatDeliveries.get(sessionId);
+    if (!queue) {
+      queue = [];
+      this.chatDeliveries.set(sessionId, queue);
+    }
+    let chatCount = 0;
+    let oldestChatIdx = -1;
+    for (let idx = 0; idx < queue.length; idx++) {
+      if (queue[idx].chatId === chatId) {
+        if (oldestChatIdx === -1) oldestChatIdx = idx;
+        chatCount++;
+      }
+    }
+    if (chatCount >= MAX_CHAT_DELIVERIES_PER_CHAT && oldestChatIdx !== -1) {
+      queue.splice(oldestChatIdx, 1);
+      this.noteDroppedChatDelivery(`${sessionId}:${chatId}`, 'chat', MAX_CHAT_DELIVERIES_PER_CHAT);
+    } else if (queue.length >= MAX_CHAT_DELIVERIES_PER_SESSION) {
+      const dropped = queue.shift();
+      if (dropped) {
+        this.noteDroppedChatDelivery(`${sessionId}:${dropped.chatId}`, 'session', MAX_CHAT_DELIVERIES_PER_SESSION);
+      }
+    }
+    queue.push({ event, chatId, sessionId, eventMessage, idsPromise });
+    if (!this.chatDeliveryActive.has(sessionId)) {
+      this.chatDeliveryActive.add(sessionId);
+      void this.drainChatDeliveries(sessionId);
+    }
+  }
+
+  private noteDroppedChatDelivery(queueKey: string, scope: 'chat' | 'session', maxQueued: number): void {
+    const now = Date.now();
+    const warnKey = `${scope}:${queueKey}`;
+    const state = this.chatDeliveryDropWarn.get(warnKey) ?? { at: -Infinity, dropped: 0 };
+    state.dropped++;
+    if (now - state.at >= CHAT_DELIVERY_DROP_WARN_INTERVAL_MS) {
+      const dropped = state.dropped;
+      state.at = now;
+      state.dropped = 0;
+      this.logger.warn(
+        scope === 'chat'
+          ? 'Dropped oldest queued WebSocket chat delivery at per-chat depth cap'
+          : 'Dropped oldest queued WebSocket chat delivery at per-session depth cap',
+        {
+          scope,
+          queueKey,
+          dropped,
+          maxQueued,
+        },
+      );
+    }
+    this.chatDeliveryDropWarn.delete(warnKey);
+    this.chatDeliveryDropWarn.set(warnKey, state);
+    while (this.chatDeliveryDropWarn.size > CHAT_DELIVERY_DROP_WARN_MAX) {
+      const oldest = this.chatDeliveryDropWarn.keys().next().value;
+      if (oldest === undefined) break;
+      this.chatDeliveryDropWarn.delete(oldest);
+    }
+  }
+
+  private async drainChatDeliveries(sessionId: string): Promise<void> {
+    if (this.destroyed) return;
+    try {
+      while (!this.destroyed) {
+        const queue = this.chatDeliveries.get(sessionId);
+        const item = queue?.shift();
+        if (!item) break;
+        try {
+          const ids = await item.idsPromise;
+          if (this.destroyed || !ids?.length) continue;
+          const rooms = ids.flatMap(id => {
+            const namedRooms = [chatRoom(item.sessionId, item.event, id), chatRoom('*', item.event, id)];
+            return WILDCARD_EXCLUDED_EVENTS.includes(item.event)
+              ? namedRooms
+              : [...namedRooms, chatRoom(item.sessionId, '*', id), chatRoom('*', '*', id)];
+          });
+          this.server.to(rooms).emit('message', item.eventMessage);
+        } catch (error) {
+          this.logger.warn('Could not resolve chat identity for WebSocket delivery', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } finally {
+      this.chatDeliveryActive.delete(sessionId);
+      const remaining = this.chatDeliveries.get(sessionId);
+      if (this.destroyed || (remaining && remaining.length === 0)) {
+        this.chatDeliveries.delete(sessionId);
+      } else if (remaining && remaining.length > 0 && !this.chatDeliveryActive.has(sessionId)) {
+        this.chatDeliveryActive.add(sessionId);
+        void this.drainChatDeliveries(sessionId);
+      }
+    }
   }
 
   /**

@@ -1,5 +1,9 @@
 import { UnauthorizedException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
+import { DataSource } from 'typeorm';
+import { BrowserSession } from '../auth/entities/browser-session.entity';
+import { LoggerService } from '../../common/services/logger.service';
+import { ChatScopeService } from '../auth/chat-scope.service';
 
 // ConfigService stub for the media-shed knob: no override means the default cap applies.
 const asConfig = (): { get: jest.Mock } => ({ get: jest.fn((_key: string, defaultValue?: unknown) => defaultValue) });
@@ -1245,12 +1249,13 @@ describe('EventsGateway rate limiting', () => {
     it('throttles an unauthenticated handshake flood before any credential/audit work', async () => {
       process.env.WS_RATE_LIMIT_HANDSHAKE_MAX = '2';
       const gw = buildGateway();
+      const floodIp = '203.0.113.201';
 
       // Three key-less handshakes from one IP: the first two reach the missing-key audit,
       // the third is gated by the limiter instead (no per-attempt auth failure processing).
-      await gw.handleConnection(asSocket(makeSock('a')));
-      await gw.handleConnection(asSocket(makeSock('b')));
-      await gw.handleConnection(asSocket(makeSock('c')));
+      await gw.handleConnection(asSocket(makeSock('a', {}, floodIp)));
+      await gw.handleConnection(asSocket(makeSock('b', {}, floodIp)));
+      await gw.handleConnection(asSocket(makeSock('c', {}, floodIp)));
 
       const authFailed = warnCalls().filter(([action]) => action === AuditAction.API_KEY_AUTH_FAILED);
       expect(authFailed).toHaveLength(2);
@@ -1817,6 +1822,320 @@ describe('EventsGateway rate limiting', () => {
         recordUsage: false,
       });
       expect(sock.disconnect).toHaveBeenCalledWith(true);
+    });
+
+    it('stores browserSessionExpiresAt on client.data, enforces offline expiry even if findAuthorizationStates throws, and batch-queries browser_sessions via In(sessionIds)', async () => {
+      const ds = new DataSource({
+        type: 'better-sqlite3',
+        database: ':memory:',
+        entities: [BrowserSession],
+        synchronize: true,
+      });
+      await ds.initialize();
+      try {
+        const bsRepo = ds.getRepository(BrowserSession);
+        const now = Date.now();
+        await bsRepo.save([
+          {
+            id: 'bs-active',
+            tokenHash: 'h1',
+            apiKeyId: 'k-cookie',
+            createdAt: new Date(now - 60_000),
+            expiresAt: new Date(now + 600_000),
+            revokedAt: null,
+          },
+          {
+            id: 'bs-revoked',
+            tokenHash: 'h2',
+            apiKeyId: 'k-cookie',
+            createdAt: new Date(now - 60_000),
+            expiresAt: new Date(now + 600_000),
+            revokedAt: new Date(now - 1_000),
+          },
+          {
+            id: 'bs-offline-exp',
+            tokenHash: 'h3',
+            apiKeyId: 'k-cookie',
+            createdAt: new Date(now - 60_000),
+            expiresAt: new Date(now + 10_000),
+            revokedAt: null,
+          },
+        ]);
+
+        const key = {
+          id: 'k-cookie',
+          name: 'Cookie Key',
+          role: 'admin',
+          isActive: true,
+          allowedSessions: null,
+          allowedChats: null,
+          allowedIps: null,
+          expiresAt: null,
+        };
+        const findAuthSpy = jest.fn().mockRejectedValue(new Error('sqlite busy'));
+        (authService as unknown as { findAuthorizationStates: jest.Mock }).findAuthorizationStates = findAuthSpy;
+        browserSessionService.validateSessionToken
+          .mockResolvedValueOnce({
+            session: { id: 'bs-active', apiKeyId: 'k-cookie', expiresAt: new Date(now + 600_000) },
+            apiKey: key,
+          })
+          .mockResolvedValueOnce({
+            session: { id: 'bs-revoked', apiKeyId: 'k-cookie', expiresAt: new Date(now + 600_000) },
+            apiKey: key,
+          })
+          .mockResolvedValueOnce({
+            session: { id: 'bs-offline-exp', apiKeyId: 'k-cookie', expiresAt: new Date(now + 10_000) },
+            apiKey: key,
+          });
+
+        const Ctor = EventsGateway as unknown as new (...args: unknown[]) => EventsGateway;
+        const gw = new Ctor(
+          authService,
+          auditService,
+          asConfig(),
+          new ChatScopeService(),
+          browserSessionService,
+          undefined,
+          undefined,
+          ds,
+        );
+
+        const sActive = makeCookieSock(
+          's-active',
+          {
+            cookie: 'openwa_session=t1',
+            host: 'wa.example.com',
+            origin: 'https://wa.example.com',
+          },
+          { secure: true },
+        );
+        const sRevoked = makeCookieSock(
+          's-revoked',
+          {
+            cookie: 'openwa_session=t2',
+            host: 'wa.example.com',
+            origin: 'https://wa.example.com',
+          },
+          { secure: true },
+        );
+        const sExpired = makeCookieSock(
+          's-exp',
+          {
+            cookie: 'openwa_session=t3',
+            host: 'wa.example.com',
+            origin: 'https://wa.example.com',
+          },
+          { secure: true },
+        );
+
+        await gw.handleConnection(asSocket(sActive));
+        await gw.handleConnection(asSocket(sRevoked));
+        await gw.handleConnection(asSocket(sExpired));
+        expect(sExpired.data.browserSessionExpiresAt).toEqual(new Date(now + 10_000));
+
+        const findSpy = jest.spyOn(bsRepo, 'find');
+        const findBySpy = jest.spyOn(bsRepo, 'findBy');
+        await (gw as unknown as { sweepApiKeyAuthorization: (ts?: number) => Promise<void> }).sweepApiKeyAuthorization(
+          now + 20_000,
+        );
+
+        // Must enforce offline expiry + batch query even though findAuthorizationStates threw!
+        expect(sExpired.disconnect).toHaveBeenCalledWith(true);
+        expect(sRevoked.disconnect).toHaveBeenCalledWith(true);
+        expect(sActive.disconnect).not.toHaveBeenCalled();
+        expect(browserSessionService.validateSessionById).not.toHaveBeenCalled();
+        expect(findSpy.mock.calls.length + findBySpy.mock.calls.length).toBe(1);
+      } finally {
+        await ds.destroy();
+      }
+    });
+
+    it('throttles audit rows for unauthenticated WS handshake failures via allowUnauthenticatedAuditRow', async () => {
+      const savedMax = process.env.WS_RATE_LIMIT_HANDSHAKE_MAX;
+      process.env.WS_RATE_LIMIT_HANDSHAKE_MAX = '100';
+      const gw = buildCookieGateway();
+      const isolatedIp = '198.51.100.77';
+      try {
+        for (let i = 0; i < 15; i++) {
+          const sock = makeCookieSock(`ws-anon-${i}`, { host: 'wa.example.com' }, { address: isolatedIp });
+          await gw.handleConnection(asSocket(sock));
+          expect(sock.disconnect).toHaveBeenCalledWith(true);
+        }
+        // allowUnauthenticatedAuditRow allows up to 10 rows per IP per minute; the rest are dropped.
+        const authFailedRows = auditService.logWarn.mock.calls.filter(
+          ([action]) => action === AuditAction.API_KEY_AUTH_FAILED,
+        );
+        expect(authFailedRows.length).toBeLessThanOrEqual(10);
+      } finally {
+        if (savedMax === undefined) delete process.env.WS_RATE_LIMIT_HANDSHAKE_MAX;
+        else process.env.WS_RATE_LIMIT_HANDSHAKE_MAX = savedMax;
+      }
+    });
+
+    it('bounds chatDeliveries queue depth per chat with a rate-limited warning when identity lookup stalls', async () => {
+      const savedRedis = process.env.REDIS_ENABLED;
+      process.env.REDIS_ENABLED = 'true';
+      const warnSpy = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+      try {
+        let releaseLookup!: () => void;
+        const slowScope = new ChatScopeService({
+          phonesForLidsPersisted: jest.fn().mockResolvedValue({}),
+          lidsForPhonesPersisted: jest.fn(
+            () =>
+              new Promise<Record<string, string[]>>(res => {
+                releaseLookup = () => res({ '628111000111': ['111'] });
+              }),
+          ),
+        } as never);
+        const Ctor = EventsGateway as unknown as new (...args: unknown[]) => EventsGateway;
+        const gw = new Ctor(authService, auditService, asConfig(), slowScope);
+        const { server, emit } = makeCapturingServer();
+        (gw as unknown as { server: unknown }).server = server;
+        // Mark local restricted socket so emitToRooms enqueues into chatDeliveries.
+        const restrictedSock = makeCookieSock('ws-r', {});
+        restrictedSock.data.apiKey = {
+          id: 'k-r',
+          name: 'r',
+          role: 'viewer',
+          allowedSessions: null,
+          allowedChats: ['628111000111@c.us'],
+        };
+        (gw as unknown as { socketsByKeyId: Map<string, Set<Socket>> }).socketsByKeyId.set(
+          'k-r',
+          new Set([asSocket(restrictedSock)]),
+        );
+
+        for (let i = 0; i < 150; i++) {
+          gw.emitMessage('sess-stall', { chatId: '628111000111@c.us', id: `m-${i}` });
+        }
+
+        const queues = (gw as unknown as { chatDeliveries: Map<string, unknown[]> }).chatDeliveries;
+        const queueDepth =
+          queues.size > 0 ? Math.max(...[...queues.values()].map(q => (Array.isArray(q) ? q.length : 1))) : 0;
+        expect(queueDepth).toBeLessThanOrEqual(64);
+        expect(warnSpy).toHaveBeenCalled();
+
+        releaseLookup?.();
+        await new Promise(resolve => setImmediate(resolve));
+        expect(emit).toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+        if (savedRedis === undefined) delete process.env.REDIS_ENABLED;
+        else process.env.REDIS_ENABLED = savedRedis;
+      }
+    });
+
+    it('reports per-session depth cap accurately when session queue limit triggers across chats', async () => {
+      const savedRedis = process.env.REDIS_ENABLED;
+      process.env.REDIS_ENABLED = 'true';
+      const warnSpy = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+      try {
+        let releaseLookup!: () => void;
+        const slowScope = new ChatScopeService({
+          phonesForLidsPersisted: jest.fn().mockResolvedValue({}),
+          lidsForPhonesPersisted: jest.fn(
+            () =>
+              new Promise<Record<string, string[]>>(res => {
+                releaseLookup = () => res({ '628111000111': ['111'] });
+              }),
+          ),
+        } as never);
+        const Ctor = EventsGateway as unknown as new (...args: unknown[]) => EventsGateway;
+        const gw = new Ctor(authService, auditService, asConfig(), slowScope);
+        const { server } = makeCapturingServer();
+        (gw as unknown as { server: unknown }).server = server;
+        const restrictedSock = makeCookieSock('ws-r', {});
+        restrictedSock.data.apiKey = {
+          id: 'k-r',
+          name: 'r',
+          role: 'viewer',
+          allowedSessions: null,
+          allowedChats: ['628111000111@c.us'],
+        };
+        (gw as unknown as { socketsByKeyId: Map<string, Set<Socket>> }).socketsByKeyId.set(
+          'k-r',
+          new Set([asSocket(restrictedSock)]),
+        );
+
+        // Emit 1026 unique chats: item 0 is shifted immediately by the active drain,
+        // leaving 1024 queued items when item 1025 arrives and triggers the session cap.
+        for (let i = 0; i < 1026; i++) {
+          gw.emitMessage('sess-cap', { chatId: `628111${String(i).padStart(6, '0')}@c.us`, id: `m-${i}` });
+        }
+
+        expect(warnSpy).toHaveBeenCalledWith(
+          'Dropped oldest queued WebSocket chat delivery at per-session depth cap',
+          expect.objectContaining({
+            scope: 'session',
+            maxQueued: 1024,
+          }),
+        );
+
+        await gw.onModuleDestroy();
+        releaseLookup?.();
+        await new Promise(resolve => setImmediate(resolve));
+      } finally {
+        warnSpy.mockRestore();
+        if (savedRedis === undefined) delete process.env.REDIS_ENABLED;
+        else process.env.REDIS_ENABLED = savedRedis;
+      }
+    });
+
+    it('guards against late emits and prevents drainChatDeliveries restart after onModuleDestroy()', async () => {
+      const savedRedis = process.env.REDIS_ENABLED;
+      process.env.REDIS_ENABLED = 'true';
+      try {
+        let releaseLookup!: () => void;
+        const lidsForPhonesPersisted = jest.fn(
+          () =>
+            new Promise<Record<string, string[]>>(res => {
+              releaseLookup = () => res({ '628111000111': ['111'] });
+            }),
+        );
+        const slowScope = new ChatScopeService({
+          phonesForLidsPersisted: jest.fn().mockResolvedValue({}),
+          lidsForPhonesPersisted,
+        } as never);
+        const Ctor = EventsGateway as unknown as new (...args: unknown[]) => EventsGateway;
+        const gw = new Ctor(authService, auditService, asConfig(), slowScope);
+        const { server, emit } = makeCapturingServer();
+        (gw as unknown as { server: unknown }).server = server;
+        const restrictedSock = makeCookieSock('ws-r', {});
+        restrictedSock.data.apiKey = {
+          id: 'k-r',
+          name: 'r',
+          role: 'viewer',
+          allowedSessions: null,
+          allowedChats: ['628111000111@c.us'],
+        };
+        (gw as unknown as { socketsByKeyId: Map<string, Set<Socket>> }).socketsByKeyId.set(
+          'k-r',
+          new Set([asSocket(restrictedSock)]),
+        );
+
+        gw.emitMessage('sess-destroy', { chatId: '628111000111@c.us', id: 'm-inflight' });
+        emit.mockClear();
+        await gw.onModuleDestroy();
+
+        // Simulate queued leftovers appearing concurrently before in-flight lookup resolves.
+        const deliveries = (gw as unknown as { chatDeliveries: Map<string, unknown[]> }).chatDeliveries;
+        deliveries.set('sess-destroy', [
+          { chatId: 'x', sessionId: 'sess-destroy', event: 'message', eventMessage: {} },
+        ]);
+
+        releaseLookup?.();
+        await new Promise(resolve => setImmediate(resolve));
+
+        // Post-destroy emits must be ignored and in-flight drains must not emit or restart.
+        gw.emitMessage('sess-destroy', { chatId: '628111000111@c.us', id: 'm-after' });
+        expect(lidsForPhonesPersisted).toHaveBeenCalledTimes(1);
+        expect(emit).not.toHaveBeenCalled();
+        expect(deliveries.size).toBe(0);
+        expect((gw as unknown as { chatDeliveryActive: Set<string> }).chatDeliveryActive.size).toBe(0);
+      } finally {
+        if (savedRedis === undefined) delete process.env.REDIS_ENABLED;
+        else process.env.REDIS_ENABLED = savedRedis;
+      }
     });
   });
 });

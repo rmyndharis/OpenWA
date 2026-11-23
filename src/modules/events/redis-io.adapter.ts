@@ -149,6 +149,7 @@ export class RedisIoAdapter extends IoAdapter {
   private pubClient?: Redis;
   private subClient?: Redis;
   private subPing?: NodeJS.Timeout;
+  private closePromise?: Promise<void>;
 
   constructor(app: INestApplicationContext) {
     super(app);
@@ -265,11 +266,19 @@ export class RedisIoAdapter extends IoAdapter {
     // a shutdown that had in fact gone fine. Close the server first, then release the pair. Under
     // forceCloseConnections Nest skips the server close when the socket.io server shares the HTTP
     // server, so only the pub/sub pair is released here and the HTTP close tears the sockets down.
-    clearInterval(this.subPing);
+    if (this.subPing) {
+      clearInterval(this.subPing);
+      this.subPing = undefined;
+    }
     await super.close(server);
-    await Promise.allSettled([this.quitClient(this.pubClient), this.quitClient(this.subClient)]);
-    this.pubClient = undefined;
-    this.subClient = undefined;
+    if (!this.closePromise) {
+      const pub = this.pubClient;
+      const sub = this.subClient;
+      this.pubClient = undefined;
+      this.subClient = undefined;
+      this.closePromise = Promise.allSettled([this.quitClient(pub), this.quitClient(sub)]).then(() => undefined);
+    }
+    await this.closePromise;
   }
 
   /**
