@@ -1,10 +1,11 @@
 import { EventEmitter } from 'events';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { createServer, request as httpRequest, Server } from 'http';
-import { AddressInfo } from 'net';
+import { Agent as HttpAgent, createServer, request as httpRequest, Server } from 'http';
+import { AddressInfo, connect as netConnect } from 'net';
 import { gzipSync } from 'zlib';
-import express, { Request, Response, json } from 'express';
+import express, { Request, Response, json, urlencoded } from 'express';
+import multer from 'multer';
 import {
   createInflightBodyBudget,
   parseBodyLimitBytes,
@@ -1254,5 +1255,476 @@ describe('body-parser inflate backstop', () => {
 
   it('mirrors the global cap and disabled inflate on the MCP route-level fallback parser', () => {
     expect(read('../modules/mcp/mcp.server.ts')).toContain('express.json({ limit: bodyLimit, inflate: false })');
+  });
+});
+
+describe('chunked body incremental accounting and keep-alive over real HTTP', () => {
+  const servers: Server[] = [];
+
+  beforeEach(() => jest.useRealTimers());
+  afterEach(async () => {
+    for (const srv of servers.splice(0)) {
+      srv.closeAllConnections();
+      await new Promise<void>(resolve => srv.close(() => resolve()));
+    }
+  });
+
+  const startApp = async (
+    budget: InflightBodyBudget,
+  ): Promise<{ port: number; received: Array<{ path: string; bytes: number }> }> => {
+    const received: Array<{ path: string; bytes: number }> = [];
+    const app = express();
+    app.use((req, _res, next) => {
+      // Never attach a 'data' listener to IncomingMessage itself.
+      const origOn = req.on.bind(req);
+      let sawBudget = false;
+      req.on = ((event: string, fn: (...args: unknown[]) => void) => {
+        if (sawBudget && event === 'data') {
+          throw new Error('unexpected data listener attached to req');
+        }
+        return origOn(event, fn);
+      }) as typeof req.on;
+      budget.middleware(req, _res, () => {
+        sawBudget = false;
+        req.on = origOn;
+        next();
+      });
+      sawBudget = true;
+    });
+    app.use(json({ limit: '25mb' }));
+    app.use(urlencoded({ extended: true, limit: '25mb' }));
+    const upload = multer();
+    app.post('/json', (req, res) => {
+      const len =
+        typeof (req.body as { data?: unknown })?.data === 'string' ? (req.body as { data: string }).data.length : 0;
+      received.push({ path: '/json', bytes: len });
+      res.status(200).json({ bytes: len });
+    });
+    app.post('/form', (req, res) => {
+      const len =
+        typeof (req.body as { data?: unknown })?.data === 'string' ? (req.body as { data: string }).data.length : 0;
+      received.push({ path: '/form', bytes: len });
+      res.status(200).json({ bytes: len });
+    });
+    app.post('/multipart', upload.single('file'), (req, res) => {
+      const len = req.file?.buffer.length ?? 0;
+      received.push({ path: '/multipart', bytes: len });
+      res.status(200).json({ bytes: len });
+    });
+    app.use((err: unknown, _req: Request, res: Response, _next: unknown) => {
+      void _req;
+      void _next;
+      if (!res.headersSent) res.status(400).json({ error: String(err) });
+    });
+
+    const srv = createServer(app);
+    servers.push(srv);
+    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve));
+    return { port: (srv.address() as AddressInfo).port, received };
+  };
+
+  it('drops excess concurrent 6 x 1.90 MiB chunked POSTs completing in <1 s under a 10 MiB budget', async () => {
+    const budget = createInflightBodyBudget(10 * MB, { perClientShare: 1 });
+    const { port } = await startApp(budget);
+
+    const payload = JSON.stringify({ data: 'a'.repeat(Math.floor(1.9 * MB) - 11) });
+    const firstStageLen = Math.floor(1.85 * MB);
+    const chunkSize = 256 * 1024;
+    const t0 = Date.now();
+
+    const clients = Array.from({ length: 6 }, () => {
+      let settled = false;
+      let finish!: (result: { status: number; buffered: boolean }) => void;
+      const done = new Promise<{ status: number; buffered: boolean }>(res => (finish = res));
+      const req = httpRequest(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/json',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' },
+        },
+        res => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            if (settled) return;
+            settled = true;
+            finish({ status: res.statusCode ?? 0, buffered: res.statusCode === 200 });
+          });
+        },
+      );
+      req.on('error', () => {
+        if (settled) return;
+        settled = true;
+        finish({ status: 0, buffered: false });
+      });
+      return { req, done };
+    });
+
+    // Stream first 1.85 MiB concurrently on all 6 before any sends its terminating chunk.
+    await Promise.all(
+      clients.map(
+        ({ req }) =>
+          new Promise<void>(resolve => {
+            let offset = 0;
+            const writeNext = (): void => {
+              if (req.destroyed || offset >= firstStageLen) {
+                resolve();
+                return;
+              }
+              const nextOffset = Math.min(firstStageLen, offset + chunkSize);
+              req.write(payload.slice(offset, nextOffset), () => {
+                offset = nextOffset;
+                setTimeout(writeNext, 2);
+              });
+            };
+            writeNext();
+          }),
+      ),
+    );
+
+    // Send final 0.05 MiB chunk on any surviving connections.
+    for (const { req } of clients) {
+      if (!req.destroyed) req.end(payload.slice(firstStageLen));
+    }
+
+    const results = await Promise.all(clients.map(c => c.done));
+    const elapsedMs = Date.now() - t0;
+
+    expect(elapsedMs).toBeLessThan(1000);
+    const okCount = results.filter(r => r.status === 200).length;
+    const droppedCount = results.filter(r => r.status !== 200).length;
+    expect(okCount).toBeLessThan(6);
+    expect(droppedCount).toBeGreaterThanOrEqual(1);
+    expect(budget.currentBytes()).toBe(0);
+  });
+
+  it('drops excess unkeyed chunked POSTs mid-stream when crossing the 4 MiB anonymous pool in <1 s', async () => {
+    const budget = createInflightBodyBudget(10 * MB, {
+      classify: () => undefined,
+      bodyLimitBytes: 2 * MB,
+      trustedProxies: ['127.0.0.1'],
+    });
+    const { port } = await startApp(budget);
+
+    const payload = JSON.stringify({ data: 'b'.repeat(Math.floor(1.9 * MB) - 11) });
+    const firstStageLen = Math.floor(1.85 * MB);
+    const chunkSize = 256 * 1024;
+    const t0 = Date.now();
+
+    const clients = Array.from({ length: 6 }, (_, idx) => {
+      let settled = false;
+      let finish!: (result: { status: number }) => void;
+      const done = new Promise<{ status: number }>(res => (finish = res));
+      const req = httpRequest(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/json',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Transfer-Encoding': 'chunked',
+            'X-Forwarded-For': `198.51.100.${idx + 1}`,
+          },
+        },
+        res => {
+          res.resume();
+          res.on('end', () => {
+            if (settled) return;
+            settled = true;
+            finish({ status: res.statusCode ?? 0 });
+          });
+        },
+      );
+      req.on('error', () => {
+        if (settled) return;
+        settled = true;
+        finish({ status: 0 });
+      });
+      return { req, done };
+    });
+
+    await Promise.all(
+      clients.map(
+        ({ req }) =>
+          new Promise<void>(resolve => {
+            let offset = 0;
+            const writeNext = (): void => {
+              if (req.destroyed || offset >= firstStageLen) {
+                resolve();
+                return;
+              }
+              const nextOffset = Math.min(firstStageLen, offset + chunkSize);
+              req.write(payload.slice(offset, nextOffset), () => {
+                offset = nextOffset;
+                setTimeout(writeNext, 2);
+              });
+            };
+            writeNext();
+          }),
+      ),
+    );
+
+    for (const { req } of clients) {
+      if (!req.destroyed) req.end(payload.slice(firstStageLen));
+    }
+
+    const results = await Promise.all(clients.map(c => c.done));
+    expect(Date.now() - t0).toBeLessThan(1000);
+    // 4 MiB pool holds at most two 1.90 MiB bodies simultaneously; 6 concurrent senders cannot all get 200.
+    expect(results.filter(r => r.status === 200).length).toBeLessThanOrEqual(2);
+    expect(budget.anonymousBytes()).toBe(0);
+    expect(budget.currentBytes()).toBe(0);
+  });
+
+  it('drops a chunked body that crosses the cap right as its final chunk arrives', async () => {
+    const budget = createInflightBodyBudget(2 * MB, { perClientShare: 1 });
+    const { port, received } = await startApp(budget);
+
+    const payload = JSON.stringify({ data: 'c'.repeat(Math.floor(2.1 * MB) - 11) });
+    const split = Math.floor(1.5 * MB);
+
+    const status = await new Promise<number>(resolve => {
+      const req = httpRequest(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/json',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' },
+        },
+        res => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode ?? 0));
+        },
+      );
+      req.on('error', () => resolve(0));
+      req.write(payload.slice(0, split), () => {
+        setTimeout(() => {
+          if (!req.destroyed) req.end(payload.slice(split));
+        }, 20);
+      });
+    });
+
+    expect(status).not.toBe(200);
+    expect(received).toHaveLength(0);
+    expect(budget.currentBytes()).toBe(0);
+  });
+
+  it('keeps delivering 100% of bytes for keep-alive JSON, urlencoded, multipart, and pipelined requests', async () => {
+    const budget = createInflightBodyBudget(10 * MB, { perClientShare: 1 });
+    const { port, received } = await startApp(budget);
+    const agent = new HttpAgent({ keepAlive: true, maxSockets: 1 });
+
+    const send = (
+      path: string,
+      headers: Record<string, string>,
+      body: Buffer,
+    ): Promise<{ status: number; body: string }> =>
+      new Promise((resolve, reject) => {
+        const req = httpRequest({ host: '127.0.0.1', port, path, method: 'POST', headers, agent }, res => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString() }));
+        });
+        req.on('error', reject);
+        const half = Math.floor(body.length / 2);
+        req.write(body.slice(0, half), () => {
+          setTimeout(() => req.end(body.slice(half)), 5);
+        });
+      });
+
+    try {
+      const jsonText = 'hello-keepalive-json-'.repeat(200);
+      const r1 = await send(
+        '/json',
+        { 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' },
+        Buffer.from(JSON.stringify({ data: jsonText })),
+      );
+      expect(r1).toEqual({ status: 200, body: JSON.stringify({ bytes: jsonText.length }) });
+
+      const formText = 'hello-keepalive-form-'.repeat(200);
+      const r2 = await send(
+        '/form',
+        { 'Content-Type': 'application/x-www-form-urlencoded', 'Transfer-Encoding': 'chunked' },
+        Buffer.from(`data=${formText}`),
+      );
+      expect(r2).toEqual({ status: 200, body: JSON.stringify({ bytes: formText.length }) });
+
+      const mpData = 'hello-keepalive-multipart-'.repeat(200);
+      const boundary = '----openwaBoundary77';
+      const mpBody = Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="payload.bin"\r\n` +
+          `Content-Type: application/octet-stream\r\n\r\n${mpData}\r\n--${boundary}--\r\n`,
+      );
+      const r3 = await send(
+        '/multipart',
+        { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Transfer-Encoding': 'chunked' },
+        mpBody,
+      );
+      expect(r3).toEqual({ status: 200, body: JSON.stringify({ bytes: mpData.length }) });
+
+      // Pipelined chunked requests over one raw TCP socket.
+      const pipedReply = await new Promise<string>((resolve, reject) => {
+        const sock = netConnect(port, '127.0.0.1', () => {
+          const b1 = JSON.stringify({ data: 'pipe-one' });
+          const b2 = JSON.stringify({ data: 'pipe-two' });
+          const p1 =
+            `POST /json HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n` +
+            `${b1.length.toString(16)}\r\n${b1}\r\n0\r\n\r\n`;
+          const p2 =
+            `POST /json HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n` +
+            `${b2.length.toString(16)}\r\n${b2}\r\n0\r\n\r\n`;
+          sock.write(p1 + p2);
+        });
+        const chunks: Buffer[] = [];
+        sock.on('data', (d: Buffer) => chunks.push(d));
+        sock.on('end', () => resolve(Buffer.concat(chunks).toString()));
+        sock.on('error', reject);
+      });
+      expect(pipedReply).toContain('{"bytes":8}');
+      expect(received).toHaveLength(5);
+      expect(budget.currentBytes()).toBe(0);
+    } finally {
+      agent.destroy();
+    }
+  });
+});
+
+describe('chunked socket listener lifecycle and guards', () => {
+  it('attaches and detaches socket data listener cleanly on settle and release, and reconciles incrementally', () => {
+    const budget = createInflightBodyBudget(4 * MB, { perClientShare: 1 });
+    const req = new EventEmitter() as unknown as Request & EventEmitter;
+    const socket = Object.assign(new EventEmitter(), { bytesRead: 0, remoteAddress: '203.0.113.7' });
+    (req as unknown as { headers: Record<string, string>; socket: unknown; destroy: jest.Mock }).headers = {
+      'transfer-encoding': 'chunked',
+    };
+    (req as unknown as { socket: unknown }).socket = socket;
+    (req as unknown as { destroy: jest.Mock }).destroy = jest.fn();
+
+    const mock = (() => {
+      const res = Object.assign(new EventEmitter(), {
+        headersSent: false,
+        writableEnded: false,
+        status: () => res,
+        set: () => res,
+        json: () => res,
+      }) as unknown as Response & EventEmitter;
+      return res;
+    })();
+    budget.middleware(req, mock, jest.fn());
+    expect(req.listenerCount('data')).toBe(0);
+    expect(socket.listenerCount('data')).toBe(1);
+
+    socket.bytesRead = 2 * MB;
+    socket.emit('data', Buffer.alloc(1));
+    expect(budget.currentBytes()).toBe(2 * MB);
+
+    // Completing req detaches socket listener before res finishes.
+    (req as unknown as { complete: boolean }).complete = true;
+    req.emit('end');
+    expect(socket.listenerCount('data')).toBe(0);
+
+    mock.emit('finish');
+    expect(budget.currentBytes()).toBe(0);
+  });
+
+  it('detaches socket data listener on release even if end never fired, and handles already-complete or mock sockets', () => {
+    const budget = createInflightBodyBudget(4 * MB, { perClientShare: 1 });
+
+    // Early release (res finish before req end) detaches socket data listener.
+    const reqA = new EventEmitter() as unknown as Request & EventEmitter;
+    const sockA = Object.assign(new EventEmitter(), { bytesRead: 0, remoteAddress: '203.0.113.8' });
+    (reqA as unknown as { headers: Record<string, string>; socket: unknown; destroy: jest.Mock }).headers = {
+      'transfer-encoding': 'chunked',
+    };
+    (reqA as unknown as { socket: unknown }).socket = sockA;
+    (reqA as unknown as { destroy: jest.Mock }).destroy = jest.fn();
+    const resA = Object.assign(new EventEmitter(), {
+      headersSent: false,
+      writableEnded: false,
+    }) as unknown as Response & EventEmitter;
+    budget.middleware(reqA, resA, jest.fn());
+    expect(sockA.listenerCount('data')).toBe(1);
+    resA.emit('finish');
+    expect(sockA.listenerCount('data')).toBe(0);
+
+    // Already-complete chunked request at admission does not attach socket listener.
+    const reqB = new EventEmitter() as unknown as Request & EventEmitter;
+    const sockB = Object.assign(new EventEmitter(), { bytesRead: 0, remoteAddress: '203.0.113.9' });
+    (
+      reqB as unknown as { headers: Record<string, string>; socket: unknown; complete: boolean; destroy: jest.Mock }
+    ).headers = {
+      'transfer-encoding': 'chunked',
+    };
+    (reqB as unknown as { socket: unknown }).socket = sockB;
+    (reqB as unknown as { complete: boolean }).complete = true;
+    (reqB as unknown as { destroy: jest.Mock }).destroy = jest.fn();
+    const resB = Object.assign(new EventEmitter(), {
+      headersSent: false,
+      writableEnded: false,
+    }) as unknown as Response & EventEmitter;
+    budget.middleware(reqB, resB, jest.fn());
+    expect(sockB.listenerCount('data')).toBe(0);
+    resB.emit('finish');
+
+    // Socket with .on but without .off does not throw on release.
+    const reqC = new EventEmitter() as unknown as Request & EventEmitter;
+    const listeners: Array<() => void> = [];
+    const sockC = {
+      bytesRead: 0,
+      remoteAddress: '203.0.113.10',
+      on: (_ev: string, fn: () => void) => listeners.push(fn),
+    };
+    (reqC as unknown as { headers: Record<string, string>; socket: unknown; destroy: jest.Mock }).headers = {
+      'transfer-encoding': 'chunked',
+    };
+    (reqC as unknown as { socket: unknown }).socket = sockC;
+    (reqC as unknown as { destroy: jest.Mock }).destroy = jest.fn();
+    const resC = Object.assign(new EventEmitter(), {
+      headersSent: false,
+      writableEnded: false,
+    }) as unknown as Response & EventEmitter;
+    budget.middleware(reqC, resC, jest.fn());
+    expect(listeners).toHaveLength(1);
+    expect(() => resC.emit('finish')).not.toThrow();
+  });
+
+  it('ignores pipelined socket bytes when end fires after onSocketData has already settled', () => {
+    const budget = createInflightBodyBudget(6 * MB, { perClientShare: 1 });
+    const req = new EventEmitter() as unknown as Request & EventEmitter;
+    const socket = Object.assign(new EventEmitter(), { bytesRead: 0, remoteAddress: '203.0.113.11' });
+    (
+      req as unknown as { headers: Record<string, string>; socket: unknown; complete: boolean; destroy: jest.Mock }
+    ).headers = {
+      'transfer-encoding': 'chunked',
+    };
+    (req as unknown as { socket: unknown }).socket = socket;
+    (req as unknown as { complete: boolean }).complete = false;
+    (req as unknown as { destroy: jest.Mock }).destroy = jest.fn();
+    const res = Object.assign(new EventEmitter(), {
+      headersSent: false,
+      writableEnded: false,
+    }) as unknown as Response & EventEmitter;
+
+    budget.middleware(req, res, jest.fn());
+    expect(budget.currentBytes()).toBe(1 * MB);
+
+    // Final chunk arrives and marks req.complete before onSocketData triggers settle().
+    socket.bytesRead = 2 * MB;
+    (req as unknown as { complete: boolean }).complete = true;
+    socket.emit('data', Buffer.alloc(1));
+    expect(budget.currentBytes()).toBe(2 * MB);
+    expect(socket.listenerCount('data')).toBe(0);
+
+    // A pipelined request increases socket.bytesRead before req emits 'end'; end must not re-reconcile it.
+    socket.bytesRead = 4 * MB;
+    req.emit('end');
+    expect(budget.currentBytes()).toBe(2 * MB);
+
+    res.emit('finish');
+    expect(budget.currentBytes()).toBe(0);
   });
 });
