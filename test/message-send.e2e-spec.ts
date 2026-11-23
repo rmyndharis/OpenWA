@@ -9,6 +9,7 @@ import { applyGlobalValidation } from './../src/config/app-validation';
 import { AuthService } from './../src/modules/auth/auth.service';
 import { ApiKeyRole } from './../src/modules/auth/entities/api-key.entity';
 import { Session } from './../src/modules/session/entities/session.entity';
+import { SessionOwnershipService } from './../src/modules/session/session-ownership.service';
 import { EngineRegistry } from './../src/engine/engine-registry.service';
 import type { IWhatsAppEngine, MessageResult } from './../src/engine/interfaces/whatsapp-engine.interface';
 
@@ -91,6 +92,7 @@ describe('Message send endpoints (e2e)', () => {
     sessionId = (await sessionRepo.save(sessionRepo.create({ name: `e2e-send-${Date.now()}` }))).id;
 
     app.get(EngineRegistry).set(sessionId, engine as unknown as IWhatsAppEngine);
+    expect(await app.get(SessionOwnershipService).claim(sessionId)).toBe(true);
     operatorKey = (await app.get(AuthService).createApiKey({ name: 'e2e-send', role: ApiKeyRole.OPERATOR })).rawKey;
 
     // A real template row via the real route, so send-template exercises resolution and rendering

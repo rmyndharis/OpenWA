@@ -113,7 +113,7 @@ describeWithRedis('WebSocket Redis presence Lua and RedisIoAdapter against real 
     it('prunes expired and orphaned node members atomically while preserving live nodes', async () => {
       const liveTracker = new WsRestrictedPresenceTracker(redis, { nodeId: `live-${randomUUID()}`, ttlMs: 30_000 });
       const expiredTracker = new WsRestrictedPresenceTracker(redis, { nodeId: `exp-${randomUUID()}`, ttlMs: 80 });
-      const observerTracker = new WsRestrictedPresenceTracker(redis, { nodeId: `obs-${randomUUID()}` });
+      const observerTracker = new WsRestrictedPresenceTracker(redis, { nodeId: `obs-${randomUUID()}`, cacheTtlMs: 0 });
       trackersToDestroy.push(liveTracker, expiredTracker, observerTracker);
       trackMember(liveTracker.nodeKey);
       trackMember(expiredTracker.nodeKey);
@@ -166,7 +166,7 @@ describeWithRedis('WebSocket Redis presence Lua and RedisIoAdapter against real 
     });
 
     it('initializes createDefault against real Redis, tracks local state, and tears down cleanly', async () => {
-      const observer = new WsRestrictedPresenceTracker(redis, { nodeId: `obs-${randomUUID()}` });
+      const observer = new WsRestrictedPresenceTracker(redis, { nodeId: `obs-${randomUUID()}`, cacheTtlMs: 0 });
       trackersToDestroy.push(observer);
 
       let localRestricted = true;
@@ -325,6 +325,10 @@ describeWithRedis('WebSocket Redis presence Lua and RedisIoAdapter against real 
       expect(internalA.subClient).toBeUndefined();
       expect(internalB.pubClient).toBeUndefined();
       expect(internalB.subClient).toBeUndefined();
+      await waitUntil(
+        () => pubA.status === 'end' && subA.status === 'end' && pubB.status === 'end' && subB.status === 'end',
+        5_000,
+      );
       expect(pubA.status).toBe('end');
       expect(subA.status).toBe('end');
       expect(pubB.status).toBe('end');
