@@ -17,6 +17,7 @@ import { EngineThrottledError } from '../../../common/errors/engine-throttled.er
 import { EngineTransportError } from '../../../common/errors/engine-transport.error';
 import { SendIdempotencyInterceptor, sendFailureProvesNothingSent } from './send-idempotency.interceptor';
 import { hashSendRequest, SendIdempotencyService } from './send-idempotency.service';
+import { MAX_BODY_OBJECT_KEYS } from '../../../common/validation/body-width';
 
 describe('SendIdempotencyInterceptor', () => {
   let store: jest.Mocked<Pick<SendIdempotencyService, 'claim' | 'complete' | 'release' | 'markFailed'>>;
@@ -208,5 +209,34 @@ describe('sendFailureProvesNothingSent', () => {
 
   it('treats 501 as a refusal', () => {
     expect(HttpStatus.NOT_IMPLEMENTED).toBe(501);
+  });
+
+  it('rejects bodies exceeding width limits with BadRequestException before canonicalJson/store claim', async () => {
+    const claim = jest.fn();
+    const store = {
+      claim,
+      complete: jest.fn(),
+      fail: jest.fn(),
+      release: jest.fn(),
+    } as unknown as SendIdempotencyService;
+    const interceptor = new SendIdempotencyInterceptor(store);
+    const wideBody = Object.fromEntries(Array.from({ length: MAX_BODY_OBJECT_KEYS + 1 }, (_, i) => [`k${i}`, i]));
+    const context = {
+      getType: () => 'http',
+      getHandler: () => ({ name: 'sendText' }),
+      switchToHttp: () => ({
+        getRequest: () => ({
+          headers: { 'idempotency-key': 'wide-key-1' },
+          params: { sessionId: 'sess-1' },
+          body: wideBody,
+        }),
+        getResponse: () => ({ setHeader: jest.fn() }),
+      }),
+    } as unknown as ExecutionContext;
+
+    await expect(interceptor.intercept(context, { handle: () => of({ ok: true }) })).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(claim).not.toHaveBeenCalled();
   });
 });

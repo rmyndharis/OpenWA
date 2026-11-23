@@ -23,6 +23,8 @@ import {
  * on every reply.
  */
 const COOLDOWN_SWEEP_THRESHOLD = 10_000;
+/** Hard upper bound on entries retained in the in-memory cooldown map. */
+const COOLDOWN_MAX_ENTRIES = 50_000;
 
 /** TTL for the per-session cache of enabled automation rules. */
 export const ENABLED_RULES_CACHE_TTL_MS = 5_000;
@@ -67,7 +69,11 @@ export class AutomationRulesService {
    * Per-process.
    */
   private readonly cooldowns = new Map<string, number>();
+  private readonly cooldownMeta = new Map<string, { sessionId: string; ruleId: string }>();
+  private readonly ruleCooldownSeconds = new Map<string, { sessionId: string; cooldownSeconds: number }>();
   private nextCooldownSweepAt = COOLDOWN_SWEEP_THRESHOLD;
+  private writesAtCapSinceSweep = 0;
+  private lastCapSweepAt = 0;
 
   /**
    * Per-session cache of enabled rules. The in-flight promise is cached rather than its resolved
@@ -120,7 +126,15 @@ export class AutomationRulesService {
     this.markInFlightInvalidated(sessionId);
     const prefix = `${sessionId}:`;
     for (const key of this.cooldowns.keys()) {
-      if (key.startsWith(prefix)) this.cooldowns.delete(key);
+      if (key.startsWith(prefix)) {
+        this.cooldowns.delete(key);
+        this.cooldownMeta.delete(key);
+      }
+    }
+    for (const [ruleId, entry] of this.ruleCooldownSeconds) {
+      if (entry.sessionId === sessionId) {
+        this.ruleCooldownSeconds.delete(ruleId);
+      }
     }
   }
 
@@ -128,6 +142,10 @@ export class AutomationRulesService {
   clearCache(): void {
     this.enabledRulesCache.clear();
     this.cooldowns.clear();
+    this.cooldownMeta.clear();
+    this.ruleCooldownSeconds.clear();
+    this.writesAtCapSinceSweep = 0;
+    this.lastCapSweepAt = 0;
     this.nextCooldownSweepAt = COOLDOWN_SWEEP_THRESHOLD;
     for (const tokens of this.inFlightEvaluations.values()) {
       for (const token of tokens) token.invalidated = true;
@@ -216,13 +234,17 @@ export class AutomationRulesService {
   async remove(sessionId: string, id: string): Promise<void> {
     const rule = await this.findOne(sessionId, id);
     try {
-      await this.ruleRepository.remove(rule);
+      await this.ruleRepository.remove(rule, { transaction: false });
     } finally {
       this.invalidateSession(sessionId);
     }
+    this.ruleCooldownSeconds.delete(id);
     const prefix = `${sessionId}:${id}:`;
     for (const key of this.cooldowns.keys()) {
-      if (key.startsWith(prefix)) this.cooldowns.delete(key);
+      if (key.startsWith(prefix)) {
+        this.cooldowns.delete(key);
+        this.cooldownMeta.delete(key);
+      }
     }
   }
 
@@ -386,10 +408,15 @@ export class AutomationRulesService {
       if (oldest === undefined) break;
       this.enabledRulesCache.delete(oldest);
     }
-    const rules = this.ruleRepository.find({
-      where: { sessionId, enabled: true },
-      order: { createdAt: 'ASC', id: 'ASC' },
-    });
+    const rules = this.ruleRepository
+      .find({
+        where: { sessionId, enabled: true },
+        order: { createdAt: 'ASC', id: 'ASC' },
+      })
+      .then(rows => {
+        for (const r of rows) this.ruleCooldownSeconds.set(r.id, { sessionId, cooldownSeconds: r.cooldownSeconds });
+        return rows;
+      });
     const entry = { rules, loadedAt: now, expiresAt: now + ENABLED_RULES_CACHE_TTL_MS };
     this.enabledRulesCache.set(sessionId, entry);
     // Never cache failures, and evict only if this exact entry is still the current one.
@@ -410,12 +437,48 @@ export class AutomationRulesService {
   private enterCooldown(sessionId: string, rule: AutomationRule, chatId: string): void {
     if (!rule.cooldownSeconds) return;
     const now = Date.now();
-    if (this.cooldowns.size >= this.nextCooldownSweepAt) {
-      for (const [key, firedAt] of this.cooldowns) {
-        if (firedAt + AUTOMATION_COOLDOWN_MAX_SECONDS * 1000 <= now) this.cooldowns.delete(key);
+    const key = `${sessionId}:${rule.id}:${chatId}`;
+    this.ruleCooldownSeconds.set(rule.id, { sessionId, cooldownSeconds: rule.cooldownSeconds });
+    // Keep insertion order reflective of most-recent activation for bounded FIFO eviction at ceiling.
+    this.cooldowns.delete(key);
+    this.cooldownMeta.delete(key);
+
+    const needsThresholdSweep = this.cooldowns.size >= this.nextCooldownSweepAt;
+    const atCap = this.cooldowns.size >= COOLDOWN_MAX_ENTRIES;
+    const capSweepDue =
+      atCap &&
+      (this.writesAtCapSinceSweep === 0 ||
+        now - this.lastCapSweepAt >= 1_000 ||
+        now < this.lastCapSweepAt ||
+        this.writesAtCapSinceSweep >= COOLDOWN_SWEEP_THRESHOLD);
+    if (needsThresholdSweep || capSweepDue) {
+      for (const [entryKey, firedAt] of this.cooldowns) {
+        const meta = this.cooldownMeta.get(entryKey);
+        const ttlSeconds = meta
+          ? (this.ruleCooldownSeconds.get(meta.ruleId)?.cooldownSeconds ?? AUTOMATION_COOLDOWN_MAX_SECONDS)
+          : AUTOMATION_COOLDOWN_MAX_SECONDS;
+        if (firedAt + ttlSeconds * 1000 <= now) {
+          this.cooldowns.delete(entryKey);
+          this.cooldownMeta.delete(entryKey);
+        }
       }
-      this.nextCooldownSweepAt = Math.max(COOLDOWN_SWEEP_THRESHOLD, this.cooldowns.size * 2);
+      this.writesAtCapSinceSweep = 0;
+      if (atCap) this.lastCapSweepAt = now;
+      this.nextCooldownSweepAt =
+        this.cooldowns.size >= COOLDOWN_MAX_ENTRIES
+          ? COOLDOWN_MAX_ENTRIES + 1
+          : Math.min(COOLDOWN_MAX_ENTRIES, Math.max(COOLDOWN_SWEEP_THRESHOLD, this.cooldowns.size * 2));
     }
-    this.cooldowns.set(`${sessionId}:${rule.id}:${chatId}`, now);
+
+    while (this.cooldowns.size >= COOLDOWN_MAX_ENTRIES) {
+      const oldestKey = this.cooldowns.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.cooldowns.delete(oldestKey);
+      this.cooldownMeta.delete(oldestKey);
+      this.writesAtCapSinceSweep++;
+    }
+
+    this.cooldowns.set(key, now);
+    this.cooldownMeta.set(key, { sessionId, ruleId: rule.id });
   }
 }

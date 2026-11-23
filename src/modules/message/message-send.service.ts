@@ -1004,7 +1004,9 @@ export class MessageSendService {
               // The bulk engine has already sent this item. Keep its media in an id-less SENT row
               // when the echo cannot accept it, instead of losing the only payload-bearing copy.
               return scope.write(() =>
-                this.messageRepository.save(this.messageRepository.create({ ...message, waMessageId: undefined })),
+                this.messageRepository.save(this.messageRepository.create({ ...message, waMessageId: undefined }), {
+                  transaction: false,
+                }),
               );
             }
           }

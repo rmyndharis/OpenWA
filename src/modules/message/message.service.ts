@@ -390,14 +390,16 @@ export class MessageService implements PluginMessagePort {
 
     // The filters a page's rows are read against again once its ids are picked (readPageSpendingBudget). Not the
     // whole query: that also carries the order, the page bounds and the cursor, which the picked ids encode.
+    const cursorQuery = query.clone();
     const rowFilters: Array<[clause: string, parameters?: ObjectLiteral]> = [];
-    const narrow = (clause: string, parameters?: ObjectLiteral): void => {
+    const narrow = (clause: string, parameters?: ObjectLiteral, includeInCursor = true): void => {
       query.andWhere(clause, parameters);
+      if (includeInCursor) cursorQuery.andWhere(clause, parameters);
       rowFilters.push([clause, parameters]);
     };
 
     if (chatIds) {
-      narrow('message.chatId IN (:...chatIds)', { chatIds });
+      narrow('message.chatId IN (:...chatIds)', { chatIds }, false);
     }
     if (options.direction !== undefined) {
       narrow('message.direction = :direction', { direction: options.direction });
@@ -418,10 +420,14 @@ export class MessageService implements PluginMessagePort {
       // An API send stored by an earlier version names the account by its bare phone digits, so a filter on the
       // account's JID still matches those rows.
       const froms = [...new Set([...candidates, ...candidates.flatMap(bareUserDigits)])];
-      narrow('(message.from IN (:...froms) OR message.author IN (:...authorFroms))', {
-        froms,
-        authorFroms: froms,
-      });
+      narrow(
+        '(message.from IN (:...froms) OR message.author IN (:...authorFroms))',
+        {
+          froms,
+          authorFroms: froms,
+        },
+        false,
+      );
     }
 
     if (options.messageId !== undefined) {
@@ -453,7 +459,7 @@ export class MessageService implements PluginMessagePort {
       // A selection cursor must name a row inside this same selection, not merely a row from the
       // session. Otherwise an unrelated time/direction/type could silently truncate a valid walk. A chat or
       // sender filter is left out: its candidate set can change between pages (a lid mapping learned or lost),
-      // and the cursor is only a position in time, so a row stored under an alias must still anchor the walk.
+      // and the cursor is only a position in time, so checking cursorQuery keeps keyset pagination valid.
       if (
         (messageTimeOrder ||
           options.since !== undefined ||
@@ -461,7 +467,7 @@ export class MessageService implements PluginMessagePort {
           options.direction !== undefined ||
           options.type !== undefined ||
           options.messageId !== undefined) &&
-        !(await query.clone().andWhere('message.id = :cursorId', { cursorId: after }).getCount())
+        !(await cursorQuery.clone().andWhere('message.id = :cursorId', { cursorId: after }).getCount())
       ) {
         throw new BadRequestException('Unknown cursor for this message selection');
       }

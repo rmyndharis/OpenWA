@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { from, lastValueFrom, Observable, of } from 'rxjs';
 import { claimIdempotentSend, runClaimedSend } from './run-idempotent-send';
 import { isValidIdempotencyKey, SendIdempotencyService } from './send-idempotency.service';
+import { BODY_WIDTH_MESSAGES, exceededBodyWidth } from '../../../common/validation/body-width';
 
 export { sendFailureProvesNothingSent } from './run-idempotent-send';
 
@@ -46,6 +47,11 @@ export class SendIdempotencyInterceptor implements NestInterceptor {
         message: 'Idempotency-Key must be one value of 1-255 visible ASCII characters.',
         code: 'IDEMPOTENCY_KEY_INVALID',
       });
+    }
+
+    const exceeded = exceededBodyWidth(request.body);
+    if (exceeded) {
+      throw new BadRequestException(BODY_WIDTH_MESSAGES[exceeded]);
     }
 
     const sessionId = String((request.params as Record<string, string | undefined>).sessionId ?? '');

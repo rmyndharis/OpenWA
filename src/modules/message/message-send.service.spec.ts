@@ -8,6 +8,7 @@ import { BadRequestException, ExecutionContext, NotFoundException, PayloadTooLar
 import { from, lastValueFrom } from 'rxjs';
 import { MessageSendService } from './message-send.service';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
+import { Session, SessionStatus } from '../session/entities/session.entity';
 import { SessionService } from '../session/session.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -2776,5 +2777,78 @@ describe('MessageSendService', () => {
         expect(archive.archive).toHaveBeenCalledWith(expect.objectContaining({ waMessageId: `wa-${status}`, status }));
       },
     );
+  });
+});
+
+describe('MessageSendService fallback media save beside concurrent writes on SQLite', () => {
+  it('does not wrap the line-1007 id-less fallback save in an implicit SQLite transaction that rolls back sibling writes', async () => {
+    const ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Session, Message],
+      synchronize: true,
+    }).initialize();
+    try {
+      await ds.getRepository(Session).save({ id: 'sess-1', name: 'sess-1', status: SessionStatus.READY, config: {} });
+      await ds.getRepository(Session).save({ id: 'sessB', name: 'sessB', status: SessionStatus.READY, config: {} });
+      const repo = ds.getRepository(Message);
+      // Pre-seed echo row so saveOutgoingMessage hits UNIQUE(sessionId, waMessageId).
+      await repo.save({
+        sessionId: 'sess-1',
+        waMessageId: 'wa-dup-1',
+        chatId: '621@c.us',
+        from: 'me@c.us',
+        to: '621@c.us',
+        body: '',
+        type: 'image',
+        direction: MessageDirection.OUTGOING,
+        status: MessageStatus.SENT,
+      });
+
+      const svc = new MessageSendService(
+        repo,
+        { findOne: jest.fn().mockResolvedValue({ phone: '621' }) } as never,
+        new EngineRegistry(),
+        { execute: jest.fn((_e: unknown, d: unknown) => Promise.resolve({ continue: true, data: d })) } as never,
+        {} as never,
+        inertPacing(),
+        { get: (_k: string, d?: unknown) => d } as never,
+      );
+
+      // Force mergeSentMetadata path to throw so line 1006-1008 fallback save executes.
+      jest.spyOn(repo, 'findOne').mockRejectedValueOnce(new Error('echo read busy'));
+
+      let triggerSibling = false;
+      let beside = Promise.resolve();
+      const origInsert = ds.getRepository(Message).insert.bind(repo);
+      void origInsert;
+      ds.subscribers.push({
+        listenTo: () => Message,
+        beforeInsert: event => {
+          if (event.entity && (event.entity as Message).waMessageId === undefined) {
+            triggerSibling = true;
+            beside = (async () => {
+              await ds.getRepository(Session).update('sessB', { status: SessionStatus.FAILED });
+            })();
+            throw new Error('abort fallback save');
+          }
+        },
+      });
+
+      await expect(
+        svc.saveOutgoingMessage('sess-1', {
+          waMessageId: 'wa-dup-1',
+          chatId: '621@c.us',
+          type: 'image',
+          status: MessageStatus.SENT,
+          metadata: { media: { mimetype: 'image/png', data: 'QUJD' } },
+        }),
+      ).rejects.toThrow('abort fallback save');
+      await beside;
+      expect(triggerSibling).toBe(true);
+      expect((await ds.getRepository(Session).findOneByOrFail({ id: 'sessB' })).status).toBe(SessionStatus.FAILED);
+    } finally {
+      await ds.destroy();
+    }
   });
 });

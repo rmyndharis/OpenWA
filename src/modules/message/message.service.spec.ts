@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { FindOperator, In, Repository } from 'typeorm';
+import { FindOperator, In, Repository, DataSource } from 'typeorm';
+import { Session, SessionStatus } from '../session/entities/session.entity';
+import { MessageDirection, MessageStatus } from './entities/message.entity';
 import { Readable } from 'stream';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { MessageService, spendInlineMediaBudget } from './message.service';
@@ -1646,5 +1648,114 @@ describe('spendInlineMediaBudget', () => {
     expect(rows[0].metadata.media).toBeUndefined();
     expect(mediaOf(rows[1]).data).toHaveLength(3000);
     expect(mediaOf(rows[1]).omitted).toBeUndefined();
+  });
+});
+
+describe('MessageService.list cursor membership across LID mapping updates (SQLite)', () => {
+  let ds: DataSource;
+  let service: MessageService;
+
+  beforeEach(async () => {
+    ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Session, Message, LidMapping],
+      synchronize: true,
+    }).initialize();
+    await ds.getRepository(Session).save({ id: 'sess-1', name: 's1', status: SessionStatus.READY, config: {} });
+    const lidStore = new LidMappingStoreService(ds.getRepository(LidMapping));
+    service = new MessageService(
+      ds.getRepository(Message),
+      {} as never,
+      {} as never,
+      {} as never,
+      lidStore,
+      inertPacing(),
+      {} as never,
+    );
+  });
+
+  afterEach(async () => {
+    await ds.destroy();
+  });
+
+  it('allows keyset cursor from old LID chatId/from when filtering by phone chatId with direction/since/until/type/orderBy=timestamp', async () => {
+    const repo = ds.getRepository(Message);
+    const oldLidMsg = await repo.save(
+      repo.create({
+        sessionId: 'sess-1',
+        waMessageId: 'wamid-1',
+        chatId: '99999@lid',
+        from: '99999@lid',
+        to: 'me@c.us',
+        body: 'older via lid',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        status: MessageStatus.SENT,
+        timestamp: 1000,
+      }),
+    );
+    await repo.save(
+      repo.create({
+        sessionId: 'sess-1',
+        waMessageId: 'wamid-2',
+        chatId: '628111@c.us',
+        from: '628111@c.us',
+        to: 'me@c.us',
+        body: 'newer via pn',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        status: MessageStatus.SENT,
+        timestamp: 2000,
+      }),
+    );
+    await repo.save(
+      repo.create({
+        sessionId: 'sess-1',
+        waMessageId: 'wamid-3',
+        chatId: '628111@c.us',
+        from: '628111@c.us',
+        to: 'me@c.us',
+        body: 'oldest via pn',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        status: MessageStatus.SENT,
+        timestamp: 900,
+      }),
+    );
+
+    const page = await service.getMessages('sess-1', {
+      chatId: '628111@c.us',
+      direction: MessageDirection.INCOMING,
+      type: 'text',
+      since: 500_000,
+      until: 3_000_000,
+      orderBy: 'timestamp',
+      after: oldLidMsg.id,
+    });
+    expect(page.messages.map(m => m.waMessageId)).toEqual(['wamid-3']);
+
+    const wrongDir = await repo.save(
+      repo.create({
+        sessionId: 'sess-1',
+        waMessageId: 'wamid-out',
+        chatId: '628111@c.us',
+        from: 'me@c.us',
+        to: '628111@c.us',
+        body: 'wrong direction',
+        type: 'text',
+        direction: MessageDirection.OUTGOING,
+        status: MessageStatus.SENT,
+        timestamp: 1500,
+      }),
+    );
+    await expect(
+      service.getMessages('sess-1', {
+        chatId: '628111@c.us',
+        direction: MessageDirection.INCOMING,
+        orderBy: 'timestamp',
+        after: wrongDir.id,
+      }),
+    ).rejects.toThrow(BadRequestException);
   });
 });

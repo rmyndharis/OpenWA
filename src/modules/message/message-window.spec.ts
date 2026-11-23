@@ -120,7 +120,7 @@ describe('message-time selection', () => {
     const page = await service.getMessages('s1', { chatId: '100@g.us', orderBy: 'timestamp', limit: 1 });
     const anchor = page.messages[0];
     for (const options of [
-      { chatId: '200@g.us', after: anchor.id },
+      { messageId: 'non-existent-wamid', after: anchor.id },
       { until: 1000_000, after: anchor.id },
       { after: randomUUID() },
     ])
@@ -129,6 +129,41 @@ describe('message-time selection', () => {
     await expect(service.getMessages('s1', { orderBy: 'timestamp', after: anchor.id })).rejects.toThrow(
       'Unknown cursor',
     );
+  });
+
+  it('continues keyset pagination when chatId or from LID mappings change between pages', async () => {
+    const repo = ds.getRepository(Message);
+    const first = await repo.save({
+      sessionId: 's1',
+      chatId: '77777@lid',
+      from: '77777@lid',
+      to: 'me@c.us',
+      body: 'page 1 via lid',
+      type: 'text',
+      direction: MessageDirection.INCOMING,
+      timestamp: 2000,
+    });
+    const second = await repo.save({
+      sessionId: 's1',
+      chatId: '628999@c.us',
+      from: '628999@c.us',
+      to: 'me@c.us',
+      body: 'page 2 via pn',
+      type: 'text',
+      direction: MessageDirection.INCOMING,
+      timestamp: 1990,
+    });
+
+    const page = await service.getMessages('s1', {
+      chatId: '628999@c.us',
+      direction: MessageDirection.INCOMING,
+      type: 'text',
+      since: 1900_000,
+      until: 2100_000,
+      orderBy: 'timestamp',
+      after: first.id,
+    });
+    expect(page.messages.map(m => m.id)).toEqual([second.id]);
   });
 
   // The membership check is switched on by the selection itself. orderBy 'timestamp' does that alone,

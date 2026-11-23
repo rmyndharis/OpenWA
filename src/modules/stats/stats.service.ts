@@ -114,7 +114,10 @@ export class StatsService {
 
   /** The data-connection dialect ('sqlite' | 'postgres'), used to pick portable date SQL. */
   private get dataDbType(): string {
-    return this.messageRepo.manager.dataSource.options.type;
+    return (
+      this.messageRepo.manager?.dataSource?.options?.type ??
+      this.configService.get<string>('dataDatabase.type', 'sqlite')
+    );
   }
 
   /** Memo TTL in ms; 0 disables memoization (every request hits the DB). Read per call. */
@@ -171,7 +174,7 @@ export class StatsService {
 
     // Get message stats
     const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    todayStart.setUTCHours(0, 0, 0, 0);
 
     const messageStats = await this.messageRepo
       .createQueryBuilder('m')
@@ -184,7 +187,7 @@ export class StatsService {
       .createQueryBuilder('m')
       .select('m.direction', 'direction')
       .addSelect('COUNT(*)', 'count')
-      .where('m.createdAt >= :todayStart', { todayStart })
+      .where('m.createdAt >= :todayStart', { todayStart: this.toBoundaryParam(todayStart) })
       .groupBy('m.direction')
       .getRawMany<{ direction: string; count: string }>();
 
@@ -227,11 +230,12 @@ export class StatsService {
     // By type. Rows with no body AND no metadata are content-less system/event rows (e.g. @lid
     // privacy-user events the engine maps to `unknown`) — counting them would put a misleading
     // "unknown" slice in the by-type chart, so they're excluded from the aggregation.
+    const sinceParam = this.toBoundaryParam(since);
     const byTypeRaw = await this.messageRepo
       .createQueryBuilder('m')
       .select('m.type', 'type')
       .addSelect('COUNT(*)', 'count')
-      .where('m.createdAt >= :since', { since })
+      .where('m.createdAt >= :since', { since: sinceParam })
       // Parenthesized: TypeORM does not wrap an andWhere, so a bare OR would escape the period bound.
       .andWhere("((m.body IS NOT NULL AND m.body != '') OR m.metadata IS NOT NULL)")
       .groupBy('m.type')
@@ -248,7 +252,7 @@ export class StatsService {
       .select('m.sessionId', 'sessionId')
       .addSelect('m.direction', 'direction')
       .addSelect('COUNT(*)', 'count')
-      .where('m.createdAt >= :since', { since })
+      .where('m.createdAt >= :since', { since: sinceParam })
       .groupBy('m.sessionId')
       .addGroupBy('m.direction')
       .getRawMany<{ sessionId: string; direction: string; count: string }>();
@@ -317,7 +321,7 @@ export class StatsService {
       .select('m.chatId', 'chatId')
       .addSelect('m.chatName', 'chatName')
       .addSelect('m.direction', 'direction')
-      .where('m.createdAt >= :since', { since })
+      .where('m.createdAt >= :since', { since: this.toBoundaryParam(since) })
       .getQueryAndParameters();
     return this.messageRepo.manager.query(
       `WITH w AS MATERIALIZED (${window}) SELECT w.chatId AS "chatId", COUNT(*) AS "messageCount", ` +
@@ -347,7 +351,7 @@ export class StatsService {
     }
 
     const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    todayStart.setUTCHours(0, 0, 0, 0);
 
     // Message counts
     const stats = await this.messageRepo
@@ -361,7 +365,7 @@ export class StatsService {
     const todayCount = await this.messageRepo
       .createQueryBuilder('m')
       .where('m.sessionId = :sessionId', { sessionId })
-      .andWhere('m.createdAt >= :todayStart', { todayStart })
+      .andWhere('m.createdAt >= :todayStart', { todayStart: this.toBoundaryParam(todayStart) })
       .getCount();
 
     const sent = parseInt(stats.find(s => s.direction === 'outgoing')?.count || '0');
@@ -413,6 +417,17 @@ export class StatsService {
     }
   }
 
+  private toBoundaryParam(date: Date): Date | string {
+    if (this.dataDbType === 'postgres') return date;
+    const p2 = (n: number): string => String(n).padStart(2, '0');
+    const p3 = (n: number): string => String(n).padStart(3, '0');
+    const base =
+      `${date.getUTCFullYear()}-${p2(date.getUTCMonth() + 1)}-${p2(date.getUTCDate())} ` +
+      `${p2(date.getUTCHours())}:${p2(date.getUTCMinutes())}:${p2(date.getUTCSeconds())}`;
+    const ms = date.getUTCMilliseconds();
+    return ms === 0 ? base : `${base}.${p3(ms)}`;
+  }
+
   private async getTimeSeries(since: Date, interval: 'hour' | 'day'): Promise<TimeSeriesPoint[]> {
     // Alias the bucket as `bucket`, not `timestamp`: `timestamp` is a reserved type keyword in
     // PostgreSQL, so `GROUP BY timestamp` is not read as the output alias and the query 500s
@@ -423,7 +438,7 @@ export class StatsService {
       .select(timeSeriesTimestampSql(this.dataDbType, interval), 'bucket')
       .addSelect(`SUM(CASE WHEN m.direction = 'outgoing' THEN 1 ELSE 0 END)`, 'sent')
       .addSelect(`SUM(CASE WHEN m.direction = 'incoming' THEN 1 ELSE 0 END)`, 'received')
-      .where('m.createdAt >= :since', { since })
+      .where('m.createdAt >= :since', { since: this.toBoundaryParam(since) })
       .groupBy('bucket')
       .orderBy('bucket', 'ASC')
       .getRawMany<{ bucket: string; sent: string; received: string }>();
@@ -444,7 +459,7 @@ export class StatsService {
       .addSelect(`SUM(CASE WHEN m.direction = 'outgoing' THEN 1 ELSE 0 END)`, 'sent')
       .addSelect(`SUM(CASE WHEN m.direction = 'incoming' THEN 1 ELSE 0 END)`, 'received')
       .where('m.sessionId = :sessionId', { sessionId })
-      .andWhere('m.createdAt >= :since', { since })
+      .andWhere('m.createdAt >= :since', { since: this.toBoundaryParam(since) })
       .groupBy('hour')
       .orderBy('hour', 'ASC')
       .getRawMany<{ hour: string; sent: string; received: string }>();

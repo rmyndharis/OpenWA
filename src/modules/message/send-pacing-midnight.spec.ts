@@ -163,4 +163,18 @@ describe('send pacing UTC rollover', () => {
 
     await expect(admit('next@c.us', { whilePreparing: true })).resolves.toBeInstanceOf(Function);
   });
+
+  it('includes a 19-char SQLite UTC midnight timestamp in today counts and excludes it from prior days', async () => {
+    configure('daily', 1);
+    const midnight = new Date('2026-08-04T00:00:00.000Z');
+    jest.setSystemTime(midnight);
+    await insertRow('at-midnight', 'first@c.us');
+    await db.query(`UPDATE messages SET createdAt = '2026-08-04 00:00:00' WHERE id = 'at-midnight'`);
+
+    await limited('second@c.us');
+
+    // Reset daily to high and check cold daily cap too: the exact-midnight row must count as a new chat today.
+    configure('cold', 1);
+    await limited('third@c.us');
+  });
 });

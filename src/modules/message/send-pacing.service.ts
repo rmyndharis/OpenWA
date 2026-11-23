@@ -1,7 +1,7 @@
 import { BadRequestException, HttpException, HttpStatus, Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, MoreThanOrEqual, Repository } from 'typeorm';
+import { In, MoreThanOrEqual, Raw, Repository } from 'typeorm';
 import { Message, MessageDirection } from './entities/message.entity';
 import { Session } from '../session/entities/session.entity';
 import { resolveSendPacingConfig, type SendPacingConfig } from './send-pacing.config';
@@ -288,8 +288,16 @@ export class SendPacingService {
     // that reconnects would look one day old forever and never leave the first rung of the ramp.
     const ageDays = Math.floor((dayStart.getTime() - startOfUtcDay(session.createdAt).getTime()) / DAY_MS);
     const allowance = this.allowanceForAge(config.warmupSchedule, ageDays);
+    const dayStartParam = this.toBoundaryParam(dayStart);
     const sentToday = await this.messageRepository.count({
-      where: { sessionId, direction: MessageDirection.OUTGOING, createdAt: MoreThanOrEqual(dayStart) },
+      where: {
+        sessionId,
+        direction: MessageDirection.OUTGOING,
+        createdAt:
+          typeof dayStartParam === 'string'
+            ? Raw(alias => `${alias} >= :dayStart`, { dayStart: dayStartParam })
+            : MoreThanOrEqual(dayStart),
+      },
     });
     // A stale count must not reset the new day's held admissions.
     if (startOfUtcDay(new Date()).getTime() !== dayStart.getTime()) {
@@ -721,6 +729,18 @@ export class SendPacingService {
     });
   }
 
+  private toBoundaryParam(date: Date): Date | string {
+    const dbType = String(this.messageRepository.manager?.connection?.options?.type ?? '');
+    if (dbType !== 'sqlite' && dbType !== 'better-sqlite3') return date;
+    const p2 = (n: number): string => String(n).padStart(2, '0');
+    const p3 = (n: number): string => String(n).padStart(3, '0');
+    const base =
+      `${date.getUTCFullYear()}-${p2(date.getUTCMonth() + 1)}-${p2(date.getUTCDate())} ` +
+      `${p2(date.getUTCHours())}:${p2(date.getUTCMinutes())}:${p2(date.getUTCSeconds())}`;
+    const ms = date.getUTCMilliseconds();
+    return ms === 0 ? base : `${base}.${p3(ms)}`;
+  }
+
   /**
    * Distinct chats this session started today: it sent to them today, nothing in the chat predates
    * today, and nobody wrote to it first — a chat whose counterpart messaged earlier the same day is
@@ -731,6 +751,7 @@ export class SendPacingService {
    * is applied to what this returns, by countColdReachoutsToday.
    */
   private startedChatsToday(sessionId: string, dayStart: Date): Promise<string[]> {
+    const dayStartParam = this.toBoundaryParam(dayStart);
     return (
       this.messageRepository
         .createQueryBuilder('m')
@@ -742,7 +763,7 @@ export class SendPacingService {
         .select(`DISTINCT REPLACE(m."chatId", '@s.whatsapp.net', '@c.us')`, 'chatId')
         .where('m.sessionId = :sessionId', { sessionId })
         .andWhere('m.direction = :direction', { direction: MessageDirection.OUTGOING })
-        .andWhere('m.createdAt >= :dayStart', { dayStart })
+        .andWhere('m.createdAt >= :dayStart', { dayStart: dayStartParam })
         // Identifiers are quoted because the columns really are camelCase (`"chatId"`, not `chat_id`)
         // — there is no snake_case naming strategy on this connection. Unquoted, Postgres would fold
         // them to lowercase and the query would fail at runtime on the very first cold send.
@@ -800,6 +821,7 @@ export class SendPacingService {
    * (see LOOKUP_CHUNK), however many chats there are.
    */
   private async chatsWithRowsBefore(sessionId: string, dayStart: Date, chatIds: string[]): Promise<Set<string>> {
+    const dayStartParam = this.toBoundaryParam(dayStart);
     const found = new Set<string>();
     for (let i = 0; i < chatIds.length; i += LOOKUP_CHUNK) {
       const rows = await this.messageRepository
@@ -807,7 +829,7 @@ export class SendPacingService {
         .select('DISTINCT t.chatId', 'chatId')
         .where('t.sessionId = :sessionId', { sessionId })
         .andWhere('t.chatId IN (:...ids)', { ids: chatIds.slice(i, i + LOOKUP_CHUNK) })
-        .andWhere('t.createdAt < :dayStart', { dayStart })
+        .andWhere('t.createdAt < :dayStart', { dayStart: dayStartParam })
         .getRawMany<{ chatId: string }>();
       for (const row of rows) found.add(row.chatId);
     }
@@ -823,6 +845,7 @@ export class SendPacingService {
    */
   private answeredUnderOtherForm(sessionId: string, dayStart: Date, chatId: string, twins: string[]): Promise<boolean> {
     const own = dialectVariants(chatId);
+    const dayStartParam = this.toBoundaryParam(dayStart);
     return this.messageRepository
       .createQueryBuilder('t')
       .where('t.sessionId = :sessionId', { sessionId })
@@ -830,7 +853,7 @@ export class SendPacingService {
       .andWhere('t.direction = :incoming', { incoming: MessageDirection.INCOMING })
       .andWhere(
         `t."createdAt" < (SELECT MIN(o."createdAt") FROM "messages" o WHERE o."sessionId" = :sessionId AND o."chatId" IN (:...own) AND o."direction" = :direction AND o."createdAt" >= :dayStart)`,
-        { dayStart, direction: MessageDirection.OUTGOING, own },
+        { dayStart: dayStartParam, direction: MessageDirection.OUTGOING, own },
       )
       .getExists();
   }
