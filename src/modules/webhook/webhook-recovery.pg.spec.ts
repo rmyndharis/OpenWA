@@ -167,6 +167,89 @@ describePostgres('webhook and media recovery on PostgreSQL', () => {
     expect(delivery.redeliver.mock.calls.map(call => call[3])).toEqual(['ordinary', 'receipt']);
   });
 
+  it('ignores malformed, non-RFC-whitespace, non-array, empty, and null webhook events during redrive even with standard_conforming_strings off', async () => {
+    const rawPayloads: Array<string | null> = [
+      '{not-json',
+      '{"a":1}',
+      '[123]',
+      '\x0b[]',
+      '\x0c["message.received"]',
+      '\u00a0["message.received"]',
+      '[]',
+      null,
+    ];
+    await ds.query('ALTER TABLE webhooks ALTER COLUMN events DROP NOT NULL');
+    try {
+      for (const [index, raw] of rawPayloads.entries()) {
+        const badWebhook = await webhooks.save({
+          sessionId,
+          url: input.url,
+          events: ['message.received'],
+          active: true,
+        });
+        await ds.query('UPDATE webhooks SET events = $1 WHERE id = $2', [raw, badWebhook.id]);
+        await failures.save({
+          ...input,
+          webhookId: badWebhook.id,
+          idempotencyKey: `bad-events-${index}`,
+          payload: { index },
+        });
+      }
+
+      const spacedWebhook = await webhooks.save({
+        sessionId,
+        url: input.url,
+        events: ['message.received'],
+        active: true,
+      });
+      await ds.query('UPDATE webhooks SET events = $1 WHERE id = $2', [
+        ' \t\r\n[ "message.received" ]\r\n',
+        spacedWebhook.id,
+      ]);
+
+      await failures.save({ ...input, idempotencyKey: 'healthy-default', payload: { ok: 1 } });
+      await failures.save({
+        ...input,
+        webhookId: spacedWebhook.id,
+        idempotencyKey: 'healthy-rfc-ws',
+        payload: { ok: 2 },
+      });
+
+      const delivery = {
+        redeliver: jest.fn(async (_webhook: Webhook, _session: string, _event: string, key: string) => {
+          await failures.delete({ idempotencyKey: key });
+          return 'delivered';
+        }),
+      };
+      const service = new WebhookRedriveService(webhooks, failures, delivery as never, config);
+      expect(await service.redrive({}, [sessionId])).toMatchObject({ delivered: 2, skipped: 0, remaining: 0 });
+      expect(delivery.redeliver.mock.calls.map(call => call[3]).sort()).toEqual(['healthy-default', 'healthy-rfc-ws']);
+
+      await failures.save({ ...input, idempotencyKey: 'healthy-scs-off', payload: { ok: 3 } });
+      await ds.transaction(async manager => {
+        await manager.query('SET LOCAL standard_conforming_strings = off');
+        const txFailures = manager.getRepository(WebhookDeliveryFailure);
+        const txDelivery = {
+          redeliver: jest.fn(async (_webhook: Webhook, _session: string, _event: string, key: string) => {
+            await txFailures.delete({ idempotencyKey: key });
+            return 'delivered';
+          }),
+        };
+        const txService = new WebhookRedriveService(
+          manager.getRepository(Webhook),
+          txFailures,
+          txDelivery as never,
+          config,
+        );
+        expect(await txService.redrive({}, [sessionId])).toMatchObject({ delivered: 1, skipped: 0, remaining: 0 });
+        expect(txDelivery.redeliver.mock.calls.map(call => call[3])).toEqual(['healthy-scs-off']);
+      });
+    } finally {
+      await ds.query('DELETE FROM webhooks WHERE events IS NULL');
+      await ds.query('ALTER TABLE webhooks ALTER COLUMN events SET NOT NULL');
+    }
+  });
+
   it('lists a row of a deleted webhook or another session as not replayable, a disabled one as replayable', async () => {
     const listing = new WebhookService(webhooks, failures, {} as never, config, {} as never);
     const save = () => webhooks.save({ sessionId, url: input.url, events: ['message.received'] });

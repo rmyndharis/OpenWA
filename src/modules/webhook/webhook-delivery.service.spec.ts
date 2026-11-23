@@ -83,6 +83,7 @@ describe('WebhookDeliveryService', () => {
     open: jest.MockedFunction<WebhookOutboxService['open']>;
     close: jest.Mock;
     markQueued: jest.Mock;
+    markPending: jest.Mock;
   };
   let insertedFailures: Array<Partial<WebhookDeliveryFailure>>;
 
@@ -190,6 +191,7 @@ describe('WebhookDeliveryService', () => {
       open: jest.fn().mockResolvedValue(undefined),
       close: jest.fn().mockResolvedValue(undefined),
       markQueued: jest.fn().mockResolvedValue(undefined),
+      markPending: jest.fn().mockResolvedValue(undefined),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -1376,6 +1378,93 @@ describe('WebhookDeliveryService', () => {
       expect(failureRepository.insert).not.toHaveBeenCalled();
     });
 
+    it('skips direct HTTP fallback when queued enqueue fails after shutdown starts', async () => {
+      (service as unknown as { queueEnabled: boolean }).queueEnabled = true;
+      const webhook = createMockWebhook({ events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (hookManager.execute as jest.Mock).mockImplementation((_event: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+      (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
+        if (key === 'queue.enabled') return true;
+        if (key === 'webhook.shutdownDrainMs') return 1000;
+        return def as T;
+      });
+      const errorSpy = jest.spyOn(
+        (service as unknown as { logger: { error: (...args: unknown[]) => void } }).logger,
+        'error',
+      );
+      let rejectAdd!: (err: Error) => void;
+      webhookQueue.add.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectAdd = reject;
+          }),
+      );
+
+      const dispatchP = service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+      for (let i = 0; i < 20 && webhookQueue.add.mock.calls.length === 0; i++) await new Promise(r => setImmediate(r));
+      expect(outboxService.markQueued).toHaveBeenCalledTimes(1);
+
+      const destroyP = service.onModuleDestroy();
+      rejectAdd(new Error('Redis disconnected'));
+      await destroyP;
+      await dispatchP;
+
+      const [, , opts] = webhookQueue.add.mock.calls[0] as [string, WebhookJobData, { jobId: string }];
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(outboxService.markPending).toHaveBeenCalledTimes(1);
+      expect(outboxService.markPending).toHaveBeenCalledWith(webhook.id, expect.any(String), opts.jobId);
+      expect(outboxService.close).not.toHaveBeenCalled();
+      expect(failureRepository.insert).toHaveBeenCalledWith(
+        expect.objectContaining({ webhookId: webhook.id, attempts: 0 }),
+      );
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.objectContaining({ action: 'webhook_dispatch_shutdown', webhookId: webhook.id }),
+      );
+    });
+
+    it('skips direct HTTP fallback if shutdown begins while the webhook:error hook runs', async () => {
+      (service as unknown as { queueEnabled: boolean }).queueEnabled = true;
+      const webhook = createMockWebhook({ events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
+        if (key === 'queue.enabled') return true;
+        if (key === 'webhook.shutdownDrainMs') return 1000;
+        return def as T;
+      });
+      webhookQueue.add.mockRejectedValueOnce(new Error('Redis disconnected'));
+
+      let releaseErrorHook!: () => void;
+      const errorHookGate = new Promise<void>(resolve => (releaseErrorHook = resolve));
+      let enteredErrorHook!: () => void;
+      const onErrorHook = new Promise<void>(resolve => (enteredErrorHook = resolve));
+      (hookManager.execute as jest.Mock).mockImplementation(async (eventName: string, data: unknown) => {
+        if (eventName === 'webhook:error') {
+          enteredErrorHook();
+          await errorHookGate;
+        }
+        return { continue: true, data };
+      });
+
+      const dispatchP = service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+      await onErrorHook;
+
+      const destroyP = service.onModuleDestroy();
+      releaseErrorHook();
+      await destroyP;
+      await dispatchP;
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(outboxService.markPending).toHaveBeenCalledTimes(1);
+      expect(outboxService.close).not.toHaveBeenCalled();
+      expect(failureRepository.insert).toHaveBeenCalledWith(
+        expect.objectContaining({ webhookId: webhook.id, attempts: 0 }),
+      );
+    });
+
     it('records a dispatch that arrives after the limiter closed (no fetch, dead-letter row)', async () => {
       const webhook = createMockWebhook({ events: ['message.received'] });
       (repository.find as jest.Mock).mockResolvedValue([webhook]);
@@ -1954,6 +2043,71 @@ describe('WebhookDeliveryService', () => {
       const [, , opts] = (webhookQueue.add as jest.Mock).mock.calls[0] as [string, WebhookJobData, { jobId: string }];
       expect(outboxService.markQueued).toHaveBeenCalledTimes(1);
       expect(outboxService.markQueued).toHaveBeenCalledWith(webhook.id, 'stored-key', opts.jobId);
+    });
+
+    it('marks the outbox row queued after producerReady and before webhookQueue.add', async () => {
+      const queueService = await buildQueueService((key: string, def?: unknown) =>
+        key === 'queue.enabled' ? true : def,
+      );
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+      const webhook = createMockWebhook({ events: ['message.received'] });
+      const steps: string[] = [];
+      webhookQueue.waitUntilReady.mockImplementation(() => {
+        steps.push('waitUntilReady');
+        return Promise.resolve(undefined);
+      });
+      outboxService.markQueued.mockImplementation(() => {
+        steps.push('markQueued');
+        return Promise.resolve(undefined);
+      });
+      webhookQueue.add.mockImplementation(() => {
+        steps.push('add');
+        return Promise.resolve({});
+      });
+
+      await expect(queueService.redeliver(webhook, 'sess-1', 'message.received', 'stored-key', {})).resolves.toBe(
+        'enqueued',
+      );
+
+      expect(steps).toEqual(['waitUntilReady', 'markQueued', 'add']);
+    });
+
+    it('reverts the outbox row to pending via markPending when webhookQueue.add rejects after markQueued', async () => {
+      const queueService = await buildQueueService((key: string, def?: unknown) =>
+        key === 'queue.enabled' ? true : def,
+      );
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+      const webhook = createMockWebhook({ events: ['message.received'] });
+      webhookQueue.add.mockRejectedValueOnce(new Error('Redis down'));
+      (undiciFetch as jest.Mock).mockResolvedValue({ ok: true, status: 200 });
+
+      await expect(queueService.redeliver(webhook, 'sess-1', 'message.received', 'stored-key', {})).resolves.toBe(
+        'delivered',
+      );
+
+      const [, , opts] = webhookQueue.add.mock.calls[0] as [string, WebhookJobData, { jobId: string }];
+      expect(outboxService.markQueued).toHaveBeenCalledTimes(1);
+      expect(outboxService.markQueued).toHaveBeenCalledWith(webhook.id, 'stored-key', opts.jobId);
+      expect(outboxService.markPending).toHaveBeenCalledTimes(1);
+      expect(outboxService.markPending).toHaveBeenCalledWith(webhook.id, 'stored-key', opts.jobId);
+    });
+
+    it('does not call markQueued or markPending when producerReady rejects', async () => {
+      const queueService = await buildQueueService((key: string, def?: unknown) =>
+        key === 'queue.enabled' ? true : def,
+      );
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+      const webhook = createMockWebhook({ events: ['message.received'] });
+      webhookQueue.waitUntilReady.mockRejectedValueOnce(new Error('Redis connect failed'));
+      (undiciFetch as jest.Mock).mockResolvedValue({ ok: true, status: 200 });
+
+      await expect(queueService.redeliver(webhook, 'sess-1', 'message.received', 'stored-key', {})).resolves.toBe(
+        'delivered',
+      );
+
+      expect(webhookQueue.add).not.toHaveBeenCalled();
+      expect(outboxService.markQueued).not.toHaveBeenCalled();
+      expect(outboxService.markPending).not.toHaveBeenCalled();
     });
 
     it('carries the pre-hook event data in the job only while payload retention is on', async () => {
@@ -2586,6 +2740,101 @@ describe('WebhookDeliveryService', () => {
       await destroyed;
       await a;
       expect(order).toEqual(['insert', 'destroyed']);
+    });
+
+    it('aborts a long direct-mode retry backoff immediately on shutdown instead of waiting out the drain window', async () => {
+      (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
+        if (key === 'queue.enabled') return false;
+        if (key === 'webhook.retryDelay') return 30_000;
+        if (key === 'webhook.shutdownDrainMs') return 2_000;
+        return def as T;
+      });
+      internals().dispatchLimiter = new ConcurrencyLimiter(1, 1000);
+      hooksBySession['sess-a'] = [createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', retryCount: 3 })];
+      mockFetch.mockRejectedValue(new Error('receiver down'));
+      const backoff = sleep as unknown as jest.Mock;
+      backoff.mockClear();
+      const errorLog = jest.spyOn((service as unknown as { logger: { error: jest.Mock } }).logger, 'error');
+
+      const a = service.dispatch('sess-a', 'message.received', {});
+      await settle(() => backoff.mock.calls.length > 0);
+
+      const started = Date.now();
+      await service.onModuleDestroy();
+      const elapsed = Date.now() - started;
+      await a;
+
+      expect(elapsed).toBeLessThan(1_000);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(outboxService.close).not.toHaveBeenCalled();
+      expect(insertedFailures).toEqual([
+        expect.objectContaining({ webhookId: 'wh-a', attempts: 0, lastError: 'ConcurrencyLimiter closed' }),
+      ]);
+      expect(
+        errorLog.mock.calls.some(
+          c => (c[2] as { action?: string } | undefined)?.action === 'webhook_delivery_abandoned_shutdown',
+        ),
+      ).toBe(false);
+      errorLog.mockRestore();
+    });
+
+    it('aborts a queued-mode direct fallback retry backoff on shutdown without sending another attempt', async () => {
+      (service as unknown as { queueEnabled: boolean }).queueEnabled = true;
+      (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
+        if (key === 'queue.enabled') return true;
+        if (key === 'webhook.retryDelay') return 30_000;
+        if (key === 'webhook.shutdownDrainMs') return 2_000;
+        return def as T;
+      });
+      internals().dispatchLimiter = new ConcurrencyLimiter(1, 1000);
+      hooksBySession['sess-a'] = [createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', retryCount: 3 })];
+      webhookQueue.add.mockRejectedValueOnce(new Error('redis down'));
+      mockFetch.mockRejectedValue(new Error('receiver down'));
+      const backoff = sleep as unknown as jest.Mock;
+      backoff.mockClear();
+      const errorLog = jest.spyOn((service as unknown as { logger: { error: jest.Mock } }).logger, 'error');
+
+      const a = service.dispatch('sess-a', 'message.received', {});
+      await settle(() => backoff.mock.calls.length > 0);
+
+      const started = Date.now();
+      await service.onModuleDestroy();
+      const elapsed = Date.now() - started;
+      await a;
+
+      expect(elapsed).toBeLessThan(1_000);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(outboxService.close).not.toHaveBeenCalled();
+      expect(insertedFailures).toEqual([expect.objectContaining({ webhookId: 'wh-a', attempts: 0 })]);
+      expect(
+        errorLog.mock.calls.some(
+          c => (c[2] as { action?: string } | undefined)?.action === 'webhook_delivery_abandoned_shutdown',
+        ),
+      ).toBe(false);
+      errorLog.mockRestore();
+    });
+
+    it('returns unrecorded when shutdown aborts an un-signaled redeliver retry backoff', async () => {
+      (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
+        if (key === 'queue.enabled') return false;
+        if (key === 'webhook.retryDelay') return 30_000;
+        return def as T;
+      });
+      const webhook = createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', retryCount: 3 });
+      hooksBySession['sess-a'] = [webhook];
+      mockFetch.mockRejectedValue(new Error('receiver down'));
+      const backoff = sleep as unknown as jest.Mock;
+      backoff.mockClear();
+
+      const replay = service.redeliver(webhook, 'sess-a', 'message.received', 'stored-key', {});
+      await settle(() => backoff.mock.calls.length > 0);
+
+      await service.onModuleDestroy();
+
+      await expect(replay).resolves.toBe('unrecorded');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(insertedFailures).toEqual([]);
+      expect(outboxService.close).not.toHaveBeenCalled();
     });
 
     it("holds one session's failing receivers to their share of the pool", async () => {

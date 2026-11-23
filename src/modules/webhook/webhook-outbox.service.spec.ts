@@ -1,4 +1,4 @@
-import { In } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 import { WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookOutboxEvent } from './entities/webhook-outbox-event.entity';
 
@@ -67,6 +67,17 @@ describe('WebhookOutboxService', () => {
     expect((repo.update.mock.calls as unknown[][])[0][1]).not.toHaveProperty('payload');
   });
 
+  it('reverts a matching queued delivery back to pending without reopening settled rows', async () => {
+    await service.markPending('wh-1', 'key_wh-1', 'job-1');
+    expect(repo.update).toHaveBeenCalledWith(
+      expect.objectContaining({ webhookId: 'wh-1', idempotencyKey: 'key_wh-1', state: 'queued', deliveryId: 'job-1' }),
+      { state: 'pending' },
+    );
+
+    repo.update.mockRejectedValueOnce(new Error('disk full'));
+    await expect(service.markPending('wh-1', 'key_wh-1', 'job-1')).resolves.toBeUndefined();
+  });
+
   it('returns only rows that still carry a payload: a retired row is not replayable', async () => {
     const row = (over: Partial<WebhookOutboxEvent>): WebhookOutboxEvent => ({
       id: 'r',
@@ -116,19 +127,109 @@ describe('WebhookOutboxService retention', () => {
     service = new WebhookOutboxService(repo as never);
   });
 
-  it('prunes settled rows only, never one that can still be replayed', async () => {
+  it('prunes settled and legacy null-state rows only, never one that can still be replayed', async () => {
     const removed = await service.pruneSettled(7);
 
     expect(removed).toBe(3);
-    // The ids are read with the condition and removed by id.
+    // The ids are read with the OR condition (settled non-null OR null state) and removed by id.
     const [[{ where }]] = repo.find.mock.calls as unknown as [
-      [{ where: { state: { type: string; value: unknown }; createdAt: { type: string } } }],
+      [
+        {
+          where: Array<{ state: { type: string; value?: unknown }; createdAt: { type: string } }>;
+        },
+      ],
     ];
-    // Deleting a 'pending' row on age would discard the delivery this table exists to protect.
-    expect(where.state.type).toBe('not');
-    expect(where.state.value).toEqual(['pending', 'queued']);
-    expect(where.createdAt.type).toBe('lessThan');
+    expect(Array.isArray(where)).toBe(true);
+    expect(where).toHaveLength(2);
+    // Deleting a 'pending' or 'queued' row on age would discard the delivery this table exists to protect.
+    expect(where[0].state.type).toBe('not');
+    expect(where[0].state.value).toEqual(['pending', 'queued']);
+    expect(where[0].createdAt.type).toBe('lessThan');
+    expect(where[1].state.type).toBe('isNull');
+    expect(where[1].createdAt.type).toBe('lessThan');
     expect(repo.delete).toHaveBeenCalledWith(['a', 'b', 'c']);
+  });
+
+  it('prunes legacy null-state rows older than cutoff in SQLite while preserving pending, queued, and recent rows', async () => {
+    const ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [WebhookOutboxEvent],
+      synchronize: true,
+    }).initialize();
+    try {
+      const insertRow = (id: string, key: string, state: string | null, daysOld: number): Promise<unknown> =>
+        ds.query(
+          `INSERT INTO webhook_outbox_events (id, webhookId, sessionId, event, idempotencyKey, deliveryId, payload, state, attempts, createdAt)
+           VALUES (?, 'wh-1', 'sess-1', 'message.received', ?, ?, NULL, ?, 0, datetime('now', ?))`,
+          [id, key, `dlv-${key}`, state, `-${daysOld} days`],
+        );
+
+      await insertRow('00000000-0000-4000-8000-000000000001', 'old-null', null, 14);
+      await insertRow('00000000-0000-4000-8000-000000000002', 'old-dispatched', 'dispatched', 14);
+      await insertRow('00000000-0000-4000-8000-000000000003', 'old-failed', 'failed', 14);
+      await insertRow('00000000-0000-4000-8000-000000000004', 'old-pending', 'pending', 14);
+      await insertRow('00000000-0000-4000-8000-000000000005', 'old-queued', 'queued', 14);
+      await insertRow('00000000-0000-4000-8000-000000000006', 'recent-null', null, 1);
+      await insertRow('00000000-0000-4000-8000-000000000007', 'recent-dispatched', 'dispatched', 1);
+
+      const sqliteService = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent));
+      expect(await sqliteService.pruneSettled(7)).toBe(3);
+
+      const survivors = (await ds.getRepository(WebhookOutboxEvent).find()).map(r => r.idempotencyKey).sort();
+      expect(survivors).toEqual(['old-pending', 'old-queued', 'recent-dispatched', 'recent-null']);
+    } finally {
+      await ds.destroy();
+    }
+  });
+
+  it('awaits an in-flight prune pass during onModuleDestroy', async () => {
+    let releaseFind!: () => void;
+    repo.find.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          releaseFind = () => resolve([{ id: 'a' }]);
+        }),
+    );
+
+    const pruning = service.pruneSettled(7);
+    await new Promise(resolve => setImmediate(resolve));
+
+    let destroyed = false;
+    const destroyP = Promise.resolve(service.onModuleDestroy()).then(() => {
+      destroyed = true;
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(destroyed).toBe(false);
+
+    releaseFind();
+    await destroyP;
+    await pruning;
+    expect(destroyed).toBe(true);
+    // Stopped before issuing delete on the batch returned after shutdown began.
+    expect(repo.delete).not.toHaveBeenCalled();
+  });
+
+  it('bounds onModuleDestroy when a prune query hangs', async () => {
+    jest.useFakeTimers();
+    try {
+      repo.find.mockImplementationOnce(() => new Promise(() => undefined));
+
+      void service.pruneSettled(7);
+      let destroyed = false;
+      const destroyP = service.onModuleDestroy().then(() => {
+        destroyed = true;
+      });
+
+      await jest.advanceTimersByTimeAsync(999);
+      expect(destroyed).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(destroyed).toBe(true);
+      await destroyP;
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('refuses a retention window that would let the table grow without bound', async () => {
@@ -141,7 +242,7 @@ describe('WebhookOutboxService retention', () => {
       // nothing: the value falls back rather than disabling the prune.
       expect(repo.delete).toHaveBeenCalled();
     } finally {
-      service.onModuleDestroy();
+      await service.onModuleDestroy();
       if (prev === undefined) delete process.env.WEBHOOK_OUTBOX_RETENTION_DAYS;
       else process.env.WEBHOOK_OUTBOX_RETENTION_DAYS = prev;
     }

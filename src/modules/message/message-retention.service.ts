@@ -66,7 +66,7 @@ export class MessageRetentionService implements OnModuleInit, OnModuleDestroy {
   private timer?: ReturnType<typeof setInterval>;
   private followUp?: ReturnType<typeof setTimeout>;
   private stopped = false;
-  private running = false;
+  private inFlight?: Promise<void>;
 
   constructor(
     @InjectRepository(Message, 'data') private readonly messages: Repository<Message>,
@@ -106,17 +106,20 @@ export class MessageRetentionService implements OnModuleInit, OnModuleDestroy {
     this.timer.unref?.();
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     clearTimeout(this.followUp);
+    await this.inFlight?.catch(() => undefined);
   }
 
-  /** One bounded pass. Overlap-guarded, and a no-op while retention is off. */
+  /** One bounded pass. Overlap-guarded, and a no-op while retention is off or stopped. */
   async prune(now: Date = new Date()): Promise<{ messages: number; batches: number }> {
+    if (this.stopped || this.inFlight) return { messages: 0, batches: 0 };
     const cutoff = resolveMessageRetentionCutoff(now);
-    if (!cutoff || this.running) return { messages: 0, batches: 0 };
-    this.running = true;
+    if (!cutoff) return { messages: 0, batches: 0 };
+    let settle!: () => void;
+    this.inFlight = new Promise<void>(resolve => (settle = resolve));
     try {
       const messages = await pruneInBatches({
         repository: this.messages,
@@ -134,7 +137,8 @@ export class MessageRetentionService implements OnModuleInit, OnModuleDestroy {
       });
       return { messages, batches };
     } finally {
-      this.running = false;
+      this.inFlight = undefined;
+      settle();
     }
   }
 }

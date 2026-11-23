@@ -184,8 +184,11 @@ export class PluginsController {
   @ApiResponse({ status: 400, description: 'Validation failed, or the body carries a field the DTO does not declare.' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
   @ApiResponse({ status: 409, description: UNINSTALLING_CONFLICT })
-  updateConfig(@Param('id') id: string, @Body() configDto: PluginConfigDto): { success: boolean; message: string } {
-    const result = this.pluginsService.updateConfig(id, configDto.config);
+  async updateConfig(
+    @Param('id') id: string,
+    @Body() configDto: PluginConfigDto,
+  ): Promise<{ success: boolean; message: string }> {
+    const result = await this.pluginsService.updateConfig(id, configDto.config);
     // The service answers a refused change with 200 and success false, so a row is written only for one applied.
     if (result.success)
       this.record(AuditAction.PLUGIN_CONFIG_UPDATED, id, { fields: Object.keys(configDto.config ?? {}) });

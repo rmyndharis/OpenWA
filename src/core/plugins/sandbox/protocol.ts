@@ -20,6 +20,12 @@ export interface SandboxStaticContext {
   config: Record<string, unknown>;
 }
 
+/** Host-authoritative dispatch context (firing hook session or ingress instance) for a worker request. */
+export interface SandboxDispatchContext {
+  sessionId?: string;
+  instanceId?: string;
+}
+
 export type PluginLogLevel = 'log' | 'debug' | 'warn' | 'error';
 
 /**
@@ -74,6 +80,7 @@ export type HostToWorkerMessage =
   | {
       kind: 'hook';
       id: number;
+      dispatchId?: string;
       event: string;
       data: unknown;
       sessionId?: string;
@@ -98,6 +105,7 @@ export type HostToWorkerMessage =
   | {
       kind: 'webhook';
       id: number;
+      dispatchId?: string;
       instanceId: string;
       route: string;
       method: string;
@@ -129,7 +137,9 @@ export type WorkerToHostMessage =
   // validates it (permission + session scope) before running the real verb and replying.
   // `inFlight` is the chain of the hook dispatch whose handler issued the call (absent outside a hook,
   // e.g. an ingress handler or a timer); the host trusts only events it actually dispatched.
-  | { kind: 'cap'; id: number; verb: string; args: unknown[]; inFlight?: string[] }
+  // `dispatchId` echoes the host-generated id of the active hook or webhook dispatch so the host can
+  // look up its authoritative session/instance context without trusting worker-supplied identifiers.
+  | { kind: 'cap'; id: number; verb: string; args: unknown[]; inFlight?: string[]; dispatchId?: string }
   // The worker asks the host to dispatch `event` to it (registered a handler for it).
   | { kind: 'hook-subscribe'; event: string; priority?: number }
   // The worker's handler result for a dispatched hook (continue/modify/error).

@@ -24,7 +24,7 @@ import { PluginsModule } from '../../core/plugins/plugins.module';
  * is additionally size-gated (media shed) before enqueue, so count × bytes both stay bounded.
  */
 export const WEBHOOK_QUEUE_JOB_OPTIONS = {
-  removeOnComplete: { age: 3600, count: 1000 },
+  removeOnComplete: { age: 3600, count: 10_000 },
   removeOnFail: { age: 86400, count: 5000 },
 } as const;
 

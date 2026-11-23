@@ -402,3 +402,115 @@ for (const change of ['replace key', 'sign out', 'abort'] as const) {
     assert.equal(requests, 1);
   });
 }
+
+test('dynamic path segments and stats period are URL-encoded across every API group', async () => {
+  const { webhookApi, templateApi, contactApi, apiKeyApi, messageApi, pluginInstancesApi, statsApi } =
+    await import('./api.ts');
+  const requested: string[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    requested.push(
+      String(input)
+        .replace(/^https?:\/\/[^/]+/, '')
+        .replace(/^\/api/, ''),
+    );
+    return Promise.resolve(
+      new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+  }) as typeof fetch;
+
+  const tricky = '../admin/x?a=1#frag';
+  const encTricky = encodeURIComponent(tricky);
+  const tricky2 = 'sub/id?b=2#h';
+  const encTricky2 = encodeURIComponent(tricky2);
+
+  await sessionApi.get(tricky);
+  await sessionApi.start(tricky);
+  await sessionApi.getConfig(tricky);
+  await sessionApi.getGroups(tricky);
+  await sessionApi.getSubscribedChannels(tricky);
+  await sessionApi.getContactStatuses(tricky);
+  await webhookApi.listBySession(tricky);
+  await webhookApi.update(tricky, tricky2, { active: false });
+  await webhookApi.delete(tricky, tricky2);
+  await webhookApi.test(tricky, tricky2);
+  await templateApi.list(tricky);
+  await templateApi.update(tricky, tricky2, { body: 'hi' });
+  await templateApi.delete(tricky, tricky2);
+  await contactApi.listBlocked(tricky);
+  await contactApi.block(tricky, tricky2);
+  await apiKeyApi.update(tricky, { name: 'k' });
+  await apiKeyApi.delete(tricky);
+  await apiKeyApi.revoke(tricky);
+  await messageApi.sendText(tricky, '1555@c.us', 'hi');
+  await messageApi.react(tricky, { chatId: '1555@c.us', messageId: 'm1', emoji: '👍' });
+  await pluginsApi.get(tricky);
+  await pluginsApi.enable(tricky);
+  await pluginsApi.updateSessionConfig(tricky, tricky2, {});
+  await pluginsApi.getConfigUi(tricky);
+  await pluginInstancesApi.list(tricky);
+  await pluginInstancesApi.regenerateSecret(tricky, tricky2);
+  await pluginInstancesApi.update(tricky, tricky2, { enabled: false });
+  await pluginInstancesApi.remove(tricky, tricky2);
+  await statsApi.getMessages('7d&x=1' as '7d');
+
+  assert.deepEqual(requested, [
+    `/sessions/${encTricky}`,
+    `/sessions/${encTricky}/start`,
+    `/sessions/${encTricky}/config`,
+    `/sessions/${encTricky}/groups`,
+    `/sessions/${encTricky}/channels`,
+    `/sessions/${encTricky}/status`,
+    `/sessions/${encTricky}/webhooks`,
+    `/sessions/${encTricky}/webhooks/${encTricky2}`,
+    `/sessions/${encTricky}/webhooks/${encTricky2}`,
+    `/sessions/${encTricky}/webhooks/${encTricky2}/test`,
+    `/sessions/${encTricky}/templates`,
+    `/sessions/${encTricky}/templates/${encTricky2}`,
+    `/sessions/${encTricky}/templates/${encTricky2}`,
+    `/sessions/${encTricky}/contacts/blocked`,
+    `/sessions/${encTricky}/contacts/${encTricky2}/block`,
+    `/auth/api-keys/${encTricky}`,
+    `/auth/api-keys/${encTricky}`,
+    `/auth/api-keys/${encTricky}/revoke`,
+    `/sessions/${encTricky}/messages/send-text`,
+    `/sessions/${encTricky}/messages/react`,
+    `/plugins/${encTricky}`,
+    `/plugins/${encTricky}/enable`,
+    `/plugins/${encTricky}/config/${encTricky2}`,
+    `/plugins/${encTricky}/config-ui`,
+    `/integration/plugins/${encTricky}/instances`,
+    `/integration/plugins/${encTricky}/instances/${encTricky2}/regenerate-secret`,
+    `/integration/plugins/${encTricky}/instances/${encTricky2}`,
+    `/integration/plugins/${encTricky}/instances/${encTricky2}`,
+    `/stats/messages?period=${encodeURIComponent('7d&x=1')}`,
+  ]);
+});
+
+test('chat and contact list pagination stop at the 50,000 item ceiling on non-terminating servers', async () => {
+  const { contactApi } = await import('./api.ts');
+  let chatPages = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const offset = Number(new URL(String(input), 'http://localhost').searchParams.get('offset'));
+    chatPages++;
+    if (chatPages > 52) throw new Error('pagination exceeded ceiling');
+    return chatResponse(Array.from({ length: 1000 }, (_, i) => ({ id: `chat-${offset + i}` })));
+  }) as typeof fetch;
+
+  const chats = await sessionApi.getChats('s1');
+  assert.equal(chats.length, 50_000);
+  assert.equal(chatPages, 50);
+
+  let contactPages = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const offset = Number(new URL(String(input), 'http://localhost').searchParams.get('offset'));
+    contactPages++;
+    if (contactPages > 52) throw new Error('pagination exceeded ceiling');
+    return chatResponse(
+      Array.from({ length: 1000 }, (_, i) => ({ id: `${offset + i}@c.us`, number: `${offset + i}` })),
+    );
+  }) as typeof fetch;
+
+  const contacts = await contactApi.list('s1');
+  assert.equal(contacts.length, 50_000);
+  assert.equal(contactPages, 50);
+});

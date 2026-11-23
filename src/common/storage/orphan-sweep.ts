@@ -49,8 +49,10 @@ export async function sweepOrphanedFiles(options: {
   chunkSize?: number;
   /** Caller-worded warning for a delete that failed; the file stays for the next pass. */
   onDeleteFailed: (key: string, error: unknown) => void;
+  /** Optional cooperative stop predicate checked during enumeration, lookups, and deletes. */
+  stopped?: () => boolean;
 }): Promise<number> {
-  const { storage, prefix, graceMs, now, firstSeenAt, referencedAmong, onDeleteFailed } = options;
+  const { storage, prefix, graceMs, now, firstSeenAt, referencedAmong, onDeleteFailed, stopped } = options;
   let removed = 0;
   // Keys still unreferenced at the end of THIS pass; drives the bookkeeping prune below. Bounded by
   // the orphan count (normally ~0), not by the size of the store.
@@ -58,9 +60,13 @@ export async function sweepOrphanedFiles(options: {
 
   let chunk: string[] = [];
   const flush = async (): Promise<void> => {
-    if (chunk.length === 0) return;
+    if (chunk.length === 0 || stopped?.()) {
+      chunk = [];
+      return;
+    }
     const referenced = await referencedAmong(chunk);
     for (const file of chunk) {
+      if (stopped?.()) break;
       if (referenced.has(file)) {
         firstSeenAt.delete(file);
         continue;
@@ -71,6 +77,7 @@ export async function sweepOrphanedFiles(options: {
       const firstSeen = known ?? now;
       firstSeenAt.set(file, firstSeen);
       if (now - firstSeen < graceMs) continue;
+      if (stopped?.()) break;
       try {
         await storage.deleteFile(file);
         firstSeenAt.delete(file);
@@ -83,18 +90,26 @@ export async function sweepOrphanedFiles(options: {
     chunk = [];
   };
 
-  // A directory the walk cannot read is left alone: this pass deletes only files it was shown.
-  for await (const file of storage.iterateFiles(prefix, { skipUnreadable: true })) {
-    if (!file.startsWith(prefix)) continue;
-    chunk.push(file);
-    if (options.chunkSize !== undefined && chunk.length >= options.chunkSize) await flush();
+  if (!stopped?.()) {
+    // A directory the walk cannot read is left alone: this pass deletes only files it was shown.
+    for await (const file of storage.iterateFiles(prefix, { skipUnreadable: true })) {
+      if (stopped?.()) break;
+      if (!file.startsWith(prefix)) continue;
+      chunk.push(file);
+      if (options.chunkSize !== undefined && chunk.length >= options.chunkSize) {
+        await flush();
+        if (stopped?.()) break;
+      }
+    }
+    if (!stopped?.()) await flush();
   }
-  await flush();
 
-  // Drop bookkeeping for anything not still orphaned this pass — the file is gone, or a row now
-  // references it. Keyed off the orphan set rather than a full listing so this stays bounded too.
-  for (const key of [...firstSeenAt.keys()]) {
-    if (!stillOrphaned.has(key)) firstSeenAt.delete(key);
+  // Drop bookkeeping for anything not still orphaned this pass (the file is gone, or a row now
+  // references it). Skip when cut short so unvisited keys keep their first-seen timestamps.
+  if (!stopped?.()) {
+    for (const key of [...firstSeenAt.keys()]) {
+      if (!stillOrphaned.has(key)) firstSeenAt.delete(key);
+    }
   }
   return removed;
 }

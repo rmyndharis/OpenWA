@@ -6,6 +6,7 @@ import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { sessionScopeKey } from '../../core/plugins/plugin-activation';
+import { updatePluginConfigDurable } from '../../core/plugins/plugin-lifecycle';
 import { Session } from '../session/entities/session.entity';
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginInstance } from './entities/plugin-instance.entity';
@@ -239,7 +240,7 @@ export class ScopeBindingService implements OnApplicationBootstrap {
         // enabled instance still binds a wildcard/null scope — otherwise disabling/deleting a wildcard
         // instance would leave the plugin firing on every session with stale config.
         if (activate) {
-          this.loader.updatePluginConfig(pluginId, {
+          await this.updateBaseConfig(pluginId, {
             ...(await this.retractedSecrets(pluginId, config, opts.previousConfig)),
             ...config,
           });
@@ -247,7 +248,7 @@ export class ScopeBindingService implements OnApplicationBootstrap {
           return;
         }
         const retracted = await this.retractedSecrets(pluginId, {}, opts.previousConfig);
-        if (Object.keys(retracted).length > 0) this.loader.updatePluginConfig(pluginId, retracted);
+        if (Object.keys(retracted).length > 0) await this.updateBaseConfig(pluginId, retracted);
         if (globalPlugin) return;
         const rows = await this.instances.list(pluginId);
         const anyWildcardLeft = rows.some(i => i.enabled && (!i.sessionScope || i.sessionScope === '*'));
@@ -315,6 +316,27 @@ export class ScopeBindingService implements OnApplicationBootstrap {
         metadata: { pluginId, scope, bridgeError: String(err) },
       });
     }
+  }
+
+  /**
+   * Project a wildcard config patch onto the plugin's base config and sanitize any persisted
+   * instances whose config inherits a redirected base host key in a single durable pass.
+   */
+  private async updateBaseConfig(pluginId: string, patch: Record<string, unknown>): Promise<void> {
+    const plugin = this.loader.getPlugin(pluginId);
+    if (!plugin) {
+      this.loader.updatePluginConfig(pluginId, patch);
+      return;
+    }
+    if (await updatePluginConfigDurable(plugin, patch)) return;
+    // Fallback when `this.loader` is a test double without a live PluginLifecycle.
+    const previousBase = plugin.config ? { ...plugin.config } : undefined;
+    this.loader.updatePluginConfig(pluginId, patch);
+    if (!previousBase) return;
+    const currentBase = this.loader.getPlugin(pluginId)?.config;
+    const nextBase =
+      currentBase && !isDeepStrictEqual(currentBase, previousBase) ? currentBase : { ...previousBase, ...patch };
+    await this.instances.sanitizeForBaseRedirect?.(pluginId, previousBase, nextBase, plugin.manifest);
   }
 
   /**

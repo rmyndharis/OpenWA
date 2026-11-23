@@ -18,7 +18,11 @@ export interface WwebjsStuckAuthHost {
   getClient(): Client | null;
   setClient(client: Client | null): void;
   setStatus(status: EngineStatus): void;
-  /** Live callbacks bag — read per event, since initialize() installs it after delegates are built. */
+  isTearingDown(): boolean;
+  isDisconnectReported(): boolean;
+  markCredentialTeardownStarted(): void;
+  clearTimersAndTransientState(): void;
+  /** Live callbacks bag: read per event, since initialize() installs it after delegates are built. */
   getCallbacks(): EngineEventCallbacks;
 }
 
@@ -44,6 +48,9 @@ export class WwebjsStuckAuth {
    * back to its own instance-local boolean so standalone behavior stays one-shot.
    */
   async recoverFromStuckAuth(): Promise<void> {
+    if (this.host.isTearingDown()) {
+      return;
+    }
     // The one-shot budget is decided SYNCHRONOUSLY before any destructive I/O. The session-owned
     // callback is authoritative when present; the instance-local boolean is the standalone fallback.
     // Fail-closed: a callback that throws (or already-spent budget) makes this terminal WITHOUT
@@ -71,6 +78,13 @@ export class WwebjsStuckAuth {
     }
 
     const client = this.host.getClient();
+    this.host.clearTimersAndTransientState();
+    this.host.markCredentialTeardownStarted();
+    try {
+      (client as { removeAllListeners?: () => void } | null)?.removeAllListeners?.();
+    } catch {
+      // Best-effort listener detach before terminating Chromium.
+    }
     this.host.setClient(null);
     // Kill the wedged Chromium before removing its profile: a live browser keeps writing into the
     // directory being removed, which can exhaust the rm retries and leave half a profile behind.
@@ -90,9 +104,13 @@ export class WwebjsStuckAuth {
     const removal = this.clearLocalAuth();
     this.host.getCallbacks().onCredentialTeardownStarted?.(removal);
     await removal;
+    if (this.host.isTearingDown() || this.host.isDisconnectReported()) {
+      if (typeof client?.destroy === 'function') void client.destroy().catch(() => undefined);
+      return;
+    }
     this.host.setStatus(EngineStatus.DISCONNECTED);
     // onDisconnected drives the lifecycle's reconnect, which re-creates the engine with no saved auth
-    // → a fresh QR. (A no-op once the engine is superseded/torn down.)
+    // -> a fresh QR. (A no-op once the engine is superseded/torn down.)
     this.host.getCallbacks().onDisconnected?.('Saved session could not be restored; cleared for re-pairing');
     if (typeof client?.destroy === 'function') void client.destroy().catch(() => undefined);
   }

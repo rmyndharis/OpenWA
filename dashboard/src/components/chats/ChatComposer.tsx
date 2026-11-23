@@ -1,6 +1,8 @@
 import {
+  useCallback,
   useEffect,
   useId,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -8,6 +10,7 @@ import {
   type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
   type SetStateAction,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -77,6 +80,11 @@ export interface StagedAttachment {
   filename: string;
 }
 
+/** Imperative handle for restoring a refused send's text without lifting live keystroke state to the page. */
+export interface ChatComposerHandle {
+  restoreDraftIfEmpty: (threadKey: string, text: string) => boolean;
+}
+
 interface ChatComposerProps {
   selectedSessionId: string;
   activeChat: Chat;
@@ -89,8 +97,15 @@ interface ChatComposerProps {
   onSendConfirmed?: (tempId: string, key: string) => void;
   /** A send was refused: `text` is what it took from the field of the thread (`sessionId`, `chatId`) it was typed in. */
   onSendFailed?: (sessionId: string, chatId: string, text: string) => void;
-  messageInput: string;
-  setMessageInput: Dispatch<SetStateAction<string>>;
+  /** Optional controlled input pair (used in unit tests). When omitted, drafts live locally backed by `draftsRef`. */
+  messageInput?: string;
+  setMessageInput?: Dispatch<SetStateAction<string>>;
+  /** Parked draft text for the active thread on render, avoiding a 1-commit flash or render-time ref read on chat switch. */
+  initialDraft?: string;
+  /** Shared per-thread draft map owned by the page so drafts survive room close/reopen without re-rendering the page on keystrokes. */
+  draftsRef?: RefObject<Map<string, string>>;
+  /** Imperative handle allowing the page to restore a refused send's text when the active field is empty. */
+  composerHandleRef?: RefObject<ChatComposerHandle | null>;
   attachment: StagedAttachment | null;
   setAttachment: Dispatch<SetStateAction<StagedAttachment | null>>;
   previewUrl: string | null;
@@ -99,8 +114,9 @@ interface ChatComposerProps {
 
 // The composer half of the chat room: attachment preview, emoji panel, reply banner, and the input
 // bar with the whole optimistic-send flow. `replyingTo` is shared with the thread (its reply action
-// sets it), and `messageInput` plus the staged attachment live in the page so a draft survives
-// closing the room; everything else is local.
+// sets it), and the staged attachment lives in the page so it survives closing the room. Live
+// keystroke draft state stays local (mirrored into `draftsRef`) so typing does not re-render the
+// page or thread.
 function ChatComposer({
   selectedSessionId,
   activeChat,
@@ -110,8 +126,11 @@ function ChatComposer({
   onSent,
   onSendConfirmed,
   onSendFailed,
-  messageInput,
-  setMessageInput,
+  messageInput: controlledInput,
+  setMessageInput: controlledSetInput,
+  initialDraft,
+  draftsRef,
+  composerHandleRef,
   attachment,
   setAttachment,
   previewUrl,
@@ -124,8 +143,84 @@ function ChatComposer({
   const queryClient = useQueryClient();
 
   const [sendingByThread, setSendingByThread] = useState<Record<string, number>>({});
-  const activeThreadKey = selectedSessionId && activeChat?.id ? `${selectedSessionId}\0${activeChat.id}` : '';
+  const activeThreadKey = selectedSessionId && activeChat?.id ? `${selectedSessionId}\u0000${activeChat.id}` : '';
   const sending = Boolean(activeThreadKey && (sendingByThread[activeThreadKey] ?? 0) > 0);
+
+  const controlled = controlledInput !== undefined && controlledSetInput !== undefined;
+  const [draftState, setDraftState] = useState<{ threadKey: string; text: string }>(() => ({
+    threadKey: activeThreadKey,
+    text: controlled ? '' : (initialDraft ?? ''),
+  }));
+
+  // Render-time thread-switch sync keeps ChatComposer mounted (preserving sendingByThread across
+  // chat switches) while swapping the visible draft before DOM commit so the new room never paints
+  // with the previous chat's text.
+  let localInput = draftState.text;
+  if (!controlled && draftState.threadKey !== activeThreadKey) {
+    localInput = initialDraft ?? '';
+    setDraftState({ threadKey: activeThreadKey, text: localInput });
+  }
+
+  const messageInput = controlled ? controlledInput : localInput;
+
+  const activeThreadKeyRef = useRef(activeThreadKey);
+  const currentInputRef = useRef(messageInput);
+  useLayoutEffect(() => {
+    activeThreadKeyRef.current = activeThreadKey;
+    currentInputRef.current = messageInput;
+  }, [activeThreadKey, messageInput]);
+
+  // Fallback sync from `draftsRef` when switching threads without an explicit `initialDraft` prop.
+  useLayoutEffect(() => {
+    if (controlled || !draftsRef) return;
+    const stored = draftsRef.current.get(activeThreadKey) ?? '';
+    if (stored === currentInputRef.current) return;
+    currentInputRef.current = stored;
+    setDraftState({ threadKey: activeThreadKey, text: stored });
+  }, [activeThreadKey, controlled, draftsRef]);
+
+  const writeDraft = useCallback(
+    (threadKey: string, text: string) => {
+      if (!draftsRef || !threadKey) return;
+      if (text === '') draftsRef.current.delete(threadKey);
+      else draftsRef.current.set(threadKey, text);
+    },
+    [draftsRef],
+  );
+
+  const setMessageInput = useCallback<Dispatch<SetStateAction<string>>>(
+    value => {
+      if (controlled) {
+        controlledSetInput(value);
+        return;
+      }
+      const threadKey = activeThreadKeyRef.current;
+      const next = typeof value === 'function' ? value(currentInputRef.current) : value;
+      currentInputRef.current = next;
+      writeDraft(threadKey, next);
+      setDraftState(prev => (prev.threadKey === threadKey && prev.text === next ? prev : { threadKey, text: next }));
+    },
+    [controlled, controlledSetInput, writeDraft],
+  );
+
+  useImperativeHandle(
+    composerHandleRef,
+    () => ({
+      restoreDraftIfEmpty(threadKey: string, text: string): boolean {
+        if (activeThreadKeyRef.current !== threadKey) return false;
+        if (currentInputRef.current !== '') return false;
+        currentInputRef.current = text;
+        if (controlled) {
+          controlledSetInput(text);
+        } else {
+          writeDraft(threadKey, text);
+          setDraftState({ threadKey, text });
+        }
+        return true;
+      },
+    }),
+    [controlled, controlledSetInput, writeDraft],
+  );
   // "[Image]" for a non-text message; an unexpected type still reads as itself rather than a raw key.
   // An `unknown` one quotes as "[Message]" on purpose: here it is a message, not a type category
   // (the chart and the webhook filter name it through messageTypeLabelKey instead).
@@ -272,12 +367,12 @@ function ChatComposer({
     return () => observer.disconnect();
   }, []);
 
-  // A room reopened on a kept draft mounts the field with its caret before the text; typing continues after it.
+  // A room reopened or switched onto a kept draft puts its caret at the end of the text; typing continues after it.
   // Setting the selection moves no focus.
   useLayoutEffect(() => {
     const field = textInputRef.current;
     field?.setSelectionRange(field.value.length, field.value.length);
-  }, []);
+  }, [activeThreadKey]);
 
   // Typing replaces the first placeholder of the template that was just inserted.
   useLayoutEffect(() => {
@@ -508,7 +603,9 @@ function ChatComposer({
       updateMessage(selectedSessionId, activeChat.id, tempId, { status: 'failed' });
       // The field was emptied as Send was pressed (text next to audio was left in it).
       if (textToSend && !attachmentIsAudio) {
-        if (closedAtSend) setSlashClosedFor(messageInput);
+        if (closedAtSend && activeThreadKeyRef.current === threadKey && currentInputRef.current === '') {
+          setSlashClosedFor(messageInput);
+        }
         onSendFailed?.(selectedSessionId, activeChat.id, messageInput);
       }
     } finally {

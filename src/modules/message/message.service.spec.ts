@@ -1194,18 +1194,23 @@ describe('MessageService', () => {
       );
     });
 
-    it('judges the stored row by the chat the gate sent the edit to, not the one the caller named', async () => {
+    it('keeps chatId and messageId pinned to the caller values while applying rewritten edit content', async () => {
       (hookManager.execute as jest.Mock).mockResolvedValueOnce({
         continue: true,
-        data: { input: { chatId: 'other@c.us', messageId: 'wa-msg-1', body: 'edited' } },
+        data: { input: { chatId: 'other@c.us', messageId: 'wa-other', body: 'redacted', mentions: ['62811@c.us'] } },
       });
 
-      await service.editMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1', body: 'edited' });
+      await service.editMessage('sess-1', {
+        chatId: 'test@c.us',
+        messageId: 'wa-msg-1',
+        body: 'edited',
+        mentions: ['62811@c.us', '62999@c.us'],
+      });
 
-      expect(mockEngine.editMessage).toHaveBeenCalledWith('other@c.us', 'wa-msg-1', 'edited');
-      expect(messageProjector.recordOutboundMessageEdit).toHaveBeenCalledWith('sess-1', 'wa-msg-1', 'edited', {
+      expect(mockEngine.editMessage).toHaveBeenCalledWith('test@c.us', 'wa-msg-1', 'redacted', ['62811@c.us']);
+      expect(messageProjector.recordOutboundMessageEdit).toHaveBeenCalledWith('sess-1', 'wa-msg-1', 'redacted', {
         kind: 'edit',
-        chatId: 'other@c.us',
+        chatId: 'test@c.us',
         fromMe: true,
       });
     });

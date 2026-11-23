@@ -12,6 +12,23 @@ export function stripBase64DataUri(base64: string | null | undefined): string | 
   return match ? base64.slice(match[0].length) : base64;
 }
 
+/** Room for a `data:<mime>;base64,` prefix, which the exact check strips, when only the length is known. */
+const DATA_URI_PREFIX_ALLOWANCE_CHARS = 256;
+
+const DATA_URI_MIMETYPE_RE =
+  /^data:([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+(?:;[ \t]*[\x21-\x2b\x2d-\x3a\x3c-\x7e][ \t\x21-\x2b\x2d-\x3a\x3c-\x7e]*)*);base64,/i;
+
+/**
+ * Extract and normalize the MIME type declared in a `data:<mime>;base64,<payload>` prefix, or
+ * return `undefined` for plain base64, oversized headers, or malformed prefixes.
+ */
+export function extractDataUriMimetype(base64: string | null | undefined): string | undefined {
+  if (base64 == null) return undefined;
+  const head = base64.slice(0, DATA_URI_PREFIX_ALLOWANCE_CHARS);
+  const match = DATA_URI_MIMETYPE_RE.exec(head);
+  return match ? match[1].trim().toLowerCase() : undefined;
+}
+
 /**
  * Reject an outbound base64 media blob whose DECODED size exceeds the shared media byte cap
  * (`MEDIA_DOWNLOAD_MAX_BYTES`, default 50 MiB) — the same limit the remote-URL download and inbound
@@ -35,9 +52,6 @@ export function assertBase64WithinMediaCap(base64: string | null | undefined, ca
     throw new PayloadTooLargeException(`Base64 media exceeds the maximum allowed size of ${maxBytes} bytes`);
   }
 }
-
-/** Room for a `data:<mime>;base64,` prefix, which the exact check strips, when only the length is known. */
-const DATA_URI_PREFIX_ALLOWANCE_CHARS = 256;
 
 /**
  * The same refusal as {@link assertBase64WithinMediaCap}, for a base64 string that has not been built yet and

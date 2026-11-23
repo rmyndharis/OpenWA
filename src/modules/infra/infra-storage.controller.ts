@@ -301,7 +301,23 @@ export class InfraStorageController implements OnApplicationBootstrap {
       throw new BadRequestException(`File not found: ${filePath}`);
     }
 
-    const readStream = fs.createReadStream(resolved);
+    let realDataDir: string;
+    let realTarget: string;
+    try {
+      realDataDir = fs.realpathSync(dataDir);
+      realTarget = fs.realpathSync(resolved);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new BadRequestException('Import file not found');
+      }
+      throw error;
+    }
+
+    if (!isPathWithin(realDataDir, realTarget)) {
+      throw new BadRequestException('filePath must reference a file inside the data directory');
+    }
+
+    const readStream = fs.createReadStream(realTarget);
     // importFromStream rejects on archive/gzip/read failures (its streams carry error listeners, so a
     // bad file fails the request instead of crashing the process on an unhandled 'error' event). The
     // failures that reach here are almost always a problem with the caller-supplied file (not a gzip,

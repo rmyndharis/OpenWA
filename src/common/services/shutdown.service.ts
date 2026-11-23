@@ -58,7 +58,15 @@ export class ShutdownService {
     if (!this.shuttingDown) {
       this.shuttingDown = true;
       this.logger.log('Entering draining state — readiness now reports 503');
-      for (const listener of this.shutdownListeners) listener();
+      for (const listener of this.shutdownListeners) {
+        try {
+          listener();
+        } catch (error) {
+          this.logger.warn('Shutdown listener threw an error', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     }
   }
 

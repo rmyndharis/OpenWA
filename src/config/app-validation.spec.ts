@@ -20,6 +20,11 @@ describe('NulBodyPipe', () => {
     expect(() => pipe.transform(body, { type: 'body', metatype: SendBulkMessageDto })).toThrow(BadRequestException);
   });
 
+  it('refuses a body holding a NUL character in an object key', () => {
+    const body = { url: 'https://example.com/hook', headers: { 'X-Bad\u0000': 'value' } };
+    expect(() => pipe.transform(body, { type: 'body', metatype: CreateWebhookDto })).toThrow(BadRequestException);
+  });
+
   it('passes a body without one, and leaves the path and query to the URL refusal', () => {
     const body = { messages: [{ chatId: 'a@c.us', variables: { name: 'x' } }] };
     expect(pipe.transform(body, { type: 'body', metatype: SendBulkMessageDto })).toBe(body);
@@ -136,6 +141,17 @@ describe('the global pipes ahead of the DTO transform', () => {
 
     expect((restored.tables as { messages: unknown[] }).messages).toHaveLength(260_000);
   }, 30_000);
+
+  it('still refuses a restore body holding an object past the key limit, before the validation pipe runs', async () => {
+    const transform = jest.spyOn(ValidationPipe.prototype, 'transform');
+    const oversizedRow = { tables: { messages: [keys(1_001)] } };
+    const oversizedRoot = { tables: keys(1_001) };
+
+    for (const payload of [oversizedRow, oversizedRoot]) {
+      await expect(runAll(payload, body('body', ImportDataDto))).rejects.toThrow(new BadRequestException(OBJECT_LIMIT));
+    }
+    expect(transform).not.toHaveBeenCalled();
+  });
 
   // 100 recipients, each tagging the most the single-send routes allow: the largest body the API documents.
   it('still validates a bulk send at its documented maximum', async () => {

@@ -380,6 +380,8 @@ export class WebhookProcessor extends WorkerHost {
     try {
       const current = await this.loadDeliverableWebhook(webhookId, event, sessionId);
       if (!current) {
+        this.failingWebhooks.delete(webhookId);
+        await this.outbox.close(webhookId, payload.idempotencyKey, 'dispatched');
         return;
       }
       url = current.url;

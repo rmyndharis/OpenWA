@@ -179,17 +179,42 @@ describe('table importers: NUL in free text', () => {
     TABLE_IMPORTERS.find(importer => importer.key === key)!.map(row as never);
 
   it.each([
-    ['sessions', { id: 's1', name: 'my-bot', pushName: nul }, [4]],
-    ['messages', { id: 'm1', chatId: nul, chatName: nul, body: nul, mediaMimetype: nul }, [4, 8, 16]],
+    ['sessions', { id: 's1', name: 'my-bot', pushName: nul, config: nul, proxyUrl: nul, proxyType: nul }, [4, 5, 6, 7]],
+    [
+      'webhooks',
+      { id: 'wh1', sessionId: 's1', url: nul, events: nul, secret: nul, headers: nul, filters: nul },
+      [2, 3, 4, 5, 6],
+    ],
+    [
+      'messages',
+      { id: 'm1', chatId: nul, chatName: nul, body: nul, metadata: nul, mediaPath: nul, mediaMimetype: nul },
+      [4, 8, 12, 15, 16],
+    ],
+    ['messageBatches', { id: 'b1', messages: nul, options: nul, progress: nul, results: nul }, [4, 5, 6, 7]],
+    ['baileysStoredMessages', { id: 'bsm1', sessionId: 's1', waMessageId: 'w1', serializedMessage: nul }, [3]],
+    ['pluginInstances', { id: 'pi1', secret: nul, verifyToken: nul, config: nul }, [4, 5, 6]],
+    ['conversationMappings', { id: 'cm1', metadata: nul }, [7]],
+    ['ingressEvents', { id: 'ie1', payload: nul }, [5]],
+    ['webhookDeliveryFailures', { id: 'wf1', url: nul, lastError: nul }, [4, 9]],
+    ['webhookOutboxEvents', { id: 'ob1', payload: nul }, [6]],
+    ['integrationDeliveryFailures', { id: 'df1', lastError: nul, payload: nul }, [7, 8]],
     [
       'statusUpdates',
-      { id: 'su1', contactJid: nul, contactName: nul, contactPushName: nul, caption: nul, mediaMimetype: nul },
-      [3, 4, 7, 9],
+      {
+        id: 'su1',
+        contactJid: nul,
+        contactName: nul,
+        contactPushName: nul,
+        caption: nul,
+        mediaPath: nul,
+        mediaMimetype: nul,
+        omitReason: nul,
+        backgroundColor: nul,
+      },
+      [3, 4, 7, 8, 9, 11, 12],
     ],
-    ['webhookDeliveryFailures', { id: 'wf1', lastError: nul }, [9]],
-    ['integrationDeliveryFailures', { id: 'df1', lastError: nul }, [7]],
     ['templates', { id: 't1', name: nul, body: nul, header: nul, footer: nul }, [2, 3, 4, 5]],
-    ['automationRules', { id: 'r1', name: nul, replyText: nul }, [2, 5]],
+    ['automationRules', { id: 'r1', name: nul, conditions: nul, replyText: nul }, [2, 4, 5]],
   ])('drops it from the %s text columns', (key, row, columns) => {
     const params = mapped(key, row);
     columns.forEach(index => expect(params[index]).toBe('ab'));
@@ -198,6 +223,11 @@ describe('table importers: NUL in free text', () => {
   it('keeps it in a lookup column', () => {
     expect(mapped('messages', { id: 'm1', chatId: nul })[3]).toBe(nul);
     expect(mapped('statusUpdates', { id: 'su1', contactJid: nul })[2]).toBe(nul);
+    expect(mapped('baileysStoredMessages', { id: nul, sessionId: nul, waMessageId: nul }).slice(0, 3)).toEqual([
+      nul,
+      nul,
+      nul,
+    ]);
   });
 });
 

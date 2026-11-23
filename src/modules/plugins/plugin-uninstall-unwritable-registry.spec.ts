@@ -155,22 +155,22 @@ describe('Uninstall when registry.json cannot be written', () => {
       .lifecycle;
     const unload = lifecycle.unloadPlugin.bind(lifecycle);
     const outcomes: unknown[] = [];
-    const attempt = (write: () => unknown): void => {
+    const attempt = async (write: () => unknown): Promise<void> => {
       try {
-        outcomes.push(write());
+        outcomes.push(await write());
       } catch (error) {
         outcomes.push(error);
       }
     };
     jest.spyOn(lifecycle, 'unloadPlugin').mockImplementation(async (id: string) => {
       const { controller, loader } = gateway;
-      attempt(() => controller.updateConfig('p1', { config: { token: 'saved-during-uninstall' } }));
-      attempt(() => controller.updateSessionConfig('p1', 's2', { config: { token: 'tenant-2' } }));
-      attempt(() => controller.updateSessions('p1', { sessions: ['s2'] }));
+      await attempt(() => controller.updateConfig('p1', { config: { token: 'saved-during-uninstall' } }));
+      await attempt(() => controller.updateSessionConfig('p1', 's2', { config: { token: 'tenant-2' } }));
+      await attempt(() => controller.updateSessions('p1', { sessions: ['s2'] }));
       // The integration fabric projects instance config through the loader directly, best effort.
-      attempt(() => loader.updatePluginConfig('p1', { token: 'instance-secret' }));
-      attempt(() => loader.setPluginSessionConfig('p1', 's3', { token: 'instance-3' }));
-      attempt(() => loader.setPluginSessions('p1', ['*']));
+      await attempt(() => loader.updatePluginConfig('p1', { token: 'instance-secret' }));
+      await attempt(() => loader.setPluginSessionConfig('p1', 's3', { token: 'instance-3' }));
+      await attempt(() => loader.setPluginSessions('p1', ['*']));
       return unload(id);
     });
 
@@ -203,7 +203,7 @@ describe('Uninstall when registry.json cannot be written', () => {
     await expect(gateway.controller.uninstall('p1')).rejects.toThrow('onUnload failed');
 
     expect(gateway.loader.getPlugin('p1')).toBeDefined();
-    expect(gateway.controller.updateConfig('p1', { config: { token: 'new-secret' } }).success).toBe(true);
+    expect((await gateway.controller.updateConfig('p1', { config: { token: 'new-secret' } })).success).toBe(true);
     expect(onDisk()?.config).toEqual({ token: 'new-secret' });
   });
 

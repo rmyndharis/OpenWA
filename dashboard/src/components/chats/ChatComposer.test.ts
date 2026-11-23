@@ -3,10 +3,10 @@
 import '../../test-helpers/register-hooks.ts';
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createElement, useState, type ReactNode } from 'react';
+import { createElement, createRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Chat } from '../../services/api.ts';
 import type { ChatMessageView } from '../../utils/chatMessages.ts';
-import type { StagedAttachment } from './ChatComposer.tsx';
+import type { ChatComposerHandle, StagedAttachment } from './ChatComposer.tsx';
 
 let rtl: typeof import('@testing-library/react');
 let ChatComposer: (typeof import('./ChatComposer.tsx'))['default'];
@@ -193,4 +193,139 @@ test('the attachment and reply banners name the buttons that close them', async 
   assert.equal(container.querySelector('.attachment-preview-banner') === null, true, 'the file stayed staged');
   fireEvent.click(screen.getByRole('button', { name: 'Close' }));
   assert.equal(container.querySelector('.replying-preview-banner') === null, true, 'the reply stayed open');
+});
+
+test('uncontrolled draftsRef mode syncs across chat switches without flash and supports restoreDraftIfEmpty', async () => {
+  const { screen, fireEvent, act } = rtl;
+  const chat2: Chat = { ...chat, id: 'bob@c.us', name: 'Bob' };
+  const draftsRef: RefObject<Map<string, string>> = { current: new Map<string, string>() };
+  const composerHandleRef = createRef<ChatComposerHandle | null>();
+
+  function UncontrolledHarness({ active, initialDraft }: { active: Chat; initialDraft?: string }) {
+    const [attachment, setAttachment] = useState<StagedAttachment | null>(null);
+    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    const [replyingTo, setReplyingTo] = useState<ChatMessageView | null>(null);
+    return createElement(ChatComposer, {
+      selectedSessionId: 'sess-1',
+      activeChat: active,
+      replyingTo,
+      setReplyingTo,
+      onMessageAppended: () => undefined,
+      onSent: () => undefined,
+      initialDraft,
+      draftsRef,
+      composerHandleRef,
+      attachment,
+      setAttachment,
+      previewUrl,
+      setPreviewUrl,
+    });
+  }
+
+  const { rerender } = rtl.render(wrap(createElement(UncontrolledHarness, { active: chat, initialDraft: '' })));
+  const field = () => screen.getByPlaceholderText('Type a message...') as HTMLTextAreaElement;
+
+  fireEvent.change(field(), { target: { value: 'hello alice' } });
+  assert.equal(draftsRef.current.get('sess-1\u0000alice@c.us'), 'hello alice');
+
+  rerender(wrap(createElement(UncontrolledHarness, { active: chat2, initialDraft: '' })));
+  assert.equal(field().value, '');
+
+  // restoreDraftIfEmpty ignores mismatched thread and restores active empty thread.
+  assert.ok(composerHandleRef.current);
+  assert.equal(composerHandleRef.current.restoreDraftIfEmpty('sess-1\u0000alice@c.us', 'wrong'), false);
+  act(() => {
+    assert.equal(composerHandleRef.current?.restoreDraftIfEmpty('sess-1\u0000bob@c.us', 'restored bob'), true);
+  });
+  assert.equal(field().value, 'restored bob');
+  assert.equal(draftsRef.current.get('sess-1\u0000bob@c.us'), 'restored bob');
+
+  // Does not overwrite non-empty input.
+  assert.equal(composerHandleRef.current.restoreDraftIfEmpty('sess-1\u0000bob@c.us', 'should not overwrite'), false);
+  assert.equal(field().value, 'restored bob');
+
+  rerender(wrap(createElement(UncontrolledHarness, { active: chat })));
+  assert.equal(field().value, 'hello alice');
+});
+
+test('a refused dismissed slash send does not suppress the template picker if the user already typed a new draft', async () => {
+  const { fireEvent, waitFor } = rtl;
+  const fetchOriginal = globalThis.fetch;
+  let rejectSend!: () => void;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const path = new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost').pathname;
+    if (path.includes('/templates')) {
+      return Promise.resolve(
+        new Response(JSON.stringify([{ id: 't1', name: 'start', body: 'Welcome aboard!' }]), {
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    }
+    sentPaths.push(path);
+    return new Promise<Response>(resolve => {
+      rejectSend = () =>
+        resolve(
+          new Response(JSON.stringify({ message: 'refused' }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+    });
+  }) as typeof fetch;
+
+  try {
+    const draftsRef: RefObject<Map<string, string>> = { current: new Map<string, string>() };
+    const composerHandleRef = createRef<ChatComposerHandle | null>();
+    function SlashHarness() {
+      const [attachment, setAttachment] = useState<StagedAttachment | null>(null);
+      const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+      const [replyingTo, setReplyingTo] = useState<ChatMessageView | null>(null);
+      return createElement(ChatComposer, {
+        selectedSessionId: 'sess-1',
+        activeChat: chat,
+        replyingTo,
+        setReplyingTo,
+        onMessageAppended: () => undefined,
+        onSent: () => undefined,
+        onSendFailed: (sessionId, chatId, text) => {
+          const key = `${sessionId}\u0000${chatId}`;
+          composerHandleRef.current?.restoreDraftIfEmpty(key, text);
+        },
+        initialDraft: '',
+        draftsRef,
+        composerHandleRef,
+        attachment,
+        setAttachment,
+        previewUrl,
+        setPreviewUrl,
+      });
+    }
+
+    const { container } = rtl.render(wrap(createElement(SlashHarness)));
+    const field = () => container.querySelector('.message-text-input') as HTMLTextAreaElement;
+    const picker = () => container.querySelector('.slash-template-picker');
+
+    field().focus();
+    fireEvent.change(field(), { target: { value: '/start' } });
+    await waitFor(() => assert.ok(picker(), 'template picker did not open for /start'));
+
+    // Dismiss the picker for /start and send it as literal text.
+    fireEvent.keyDown(field(), { key: 'Escape' });
+    assert.equal(picker(), null);
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => assert.equal(sentPaths.length, 1));
+    assert.equal(field().value, '');
+
+    // Type a new draft while the dismissed /start send is still in flight, then fail the send.
+    fireEvent.change(field(), { target: { value: 'typed while in flight' } });
+    rejectSend();
+    await waitFor(() => assert.ok(container.querySelector('.toast-error') || document.querySelector('.toast')));
+    assert.equal(field().value, 'typed while in flight');
+
+    // Pasting /start directly over the new draft must still open the template picker.
+    fireEvent.change(field(), { target: { value: '/start' } });
+    await waitFor(() => assert.ok(picker(), 'slashClosedFor was poisoned by the earlier refused send'));
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
 });

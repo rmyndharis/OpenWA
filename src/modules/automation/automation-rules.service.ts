@@ -188,13 +188,20 @@ export class AutomationRulesService {
       this.lidMappingStore ? lids => this.lidMappingStore!.phonesForLidsPersisted(lids) : undefined,
     );
 
-    // Resolved the way the `kind` filter field resolves it, so the guard and a kind condition agree.
-    const kind = typeof message.kind === 'string' && message.kind ? message.kind : chatKind(chatId);
-    const optInOnly = OPT_IN_CHAT_KINDS.has(kind);
+    // Resolved the way the `kind` filter field resolves it, and also checked against `chatKind(chatId)`
+    // so rewriting `message.kind` cannot bypass opt-in fencing on newsletter, broadcast, or status chats.
+    const derivedKind = chatKind(chatId);
+    const kind = typeof message.kind === 'string' && message.kind ? message.kind : derivedKind;
+    const optInOnly = OPT_IN_CHAT_KINDS.has(kind) || OPT_IN_CHAT_KINDS.has(derivedKind);
+    const requiredKinds = [
+      ...(OPT_IN_CHAT_KINDS.has(derivedKind) ? [derivedKind] : []),
+      ...(OPT_IN_CHAT_KINDS.has(kind) && kind !== derivedKind ? [kind] : []),
+    ];
 
     // First match wins: one inbound message never produces more than one automated reply, and rule
-    // order (creation order) is the tiebreak the operator can reason about. A rule without a `kind`
-    // condition skips the opt-in chat kinds; naming the kind is how a rule reaches them. A rule whose
+    // order (creation order) is the tiebreak the operator can reason about. A rule without an
+    // explicit `kind` `is` condition naming this chat kind skips the opt-in chat kinds; opting into
+    // the kind explicitly is how a rule reaches them. A rule whose
     // stored conditions are malformed (a restore bypasses the DTO) is skipped on its own, so it cannot
     // silence every other rule of the session. A `conditions` that is not a plain object, or a
     // non-array `conditions.conditions`, is refused explicitly: evaluateFilters reads either as "no
@@ -211,7 +218,12 @@ export class AutomationRulesService {
           throw new TypeError('conditions must be an object with a conditions array');
         }
         return (
-          (!optInOnly || candidate.conditions?.conditions?.some(c => c.field === 'kind')) &&
+          (!optInOnly ||
+            requiredKinds.every(required =>
+              candidate.conditions?.conditions?.some(
+                c => c.field === 'kind' && c.operator === 'is' && Array.isArray(c.value) && c.value.includes(required),
+              ),
+            )) &&
           evaluateFilters(candidate.conditions, 'message.received', message, resolveLid)
         );
       } catch (error) {

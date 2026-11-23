@@ -103,7 +103,7 @@ const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${
         );
         const provider = new BuiltInFtsProvider(app, new ConfigService({ search: { containsEnabled: true } }));
         await provider.buildContainsIndex();
-        provider.onModuleDestroy();
+        await provider.onModuleDestroy();
         await app.destroy();
         expect(await state(source)).toEqual({ messages: 1, trigram: true, extensions: 2, aside: 0 });
 

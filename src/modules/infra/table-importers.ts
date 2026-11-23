@@ -182,9 +182,9 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       session.status,
       session.phone,
       nulFree(session.pushName),
-      typeof session.config === 'string' ? session.config : JSON.stringify(session.config || {}),
-      session.proxyUrl,
-      session.proxyType,
+      nulFree(typeof session.config === 'string' ? session.config : JSON.stringify(session.config || {})),
+      nulFree(session.proxyUrl),
+      nulFree(session.proxyType),
       session.connectedAt,
       session.lastActiveAt,
       session.createdAt,
@@ -223,17 +223,15 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
     map: (webhook: WebhookRow) => [
       webhook.id,
       webhook.sessionId,
-      webhook.url,
-      typeof webhook.events === 'string' ? webhook.events : JSON.stringify(webhook.events || []),
+      nulFree(webhook.url),
+      nulFree(typeof webhook.events === 'string' ? webhook.events : JSON.stringify(webhook.events || [])),
       // Rows exported after credential redaction (and hand-trimmed archives) carry no secret at
       // all — restore those as unsigned rather than failing the row on a missing key.
-      webhook.secret ?? null,
-      typeof webhook.headers === 'string' ? webhook.headers : JSON.stringify(webhook.headers || {}),
+      nulFree(webhook.secret ?? null),
+      nulFree(typeof webhook.headers === 'string' ? webhook.headers : JSON.stringify(webhook.headers || {})),
       webhook.filters == null
         ? null
-        : typeof webhook.filters === 'string'
-          ? webhook.filters
-          : JSON.stringify(webhook.filters),
+        : nulFree(typeof webhook.filters === 'string' ? webhook.filters : JSON.stringify(webhook.filters)),
       webhook.active,
       webhook.retryCount,
       webhook.lastTriggeredAt,
@@ -264,13 +262,15 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       msg.type,
       msg.direction,
       msg.timestamp ?? null,
-      msg.metadata == null ? null : typeof msg.metadata === 'string' ? msg.metadata : JSON.stringify(msg.metadata),
+      msg.metadata == null
+        ? null
+        : nulFree(typeof msg.metadata === 'string' ? msg.metadata : JSON.stringify(msg.metadata)),
       msg.status,
       msg.createdAt,
       // Archives predating the chat-media columns restore to NULL, same as author above. Carrying
       // them matters because the media FILES ride along in the storage export: restoring the rows
       // without their pointers would turn every archived file into an orphan the sweep then reaps.
-      msg.mediaPath ?? null,
+      nulFree(msg.mediaPath ?? null),
       nulFree(msg.mediaMimetype ?? null),
     ],
   }),
@@ -289,14 +289,16 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       batch.batch_id,
       batch.session_id,
       batch.status,
-      typeof batch.messages === 'string' ? batch.messages : JSON.stringify(batch.messages ?? []),
-      batch.options == null ? null : typeof batch.options === 'string' ? batch.options : JSON.stringify(batch.options),
+      nulFree(typeof batch.messages === 'string' ? batch.messages : JSON.stringify(batch.messages ?? [])),
+      batch.options == null
+        ? null
+        : nulFree(typeof batch.options === 'string' ? batch.options : JSON.stringify(batch.options)),
       batch.progress == null
         ? null
-        : typeof batch.progress === 'string'
-          ? batch.progress
-          : JSON.stringify(batch.progress),
-      batch.results == null ? null : typeof batch.results === 'string' ? batch.results : JSON.stringify(batch.results),
+        : nulFree(typeof batch.progress === 'string' ? batch.progress : JSON.stringify(batch.progress)),
+      batch.results == null
+        ? null
+        : nulFree(typeof batch.results === 'string' ? batch.results : JSON.stringify(batch.results)),
       batch.current_index,
       batch.created_at,
       batch.updated_at,
@@ -344,7 +346,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       bsm.id,
       bsm.sessionId,
       bsm.waMessageId,
-      bsm.serializedMessage,
+      nulFree(bsm.serializedMessage),
       bsm.createdAt,
     ],
   }),
@@ -395,9 +397,9 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       pi.pluginId,
       pi.instanceId,
       pi.sessionScope,
-      pi.secret,
-      pi.verifyToken,
-      pi.config == null ? null : typeof pi.config === 'string' ? pi.config : JSON.stringify(pi.config),
+      nulFree(pi.secret),
+      nulFree(pi.verifyToken),
+      pi.config == null ? null : nulFree(typeof pi.config === 'string' ? pi.config : JSON.stringify(pi.config)),
       pi.enabled,
       pi.createdAt,
       pi.updatedAt,
@@ -420,7 +422,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       cm.instanceId,
       cm.providerConversationId,
       cm.handoverState,
-      cm.metadata == null ? null : typeof cm.metadata === 'string' ? cm.metadata : JSON.stringify(cm.metadata),
+      cm.metadata == null ? null : nulFree(typeof cm.metadata === 'string' ? cm.metadata : JSON.stringify(cm.metadata)),
       cm.updatedAt,
     ],
   }),
@@ -444,7 +446,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       ie.route,
       // A retired (NULL) payload must stay NULL — re-materializing it as '{}' would make a
       // slimmed dedup row read as a pending event with an empty body.
-      ie.payload == null ? null : typeof ie.payload === 'string' ? ie.payload : JSON.stringify(ie.payload),
+      ie.payload == null ? null : nulFree(typeof ie.payload === 'string' ? ie.payload : JSON.stringify(ie.payload)),
       ie.payloadHash ?? null,
       ie.sessionId,
       ie.dispatchState ?? null,
@@ -466,7 +468,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       wf.webhookId,
       wf.sessionId,
       wf.event,
-      wf.url,
+      nulFree(wf.url),
       wf.idempotencyKey,
       wf.deliveryId,
       wf.attempts,
@@ -492,7 +494,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       row.event,
       row.idempotencyKey,
       row.deliveryId,
-      row.payload == null ? null : typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload),
+      row.payload == null ? null : nulFree(typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload)),
       row.state,
       row.attempts,
       row.lastAttemptAt,
@@ -516,7 +518,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       df.deliveryId,
       df.attempts,
       nulFree(df.lastError),
-      df.payload == null ? null : typeof df.payload === 'string' ? df.payload : JSON.stringify(df.payload),
+      df.payload == null ? null : nulFree(typeof df.payload === 'string' ? df.payload : JSON.stringify(df.payload)),
       df.redriven,
       df.createdAt,
     ],
@@ -538,11 +540,11 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       su.waStatusId,
       su.type,
       nulFree(su.caption ?? null),
-      su.mediaPath ?? null,
+      nulFree(su.mediaPath ?? null),
       nulFree(su.mediaMimetype ?? null),
       su.mediaOmitted ?? false,
-      su.omitReason ?? null,
-      su.backgroundColor ?? null,
+      nulFree(su.omitReason ?? null),
+      nulFree(su.backgroundColor ?? null),
       su.font ?? null,
       su.postedAt,
       su.expiresAt,
@@ -572,9 +574,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       rule.enabled ?? true,
       rule.conditions == null
         ? null
-        : typeof rule.conditions === 'string'
-          ? rule.conditions
-          : JSON.stringify(rule.conditions),
+        : nulFree(typeof rule.conditions === 'string' ? rule.conditions : JSON.stringify(rule.conditions)),
       nulFree(rule.replyText),
       rule.cooldownSeconds ?? 60,
       rule.createdAt,

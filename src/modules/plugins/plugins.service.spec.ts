@@ -134,7 +134,7 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
 
   it('updatePackage swaps to the new version and preserves operator config', async () => {
     service.install({ buffer: pkg({ version: '1.0.0' }) });
-    service.updateConfig('svc-plg', { apiKey: 'secret-123' });
+    await service.updateConfig('svc-plg', { apiKey: 'secret-123' });
 
     const dto = await service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
 
@@ -734,8 +734,8 @@ describe('PluginsService — per-session config', () => {
     });
 
     // The override names no host, so it resolves to the base host; a write that names that host moves nothing.
-    it('judges a write against the base host when the stored override names none', () => {
-      service.updateConfig('sess-host', { baseUrl: 'https://base.example', apiKey: 'BASE' });
+    it('judges a write against the base host when the stored override names none', async () => {
+      await service.updateConfig('sess-host', { baseUrl: 'https://base.example', apiKey: 'BASE' });
       service.updateSessionConfig('sess-host', 'sess-A', { apiKey: 'OWN' });
 
       service.updateSessionConfig('sess-host', 'sess-A', { baseUrl: 'https://base.example/', apiKey: '***' });
@@ -752,22 +752,337 @@ describe('PluginsService — per-session config', () => {
     });
   });
 
+  describe('base config with a host key the plugin may call', () => {
+    const hostManifest = {
+      ...manifest,
+      id: 'base-host',
+      net: { allowConfigHosts: ['baseUrl'] },
+      configSchema: {
+        type: 'object',
+        properties: {
+          baseUrl: { type: 'string' },
+          apiKey: { type: 'string', secret: true },
+          lang: { type: 'string' },
+          auth: {
+            type: 'object',
+            properties: {
+              user: { type: 'string' },
+              password: { type: 'string', secret: true },
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig = () => loader.getPlugin('base-host')?.config;
+    const storedConfig = () => loader.getRegistryEntry('base-host')?.config;
+
+    beforeEach(async () => {
+      const z = new AdmZip();
+      z.addFile('manifest.json', Buffer.from(JSON.stringify(hostManifest)));
+      z.addFile('index.js', Buffer.from('module.exports = class {};'));
+      service.install({ buffer: z.toBuffer() });
+      await service.updateConfig('base-host', {
+        baseUrl: 'https://tenant.example',
+        apiKey: 'BASE-SECRET',
+        lang: 'en',
+        auth: { user: 'bot', password: 'NESTED-SECRET' },
+      });
+    });
+
+    it('drops a masked or blank base secret when the write points the host at another origin', async () => {
+      for (const echoed of ['***', '']) {
+        await service.updateConfig('base-host', {
+          baseUrl: 'https://tenant.example',
+          apiKey: 'BASE-SECRET',
+          lang: 'en',
+          auth: { user: 'bot', password: 'NESTED-SECRET' },
+        });
+        await service.updateConfig('base-host', {
+          baseUrl: 'https://attacker.example',
+          apiKey: echoed,
+          lang: 'en',
+          auth: { user: 'bot', password: echoed },
+        });
+        expect(runtimeConfig()).toEqual({
+          baseUrl: 'https://attacker.example',
+          lang: 'en',
+          auth: { user: 'bot' },
+        });
+        expect(storedConfig()).toEqual({
+          baseUrl: 'https://attacker.example',
+          lang: 'en',
+          auth: { user: 'bot' },
+        });
+      }
+    });
+
+    it('drops stored base secrets on a partial host-redirect update that omits secret keys', async () => {
+      await service.updateConfig('base-host', { baseUrl: 'https://attacker.example' });
+      expect(runtimeConfig()).toEqual({
+        baseUrl: 'https://attacker.example',
+        lang: 'en',
+        auth: { user: 'bot' },
+      });
+      expect(storedConfig()).toEqual({
+        baseUrl: 'https://attacker.example',
+        lang: 'en',
+        auth: { user: 'bot' },
+      });
+    });
+
+    it('keeps base secrets on non-redirect partial updates and same-origin host writes', async () => {
+      await service.updateConfig('base-host', { lang: 'fr' });
+      expect(runtimeConfig()).toEqual({
+        baseUrl: 'https://tenant.example',
+        apiKey: 'BASE-SECRET',
+        lang: 'fr',
+        auth: { user: 'bot', password: 'NESTED-SECRET' },
+      });
+
+      await service.updateConfig('base-host', { baseUrl: 'https://tenant.example/v2', apiKey: '***' });
+      expect(runtimeConfig()).toMatchObject({
+        baseUrl: 'https://tenant.example/v2',
+        apiKey: 'BASE-SECRET',
+        lang: 'fr',
+      });
+    });
+
+    it('stores a new base secret supplied alongside a host redirect', async () => {
+      await service.updateConfig('base-host', { baseUrl: 'https://other.example', apiKey: 'NEW-SECRET' });
+      expect(runtimeConfig()).toEqual({
+        baseUrl: 'https://other.example',
+        apiKey: 'NEW-SECRET',
+        lang: 'en',
+        auth: { user: 'bot' },
+      });
+      expect(storedConfig()).toEqual({
+        baseUrl: 'https://other.example',
+        apiKey: 'NEW-SECRET',
+        lang: 'en',
+        auth: { user: 'bot' },
+      });
+    });
+
+    it('strips env-derived built-in secrets on a host redirect and restores env fallback on null', async () => {
+      loader.registerBuiltInPlugin(
+        {
+          id: 'builtin-host',
+          name: 'Built-in Host',
+          version: '1.0.0',
+          type: PluginType.EXTENSION,
+          main: 'index.js',
+          net: { allowConfigHosts: ['baseUrl'] },
+          configSchema: {
+            type: 'object',
+            properties: {
+              baseUrl: { type: 'string' },
+              apiKey: { type: 'string', secret: true },
+              lang: { type: 'string' },
+            },
+          },
+        },
+        {},
+        { baseUrl: 'https://env.example', apiKey: 'ENV-SECRET', lang: 'en' },
+      );
+
+      await service.updateConfig('builtin-host', { baseUrl: 'https://other.example' });
+      expect(loader.getPlugin('builtin-host')?.config).toEqual({
+        baseUrl: 'https://other.example',
+        lang: 'en',
+      });
+
+      await service.updateConfig('builtin-host', { baseUrl: null });
+      expect(loader.getPlugin('builtin-host')?.config).toEqual({
+        baseUrl: 'https://env.example',
+        apiKey: 'ENV-SECRET',
+        lang: 'en',
+      });
+    });
+
+    it('drops stored base values on a host redirect when a plugin declares allowConfigHosts without a configSchema', async () => {
+      const z = new AdmZip();
+      z.addFile(
+        'manifest.json',
+        Buffer.from(
+          JSON.stringify({
+            ...manifest,
+            id: 'schemaless-host',
+            net: { allowConfigHosts: ['baseUrl'] },
+          }),
+        ),
+      );
+      z.addFile('index.js', Buffer.from('module.exports = class {};'));
+      service.install({ buffer: z.toBuffer() });
+      await service.updateConfig('schemaless-host', { baseUrl: 'https://tenant.example', secretToken: 'RAW' });
+
+      await service.updateConfig('schemaless-host', { baseUrl: 'https://attacker.example', secretToken: '***' });
+      expect(loader.getPlugin('schemaless-host')?.config).toEqual({ baseUrl: 'https://attacker.example' });
+      expect(loader.getRegistryEntry('schemaless-host')?.config).toEqual({ baseUrl: 'https://attacker.example' });
+    });
+
+    it('still allows pre-staging per-session config for an inactive session', () => {
+      service.updateSessions('base-host', ['sess-active']);
+      const res = service.updateSessionConfig('base-host', 'sess-inactive', {
+        baseUrl: 'https://staged.example',
+        apiKey: 'STAGED-KEY',
+      });
+      expect(res.success).toBe(true);
+      expect(loader.getPlugin('base-host')?.sessionConfig?.['sess-inactive']).toEqual({
+        baseUrl: 'https://staged.example',
+        apiKey: 'STAGED-KEY',
+      });
+    });
+
+    it('does not resurrect env-derived built-in secrets across a restart after a host redirect', async () => {
+      const builtInManifest = {
+        id: 'builtin-restart',
+        name: 'Built-in Restart',
+        version: '1.0.0',
+        type: PluginType.EXTENSION,
+        main: 'index.js',
+        net: { allowConfigHosts: ['baseUrl'] },
+        configSchema: {
+          type: 'object' as const,
+          properties: {
+            baseUrl: { type: 'string' as const },
+            apiKey: { type: 'string' as const, secret: true },
+            lang: { type: 'string' as const },
+          },
+        },
+      };
+      const envConfig = { baseUrl: 'https://env.example', apiKey: 'ENV-SECRET', lang: 'en' };
+      loader.registerBuiltInPlugin(builtInManifest, {}, envConfig);
+
+      await service.updateConfig('builtin-restart', { baseUrl: 'https://other.example' });
+      expect(loader.getPlugin('builtin-restart')?.config).toEqual({
+        baseUrl: 'https://other.example',
+        lang: 'en',
+      });
+
+      // Simulate restart with a fresh loader reading persisted registry.json and re-registering the built-in.
+      const restartConfig = {
+        get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+      } as unknown as ConfigService;
+      const restartedLoader = new PluginLoaderService(
+        restartConfig,
+        new HookManager(),
+        new PluginStorageService(restartConfig),
+        {} as unknown as ModuleRef,
+      );
+      restartedLoader.registerBuiltInPlugin(builtInManifest, {}, envConfig);
+
+      expect(restartedLoader.getPlugin('builtin-restart')?.config).toEqual({
+        baseUrl: 'https://other.example',
+        lang: 'en',
+      });
+    });
+
+    it('removes a stored built-in secret on explicit null when the write echoes the env baseUrl', async () => {
+      const builtInManifest = {
+        id: 'builtin-echo-env',
+        name: 'Built-in Echo Env',
+        version: '1.0.0',
+        type: PluginType.EXTENSION,
+        main: 'index.js',
+        net: { allowConfigHosts: ['baseUrl'] },
+        configSchema: {
+          type: 'object' as const,
+          properties: {
+            baseUrl: { type: 'string' as const },
+            apiKey: { type: 'string' as const, secret: true },
+          },
+        },
+      };
+      loader.registerBuiltInPlugin(builtInManifest, {}, { baseUrl: 'https://env.example', apiKey: 'ENV-SECRET' });
+      // Operator overrides only apiKey (stored registry entry has no baseUrl; runtime inherits env baseUrl).
+      await service.updateConfig('builtin-echo-env', { apiKey: 'OP-SECRET' });
+      expect(loader.getRegistryEntry('builtin-echo-env')?.config).toEqual({ apiKey: 'OP-SECRET' });
+
+      // Dashboard echoes env baseUrl while explicitly clearing apiKey with null.
+      await service.updateConfig('builtin-echo-env', { baseUrl: 'https://env.example', apiKey: null });
+
+      expect(loader.getRegistryEntry('builtin-echo-env')?.config).toEqual({ baseUrl: 'https://env.example' });
+      expect(loader.getPlugin('builtin-echo-env')?.config).toEqual({
+        baseUrl: 'https://env.example',
+        apiKey: 'ENV-SECRET',
+      });
+    });
+
+    it('drops a stored built-in secret when baseUrl: null reverts the host to a different env origin', async () => {
+      const builtInManifest = {
+        id: 'builtin-revert',
+        name: 'Built-in Revert',
+        version: '1.0.0',
+        type: PluginType.EXTENSION,
+        main: 'index.js',
+        net: { allowConfigHosts: ['baseUrl'] },
+        configSchema: {
+          type: 'object' as const,
+          properties: {
+            baseUrl: { type: 'string' as const },
+            apiKey: { type: 'string' as const, secret: true },
+          },
+        },
+      };
+      loader.registerBuiltInPlugin(builtInManifest, {}, { baseUrl: 'https://env.example', apiKey: 'ENV-SECRET' });
+
+      for (const payload of [{ baseUrl: null }, { baseUrl: null, apiKey: '***' }]) {
+        await service.updateConfig('builtin-revert', { baseUrl: 'https://other.example', apiKey: 'OP-SECRET' });
+        expect(loader.getPlugin('builtin-revert')?.config).toEqual({
+          baseUrl: 'https://other.example',
+          apiKey: 'OP-SECRET',
+        });
+
+        await service.updateConfig('builtin-revert', payload);
+
+        expect(loader.getRegistryEntry('builtin-revert')?.config).toEqual({});
+        expect(loader.getPlugin('builtin-revert')?.config).toEqual({
+          baseUrl: 'https://env.example',
+          apiKey: 'ENV-SECRET',
+        });
+      }
+    });
+
+    it('strips secrets from child sessionConfig slices inheriting a redirected base host while keeping slices with their own host', async () => {
+      service.updateSessionConfig('base-host', 'sess-A', {
+        apiKey: 'SESS-A-SECRET',
+        lang: 'es',
+        auth: { user: 'a-bot', password: 'SESS-A-PW' },
+      });
+      service.updateSessionConfig('base-host', 'sess-B', {
+        baseUrl: 'https://tenant-b.example',
+        apiKey: 'SESS-B-SECRET',
+        lang: 'fr',
+      });
+      service.updateSessionConfig('base-host', 'sess-C', { apiKey: 'SESS-C-ONLY' });
+
+      await service.updateConfig('base-host', { baseUrl: 'https://attacker.example' });
+
+      const expectedSessions = {
+        'sess-A': { lang: 'es', auth: { user: 'a-bot' } },
+        'sess-B': { baseUrl: 'https://tenant-b.example', apiKey: 'SESS-B-SECRET', lang: 'fr' },
+      };
+      expect(loader.getPlugin('base-host')?.sessionConfig).toEqual(expectedSessions);
+      expect(loader.getRegistryEntry('base-host')?.sessionConfig).toEqual(expectedSessions);
+    });
+  });
+
   // A write is merged over the stored base config, so a removed secret has to travel as null; an empty
   // string is not a removal.
-  it('removes the base secret on an explicit null and keeps it on an empty string', () => {
-    service.updateConfig('sess-cfg', { apiKey: 'BASE', lang: 'en' });
+  it('removes the base secret on an explicit null and keeps it on an empty string', async () => {
+    await service.updateConfig('sess-cfg', { apiKey: 'BASE', lang: 'en' });
 
-    service.updateConfig('sess-cfg', { apiKey: '', lang: 'de' });
+    await service.updateConfig('sess-cfg', { apiKey: '', lang: 'de' });
     expect(loader.getPlugin('sess-cfg')?.config).toEqual({ apiKey: 'BASE', lang: 'de' });
 
-    expect(service.updateConfig('sess-cfg', { apiKey: null }).success).toBe(true);
+    expect((await service.updateConfig('sess-cfg', { apiKey: null })).success).toBe(true);
     expect(loader.getPlugin('sess-cfg')?.config).toEqual({ apiKey: null, lang: 'de' });
     expect(service.findOne('sess-cfg').config).toEqual({ apiKey: null, lang: 'de' });
   });
 
   // The override slice replaces the stored one, and a session without its own secret inherits the base.
-  it('drops a per-session secret sent as null, so the session inherits the base one', () => {
-    service.updateConfig('sess-cfg', { apiKey: 'BASE' });
+  it('drops a per-session secret sent as null, so the session inherits the base one', async () => {
+    await service.updateConfig('sess-cfg', { apiKey: 'BASE' });
     service.updateSessionConfig('sess-cfg', 'sess-A', { apiKey: 'A-secret', lang: 'he' });
 
     service.updateSessionConfig('sess-cfg', 'sess-A', { apiKey: null, lang: 'he' });
@@ -775,8 +1090,8 @@ describe('PluginsService — per-session config', () => {
     expect(loader.getPlugin('sess-cfg')?.sessionConfig?.['sess-A']).toEqual({ lang: 'he' });
   });
 
-  it('keeps the base config and per-session overrides independent', () => {
-    service.updateConfig('sess-cfg', { apiKey: 'BASE', lang: 'en' });
+  it('keeps the base config and per-session overrides independent', async () => {
+    await service.updateConfig('sess-cfg', { apiKey: 'BASE', lang: 'en' });
     service.updateSessionConfig('sess-cfg', 'sess-A', { apiKey: 'A-secret', lang: 'he' });
     const plugin = loader.getPlugin('sess-cfg');
     expect(plugin?.config).toEqual({ apiKey: 'BASE', lang: 'en' });

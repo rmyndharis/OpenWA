@@ -31,28 +31,40 @@ export function startedWorker(host: WorkerHost): Worker | undefined {
 /**
  * Close a processor's Worker from its onModuleDestroy hook, waiting at most `waitMs` (capped at
  * MAX_WORKER_CLOSE_WAIT_MS) for its running jobs. Past the wait the hook returns and the teardown goes on.
- * A close that is still pending then is abandoned: Worker.close() hands every caller its first promise,
- * and BullModule awaits it again in onApplicationShutdown with no timeout, ahead of the DataSource
- * close, so it is replaced by one that resolves at once. A rejected close is left to that later await,
- * so it cannot skip the global destroy hooks. A no-op for a Worker that was never created.
+ * BullModule awaits worker.close() again in onApplicationShutdown with no timeout ahead of the DataSource
+ * close, and Worker.close() returns its original promise to every caller, so on either timeout or rejection
+ * it is replaced by a resolved promise so later teardown hooks (including DataSource.destroy()) still run.
+ * A no-op for a Worker that was never created.
  */
 export async function closeWorkerIfStarted(host: WorkerHost, waitMs: number): Promise<void> {
   const worker = startedWorker(host);
   if (!worker) return;
   const limitMs = Math.min(waitMs, MAX_WORKER_CLOSE_WAIT_MS);
   let timer: NodeJS.Timeout | undefined;
-  const closed = await Promise.race([
-    worker.close().then(
-      () => true,
-      () => true,
-    ),
-    new Promise<false>(resolve => {
-      timer = setTimeout(() => resolve(false), limitMs);
+  let failure: unknown;
+  const outcome = await Promise.race<'resolved' | 'rejected' | 'timeout'>([
+    Promise.resolve()
+      .then(() => worker.close())
+      .then(
+        () => 'resolved',
+        error => {
+          failure = error;
+          return 'rejected';
+        },
+      ),
+    new Promise<'timeout'>(resolve => {
+      timer = setTimeout(() => resolve('timeout'), limitMs);
     }),
   ]);
   clearTimeout(timer);
-  if (!closed) {
+  if (outcome === 'timeout') {
     logger.warn('Queue worker did not close in time; continuing shutdown', { queue: worker.name, waitMs: limitMs });
+    worker.close = () => Promise.resolve();
+  } else if (outcome === 'rejected') {
+    logger.warn('Queue worker close failed; continuing shutdown', {
+      queue: worker.name,
+      error: failure instanceof Error ? failure.message : String(failure),
+    });
     worker.close = () => Promise.resolve();
   }
 }

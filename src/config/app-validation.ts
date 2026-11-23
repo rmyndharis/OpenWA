@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { isValidationErrorDetailEnabled } from './bootstrap-security';
 import { containsNul } from '../common/validation/no-nul-character';
-import { BODY_WIDTH_MESSAGES, exceededBodyWidth } from '../common/validation/body-width';
+import { BODY_WIDTH_MESSAGES, MAX_BODY_OBJECT_KEYS, exceededBodyWidth } from '../common/validation/body-width';
 import { ImportDataDto } from '../modules/infra/dto/import-data.dto';
 
 /**
@@ -51,14 +51,21 @@ const NOT_A_DTO: unknown[] = [String, Boolean, Number, Array, Object, Buffer, Da
 /**
  * Refuses a request body too wide for the validation pipe to copy (see body-width.ts) with a 400 that names the limit
  * it exceeded. It runs BEFORE that pipe, which copies the whole body before any validator can refuse it, and only
- * for a body a DTO defines: the restore is exempt, as it is from NulBodyPipe, because its tables hold as many rows
- * as the database does, and a provider-defined body (integration ingress, plugin-hosted routes) is read raw and
- * never reaches a pipe.
+ * for a body a DTO defines: the restore lifts the array-length and total-entry caps because its tables hold as many
+ * rows as the database does, while still capping keys per object so no single object stalls class-transformer. A
+ * provider-defined body (integration ingress, plugin-hosted routes) is read raw and never reaches a pipe.
  */
 export class BodyWidthPipe implements PipeTransform {
   transform(value: unknown, { type, metatype }: ArgumentMetadata): unknown {
-    if (type !== 'body' || !metatype || NOT_A_DTO.includes(metatype) || metatype === ImportDataDto) return value;
-    const exceeded = exceededBodyWidth(value);
+    if (type !== 'body' || !metatype || NOT_A_DTO.includes(metatype)) return value;
+    const exceeded =
+      metatype === ImportDataDto
+        ? exceededBodyWidth(value, {
+            maxArrayLength: Infinity,
+            maxEntries: Infinity,
+            maxObjectKeys: MAX_BODY_OBJECT_KEYS,
+          })
+        : exceededBodyWidth(value);
     if (exceeded) throw new BadRequestException(BODY_WIDTH_MESSAGES[exceeded]);
     return value;
   }

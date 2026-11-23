@@ -57,7 +57,7 @@ describe('updating a plugin whose schema default changed', () => {
   it('keeps a persisted default when the new version changes its schema default', async () => {
     const { loader, service } = boot();
     service.install({ buffer: packageOf('1.0.0', 60) });
-    expect(service.updateConfig('poller', { apiKey: 'k-123' }).success).toBe(true);
+    expect((await service.updateConfig('poller', { apiKey: 'k-123' })).success).toBe(true);
 
     await service.updatePackage('poller', packageOf('2.0.0', 300));
 
@@ -68,7 +68,7 @@ describe('updating a plugin whose schema default changed', () => {
   it('keeps the persisted default after a restart too', async () => {
     const first = boot();
     first.service.install({ buffer: packageOf('1.0.0', 60) });
-    first.service.updateConfig('poller', { apiKey: 'k-123' });
+    await first.service.updateConfig('poller', { apiKey: 'k-123' });
     await first.service.updatePackage('poller', packageOf('2.0.0', 300));
 
     const second = boot();
@@ -79,7 +79,7 @@ describe('updating a plugin whose schema default changed', () => {
   it('keeps a value the operator set for that field', async () => {
     const { loader, service } = boot();
     service.install({ buffer: packageOf('1.0.0', 60) });
-    service.updateConfig('poller', { interval: 45, apiKey: 'k-123' });
+    await service.updateConfig('poller', { interval: 45, apiKey: 'k-123' });
 
     await service.updatePackage('poller', packageOf('2.0.0', 300));
 
@@ -89,7 +89,7 @@ describe('updating a plugin whose schema default changed', () => {
   it('keeps an explicitly saved value equal to the previous default', async () => {
     const { loader, service } = boot();
     service.install({ buffer: packageOf('1.0.0', 60) });
-    service.updateConfig('poller', { interval: 60, apiKey: 'k-123' });
+    await service.updateConfig('poller', { interval: 60, apiKey: 'k-123' });
     await service.updatePackage('poller', packageOf('2.0.0', 300));
     expect(loader.getPlugin('poller')?.config).toEqual({ interval: 60, apiKey: 'k-123' });
   });

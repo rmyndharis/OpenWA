@@ -341,6 +341,74 @@ describe('WebhookRedriveService', () => {
     expect(delivery.redeliver.mock.calls[0][3]).toBe(exact.idempotencyKey);
   });
 
+  it('ignores a webhook row whose events column holds invalid JSON instead of failing redrive', async () => {
+    const corrupt = await webhooks.save(
+      webhooks.create({ ...primary, id: randomUUID(), events: ['message.received'] }),
+    );
+    await ds.query('UPDATE webhooks SET events = ? WHERE id = ?', ['{not-json', corrupt.id]);
+    await addFailure({ webhookId: corrupt.id });
+    const healthy = await addFailure();
+
+    expect(await service.redrive({})).toMatchObject({ delivered: 1, skipped: 0, remaining: 0 });
+    expect(delivery.redeliver).toHaveBeenCalledTimes(1);
+    expect(delivery.redeliver.mock.calls[0][3]).toBe(healthy.idempotencyKey);
+  });
+
+  it('guards PostgreSQL subscription expansion with a bound PG 12-18 RFC 8259 JSON string-array regex', async () => {
+    const andWhereCalls: Array<{ sql: string; params?: Record<string, unknown> }> = [];
+    const qb: Record<string, jest.Mock> = {
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn((sql: string, params?: Record<string, unknown>) => {
+        andWhereCalls.push({ sql, params });
+        return qb;
+      }),
+      clone: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+      getCount: jest.fn().mockResolvedValue(0),
+    };
+    const pgFailures = {
+      manager: { connection: { options: { type: 'postgres' } } },
+      createQueryBuilder: jest.fn(() => qb),
+    } as unknown as Repository<WebhookDeliveryFailure>;
+    const pgService = new WebhookRedriveService(
+      webhooks,
+      pgFailures,
+      delivery as unknown as WebhookDeliveryService,
+      {
+        get: (key: string) => (key === 'webhook.shutdownDrainMs' ? drainMs : retentionHours),
+      } as unknown as ConfigService,
+    );
+
+    await pgService.redrive({});
+
+    const expectedGuard = "CASE WHEN webhook.events ~ :eventsPattern THEN webhook.events::json ELSE '[]'::json END";
+    const subCall = andWhereCalls.find(({ sql }) => sql.includes(expectedGuard));
+    expect(subCall).toBeDefined();
+    expect(andWhereCalls.some(({ sql }) => sql.includes('IS JSON ARRAY'))).toBe(false);
+    expect(andWhereCalls.some(({ sql }) => sql.includes('json_typeof(webhook.events::json)'))).toBe(false);
+
+    const pattern = subCall?.params?.eventsPattern;
+    expect(pattern).toBe(
+      String.raw`^[ \t\r\n]*\[([ \t\r\n]*"[^"\\[:cntrl:]]*"([ \t\r\n]*,[ \t\r\n]*"[^"\\[:cntrl:]]*")*)?[ \t\r\n]*\][ \t\r\n]*$`,
+    );
+    const re = new RegExp(String(pattern).replace(/\[:cntrl:\]/g, '\\x00-\\x1f\\x7f'));
+    expect(re.test('[]')).toBe(true);
+    expect(re.test('["message.received","*"]')).toBe(true);
+    expect(re.test(' \t\r\n[ "message.received" , "*" ]\r\n')).toBe(true);
+    expect(re.test('{not-json')).toBe(false);
+    expect(re.test('{"a":1}')).toBe(false);
+    expect(re.test('[123]')).toBe(false);
+    expect(re.test('\x0b[]')).toBe(false);
+    expect(re.test('\x0c["message.received"]')).toBe(false);
+    expect(re.test('\u00a0["message.received"]')).toBe(false);
+    expect(re.test('["bad\\escape"]')).toBe(false);
+    expect(re.test('["bad\nctrl"]')).toBe(false);
+  });
+
   it('supports unrestricted redrive with more than 1000 active webhooks', async () => {
     const ids = Array.from({ length: 1001 }, () => randomUUID());
     await webhooks

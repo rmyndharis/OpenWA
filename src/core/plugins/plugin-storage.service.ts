@@ -339,6 +339,20 @@ export class PluginStorageService {
     if (entry) this.commitEntryChange(entry, { config }, opts);
   }
 
+  /**
+   * Atomically store both base config and per-session config in a single registry write so a disk
+   * failure cannot persist a redirected base host alongside stale per-session secrets.
+   */
+  setPluginConfigAndSessionConfig(
+    pluginId: string,
+    config: Record<string, unknown>,
+    sessionConfig: Record<string, Record<string, unknown>>,
+    opts?: RegistryWriteOptions,
+  ): void {
+    const entry = this.registry.get(pluginId);
+    if (entry) this.commitEntryChange(entry, { config, sessionConfig }, opts);
+  }
+
   getPluginSessions(pluginId: string): string[] | null {
     const entry = this.registry.get(pluginId);
     return entry?.activeSessions ?? null;

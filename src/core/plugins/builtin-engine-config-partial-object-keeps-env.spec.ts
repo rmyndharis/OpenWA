@@ -72,7 +72,7 @@ describe('a built-in engine config stored as part of a nested object', () => {
       expect.objectContaining({ headless: false, args: envEngineConfig.puppeteer.args }),
     );
 
-    const saved = service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: 300_000 } });
+    const saved = await service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: 300_000 } });
     expect(saved.success).toBe(true);
 
     expect(launchedBrowser(plugin)).toEqual({
@@ -85,7 +85,7 @@ describe('a built-in engine config stored as part of a nested object', () => {
 
   it('keeps them after a restart too', async () => {
     const first = await boot();
-    first.service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: 300_000 } });
+    await first.service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: 300_000 } });
 
     const second = await boot();
 
@@ -99,8 +99,8 @@ describe('a built-in engine config stored as part of a nested object', () => {
 
   it('persists sibling options across sequential partial writes and a restart', async () => {
     const first = await boot();
-    first.service.updateConfig('whatsapp-web.js', { puppeteer: { headless: true } });
-    first.service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: 300_000 } });
+    await first.service.updateConfig('whatsapp-web.js', { puppeteer: { headless: true } });
+    await first.service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: 300_000 } });
 
     expect(first.loader.getRegistryEntry('whatsapp-web.js')?.config).toEqual({
       puppeteer: { headless: true, protocolTimeoutMs: 300_000 },
@@ -116,8 +116,8 @@ describe('a built-in engine config stored as part of a nested object', () => {
 
   it('removes only a nested null override and restores the environment value', async () => {
     const first = await boot();
-    first.service.updateConfig('whatsapp-web.js', { puppeteer: { headless: true, protocolTimeoutMs: 300_000 } });
-    first.service.updateConfig('whatsapp-web.js', { puppeteer: { headless: null } });
+    await first.service.updateConfig('whatsapp-web.js', { puppeteer: { headless: true, protocolTimeoutMs: 300_000 } });
+    await first.service.updateConfig('whatsapp-web.js', { puppeteer: { headless: null } });
 
     expect(first.loader.getRegistryEntry('whatsapp-web.js')?.config).toEqual({
       puppeteer: { protocolTimeoutMs: 300_000 },
@@ -134,8 +134,8 @@ describe('a built-in engine config stored as part of a nested object', () => {
 
   it('removes an override that has no environment fallback', async () => {
     const { loader, plugin, service } = await boot();
-    service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: 300_000 } });
-    service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: null } });
+    await service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: 300_000 } });
+    await service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: null } });
 
     expect(loader.getRegistryEntry('whatsapp-web.js')?.config).toEqual({ puppeteer: {} });
     expect(launchedBrowser(plugin).protocolTimeoutMs).toBeUndefined();
@@ -144,8 +144,8 @@ describe('a built-in engine config stored as part of a nested object', () => {
 
   it('replaces a stored array instead of appending environment arguments', async () => {
     const first = await boot();
-    first.service.updateConfig('whatsapp-web.js', { puppeteer: { args: ['--disable-gpu'] } });
-    first.service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: 300_000 } });
+    await first.service.updateConfig('whatsapp-web.js', { puppeteer: { args: ['--disable-gpu'] } });
+    await first.service.updateConfig('whatsapp-web.js', { puppeteer: { protocolTimeoutMs: 300_000 } });
 
     expect(launchedBrowser(first.plugin).args).toEqual(['--disable-gpu']);
     const second = await boot();
@@ -162,8 +162,8 @@ describe('a built-in engine config stored as part of a nested object', () => {
     );
     fs.writeFileSync(path.join(dir, 'index.js'), 'module.exports = class {};');
     loader.loadPlugin(dir);
-    service.updateConfig('relay', { nested: { first: 1, second: 2 }, nullable: 'value' });
-    service.updateConfig('relay', { nested: { first: 3 }, nullable: null });
+    await service.updateConfig('relay', { nested: { first: 1, second: 2 }, nullable: 'value' });
+    await service.updateConfig('relay', { nested: { first: 3 }, nullable: null });
 
     expect(loader.getPlugin('relay')?.config).toEqual({ nested: { first: 3 }, nullable: null });
     expect(loader.getRegistryEntry('relay')?.config).toEqual({ nested: { first: 3 }, nullable: null });

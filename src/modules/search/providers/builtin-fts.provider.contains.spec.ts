@@ -325,8 +325,8 @@ describe('BuiltInFtsProvider trigram index build (sqlite)', () => {
       provider = new BuiltInFtsProvider(ds, containsOn);
       Object.assign(provider, { containsBuildRetryMs: 20 });
     });
-    afterEach(() => {
-      provider.onModuleDestroy();
+    afterEach(async () => {
+      await provider.onModuleDestroy();
       jest.restoreAllMocks();
     });
 

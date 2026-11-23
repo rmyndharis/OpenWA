@@ -16,6 +16,7 @@ jest.mock('fs', () => {
     chmodSync: jest.fn(),
     existsSync: jest.fn().mockReturnValue(false),
     readFileSync: jest.fn().mockReturnValue(''),
+    realpathSync: jest.fn((p: fs.PathLike) => String(p)),
     createReadStream: jest.fn(() => jest.requireActual<typeof import('stream')>('stream').Readable.from([])),
     createWriteStream: jest.fn(actual.createWriteStream),
   };
@@ -56,6 +57,94 @@ describe('InfraStorageController.importStorage filePath validation', () => {
     } finally {
       cwdSpy.mockRestore();
       (fs.existsSync as jest.Mock).mockReturnValue(false);
+    }
+  });
+
+  const realpathMock = (): jest.Mock => fs.realpathSync as unknown as jest.Mock;
+
+  it('rejects a mocked symlink whose realpath escapes the data directory', async () => {
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue('/srv/openwa');
+    (fs.existsSync as jest.Mock).mockImplementation((p: string) => p === '/srv/openwa/data/exports/link.tar.gz');
+    realpathMock().mockImplementation((p: fs.PathLike) =>
+      String(p) === '/srv/openwa/data/exports/link.tar.gz' ? '/etc/passwd' : String(p),
+    );
+    (fs.createReadStream as jest.Mock).mockClear();
+    const storage = { importFromStream: jest.fn(), getCurrentStorageType: jest.fn(() => 'local') };
+    try {
+      await expect(
+        buildController(storage).importStorage({ filePath: 'data/exports/link.tar.gz' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(fs.createReadStream).not.toHaveBeenCalled();
+      expect(storage.importFromStream).not.toHaveBeenCalled();
+    } finally {
+      cwdSpy.mockRestore();
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+      realpathMock().mockImplementation((p: fs.PathLike) => String(p));
+    }
+  });
+
+  it('maps an ENOENT from realpathSync to BadRequestException', async () => {
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue('/srv/openwa');
+    (fs.existsSync as jest.Mock).mockImplementation((p: string) => p === '/srv/openwa/data/exports/gone.tar.gz');
+    realpathMock().mockImplementation((p: fs.PathLike) => {
+      if (String(p) === '/srv/openwa/data/exports/gone.tar.gz') {
+        throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' });
+      }
+      return String(p);
+    });
+    const storage = { importFromStream: jest.fn(), getCurrentStorageType: jest.fn(() => 'local') };
+    try {
+      await expect(buildController(storage).importStorage({ filePath: 'data/exports/gone.tar.gz' })).rejects.toThrow(
+        new BadRequestException('Import file not found'),
+      );
+      expect(storage.importFromStream).not.toHaveBeenCalled();
+    } finally {
+      cwdSpy.mockRestore();
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+      realpathMock().mockImplementation((p: fs.PathLike) => String(p));
+    }
+  });
+
+  it('rejects a real on-disk symlink escaping the data directory and opens intra-data symlinks by realpath', async () => {
+    const actualFs = jest.requireActual<typeof import('fs')>('fs');
+    const base = actualFs.mkdtempSync(path.join(os.tmpdir(), 'owa-import-link-'));
+    const cwdDir = path.join(base, 'app');
+    const dataExports = path.join(cwdDir, 'data', 'exports');
+    const outsideFile = path.join(base, 'outside.tar.gz');
+    const insideFile = path.join(cwdDir, 'data', 'inside.tar.gz');
+    actualFs.mkdirSync(dataExports, { recursive: true });
+    actualFs.writeFileSync(outsideFile, 'secret');
+    actualFs.writeFileSync(insideFile, 'archive');
+    actualFs.symlinkSync(outsideFile, path.join(dataExports, 'escape.tar.gz'));
+    actualFs.symlinkSync(insideFile, path.join(dataExports, 'alias.tar.gz'));
+
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(cwdDir);
+    (fs.existsSync as jest.Mock).mockImplementation((p: fs.PathLike) => actualFs.existsSync(p));
+    realpathMock().mockImplementation((p: fs.PathLike) => actualFs.realpathSync(p));
+    (fs.createReadStream as jest.Mock).mockClear();
+    const storage = {
+      importFromStream: jest.fn().mockResolvedValue({ imported: 1, failed: 0 }),
+      getCurrentStorageType: jest.fn(() => 'local'),
+    };
+    try {
+      await expect(
+        buildController(storage).importStorage({ filePath: 'data/exports/escape.tar.gz' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(fs.createReadStream).not.toHaveBeenCalled();
+      expect(storage.importFromStream).not.toHaveBeenCalled();
+
+      await expect(buildController(storage).importStorage({ filePath: 'data/exports/alias.tar.gz' })).resolves.toEqual({
+        imported: true,
+        count: 1,
+        failed: 0,
+        storageType: 'local',
+      });
+      expect(fs.createReadStream).toHaveBeenCalledWith(actualFs.realpathSync(insideFile));
+    } finally {
+      cwdSpy.mockRestore();
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+      realpathMock().mockImplementation((p: fs.PathLike) => String(p));
+      actualFs.rmSync(base, { recursive: true, force: true });
     }
   });
 });

@@ -55,6 +55,8 @@ let thirdSessionStatus: Session['status'] | null = null;
 
 // When set, the session list answers this status with a gateway-style error body until a test clears it.
 let sessionListStatus: number | null = null;
+// Override SESSION.phone for a test (undefined uses SESSION.phone, null models a session without a phone yet).
+let sessionPhoneOverride: string | null | undefined = undefined;
 
 // Hits the global search answers with.
 let searchHits: SearchHit[] = [];
@@ -318,7 +320,8 @@ function installFetchStub(): void {
 
     if (method === 'GET' && path === '/api/sessions') {
       if (sessionListStatus) return Promise.resolve(jsonResponse({ message: 'Bad Gateway' }, sessionListStatus));
-      const listed = twoSessions ? [SESSION, SESSION_2] : [SESSION];
+      const first = sessionPhoneOverride === undefined ? SESSION : { ...SESSION, phone: sessionPhoneOverride };
+      const listed = twoSessions ? [first, SESSION_2] : [first];
       if (thirdSessionStatus) listed.push({ ...SESSION_3, status: thirdSessionStatus });
       return Promise.resolve(jsonResponse(listed));
     }
@@ -425,6 +428,12 @@ function installFetchStub(): void {
     if (method === 'POST' && path === `/api/sessions/${SESSION.id}/messages/send-document`) {
       return Promise.resolve(jsonResponse({ messageId: 'wamid.out.document', timestamp: 1_700_000_100 }));
     }
+    if (method === 'POST' && path === `/api/sessions/${SESSION.id}/messages/react`) {
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
+    if (method === 'POST' && path === `/api/sessions/${SESSION.id}/messages/delete`) {
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
     if (method === 'GET' && path.startsWith('/api/search?')) {
       return Promise.resolve(jsonResponse({ hits: searchHits, total: searchHits.length }));
     }
@@ -513,6 +522,7 @@ afterEach(async () => {
   for (const id of Object.keys(lidPhones)) delete lidPhones[id];
   thirdSessionStatus = null;
   sessionListStatus = null;
+  sessionPhoneOverride = undefined;
   searchHits = [];
   engineType = 'baileys';
   channels = [CHANNEL];
@@ -5983,4 +5993,247 @@ test('playing an audio or video element pauses other active media on the page', 
   audio1.remove();
   audio2.remove();
   cleanup();
+});
+
+test('own reactions match only exact session phone JIDs, key consistently, and withdraw cleanly', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  firstPageOverride = [
+    {
+      ...DB_MESSAGE,
+      id: 'db-react-1',
+      waMessageId: 'wamid.react.1',
+      body: 'react target',
+      metadata: {
+        reactions: {
+          [`${SESSION.phone}@c.us`]: '👍',
+          [`${SESSION.phone}99@c.us`]: '❤️',
+          [`${SESSION.phone}@lid`]: '😂',
+        },
+      },
+    },
+  ];
+  const { container } = renderChats();
+  await screen.findByText(SESSION.name);
+  await openListed(container, 'Alice');
+  const room = container.querySelector('.room-messages') as HTMLElement;
+  await within(room).findByText('react target');
+
+  const bubble = room.querySelector('[data-wa-message-id="wamid.react.1"]') as HTMLElement;
+  // Clicking ❤️ belongs to a different superstring phone (not ours), so it must send ❤️ and replace our 👍
+  // under <phone>@c.us without creating a duplicate 'me' key.
+  resetFetchCalls();
+  fireEvent.click(within(bubble).getByRole('button', { name: '❤️' }));
+  await waitFor(() => assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/messages/react`), 1));
+  assert.deepEqual(findFetchCall('POST', `/api/sessions/${SESSION.id}/messages/react`)?.body, {
+    chatId: CHAT.id,
+    messageId: 'wamid.react.1',
+    emoji: '❤️',
+  });
+  await waitFor(() => {
+    const cached = queryClient?.getQueryData<{ pages: Array<{ db: ChatMessage[] }> }>([
+      'messages',
+      SESSION.id,
+      CHAT.id,
+    ]);
+    const row = cached?.pages[0].db.find(m => m.waMessageId === 'wamid.react.1');
+    assert.deepEqual(row?.metadata?.reactions, {
+      [`${SESSION.phone}@c.us`]: '❤️',
+      [`${SESSION.phone}99@c.us`]: '❤️',
+      [`${SESSION.phone}@lid`]: '😂',
+    });
+  });
+
+  // Clicking ❤️ again withdraws our own <phone>@c.us reaction while preserving the other participants.
+  resetFetchCalls();
+  fireEvent.click(within(bubble).getByRole('button', { name: '❤️' }));
+  await waitFor(() => assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/messages/react`), 1));
+  assert.deepEqual(findFetchCall('POST', `/api/sessions/${SESSION.id}/messages/react`)?.body, {
+    chatId: CHAT.id,
+    messageId: 'wamid.react.1',
+    emoji: '',
+  });
+  await waitFor(() => {
+    const cached = queryClient?.getQueryData<{ pages: Array<{ db: ChatMessage[] }> }>([
+      'messages',
+      SESSION.id,
+      CHAT.id,
+    ]);
+    const row = cached?.pages[0].db.find(m => m.waMessageId === 'wamid.react.1');
+    assert.deepEqual(row?.metadata?.reactions, {
+      [`${SESSION.phone}99@c.us`]: '❤️',
+      [`${SESSION.phone}@lid`]: '😂',
+    });
+  });
+});
+
+test('own reaction does not confuse another sender containing "me" when session phone is null', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  sessionPhoneOverride = null;
+  firstPageOverride = [
+    {
+      ...DB_MESSAGE,
+      id: 'db-react-null',
+      waMessageId: 'wamid.react.null',
+      body: 'null phone target',
+      metadata: {
+        reactions: {
+          'acme@c.us': '👍',
+        },
+      },
+    },
+  ];
+  const { container } = renderChats();
+  await screen.findByText(SESSION.name);
+  await openListed(container, 'Alice');
+  const room = container.querySelector('.room-messages') as HTMLElement;
+  await within(room).findByText('null phone target');
+  const bubble = room.querySelector('[data-wa-message-id="wamid.react.null"]') as HTMLElement;
+
+  resetFetchCalls();
+  fireEvent.click(within(bubble).getByRole('button', { name: '👍' }));
+  await waitFor(() => assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/messages/react`), 1));
+  assert.deepEqual(findFetchCall('POST', `/api/sessions/${SESSION.id}/messages/react`)?.body, {
+    chatId: CHAT.id,
+    messageId: 'wamid.react.null',
+    emoji: '👍',
+  });
+});
+
+test('reacting to and deleting a message patch both db and history copies matched by waMessageId', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
+  firstPageOverride = [
+    {
+      ...DB_MESSAGE,
+      id: 'db-uuid-pair',
+      waMessageId: 'wamid.paired.1',
+      direction: 'outgoing',
+      from: 'me',
+      to: CHAT.id,
+      status: 'delivered',
+      body: 'paired outgoing',
+    },
+  ];
+  historyExtra = [
+    {
+      id: 'wamid.paired.1',
+      chatId: CHAT.id,
+      from: 'me',
+      to: CHAT.id,
+      body: 'paired outgoing',
+      type: 'text',
+      timestamp: 1_700_000_000,
+      fromMe: true,
+      isGroup: false,
+      kind: 'individual',
+    },
+  ];
+  const confirmOriginal = window.confirm;
+  window.confirm = () => true;
+  try {
+    const { container } = renderChats();
+    await screen.findByText(SESSION.name);
+    await openListed(container, 'Alice');
+    const room = container.querySelector('.room-messages') as HTMLElement;
+    await within(room).findByText('paired outgoing');
+    const bubble = room.querySelector('[data-wa-message-id="wamid.paired.1"]') as HTMLElement;
+
+    fireEvent.click(within(bubble).getByRole('button', { name: '👍' }));
+    await waitFor(() => {
+      const cached = queryClient?.getQueryData<{
+        pages: Array<{ db: ChatMessage[]; history: ChatMessage[] }>;
+      }>(['messages', SESSION.id, CHAT.id]);
+      assert.deepEqual(cached?.pages[0].db[0].metadata?.reactions, { [`${SESSION.phone}@c.us`]: '👍' });
+      assert.deepEqual(cached?.pages[0].history[0].metadata?.reactions, { [`${SESSION.phone}@c.us`]: '👍' });
+    });
+
+    fireEvent.click(within(bubble).getByTitle('Delete message'));
+    await waitFor(() => {
+      const cached = queryClient?.getQueryData<{
+        pages: Array<{ db: ChatMessage[]; history: ChatMessage[] }>;
+      }>(['messages', SESSION.id, CHAT.id]);
+      assert.equal(cached?.pages[0].db[0].type, 'revoked');
+      assert.equal(cached?.pages[0].history[0].type, 'revoked');
+    });
+  } finally {
+    window.confirm = confirmOriginal;
+  }
+});
+
+test('typing in the composer does not re-render ChatThread and preserves in-flight sendingByThread across chat switches', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  const { container } = renderChats();
+  await screen.findByText(SESSION.name);
+  await openListed(container, 'Alice');
+  const room = container.querySelector('.room-messages') as HTMLElement;
+  await within(room).findByText('hello from alice');
+
+  // Typing characters in the composer must not trigger Chats or ChatThread re-renders.
+  const originalFormatTime = Date.prototype.toLocaleTimeString;
+  let timeFormatCalls = 0;
+  Date.prototype.toLocaleTimeString = function (...args: Parameters<Date['toLocaleTimeString']>) {
+    timeFormatCalls++;
+    return originalFormatTime.apply(this, args);
+  };
+  try {
+    const input = screen.getByPlaceholderText('Type a message...');
+    for (const draft of ['h', 'he', 'hel', 'hell', 'hello']) {
+      fireEvent.change(input, { target: { value: draft } });
+    }
+    assert.equal(timeFormatCalls, 0, 'typing in composer caused ChatThread/Chats to re-render');
+  } finally {
+    Date.prototype.toLocaleTimeString = originalFormatTime;
+  }
+
+  // Start an in-flight send in Alice, switch to Carol, then return to Alice: sending state must survive.
+  const releaseSend = holdSend();
+  try {
+    const sendButton = () => screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+    fireEvent.click(sendButton());
+    await waitFor(() => assert.equal(sendButton().disabled, true));
+
+    await openListed(container, 'Carol');
+    typeDraft('carol text');
+    assert.equal(sendButton().disabled, false, 'in-flight send in Alice blocked Carol');
+
+    await openListed(container, 'Alice');
+    typeDraft('second draft');
+    assert.equal(sendButton().disabled, true, 'in-flight sendingByThread for Alice was lost on chat switch');
+  } finally {
+    releaseSend();
+  }
+});
+
+test('global search hit scrolls to messages whose waMessageId contains quotes or backslashes', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  const specialId = 'wamid."quoted"\\1';
+  firstPageOverride = [
+    {
+      ...DB_MESSAGE,
+      id: 'db-special',
+      waMessageId: specialId,
+      body: 'special id message',
+    },
+  ];
+  searchHits = [{ ...THIRD_SESSION_HIT, sessionId: SESSION.id, chatId: CHAT.id, waMessageId: specialId }];
+  const scrolled: Element[] = [];
+  const original = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function (this: Element) {
+    scrolled.push(this);
+  };
+  try {
+    const { container } = renderChats();
+    fireEvent.click(await screen.findByText('Alice'));
+    await within(container.querySelector('.room-messages') as HTMLElement).findByText('special id message');
+    await clickSearchHit(container);
+    await waitFor(() =>
+      assert.equal(
+        scrolled.filter(el => el.getAttribute('data-wa-message-id') === specialId).length,
+        1,
+        'search hit with quotes/backslashes in waMessageId did not scroll',
+      ),
+    );
+  } finally {
+    Element.prototype.scrollIntoView = original;
+  }
 });

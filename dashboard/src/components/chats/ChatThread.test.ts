@@ -192,25 +192,114 @@ test('an @mention of a participant who posted in the thread shows their first na
   assert.equal(container.querySelector('.quote-body bdi')?.textContent, '@Bob');
 });
 
-test('a document sent by URL opens in a new tab instead of navigating the dashboard away', () => {
-  // Browsers ignore `download` on a cross-origin link, so a plain click would unload the dashboard.
-  const doc = (id: string, data: string): ChatMessageView => ({
+test('remote documents open in a new tab while inline documents download via an inert Blob URL button', () => {
+  // Browsers ignore `download` on a cross-origin link, so remote documents open in a new tab;
+  // inline documents avoid exposing clickable `data:` links by downloading an inert octet-stream Blob
+  // and deferring URL revocation so async download pipelines (Safari/Firefox) can open the Blob stream.
+  const doc = (id: string, data: string, mimetype = 'application/pdf', filename = `${id}.pdf`): ChatMessageView => ({
     ...PROMPT,
     id,
     waMessageId: `wamid.${id}`,
     body: '',
     type: 'document',
-    metadata: { media: { mimetype: 'application/pdf', filename: `${id}.pdf`, data } },
+    metadata: { media: { mimetype, filename, data } },
   });
-  const { container } = renderThread('operator', [
-    doc('remote', 'https://files.example.com/remote.pdf'),
-    doc('inline', 'JVBERi0='),
-  ]);
-  const [remote, inline] = Array.from(container.querySelectorAll<HTMLAnchorElement>('a.chat-document-media'));
-  assert.equal(remote.getAttribute('target'), '_blank');
-  assert.equal(remote.getAttribute('rel'), 'noopener noreferrer');
-  assert.equal(inline.getAttribute('target'), null);
-  assert.equal(inline.getAttribute('download'), 'inline.pdf');
+  const createdBlobs: Blob[] = [];
+  const revokedUrls: string[] = [];
+  const downloads: Array<{ href: string | null; download: string | null }> = [];
+  const createOriginal = URL.createObjectURL;
+  const revokeOriginal = URL.revokeObjectURL;
+  const clickOriginal = HTMLAnchorElement.prototype.click;
+  URL.createObjectURL = (obj: Blob | MediaSource) => {
+    createdBlobs.push(obj as Blob);
+    return `blob:inline-${createdBlobs.length}`;
+  };
+  URL.revokeObjectURL = (url: string) => {
+    revokedUrls.push(url);
+  };
+  HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+    downloads.push({ href: this.getAttribute('href'), download: this.getAttribute('download') });
+  };
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const { container } = renderThread('operator', [
+      doc('remote', 'https://files.example.com/remote.pdf'),
+      doc('inline', 'JVBERi0='),
+      doc('html', 'data:text/html;base64,PGh0bWw+', 'text/html', 'report.html'),
+    ]);
+    const remoteLinks = Array.from(container.querySelectorAll<HTMLAnchorElement>('a.chat-document-media'));
+    assert.equal(remoteLinks.length, 1);
+    assert.equal(remoteLinks[0].getAttribute('href'), 'https://files.example.com/remote.pdf');
+    assert.equal(remoteLinks[0].getAttribute('target'), '_blank');
+    assert.equal(remoteLinks[0].getAttribute('rel'), 'noopener noreferrer');
+
+    const inlineButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button.chat-document-media.chat-document-card'),
+    );
+    assert.equal(inlineButtons.length, 2);
+    assert.equal(inlineButtons[0].getAttribute('type'), 'button');
+    assert.equal(inlineButtons[1].getAttribute('type'), 'button');
+
+    rtl.fireEvent.click(inlineButtons[0]);
+    rtl.fireEvent.click(inlineButtons[1]);
+
+    assert.equal(createdBlobs.length, 2);
+    assert.equal(createdBlobs[0].type, 'application/octet-stream');
+    assert.equal(createdBlobs[1].type, 'application/octet-stream');
+    assert.deepEqual(downloads, [
+      { href: 'blob:inline-1', download: 'inline.pdf' },
+      { href: 'blob:inline-2', download: 'report.html' },
+    ]);
+    // Must not revoke synchronously before the browser starts reading the Blob URL.
+    assert.deepEqual(revokedUrls, []);
+
+    mock.timers.tick(1000);
+    assert.deepEqual(revokedUrls, ['blob:inline-1', 'blob:inline-2']);
+  } finally {
+    mock.timers.reset();
+    URL.createObjectURL = createOriginal;
+    URL.revokeObjectURL = revokeOriginal;
+    HTMLAnchorElement.prototype.click = clickOriginal;
+  }
+});
+
+test('inline document download revokes immediately if link click throws before handoff', () => {
+  const revokedUrls: string[] = [];
+  const createOriginal = URL.createObjectURL;
+  const revokeOriginal = URL.revokeObjectURL;
+  const clickOriginal = HTMLAnchorElement.prototype.click;
+  URL.createObjectURL = () => 'blob:failed-click';
+  URL.revokeObjectURL = (url: string) => {
+    revokedUrls.push(url);
+  };
+  HTMLAnchorElement.prototype.click = () => {
+    throw new Error('click blocked');
+  };
+  try {
+    const { container } = renderThread('operator', [
+      {
+        ...PROMPT,
+        id: 'inline-err',
+        waMessageId: 'wamid.inline-err',
+        body: '',
+        type: 'document',
+        metadata: { media: { mimetype: 'application/pdf', filename: 'doc.pdf', data: 'JVBERi0=' } },
+      },
+    ]);
+    const button = container.querySelector<HTMLButtonElement>('button.chat-document-media.chat-document-card');
+    assert.ok(button);
+    // React captures click errors or rethrows via window; ensure revoke ran either way.
+    try {
+      rtl.fireEvent.click(button);
+    } catch {
+      // Expected from throwing stub.
+    }
+    assert.deepEqual(revokedUrls, ['blob:failed-click']);
+  } finally {
+    URL.createObjectURL = createOriginal;
+    URL.revokeObjectURL = revokeOriginal;
+    HTMLAnchorElement.prototype.click = clickOriginal;
+  }
 });
 
 test('a document shows as a card with its name and size, whether the page holds it or has to fetch it', () => {
@@ -236,9 +325,9 @@ test('a document shows as a card with its name and size, whether the page holds 
   const card = (id: string) => container.querySelector(`[data-wa-message-id="wamid.${id}"] .chat-document-card`);
   const text = (id: string, part: string) => card(id)?.querySelector(`.chat-document-${part}`)?.textContent;
 
-  // Held by the page: the card is the link that downloads it. No size is known for it, so only the kind is named.
-  assert.equal(card('held')?.tagName, 'A');
-  assert.equal(card('held')?.getAttribute('download'), 'held.pdf');
+  // Held by the page: the card is an inert download button. No size is known for it, so only the kind is named.
+  assert.equal(card('held')?.tagName, 'BUTTON');
+  assert.equal(card('held')?.getAttribute('href'), null);
   assert.equal(text('held', 'title'), 'held.pdf');
   assert.equal(text('held', 'meta'), 'PDF');
 
@@ -2396,4 +2485,55 @@ test('unknown rows with renderable content plus revoked and masked rows still re
   ];
   const { container } = renderThread('operator', rows);
   assert.equal(container.querySelectorAll('.message-bubble').length, 6);
+});
+
+test('scroll listener stays attached across re-renders while reading the latest older-page props', () => {
+  let firstCalls = 0;
+  let secondCalls = 0;
+  const { container, rerenderWith, rerenderProps } = renderThread('operator', [PROMPT], CHAT, {
+    hasMoreMessages: false,
+    loadingOlderMessages: false,
+    onLoadOlderMessages: () => {
+      firstCalls++;
+    },
+  });
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  Object.defineProperty(thread, 'scrollHeight', { value: 2000, configurable: true });
+  Object.defineProperty(thread, 'clientHeight', { value: 400, configurable: true });
+  Object.defineProperty(thread, 'scrollTop', { value: 10, writable: true, configurable: true });
+
+  let scrollAdds = 0;
+  let scrollRemoves = 0;
+  const addOriginal = thread.addEventListener.bind(thread);
+  const removeOriginal = thread.removeEventListener.bind(thread);
+  thread.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: unknown) => {
+    if (type === 'scroll') scrollAdds++;
+    return addOriginal(type, listener, options as AddEventListenerOptions);
+  }) as typeof thread.addEventListener;
+  thread.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: unknown) => {
+    if (type === 'scroll') scrollRemoves++;
+    return removeOriginal(type, listener, options as EventListenerOptions);
+  }) as typeof thread.removeEventListener;
+
+  rerenderWith([PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2', body: 'second' }]);
+  rerenderProps({
+    hasMoreMessages: true,
+    onLoadOlderMessages: () => {
+      secondCalls++;
+    },
+  });
+  rerenderProps({ loadingOlderMessages: true });
+  rerenderProps({ loadingOlderMessages: false });
+
+  assert.equal(scrollAdds, 0, 'scroll listener was re-attached on re-render');
+  assert.equal(scrollRemoves, 0, 'scroll listener was torn down on re-render');
+
+  rtl.fireEvent.scroll(thread);
+  assert.equal(firstCalls, 0);
+  assert.equal(secondCalls, 1, 'scroll listener did not use updated callback and flags');
+});
+
+test('ChatThread is wrapped in React.memo to skip re-renders when props are unchanged', () => {
+  assert.equal((ChatThread as unknown as { $$typeof?: symbol }).$$typeof, Symbol.for('react.memo'));
 });

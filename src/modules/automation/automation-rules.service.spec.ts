@@ -290,6 +290,64 @@ describe('AutomationRulesService', () => {
       ]);
     });
 
+    it('a negated kind condition does not opt into channels, broadcast lists, or status', async () => {
+      await service.create('sessA', {
+        name: 'non-groups',
+        replyText: 'dm-reply',
+        cooldownSeconds: 0,
+        conditions: { conditions: [{ field: 'kind', operator: 'isNot', value: ['group'] }] },
+      });
+
+      for (const chatId of ['120363000000000001@newsletter', '1234@broadcast', 'status@broadcast']) {
+        await service.evaluateInbound('sessA', inbound({ chatId, from: chatId }));
+      }
+      expect(sends).toHaveLength(0);
+
+      // Direct chats still match the negated condition.
+      await service.evaluateInbound('sessA', inbound());
+      expect(sends.map(s => s.chatId)).toEqual(['628111@c.us']);
+    });
+
+    it('an explicit kind opt-in only reaches the named opt-in kind, not other opt-in kinds', async () => {
+      await service.create('sessA', {
+        name: 'only-channels',
+        replyText: 'channel-only',
+        cooldownSeconds: 0,
+        conditions: { conditions: [{ field: 'kind', operator: 'is', value: ['channel'] }] },
+      });
+      await service.create('sessA', {
+        name: 'not-channels',
+        replyText: 'not-channel',
+        cooldownSeconds: 0,
+        conditions: { conditions: [{ field: 'kind', operator: 'isNot', value: ['channel'] }] },
+      });
+
+      await service.evaluateInbound('sessA', inbound({ chatId: '1234@broadcast', from: '1234@broadcast' }));
+      await service.evaluateInbound('sessA', inbound({ chatId: 'status@broadcast', from: 'status@broadcast' }));
+      expect(sends).toHaveLength(0);
+
+      await service.evaluateInbound(
+        'sessA',
+        inbound({ chatId: '120363000000000001@newsletter', from: '120363000000000001@newsletter' }),
+      );
+      expect(sends.map(s => [s.chatId, s.text])).toEqual([['120363000000000001@newsletter', 'channel-only']]);
+    });
+
+    it('still enforces opt-in fencing from chatId even if message.kind was rewritten to individual', async () => {
+      await service.create('sessA', { name: 'all', replyText: 'catch-all', cooldownSeconds: 0 });
+      await service.create('sessA', {
+        name: 'dms-only',
+        replyText: 'dm-reply',
+        cooldownSeconds: 0,
+        conditions: { conditions: [{ field: 'kind', operator: 'is', value: ['individual'] }] },
+      });
+
+      for (const chatId of ['120363000000000001@newsletter', '1234@broadcast', 'status@broadcast']) {
+        await service.evaluateInbound('sessA', inbound({ chatId, from: chatId, kind: 'individual' }));
+      }
+      expect(sends).toHaveLength(0);
+    });
+
     it('never replies to the account’s own messages (fromMe)', async () => {
       await service.create('sessA', { name: 'all', replyText: 'ack' });
 

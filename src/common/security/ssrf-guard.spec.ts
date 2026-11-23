@@ -78,6 +78,15 @@ describe('isBlockedAddress', () => {
     ['0:0:0:0:0:ffff:7f00:1', 'fully-expanded IPv4-mapped loopback 127.0.0.1 (hex)'],
     ['0:0:0:0:0:ffff:127.0.0.1', 'fully-expanded IPv4-mapped loopback (dotted tail)'],
     ['0:0:0:0:0:ffff:a9fe:a9fe', 'fully-expanded IPv4-mapped cloud metadata 169.254.169.254'],
+    ['2001:10::1', 'ORCHID 2001:10::/28 (RFC 4843, deprecated)'],
+    ['2001:1f:ffff::1', 'ORCHID 2001:10::/28 upper bound'],
+    ['2001::', 'Teredo with inverted client 255.255.255.255'],
+    ['2001:0:808:808:0:0:80ff:fffe', 'Teredo embedding loopback client 127.0.0.1 with public server 8.8.8.8'],
+    ['2001:0::5601:5601', 'Teredo embedding cloud metadata client 169.254.169.254'],
+    ['2001:0:101:101:0:0:f5ff:fffe', 'Teredo embedding RFC1918 client 10.0.0.1 with public server 1.1.1.1'],
+    ['2001:0:7f00:1:0:0:f7f7:f7f7', 'Teredo embedding public client 8.8.8.8 with loopback server 127.0.0.1'],
+    ['2001:0:a00:1:0:0:f7f7:f7f7', 'Teredo embedding public client 8.8.8.8 with RFC1918 server 10.0.0.1'],
+    ['2001::f7f7:f7f7', 'Teredo embedding public client 8.8.8.8 with unspecified server 0.0.0.0'],
   ])('blocks %s (%s)', ip => {
     expect(isBlockedAddress(ip)).toBe(true);
   });
@@ -87,6 +96,10 @@ describe('isBlockedAddress', () => {
     ['1.1.1.1', 'public IPv4'],
     ['172.32.0.1', 'just outside 172.16/12'],
     ['2001:4860:4860::8888', 'public IPv6'],
+    ['2001:20::1', 'ORCHIDv2 2001:20::/28 stays allowed'],
+    ['2001:30::1', 'DRIP DETs 2001:30::/28 (RFC 9374, globally reachable) stays allowed'],
+    ['2001:0:101:101:0:0:f7f7:f7f7', 'Teredo with public client 8.8.8.8 and public server 1.1.1.1'],
+    ['2001:0:4136:e378:8000:63bf:f7f7:f7f7', 'Teredo with public server 65.54.227.120 and public client 8.8.8.8'],
     ['2606:4700::1111', 'public IPv6 in 2000::/3 (RFC 4291 global unicast) stays allowed'],
     ['64:ff9b::8.8.8.8', 'NAT64 of public 8.8.8.8 (dotted tail) stays allowed via the ladder'],
     ['::ffff:0808:0808', 'IPv4-mapped public 8.8.8.8 (hex)'],
@@ -287,11 +300,20 @@ describe('urlCarriesCredentials', () => {
     'http://ops:s3cr3t@exa mple.com/',
     'https://s3cr3t@example.com:99999/',
     'http://:s3cr3t@example.com:abc/',
+    ' https://ops:s3cr3t@93.184.216.34:99999/hook',
+    '//ops:s3cr3t@cdn.example.com:99999/p.zip',
+    '///ops:s3cr3t@cdn.example.com:99999/p.zip',
+    'https:///ops:s3cr3t@cdn.example.com:99999/p.zip',
+    'https:\\\\ops:s3cr3t@cdn.example.com:99999/p.zip',
+    '\\\\ops:s3cr3t@cdn.example.com:99999/p.zip',
   ])('is true for %s', url => expect(urlCarriesCredentials(url)).toBe(true));
 
   // undici accepts an empty userinfo, and an unparsable URL with none is left to the guard, which names it.
   it.each([
     'http://@example.com/',
+    '//@example.com/',
+    '//:@example.com/',
+    '/path/to/a@b',
     'https://example.com/a@b',
     'https://example.com/?u=a:b@c',
     'http://@exa mple.com/',
@@ -431,6 +453,54 @@ describe('withSafeFetch (guarded + pinned fetch)', () => {
       SsrfBlockedError,
     );
     expect(use).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['absolute Location with userinfo', 'https://ops:s3cr3t@cdn.example.com/p.zip'],
+    ['protocol-relative Location with userinfo', '//ops:s3cr3t@cdn.example.com/p.zip'],
+    ['malformed Location with whitespace and userinfo', ' https://ops:s3cr3t@cdn.example.com:99999/p.zip'],
+    ['malformed protocol-relative Location with userinfo', '//ops:s3cr3t@cdn.example.com:99999/p.zip'],
+  ])(
+    'refuses a redirect hop carrying credentials (%s) without fetching it or leaking userinfo',
+    async (_label, loc) => {
+      (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+      (undiciFetch as jest.Mock).mockResolvedValueOnce({
+        status: 302,
+        type: 'basic',
+        headers: new Map([['location', loc]]),
+      });
+      const use = jest.fn();
+
+      const error: unknown = await withSafeFetch('https://github.com/x/releases/p.zip', {}, use, {
+        followRedirects: true,
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(URL_CREDENTIALS_MESSAGE);
+      expect((error as Error).message).not.toContain('s3cr3t');
+      expect(use).not.toHaveBeenCalled();
+      expect(undiciFetch as jest.Mock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('throws SsrfBlockedError without echoing the raw header when redirect Location is malformed', async () => {
+    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+    (undiciFetch as jest.Mock).mockResolvedValueOnce({
+      status: 302,
+      type: 'basic',
+      headers: new Map([['location', 'http://[invalid-host:secret-token']]),
+    });
+    const use = jest.fn();
+
+    const error: unknown = await withSafeFetch('https://github.com/x/releases/p.zip', {}, use, {
+      followRedirects: true,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SsrfBlockedError);
+    expect((error as Error).message).toBe('Invalid redirect URL');
+    expect((error as Error).message).not.toContain('secret-token');
+    expect(use).not.toHaveBeenCalled();
+    expect(undiciFetch as jest.Mock).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a redirect hop that downgrades from https to http', async () => {
@@ -971,6 +1041,33 @@ describe('redactSsrfError redacts network topology', () => {
     const out = redactSsrfError(new Error('getaddrinfo ENOTFOUND internal.receiver.svc.local'));
     expect(out).toContain('ENOTFOUND');
     expect(out).not.toContain('internal.receiver.svc.local');
+  });
+
+  it.each([
+    ['connect ECONNREFUSED ::1:8080', 'ECONNREFUSED', '::1'],
+    ['connect ECONNREFUSED [::1]:8080', 'ECONNREFUSED', '::1'],
+    ['connect ECONNREFUSED [fd12:3456::1]', 'ECONNREFUSED', 'fd12:3456::1'],
+    ['connect ETIMEDOUT fd12:3456::1:443', 'ETIMEDOUT', 'fd12:3456::1'],
+    ['connect EHOSTUNREACH fe80::1%eth0:443', 'EHOSTUNREACH', 'fe80::1'],
+    ['connect EHOSTUNREACH [fe80::1%eth0]:443', 'EHOSTUNREACH', 'fe80::1'],
+    ['connect EHOSTUNREACH [fe80::1%eth0:1]:443', 'EHOSTUNREACH', 'fe80::1'],
+    ['connect EHOSTUNREACH [fe80::1%veth0@if2]:443', 'EHOSTUNREACH', 'fe80::1'],
+    ['connect EHOSTUNREACH [fe80::1%12]:443', 'EHOSTUNREACH', 'fe80::1'],
+  ])('strips IPv6 address from %s', (message, code, leaked) => {
+    const out = redactSsrfError(new Error(message));
+    expect(out).toBe(`connect ${code} [redacted]`);
+    expect(out).not.toContain(leaked);
+  });
+
+  it.each([
+    ['connect ECONNREFUSED 10.0.0.1:443, retrying', 'connect ECONNREFUSED [redacted], retrying', '10.0.0.1'],
+    ['connect ECONNREFUSED 10.0.0.1:443.', 'connect ECONNREFUSED [redacted].', '10.0.0.1'],
+    ['(connect ECONNREFUSED [::1]:8080)', '(connect ECONNREFUSED [redacted])', '::1'],
+    ['failed: "connect ETIMEDOUT [fd00::1]:443"!', 'failed: "connect ETIMEDOUT [redacted]"!', 'fd00::1'],
+  ])('strips addresses followed by punctuation in %s', (message, expected, leaked) => {
+    const out = redactSsrfError(new Error(message));
+    expect(out).toBe(expected);
+    expect(out).not.toContain(leaked);
   });
 
   it('leaves ordinary operator-actionable messages untouched', () => {

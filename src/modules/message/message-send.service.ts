@@ -34,6 +34,16 @@ import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 import { MEDIA_MESSAGE_TYPES, OMITTED_MEDIA } from '../session/message-row.mapper';
 
+/**
+ * Outbound statuses whose media is eligible for archiving. An echo row merged after a fast ack can
+ * already be DELIVERED or READ when `emitPersisted` runs, while PENDING and FAILED remain excluded.
+ */
+const ARCHIVABLE_OUTBOUND_STATUSES: ReadonlySet<MessageStatus> = new Set([
+  MessageStatus.SENT,
+  MessageStatus.DELIVERED,
+  MessageStatus.READ,
+]);
+
 /** Default cap on a rendered template's final text; overridable via TEMPLATE_RENDER_MAX_CHARS. */
 export const DEFAULT_TEMPLATE_RENDER_MAX_CHARS = 64 * 1024;
 
@@ -915,9 +925,11 @@ export class MessageSendService {
   // (PENDING → SENT/FAILED), and fire-and-forget execution must still see the state at emission time.
   //
   // Outbound archiving rides the same chokepoint rather than a call at each of the four persist
-  // sites: every terminal state of an outbound row passes here. Gated on SENT because a PENDING row
-  // may still be deleted by the dedup merge or rewritten by the pending reaper, and a FAILED one has
-  // had its payload stripped — archiving either would strand a file the row never points at.
+  // sites: every terminal state of an outbound row passes here. Gated on SENT/DELIVERED/READ
+  // because a PENDING row may still be deleted by the dedup merge or rewritten by the pending
+  // reaper, and a FAILED one has had its payload stripped; archiving either would strand a file
+  // the row never points at, whereas an echo row merged after a fast ack may already be DELIVERED
+  // or READ.
   //
   // Hook emissions keep `source: 'MessageService'` — the string is part of the observable hook
   // contract plugins may filter on, so the send seam must not change it.
@@ -925,7 +937,7 @@ export class MessageSendService {
     void this.hookManager
       .execute('message:persisted', { sessionId, message: { ...message } }, { sessionId, source: 'MessageService' })
       .catch(() => undefined);
-    if (message.status === MessageStatus.SENT && this.archiveOutboundEnabled) {
+    if (ARCHIVABLE_OUTBOUND_STATUSES.has(message.status) && this.archiveOutboundEnabled) {
       void this.chatMediaArchive?.archive(message).catch(() => undefined);
     }
   }

@@ -229,6 +229,10 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
       getClient: () => this.client,
       setClient: client => (this.lifecycle.client = client),
       setStatus: status => this.lifecycle.setStatus(status),
+      isTearingDown: () => this.tearingDown,
+      isDisconnectReported: () => this.disconnectReported,
+      markCredentialTeardownStarted: () => this.lifecycle.markCredentialTeardownStarted(),
+      clearTimersAndTransientState: () => this.lifecycle.clearTimersAndTransientState(),
       getCallbacks: () => this.callbacks,
     });
     this.calls = new WwebjsCalls({

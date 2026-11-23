@@ -153,6 +153,121 @@ describe('HookManager', () => {
     expect(unguarded.data).toBeNull();
   });
 
+  it('isolateData clones currentData per handler so in-place mutations on throw, error, or no-data cannot leak', async () => {
+    const initial = { input: { mentions: ['62811@c.us'], meta: { tag: 'orig' } } };
+    const seenByObserver: Array<{ mentions: string[]; tag: string }> = [];
+
+    hm.register(
+      'throws',
+      'message:sending',
+      async ctx => {
+        const payload = ctx.data as typeof initial;
+        payload.input.mentions.push('62991@c.us');
+        payload.input.meta.tag = 'from-throw';
+        throw new Error('handler crashed');
+      },
+      10,
+    );
+    hm.register(
+      'returns-error',
+      'message:sending',
+      async ctx => {
+        const payload = ctx.data as typeof initial;
+        payload.input.mentions.push('62992@c.us');
+        payload.input.meta.tag = 'from-error';
+        return { continue: true, data: payload, error: new Error('reported error') };
+      },
+      20,
+    );
+    hm.register(
+      'no-data',
+      'message:sending',
+      async ctx => {
+        const payload = ctx.data as typeof initial;
+        payload.input.mentions.push('62993@c.us');
+        payload.input.meta.tag = 'from-no-data';
+        return { continue: true };
+      },
+      30,
+    );
+    hm.register(
+      'observer',
+      'message:sending',
+      async ctx => {
+        const payload = ctx.data as typeof initial;
+        seenByObserver.push({ mentions: [...payload.input.mentions], tag: payload.input.meta.tag });
+        return { continue: true, data: payload };
+      },
+      40,
+    );
+
+    const res = await hm.execute('message:sending', initial, { source: 'test', isolateData: true });
+
+    expect(initial).toEqual({ input: { mentions: ['62811@c.us'], meta: { tag: 'orig' } } });
+    expect(seenByObserver).toEqual([{ mentions: ['62811@c.us'], tag: 'orig' }]);
+    expect(res.data).toEqual({ input: { mentions: ['62811@c.us'], meta: { tag: 'orig' } } });
+  });
+
+  it('isolateData falls back to recursive deep cloning when data contains a non-structuredCloneable leaf', async () => {
+    const markerFn = () => 'non-cloneable';
+    const initial = { input: { mentions: ['62811@c.us'], meta: { tag: 'orig' }, helper: markerFn } };
+
+    hm.register(
+      'mutates-and-throws',
+      'message:sending',
+      async ctx => {
+        const payload = ctx.data as typeof initial;
+        payload.input.mentions.push('62999@c.us');
+        payload.input.meta.tag = 'corrupted';
+        throw new Error('boom');
+      },
+      10,
+    );
+
+    const res = await hm.execute('message:sending', initial, { source: 'test', isolateData: true });
+
+    expect(initial.input.mentions).toEqual(['62811@c.us']);
+    expect(initial.input.meta).toEqual({ tag: 'orig' });
+    expect(res.data.input.mentions).toEqual(['62811@c.us']);
+    expect(res.data.input.meta).toEqual({ tag: 'orig' });
+    expect(res.data.input.helper).toBe(markerFn);
+  });
+
+  it('normalizeData transforms accepted handler output before later handlers run', async () => {
+    const seenByLater: string[] = [];
+    hm.register(
+      'first',
+      'message:sending',
+      async ctx => ({
+        continue: true,
+        data: { ...(ctx.data as { chatId: string; text: string }), chatId: 'spoofed@c.us', text: 'edited' },
+      }),
+      10,
+    );
+    hm.register(
+      'second',
+      'message:sending',
+      async ctx => {
+        seenByLater.push((ctx.data as { chatId: string }).chatId);
+        return { continue: true, data: ctx.data };
+      },
+      20,
+    );
+
+    const res = await hm.execute(
+      'message:sending',
+      { chatId: 'orig@c.us', text: 'hi' },
+      {
+        source: 'test',
+        isolateData: true,
+        normalizeData: d => ({ ...d, chatId: 'orig@c.us' }),
+      },
+    );
+
+    expect(seenByLater).toEqual(['orig@c.us']);
+    expect(res.data).toEqual({ chatId: 'orig@c.us', text: 'edited' });
+  });
+
   it('register/unregister/hasHooks/getHookCount track registrations', () => {
     expect(hm.hasHooks('session:created')).toBe(false);
     const id = hm.register('p', 'session:created', async ctx => ({ continue: true, data: ctx.data }));

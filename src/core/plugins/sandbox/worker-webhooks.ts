@@ -74,7 +74,18 @@ export class WebhookRegistry {
         });
       }
     };
-    if (message.config !== undefined) await hookConfigStore.run({ config: message.config }, run);
-    else await run();
+    if (message.config !== undefined || message.dispatchId !== undefined) {
+      const store: { config?: Record<string, unknown>; dispatchId?: string } = {
+        config: message.config,
+        dispatchId: message.dispatchId,
+      };
+      try {
+        await hookConfigStore.run(store, run);
+      } finally {
+        store.dispatchId = undefined;
+      }
+    } else {
+      await run();
+    }
   }
 }

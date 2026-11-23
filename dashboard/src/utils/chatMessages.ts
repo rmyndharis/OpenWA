@@ -301,13 +301,70 @@ export type MessageMedia = {
   archived?: boolean;
 };
 
+// Allowlisted passive media MIME essences that may be embedded directly in inline `data:` URIs.
+// Matches backend INERT_MEDIA_MIMETYPE so active document/markup types (such as text/html or
+// image/svg+xml) are downgraded to inert application/octet-stream.
+const INERT_MEDIA_MIMETYPE =
+  /^(image\/(jpeg|png|gif|webp|bmp)|video\/(mp4|webm|quicktime|3gpp)|audio\/(mpeg|mp4|ogg|aac|wav|webm))$/;
+
+/** Return the normalized MIME essence if it is safe passive media, else `application/octet-stream`. */
+export function inertMediaMimetype(mimetype?: string): string {
+  const essence = (mimetype ?? '').split(';')[0].trim().toLowerCase();
+  return INERT_MEDIA_MIMETYPE.test(essence) ? essence : 'application/octet-stream';
+}
+
 export const getMediaSrc = (media?: MessageMedia): string => {
   if (!media || !media.data) return '';
-  if (media.data.startsWith('data:') || media.data.startsWith('http://') || media.data.startsWith('https://')) {
+  if (/^https?:\/\//i.test(media.data)) {
     return media.data;
   }
-  return `data:${media.mimetype};base64,${media.data}`;
+  if (/^data:/i.test(media.data)) {
+    const comma = media.data.indexOf(',');
+    if (comma === -1) return '';
+    const header = media.data.slice(5, comma);
+    const payload = media.data.slice(comma + 1);
+    const isBase64 = /;base64$/i.test(header.trim());
+    const safeMime = inertMediaMimetype(header);
+    return `data:${safeMime}${isBase64 ? ';base64' : ''},${payload}`;
+  }
+  return `data:${inertMediaMimetype(media.mimetype)};base64,${media.data}`;
 };
+
+function decodeBase64(raw: string): Uint8Array<ArrayBuffer> | null {
+  try {
+    const binary = atob(raw.replace(/\s+/g, ''));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+/** Decode an inline media payload (raw base64 or `data:` URI) into an inert `application/octet-stream` Blob. */
+export function inlineMediaToBlob(media?: MessageMedia): Blob | null {
+  if (!media?.data || /^https?:\/\//i.test(media.data)) return null;
+  if (/^data:/i.test(media.data)) {
+    const comma = media.data.indexOf(',');
+    if (comma === -1) return null;
+    const header = media.data.slice(5, comma);
+    const payload = media.data.slice(comma + 1);
+    if (/;base64$/i.test(header.trim())) {
+      const bytes = decodeBase64(payload);
+      return bytes ? new Blob([bytes], { type: 'application/octet-stream' }) : null;
+    }
+    let decoded = payload;
+    try {
+      decoded = decodeURIComponent(payload);
+    } catch {
+      // Keep raw payload when percent-decoding fails so the download still delivers inert bytes.
+    }
+    const bytes = new TextEncoder().encode(decoded);
+    return new Blob([bytes], { type: 'application/octet-stream' });
+  }
+  const bytes = decodeBase64(media.data);
+  return bytes ? new Blob([bytes], { type: 'application/octet-stream' }) : null;
+}
 
 /**
  * A message's time in epoch seconds as the thread dates it, for its clock and its day separators: the WhatsApp
@@ -405,6 +462,69 @@ export function mergeReactionSnapshot(
   incoming: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
   return incoming ?? existing;
+}
+
+/** Extract bare phone digits from a session phone value or JID, or null when absent/non-numeric. */
+export function normalizeSessionPhone(phone?: string | null): string | null {
+  if (!phone) return null;
+  const digits = phone.split('@')[0].split(':')[0].replace(/\D/g, '');
+  return digits.length > 0 ? digits : null;
+}
+
+/**
+ * Whether a reaction map key belongs to the current session: `'me'` or an exact match on the
+ * session's normalized phone local-part (with optional numeric `:device` suffix) and either no
+ * domain, `@c.us`, or `@s.whatsapp.net`. Never performs substring matching and never matches
+ * `@lid` or `@g.us`.
+ */
+export function isOwnReactionSender(sender: string, sessionPhone?: string | null): boolean {
+  if (sender === 'me') return true;
+  const digits = normalizeSessionPhone(sessionPhone);
+  if (!digits) return false;
+  const at = sender.indexOf('@');
+  const local = at === -1 ? sender : sender.slice(0, at);
+  const domain = at === -1 ? '' : sender.slice(at + 1).toLowerCase();
+  if (at !== -1 && domain !== 'c.us' && domain !== 's.whatsapp.net') return false;
+  const colon = local.indexOf(':');
+  if (colon === -1) return local === digits;
+  const phonePart = local.slice(0, colon);
+  const devicePart = local.slice(colon + 1);
+  return phonePart === digits && /^\d+$/.test(devicePart);
+}
+
+/** Canonical reaction map key for the local session (`<digits>@c.us`, or `'me'` when phone is unknown). */
+export function ownReactionKey(sessionPhone?: string | null): string {
+  const digits = normalizeSessionPhone(sessionPhone);
+  return digits ? `${digits}@c.us` : 'me';
+}
+
+/** Return `''` if the session already reacted with `emoji` (toggle off), otherwise `emoji`. */
+export function toggleOwnReaction(
+  reactions: Record<string, string> | undefined,
+  emoji: string,
+  sessionPhone?: string | null,
+): string {
+  for (const [sender, emo] of Object.entries(reactions ?? {})) {
+    if (isOwnReactionSender(sender, sessionPhone) && emo === emoji) return '';
+  }
+  return emoji;
+}
+
+/**
+ * Return an updated reaction map with all existing own-sender entries (`'me'` and `<phone>@...`)
+ * removed, and `ownReactionKey(sessionPhone)` set to `emoji` when `emoji` is non-empty.
+ */
+export function applyOwnReaction(
+  reactions: Record<string, string> | undefined,
+  emoji: string,
+  sessionPhone?: string | null,
+): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [sender, emo] of Object.entries(reactions ?? {})) {
+    if (!isOwnReactionSender(sender, sessionPhone)) next[sender] = emo;
+  }
+  if (emoji !== '') next[ownReactionKey(sessionPhone)] = emoji;
+  return next;
 }
 
 /**

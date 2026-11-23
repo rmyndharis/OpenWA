@@ -263,7 +263,7 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
       // The pool hands out its last released connection first, so the build's own is among these.
       const timeouts = (await settings(ds)).map(row => (row as { timeout: string }).timeout);
       expect(timeouts).toEqual(['30s', '30s', '30s', '30s']);
-      provider.onModuleDestroy();
+      await provider.onModuleDestroy();
     } finally {
       await ds.destroy();
       await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
@@ -370,7 +370,7 @@ const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${
           );
           const provider = new BuiltInFtsProvider(app, new ConfigService({ search: { containsEnabled: true } }));
           await provider.buildContainsIndex();
-          provider.onModuleDestroy();
+          await provider.onModuleDestroy();
           const [{ home }] = await app.query<Array<{ home: string }>>(
             `SELECT extnamespace::regnamespace::text AS home FROM pg_extension WHERE extname = 'pg_trgm'`,
           );

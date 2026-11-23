@@ -550,6 +550,20 @@ describe('WebhookProcessor', () => {
 
       expect(failureRepo.insert).not.toHaveBeenCalled();
       expect(hookManager.execute).not.toHaveBeenCalled();
+      expect(outbox.close).toHaveBeenCalledTimes(1);
+      expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
+    });
+
+    it('clears the failing-receiver gate when a stalled job finds its webhook gone', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Server Error' });
+      await expect(processor.process(makeJob())).rejects.toThrow('HTTP 500');
+      expect((processor as unknown as { failingWebhooks: Set<string> }).failingWebhooks.has('wh-1')).toBe(true);
+
+      repo.findOne.mockResolvedValueOnce(null);
+      await processor.onWorkerFailed(makeStalledJob(), new Error('job stalled more than allowable limit'));
+
+      expect((processor as unknown as { failingWebhooks: Set<string> }).failingWebhooks.has('wh-1')).toBe(false);
+      expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
     });
 
     it("replaces a replayed delivery's attempts-0 shed row with the stall row", async () => {
