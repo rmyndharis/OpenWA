@@ -64,7 +64,7 @@ import {
 import { useWebSocket } from '../hooks/useWebSocket';
 import { createSessionFeedState, noteSessionFeedError, subscribeSessionFeed } from '../utils/sessionFeedSubscription';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { useToast } from '../hooks/useToast';
+import { useToastActions } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
 import { GlobalSearch } from '../components/GlobalSearch';
 import { RoomSearch, type DayJump } from '../components/chats/RoomSearch';
@@ -74,6 +74,7 @@ import {
   messagesQueryKey,
   updateCachedMessages,
   cachedSessionThreads,
+  hasCachedSessionMessage,
   flattenMessagePages,
   loadMoreOfThread,
   refreshFailed,
@@ -212,7 +213,7 @@ const CONFIRM_TEXT = {
 export function Chats() {
   const { t } = useTranslation();
   useDocumentTitle(t('nav.chats'));
-  const { error: showErrorToast, warning: showWarningToast, success: showSuccessToast } = useToast();
+  const { error: showErrorToast, warning: showWarningToast, success: showSuccessToast } = useToastActions();
   const { canWrite, engineType } = useRole();
 
   // Sessions list & active session
@@ -984,11 +985,11 @@ export function Chats() {
 
       const newMsg = event.message as unknown as IncomingWsMessage;
       if (
-        cachedSessionThreads(
+        hasCachedSessionMessage(
           queryClient,
           event.sessionId,
           m => m.chatId === newMsg.chatId && byMessageId(newMsg.id)(m) && m.type === 'revoked',
-        ).length
+        )
       ) {
         return;
       }
@@ -1015,9 +1016,11 @@ export function Chats() {
 
       // A message the thread already holds merges into its row and adds none (the echo of a send after its response,
       // a message delivered twice), so the scroll heuristic below is not told to expect one.
-      const addsRow =
-        cachedSessionThreads(queryClient, event.sessionId, m => m.chatId === newMsg.chatId && byMessageId(newMsg.id)(m))
-          .length === 0;
+      const addsRow = !hasCachedSessionMessage(
+        queryClient,
+        event.sessionId,
+        m => m.chatId === newMsg.chatId && byMessageId(newMsg.id)(m),
+      );
 
       // Always write to the React Query cache for this message's session — keeps non-active chats
       // up to date so re-opening them shows fresh data without a refetch.

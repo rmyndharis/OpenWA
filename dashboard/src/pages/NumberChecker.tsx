@@ -30,6 +30,7 @@ import { normalizePhoneDigits, normalizePhoneText } from '../utils/phone';
 import { keepsSameKey } from '../utils/authLifecycle';
 import { isComposingKey } from '../utils/composition';
 import { onTabListKeyDown } from '../utils/tabKeys';
+import { scheduleObjectUrlRevoke } from '../utils/objectUrl';
 import './NumberChecker.css';
 
 // Every lookup is an outbound WhatsApp query that counts against the gateway's per-IP limit on this route
@@ -298,7 +299,7 @@ export function NumberChecker() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    scheduleObjectUrlRevoke(url);
   };
 
   const registeredCount = batchResults.filter(r => r.status === 'registered').length;

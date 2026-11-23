@@ -1078,21 +1078,11 @@ test('the remove confirmation names an unnamed member inside an isolate', async 
   const { fireEvent, within } = rtl;
   listGroup = true;
   bobUnnamed = true;
-  const confirm = window.confirm;
-  try {
-    renderPage();
-    const dialog = await openGroupInfo();
-    fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
-    let asked = '';
-    window.confirm = message => {
-      asked = String(message);
-      return false;
-    };
-    fireEvent.click(within(dialog).getByRole('button', { name: /^Remove: / }));
-    assert.equal(asked, `Remove ${LTR_BOB} from the group?`);
-  } finally {
-    window.confirm = confirm;
-  }
+  renderPage();
+  const dialog = await openGroupInfo();
+  fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+  fireEvent.click(within(dialog).getByRole('button', { name: /^Remove: / }));
+  assert.ok(within(dialog).getByText(`Remove ${LTR_BOB} from the group?`));
 });
 
 test('the number a check finds unregistered is named inside an isolate when adding to a group', async () => {
@@ -1908,34 +1898,25 @@ test('a changed description is saved on its own through the description route', 
 test('removing a member asks first, and sends nothing unless it is confirmed', async () => {
   const { fireEvent, waitFor, within } = rtl;
   listGroup = true;
-  const confirm = window.confirm;
-  try {
-    renderPage();
-    const dialog = await openGroupInfo();
-    fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
-    const removals = () => fetchCalls.filter(c => c.method === 'DELETE' && c.path.endsWith('/participants'));
+  renderPage();
+  const dialog = await openGroupInfo();
+  fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+  const removals = () => fetchCalls.filter(c => c.method === 'DELETE' && c.path.endsWith('/participants'));
 
-    const asked: Array<string | undefined> = [];
-    window.confirm = message => {
-      asked.push(message);
-      return false;
-    };
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove: Bob' }));
-    assert.deepEqual(asked, ['Remove Bob from the group?']);
-    await settle();
-    assert.deepEqual(removals(), [], 'a member was removed without being confirmed');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Remove: Bob' }));
+  assert.ok(within(dialog).getByText('Remove Bob from the group?'));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+  await settle();
+  assert.deepEqual(removals(), [], 'a member was removed without being confirmed');
 
-    window.confirm = () => true;
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove: Bob' }));
-    await waitFor(() =>
-      assert.deepEqual(
-        removals().map(c => c.body),
-        [{ participants: ['15550002222@c.us'] }],
-      ),
-    );
-  } finally {
-    window.confirm = confirm;
-  }
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Remove: Bob' }));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+  await waitFor(() =>
+    assert.deepEqual(
+      removals().map(c => c.body),
+      [{ participants: ['15550002222@c.us'] }],
+    ),
+  );
 });
 
 // Both engines hand the number over without a device, so this id only reaches the dialog from a synthetic list;

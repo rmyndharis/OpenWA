@@ -57,9 +57,14 @@ function AppContent() {
   const [isAuthenticated, setIsAuthenticated] = useState(hadSavedSession);
   const [hydratingSession, setHydratingSession] = useState(!hadSavedSession);
   const authGenRef = useRef(0);
-  const { setRole, role, setEngineType, setScoped, scoped, setApiKeyId, bumpSessionEpoch } = useRole();
+  const { setRole, role, setEngineType, setScoped, scoped, setApiKeyId, apiKeyId, bumpSessionEpoch } = useRole();
+  const actorRef = useRef({ apiKeyId, role, scoped });
+  useEffect(() => {
+    actorRef.current = { apiKeyId, role, scoped };
+  }, [apiKeyId, role, scoped]);
 
   const clearLocalSession = useCallback(() => {
+    actorRef.current = { apiKeyId: null, role: null, scoped: false };
     setIsAuthenticated(false);
     setHydratingSession(false);
     setRole(null);
@@ -78,12 +83,15 @@ function AppContent() {
       authGenRef.current += 1;
       clearLegacyApiKeyStorage();
       const effectiveApiKeyId = session.apiKeyId ?? 'session';
+      const nextRole = isUserRole(session.role) ? session.role : 'viewer';
+      const nextScoped = session.scoped === true;
+      actorRef.current = { apiKeyId: effectiveApiKeyId, role: nextRole, scoped: nextScoped };
       // The login page's POST /auth/session response already carried the role, scope, engine, and
       // apiKeyId, so no second round-trip is needed. An absent or unrecognized role falls back to
       // viewer, the least-privileged default.
-      setRole(isUserRole(session.role) ? session.role : 'viewer');
+      setRole(nextRole);
       setEngineType(session.engineType ?? null);
-      setScoped(session.scoped === true);
+      setScoped(nextScoped);
       setApiKeyId?.(effectiveApiKeyId);
       setHydratingSession(false);
       setIsAuthenticated(true);
@@ -116,6 +124,18 @@ function AppContent() {
               setHydratingSession(false);
             }
           } else if (decision.action === 'role') {
+            const prevActor = actorRef.current;
+            const nextApiKeyId = decision.apiKeyId ?? getActiveApiKeyId() ?? 'session';
+            const hadPriorActor = prevActor.apiKeyId !== null || prevActor.role !== null;
+            const actorChanged =
+              hadPriorActor &&
+              ((prevActor.apiKeyId !== null && prevActor.apiKeyId !== nextApiKeyId) ||
+                (prevActor.role !== null && prevActor.role !== decision.role) ||
+                prevActor.scoped !== decision.scoped);
+            if (actorChanged) {
+              clearActorState(queryClient);
+            }
+            actorRef.current = { apiKeyId: nextApiKeyId, role: decision.role, scoped: decision.scoped };
             setRole(decision.role);
             setScoped(decision.scoped);
             if (decision.engineType) setEngineType(decision.engineType);
@@ -153,9 +173,10 @@ function AppContent() {
         return;
       }
       if (event.type === 'login') {
-        // Always re-hydrate and reconnect sockets even when apiKeyId matches, because
+        // Always clear local state and re-hydrate even when apiKeyId matches, because
         // POST /api/auth/session rotates and revokes the prior cookie session.
-        clearActorState(queryClient);
+        clearLocalSession();
+        setHydratingSession(true);
         hydrateFromServer(true, true);
       }
     });
@@ -180,7 +201,7 @@ function AppContent() {
   }
 
   return (
-    <ToastProvider>
+    <ToastProvider key={apiKeyId ?? 'session'}>
       {/* Above the routes, so a bulk Number Checker run survives leaving its page; a logout unmounts it. */}
       <NumberCheckProvider>
         <BrowserRouter>

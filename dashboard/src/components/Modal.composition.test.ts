@@ -57,3 +57,29 @@ test('a plain Escape in a dialog field still closes the dialog', () => {
   rtl.fireEvent.keyDown(input, { key: 'Escape' });
   assert.equal(closes, 1);
 });
+
+test('hideCloseButton omits the header close button while guarded onClose blocks Escape and backdrop dismissal', () => {
+  let closes = 0;
+  let busy = true;
+  rtl.render(
+    createElement(Modal, {
+      open: true,
+      onClose: () => {
+        if (!busy) closes += 1;
+      },
+      title: 'Saving',
+      hideCloseButton: true,
+      children: createElement('input', { 'aria-label': 'Field' }),
+    }),
+  );
+  const input = rtl.screen.getByLabelText('Field');
+  rtl.fireEvent.keyDown(input, { key: 'Escape' });
+  const overlay = document.querySelector('.modal-overlay') as HTMLElement;
+  rtl.fireEvent.mouseDown(overlay);
+  assert.equal(closes, 0);
+  assert.equal(rtl.screen.queryByRole('button', { name: 'Close' }), null);
+
+  busy = false;
+  rtl.fireEvent.keyDown(input, { key: 'Escape' });
+  assert.equal(closes, 1);
+});

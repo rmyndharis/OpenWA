@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { ErrorBoundary } from './ErrorBoundary';
 import {
   LayoutDashboard,
   Smartphone,
@@ -63,6 +64,7 @@ const MOBILE_QUERY = '(max-width: 767px)';
 
 export function Layout({ onLogout, userRole }: LayoutProps) {
   const { t, i18n } = useTranslation();
+  const { pathname } = useLocation();
   const { theme, toggleTheme } = useTheme();
   const ThemeIcon = themeIcons[theme];
   const themeLabel = t(`theme.${theme}`);
@@ -124,7 +126,10 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   }, []);
 
   useEffect(() => {
-    if (userRole !== 'admin' || scoped) return;
+    if (userRole !== 'admin' || scoped) {
+      setUpdate(null);
+      return;
+    }
     let active = true;
     infraApi
       .getUpdateCheck()
@@ -366,7 +371,9 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
         className={`main-content ${collapsed ? 'expanded' : ''} ${isMobile ? 'mobile' : ''}`}
         inert={isMobile && isMobileOpen}
       >
-        <Outlet />
+        <ErrorBoundary resetKey={pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
     </div>
   );

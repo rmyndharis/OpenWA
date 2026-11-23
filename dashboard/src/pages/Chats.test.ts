@@ -14,7 +14,7 @@ import '../test-helpers/register-hooks.ts';
 import { test, before, afterEach, mock, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, timeoutManager } from '@tanstack/react-query';
 import type {
   Session,
   Chat,
@@ -241,6 +241,29 @@ function countPagedMessagesFetches(): number {
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 6; i++) {
+    await rtl.act(async () => {
+      mock.timers.tick(0);
+      for (let j = 0; j < 6; j++) await Promise.resolve();
+    });
+  }
+}
+
+async function runWithFakeTimers(body: (tick: (ms: number) => Promise<void>) => Promise<void>): Promise<void> {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    await body(async ms => {
+      await rtl.act(async () => {
+        mock.timers.tick(ms);
+      });
+      await flushMicrotasks();
+    });
+  } finally {
+    mock.timers.reset();
+  }
+}
+
 /** The per-message media route the omitted marker sends the viewer to. */
 const mediaPathFor = (waMessageId: string): string =>
   `/api/sessions/${SESSION.id}/messages/${encodeURIComponent(CHAT.id)}/${encodeURIComponent(waMessageId)}/media`;
@@ -463,6 +486,18 @@ let installJsdomGlobals: typeof installJsdomGlobalsFn;
 let queryClient: QueryClient | undefined;
 
 before(async () => {
+  // Unref React Query gcTime timers so a gc timer armed across a fake/real timer transition
+  // cannot hold the Node test worker open for 5-30 minutes after all tests pass.
+  const unrefTimer = <T>(id: T): T => {
+    if (typeof id === 'object' && id !== null) (id as { unref?: () => void }).unref?.();
+    return id;
+  };
+  timeoutManager.setTimeoutProvider({
+    setTimeout: (callback, delay) => unrefTimer(setTimeout(callback, delay)),
+    clearTimeout: id => clearTimeout(id),
+    setInterval: (callback, delay) => unrefTimer(setInterval(callback, delay)),
+    clearInterval: id => clearInterval(id),
+  });
   ({ installJsdomGlobals } = await import('../test-helpers/jsdom.ts'));
   await installJsdomGlobals();
   installFetchStub();
@@ -1381,10 +1416,14 @@ test('a chat whose thread fails to load is not marked read and keeps its unread 
   await screen.findByText(SESSION.name);
   resetFetchCalls();
   assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
-  fireEvent.click(await screen.findByText('Alice'));
-  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
-  // Past the quiet window of the read, with the retry of the thread done.
-  await new Promise(resolve => setTimeout(resolve, 1_500));
+  const aliceRow = await screen.findByText('Alice');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await flushMicrotasks();
+    assert.ok(screen.getByText("Couldn't load messages. Check the server logs."));
+    // Past the quiet window of the read, with the retry of the thread done.
+    await tick(1_500);
+  });
   assert.ok(!findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`), 'a chat that showed no message was read');
   await waitFor(() =>
     assert.ok(screen.queryByLabelText('2 unread messages'), 'the badge of an unseen chat was cleared'),
@@ -1397,9 +1436,13 @@ test('a chat whose thread failed to load is read once a later load of it succeed
   const { container } = renderChats();
   await screen.findByText(SESSION.name);
   resetFetchCalls();
-  fireEvent.click(await screen.findByText('Alice'));
-  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
-  await new Promise(resolve => setTimeout(resolve, 1_500));
+  const aliceRow = await screen.findByText('Alice');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await flushMicrotasks();
+    assert.ok(screen.getByText("Couldn't load messages. Check the server logs."));
+    await tick(1_500);
+  });
   assert.ok(!findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`));
 
   // The gateway answers again and the thread is asked for again, which is all that reaches the read: no tab was hidden,
@@ -1424,9 +1467,13 @@ test('a chat is not read while its thread is still loading, and the badge comes 
   await screen.findByText(SESSION.name);
   resetFetchCalls();
   assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
-  fireEvent.click(await screen.findByText('Alice'));
-  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
-  await new Promise(resolve => setTimeout(resolve, 1_500));
+  const aliceRow = await screen.findByText('Alice');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await tick(1_200);
+    assert.ok(screen.getByText("Couldn't load messages. Check the server logs."));
+    await tick(1_500);
+  });
   assert.ok(!findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`), 'a chat that showed no message was read');
   await waitFor(() =>
     assert.ok(screen.queryByLabelText('2 unread messages'), 'the badge of an unseen chat stayed cleared'),
@@ -1443,9 +1490,13 @@ test('a whatsapp-web.js chat is not read while its engine history is still loadi
   await screen.findByText(SESSION.name);
   resetFetchCalls();
   assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
-  fireEvent.click(await screen.findByText('Alice'));
-  await screen.findByText("Couldn't load messages. Check the server logs.", {}, { timeout: 5_000 });
-  await new Promise(resolve => setTimeout(resolve, 1_500));
+  const aliceRow = await screen.findByText('Alice');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await tick(1_200);
+    assert.ok(screen.getByText("Couldn't load messages. Check the server logs."));
+    await tick(1_500);
+  });
   assert.equal(
     countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`),
     0,
@@ -1464,19 +1515,25 @@ test('a chat left before its thread showed is unread again, and is not read', as
   await screen.findByText(SESSION.name);
   resetFetchCalls();
   assert.ok(await screen.findByLabelText('2 unread messages'), 'the fixture chat shows no unread badge');
-  fireEvent.click(await screen.findByText('Alice'));
-  await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages'), 'opening the chat kept its badge'));
+  const aliceRow = await screen.findByText('Alice');
+  const carolRow = await screen.findByText('Carol');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await flushMicrotasks();
+    assert.ok(!screen.queryByLabelText('2 unread messages'), 'opening the chat kept its badge');
 
-  // Leave for another chat while the thread of the first is still loading: its read falls due after that.
-  fireEvent.click(await screen.findByText('Carol'));
+    // Leave for another chat while the thread of the first is still loading: its read falls due after that.
+    fireEvent.click(carolRow);
+    // Carol's thread loaded, so hers is read; the one that never showed is not.
+    await tick(1_200);
+    assert.ok(screen.queryByLabelText('2 unread messages'), 'the unseen chat stayed read in the list');
+  });
   await waitFor(
     () => assert.ok(screen.queryByLabelText('2 unread messages'), 'the unseen chat stayed read in the list'),
     {
       timeout: 5_000,
     },
   );
-  // Carol's thread loaded, so hers is read; the one that never showed is not.
-  await new Promise(resolve => setTimeout(resolve, 1_200));
   const readOfAlice = fetchCalls.filter(
     call =>
       call.method === 'POST' &&
@@ -1502,13 +1559,15 @@ test('an empty thread that was read does not get its unread badge back when a re
   await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages')));
 
   // A reconnect invalidates the thread, and its stored read is refused this time.
-  storedReadStatus = 503;
-  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
-  await new Promise(resolve => setTimeout(resolve, 300));
-  assert.ok(!screen.queryByLabelText('2 unread messages'), 'the badge of a chat already read came back');
-  storedReadStatus = 200;
-  await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
-  await new Promise(resolve => setTimeout(resolve, 600));
+  await runWithFakeTimers(async tick => {
+    storedReadStatus = 503;
+    await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+    await tick(300);
+    assert.ok(!screen.queryByLabelText('2 unread messages'), 'the badge of a chat already read came back');
+    storedReadStatus = 200;
+    await rtl.act(() => queryClient!.invalidateQueries({ queryKey: ['messages', SESSION.id] }));
+    await tick(600);
+  });
   assert.ok(!screen.queryByLabelText('2 unread messages'), 'the badge came back after a later refresh');
   assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`), 1, 'the chat was read again');
 });
@@ -1759,26 +1818,31 @@ test('a row a send stamped with the browser clock does not outrank a later recon
 });
 
 test('a socket reconnect keeps the open chat read instead of badging it with the gap count', async () => {
-  const { screen, fireEvent, within, act, waitFor } = rtl;
+  const { screen, fireEvent, within, act } = rtl;
   const { container } = renderChats();
   await screen.findByText(SESSION.name);
-  fireEvent.click(await screen.findByText('Alice'));
-  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
-  await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages'), 'opening the chat kept its badge'));
-  // Past the mark-as-read quiet window, so the open's own call is out before counting.
-  await new Promise(resolve => setTimeout(resolve, 1_000));
-  resetFetchCalls();
+  const aliceRow = await screen.findByText('Alice');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await flushMicrotasks();
+    assert.ok(within(container.querySelector('.room-messages') as HTMLElement).getByText('hello from alice'));
+    assert.ok(!screen.queryByLabelText('2 unread messages'), 'opening the chat kept its badge');
+    // Past the mark-as-read quiet window, so the open's own call is out before counting.
+    await tick(1_000);
+    resetFetchCalls();
 
-  // Alice wrote into the open chat while the socket was down; the snapshot still counts it unread.
-  chatsResponder = () =>
-    Promise.resolve(jsonResponse([{ ...CHAT, unreadCount: 4, lastMessage: 'sent during the gap' }, CHAT_2]));
-  const socket = lastSocket();
-  assert.ok(socket, 'expected the page to have opened a socket');
-  act(() => socket.receive('disconnect', 'transport close'));
-  act(() => socket.receive('connect'));
+    // Alice wrote into the open chat while the socket was down; the snapshot still counts it unread.
+    chatsResponder = () =>
+      Promise.resolve(jsonResponse([{ ...CHAT, unreadCount: 4, lastMessage: 'sent during the gap' }, CHAT_2]));
+    const socket = lastSocket();
+    assert.ok(socket, 'expected the page to have opened a socket');
+    act(() => socket.receive('disconnect', 'transport close'));
+    act(() => socket.receive('connect'));
+    await flushMicrotasks();
 
-  await screen.findByText('sent during the gap');
-  await new Promise(resolve => setTimeout(resolve, 1_000));
+    assert.ok(screen.getByText('sent during the gap'));
+    await tick(1_000);
+  });
   assert.ok(!screen.queryByLabelText('4 unread messages'), 'the open chat was badged with the gap count');
   assert.ok(findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`), 'the gap messages were not marked read');
 });
@@ -1787,20 +1851,24 @@ test('a reconnect whose refetch fails while the engine starts sends no mark-as-r
   const { screen, fireEvent, within, act } = rtl;
   const { container } = renderChats();
   await screen.findByText(SESSION.name);
-  fireEvent.click(await screen.findByText('Alice'));
-  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
-  await new Promise(resolve => setTimeout(resolve, 1_000));
-  resetFetchCalls();
+  const aliceRow = await screen.findByText('Alice');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await flushMicrotasks();
+    assert.ok(within(container.querySelector('.room-messages') as HTMLElement).getByText('hello from alice'));
+    await tick(1_000);
+    resetFetchCalls();
 
-  // After a backend restart the socket is back before the engine: the session's routes answer 409.
-  chatsResponder = () =>
-    Promise.resolve(jsonResponse({ statusCode: 409, message: 'Engine not ready', code: 'ENGINE_NOT_READY' }, 409));
-  const socket = lastSocket();
-  assert.ok(socket, 'expected the page to have opened a socket');
-  act(() => socket.receive('disconnect', 'transport close'));
-  act(() => socket.receive('connect'));
+    // After a backend restart the socket is back before the engine: the session's routes answer 409.
+    chatsResponder = () =>
+      Promise.resolve(jsonResponse({ statusCode: 409, message: 'Engine not ready', code: 'ENGINE_NOT_READY' }, 409));
+    const socket = lastSocket();
+    assert.ok(socket, 'expected the page to have opened a socket');
+    act(() => socket.receive('disconnect', 'transport close'));
+    act(() => socket.receive('connect'));
 
-  await new Promise(resolve => setTimeout(resolve, 1_000));
+    await tick(1_000);
+  });
   assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`), 1);
   assert.ok(
     !findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`),
@@ -1812,9 +1880,13 @@ test('a reload asked for before the reconnect zeroed the open row does not bring
   const { screen, fireEvent, within, act, waitFor } = rtl;
   const { container } = renderChats();
   await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
-  fireEvent.click(await screen.findByText('Alice'));
-  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
-  await new Promise(resolve => setTimeout(resolve, 1_000));
+  const aliceRow = await screen.findByText('Alice');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await flushMicrotasks();
+    assert.ok(within(container.querySelector('.room-messages') as HTMLElement).getByText('hello from alice'));
+    await tick(1_000);
+  });
   resetFetchCalls();
 
   // Every snapshot counts Alice's gap messages, as the gateway does until it has processed the read.
@@ -1843,15 +1915,16 @@ test('a reload asked for before the reconnect zeroed the open row does not bring
   await waitFor(() => assert.equal(answers.length, 2), { timeout: 3_000 }); // the reconnect's own reload is out
 
   // Another event asks for a list while it is out; that one starts the moment the reconnect's lands.
-  edit();
-  answers[1]();
-  // The row is zeroed with the reload, well before the read it sends is due.
-  await flush();
-  await flush();
-  assert.ok(!screen.queryByLabelText('4 unread messages'), 'the open chat was badged');
-  await waitFor(() => assert.equal(answers.length, 3), { timeout: 3_000 });
-  answers[2]();
-  await new Promise(resolve => setTimeout(resolve, 300));
+  await runWithFakeTimers(async tick => {
+    edit();
+    answers[1]();
+    // The row is zeroed with the reload, well before the read it sends is due.
+    await flushMicrotasks();
+    assert.ok(!screen.queryByLabelText('4 unread messages'), 'the open chat was badged');
+    assert.equal(answers.length, 3);
+    answers[2]();
+    await tick(300);
+  });
   assert.ok(!screen.queryByLabelText('4 unread messages'), 'the gap count came back on the open chat');
 });
 
@@ -1859,9 +1932,13 @@ test('a reconnect refetch that settles after the open chat was left keeps its un
   const { screen, fireEvent, within, act, waitFor } = rtl;
   const { container } = renderChats();
   await screen.findByText(SESSION.name);
-  fireEvent.click(await screen.findByText('Alice'));
-  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
-  await new Promise(resolve => setTimeout(resolve, 1_000));
+  const aliceRow = await screen.findByText('Alice');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await flushMicrotasks();
+    assert.ok(within(container.querySelector('.room-messages') as HTMLElement).getByText('hello from alice'));
+    await tick(1_000);
+  });
   resetFetchCalls();
 
   let release!: () => void;
@@ -1877,10 +1954,14 @@ test('a reconnect refetch that settles after the open chat was left keeps its un
   await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`), 1));
 
   // The user moves on to Carol before the refetch lands; Alice's new message was never seen.
-  fireEvent.click(await screen.findByText('Carol'));
-  release();
-  await screen.findByText('sent after leaving');
-  await new Promise(resolve => setTimeout(resolve, 1_000));
+  const carolRow = await screen.findByText('Carol');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(carolRow);
+    release();
+    await flushMicrotasks();
+    assert.ok(screen.getByText('sent after leaving'));
+    await tick(1_000);
+  });
   assert.ok(screen.queryByLabelText('4 unread messages'), 'the chat the user left lost its unread count');
   assert.ok(
     !fetchCalls.some(
@@ -1897,9 +1978,13 @@ test('a reconnect refetch that settles after the page was left sends no mark-as-
   const { screen, fireEvent, within, act, waitFor } = rtl;
   const { container, unmount } = renderChats();
   await screen.findByText(SESSION.name);
-  fireEvent.click(await screen.findByText('Alice'));
-  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
-  await new Promise(resolve => setTimeout(resolve, 1_000));
+  const aliceRow = await screen.findByText('Alice');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await flushMicrotasks();
+    assert.ok(within(container.querySelector('.room-messages') as HTMLElement).getByText('hello from alice'));
+    await tick(1_000);
+  });
   resetFetchCalls();
 
   let release!: () => void;
@@ -1915,9 +2000,11 @@ test('a reconnect refetch that settles after the page was left sends no mark-as-
   await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`), 1));
 
   // The operator opens another page before the refetch lands; the gap messages were never seen.
-  unmount();
-  release();
-  await new Promise(resolve => setTimeout(resolve, 1_000));
+  await runWithFakeTimers(async tick => {
+    unmount();
+    release();
+    await tick(1_000);
+  });
   assert.ok(
     !findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`),
     'the chat was marked read after the page was left',
@@ -1929,21 +2016,25 @@ async function leaveWithPendingRead(loggedOut: boolean): Promise<number> {
   resetFetchCalls();
   const { container, unmount } = renderChats();
   await screen.findByText(SESSION.name);
-  fireEvent.click(await screen.findByText('Alice'));
-  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
-  // Opening the chat queued its read behind the quiet window; the page goes away inside it.
-  assert.ok(
-    !findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`),
-    'the read went out before the page was left',
-  );
-  // Logout removes the key before the authenticated tree unmounts.
-  if (loggedOut) window.sessionStorage.removeItem('openwa_api_key_id');
-  try {
-    unmount();
-    await new Promise(resolve => setTimeout(resolve, 1_000));
-  } finally {
-    window.sessionStorage.setItem('openwa_api_key_id', 'test-key');
-  }
+  const aliceRow = await screen.findByText('Alice');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await flushMicrotasks();
+    assert.ok(within(container.querySelector('.room-messages') as HTMLElement).getByText('hello from alice'));
+    // Opening the chat queued its read behind the quiet window; the page goes away inside it.
+    assert.ok(
+      !findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`),
+      'the read went out before the page was left',
+    );
+    // Logout removes the key before the authenticated tree unmounts.
+    if (loggedOut) window.sessionStorage.removeItem('openwa_api_key_id');
+    try {
+      unmount();
+      await tick(1_000);
+    } finally {
+      window.sessionStorage.setItem('openwa_api_key_id', 'test-key');
+    }
+  });
   return countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`);
 }
 
@@ -1959,9 +2050,13 @@ test('a reconnect that arrives while another reload is out is answered by the tr
   const { screen, fireEvent, within, act, waitFor } = rtl;
   const { container } = renderChats();
   await screen.findByText(SESSION.name);
-  fireEvent.click(await screen.findByText('Alice'));
-  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
-  await new Promise(resolve => setTimeout(resolve, 1_000));
+  const aliceRow = await screen.findByText('Alice');
+  await runWithFakeTimers(async tick => {
+    fireEvent.click(aliceRow);
+    await flushMicrotasks();
+    assert.ok(within(container.querySelector('.room-messages') as HTMLElement).getByText('hello from alice'));
+    await tick(1_000);
+  });
   resetFetchCalls();
 
   // An edit in a chat that was never opened reloads the list, and that reload stays out while the socket
@@ -1994,11 +2089,12 @@ test('a reconnect that arrives while another reload is out is answered by the tr
   assert.ok(screen.queryByLabelText('4 unread messages'), 'a reload that began before the reconnect answered it');
   await waitFor(() => assert.equal(answers.length, 2));
 
-  answers[1]();
-  await waitFor(() =>
-    assert.ok(!screen.queryByLabelText('4 unread messages'), 'the open chat was badged with the gap count'),
-  );
-  await new Promise(resolve => setTimeout(resolve, 1_000));
+  await runWithFakeTimers(async tick => {
+    answers[1]();
+    await flushMicrotasks();
+    assert.ok(!screen.queryByLabelText('4 unread messages'), 'the open chat was badged with the gap count');
+    await tick(1_000);
+  });
   assert.ok(
     fetchCalls.some(
       c =>
@@ -2101,10 +2197,14 @@ test('a read-only key opening a chat sends no mark-as-read', async () => {
   try {
     const { container } = renderChats();
     await screen.findByText(SESSION.name);
-    fireEvent.click(await screen.findByText('Alice'));
-    await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
-    // Past the mark-as-read quiet window, so a queued call would have gone out.
-    await new Promise(resolve => setTimeout(resolve, 1_000));
+    const aliceRow = await screen.findByText('Alice');
+    await runWithFakeTimers(async tick => {
+      fireEvent.click(aliceRow);
+      await flushMicrotasks();
+      assert.ok(within(container.querySelector('.room-messages') as HTMLElement).getByText('hello from alice'));
+      // Past the mark-as-read quiet window, so a queued call would have gone out.
+      await tick(1_000);
+    });
     assert.ok(!findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`), 'a viewer key marked the chat read');
     // The chat is still unread on the gateway, so the sidebar badge keeps its count.
     assert.ok(

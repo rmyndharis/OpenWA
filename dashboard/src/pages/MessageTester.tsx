@@ -196,6 +196,7 @@ export function MessageTester() {
   const [batchCancelling, setBatchCancelling] = useState(false);
   const [batchError, setBatchError] = useState<string | null>(null);
   const batchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const batchPollInFlightRef = useRef(false);
   // The session a running batch belongs to: the user may switch the selector mid-batch, and
   // poll/cancel must keep addressing the session the batch was created on.
   const batchSessionRef = useRef('');
@@ -223,6 +224,7 @@ export function MessageTester() {
       clearInterval(batchPollRef.current);
       batchPollRef.current = null;
     }
+    batchPollInFlightRef.current = false;
   };
 
   // Stop polling on unmount; the batch itself keeps running server-side regardless. A send-bulk still
@@ -243,6 +245,8 @@ export function MessageTester() {
     stopBatchPolling();
     if (unmountedRef.current) return;
     const timer = setInterval(async () => {
+      if (batchPollInFlightRef.current) return;
+      batchPollInFlightRef.current = true;
       try {
         const status = await messageApi.getBatchStatus(batchSessionId, batchId);
         // Polling was stopped (a cancel, a terminal status, a new batch, unmount) while this read
@@ -260,6 +264,8 @@ export function MessageTester() {
           stopBatchPolling();
           setBatchError(err instanceof Error ? err.message : t('messageTester.sendFailed'));
         }
+      } finally {
+        if (batchPollRef.current === timer) batchPollInFlightRef.current = false;
       }
     }, 2000);
     batchPollRef.current = timer;

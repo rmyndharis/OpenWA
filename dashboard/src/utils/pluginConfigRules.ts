@@ -66,6 +66,13 @@ export function sparseSessionOverride(full: Record<string, unknown>, plugin: Plu
   return out;
 }
 
+/** Whether a postMessage payload value is a plain object map (rejecting null, arrays, and primitives). */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 /** Required schema keys the plugin has no usable value for — enabling without these fails at load. */
 export function missingRequiredConfig(plugin: Plugin): string[] {
   const props = plugin.configSchema?.properties ?? {};

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useId, useRef } from 'react';
 import { searchApi, type SearchHit } from '../services/api';
 import { renderHighlightedSnippet, buildSearchParams } from '../utils/search-highlight';
 import { isComposingKey } from '../utils/composition';
@@ -18,8 +18,10 @@ const PAGE_SIZE = 20;
 
 export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
   const { t } = useTranslation();
+  const listId = useId();
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const [total, setTotal] = useState(0);
   // Where the next page starts on the server: hits already listed are dropped from a page, so this can
   // run ahead of hits.length, and "more" stays up only while the server has rows past it.
@@ -64,6 +66,7 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
       try {
         const res = await searchApi.search(params);
         if (id !== requestId.current) return;
+        if (!append) setActiveIndex(-1);
         // A message indexed since the last page shifts the offset, so the next page can repeat a hit.
         setHits(prev => {
           if (!append) return res.hits;
@@ -100,6 +103,7 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
     if (!q.trim()) {
       requestId.current += 1;
       setHits([]);
+      setActiveIndex(-1);
       setTotal(0);
       setNextOffset(0);
       setError(null);
@@ -112,6 +116,7 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
     // alone until the search for this text answers.
     requestId.current += 1;
     searchedKey.current = '';
+    setActiveIndex(-1);
     setLoading(true);
     setPaging(false);
     // timer.current is non-null exactly while a search is pending, which the Escape handler reads.
@@ -151,6 +156,11 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
     void run(q, nextOffset, true);
   };
 
+  const resultsVisible = Boolean(open && q.trim());
+  const optionsReady = resultsVisible && (!loading || paging) && hits.length > 0;
+  const activeOptionId =
+    optionsReady && activeIndex >= 0 && hits[activeIndex] ? `${listId}-option-${activeIndex}` : undefined;
+
   return (
     <div
       className="global-search"
@@ -162,7 +172,10 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
       // the "more" button must keep the results open, or the button unmounts before it can be used.
       onBlur={e => {
         if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-        blurTimer.current = setTimeout(() => setOpen(false), 150);
+        blurTimer.current = setTimeout(() => {
+          setOpen(false);
+          setActiveIndex(-1);
+        }, 150);
       }}
       // Escape dismisses the open results from anywhere in the widget (input, scope toggle, a hit,
       // "more") and is consumed, so a page-level Escape handler (the Chats page closes the open
@@ -177,15 +190,37 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
         if (!cancelledSearch && (!open || !q.trim())) return;
         e.preventDefault();
         setOpen(false);
+        setActiveIndex(-1);
       }}
     >
       <input
         ref={inputRef}
         className="global-search-input"
         type="text"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={resultsVisible}
+        aria-controls={resultsVisible ? listId : undefined}
+        aria-activedescendant={activeOptionId}
         placeholder={t('search.placeholder')}
         value={q}
         onChange={e => setQ(e.target.value)}
+        onKeyDown={e => {
+          if (!optionsReady || isComposingKey(e.nativeEvent)) return;
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setActiveIndex(prev => (prev + 1 < hits.length ? prev + 1 : 0));
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActiveIndex(prev => (prev > 0 ? prev - 1 : hits.length - 1));
+          } else if (e.key === 'Enter' && activeIndex >= 0 && hits[activeIndex]) {
+            e.preventDefault();
+            const picked = hits[activeIndex];
+            setOpen(false);
+            setActiveIndex(-1);
+            onHit(picked);
+          }
+        }}
         onFocus={reopen}
         // A pick or Escape closes the results with focus still in the input, where a click fires no focus.
         onClick={reopen}
@@ -197,21 +232,24 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
           {t('search.scope.current')}
         </label>
       )}
-      {open && q.trim() && (
-        <div className="global-search-results" role="listbox">
+      {resultsVisible && (
+        <div id={listId} className="global-search-results" role="listbox">
           {loading && !paging && <div className="global-search-state">{t('search.loading')}</div>}
           {!loading && !error && hits.length === 0 && <div className="global-search-state">{t('search.empty')}</div>}
           {(!loading || paging) &&
-            hits.map(h => (
+            hits.map((h, index) => (
               <button
                 key={h.messageId}
+                id={`${listId}-option-${index}`}
                 className="global-search-hit"
                 role="option"
+                aria-selected={index === activeIndex}
                 // preventDefault on mousedown keeps focus in the input, as on "more"; click fires for the
                 // mouse and for Enter/Space on a hit reached with Tab. Picking a hit closes the results.
                 onMouseDown={e => e.preventDefault()}
                 onClick={() => {
                   setOpen(false);
+                  setActiveIndex(-1);
                   onHit(h);
                 }}
               >

@@ -354,3 +354,93 @@ test('the close control is a button of the bar, not the room Back button the two
   rtl.fireEvent.click(close);
   assert.equal(onClose.mock.callCount(), 1);
 });
+
+test('combobox exposes ARIA 1.2 listbox linkage and updates aria-activedescendant across hits', async () => {
+  const second: SearchHit = { ...hit, messageId: 'db-2', waMessageId: 'wamid.2', body: 'second alice' };
+  stubSearch({ hits: [hit, second], total: 2 });
+  const { screen, fireEvent } = rtl;
+  renderBar();
+  const combo = screen.getByRole('combobox', { name: 'Search' });
+  assert.equal(combo.getAttribute('aria-expanded'), 'false');
+
+  fireEvent.change(combo, { target: { value: 'alice' } });
+  const options = await screen.findAllByRole('option');
+  assert.equal(options.length, 2);
+  const listbox = screen.getByRole('listbox');
+  assert.equal(combo.getAttribute('aria-expanded'), 'true');
+  assert.equal(combo.getAttribute('aria-controls'), listbox.id);
+  assert.equal(combo.getAttribute('aria-activedescendant'), null);
+
+  fireEvent.keyDown(combo, { key: 'ArrowDown' });
+  assert.equal(combo.getAttribute('aria-activedescendant'), options[0].id);
+  assert.equal(options[0].getAttribute('aria-selected'), 'true');
+  assert.equal(options[1].getAttribute('aria-selected'), 'false');
+
+  fireEvent.keyDown(combo, { key: 'ArrowDown' });
+  assert.equal(combo.getAttribute('aria-activedescendant'), options[1].id);
+  assert.equal(options[0].getAttribute('aria-selected'), 'false');
+  assert.equal(options[1].getAttribute('aria-selected'), 'true');
+});
+
+test('combobox clears aria-activedescendant and blocks stale Enter while a new search is loading', async () => {
+  let releaseSecond!: () => void;
+  const secondGate = new Promise<void>(resolve => {
+    releaseSecond = resolve;
+  });
+  let calls = 0;
+  globalThis.fetch = (() => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ hits: [hit], total: 1, tookMs: 1, provider: 'test' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    }
+    return secondGate.then(
+      () =>
+        new Response(
+          JSON.stringify({
+            hits: [{ ...hit, messageId: 'db-2', waMessageId: 'wamid.2', body: 'bob hit' }],
+            total: 1,
+            tookMs: 1,
+            provider: 'test',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+    );
+  }) as typeof fetch;
+
+  const picked: string[] = [];
+  const { screen, fireEvent } = rtl;
+  renderBar({
+    onHit: h => {
+      picked.push(h.messageId);
+      return true;
+    },
+  });
+  const combo = screen.getByRole('combobox', { name: 'Search' });
+  fireEvent.change(combo, { target: { value: 'alice' } });
+  const [opt1] = await screen.findAllByRole('option');
+  fireEvent.keyDown(combo, { key: 'ArrowDown' });
+  assert.equal(combo.getAttribute('aria-activedescendant'), opt1.id);
+
+  fireEvent.change(combo, { target: { value: 'bob' } });
+  assert.equal(combo.getAttribute('aria-activedescendant'), null);
+  assert.equal(screen.queryByRole('option'), null);
+  fireEvent.keyDown(combo, { key: 'ArrowDown' });
+  fireEvent.keyDown(combo, { key: 'Enter' });
+  assert.deepEqual(picked, []);
+
+  await rtl.act(async () => {
+    releaseSecond();
+    await secondGate;
+  });
+  const [opt2] = await screen.findAllByRole('option');
+  assert.equal(combo.getAttribute('aria-activedescendant'), null);
+  fireEvent.keyDown(combo, { key: 'ArrowDown' });
+  assert.equal(combo.getAttribute('aria-activedescendant'), opt2.id);
+  fireEvent.keyDown(combo, { key: 'Enter' });
+  assert.deepEqual(picked, ['db-2']);
+});

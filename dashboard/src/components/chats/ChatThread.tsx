@@ -46,6 +46,7 @@ import { formatFileSize } from '../../utils/bulkMedia';
 import { shouldFetchOlderMessages } from '../../utils/scrollDecision';
 import { keepsSameKey } from '../../utils/authLifecycle';
 import { retryThrottled } from '../../utils/fetchAllPages';
+import { scheduleObjectUrlRevoke } from '../../utils/objectUrl';
 import ArchivedMediaPreview, { type ArchivedMediaKind } from './ArchivedMediaPreview';
 import MessageBody from './MessageBody';
 
@@ -106,21 +107,6 @@ interface ChatThreadProps {
  * was held; a focus long after the pointer's last event is a script's or an assistive technology's.
  */
 const POINTER_FOCUS_WINDOW_MS = 1000;
-
-// Delay before releasing a Blob object URL after `link.click()` hands off a download.
-// Safari/WebKit and Firefox open the Blob stream asynchronously after click returns; revoking
-// synchronously in `finally` aborts the download. Calling `unref()` keeps Node test runs from
-// waiting on the cleanup timer.
-const BLOB_URL_REVOKE_DELAY_MS = 1000;
-
-function scheduleObjectUrlRevoke(url: string): void {
-  const revoke = typeof URL.revokeObjectURL === 'function' ? URL.revokeObjectURL.bind(URL) : null;
-  if (!revoke) return;
-  const timer = setTimeout(() => {
-    revoke(url);
-  }, BLOB_URL_REVOKE_DELAY_MS);
-  (timer as unknown as { unref?: () => void }).unref?.();
-}
 
 // The messages area of the active chat room: the bubble list (media, quotes, reactions, hover
 // actions) plus the floating scroll-to-bottom button. The page owns the message query and the

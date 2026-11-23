@@ -181,7 +181,8 @@ function StatusComposeModal({ sessionId, onClose, onPosted }: Props) {
   return (
     <Modal
       open
-      onClose={closeComposeModal}
+      onClose={() => !composePosting && closeComposeModal()}
+      hideCloseButton={composePosting}
       title={t('chats.status.compose')}
       closeLabel={t('common.close')}
       className="status-compose-modal"
