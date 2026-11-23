@@ -91,7 +91,7 @@ test('the key validation route is required of every SDK, the key management rout
   // cut every entry to its first segment, which made all of /api/auth unexposed, so an SDK without its auth()
   // method kept the gate green. The gate runs on a copy of the sources it reads, with the PHP auth() emptied.
   withCopy(({ edit, run }) => {
-    edit('sdk/php/src/Client.php', "return $this->http->request('POST', '/api/auth/validate') ?? [];", 'return [];');
+    edit('sdk/php/src/Client.php', "return $this->http->requestNullableArray('POST', '/api/auth/validate') ?? [];", 'return [];');
     const without = run();
     assert.equal(without.status, 1, without.stdout + without.stderr);
     assert.match(without.stderr, /\/api\/auth\/validate .*built by no method in: php/);
@@ -109,7 +109,7 @@ test('a builder whose last segment is a variable covers only the names its calle
     // A message route one client stopped building.
     let restore = edit(
       'sdk/php/src/Resources/MessagesResource.php',
-      'return $this->http->request(\'POST\', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/react", [], $body);',
+      'return $this->http->requestArray(\'POST\', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/react", [], $body);',
       'return [];',
     );
     let result = run();
@@ -143,6 +143,433 @@ test('a builder whose last segment is a variable covers only the names its calle
       '/api/sessions/*/groups/*/membership-requests/brand-new',
       'javascript, python, php, java, go',
     );
+    restore();
+  });
+});
+
+test('stale routes in Go and Java fail the coverage gate, including wildcards, path vars, and doRaw', () => {
+  withCopy(({ edit, run }) => {
+    let restore = edit('sdk/go/calls.go', '"/reject"', '"/reject-stale"');
+    let result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /\/api\/sessions\/\*\/calls\/\*\/reject-stale: built by go/);
+    restore();
+
+    restore = edit(
+      'sdk/java/src/main/java/com/rmyndharis/openwa/resources/CallsResource.java',
+      '"/reject"',
+      '"/reject-stale"',
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /\/api\/sessions\/\*\/calls\/\*\/reject-stale: built by java/);
+    restore();
+
+    // Wildcard-ending by-id routes (/*) must be verified against the contract, not skipped.
+    restore = edit('sdk/go/catalog.go', '"/catalog/products/"', '"/catalog/stale-products/"');
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /\/api\/sessions\/\*\/catalog\/stale-products\/\*: built by go/);
+    restore();
+
+    restore = edit(
+      'sdk/java/src/main/java/com/rmyndharis/openwa/resources/CatalogResource.java',
+      '"/catalog/products/"',
+      '"/catalog/stale-products/"',
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /\/api\/sessions\/\*\/catalog\/stale-products\/\*: built by java/);
+    restore();
+
+    // Go local `path :=` route variables and `.doRaw(...)` calls must also be checked.
+    restore = edit(
+      'sdk/go/chats.go',
+      'path := s.base(sessionID) + "/" + pathEscape(chatID) + "/messages"',
+      'path := s.base(sessionID) + "/" + pathEscape(chatID) + "/messages-stale"',
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /DELETE \/api\/sessions\/\*\/chats\/\*\/messages-stale: built by go/);
+    restore();
+
+    restore = edit('sdk/go/status.go', '+pathEscape(statusID)+"/media"', '+pathEscape(statusID)+"/media-stale"');
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/status\/\*\/media-stale: built by go/);
+    restore();
+
+    restore = edit(
+      'sdk/go/messages.go',
+      'path := s.base(sessionID) + "/" + pathEscape(chatID) + "/" + pathEscape(messageID) + "/media"',
+      'path := s.base(sessionID) + "/" + pathEscape(chatID) + "/" + pathEscape(messageID) + "/media-stale"',
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/messages\/\*\/\*\/media-stale: built by go/);
+    restore();
+
+    // Local named `webhooks` must NOT rewrite `"/webhooks/"` inside string literals.
+    restore = edit(
+      'sdk/go/webhooks.go',
+      'err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(webhookID), nil, nil, &out)',
+      'webhooks := "custom"\n\t_ = webhooks\n\terr := s.client.do(ctx, "GET", "/api/sessions/"+pathEscape(sessionID)+"/webhooks/"+pathEscape(webhookID), nil, nil, &out)',
+    );
+    result = run();
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    restore();
+
+    // Chained, multi-line, and conditional-branch Go locals must all be resolved and flagged when stale.
+    restore = edit(
+      'sdk/go/catalog.go',
+      'err := s.client.do(ctx, "GET", s.sessionBase(sessionID)+"/catalog/products", valuesOf(query), nil, &out)',
+      [
+        'prefix := s.sessionBase(sessionID) +',
+        '\t\t"/catalog"',
+        '\tpath := prefix + "/products"',
+        '\tif query != nil {',
+        '\t\tpath = prefix + "/products-stale"',
+        '\t}',
+        '\terr := s.client.do(ctx, "GET", path, valuesOf(query), nil, &out)',
+      ].join('\n\t'),
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/catalog\/products-stale: built by go/);
+    restore();
+
+    // Java local `String` route variables (chained and conditional) must also be caught when stale.
+    restore = edit(
+      'sdk/java/src/main/java/com/rmyndharis/openwa/resources/CatalogResource.java',
+      'public CatalogInfo info(String sessionId) {\n        return client.request(\n            HttpMethod.GET, "/api/sessions/" + encodeSegment(sessionId) + "/catalog", null, null, CatalogInfo.class);',
+      [
+        'public CatalogInfo info(String sessionId) {',
+        '        String base = "/api/sessions/" + encodeSegment(sessionId);',
+        '        String path = base + "/catalog";',
+        '        if (sessionId.isEmpty()) {',
+        '            path = base + "/catalog-stale";',
+        '        }',
+        '        return client.request(',
+        '            HttpMethod.GET, path, null, null, CatalogInfo.class);',
+      ].join('\n'),
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/catalog-stale: built by java/);
+    restore();
+  });
+});
+
+test('sequential +=, overwrite, and mutually exclusive if/else branches avoid intermediate and cross-branch false positives', () => {
+  withCopy(({ edit, run }) => {
+    // Go: sequential +=, path = path + "...", unconditional overwrite, if/else += isolation, and early-return isolation.
+    let restore = edit(
+      'sdk/go/media.go',
+      'err := s.client.do(ctx, "GET", s.base(sessionID)+"/convert", nil, nil, &out)',
+      [
+        'path := "/api/sessions/" + pathEscape(sessionID) + "/media"',
+        '\tpath += "/convert"',
+        '\tif len(sessionID) == 0 {',
+        '\t\tpath = "/api/sessions/" + pathEscape(sessionID) + "/media"',
+        '\t\tpath = path + "/convert"',
+        '\t} else if len(sessionID) == 1 {',
+        '\t\tpath = s.base(sessionID)',
+        '\t\tpath = "/api/sessions/" + pathEscape(sessionID) + "/chats"',
+        '\t}',
+        '\terr := s.client.do(ctx, "GET", path, nil, nil, &out)',
+      ].join('\n\t'),
+    );
+    let restoreVoice = edit(
+      'sdk/go/media.go',
+      'err := s.client.do(ctx, "POST", s.base(sessionID)+"/convert/voice", nil, in, &out)',
+      [
+        'target := s.base(sessionID)',
+        '\tif in.URL != "" {',
+        '\t\ttarget += "/convert/voice"',
+        '\t} else {',
+        '\t\ttarget += "/convert/video"',
+        '\t}',
+        '\terr := s.client.do(ctx, "POST", target, nil, in, &out)',
+      ].join('\n\t'),
+    );
+    let restoreVideo = edit(
+      'sdk/go/media.go',
+      'err := s.client.do(ctx, "POST", s.base(sessionID)+"/convert/video", nil, in, &out)',
+      [
+        'early := s.base(sessionID)',
+        '\tif in.URL != "" {',
+        '\t\tearly += "/convert/voice"',
+        '\t\tvar first ConvertedMedia',
+        '\t\t_ = s.client.do(ctx, "POST", early, nil, in, &first)',
+        '\t\treturn &first, nil',
+        '\t}',
+        '\tearly += "/convert/video"',
+        '\terr := s.client.do(ctx, "POST", early, nil, in, &out)',
+      ].join('\n\t'),
+    );
+    let result = run();
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    restoreVideo();
+    restoreVoice();
+    restore();
+
+    // Java: sequential +=, p = p + "...", overwrite, if/else += isolation, and early-return isolation.
+    restore = edit(
+      'sdk/java/src/main/java/com/rmyndharis/openwa/resources/MediaResource.java',
+      'public ConvertedMedia convertVideo(String sessionId, ConvertMediaRequest media) {',
+      [
+        'void sequentialHelpers(String sessionId, ConvertMediaRequest media, boolean flag) throws Exception {',
+        '        var p = "/api/sessions/" + encodeSegment(sessionId) + "/media";',
+        '        p += "/convert";',
+        '        if (sessionId.isEmpty()) {',
+        '            p = "/api/sessions/" + encodeSegment(sessionId) + "/media";',
+        '            p = p + "/convert";',
+        '        } else if (sessionId.length() == 1) {',
+        '            p = "/api/sessions/" + encodeSegment(sessionId) + "/media";',
+        '            p = "/api/sessions/" + encodeSegment(sessionId) + "/chats";',
+        '        }',
+        '        client.request(HttpMethod.GET, p, null, null, Object.class);',
+        '',
+        '        String target = "/api/sessions/" + encodeSegment(sessionId) + "/media";',
+        '        if (flag) {',
+        '            target += "/convert/voice";',
+        '        } else {',
+        '            target += "/convert/video";',
+        '        }',
+        '        client.request(HttpMethod.POST, target, null, media, ConvertedMedia.class);',
+        '',
+        '        var early = "/api/sessions/" + encodeSegment(sessionId) + "/media";',
+        '        if (flag) {',
+        '            early += "/convert/voice";',
+        '            client.request(HttpMethod.POST, early, null, media, ConvertedMedia.class);',
+        '            return;',
+        '        }',
+        '        early += "/convert/video";',
+        '        client.request(HttpMethod.POST, early, null, media, ConvertedMedia.class);',
+        '    }',
+        '',
+        '    public ConvertedMedia convertVideo(String sessionId, ConvertMediaRequest media) {',
+      ].join('\n'),
+    );
+    result = run();
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    restore();
+  });
+});
+
+test('stale routes inside Go if/else-if/for init clauses, Go free helpers, and Java package-private/throws/var/unbraced-if are caught', () => {
+  withCopy(({ edit, run }) => {
+    // Go `if path := ...` init clause + `+=` stale route
+    let restore = edit(
+      'sdk/go/catalog.go',
+      'err := s.client.do(ctx, "GET", s.sessionBase(sessionID)+"/catalog/products", valuesOf(query), nil, &out)',
+      [
+        'if path := s.sessionBase(sessionID) + "/catalog"; query != nil {',
+        '\t\tpath += "/if-init-stale"',
+        '\t\t_ = s.client.do(ctx, "GET", path, valuesOf(query), nil, &out)',
+        '\t}',
+        '\terr := s.client.do(ctx, "GET", s.sessionBase(sessionID)+"/catalog/products", valuesOf(query), nil, &out)',
+      ].join('\n\t'),
+    );
+    let result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/catalog\/if-init-stale: built by go/);
+    restore();
+
+    // Go `else if path := ...` init clause
+    restore = edit(
+      'sdk/go/catalog.go',
+      'err := s.client.do(ctx, "GET", s.sessionBase(sessionID)+"/catalog/products", valuesOf(query), nil, &out)',
+      [
+        'if query == nil {',
+        '\t\t_ = query',
+        '\t} else if path := s.sessionBase(sessionID) + "/catalog/else-if-init-stale"; query != nil {',
+        '\t\t_ = s.client.do(ctx, "GET", path, valuesOf(query), nil, &out)',
+        '\t}',
+        '\terr := s.client.do(ctx, "GET", s.sessionBase(sessionID)+"/catalog/products", valuesOf(query), nil, &out)',
+      ].join('\n\t'),
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/catalog\/else-if-init-stale: built by go/);
+    restore();
+
+    // Go `for path := ...` init clause
+    restore = edit(
+      'sdk/go/catalog.go',
+      'err := s.client.do(ctx, "GET", s.sessionBase(sessionID)+"/catalog/products", valuesOf(query), nil, &out)',
+      [
+        'for path := s.sessionBase(sessionID) + "/catalog/for-init-stale"; false; {',
+        '\t\t_ = s.client.do(ctx, "GET", path, valuesOf(query), nil, &out)',
+        '\t}',
+        '\terr := s.client.do(ctx, "GET", s.sessionBase(sessionID)+"/catalog/products", valuesOf(query), nil, &out)',
+      ].join('\n\t'),
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/catalog\/for-init-stale: built by go/);
+    restore();
+
+    // Go free helper function with `<ident>.<baseHelper>(...)` and receiverless signature
+    restore = edit(
+      'sdk/go/catalog.go',
+      'func (s *CatalogService) sessionBase(sessionID string) string {',
+      [
+        'func helperFetchCatalog(ctx context.Context, c *CatalogService, sessionID string) error {',
+        '\tpath := c.sessionBase(sessionID) + "/catalog/free-helper-stale"',
+        '\treturn c.client.do(ctx, "GET", path, nil, nil, nil)',
+        '}',
+        '',
+        'func (s *CatalogService) sessionBase(sessionID string) string {',
+      ].join('\n'),
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/catalog\/free-helper-stale: built by go/);
+    restore();
+
+    // Java package-private method with `throws Exception`, `var`, and unbraced `if`/`else`
+    restore = edit(
+      'sdk/java/src/main/java/com/rmyndharis/openwa/resources/CatalogResource.java',
+      'public CatalogInfo info(String sessionId) {',
+      [
+        'CatalogInfo packageHelper(String sessionId, boolean flag) throws Exception {',
+        '        var p = "/api/sessions/" + encodeSegment(sessionId) + "/catalog";',
+        '        if (flag) p = p + "-if-stale";',
+        '        else p = p + "-else-stale";',
+        '        return client.request(HttpMethod.GET, p, null, null, CatalogInfo.class);',
+        '    }',
+        '',
+        '    public CatalogInfo info(String sessionId) {',
+      ].join('\n'),
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/catalog-if-stale: built by java/);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/catalog-else-stale: built by java/);
+    restore();
+  });
+});
+
+test('nested control-flow blocks, try/finally after return, and Java Object record params are analyzed accurately', () => {
+  withCopy(({ edit, run }) => {
+    // Go: nested both-returning if inside outer block prunes unreachable call; nested if/for inside if propagates locals.
+    let restore = edit(
+      'sdk/go/media.go',
+      'err := s.client.do(ctx, "GET", s.base(sessionID)+"/convert", nil, nil, &out)',
+      [
+        'path := "/api/sessions/" + pathEscape(sessionID) + "/media"',
+        '\tif len(sessionID) == 0 {',
+        '\t\tif len(sessionID) > 1 {',
+        '\t\t\tpath += "/convert/voice"',
+        '\t\t\treturn nil, nil',
+        '\t\t} else {',
+        '\t\t\tpath += "/convert/video"',
+        '\t\t\treturn nil, nil',
+        '\t\t}',
+        '\t\tpath += "/unreachable-stale"',
+        '\t}',
+        '\tif len(sessionID) == 2 {',
+        '\t\tif len(sessionID) > 0 {',
+        '\t\t\tpath = "/api/sessions/" + pathEscape(sessionID) + "/media/convert"',
+        '\t\t} else {',
+        '\t\t\tpath = "/api/sessions/" + pathEscape(sessionID) + "/chats"',
+        '\t\t}',
+        '\t\treturn nil, s.client.do(ctx, "GET", path, nil, nil, &out)',
+        '\t}',
+        '\tpath += "/convert"',
+        '\terr := s.client.do(ctx, "GET", path, nil, nil, &out)',
+      ].join('\n\t'),
+    );
+    let result = run();
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    restore();
+
+    // Java: valid try { nested if/else += } finally {} passes with zero false positives.
+    restore = edit(
+      'sdk/java/src/main/java/com/rmyndharis/openwa/resources/MediaResource.java',
+      'public ConvertedMedia convertVideo(String sessionId, ConvertMediaRequest media) {',
+      [
+        'void tryNestedHelper(String sessionId, ConvertMediaRequest media, boolean flag) {',
+        '        var target = "/api/sessions/" + encodeSegment(sessionId) + "/media";',
+        '        try {',
+        '            if (flag) {',
+        '                if (sessionId.isEmpty()) {',
+        '                    target += "/convert/voice";',
+        '                    return;',
+        '                } else {',
+        '                    target += "/convert/video";',
+        '                    return;',
+        '                }',
+        '                target += "/unreachable-stale";',
+        '                client.request(HttpMethod.POST, target, null, media, ConvertedMedia.class);',
+        '            }',
+        '            target += "/convert/voice";',
+        '        } finally {',
+        '            client.request(HttpMethod.POST, target, null, media, ConvertedMedia.class);',
+        '        }',
+        '    }',
+        '',
+        '    public ConvertedMedia convertVideo(String sessionId, ConvertMediaRequest media) {',
+      ].join('\n'),
+    );
+    result = run();
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    restore();
+
+    // Go: nested loop/if inside if propagating a stale local route out of block is caught.
+    restore = edit(
+      'sdk/go/catalog.go',
+      'err := s.client.do(ctx, "GET", s.sessionBase(sessionID)+"/catalog/products", valuesOf(query), nil, &out)',
+      [
+        'path := s.sessionBase(sessionID) + "/catalog"',
+        '\tif query != nil {',
+        '\t\tif query.Limit != nil {',
+        '\t\t\tfor i := 0; i < 1; i++ {',
+        '\t\t\t\tpath += "/nested-loop-stale"',
+        '\t\t\t}',
+        '\t\t}',
+        '\t} else {',
+        '\t\tpath += "/products"',
+        '\t}',
+        '\terr := s.client.do(ctx, "GET", path, valuesOf(query), nil, &out)',
+      ].join('\n\t'),
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/catalog\/nested-loop-stale: built by go/);
+    restore();
+
+    // Java: try/catch both terminating still evaluates calls & locals inside finally, and `Object record` param is scanned.
+    restore = edit(
+      'sdk/java/src/main/java/com/rmyndharis/openwa/resources/CatalogResource.java',
+      'public CatalogInfo info(String sessionId) {',
+      [
+        'CatalogInfo finallyHelper(String sessionId, boolean throwIt) {',
+        '        String p = "/api/sessions/" + encodeSegment(sessionId) + "/catalog";',
+        '        try {',
+        '            if (throwIt) throw new RuntimeException();',
+        '            return client.request(HttpMethod.GET, p, null, null, CatalogInfo.class);',
+        '        } catch (RuntimeException e) {',
+        '            throw e;',
+        '        } finally {',
+        '            p += "/finally-stale";',
+        '            client.request(HttpMethod.GET, p, null, null, CatalogInfo.class);',
+        '        }',
+        '    }',
+        '',
+        '    public void sendWithRecordParam(String sessionId, Object record) {',
+        '        String r = "/api/sessions/" + encodeSegment(sessionId) + "/record-param-stale";',
+        '        client.request(HttpMethod.POST, r, null, record, Object.class);',
+        '    }',
+        '',
+        '    public CatalogInfo info(String sessionId) {',
+      ].join('\n'),
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /GET \/api\/sessions\/\*\/catalog\/finally-stale: built by java/);
+    assert.match(result.stderr, /POST \/api\/sessions\/\*\/record-param-stale: built by java/);
     restore();
   });
 });

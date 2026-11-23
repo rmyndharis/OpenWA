@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -132,23 +133,56 @@ func (p RetryPolicy) retryableStatus(status int) bool {
 }
 
 // backoff returns the delay before the retry that follows attempt (0-indexed):
-// BaseDelay * 2^attempt, capped at MaxDelay.
+// BaseDelay * 2^attempt, clamped against overflow and MaxDelay, with bounded
+// equal jitter in [d/2, d].
 func (p RetryPolicy) backoff(attempt int) time.Duration {
+	return p.backoffWithJitter(attempt, rand.N[time.Duration])
+}
+
+func (p RetryPolicy) backoffWithJitter(attempt int, jitterN func(time.Duration) time.Duration) time.Duration {
+	const maxDuration = time.Duration(1<<63 - 1)
 	base := p.BaseDelay
 	if base <= 0 {
 		base = 200 * time.Millisecond
 	}
+	capDelay := maxDuration
+	if p.MaxDelay > 0 {
+		capDelay = p.MaxDelay
+	}
+	if base >= capDelay {
+		d := capDelay
+		return applyEqualJitter(d, jitterN)
+	}
 	d := base
 	for i := 0; i < attempt; i++ {
-		d *= 2
-		if p.MaxDelay > 0 && d >= p.MaxDelay {
-			return p.MaxDelay
+		if d > capDelay/2 {
+			d = capDelay
+			break
 		}
+		d *= 2
 	}
 	if p.MaxDelay > 0 && d > p.MaxDelay {
-		return p.MaxDelay
+		d = p.MaxDelay
 	}
-	return d
+	return applyEqualJitter(d, jitterN)
+}
+
+func applyEqualJitter(d time.Duration, jitterN func(time.Duration) time.Duration) time.Duration {
+	if d <= 1 || jitterN == nil {
+		return d
+	}
+	half := d / 2
+	span := d - half
+	if span <= 0 {
+		return half
+	}
+	offset := jitterN(span)
+	if offset < 0 {
+		offset = 0
+	} else if offset >= span {
+		offset = span - 1
+	}
+	return half + offset
 }
 
 func parseRetryAfter(resp *http.Response) (time.Duration, bool) {

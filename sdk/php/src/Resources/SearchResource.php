@@ -60,6 +60,6 @@ class SearchResource
      */
     public function search(array $params): array
     {
-        return $this->http->request('GET', '/api/search', $params) ?? [];
+        return $this->http->requestNullableArray('GET', '/api/search', $params) ?? [];
     }
 }

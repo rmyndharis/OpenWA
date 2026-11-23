@@ -27,13 +27,13 @@ class ChannelsResource
      */
     public function list(string $sessionId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels") ?? [];
+        return $this->http->requestNullableArray('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels") ?? [];
     }
 
     /** @return array<string,mixed> */
     public function get(string $sessionId, string $channelId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}");
     }
 
     /**
@@ -44,7 +44,7 @@ class ChannelsResource
      */
     public function messages(string $sessionId, string $channelId, array $query = []): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/messages", $query) ?? [];
+        return $this->http->requestNullableArray('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/messages", $query) ?? [];
     }
 
     /**
@@ -55,7 +55,7 @@ class ChannelsResource
      */
     public function create(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels", [], $body);
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels", [], $body);
     }
 
     /**
@@ -68,7 +68,7 @@ class ChannelsResource
      */
     public function delete(string $sessionId, string $channelId): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/delete");
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/delete");
     }
 
     /**
@@ -79,7 +79,7 @@ class ChannelsResource
      */
     public function mute(string $sessionId, string $channelId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/mute", [], $body);
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/mute", [], $body);
     }
     /**
      * Subscribe to a channel using its invite code. Requires an OPERATOR-level key.
@@ -90,13 +90,13 @@ class ChannelsResource
      */
     public function subscribe(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/subscribe", [], $body);
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/subscribe", [], $body);
     }
 
     /** Unsubscribe from a channel. Requires an OPERATOR-level key. */
     public function unsubscribe(string $sessionId, string $channelId): array
     {
-        return $this->http->request('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}");
+        return $this->http->requestArray('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}");
     }
     /**
      * Demote a channel admin back to a subscriber. Requires an OPERATOR-level key.
@@ -109,7 +109,7 @@ class ChannelsResource
      */
     public function demoteAdmin(string $sessionId, string $channelId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/admins/demote", [], $body);
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/admins/demote", [], $body);
     }
 
     /**
@@ -123,7 +123,7 @@ class ChannelsResource
      */
     public function transferOwnership(string $sessionId, string $channelId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/owner/transfer", [], $body);
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/owner/transfer", [], $body);
     }
 
 }

@@ -29,7 +29,7 @@ class CallsResource
      */
     public function rejectCall(string $sessionId, string $callId): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/calls/{$this->http->encodeSegment($callId)}/reject");
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/calls/{$this->http->encodeSegment($callId)}/reject");
     }
     /**
      * Create a shareable WhatsApp call link.
@@ -44,7 +44,7 @@ class CallsResource
      */
     public function createLink(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/calls/link", [], $body);
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/calls/link", [], $body);
     }
 
 }

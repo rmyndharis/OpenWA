@@ -29,7 +29,7 @@ class MediaResource
      */
     public function conversionStatus(string $sessionId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/media/convert");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/media/convert");
     }
 
     /**
@@ -44,7 +44,7 @@ class MediaResource
      */
     public function convertVoice(string $sessionId, array $media): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/media/convert/voice", [], $media);
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/media/convert/voice", [], $media);
     }
 
     /**
@@ -57,6 +57,6 @@ class MediaResource
      */
     public function convertVideo(string $sessionId, array $media): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/media/convert/video", [], $media);
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/media/convert/video", [], $media);
     }
 }

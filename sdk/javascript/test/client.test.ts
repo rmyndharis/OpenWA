@@ -855,4 +855,22 @@ describe('OpenWAClient', () => {
     await expect(c.sessions.list()).resolves.toEqual([]);
     expect(receivers).toEqual([undefined]);
   });
+
+  it('clones defaultHeaders on construction so post-hoc caller mutations do not alias requests', async () => {
+    const seen: Record<string, string>[] = [];
+    const fetchMock: FetchLike = async (_url, init) => {
+      seen.push({ ...(init?.headers as Record<string, string>) });
+      return new Response('[]', { status: 200 });
+    };
+    const defaultHeaders: Record<string, string> = { 'X-Tenant': 'alpha' };
+    const c = new OpenWAClient({ baseUrl: 'http://localhost', apiKey: 'k', fetch: fetchMock, defaultHeaders });
+
+    defaultHeaders['X-Tenant'] = 'mutated';
+    defaultHeaders['X-Injected'] = 'evil';
+
+    await c.sessions.list();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]['X-Tenant']).toBe('alpha');
+    expect(seen[0]['X-Injected']).toBeUndefined();
+  });
 });

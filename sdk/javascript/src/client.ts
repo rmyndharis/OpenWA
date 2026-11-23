@@ -88,7 +88,7 @@ export class OpenWAClient {
         baseUrl: options.baseUrl,
         apiKey,
         timeoutMs: toTimeoutMs(options.timeoutMs ?? 30000),
-        defaultHeaders: options.defaultHeaders ?? {},
+        defaultHeaders: options.defaultHeaders ? { ...options.defaultHeaders } : {},
         // Looked up on each call rather than captured here, so a fetch installed on globalThis after
         // the client is built (a polyfill or a test stub) is the one used.
         fetch: options.fetch ?? ((input, init) => globalThis.fetch(input, init)),
