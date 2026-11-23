@@ -209,6 +209,7 @@ resolve_sqlite_target() {
     if command -v readlink >/dev/null 2>&1; then
       link="$(readlink "$cur")"
     else
+      # shellcheck disable=SC2012
       link="$(LC_ALL=C ls -ld -- "$cur" | sed -n 's/.* -> //p')"
     fi
     [ -z "$link" ] && break
