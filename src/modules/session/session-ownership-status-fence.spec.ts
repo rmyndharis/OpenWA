@@ -211,3 +211,76 @@ describe('nodeOwnsSession default', () => {
     expect(nodeOwnsSession({ owns: jest.fn().mockReturnValue(true) }, 'sess-1')).toBe(true);
   });
 });
+
+describe('engine data-path callbacks are fenced by ownership', () => {
+  it('suppresses inbound messages, acks, receipts, revokes, reactions, edits, and call auto-reject when ownership is lost', () => {
+    const engine = { destroy: jest.fn(), rejectCall: jest.fn() } as unknown as IWhatsAppEngine;
+    const messages = {
+      handleInboundMessage: jest.fn(),
+      handleOwnSendEcho: jest.fn(),
+      handleMessageAck: jest.fn(),
+      handleMessageReceipt: jest.fn(),
+      handleMessageRevoked: jest.fn(),
+      applyReactionQueued: jest.fn(),
+      applyMessageEditQueued: jest.fn(),
+    };
+    const maybeAutoRejectCall = jest.fn();
+    const emitCallReceived = jest.fn();
+    const dispatch = jest.fn();
+    const host = {
+      isLiveEngine: () => true,
+      ownsSession: () => false,
+      messages,
+      leafEvents: {
+        dispatchGroupEvent: jest.fn(),
+        maybeAutoRejectCall,
+      },
+      eventsGateway: {
+        emitCallReceived,
+        emitEventResponse: jest.fn(),
+        emitPollVote: jest.fn(),
+        emitPresenceUpdate: jest.fn(),
+      },
+      webhookService: { dispatch },
+      presence: { record: jest.fn().mockReturnValue(true) },
+    } as unknown as SessionEngineWiringHost;
+
+    const cb = new SessionEngineEventWiring({ logger: createLogger('test') }).buildCallbacks(
+      'sess-1',
+      engine,
+      'sess-1-name',
+      host,
+    );
+
+    cb.onMessage?.({ id: 'm1' } as never);
+    cb.onMessageCreate?.({ id: 'm2' } as never);
+    cb.onMessageAck?.('m1', 'read', '6281@c.us');
+    cb.onMessageReceipt?.({
+      chatId: '6281@c.us',
+      messageIds: ['m1'],
+      status: 'read',
+      participant: '6281@c.us',
+    } as never);
+    cb.onMessageRevoked?.({ id: 'm1', chatId: '6281@c.us' } as never);
+    cb.onMessageReaction?.({
+      messageId: 'm1',
+      chatId: '6281@c.us',
+      reaction: '👍',
+      senderId: '6281@c.us',
+      timestamp: 1,
+    } as never);
+    cb.onMessageEdited?.({ messageId: 'm1', chatId: '6281@c.us', body: 'edited', timestamp: 1 } as never);
+    cb.onCall?.({ callId: 'c1', from: '6281@c.us', isVideo: false, isGroup: false, timestamp: 1 });
+
+    expect(messages.handleInboundMessage).not.toHaveBeenCalled();
+    expect(messages.handleOwnSendEcho).not.toHaveBeenCalled();
+    expect(messages.handleMessageAck).not.toHaveBeenCalled();
+    expect(messages.handleMessageReceipt).not.toHaveBeenCalled();
+    expect(messages.handleMessageRevoked).not.toHaveBeenCalled();
+    expect(messages.applyReactionQueued).not.toHaveBeenCalled();
+    expect(messages.applyMessageEditQueued).not.toHaveBeenCalled();
+    expect(emitCallReceived).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(maybeAutoRejectCall).not.toHaveBeenCalled();
+  });
+});

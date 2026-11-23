@@ -342,5 +342,29 @@ describe('SessionLivenessWatchdog', () => {
         jest.useRealTimers();
       }
     });
+
+    it('re-checks isShuttingDown after probeLiveness awaits and skips DISCONNECTED on shutdown', async () => {
+      let shuttingDown = false;
+      const shutdownService = { isShuttingDown: () => shuttingDown } as unknown as ShutdownService;
+      const wd = new SessionLivenessWatchdog(engines, shutdownService);
+      const deadCb = jest.fn().mockResolvedValue(undefined);
+      wd.start(deadCb);
+
+      let resolveProbe!: (alive: boolean) => void;
+      const engine = engineOf(
+        EngineStatus.READY,
+        jest.fn(() => new Promise<boolean>(res => (resolveProbe = res))),
+      );
+      engines.set('s1', engine as unknown as IWhatsAppEngine);
+      failuresOf(wd).set('s1', SESSION_WATCHDOG_MAX_FAILURES - 1);
+
+      const probing = wd.probe('s1', engine as unknown as IWhatsAppEngine);
+      await Promise.resolve();
+      shuttingDown = true;
+      resolveProbe(false);
+      await probing;
+
+      expect(deadCb).not.toHaveBeenCalled();
+    });
   });
 });

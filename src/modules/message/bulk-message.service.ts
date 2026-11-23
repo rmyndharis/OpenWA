@@ -856,6 +856,9 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       // Resolved per item, not once per batch: a session restart or reconnect registers a fresh
       // adapter, and a batch still holding the retired one would fail every remaining item.
       lifetime.assertCurrent();
+      if (typeof this.ownership?.owns === 'function' && !this.ownership.owns(batch.sessionId)) {
+        throw new EngineNotReadyError();
+      }
       const engine = this.engines.get(batch.sessionId);
       if (!engine) throw new EngineNotReadyError();
 

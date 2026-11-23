@@ -68,4 +68,51 @@ describe('session activity writes during a message burst', () => {
     expect(activityWrites).toBe(1);
     expect((await sessions.findOneByOrFail({ id: 's1' })).lastActiveAt).toBeInstanceOf(Date);
   });
+
+  it('fences touchLastActive SQL update on nodeId when SessionOwnershipService is wired', async () => {
+    db = new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Message, Session],
+      synchronize: true,
+    });
+    await db.initialize();
+    const sessions = db.getRepository(Session);
+    await sessions.save({ id: 's1', name: 'owned', nodeId: 'node-b', config: {} });
+    const update = jest.spyOn(sessions, 'update');
+    const engines = new EngineRegistry();
+    const engine = { tag: 'owned' } as unknown as IWhatsAppEngine;
+    engines.set('s1', engine);
+
+    const ownership = { nodeId: 'node-a', owns: () => false } as never;
+    const projector = new (MessageProjector as unknown as new (...args: unknown[]) => MessageProjector)(
+      db.getRepository(Message),
+      sessions,
+      engines,
+      { emitMessage: jest.fn() },
+      { dispatch: jest.fn().mockResolvedValue(undefined) },
+      {
+        execute: jest.fn((_e: string, data: unknown) => Promise.resolve({ continue: true, data })),
+      },
+      {},
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ownership,
+    );
+
+    (projector as unknown as { touchLastActive: (id: string, eng: IWhatsAppEngine) => void }).touchLastActive(
+      's1',
+      engine,
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(update).toHaveBeenCalledTimes(1);
+    const [where, patch] = update.mock.calls[0] as [unknown, { lastActiveAt?: unknown }];
+    expect(where).toEqual({ id: 's1', nodeId: 'node-a' });
+    expect(patch.lastActiveAt).toBeInstanceOf(Date);
+    expect((await sessions.findOneByOrFail({ id: 's1' })).lastActiveAt).toBeNull();
+  });
 });

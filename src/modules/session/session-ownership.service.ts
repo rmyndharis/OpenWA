@@ -720,7 +720,37 @@ export class SessionOwnershipService {
    * enough — after which a peer may legitimately take the session. Renewal is therefore also the
    * moment to notice, because it is the only regular contact with the row.
    */
-  async renew(): Promise<void> {
+  private renewDbInFlight?: Promise<unknown>;
+  private renewCycleQueued?: Promise<void>;
+
+  renew(): Promise<void> {
+    if (!this.renewDbInFlight && !this.renewCycleQueued) {
+      return this.launchRenewCycle();
+    }
+    if (!this.renewCycleQueued) {
+      // Chain strictly onto the active DB pass (not its onLeaseLost teardown) so a slow engine
+      // teardown never stalls a subsequent claim reconciliation or heartbeat renewal.
+      const waitForDb = this.renewDbInFlight ?? Promise.resolve();
+      const queued = waitForDb
+        .catch(() => undefined)
+        .then(() => {
+          if (this.renewCycleQueued === queued) this.renewCycleQueued = undefined;
+          return this.launchRenewCycle();
+        });
+      this.renewCycleQueued = queued;
+    }
+    return this.renewCycleQueued;
+  }
+
+  private launchRenewCycle(): Promise<void> {
+    const dbPass = this.runDbRenewPass().finally(() => {
+      if (this.renewDbInFlight === dbPass) this.renewDbInFlight = undefined;
+    });
+    this.renewDbInFlight = dbPass;
+    return dbPass.then(lost => (lost.length > 0 ? this.dispatchLeaseLost(lost) : undefined));
+  }
+
+  private async runDbRenewPass(): Promise<string[]> {
     const held = [...this.owned];
     const heldGen = new Map(held.map(id => [id, this.claimGen.get(id)]));
 
@@ -747,7 +777,7 @@ export class SessionOwnershipService {
       }
       const mine = await mineQuery.getMany();
       this.noteForeignRenewals(mine, !usePgClock);
-      if (held.length === 0) return;
+      if (held.length === 0) return [];
       if (live.length > 0) {
         if (usePgClock) {
           const updated = await this.sessions
@@ -784,19 +814,19 @@ export class SessionOwnershipService {
         nodeId: this.nodeId,
         error: error instanceof Error ? error.message : String(error),
       });
-      return;
+      return [];
     }
 
     // Re-checked HERE, after the queries above rather than only at entry: the tick this protects
     // against is precisely one that was already in flight when the import took the token, so an
     // entry-only check would let it through. Renewing was harmless; concluding loss is not.
-    if (this.lossDetectionSuspended > 0) return;
+    if (this.lossDetectionSuspended > 0) return [];
 
     // Only a claim this tick actually read can be lost. One released during the queries (a stop) is
     // gone on purpose, and one released and claimed again (a stop, then a start) may have been read
     // in between: neither was taken by a peer.
     const lost = held.filter(id => !kept.has(id) && this.owned.has(id) && this.claimGen.get(id) === heldGen.get(id));
-    if (lost.length === 0) return;
+    if (lost.length === 0) return [];
     for (const id of lost) {
       this.owned.delete(id);
       this.claimGen.delete(id);
@@ -805,6 +835,10 @@ export class SessionOwnershipService {
       nodeId: this.nodeId,
       sessionIds: lost,
     });
+    return lost;
+  }
+
+  private async dispatchLeaseLost(lost: string[]): Promise<void> {
     try {
       await this.onLeaseLost?.(lost);
     } catch (error) {

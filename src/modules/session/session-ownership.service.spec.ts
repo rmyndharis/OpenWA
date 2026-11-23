@@ -974,6 +974,10 @@ describe('SessionOwnershipService', () => {
   });
 
   describe('PostgreSQL DB-clock lease arithmetic', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
     interface CapturedQb {
       kind: 'select' | 'update' | 'unknown';
       setValues?: Record<string, unknown>;
@@ -1292,6 +1296,152 @@ describe('SessionOwnershipService', () => {
       };
       // Using DB-fetched now agrees with findLiveOwner despite +120s local clock skew.
       expect(svc.heldByOtherLiveNode(peerSession, dbNow)).toBe(true);
+    });
+  });
+
+  describe('renew overlap guard', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('queues at most one fresh DB follow-up pass for callers arriving mid-pass', async () => {
+      const session = await seed({ nodeId: 'node-a', leaseExpiresAt: new Date(Date.now() + 30_000) });
+      const svc = service('node-a');
+      await svc.claim(session.id);
+
+      let releaseFirstFind!: () => void;
+      const origFind = sessions.find.bind(sessions);
+      const findSpy = jest
+        .spyOn(sessions, 'find')
+        .mockImplementationOnce(async (...args) => {
+          await new Promise<void>(res => {
+            releaseFirstFind = res;
+          });
+          return origFind(...args);
+        })
+        .mockImplementation((...args) => origFind(...args));
+
+      try {
+        const first = svc.renew();
+        await new Promise(res => setImmediate(res));
+        expect(findSpy).toHaveBeenCalledTimes(1);
+
+        const second = svc.renew();
+        const third = svc.renew();
+        expect(second).not.toBe(first);
+        expect(third).toBe(second);
+
+        // Still only 1 DB pass running until the active DB pass settles.
+        await new Promise(res => setImmediate(res));
+        expect(findSpy).toHaveBeenCalledTimes(1);
+
+        releaseFirstFind();
+        await Promise.all([first, second, third]);
+        expect(findSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        findSpy.mockRestore();
+      }
+    });
+
+    it('runs a post-conflict DB check when claim() reconciles during an in-flight renew()', async () => {
+      const session = await seed({ nodeId: 'node-a', leaseExpiresAt: new Date(Date.now() + 30_000) });
+      const svc = service('node-a');
+      const lostCalls: string[][] = [];
+      svc.onLeaseLoss(ids => {
+        lostCalls.push(ids);
+      });
+      await expect(svc.claim(session.id)).resolves.toBe(true);
+
+      let releaseStaleFind!: () => void;
+      let enterFirstFind!: () => void;
+      const firstFindEntered = new Promise<void>(res => {
+        enterFirstFind = res;
+      });
+      const origFind = sessions.find.bind(sessions);
+      const findSpy = jest
+        .spyOn(sessions, 'find')
+        .mockImplementationOnce(async () => {
+          enterFirstFind();
+          await new Promise<void>(res => {
+            releaseStaleFind = res;
+          });
+          // Simulate a stale pre-takeover snapshot showing node-a still holds the row.
+          return [{ id: session.id } as Session];
+        })
+        .mockImplementation((...args) => origFind(...args));
+
+      try {
+        const staleRenew = svc.renew();
+        await firstFindEntered;
+
+        // Peer takes over while staleRenew is still suspended in its DB read.
+        await sessions.update({ id: session.id }, { nodeId: 'node-b', leaseExpiresAt: new Date(Date.now() + 60_000) });
+
+        // Overlapping claim() sees 0 rows and reconciles via await this.renew().
+        const claimPromise = svc.claim(session.id);
+        for (let i = 0; i < 5; i++) await new Promise(res => setImmediate(res));
+        expect(findSpy).toHaveBeenCalledTimes(1);
+
+        releaseStaleFind();
+        await expect(claimPromise).resolves.toBe(false);
+        await staleRenew;
+
+        expect(findSpy).toHaveBeenCalledTimes(2);
+        expect(lostCalls).toEqual([[session.id]]);
+        expect(svc.owns(session.id)).toBe(false);
+      } finally {
+        findSpy.mockRestore();
+      }
+    });
+
+    it('keeps renewing healthy sessions when onLeaseLost stalls on a stuck engine teardown', async () => {
+      const sessionA = await seed({ name: 'sess-a', nodeId: 'node-a', leaseExpiresAt: new Date(Date.now() + 30_000) });
+      const sessionB = await seed({ name: 'sess-b', nodeId: 'node-a', leaseExpiresAt: new Date(Date.now() + 30_000) });
+      const svc = service('node-a');
+      await expect(svc.claim(sessionA.id)).resolves.toBe(true);
+      await expect(svc.claim(sessionB.id)).resolves.toBe(true);
+
+      // Peer steals session A while session B remains owned by node-a with an older expiry.
+      await sessions.update({ id: sessionA.id }, { nodeId: 'node-b', leaseExpiresAt: new Date(Date.now() + 60_000) });
+      const staleExpiryB = new Date(Date.now() + 5_000);
+      await sessions.update({ id: sessionB.id }, { leaseExpiresAt: staleExpiryB });
+
+      let teardownStarted!: () => void;
+      const started = new Promise<void>(res => {
+        teardownStarted = res;
+      });
+      let releaseTeardown!: () => void;
+      const teardownGate = new Promise<void>(res => {
+        releaseTeardown = res;
+      });
+      const lostBatches: string[][] = [];
+      svc.onLeaseLoss(async ids => {
+        lostBatches.push(ids);
+        teardownStarted();
+        await teardownGate;
+      });
+
+      let renewADone = false;
+      const renewA = svc.renew().then(() => {
+        renewADone = true;
+      });
+      await started;
+
+      // Session A is already evicted from owned, while renewA is still blocked inside onLeaseLost.
+      expect(svc.owns(sessionA.id)).toBe(false);
+      expect(svc.owns(sessionB.id)).toBe(true);
+      expect(renewADone).toBe(false);
+
+      // A concurrent/heartbeat renew() must execute its DB renewal for session B immediately.
+      await svc.renew();
+      const refreshedB = await sessions.findOneByOrFail({ id: sessionB.id });
+      expect(refreshedB.leaseExpiresAt!.getTime()).toBeGreaterThan(staleExpiryB.getTime());
+      expect(renewADone).toBe(false);
+
+      releaseTeardown();
+      await renewA;
+      expect(lostBatches).toEqual([[sessionA.id]]);
+      expect(renewADone).toBe(true);
     });
   });
 });
