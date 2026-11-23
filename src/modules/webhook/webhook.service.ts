@@ -9,6 +9,7 @@ import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveSessionScope } from '../../common/security/session-scope';
 import { pruneInBatches } from '../../common/utils/batched-prune';
+import { startGuardedInterval } from '../../common/utils/guarded-interval';
 import { ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { generateDeliveryId } from './utils/idempotency.util';
 import { buildDeliveryHeaders } from './utils/deliver-once';
@@ -40,11 +41,14 @@ const DEFAULT_WEBHOOK_MAX_PER_SESSION = 16;
  * listing/retention. Event delivery itself (fan-out, queueing, retries, dead-lettering) lives on
  * WebhookDeliveryService; dispatch() here is the stable facade every event producer calls.
  */
+/** Upper bound on waiting for in-flight webhook failure/payload prunes during shutdown. */
+export const WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS = 1_000;
+
 @Injectable()
 export class WebhookService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookService');
-  private cleanupTimer?: ReturnType<typeof setInterval>;
-  private payloadCleanupTimer?: ReturnType<typeof setInterval>;
+  private stopPruneIntervals: Array<() => void> = [];
+  private readonly inFlightPrunes = new Set<Promise<void>>();
   private stopped = false;
 
   constructor(
@@ -72,28 +76,47 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Webhook delivery-failure retention disabled (WEBHOOK_FAILURE_RETENTION_DAYS <= 0)');
       return;
     }
-    const runPrune = (): void => {
-      this.pruneDeliveryFailures(retentionDays)
-        .then(n => {
+    this.stopPruneIntervals.push(
+      startGuardedInterval(
+        async () => {
+          if (this.stopped) return;
+          const n = await this.trackPrune(this.pruneDeliveryFailures(retentionDays));
           if (n > 0) this.logger.log(`Pruned ${n} webhook delivery-failure(s) older than ${retentionDays} day(s)`);
-        })
-        .catch(err =>
+        },
+        24 * 60 * 60 * 1000,
+        err =>
           this.logger.error('Webhook delivery-failure cleanup failed', err instanceof Error ? err.stack : String(err)),
-        );
-    };
-    runPrune(); // prune once at startup
-    this.cleanupTimer = setInterval(runPrune, 24 * 60 * 60 * 1000);
-    this.cleanupTimer.unref?.();
+      ),
+    );
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.stopped = true;
-    if (this.cleanupTimer) {
-      clearInterval(this.cleanupTimer);
+    for (const stop of this.stopPruneIntervals) stop();
+    this.stopPruneIntervals = [];
+    if (this.inFlightPrunes.size === 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        Promise.allSettled([...this.inFlightPrunes]),
+        new Promise<void>(resolve => {
+          timer = setTimeout(resolve, WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS);
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
     }
-    if (this.payloadCleanupTimer) {
-      clearInterval(this.payloadCleanupTimer);
-    }
+  }
+
+  private trackPrune<T>(promise: Promise<T>): Promise<T> {
+    const settled = promise.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.inFlightPrunes.add(settled);
+    void settled.finally(() => this.inFlightPrunes.delete(settled));
+    return promise;
   }
 
   /**
@@ -132,22 +155,27 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
    */
   private schedulePayloadPrune(): void {
     const hours = this.configService.get<number>('webhook.failurePayloadRetentionHours', 0);
-    const runPrune = (): void => {
-      this.pruneDeliveryFailurePayloads(hours)
-        .then(n => {
-          if (n > 0) this.logger.log(`Cleared the replay payload of ${n} webhook delivery-failure(s)`);
-        })
-        .catch(err =>
+    const runPrune = async (): Promise<void> => {
+      if (this.stopped) return;
+      const n = await this.trackPrune(this.pruneDeliveryFailurePayloads(hours));
+      if (n > 0) this.logger.log(`Cleared the replay payload of ${n} webhook delivery-failure(s)`);
+    };
+    if (hours > 0) {
+      this.stopPruneIntervals.push(
+        startGuardedInterval(runPrune, 60 * 60 * 1000, err =>
           this.logger.error(
             'Webhook delivery-failure payload cleanup failed',
             err instanceof Error ? err.stack : String(err),
           ),
-        );
-    };
-    runPrune();
-    if (hours > 0) {
-      this.payloadCleanupTimer = setInterval(runPrune, 60 * 60 * 1000);
-      this.payloadCleanupTimer.unref?.();
+        ),
+      );
+    } else {
+      void runPrune().catch(err =>
+        this.logger.error(
+          'Webhook delivery-failure payload cleanup failed',
+          err instanceof Error ? err.stack : String(err),
+        ),
+      );
     }
   }
 
@@ -338,7 +366,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
 
   async delete(sessionId: string, id: string): Promise<void> {
     const webhook = await this.findOne(sessionId, id);
-    await this.webhookRepository.remove(webhook);
+    await this.webhookRepository.remove(webhook, { transaction: false });
     this.delivery.invalidateOptInSubscriptions(sessionId);
     this.delivery.forgetWebhook(id);
   }

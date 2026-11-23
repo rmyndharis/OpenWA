@@ -365,4 +365,69 @@ describe('WebhookOutboxService.openBatch() conflict-ignoring transactional inser
       querySpy.mockRestore();
     }
   });
+
+  it('pruneSettled uses IDX_webhook_outbox_events_state_createdAt, caps maxRows, and handles legacy NULL states in a bounded pass', async () => {
+    const outbox = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent));
+    const repo = ds.getRepository(WebhookOutboxEvent);
+    const oldDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const oldSqlDate = oldDate.toISOString().replace('T', ' ').slice(0, 19);
+
+    const seed = (prefix: string, count: number, state: string) =>
+      repo.insert(
+        Array.from({ length: count }, (_, i) => ({
+          webhookId: 'wh-1',
+          sessionId: 'sess-1',
+          event: 'message.received',
+          idempotencyKey: `${prefix}-${i}`,
+          deliveryId: `dlv-${prefix}-${i}`,
+          payload: null,
+          state: state as never,
+          attempts: 0,
+        })),
+      );
+    await seed('disp', 8, 'dispatched');
+    await seed('fail', 6, 'failed');
+    await seed('pend', 2, 'pending');
+    await seed('que', 2, 'queued');
+    await seed('leg', 5, 'dispatched');
+    await ds.query(`UPDATE webhook_outbox_events SET createdAt = ?`, [oldSqlDate]);
+    await ds.query(`UPDATE webhook_outbox_events SET state = NULL WHERE idempotencyKey LIKE 'leg-%'`);
+
+    const capturedPlans: string[] = [];
+    const spiedRunners = new WeakSet<object>();
+    const origQuery = ds.driver.createQueryRunner.bind(ds.driver);
+    const queryRunnerSpy = jest.spyOn(ds.driver, 'createQueryRunner').mockImplementation(mode => {
+      const qr = origQuery(mode);
+      if (!spiedRunners.has(qr)) {
+        spiedRunners.add(qr);
+        const origQrQuery = qr.query.bind(qr) as (...args: unknown[]) => Promise<never>;
+        jest.spyOn(qr, 'query').mockImplementation(async (sql: string, ...rest: unknown[]) => {
+          if (/SELECT .* FROM "webhook_outbox_events"/i.test(sql) && /state/i.test(sql)) {
+            const plan = (await origQrQuery(`EXPLAIN QUERY PLAN ${sql}`, rest[0])) as unknown as Array<{
+              detail: string;
+            }>;
+            capturedPlans.push(...plan.map(p => p.detail));
+          }
+          return origQrQuery(sql, ...rest);
+        });
+      }
+      return qr;
+    });
+
+    try {
+      const firstRun = await outbox.pruneSettled(7, 10);
+      expect(firstRun).toBe(10);
+      expect(capturedPlans.some(d => /USING INDEX IDX_webhook_outbox_events_state_createdAt/.test(d))).toBe(true);
+      expect(capturedPlans.some(d => /^SCAN webhook_outbox_events\b/.test(d))).toBe(false);
+
+      // Pending and queued rows must remain untouched; finishing remaining settled + legacy NULL rows leaves 4.
+      const secondRun = await outbox.pruneSettled(7, 50);
+      expect(secondRun).toBe(9);
+      const remaining = await repo.find();
+      expect(remaining.map(r => r.state).sort()).toEqual(['pending', 'pending', 'queued', 'queued']);
+    } finally {
+      queryRunnerSpy.mockRestore();
+      await outbox.onModuleDestroy();
+    }
+  });
 });

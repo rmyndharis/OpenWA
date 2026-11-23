@@ -396,15 +396,35 @@ describePostgres('webhook and media recovery on PostgreSQL', () => {
     });
     const raced = await repository.save({ ...base, waMessageId: 'race' });
     const find = repository.findOne.bind(repository);
-    jest.spyOn(repository, 'findOne').mockImplementationOnce(async options => {
+    const findOnce = jest.spyOn(repository, 'findOne').mockImplementationOnce(async options => {
       const snapshot = await find(options);
       await repository.update({ id: raced.id }, { metadata: { ...metadata, reactions: ['kept'] } });
       return snapshot;
     });
-    expect(await archive.archive(raced)).toBeNull();
+    const archivedRaceKey = await archive.archive(raced);
+    findOnce.mockRestore();
+    expect(archivedRaceKey).toMatch(/^chat-media\//);
     expect(await repository.findOneByOrFail({ id: raced.id })).toMatchObject({
+      mediaPath: archivedRaceKey,
+      metadata: {
+        media: { mimetype: 'image/png', omitted: true, sizeBytes: bytes.length, archived: true },
+        reactions: ['kept'],
+      },
+    });
+
+    const exhausted = await repository.save({ ...base, waMessageId: 'race-exhausted' });
+    let step = 0;
+    const findAll = jest.spyOn(repository, 'findOne').mockImplementation(async options => {
+      const snapshot = await find(options);
+      step += 1;
+      await repository.update({ id: exhausted.id }, { metadata: { ...metadata, reactions: [`kept-${step}`] } });
+      return snapshot;
+    });
+    expect(await archive.archive(exhausted)).toBeNull();
+    findAll.mockRestore();
+    expect(await repository.findOneByOrFail({ id: exhausted.id })).toMatchObject({
       mediaPath: null,
-      metadata: { ...metadata, reactions: ['kept'] },
+      metadata: { ...metadata, reactions: [`kept-${step}`] },
     });
   });
   // A retention backlog is removed in statements of one batch, fed by a read that looks ahead: a read after every
