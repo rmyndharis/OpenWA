@@ -158,7 +158,7 @@
 > begun can no longer answer `502`: the connection to the client is cut, so a short body
 > cannot pass for the whole one, and the client should repeat the download.
 >
-> **On PostgreSQL, leases and expiry checks use the database clock (`NOW() AT TIME ZONE 'UTC'`).**
+> **On PostgreSQL, leases and expiry checks use the database clock (`clock_timestamp() AT TIME ZONE 'UTC'`).**
 > Every lease write (`claimedAt`, `leaseExpiresAt`) and every lease predicate (claiming, starting,
 > renewing, releasing, proxy owner lookup, `engineLoaded` reads, retirement checks, takeover
 > sweeps, and stranded-row status corrections) is evaluated against PostgreSQL's UTC clock

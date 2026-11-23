@@ -988,7 +988,7 @@ describe('SessionOwnershipService', () => {
         leaseTtlMs?: number;
         onExecute?: (qb: CapturedQb) => { affected?: number; raw?: unknown };
         onGetMany?: (qb: CapturedQb) => unknown[];
-        onGetOne?: (qb: CapturedQb) => unknown;
+        onGetOne?: (qb?: CapturedQb) => unknown;
         onGetRawOne?: (qb: CapturedQb) => unknown;
         onGetRawMany?: (qb: CapturedQb) => unknown[];
         onGetCount?: (qb: CapturedQb) => number;
@@ -1050,7 +1050,7 @@ describe('SessionOwnershipService', () => {
         },
         createQueryBuilder,
         find: jest.fn().mockResolvedValue([]),
-        findOne: jest.fn().mockResolvedValue(null),
+        findOne: jest.fn().mockImplementation(() => Promise.resolve(opts.onGetOne ? opts.onGetOne() : null)),
         update: jest.fn().mockResolvedValue({ affected: 1 }),
       };
       const svc = new SessionOwnershipService(
@@ -1071,54 +1071,55 @@ describe('SessionOwnershipService', () => {
       Object.values(qb.params).some(v => v instanceof Date) ||
       Object.values(qb.setValues ?? {}).some(v => v instanceof Date);
 
-    it('detects postgres dialect and uses DB clock with RETURNING in claimOnce (both new claim and re-claim)', async () => {
+    it('detects postgres dialect and uses DB clock in claimOnce (both new claim with RETURNING and overlapping re-claim)', async () => {
       const dbExpiry1 = new Date('2026-11-22T12:01:00.000Z');
-      const dbExpiry2 = new Date('2026-11-22T12:02:00.000Z');
-      let calls = 0;
       const { svc, repo, queries } = pgHarness({
-        onExecute: () => {
-          calls++;
-          return { affected: 1, raw: [{ id: 's1', leaseExpiresAt: calls === 1 ? dbExpiry1 : dbExpiry2 }] };
-        },
+        onExecute: () => ({ affected: 1, raw: [{ id: 's1', leaseExpiresAt: dbExpiry1 }] }),
       });
 
       expect(svc.isPostgres).toBe(true);
       await expect(svc.claim('s1')).resolves.toBe(true);
+      const lastSeen = (svc as unknown as { lastSeenLease: Map<string, number> }).lastSeenLease;
+      expect(lastSeen.get('s1')).toBe(dbExpiry1.getTime());
+
+      // Overlapping re-claim uses Repository.update with millisecond-truncated DB-clock SQL (zero JS Date).
       await expect(svc.claim('s1')).resolves.toBe(true);
 
-      // Zero Repository.update() calls with JS Date on Postgres.
-      expect(repo.update).not.toHaveBeenCalled();
-      expect(queries).toHaveLength(2);
-      for (const qb of queries) {
-        expect(qb.kind).toBe('update');
-        expect(renderedSetSql(qb)).toContain("NOW() AT TIME ZONE 'UTC'");
-        expect(renderedSetSql(qb)).toContain("interval '1 millisecond'");
-        expect(qb.returning).toBe('"id", "leaseExpiresAt"');
-        expect(qb.params.ttlMs).toBe(60_000);
-        expect(hasDateParam(qb)).toBe(false);
-      }
-      expect(allWhereSql(queries[0])).toContain("NOW() AT TIME ZONE 'UTC'");
-      const lastSeen = (svc as unknown as { lastSeenLease: Map<string, number> }).lastSeenLease;
-      expect(lastSeen.get('s1')).toBe(dbExpiry2.getTime());
+      expect(queries).toHaveLength(1);
+      expect(queries[0].kind).toBe('update');
+      expect(renderedSetSql(queries[0])).toContain("date_trunc('milliseconds', clock_timestamp() AT TIME ZONE 'UTC')");
+      expect(renderedSetSql(queries[0])).toContain("interval '1 millisecond'");
+      expect(queries[0].returning).toBe('"id", "leaseExpiresAt"');
+      expect(queries[0].params.ttlMs).toBe(60_000);
+      expect(hasDateParam(queries[0])).toBe(false);
+      expect(allWhereSql(queries[0])).toContain("date_trunc('milliseconds', clock_timestamp() AT TIME ZONE 'UTC')");
+
+      expect(repo.update).toHaveBeenCalledTimes(1);
+      const [where, patch] = repo.update.mock.calls[0] as [Record<string, unknown>, { leaseExpiresAt: () => string }];
+      expect(where).toEqual({ id: 's1', nodeId: 'node-a' });
+      expect(typeof patch.leaseExpiresAt).toBe('function');
+      expect(patch.leaseExpiresAt()).toContain("date_trunc('milliseconds', clock_timestamp() AT TIME ZONE 'UTC')");
+      expect(patch.leaseExpiresAt()).toContain("60000 * interval '1 millisecond'");
+      expect(lastSeen.has('s1')).toBe(false);
     });
 
     it('uses DB clock in prepareStart and ignores static clock skew between app and DB', async () => {
-      // DB clock is 2 minutes behind the app clock.
-      const dbNow = Date.now() - 120_000;
-      const dbExpiry = new Date(dbNow + 60_000);
-      const { svc, repo, queries } = pgHarness({
-        onExecute: () => ({ affected: 1, raw: [{ id: 's1', leaseExpiresAt: dbExpiry }] }),
-      });
+      const { svc, repo } = pgHarness({});
 
       await expect(svc.prepareStart('s1', null)).resolves.toBe(true);
-      expect(repo.update).not.toHaveBeenCalled();
-      expect(queries).toHaveLength(1);
-      expect(renderedSetSql(queries[0])).toContain("NOW() AT TIME ZONE 'UTC'");
-      expect(allWhereSql(queries[0])).toContain("NOW() AT TIME ZONE 'UTC'");
-      expect(queries[0].returning).toBe('"id", "leaseExpiresAt"');
-      expect(hasDateParam(queries[0])).toBe(false);
-      const lastSeen = (svc as unknown as { lastSeenLease: Map<string, number> }).lastSeenLease;
-      expect(lastSeen.get('s1')).toBe(dbExpiry.getTime());
+      expect(repo.update).toHaveBeenCalledTimes(1);
+      const [where, patch] = repo.update.mock.calls[0] as [
+        { leaseExpiresAt: { type?: string; getSql?: (alias: string) => string } },
+        { desiredState: null; leaseExpiresAt: () => string },
+      ];
+      expect(where.leaseExpiresAt.type).toBe('raw');
+      expect(where.leaseExpiresAt.getSql?.('"leaseExpiresAt"')).toContain(
+        "date_trunc('milliseconds', clock_timestamp() AT TIME ZONE 'UTC')",
+      );
+      expect(typeof patch.leaseExpiresAt).toBe('function');
+      expect(patch.leaseExpiresAt()).toContain("date_trunc('milliseconds', clock_timestamp() AT TIME ZONE 'UTC')");
+      expect(patch.leaseExpiresAt()).toContain("60000 * interval '1 millisecond'");
+      expect(patch.desiredState).toBeNull();
     });
 
     it('uses DB clock in stopExpiredForeignClaim, release/clearRow, lapsedHeldByOthers, isHeldByOtherNode, heldByOtherNodes, findLiveOwner, and hasLiveOwnClaim', async () => {
@@ -1142,15 +1143,35 @@ describe('SessionOwnershipService', () => {
       await expect(svc.findLiveOwner('s1')).resolves.toMatchObject({ id: 's1', nodeId: 'peer' });
       await expect(svc.hasLiveOwnClaim('s1')).resolves.toBe(true);
 
-      expect(repo.update).not.toHaveBeenCalled();
-      // Every query except clearRow's own-claim release uses NOW() AT TIME ZONE 'UTC' and zero Date params.
+      // stopExpiredForeignClaim uses Repository.update with a Raw PG_NOW_UTC predicate (no JS Date).
+      expect(repo.update).toHaveBeenCalledTimes(1);
+      const [stopWhere] = repo.update.mock.calls[0] as [
+        Array<{ leaseExpiresAt: { type?: string; getSql?: (alias: string) => string } }>,
+      ];
+      expect(stopWhere[1].leaseExpiresAt.type).toBe('raw');
+      expect(stopWhere[1].leaseExpiresAt.getSql?.('"leaseExpiresAt"')).toContain(
+        "clock_timestamp() AT TIME ZONE 'UTC'",
+      );
+
+      // findLiveOwner and hasLiveOwnClaim use Repository.findOne with a Raw PG_NOW_UTC predicate (no JS Date).
+      expect(repo.findOne).toHaveBeenCalledTimes(2);
+      for (const [opts] of repo.findOne.mock.calls as Array<
+        [{ where: { leaseExpiresAt: { type?: string; getSql?: (alias: string) => string } } }]
+      >) {
+        expect(opts.where.leaseExpiresAt.type).toBe('raw');
+        expect(opts.where.leaseExpiresAt.getSql?.('"leaseExpiresAt"')).toContain(
+          "clock_timestamp() AT TIME ZONE 'UTC'",
+        );
+      }
+
+      // Every query builder lease query uses clock_timestamp() AT TIME ZONE 'UTC' and zero Date params.
       const leaseQueries = queries.filter(
         qb =>
           !(qb.kind === 'update' && allWhereSql(qb).includes('"nodeId" = :me') && !allWhereSql(qb).includes('<> :me')),
       );
-      expect(leaseQueries.length).toBeGreaterThanOrEqual(7);
+      expect(leaseQueries.length).toBeGreaterThanOrEqual(4);
       for (const qb of leaseQueries) {
-        expect(allWhereSql(qb)).toContain("NOW() AT TIME ZONE 'UTC'");
+        expect(allWhereSql(qb)).toContain("clock_timestamp() AT TIME ZONE 'UTC'");
         expect(hasDateParam(qb)).toBe(false);
       }
 
@@ -1158,7 +1179,7 @@ describe('SessionOwnershipService', () => {
       expect(claimable).toHaveLength(3);
       const expiryClause = claimable[2].leaseExpiresAt as { type?: string; getSql?: (alias: string) => string };
       expect(expiryClause.type).toBe('raw');
-      expect(expiryClause.getSql?.('"leaseExpiresAt"')).toContain("NOW() AT TIME ZONE 'UTC'");
+      expect(expiryClause.getSql?.('"leaseExpiresAt"')).toContain("clock_timestamp() AT TIME ZONE 'UTC'");
 
       const cutoffOp = svc.expiredBeforeOperator(new Date(Date.now() - 120_000), 120_000) as unknown as {
         type?: string;
@@ -1166,7 +1187,7 @@ describe('SessionOwnershipService', () => {
         objectLiteralParameters?: Record<string, unknown>;
       };
       expect(cutoffOp.type).toBe('raw');
-      expect(cutoffOp.getSql?.('"leaseExpiresAt"')).toContain("NOW() AT TIME ZONE 'UTC'");
+      expect(cutoffOp.getSql?.('"leaseExpiresAt"')).toContain("clock_timestamp() AT TIME ZONE 'UTC'");
       expect(cutoffOp.getSql?.('"leaseExpiresAt"')).toContain("interval '1 millisecond'");
       expect(cutoffOp.objectLiteralParameters?.graceMs).toBe(120_000);
     });
@@ -1203,12 +1224,12 @@ describe('SessionOwnershipService', () => {
       const selectQueries = queries.filter(q => q.kind === 'select');
       expect(selectQueries.length).toBe(5);
       for (const q of selectQueries) {
-        expect(allWhereSql(q)).toContain("NOW() AT TIME ZONE 'UTC'");
+        expect(allWhereSql(q)).toContain("clock_timestamp() AT TIME ZONE 'UTC'");
       }
       const updateQueries = queries.filter(q => q.kind === 'update');
       for (const q of updateQueries) {
         expect(q.returning).toBe('"id", "leaseExpiresAt"');
-        expect(renderedSetSql(q)).toContain("NOW() AT TIME ZONE 'UTC'");
+        expect(renderedSetSql(q)).toContain("clock_timestamp() AT TIME ZONE 'UTC'");
         expect(hasDateParam(q)).toBe(false);
       }
 
@@ -1225,21 +1246,24 @@ describe('SessionOwnershipService', () => {
     });
 
     it('prepareStart on PostgreSQL treats nullish desiredState as IS NULL and guards elapsed time monotonically', async () => {
-      const dbExpiry = new Date(Date.now() + 60_000);
       let dateNowCalls = 0;
       const realNow = Date.now.bind(Date);
       // Simulate a +120s wall-clock NTP jump between prepareStart entry and query completion:
       // monotonic performance.now() barely moved, so prepareStart must still admit the engine.
       jest.spyOn(Date, 'now').mockImplementation(() => realNow() + ++dateNowCalls * 120_000);
 
-      const { svc, queries } = pgHarness({
-        leaseTtlMs: 60_000,
-        onExecute: () => ({ affected: 1, raw: [{ id: 's1', leaseExpiresAt: dbExpiry }] }),
-      });
+      const { svc, repo } = pgHarness({ leaseTtlMs: 60_000 });
 
       await expect(svc.prepareStart('s1', undefined as unknown as null)).resolves.toBe(true);
-      expect(allWhereSql(queries[0])).toContain('"desiredState" IS NULL');
-      expect(allWhereSql(queries[0])).not.toContain('"desiredState" = :desiredState');
+      expect(repo.update).toHaveBeenCalledTimes(1);
+      const [where] = repo.update.mock.calls[0] as [
+        { desiredState: { type?: string }; leaseExpiresAt: { type?: string; getSql?: (alias: string) => string } },
+      ];
+      expect(where.desiredState).toMatchObject({ type: 'isNull' });
+      expect(where.leaseExpiresAt.type).toBe('raw');
+      expect(where.leaseExpiresAt.getSql?.('"leaseExpiresAt"')).toContain(
+        "date_trunc('milliseconds', clock_timestamp() AT TIME ZONE 'UTC')",
+      );
 
       // Conversely, when monotonic elapsed time exceeds leaseTtlMs, prepareStart rejects even if Date.now() stepped backward.
       let perfCall = 0;
@@ -1249,7 +1273,7 @@ describe('SessionOwnershipService', () => {
       await expect(svc.prepareStart('s1', null)).resolves.toBe(false);
     });
 
-    it('getDbNow queries NOW() AT TIME ZONE UTC on PostgreSQL so heldByOtherLiveNode agrees under +120s skew', async () => {
+    it('getDbNow queries clock_timestamp() AT TIME ZONE UTC on PostgreSQL so heldByOtherLiveNode agrees under +120s skew', async () => {
       const realDbNow = new Date('2026-11-22T12:00:00.000Z');
       const { svc, repo } = pgHarness({
         onQuery: () => [{ now: realDbNow }],
@@ -1259,7 +1283,7 @@ describe('SessionOwnershipService', () => {
       jest.spyOn(Date, 'now').mockReturnValue(realDbNow.getTime() + 120_000);
 
       const dbNow = await svc.getDbNow();
-      expect(repo.manager.query).toHaveBeenCalledWith(expect.stringContaining("NOW() AT TIME ZONE 'UTC'"));
+      expect(repo.manager.query).toHaveBeenCalledWith(expect.stringContaining("clock_timestamp() AT TIME ZONE 'UTC'"));
       expect(dbNow.getTime()).toBe(realDbNow.getTime());
 
       const peerSession = {

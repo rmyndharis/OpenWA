@@ -142,6 +142,18 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
       c => (c[2] as { action?: string } | undefined)?.action === 'duplicate_node_id',
     );
     expect(duplicateLogs).toHaveLength(0);
-    expect((await repoA.findOneByOrFail({ id: session.id })).nodeId).toBe('node-a');
+    const finalRow = await repoA.findOneByOrFail({ id: session.id });
+    expect(finalRow.nodeId).toBe('node-a');
+    expect(finalRow.claimedAt).toBeInstanceOf(Date);
+
+    // Millisecond-truncated DB timestamps must round-trip cleanly through JavaScript Date for exact
+    // WHERE "claimedAt" = $1 delete-claim ownership fences.
+    const fenced = await repoA
+      .createQueryBuilder()
+      .update(Session)
+      .set({ nodeId: 'node-a', updatedAt: () => '"updatedAt"' })
+      .where({ id: session.id, nodeId: 'node-a', claimedAt: finalRow.claimedAt! })
+      .execute();
+    expect(fenced.affected).toBe(1);
   });
 });

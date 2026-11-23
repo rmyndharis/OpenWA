@@ -76,7 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Messages: harden `BulkMessageService` media handling, abortable delays, shutdown drains, and atomic result persistence.
 - Messages: align idempotency expiry checks to `<=` and drain pending idempotency writes on shutdown.
 - Sessions: preserve `x-request-id`, bodyless `DELETE`, and form-urlencoded bodies in `SessionProxyInterceptor`.
-- Sessions: evaluate PostgreSQL session leases on the database UTC clock (`NOW() AT TIME ZONE 'UTC'`) and SQL-fence status and metadata writes on `{ id, nodeId }`.
+- Sessions: evaluate PostgreSQL session leases on the database UTC clock (`clock_timestamp() AT TIME ZONE 'UTC'`) and SQL-fence status and metadata writes on `{ id, nodeId }`.
 - Sessions: explicitly delete `automation_rules` rows during session deletion and full data restore instead of relying on SQLite foreign-key cascades.
 - Queue: set `socketTimeout` (1500 ms) and disable `autoResendUnfulfilledCommands` on the Redis producer so silent peers fail fast without replaying stale commands.
 - Queue: defer busy ingress ordering keys via `DelayedError` instead of holding BullMQ worker slots so one hot conversation cannot block unrelated keys.

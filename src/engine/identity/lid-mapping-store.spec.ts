@@ -5353,14 +5353,39 @@ describe('LidMappingStoreService: the readers agree with the table once overlapp
 });
 
 describe('LidMappingStoreService onMappingLearned notifications', () => {
+  const pg = process.env.DATABASE_TYPE === 'postgres';
+  const server = {
+    type: 'postgres' as const,
+    host: process.env.DATABASE_HOST || 'localhost',
+    port: Number(process.env.DATABASE_PORT || 5432),
+    username: process.env.DATABASE_USERNAME || 'openwa',
+    password: process.env.DATABASE_PASSWORD || 'openwa',
+    database: process.env.DATABASE_NAME || 'openwa',
+  };
+
   it('notifies listeners when remember() persists a non-null phone, skips null/failed writes, and supports unsubscribe', async () => {
-    const ds = new DataSource({
-      type: 'better-sqlite3',
-      database: ':memory:',
-      entities: [Session, LidMapping],
-      synchronize: true,
-    });
-    await ds.initialize();
+    const schema = pg ? `lid_learned_${randomUUID().replace(/-/g, '')}` : '';
+    const onServer = async (sql: string): Promise<void> => {
+      const admin = await new DataSource(server).initialize();
+      await admin.query(sql).finally(() => admin.destroy());
+    };
+    if (pg) await onServer(`CREATE SCHEMA "${schema}"`);
+    const ds = await new DataSource(
+      pg
+        ? {
+            ...server,
+            schema,
+            extra: { options: `-c search_path=${schema},public` },
+            entities: [Session, LidMapping],
+            synchronize: true,
+          }
+        : {
+            type: 'better-sqlite3',
+            database: ':memory:',
+            entities: [Session, LidMapping],
+            synchronize: true,
+          },
+    ).initialize();
     const repo = ds.getRepository(LidMapping);
     const store = new LidMappingStoreService(repo);
     const learned: Array<{ lid: string; phone: string }> = [];
@@ -5388,6 +5413,7 @@ describe('LidMappingStoreService onMappingLearned notifications', () => {
     } finally {
       store.onModuleDestroy();
       await ds.destroy();
+      if (pg) await onServer(`DROP SCHEMA "${schema}" CASCADE`);
     }
   });
 });

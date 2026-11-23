@@ -24,9 +24,15 @@ import { awaitNoOpenTransaction, SHARED_CONNECTION_DIALECTS } from '../../common
 /**
  * PostgreSQL naive-UTC current timestamp expression matching the `timestamp without time zone`
  * lease columns (every PG data connection is pinned to UTC by `postgres-utc.ts`).
+ * Uses `clock_timestamp()` instead of `NOW()` so checks inside an open transaction still observe
+ * lease expiry elapsed after `BEGIN`, and truncates to milliseconds so `claimedAt` and
+ * `leaseExpiresAt` round-trip cleanly through JavaScript `Date` for exact `WHERE "claimedAt" = ...`
+ * ownership fences.
  */
-const PG_NOW_UTC = "(NOW() AT TIME ZONE 'UTC')";
+const PG_NOW_UTC = "date_trunc('milliseconds', clock_timestamp() AT TIME ZONE 'UTC')";
 const PG_EXPIRY_UTC = `${PG_NOW_UTC} + (:ttlMs * interval '1 millisecond')`;
+const pgExpirySql = (ttlMs: number): string =>
+  `${PG_NOW_UTC} + (${Math.max(0, Math.trunc(ttlMs))} * interval '1 millisecond')`;
 const PG_NAIVE_TIMESTAMP = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/;
 
 /** Parse a `Date` or UTC timestamp text returned by PostgreSQL `RETURNING` into epoch ms. */
@@ -255,18 +261,11 @@ export class SessionOwnershipService {
     if (this.owned.has(sessionId) || this.claimGen.has(sessionId)) {
       const generation = this.claimGen.get(sessionId);
       const inFlight = !this.owned.has(sessionId);
-      const renew = (): Promise<{ affected?: number; raw?: unknown }> =>
-        usePgClock
-          ? this.sessions
-              .createQueryBuilder()
-              .update(Session)
-              .set({ leaseExpiresAt: () => PG_EXPIRY_UTC })
-              .where('id = :id', { id: sessionId })
-              .andWhere('"nodeId" = :me', { me: this.nodeId })
-              .setParameter('ttlMs', this.leaseTtlMs)
-              .returning('"id", "leaseExpiresAt"')
-              .execute()
-          : this.sessions.update({ id: sessionId, nodeId: this.nodeId }, { leaseExpiresAt });
+      const renew = (): Promise<{ affected?: number }> =>
+        this.sessions.update(
+          { id: sessionId, nodeId: this.nodeId },
+          usePgClock ? { leaseExpiresAt: () => pgExpirySql(this.leaseTtlMs) } : { leaseExpiresAt },
+        );
       let renewed = await renew();
       // A claim in flight when this one began may write the row after this renewal ran. Once that claim has settled,
       // the miss says nothing about the row: ask again rather than replace the generation it settled with.
@@ -282,8 +281,12 @@ export class SessionOwnershipService {
       if (renewed.affected === 1) {
         this.owned.add(sessionId);
         if (!this.claimGen.has(sessionId)) this.claimGen.set(sessionId, ++this.claimSeq);
-        const writtenExpiry = usePgClock ? returnedLeaseRows(renewed.raw)[0]?.leaseExpiresAt : leaseExpiresAt.getTime();
-        if (writtenExpiry !== undefined) this.lastSeenLease.set(sessionId, writtenExpiry);
+        if (usePgClock) {
+          // Re-baseline duplicate-node tracking until the next renew() RETURNING records the exact DB timestamp.
+          this.lastSeenLease.delete(sessionId);
+        } else {
+          this.lastSeenLease.set(sessionId, leaseExpiresAt.getTime());
+        }
         onClaimed?.(this.captureClaim(sessionId));
         return true;
       }
@@ -308,17 +311,10 @@ export class SessionOwnershipService {
           .execute();
       }
       const previous = this.onAdopted
-        ? usePgClock
-          ? await sessions
-              .createQueryBuilder('s')
-              .select('s.nodeId', 'nodeId')
-              .addSelect(`(s."leaseExpiresAt" IS NOT NULL AND s."leaseExpiresAt" < ${PG_NOW_UTC})`, 'lapsed')
-              .where('s.id = :id', { id: sessionId })
-              .getRawOne<{ nodeId: string | null; lapsed: boolean }>()
-          : await sessions.findOne({
-              where: { id: sessionId },
-              select: { id: true, nodeId: true, leaseExpiresAt: true },
-            })
+        ? await sessions.findOne({
+            where: { id: sessionId },
+            select: { id: true, nodeId: true, leaseExpiresAt: true },
+          })
         : null;
       if (this.claimGen.get(sessionId) !== generation) return 'superseded' as const;
       const result: UpdateResult = usePgClock
@@ -359,13 +355,17 @@ export class SessionOwnershipService {
       if (claimed && usePgClock) {
         writtenExpiry = returnedLeaseRows(result.raw)[0]?.leaseExpiresAt;
       }
-      const previousLapsed =
-        previous == null
-          ? false
-          : 'lapsed' in previous
-            ? Boolean(previous.lapsed)
-            : previous.leaseExpiresAt != null && previous.leaseExpiresAt < now;
-      const adopted = claimed && previous?.nodeId != null && previous.nodeId !== this.nodeId && previousLapsed;
+      const foreignPrevious =
+        claimed && previous?.nodeId != null && previous.nodeId !== this.nodeId && previous.leaseExpiresAt != null;
+      // Under a row-locked PG transaction (manager != null), a successful UPDATE on a row previously held
+      // by another node proves `"leaseExpiresAt" < PG_NOW_UTC` on the database clock. Without a transaction,
+      // compare against the database clock directly rather than a potentially skewed local clock.
+      const previousLapsed = !foreignPrevious
+        ? false
+        : usePgClock
+          ? manager != null || previous.leaseExpiresAt! < (await this.getDbNow())
+          : previous.leaseExpiresAt! < now;
+      const adopted = foreignPrevious && previousLapsed;
       // Decided before the check below: a later claim that replaced this one while its write was in flight reads this
       // node as the previous holder, so a takeover this write made is followed up here or by no one.
       if (adopted) {
@@ -402,27 +402,24 @@ export class SessionOwnershipService {
   async prepareStart(sessionId: string, desiredState: Session['desiredState']): Promise<boolean> {
     if (this.isPostgres) {
       const startedAt = performance.now();
-      const query = this.sessions
-        .createQueryBuilder()
-        .update(Session)
-        .set({ desiredState: null, leaseExpiresAt: () => PG_EXPIRY_UTC })
-        .where('id = :id', { id: sessionId })
-        .andWhere('"nodeId" = :me', { me: this.nodeId })
-        .andWhere(`"leaseExpiresAt" > ${PG_NOW_UTC}`)
-        .setParameter('ttlMs', this.leaseTtlMs)
-        .returning('"id", "leaseExpiresAt"');
-      if (desiredState == null) {
-        query.andWhere('"desiredState" IS NULL');
-      } else {
-        query.andWhere('"desiredState" = :desiredState', { desiredState });
-      }
-      const result = await query.execute();
+      const { affected } = await this.sessions.update(
+        {
+          id: sessionId,
+          nodeId: this.nodeId,
+          leaseExpiresAt: Raw(alias => `${alias} > ${PG_NOW_UTC}`),
+          desiredState: desiredState ?? IsNull(),
+        },
+        {
+          desiredState: null,
+          leaseExpiresAt: () => pgExpirySql(this.leaseTtlMs),
+        },
+      );
       // Even a successful write can return too late to admit an engine on the renewal it wrote.
       // Measuring monotonic elapsed duration avoids comparing DB timestamps against a skewed or
       // NTP-stepped node wall clock.
-      if (result.affected !== 1 || performance.now() - startedAt >= this.leaseTtlMs) return false;
-      const writtenExpiry = returnedLeaseRows(result.raw)[0]?.leaseExpiresAt;
-      if (writtenExpiry !== undefined) this.lastSeenLease.set(sessionId, writtenExpiry);
+      if (affected !== 1 || performance.now() - startedAt >= this.leaseTtlMs) return false;
+      // Re-baseline duplicate-node tracking until the next renew() RETURNING records the exact DB timestamp.
+      this.lastSeenLease.delete(sessionId);
       return true;
     }
     const now = new Date();
@@ -444,24 +441,6 @@ export class SessionOwnershipService {
 
   /** Record a stop and release an abandoned foreign claim without letting its heartbeat revive it. */
   async stopExpiredForeignClaim(sessionId: string): Promise<boolean> {
-    if (this.isPostgres) {
-      return this.withAdoption(async (sessions, manager) => {
-        const result = await sessions
-          .createQueryBuilder()
-          .update(Session)
-          .set({ desiredState: 'stopped', nodeId: null, claimedAt: null, leaseExpiresAt: null, nodeUrl: null })
-          .where('id = :id', { id: sessionId })
-          .andWhere('"nodeId" IS NOT NULL AND "nodeId" <> :me', { me: this.nodeId })
-          .andWhere('("desiredState" IS NULL OR "desiredState" NOT IN (:...deleting))', {
-            deleting: ['deleting', 'deleting-stopped'],
-          })
-          .andWhere(`("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= ${PG_NOW_UTC})`)
-          .execute();
-        if (result.affected !== 1) return false;
-        await this.followAdoption(sessionId, manager);
-        return true;
-      });
-    }
     const foreign = {
       id: sessionId,
       nodeId: Not(this.nodeId),
@@ -471,7 +450,10 @@ export class SessionOwnershipService {
       const { affected } = await sessions.update(
         [
           { ...foreign, leaseExpiresAt: IsNull() },
-          { ...foreign, leaseExpiresAt: LessThanOrEqual(new Date()) },
+          {
+            ...foreign,
+            leaseExpiresAt: this.isPostgres ? Raw(alias => `${alias} <= ${PG_NOW_UTC}`) : LessThanOrEqual(new Date()),
+          },
         ],
         { desiredState: 'stopped', nodeId: null, claimedAt: null, leaseExpiresAt: null, nodeUrl: null },
       );
@@ -927,13 +909,14 @@ export class SessionOwnershipService {
     sessionId: string,
   ): Promise<Pick<Session, 'id' | 'nodeId' | 'nodeUrl' | 'leaseExpiresAt'> | null> {
     if (this.isPostgres) {
-      return this.sessions
-        .createQueryBuilder('session')
-        .select(['session.id', 'session.nodeId', 'session.nodeUrl', 'session.leaseExpiresAt'])
-        .where('session.id = :id', { id: sessionId })
-        .andWhere('session."nodeId" IS NOT NULL')
-        .andWhere(`session."leaseExpiresAt" > ${PG_NOW_UTC}`)
-        .getOne();
+      return this.sessions.findOne({
+        where: {
+          id: sessionId,
+          nodeId: Not(IsNull()),
+          leaseExpiresAt: Raw(alias => `${alias} > ${PG_NOW_UTC}`),
+        },
+        select: { id: true, nodeId: true, nodeUrl: true, leaseExpiresAt: true },
+      });
     }
     const owner = await this.sessions.findOne({
       where: { id: sessionId },
@@ -951,14 +934,16 @@ export class SessionOwnershipService {
    */
   async hasLiveOwnClaim(sessionId: string): Promise<boolean> {
     if (this.isPostgres) {
-      const count = await this.sessions
-        .createQueryBuilder('session')
-        .where('session.id = :id', { id: sessionId })
-        .andWhere('session."desiredState" IS NULL')
-        .andWhere('session."nodeId" = :me', { me: this.nodeId })
-        .andWhere(`session."leaseExpiresAt" > ${PG_NOW_UTC}`)
-        .getCount();
-      return count > 0;
+      const session = await this.sessions.findOne({
+        where: {
+          id: sessionId,
+          desiredState: IsNull(),
+          nodeId: this.nodeId,
+          leaseExpiresAt: Raw(alias => `${alias} > ${PG_NOW_UTC}`),
+        },
+        select: { id: true },
+      });
+      return session != null;
     }
     const session = await this.sessions.findOne({
       where: { id: sessionId },
@@ -988,7 +973,7 @@ export class SessionOwnershipService {
   }
 
   /**
-   * Current UTC timestamp from PostgreSQL's database clock (`NOW() AT TIME ZONE 'UTC'`),
+   * Current UTC timestamp from PostgreSQL's database clock (`clock_timestamp() AT TIME ZONE 'UTC'`),
    * or the local process clock on SQLite. Used when answering read-time liveness checks
    * (`engineLoaded`) against already-loaded rows so list/get responses agree with DB-clock
    * routing predicates under node-to-DB clock skew.

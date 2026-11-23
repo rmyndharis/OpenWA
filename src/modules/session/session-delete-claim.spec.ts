@@ -2549,6 +2549,9 @@ describe('A session deleted on one node while a peer shares the database', () =>
         expect(await b.ownership.claim(id)).toBe(true);
         await sessions.update(id, { leaseExpiresAt: lapsed() });
         await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(SessionStoppedException);
+        // On PostgreSQL claimedAt uses the DB server clock (unaffected by fake JS timers); force the
+        // same-millisecond collision explicitly so ownsClaim() generation fencing is still exercised.
+        if (pg && frozen) await sessions.update(id, { claimedAt: original.claimedAt });
         const reclaimed = await sessions.findOneByOrFail({ id });
         expect(reclaimed.nodeId).toBe('node-a');
         if (frozen) expect(reclaimed.claimedAt).toEqual(original.claimedAt);
@@ -2714,6 +2717,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
       expect(await b.ownership.claim(id)).toBe(true);
       await sessions.update(id, { leaseExpiresAt: lapsed() });
       expect(await a.ownership.claim(id)).toBe(true);
+      if (pg) await sessions.update(id, { claimedAt: original.claimedAt });
       expect((await sessions.findOneByOrFail({ id })).claimedAt).toEqual(original.claimedAt);
       go.resolve();
       expect(await outcome).toBeInstanceOf(ConflictException);
@@ -2769,6 +2773,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
       });
       claiming = a.ownership.claim(id);
       await written.promise;
+      if (pg) await sessions.update(id, { claimedAt: original.claimedAt });
       expect((await sessions.findOneByOrFail({ id })).claimedAt).toEqual(original.claimedAt);
       finish!();
       expect(await outcome).toBeInstanceOf(ConflictException);
