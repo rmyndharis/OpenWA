@@ -596,9 +596,14 @@ describe('StatsService aggregate memo (in-process TTL)', () => {
     }
   });
 
-  it('includes a 19-char SQLite UTC midnight timestamp in today and 24h boundary counts', async () => {
+  it('includes a 19-char SQLite local midnight timestamp without fractional ms in today and 24h boundary counts', async () => {
+    const localMidnight = new Date(2026, 10, 23, 0, 0, 0, 0);
+    const toSqliteUtcText = (d: Date): string => {
+      const p2 = (n: number): string => String(n).padStart(2, '0');
+      return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`;
+    };
     jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
-    jest.setSystemTime(new Date('2026-11-23T00:05:00.000Z'));
+    jest.setSystemTime(new Date(localMidnight.getTime() + 5 * 60_000));
     try {
       await ds.getRepository(Message).clear();
       await ds.getRepository(Session).clear();
@@ -606,25 +611,29 @@ describe('StatsService aggregate memo (in-process TTL)', () => {
       await ds
         .getRepository(Session)
         .save(ds.getRepository(Session).create({ id: 's1', name: 'n', status: SessionStatus.READY, config: {} }));
-      const atMidnight = await ds.getRepository(Message).save(
-        ds.getRepository(Message).create({
-          sessionId: 's1',
-          chatId: 'c1@c.us',
-          from: 'me@c.us',
-          to: 'c1@c.us',
-          body: 'hi',
-          type: 'text',
-          direction: MessageDirection.OUTGOING,
-          status: MessageStatus.SENT,
-        }),
-      );
-      await ds.query(`UPDATE messages SET createdAt = '2026-11-23 00:00:00' WHERE id = ?`, [atMidnight.id]);
+      const saveMsg = async (ts: Date): Promise<void> => {
+        const row = await ds.getRepository(Message).save(
+          ds.getRepository(Message).create({
+            sessionId: 's1',
+            chatId: 'c1@c.us',
+            from: 'me@c.us',
+            to: 'c1@c.us',
+            body: 'hi',
+            type: 'text',
+            direction: MessageDirection.OUTGOING,
+            status: MessageStatus.SENT,
+          }),
+        );
+        await ds.query(`UPDATE messages SET createdAt = ? WHERE id = ?`, [toSqliteUtcText(ts), row.id]);
+      };
+      await saveMsg(new Date(localMidnight.getTime() - 60_000));
+      await saveMsg(localMidnight);
 
       const overview = await service.getOverview();
       expect(overview.messages.today).toEqual({ sent: 1, received: 0 });
       expect((await service.getSessionStats('s1')).messages.today).toBe(1);
 
-      jest.setSystemTime(new Date('2026-11-24T00:00:00.000Z'));
+      jest.setSystemTime(new Date(localMidnight.getTime() + 24 * 60 * 60_000));
       const stats24h = await service.getMessageStats('24h');
       expect(stats24h.bySession).toEqual([{ sessionId: 's1', name: 'n', sent: 1, received: 0 }]);
     } finally {

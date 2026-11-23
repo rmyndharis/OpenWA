@@ -174,7 +174,7 @@ export class StatsService {
 
     // Get message stats
     const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
+    todayStart.setHours(0, 0, 0, 0);
 
     const messageStats = await this.messageRepo
       .createQueryBuilder('m')
@@ -351,7 +351,7 @@ export class StatsService {
     }
 
     const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
+    todayStart.setHours(0, 0, 0, 0);
 
     // Message counts
     const stats = await this.messageRepo

@@ -122,7 +122,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     const task = (async (): Promise<number> => {
       const settledDeleted = await pruneInBatches({
         repository: this.outbox,
-        where: { state: In(['dispatched', 'failed']), createdAt: LessThan(cutoff) },
+        where: { state: In(['dispatched', 'delivered', 'failed']), createdAt: LessThan(cutoff) },
         maxRows,
         stopped: () => this.stopped,
       });

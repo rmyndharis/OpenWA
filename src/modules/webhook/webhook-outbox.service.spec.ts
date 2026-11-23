@@ -140,7 +140,7 @@ describe('WebhookOutboxService retention', () => {
       [{ where: { state: { type: string }; createdAt: { type: string } } }],
     ];
     expect(pass1Call[0].where.state.type).toBe('in');
-    expect(pass1Call[0].where.state.value).toEqual(['dispatched', 'failed']);
+    expect(pass1Call[0].where.state.value).toEqual(['dispatched', 'delivered', 'failed']);
     expect(pass1Call[0].where.createdAt.type).toBe('lessThan');
     expect(pass2Call[0].where.state.type).toBe('isNull');
     expect(pass2Call[0].where.createdAt.type).toBe('lessThan');
@@ -166,16 +166,18 @@ describe('WebhookOutboxService retention', () => {
       await insertRow('00000000-0000-4000-8000-000000000001', 'old-null', null, 14);
       await insertRow('00000000-0000-4000-8000-000000000002', 'old-dispatched', 'dispatched', 14);
       await insertRow('00000000-0000-4000-8000-000000000003', 'old-failed', 'failed', 14);
+      await insertRow('00000000-0000-4000-8000-000000000008', 'old-delivered', 'delivered', 14);
       await insertRow('00000000-0000-4000-8000-000000000004', 'old-pending', 'pending', 14);
       await insertRow('00000000-0000-4000-8000-000000000005', 'old-queued', 'queued', 14);
       await insertRow('00000000-0000-4000-8000-000000000006', 'recent-null', null, 1);
       await insertRow('00000000-0000-4000-8000-000000000007', 'recent-dispatched', 'dispatched', 1);
+      await insertRow('00000000-0000-4000-8000-000000000009', 'recent-delivered', 'delivered', 1);
 
       const sqliteService = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent));
-      expect(await sqliteService.pruneSettled(7)).toBe(3);
+      expect(await sqliteService.pruneSettled(7)).toBe(4);
 
       const survivors = (await ds.getRepository(WebhookOutboxEvent).find()).map(r => r.idempotencyKey).sort();
-      expect(survivors).toEqual(['old-pending', 'old-queued', 'recent-dispatched', 'recent-null']);
+      expect(survivors).toEqual(['old-pending', 'old-queued', 'recent-delivered', 'recent-dispatched', 'recent-null']);
     } finally {
       await ds.destroy();
     }
