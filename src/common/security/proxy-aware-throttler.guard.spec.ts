@@ -503,4 +503,48 @@ describe('ProxyAwareThrottlerGuard authenticated forwarded-hop skip', () => {
     await expect(guard.canActivate(contextFor(buildReq()))).resolves.toBe(true);
     await expect(guard.canActivate(contextFor(buildReq()))).rejects.toThrow(ThrottlerException);
   });
+
+  it('does not skip for non-http execution contexts or requests lacking method/url', async () => {
+    const guard = await makeGuard(SECRET);
+    const shouldSkip = (ctx: ExecutionContext): Promise<boolean> =>
+      (guard as unknown as { shouldSkip(c: ExecutionContext): Promise<boolean> }).shouldSkip(ctx);
+
+    await expect(
+      shouldSkip({
+        getType: () => 'ws',
+        getHandler: () => sendText,
+        getClass: () => MessagesController,
+      } as unknown as ExecutionContext),
+    ).resolves.toBe(false);
+
+    await expect(
+      shouldSkip({
+        getType: () => 'http',
+        getHandler: () => sendText,
+        getClass: () => MessagesController,
+        switchToHttp: () => ({ getRequest: () => ({ headers: {} }) }),
+      } as unknown as ExecutionContext),
+    ).resolves.toBe(false);
+
+    await expect(
+      shouldSkip({
+        getType: () => 'http',
+        getHandler: () => sendText,
+        getClass: () => MessagesController,
+        switchToHttp: () => ({ getRequest: () => ({ method: 'GET', headers: {} }) }),
+      } as unknown as ExecutionContext),
+    ).resolves.toBe(false);
+  });
+
+  it('accepts an unprefixed forwarded path signed against req.originalUrl when peer runs behind a path prefix', async () => {
+    const guard = await makeGuard(SECRET);
+    const signed = signForwardedHop({
+      secret: SECRET,
+      nodeId: 'node-a',
+      method: 'POST',
+      path: '/api/sessions/s1/messages/send-text?trace=1',
+    });
+    await expect(guard.canActivate(contextFor(baseReq(signed)))).resolves.toBe(true);
+    await expect(guard.canActivate(contextFor(baseReq(signed)))).resolves.toBe(true);
+  });
 });

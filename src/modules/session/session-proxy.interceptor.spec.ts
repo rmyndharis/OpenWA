@@ -2,7 +2,7 @@ import http from 'http';
 import { AddressInfo } from 'net';
 import express from 'express';
 import { of, lastValueFrom } from 'rxjs';
-import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import { BadRequestException, type CallHandler, type ExecutionContext } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { ThrottlerException, ThrottlerStorageService } from '@nestjs/throttler';
@@ -15,6 +15,7 @@ import {
   verifyForwardedHop,
 } from '../../common/security/inter-node-proxy-auth';
 import { ProxyAwareThrottlerGuard } from '../../common/security/proxy-aware-throttler.guard';
+import { BODY_WIDTH_MESSAGES, MAX_BODY_ARRAY_LENGTH, MAX_BODY_OBJECT_KEYS } from '../../common/validation/body-width';
 
 /**
  * The forwarding decision IS the security surface: forwarding when the session is local answers a
@@ -1037,6 +1038,230 @@ describe('SessionProxyInterceptor', () => {
         serverB.closeAllConnections();
         await new Promise<void>(resolve => serverA.close(() => resolve()));
         await new Promise<void>(resolve => serverB.close(() => resolve()));
+      }
+    });
+
+    it('rejects unread non-JSON/non-form POST/PUT/PATCH bodies locally instead of synthesizing {} as JSON', async () => {
+      for (const method of ['POST', 'PUT', 'PATCH'] as const) {
+        for (const [label, headers] of [
+          [
+            'text/plain with content-length',
+            { 'x-api-key': 'k-123', 'content-type': 'text/plain', 'content-length': '34' },
+          ],
+          ['missing content-type with content-length', { 'x-api-key': 'k-123', 'content-length': '34' }],
+          [
+            'application/octet-stream chunked',
+            { 'x-api-key': 'k-123', 'content-type': 'application/octet-stream', 'transfer-encoding': 'chunked' },
+          ],
+          [
+            'application/vnd.api+json with content-length',
+            { 'x-api-key': 'k-123', 'content-type': 'application/vnd.api+json', 'content-length': '12' },
+          ],
+        ] as const) {
+          const req = request({
+            method,
+            originalUrl: `/api/sessions/${SID}/groups/120363@g.us/membership-requests/approve`,
+            headers: { ...headers },
+            body: undefined,
+            rawBody: undefined,
+          });
+          const built = build({ req, row: row({ nodeUrl: serverUrl }) });
+          await expect(built.interceptor.intercept(built.context, built.next)).rejects.toThrow(BadRequestException);
+          expect(seen).toHaveLength(0);
+          void label;
+        }
+      }
+    });
+
+    it('refuses a routed text/plain POST to membership-requests/approve and reject instead of approving/rejecting all', async () => {
+      const ownerApprovals: unknown[] = [];
+      const ownerApp = express();
+      ownerApp.use(express.json());
+      ownerApp.post('/api/sessions/:sessionId/groups/:groupId/membership-requests/:verb', (req, res) => {
+        const hasBody =
+          Number(req.headers['content-length'] ?? 0) > 0 || req.headers['transfer-encoding'] !== undefined;
+        if (hasBody && req.is(['application/json', 'application/x-www-form-urlencoded']) === false) {
+          res.status(400).json({ statusCode: 400 });
+          return;
+        }
+        const body: unknown = req.body;
+        ownerApprovals.push({ verb: req.params.verb, body });
+        res.status(200).json({ success: true });
+      });
+      const ownerServer = http.createServer(ownerApp);
+      await new Promise<void>(resolve => ownerServer.listen(0, '127.0.0.1', resolve));
+      const ownerUrl = `http://127.0.0.1:${(ownerServer.address() as AddressInfo).port}`;
+
+      const nodeA = express();
+      nodeA.use(
+        express.json({
+          verify: (req: express.Request & { rawBody?: Buffer }, _res, buf) => {
+            req.rawBody = buf;
+          },
+        }),
+      );
+      nodeA.post('/api/sessions/:sessionId/groups/:groupId/membership-requests/:verb', async (req, res) => {
+        const built = build({ req: req as unknown as Req, row: row({ nodeUrl: ownerUrl }) });
+        try {
+          await built.interceptor.intercept(
+            {
+              getType: () => 'http',
+              getHandler: () => undefined,
+              getClass: () => undefined,
+              switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }),
+            } as unknown as ExecutionContext,
+            built.next,
+          );
+        } catch (err) {
+          if (err instanceof BadRequestException) {
+            res.status(400).json(err.getResponse());
+            return;
+          }
+          throw err;
+        }
+      });
+      const serverA = http.createServer(nodeA);
+      await new Promise<void>(resolve => serverA.listen(0, '127.0.0.1', resolve));
+      const urlA = `http://127.0.0.1:${(serverA.address() as AddressInfo).port}`;
+
+      try {
+        for (const verb of ['approve', 'reject']) {
+          const resp = await fetch(`${urlA}/api/sessions/${SID}/groups/120363@g.us/membership-requests/${verb}`, {
+            method: 'POST',
+            headers: { 'x-api-key': 'k-123', 'content-type': 'text/plain' },
+            body: '{"participants":["628111@c.us"]}',
+          });
+          expect(resp.status).toBe(400);
+        }
+        expect(ownerApprovals).toHaveLength(0);
+
+        // Genuinely bodyless POSTs like /start still forward cleanly.
+        const startReq = request({
+          method: 'POST',
+          originalUrl: `/api/sessions/${SID}/start`,
+          headers: { 'x-api-key': 'k-123', 'content-length': '0' },
+          body: undefined,
+          rawBody: undefined,
+        });
+        const startBuilt = build({ req: startReq, row: row({ nodeUrl: serverUrl }) });
+        await startBuilt.interceptor.intercept(startBuilt.context, startBuilt.next);
+        expect(seen).toHaveLength(1);
+        expect(seen[0].url).toBe(`/api/sessions/${SID}/start`);
+      } finally {
+        ownerServer.closeAllConnections();
+        serverA.closeAllConnections();
+        await new Promise<void>(resolve => ownerServer.close(() => resolve()));
+        await new Promise<void>(resolve => serverA.close(() => resolve()));
+      }
+    });
+
+    it('rejects parsed bodies exceeding width limits locally before the network hop', async () => {
+      const wideKeys = Object.fromEntries(Array.from({ length: MAX_BODY_OBJECT_KEYS + 1 }, (_, i) => [`k${i}`, 1]));
+      const withRaw = request({
+        method: 'POST',
+        originalUrl: `/api/sessions/${SID}/messages/send-text`,
+        headers: { 'x-api-key': 'k-123', 'content-type': 'application/json' },
+        body: wideKeys,
+        rawBody: Buffer.from(JSON.stringify(wideKeys)),
+      });
+      const builtObj = build({ req: withRaw, row: row({ nodeUrl: serverUrl }) });
+      await expect(builtObj.interceptor.intercept(builtObj.context, builtObj.next)).rejects.toThrow(
+        new BadRequestException(BODY_WIDTH_MESSAGES.object),
+      );
+      expect(seen).toHaveLength(0);
+
+      const wideArr = { items: Array.from({ length: MAX_BODY_ARRAY_LENGTH + 1 }, (_, i) => i) };
+      const withoutRaw = request({
+        method: 'POST',
+        originalUrl: `/api/sessions/${SID}/messages/send-text`,
+        headers: { 'x-api-key': 'k-123', 'content-type': 'application/json' },
+        body: wideArr,
+      });
+      const builtArr = build({ req: withoutRaw, row: row({ nodeUrl: serverUrl }) });
+      await expect(builtArr.interceptor.intercept(builtArr.context, builtArr.next)).rejects.toThrow(
+        new BadRequestException(BODY_WIDTH_MESSAGES.array),
+      );
+      expect(seen).toHaveLength(0);
+    });
+
+    it('signs the unprefixed request path when owner NODE_URL has a path prefix so verifyForwardedHop and ProxyAwareThrottlerGuard match', async () => {
+      const secret = 'shared-inter-node-secret-32chars!';
+      const storage = new ThrottlerStorageService();
+      const cfg = {
+        get: jest.fn().mockImplementation((k: string) => (k === 'session.proxySecret' ? secret : undefined)),
+      } as unknown as ConfigService;
+      const guard = new ProxyAwareThrottlerGuard(
+        { throttlers: [{ name: 'short', ttl: 60_000, limit: 1 }] },
+        storage,
+        new Reflector(),
+        cfg,
+      );
+      await guard.onModuleInit();
+
+      class MessagesController {}
+      const sendText = function sendText(): void {};
+
+      const prefixedServer = http.createServer((req, res) => {
+        // Simulate a path-stripping reverse proxy in front of Node B that strips `/openwa`.
+        const strippedUrl = (req.url ?? '/').replace(/^\/openwa/, '') || '/';
+        seen.push({ method: req.method, url: req.url, headers: req.headers, body: '' });
+        const ownerReq = {
+          ip: '203.0.113.55',
+          socket: { remoteAddress: '203.0.113.55' },
+          method: req.method,
+          originalUrl: strippedUrl,
+          headers: req.headers,
+        };
+        const ownerCtx = {
+          getType: () => 'http',
+          getHandler: () => sendText,
+          getClass: () => MessagesController,
+          switchToHttp: () => ({
+            getRequest: () => ownerReq,
+            getResponse: () => ({ header: () => undefined }),
+          }),
+        } as unknown as ExecutionContext;
+        void guard.canActivate(ownerCtx).then(
+          allowed => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ allowed, strippedUrl }));
+          },
+          err => {
+            res.writeHead(429, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: String(err) }));
+          },
+        );
+      });
+      await new Promise<void>(resolve => prefixedServer.listen(0, '127.0.0.1', resolve));
+      const prefixedBase = `http://127.0.0.1:${(prefixedServer.address() as AddressInfo).port}/openwa`;
+
+      try {
+        for (let i = 0; i < 2; i++) {
+          const req = request({
+            method: 'POST',
+            originalUrl: `/api/sessions/${SID}/messages/send-text?trace=1`,
+            headers: { 'x-api-key': 'k-123', 'content-type': 'application/json' },
+            body: { text: `msg-${i}` },
+          });
+          const built = build({ req, row: row({ nodeUrl: prefixedBase }), proxySecret: secret });
+          await built.interceptor.intercept(built.context, built.next);
+          expect(built.res.status).toHaveBeenCalledWith(200);
+        }
+
+        expect(seen).toHaveLength(2);
+        expect(seen[0].url).toBe(`/openwa/api/sessions/${SID}/messages/send-text?trace=1`);
+        expect(
+          verifyForwardedHop({
+            secret,
+            headers: seen[0].headers,
+            method: 'POST',
+            path: `/api/sessions/${SID}/messages/send-text?trace=1`,
+          }),
+        ).toBe(true);
+      } finally {
+        storage.onApplicationShutdown();
+        prefixedServer.closeAllConnections();
+        await new Promise<void>(resolve => prefixedServer.close(() => resolve()));
       }
     });
   });
