@@ -49,6 +49,33 @@ function workerText(value: unknown): string {
  */
 const MAX_LATE_HOOK_CLAIMS = 32;
 
+/** Bounded cache sizing for per-dispatch deterministic send deduplication across webhook retries. */
+const WEBHOOK_SEND_DEDUP_MAX = 1024;
+const WEBHOOK_SEND_DEDUP_TTL_MS = 15 * 60 * 1000;
+
+interface ActiveCapEntry {
+  controller: AbortController;
+  cancel?: (reason: Error) => void;
+}
+
+interface InFlightDispatchEntry {
+  context: SandboxDispatchContext;
+  hookEvent?: string;
+  inFlight?: string[];
+  kind: 'hook' | 'webhook';
+  deadlineAt?: number;
+  deliveryKey?: string;
+  sendSeq: number;
+  activeCaps: Set<ActiveCapEntry>;
+}
+
+interface WebhookSendDedupEntry {
+  expiresAt: number;
+  hasResolved: boolean;
+  value?: unknown;
+  pending?: Promise<unknown>;
+}
+
 /** Worker replies that finish a host request; one arriving during a liveness probe restarts its window. */
 const PROGRESS_KINDS: ReadonlySet<WorkerToHostMessage['kind']> = new Set([
   'lifecycle-result',
@@ -123,12 +150,12 @@ export class PluginWorkerHost {
   // Host-authoritative session/instance context and in-flight hook event chain for active hook
   // and webhook dispatches, keyed by a host-generated dispatchId. Looked up when a worker issues a
   // capability call so the host never trusts worker-supplied session, instance, or hook claims.
-  private readonly inFlightDispatches = new Map<
-    string,
-    { context: SandboxDispatchContext; hookEvent?: string; inFlight?: string[] }
-  >();
+  private readonly inFlightDispatches = new Map<string, InFlightDispatchEntry>();
+  // Bounded deterministic send-outcome cache keyed per webhook delivery & send ordinal (or explicit caller key)
+  // so BullMQ retries never replay duplicate outbound sends when a previous attempt already sent or is still running.
+  private readonly webhookSendDedups = new Map<string, WebhookSendDedupEntry>();
   // Active capability calls; cancelled (signal aborted + timeout timer cleared) on terminate() or exit.
-  private readonly activeCaps = new Set<{ controller: AbortController; cancel?: (reason: Error) => void }>();
+  private readonly activeCaps = new Set<ActiveCapEntry>();
 
   // Worker-initiated capability calls currently running host-side, bounded by maxInFlightCaps.
   private inFlightCaps = 0;
@@ -229,6 +256,9 @@ export class PluginWorkerHost {
       context: { sessionId: options.sessionId },
       hookEvent: options.event,
       inFlight,
+      kind: 'hook',
+      sendSeq: 0,
+      activeCaps: new Set(),
     });
     return new Promise((resolve, reject) => {
       let released = false;
@@ -308,6 +338,7 @@ export class PluginWorkerHost {
     rawBody: string;
     verified: boolean;
     deliveryId: string;
+    dedupKey?: string;
     sessionId?: string;
     config?: Record<string, unknown>;
     timeoutMs: number;
@@ -318,9 +349,17 @@ export class PluginWorkerHost {
     if (this.dead) return Promise.resolve({ ok: false, status: 502 });
     const id = this.nextId++;
     const dispatchId = randomUUID();
-    this.inFlightDispatches.set(dispatchId, {
+    const effectiveDedupId = options.dedupKey ?? options.deliveryId;
+    const deliveryKey = effectiveDedupId ? `${options.instanceId}:${options.route}:${effectiveDedupId}` : undefined;
+    const dispatchEntry: InFlightDispatchEntry = {
       context: { sessionId: options.sessionId, instanceId: options.instanceId },
-    });
+      kind: 'webhook',
+      deadlineAt: Date.now() + options.timeoutMs,
+      deliveryKey,
+      sendSeq: 0,
+      activeCaps: new Set(),
+    };
+    this.inFlightDispatches.set(dispatchId, dispatchEntry);
     return new Promise((resolve, reject) => {
       const settle = (result: {
         status: number;
@@ -335,6 +374,14 @@ export class PluginWorkerHost {
       const timer = setTimeout(() => {
         this.webhookPending.delete(id);
         this.inFlightDispatches.delete(dispatchId);
+        const timeoutReason = new Error(`webhook dispatch timed out after ${options.timeoutMs}ms`);
+        for (const cap of dispatchEntry.activeCaps) {
+          if (!cap.controller.signal.aborted) {
+            cap.controller.abort(timeoutReason);
+          }
+          cap.cancel?.(timeoutReason);
+        }
+        dispatchEntry.activeCaps.clear();
         options.onTimeout?.();
         this.probeLiveness();
         resolve({ ok: false, status: 504 }); // the ingress job retries or dead-letters the delivery
@@ -704,7 +751,7 @@ export class PluginWorkerHost {
       this.channel.postMessage({ kind: 'cap-result', id: message.id, ok: false, error: 'no capability dispatcher' });
       return;
     }
-    let dispatchEntry: { context: SandboxDispatchContext; hookEvent?: string; inFlight?: string[] } | undefined;
+    let dispatchEntry: InFlightDispatchEntry | undefined;
     if (message.dispatchId !== undefined) {
       if (typeof message.dispatchId !== 'string' || !this.inFlightDispatches.has(message.dispatchId)) {
         this.channel.postMessage({
@@ -720,13 +767,14 @@ export class PluginWorkerHost {
     const dispatchContext = dispatchEntry?.context;
     const controller = new AbortController();
     let cancelledByTeardown = false;
-    const capEntry: { controller: AbortController; cancel?: (reason: Error) => void } = {
+    const capEntry: ActiveCapEntry = {
       controller,
       cancel: () => {
         cancelledByTeardown = true;
       },
     };
     this.activeCaps.add(capEntry);
+    dispatchEntry?.activeCaps.add(capEntry);
     this.inFlightCaps++;
     try {
       const dispatcher = this.capDispatcher;
@@ -735,11 +783,21 @@ export class PluginWorkerHost {
       // a valid host-issued dispatchId (timers, lifecycle, or an untrusted worker stripping
       // dispatchId) carry no hook guard so a worker can never spoof inFlight claims across dispatches.
       const guardedEvents = dispatchEntry?.inFlight ? [...dispatchEntry.inFlight] : [];
-      const work =
+      const execute = (): Promise<unknown> =>
         this.runWithHookGuard && guardedEvents.length > 0 ? this.runWithHookGuard(guardedEvents, run) : run();
-      const result = await this.withCapTimeout(message.verb, work, capEntry, () => {
-        cancelledByTeardown = true;
-      });
+      const work =
+        dispatchEntry?.kind === 'webhook' && SEND_CAP_VERBS.has(message.verb)
+          ? this.runWebhookSendWithDedup(dispatchEntry, message.dispatchId!, message.verb, message.args, execute)
+          : execute();
+      const result = await this.withCapTimeout(
+        message.verb,
+        work,
+        capEntry,
+        () => {
+          cancelledByTeardown = true;
+        },
+        dispatchEntry?.kind === 'webhook' ? dispatchEntry.deadlineAt : undefined,
+      );
       if (!cancelledByTeardown && !this.dead && !this.terminated) {
         this.channel.postMessage({ kind: 'cap-result', id: message.id, ok: true, result });
       }
@@ -754,8 +812,74 @@ export class PluginWorkerHost {
       }
     } finally {
       this.activeCaps.delete(capEntry);
+      dispatchEntry?.activeCaps.delete(capEntry);
       this.inFlightCaps--;
     }
+  }
+
+  private runWebhookSendWithDedup(
+    dispatchEntry: InFlightDispatchEntry,
+    dispatchId: string,
+    verb: string,
+    args: unknown[],
+    execute: () => Promise<unknown>,
+  ): Promise<unknown> {
+    const firstArg = args[0] as { idempotencyKey?: unknown } | undefined;
+    const explicitKey =
+      typeof firstArg?.idempotencyKey === 'string' && firstArg.idempotencyKey.length > 0
+        ? firstArg.idempotencyKey
+        : undefined;
+    const dedupKey = explicitKey
+      ? `explicit:${dispatchEntry.deliveryKey ?? dispatchId}:${verb}:${explicitKey}`
+      : dispatchEntry.deliveryKey
+        ? `auto:${dispatchEntry.deliveryKey}:${verb}:${dispatchEntry.sendSeq++}`
+        : undefined;
+    if (!dedupKey) return execute();
+
+    const now = Date.now();
+    for (const [k, v] of this.webhookSendDedups) {
+      if (v.expiresAt <= now && !v.pending) this.webhookSendDedups.delete(k);
+    }
+
+    const startFresh = (): Promise<unknown> => {
+      while (this.webhookSendDedups.size >= WEBHOOK_SEND_DEDUP_MAX) {
+        const oldest = this.webhookSendDedups.keys().next().value;
+        if (oldest === undefined) break;
+        this.webhookSendDedups.delete(oldest);
+      }
+      const record: WebhookSendDedupEntry = {
+        expiresAt: Date.now() + WEBHOOK_SEND_DEDUP_TTL_MS,
+        hasResolved: false,
+      };
+      const tracked = execute().then(
+        value => {
+          record.hasResolved = true;
+          record.value = value;
+          record.pending = undefined;
+          return value;
+        },
+        err => {
+          if (this.webhookSendDedups.get(dedupKey) === record) {
+            this.webhookSendDedups.delete(dedupKey);
+          }
+          record.pending = undefined;
+          throw err;
+        },
+      );
+      tracked.catch(() => undefined);
+      record.pending = tracked;
+      this.webhookSendDedups.set(dedupKey, record);
+      return tracked;
+    };
+
+    const existing = this.webhookSendDedups.get(dedupKey);
+    if (existing && existing.expiresAt > now) {
+      if (existing.hasResolved) return Promise.resolve(existing.value);
+      if (existing.pending) {
+        return existing.pending.catch(() => startFresh());
+      }
+    }
+    return startFresh();
   }
 
   /**
@@ -764,16 +888,27 @@ export class PluginWorkerHost {
    * wedge all maxInFlightCaps slots into a self-DoS. If the underlying verb does not support cancellation,
    * its unsettled promise is counted against unsettledTimedOutCaps (capped at 2 * maxInFlightCaps combined
    * with inFlightCaps) and WARN-logged once it eventually settles. Send verbs (SEND_CAP_VERBS) run on a
-   * wider budget that covers normal execution.
+   * wider budget that covers normal execution unless bounded by an active webhook deadline.
    */
   private withCapTimeout(
     verb: string,
     work: Promise<unknown>,
-    entry: { controller: AbortController; cancel?: (reason: Error) => void },
+    entry: ActiveCapEntry,
     onTeardownCancel?: () => void,
+    dispatchDeadlineAt?: number,
   ): Promise<unknown> {
-    if (this.capTimeoutMs === undefined) return work;
-    const timeoutMs = SEND_CAP_VERBS.has(verb) ? this.capTimeoutMs * SEND_CAP_TIMEOUT_FACTOR : this.capTimeoutMs;
+    const configuredTimeoutMs =
+      this.capTimeoutMs === undefined
+        ? undefined
+        : SEND_CAP_VERBS.has(verb)
+          ? this.capTimeoutMs * SEND_CAP_TIMEOUT_FACTOR
+          : this.capTimeoutMs;
+    const remainingMs = dispatchDeadlineAt !== undefined ? Math.max(0, dispatchDeadlineAt - Date.now()) : undefined;
+    const timeoutMs =
+      configuredTimeoutMs !== undefined && remainingMs !== undefined
+        ? Math.min(configuredTimeoutMs, remainingMs)
+        : (configuredTimeoutMs ?? remainingMs);
+    if (timeoutMs === undefined) return work;
     return new Promise((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {

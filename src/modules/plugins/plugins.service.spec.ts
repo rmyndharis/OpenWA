@@ -1494,6 +1494,40 @@ describe('PluginsService — recovering a plugin whose code went missing', () =>
     expect(fs.readFileSync(path.join(outside, 'manifest.json'), 'utf8')).toBe('victim');
   });
 
+  it('refuses reinstall when a nested subdirectory symlink inside the plugin dir escapes outside', () => {
+    const outside = path.join(tmpDir, 'outside-nested');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'target.js'), 'victim');
+    const { service } = orphan();
+    const pluginDir = path.join(pluginsDir, 'svc-plg');
+    fs.symlinkSync(outside, path.join(pluginDir, 'lib'));
+
+    const z = new AdmZip();
+    z.addFile('manifest.json', Buffer.from(JSON.stringify(manifest)));
+    z.addFile('index.js', Buffer.from('module.exports = class {};'));
+    z.addFile('lib/target.js', Buffer.from('overwritten'));
+
+    expect(() => service.install({ buffer: z.toBuffer() })).toThrow(ConflictException);
+    expect(fs.readFileSync(path.join(outside, 'target.js'), 'utf8')).toBe('victim');
+  });
+
+  it('refuses reinstall when a nested symlink inside the plugin dir would overwrite a file outside', () => {
+    const outside = path.join(tmpDir, 'outside-secret.txt');
+    fs.writeFileSync(outside, 'secret');
+    const { service } = orphan();
+    const nestedDir = path.join(pluginsDir, 'svc-plg', 'sub');
+    fs.mkdirSync(nestedDir, { recursive: true });
+    fs.symlinkSync(outside, path.join(nestedDir, 'payload.txt'));
+
+    const z = new AdmZip();
+    z.addFile('manifest.json', Buffer.from(JSON.stringify(manifest)));
+    z.addFile('index.js', Buffer.from('module.exports = class {};'));
+    z.addFile('sub/payload.txt', Buffer.from('tampered'));
+
+    expect(() => service.install({ buffer: z.toBuffer() })).toThrow(ConflictException);
+    expect(fs.readFileSync(outside, 'utf8')).toBe('secret');
+  });
+
   it('does not delete a file the failed install never got as far as writing', () => {
     // The rollback removes what this install wrote. Removing every entry path instead would reach
     // files the write never reached — the previous version's, still sitting in a directory the

@@ -22,6 +22,7 @@ import type { PluginConfigSchema } from '../../core/plugins';
 import { PluginDto } from './dto/plugin.dto';
 import { redactSecretConfig, restoreSecretConfig } from './redact-config';
 import { restorableConfig } from '../../core/plugins/plugin-activation';
+import { assertWritePathNoSymlinks, lstatIfPresent } from '../../core/plugins/plugin-paths';
 import {
   getBuiltInBaseConfig,
   PluginInstanceSanitizationError,
@@ -422,17 +423,24 @@ export class PluginsService {
         throw new ConflictException(`A plugin directory "${manifest.id}" already exists`);
       }
       // `existsSync` answers for the link's TARGET, so narrowing the guard above must not also
-      // narrow containment: a link planted at this path would send every write below — and the
-      // rollback's delete — wherever it points.
-      if (fs.realpathSync(dir) !== path.join(fs.realpathSync(pluginsDir), manifest.id)) {
+      // narrow containment: a link planted at this path, or anywhere along an archive entry's path,
+      // would send every write below, and the rollback's delete, wherever it points.
+      const dirStat = lstatIfPresent(dir);
+      if (dirStat?.isSymbolicLink() || fs.realpathSync(dir) !== path.join(fs.realpathSync(pluginsDir), manifest.id)) {
         throw new ConflictException(`A plugin directory "${manifest.id}" already exists`);
       }
       // Merging into a pre-existing directory means an entry path can already be occupied by a
-      // directory. Refusing here keeps that a conflict; writing into it fails with EISDIR, which
-      // the rollback below cannot clean up either.
+      // directory or symlink. Refusing here keeps that a conflict; writing into a directory fails
+      // with EISDIR and writing into a symlink (including a dangling one) escapes containment.
       for (const entry of entries) {
+        assertWritePathNoSymlinks(
+          dir,
+          entry.relPath,
+          detail => new ConflictException(`Cannot install "${manifest.id}": "${entry.relPath}" ${detail}`),
+        );
         const dest = path.join(dir, entry.relPath);
-        if (fs.existsSync(dest) && fs.statSync(dest).isDirectory()) {
+        const destStat = lstatIfPresent(dest);
+        if (destStat && destStat.isDirectory()) {
           throw new ConflictException(`Cannot install "${manifest.id}": "${entry.relPath}" is a directory`);
         }
       }

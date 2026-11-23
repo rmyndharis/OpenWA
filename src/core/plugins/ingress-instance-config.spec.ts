@@ -62,7 +62,13 @@ function job(
 }
 
 /** The fields of the worker payload these specs assert on. */
-type WebhookCall = { config?: Record<string, unknown>; verified?: boolean; sessionId?: string; deliveryId?: string };
+type WebhookCall = {
+  config?: Record<string, unknown>;
+  verified?: boolean;
+  sessionId?: string;
+  deliveryId?: string;
+  dedupKey?: string;
+};
 
 /** Builds a bridge whose dispatch path is real; only the worker host and the instance store are fakes. */
 function makeBridge(opts: {
@@ -126,6 +132,7 @@ describe('ingress dispatch resolves config per INSTANCE, not per session scope',
     await bridge.dispatchWebhookForInstance(data);
 
     expect(calls[0].deliveryId).toBe('provider-17');
+    expect(calls[0].dedupKey).toBe('delivery-acct-a');
     expect(data.deliveryId).toBe('delivery-acct-a');
   });
 

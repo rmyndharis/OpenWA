@@ -298,6 +298,31 @@ describe('PluginPackageScanner — boot-time manifest validation parity with ins
     expect(() => scanner.loadPlugin(dir)).toThrow(/main file not found/i);
   });
 
+  it('rejects a manifest whose main traverses a nested symlink escaping the plugin directory', () => {
+    const outside = path.join(tmpDir, 'outside-lib');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'evil.js'), 'module.exports = class {};');
+
+    const dir = writePlugin('sym-nest', { ...baseManifest('sym-nest'), main: 'lib/evil.js' });
+    fs.symlinkSync(outside, path.join(dir, 'lib'));
+
+    expect(() => scanner.loadPlugin(dir)).toThrow(/escapes the plugin directory|symbolic link/i);
+  });
+
+  it('rejects a dangling or escaping nested symlink main file', () => {
+    const outside = path.join(tmpDir, 'outside-file.js');
+    fs.writeFileSync(outside, 'module.exports = class {};');
+    const dir = writePlugin('sym-file', { ...baseManifest('sym-file'), main: 'sub/entry.js' });
+    fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });
+    fs.symlinkSync(outside, path.join(dir, 'sub', 'entry.js'));
+    expect(() => scanner.loadPlugin(dir)).toThrow(/escapes the plugin directory|symbolic link/i);
+
+    const danglingDir = writePlugin('sym-dangle', { ...baseManifest('sym-dangle'), main: 'sub/missing.js' });
+    fs.mkdirSync(path.join(danglingDir, 'sub'), { recursive: true });
+    fs.symlinkSync(path.join(tmpDir, 'never-existed.js'), path.join(danglingDir, 'sub', 'missing.js'));
+    expect(() => scanner.loadPlugin(danglingDir)).toThrow(/escapes the plugin directory|symbolic link|not found/i);
+  });
+
   it('rejects a plugin that declares ingress routes but omits the webhook:ingress permission', () => {
     // loadPlugin must run validateIngressManifest, so a malformed ingress declaration fails to load
     // rather than silently loading and becoming provisionable.
