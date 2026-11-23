@@ -241,6 +241,14 @@ describe('iterateLocalFiles', () => {
     it('returns empty for a missing prefix without throwing', async () => {
       expect(await walk('does-not-exist/')).toEqual([]);
     });
+
+    it('returns empty for a lexical traversal prefix and rethrows non-ENOENT prefix realpath errors', async () => {
+      expect(await walk('../outside/')).toEqual([]);
+
+      const eacces = Object.assign(new Error('EACCES: root blocked'), { code: 'EACCES' });
+      jest.spyOn(fs.promises, 'realpath').mockRejectedValueOnce(eacces);
+      await expect(walk('sub/')).rejects.toBe(eacces);
+    });
   });
 });
 
@@ -259,10 +267,16 @@ describe('local storage file operations symlink containment', () => {
   });
 
   afterEach(() => {
+    jest.restoreAllMocks();
     fs.rmSync(base, { recursive: true, force: true });
   });
 
   describe('getLocalFile and openLocalFile', () => {
+    it('rejects lexical path traversal outside the storage root', async () => {
+      await expect(getLocalFile(root, '../outside/secret.bin')).rejects.toThrow(/outside storage root/);
+      await expect(openLocalFile(root, '../outside/secret.bin')).rejects.toThrow(/outside storage root/);
+    });
+
     it('rejects reading through a file or directory symlink that escapes the storage root', async () => {
       fs.symlinkSync(path.join(outside, 'secret.bin'), path.join(root, 'escape-file.bin'));
       fs.symlinkSync(outside, path.join(root, 'escape-dir'));
@@ -331,9 +345,57 @@ describe('local storage file operations symlink containment', () => {
       expect(fs.readFileSync(path.join(root, 'nested/dir/file.bin'), 'utf8')).toBe('hello');
       expect(fs.readFileSync(path.join(root, 'real/sub/file.bin'), 'utf8')).toBe('world');
     });
+
+    it('rejects lexical escapes, root targets, existing escaping parent symlinks, and dangling directory symlinks', async () => {
+      fs.symlinkSync(outside, path.join(root, 'escape-dir'));
+      fs.symlinkSync(path.join(outside, 'missing-dir'), path.join(root, 'dangling-dir'));
+
+      await expect(putLocalFile(root, '../outside/pwn.bin', Buffer.from('bad'))).rejects.toThrow(
+        /outside storage root/,
+      );
+      await expect(putLocalFile(root, '.', Buffer.from('bad'))).rejects.toThrow(/outside storage root/);
+      await expect(putLocalFile(root, 'escape-dir/direct.bin', Buffer.from('bad'))).rejects.toThrow(
+        /outside storage root/,
+      );
+      await expect(putLocalFile(root, 'dangling-dir/file.bin', Buffer.from('bad'))).rejects.toThrow(/symbolic link/);
+      expect(fs.existsSync(path.join(outside, 'direct.bin'))).toBe(false);
+    });
+
+    it('creates a missing storage root for both top-level and nested writes and propagates non-ENOENT errors', async () => {
+      const freshTopRoot = path.join(base, 'fresh-top');
+      const freshNestedRoot = path.join(base, 'fresh-nested');
+
+      await putLocalFile(freshTopRoot, 'top.bin', Buffer.from('top'));
+      await putLocalFile(freshNestedRoot, 'a/b/nested.bin', Buffer.from('nested'));
+
+      expect(fs.readFileSync(path.join(freshTopRoot, 'top.bin'), 'utf8')).toBe('top');
+      expect(fs.readFileSync(path.join(freshNestedRoot, 'a/b/nested.bin'), 'utf8')).toBe('nested');
+
+      const eio = Object.assign(new Error('EIO: disk failure'), { code: 'EIO' });
+      jest.spyOn(fs.promises, 'realpath').mockRejectedValueOnce(eio);
+      await expect(putLocalFile(root, 'top.bin', Buffer.from('x'))).rejects.toBe(eio);
+
+      jest.spyOn(fs.promises, 'realpath').mockRejectedValueOnce(eio);
+      await expect(putLocalFile(root, 'sub/nested.bin', Buffer.from('x'))).rejects.toBe(eio);
+
+      const realRealpath = fs.promises.realpath.bind(fs.promises);
+      jest
+        .spyOn(fs.promises, 'realpath')
+        .mockImplementationOnce(p => realRealpath(p))
+        .mockRejectedValueOnce(eio);
+      await expect(putLocalFile(root, 'sub/nested.bin', Buffer.from('x'))).rejects.toBe(eio);
+
+      jest.spyOn(fs.promises, 'writeFile').mockRejectedValueOnce(eio);
+      await expect(putLocalFile(root, 'write-fail.bin', Buffer.from('x'))).rejects.toBe(eio);
+    });
   });
 
   describe('deleteLocalFile', () => {
+    it('rejects lexical traversal and root targets', async () => {
+      await expect(deleteLocalFile(root, '../outside/secret.bin')).rejects.toThrow(/outside storage root/);
+      await expect(deleteLocalFile(root, '.')).rejects.toThrow(/outside storage root/);
+    });
+
     it('rejects deleting through an escaping directory symlink without touching the outside file', async () => {
       fs.symlinkSync(outside, path.join(root, 'escape-dir'));
 
@@ -386,10 +448,59 @@ describe('local storage file operations symlink containment', () => {
       await deleteLocalFile(root, 'intra-link.bin');
       await expect(deleteLocalFile(root, 'never-existed/file.bin')).resolves.toBeUndefined();
       await expect(deleteLocalFile(path.join(base, 'nonexistent-root'), 'file.bin')).resolves.toBeUndefined();
+      await expect(deleteLocalFile(path.join(base, 'nonexistent-root'), 'nested/file.bin')).resolves.toBeUndefined();
 
       expect(fs.existsSync(path.join(root, 'regular.bin'))).toBe(false);
       expect(fs.existsSync(path.join(root, 'intra-link.bin'))).toBe(false);
       expect(fs.existsSync(path.join(root, 'target.bin'))).toBe(true);
+    });
+
+    it('handles nested dangling symlink chains, deep symlink loops, intra-root dangling links, and OS errors', async () => {
+      fs.symlinkSync(outside, path.join(root, 'escape-dir'));
+      fs.symlinkSync('./escape-dir/missing-sub/missing.bin', path.join(root, 'dangling-dot-missing.bin'));
+      fs.symlinkSync(path.join(outside, 'missing-dir'), path.join(root, 'dangling-hop-1'));
+      fs.symlinkSync('dangling-hop-1/leaf.bin', path.join(root, 'dangling-hop-2'));
+
+      await expect(deleteLocalFile(root, 'dangling-dot-missing.bin')).rejects.toThrow(/outside storage root/);
+      await expect(deleteLocalFile(root, 'dangling-hop-2')).rejects.toThrow(/outside storage root/);
+
+      fs.symlinkSync('./missing-inside.bin', path.join(root, 'intra-dangling.bin'));
+      await deleteLocalFile(root, 'intra-dangling.bin');
+      expect(() => fs.lstatSync(path.join(root, 'intra-dangling.bin'))).toThrow();
+
+      // Build a dangling symlink chain deeper than MAX_SYMLINK_DEPTH (40) to trigger ELOOP in left-to-right resolution.
+      fs.symlinkSync('./missing-tail', path.join(root, 'chain-0'));
+      for (let i = 1; i <= 42; i++) {
+        fs.symlinkSync(`chain-${i - 1}/x`, path.join(root, `chain-${i}`));
+      }
+      await expect(deleteLocalFile(root, 'chain-42')).rejects.toMatchObject({ code: 'ELOOP' });
+
+      // Propagate non-ENOENT errors and tolerate an unlink ENOENT race.
+      const eio = Object.assign(new Error('EIO: stat failure'), { code: 'EIO' });
+      jest.spyOn(fs.promises, 'realpath').mockRejectedValueOnce(eio);
+      await expect(deleteLocalFile(root, 'regular.bin')).rejects.toBe(eio);
+
+      jest.spyOn(fs.promises, 'realpath').mockRejectedValueOnce(eio);
+      await expect(deleteLocalFile(root, 'sub/nested.bin')).rejects.toBe(eio);
+
+      const realRealpath = fs.promises.realpath.bind(fs.promises);
+      jest
+        .spyOn(fs.promises, 'realpath')
+        .mockImplementationOnce(p => realRealpath(p))
+        .mockRejectedValueOnce(eio);
+      await expect(deleteLocalFile(root, 'sub/nested.bin')).rejects.toBe(eio);
+
+      jest.spyOn(fs.promises, 'lstat').mockRejectedValueOnce(eio);
+      await expect(deleteLocalFile(root, 'regular.bin')).rejects.toBe(eio);
+
+      fs.writeFileSync(path.join(root, 'race.bin'), 'x');
+      jest
+        .spyOn(fs.promises, 'unlink')
+        .mockRejectedValueOnce(Object.assign(new Error('ENOENT: already gone'), { code: 'ENOENT' }));
+      await expect(deleteLocalFile(root, 'race.bin')).resolves.toBeUndefined();
+
+      jest.spyOn(fs.promises, 'unlink').mockRejectedValueOnce(eio);
+      await expect(deleteLocalFile(root, 'race.bin')).rejects.toBe(eio);
     });
   });
 });
