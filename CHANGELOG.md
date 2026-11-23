@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Baileys: release inbound limiter slots before waiting on preparation room so slow message preparation cannot stall unrelated chats.
+- Baileys: fence generation timers and detach socket listeners with proxy agent teardown on disconnect and terminal close.
+- Baileys: make `BaileysSessionStore` LRU eviction and batched state twin lookups linear.
+- `whatsapp-web.js`: guard disconnect, auth-failure, and stuck-auth lifecycle races across adapter generations.
+- Engine: resolve self LID admin status in LID groups without caching null lookups permanently.
+- Plugins: strip secrets across base, env, session, and instance configs whenever `allowConfigHosts` targets redirect.
+- Plugins: serialize per-plugin instance mutations so concurrent updates cannot interleave.
+- Plugins: scope `ctx.net.fetch` allowed hosts to the active session and dispatch context.
+- Plugins: restrict config-UI CSP `script-src` to `'unsafe-inline'` and skip noncing external SVG scripts.
+- Plugins: memoize config-UI HTML hardening to avoid reparsing on every request.
+- Security: reject credentialed or malformed SSRF redirect locations and redact IPv6 endpoints in SSRF errors.
+- Security: block deprecated ORCHID and non-public Teredo IPv6 addresses in SSRF host validation.
+- Security: enforce per-object key limits and NUL-byte sanitization on `ImportDataDto` imports.
+- Security: verify realpath symlink containment and use `O_NOFOLLOW` on local storage and storage-import writes.
+- Automation: require explicit positive chat-kind opt-in for channel, broadcast, and status chats on automation rules.
+- Messages: isolate `message:sending` hook payloads while pinning caller routing and status recipient fields.
+- Messages: archive outbound echo media even when already merged as `DELIVERED` or `READ`.
+- Messages: harden `BulkMessageService` media handling, abortable delays, shutdown drains, and atomic result persistence.
+- Messages: align idempotency expiry checks to `<=` and drain pending idempotency writes on shutdown.
+- Sessions: preserve `x-request-id`, bodyless `DELETE`, and form-urlencoded bodies in `SessionProxyInterceptor`.
+- Webhooks: mark outbox rows queued before BullMQ enqueue with rollback on enqueue failure.
+- Webhooks: prune legacy `NULL`-state outbox rows and close outbox entries for deleted webhooks on worker failure.
+- Webhooks: guard PostgreSQL redrive JSON predicates safely across PostgreSQL 12 through 18.
+- Storage: await S3 bucket initialization before purges and fail closed on `deleteFile` when configured S3 is unavailable.
+- Reliability: isolate throwing shutdown listeners and add cooperative bounded shutdown drains across maintenance loops.
+- Dashboard: match own chat reactions by exact session phone or `me` across cached message slices.
+- Dashboard: stabilize `ChatThread` scroll listeners and isolate composer draft state to eliminate keystroke re-render churn.
+- Dashboard: cap unbounded list pagination and percent-encode dynamic API path segments.
+- Dashboard: serve inline document downloads through inert `application/octet-stream` Blobs with deferred URL revocation.
+- Dashboard: parse balanced search highlight marks safely with dataset scroll matching.
+- Dashboard: exclude shimmed non-code assets and bound concurrency during coverage runs.
+- Tests: raise bulk orphan-sweep Jest timeouts to 30s.
+
 ## [0.31.0] - 2026-11-21
 
 ### Added
