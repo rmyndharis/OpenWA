@@ -7757,7 +7757,7 @@ Outbox creation is best effort, and message persistence and outbox insertion are
 
 Before downgrading to a version that does not recognize the `queued` outbox state, drain or recover those records and take a backup. Its cleanup may otherwise treat an unsettled queued record as settled. Reverting the terminal-identity migration removes its index but does not restore historical duplicates.
 
-**Design your handler to be idempotent**, keyed on the `X-OpenWA-Idempotency-Key` header (see below). As a server-side safety net, OpenWA de-duplicates inbound `message.received` before dispatch (a re-fired event for an already-persisted message is dropped), so one webhook normally sees each inbound message once — but this is best-effort defense-in-depth and does not remove the need for consumer-side idempotency.
+**Design your handler to be idempotent**, keyed on `delivery.idempotencyKey` inside the verified JSON payload (see below; HTTP headers are not covered by the HMAC signature). As a server-side safety net, OpenWA de-duplicates inbound `message.received` before dispatch (a re-fired event for an already-persisted message is dropped), so one webhook normally sees each inbound message once, though this is best-effort defense-in-depth and does not remove the need for consumer-side idempotency.
 
 ### HMAC signature
 
@@ -7788,15 +7788,15 @@ If no `secret` is configured the `X-OpenWA-Signature` header is omitted entirely
 
 ### Idempotency & delivery headers
 
-Every delivery includes:
+Every delivery includes the following HTTP headers. Note that `X-OpenWA-Signature` signs **only the raw JSON request body**, so all `X-OpenWA-*` headers are unsigned metadata: always route on `delivery.event` and deduplicate on `delivery.idempotencyKey` from the verified JSON body rather than relying on headers:
 
-| Header                     | Meaning                                                                                                      |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `X-OpenWA-Event`           | The event name (mirrors `event`)                                                                             |
-| `X-OpenWA-Idempotency-Key` | Content-derived key; **stable across retries** of the same occurrence — dedupe on this                       |
-| `X-OpenWA-Delivery-Id`     | `dlv_<uuid>` per webhook per event, **same on every automatic retry**; replays get a new one. Not for dedup. |
-| `X-OpenWA-Retry-Count`     | Retry attempt number (`0` = first attempt)                                                                   |
-| `X-OpenWA-Signature`       | HMAC (only when a secret is set)                                                                             |
+| Header                     | Meaning                                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `X-OpenWA-Event`           | Unsigned convenience header mirroring `delivery.event` (route using the verified payload field)                                            |
+| `X-OpenWA-Idempotency-Key` | Unsigned convenience header mirroring `delivery.idempotencyKey`; **stable across retries** (always deduplicate using the verified payload) |
+| `X-OpenWA-Delivery-Id`     | `dlv_<uuid>` per webhook per event, **same on every automatic retry**; replays get a new one. Not for dedup.                               |
+| `X-OpenWA-Retry-Count`     | Retry attempt number (`0` = first attempt)                                                                                                 |
+| `X-OpenWA-Signature`       | HMAC (only when a secret is set; covers only the raw JSON body)                                                                            |
 
 **Idempotency key derivation.** The key is content-derived so duplicates of the same logical event collapse to one value. Every key below is then suffixed with `_{webhookId}`, so two webhooks subscribed to the same event never share a key:
 

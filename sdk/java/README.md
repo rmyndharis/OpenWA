@@ -159,14 +159,17 @@ if (!WebhookSignature.verify(rawBody, request.getHeader("X-OpenWA-Signature"), s
 }
 WebhookDelivery delivery =
     new Gson().fromJson(new String(rawBody, StandardCharsets.UTF_8), WebhookDelivery.class);
-// Process delivery.event() and delivery.data() here.
+// Route on delivery.event() and deduplicate on delivery.idempotencyKey() (headers are unsigned).
 ```
 
-The signature covers the body only and carries no timestamp, so a captured
-delivery still verifies when it is sent again. Dedupe on
-`delivery.idempotencyKey()` (also the `X-OpenWA-Idempotency-Key` header): the
-gateway's own retries and an operator's redrive of a failed delivery reuse it, so
-a key you have already handled is the same event arriving again.
+The signature covers the raw JSON body only (not `X-OpenWA-*` headers, which
+are unsigned) and carries no timestamp, so a captured delivery still verifies
+when it is sent again. Always deduplicate on `delivery.idempotencyKey()` and
+route on `delivery.event()` from the verified JSON payload rather than trusting
+the unsigned `X-OpenWA-Idempotency-Key` or `X-OpenWA-Event` headers: the
+gateway's own retries and an operator's redrive of a failed delivery reuse
+`delivery.idempotencyKey()`, so a key you have already handled is the same event
+arriving again.
 
 ## Reliability & security
 

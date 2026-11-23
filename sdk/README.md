@@ -277,9 +277,12 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
   `verify_webhook_signature` (Python), `VerifyWebhookSignature` (Go),
   `WebhookSignature.verify` (Java) and `WebhookSignature::verify` (PHP). The
   JavaScript, Python, Go and Java SDKs also type the delivery body as
-  `WebhookDelivery`. The signature carries no timestamp, so dedupe on the body's
-  `idempotencyKey` (also the `X-OpenWA-Idempotency-Key` header), which the
-  gateway's retries and redrives reuse.
+  `WebhookDelivery`. Because `X-OpenWA-*` delivery headers are unsigned and the
+  HMAC signature covers only the raw JSON body (with no timestamp), always
+  route on `delivery.event` and deduplicate on `delivery.idempotencyKey` read
+  from the verified JSON body, not from `X-OpenWA-Event` or
+  `X-OpenWA-Idempotency-Key` headers. The gateway's retries and redrives reuse
+  the same payload `idempotencyKey`.
 - **Redirects are never followed.** A `3xx` surfaces to the caller rather than
   being followed, so the API key is never re-sent to a redirect target.
 - **Default timeout** is 30s (configurable). `0` turns it off in the JavaScript,

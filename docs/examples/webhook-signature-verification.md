@@ -4,15 +4,15 @@ OpenWA signs webhook deliveries when a webhook is configured with a secret. Rece
 
 ## Headers
 
-OpenWA sends these system headers with webhook deliveries:
+OpenWA sends these system headers with webhook deliveries. Note that `X-OpenWA-*` headers are **unsigned** metadata (the HMAC covers the raw JSON request body bytes only), so always route on `event` and deduplicate on `idempotencyKey` from the verified JSON payload rather than trusting header values:
 
-| Header                     | Description                                                        |
-| -------------------------- | ------------------------------------------------------------------ |
-| `X-OpenWA-Signature`       | HMAC-SHA256 signature, present only when the webhook has a secret  |
-| `X-OpenWA-Event`           | Event name, for example `message.received`                         |
-| `X-OpenWA-Idempotency-Key` | Stable key for duplicate detection                                 |
-| `X-OpenWA-Delivery-Id`     | Unique identifier for this delivery (stable across retry attempts) |
-| `X-OpenWA-Retry-Count`     | Retry count for the current delivery                               |
+| Header                     | Description                                                                      |
+| -------------------------- | -------------------------------------------------------------------------------- |
+| `X-OpenWA-Signature`       | HMAC-SHA256 signature over raw body, present only when the webhook has a secret  |
+| `X-OpenWA-Event`           | Unsigned convenience header mirroring `delivery.event` (route from payload)      |
+| `X-OpenWA-Idempotency-Key` | Unsigned convenience header mirroring `delivery.idempotencyKey` (dedupe on body) |
+| `X-OpenWA-Delivery-Id`     | Unique identifier for this delivery (stable across retry attempts)               |
+| `X-OpenWA-Retry-Count`     | Retry count for the current delivery                                             |
 
 The signature format is:
 
@@ -67,9 +67,9 @@ app.post('/openwa/webhook', express.raw({ type: 'application/json' }), (req, res
     return res.status(401).send('Invalid signature');
   }
 
-  const event = JSON.parse(req.body.toString('utf8'));
+  const delivery = JSON.parse(req.body.toString('utf8'));
 
-  // Process event here.
+  // Deduplicate on delivery.idempotencyKey and route on delivery.event (X-OpenWA-* headers are unsigned).
   // Return a 2xx response only after the event is safely accepted.
   return res.status(200).send('OK');
 });
@@ -108,9 +108,9 @@ async def openwa_webhook(request: Request):
     if not verify_openwa_signature(raw_body, signature, WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
-    event = await request.json()
+    delivery = await request.json()
 
-    # Process event here.
+    # Deduplicate on delivery["idempotencyKey"] and route on delivery["event"] (X-OpenWA-* headers are unsigned).
     return {"status": "ok"}
 ```
 
@@ -120,5 +120,5 @@ async def openwa_webhook(request: Request):
 - Use the exact raw request body received by your HTTP server.
 - Use a constant-time comparison function.
 - Return `401` for invalid signatures.
-- Use `X-OpenWA-Idempotency-Key` to avoid duplicate processing on retries.
+- Deduplicate on `delivery.idempotencyKey` and route on `delivery.event` from the verified JSON payload (never trust the unsigned `X-OpenWA-*` headers, which are not covered by the signature).
 - Return a `2xx` response only after the event is accepted for processing.

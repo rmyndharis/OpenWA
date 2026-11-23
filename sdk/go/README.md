@@ -238,16 +238,19 @@ http.HandleFunc("/openwa/webhook", func(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	// Process delivery.Event and delivery.Data here.
+	// Route on delivery.Event and deduplicate on delivery.IdempotencyKey (headers are unsigned).
 	w.WriteHeader(http.StatusOK)
 })
 ```
 
-The signature covers the body only and carries no timestamp, so a captured
-delivery still verifies when it is sent again. Dedupe on
-`delivery.IdempotencyKey` (also the `X-OpenWA-Idempotency-Key` header): the
-gateway's own retries and an operator's redrive of a failed delivery reuse it, so
-a key you have already handled is the same event arriving again.
+The signature covers the raw JSON body only (not `X-OpenWA-*` headers, which
+are unsigned) and carries no timestamp, so a captured delivery still verifies
+when it is sent again. Always deduplicate on `delivery.IdempotencyKey` and
+route on `delivery.Event` from the verified JSON payload rather than trusting
+the unsigned `X-OpenWA-Idempotency-Key` or `X-OpenWA-Event` headers: the
+gateway's own retries and an operator's redrive of a failed delivery reuse
+`delivery.IdempotencyKey`, so a key you have already handled is the same event
+arriving again.
 
 ## Security & reliability
 
