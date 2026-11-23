@@ -15,6 +15,7 @@ import {
   CreateBucketCommand,
 } from '@aws-sdk/client-s3';
 import { createLogger } from '../services/logger.service';
+import { STORAGE_FALLBACK_SHUTDOWN_WAIT_MS } from '../services/shutdown-budget';
 import { positiveIntFromEnv } from '../utils/env-int';
 import { ensurePrivateDir } from '../utils/private-dir.util';
 import { isSafeStorageKey } from '../utils/path-safety';
@@ -277,7 +278,7 @@ export class StorageService implements OnModuleInit, OnModuleDestroy {
       await Promise.race([
         this.fallbackSyncInFlight,
         new Promise<void>(resolve => {
-          timer = setTimeout(resolve, 1_000);
+          timer = setTimeout(resolve, STORAGE_FALLBACK_SHUTDOWN_WAIT_MS);
           timer.unref();
         }),
       ]);

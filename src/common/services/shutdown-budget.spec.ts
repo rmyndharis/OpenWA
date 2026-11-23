@@ -20,6 +20,7 @@ import {
   SHUTDOWN_KILL_DEADLINE_MS,
   SHUTDOWN_MAINTENANCE_WAIT_MS,
   SHUTDOWN_TEARDOWN_LIMIT_MS,
+  STORAGE_FALLBACK_SHUTDOWN_WAIT_MS,
   WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS,
   shutdownTeardownLimitMs,
 } from './shutdown-budget';
@@ -41,7 +42,7 @@ describe('shutdown time budget', () => {
     AUTOSTART_SHUTDOWN_WAIT_MS +
     BULK_SHUTDOWN_DRAIN_MS +
     SHUTDOWN_MAINTENANCE_WAIT_MS * 4 +
-    WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS +
+    STORAGE_FALLBACK_SHUTDOWN_WAIT_MS +
     DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS +
     ApiKeyUsageTracker.SHUTDOWN_FLUSH_TIMEOUT_MS;
   const withPlugins = base + PLUGIN_SHUTDOWN_WAIT_MS;
@@ -56,6 +57,7 @@ describe('shutdown time budget', () => {
 
   it('sums to the documented totals', () => {
     expect([base, withPlugins, clustered]).toEqual([43_000, 53_000, 75_000]);
+    expect(WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS).toBeLessThanOrEqual(DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS);
   });
 
   it('registers one queue module per queue name, so the queue stage is counted per queue', () => {

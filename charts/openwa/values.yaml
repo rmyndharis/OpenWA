@@ -80,13 +80,14 @@ resources:
     cpu: 1000m
 
 # Matches docker-compose stop_grace_period. Sized for the worst case (QUEUE_ENABLED, Redis, a plugin
-# enabled), where the bounded teardown stages add up to 63s: drain 3 + ingress reconciler 5 + engines
-# 10 (in parallel, whatever the session count) + auto-start wait 5 + webhook drain 5 + worker close 10
-# + producer queue close 2 for each of two queues + usage flush 5 + plugin phase 10 + three Redis quits
-# 2 each. The process force-exits 67s after the drain and 5s before this deadline. Raising
-# SHUTDOWN_DELAY_MS or WEBHOOK_SHUTDOWN_DRAIN_MS moves that exit later by the same amount, so raise
-# this by the same amount too.
-terminationGracePeriodSeconds: 75
+# enabled), where the bounded teardown stages add up to 75s: drain 3 + ingress reconciler 5 + engines
+# 10 (in parallel, whatever the session count) + auto-start wait 5 + bulk batch drain 5 + maintenance
+# prune/index waits 4 + storage fallback sync drain 1 + webhook drain 5 + worker close 10 + producer queue
+# close 2 for each of two queues + usage flush 5 + plugin phase 10 + four Redis quits 2 each. The
+# process force-exits 82s after the drain and 5s before this deadline. Raising SHUTDOWN_DELAY_MS or
+# WEBHOOK_SHUTDOWN_DRAIN_MS moves that exit later by the same amount, so raise this by the same
+# amount too.
+terminationGracePeriodSeconds: 90
 
 # Boot budget of the kubelet startupProbe on /api/health/live: the container is restarted after
 # periodSeconds x (failureThreshold - 1) = 5s x 59 = 295s without an answer. The first boot after an

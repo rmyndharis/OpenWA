@@ -14,6 +14,7 @@ import { isUniqueViolation } from '../../common/utils/db-errors';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { createLogger } from '../../common/services/logger.service';
+import { SHUTDOWN_MAINTENANCE_WAIT_MS } from '../../common/services/shutdown-budget';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 
 /** A status/story lives for 24h from posting, matching WhatsApp's own expiry. Exported for the
@@ -43,7 +44,7 @@ const DEFAULT_ORPHAN_GRACE_MS = 60 * 60 * 1000;
 const STATUS_MEDIA_PREFIX = 'statuses/';
 
 /** Upper bound on waiting for in-flight maintenance passes during shutdown. */
-const MAINTENANCE_SHUTDOWN_WAIT_MS = 1_000;
+const MAINTENANCE_SHUTDOWN_WAIT_MS = SHUTDOWN_MAINTENANCE_WAIT_MS;
 
 /**
  * Persists inbound status/story broadcasts (`StatusUpdate` rows) with a 24h TTL, storing any attached

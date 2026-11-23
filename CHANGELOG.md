@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MCP_MAX_RESULT_BYTES` defaults to `100000` bytes (100 KB); set `MCP_MAX_RESULT_BYTES=0` to restore unlimited results and base64 resource offloading.
 - Dashboard authentication uses an `HttpOnly; SameSite=Strict` `openwa_session` cookie stored in `main.sqlite` (`browser_sessions`) instead of `sessionStorage`.
 - Non-safe dashboard cookie requests require `X-Requested-With: OpenWA-Dashboard` and same-origin verification, and cross-node forwarding returns `409` for cookie-only requests.
+- Raise `stop_grace_period` (Docker) and `terminationGracePeriodSeconds` (Kubernetes) to 90 s to accommodate the 82 s forced teardown limit.
+- Helm `replicaCount` values above 1 fail template rendering because a single session data volume does not support concurrent replicas.
+- Forwarded inter-node `POST`, `PUT`, and `PATCH` requests with non-JSON or non-form content types whose bodies are rejected unread now return `400` instead of forwarding synthesized `{}` as `application/json`.
 
 ### Added
 
@@ -50,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Run dashboard `npm run test:cov` in CI and release workflows.
 - Add a PHP syntax check step for PHP SDK sources in SDK CI.
 - Document HTTP/HTTPS session-proxy DNS rebinding exposure and required egress ACLs alongside `SESSION_PROXY_URL_FETCH`.
+- Reject non-scalar `?code` query arrays and objects on `GET /api/sessions/{sessionId}/groups/join-info` with `400`.
+- Bound plugin webhook delivery capability timeouts to the dispatch deadline with retry deduplication, scope `ctx.net.fetch` allowlists outside active dispatches, and check symlink containment recursively across plugin package installs.
+- Enforce `replicaCount <= 1`, valid `terminationGracePeriodSeconds` and `tmpVolumeSizeLimit` inputs, and disallow `PORT` overrides in Helm `values.schema.json`, bound `/tmp` `emptyDir.sizeLimit` in the chart template, and harden `scripts/restore.sh` path containment and pre-restore checks.
+- Exclude `*.sqlite-wal` and `*.sqlite-shm` (alongside existing `.db-wal`/`.db-shm`) patterns from Docker build contexts in `.dockerignore`.
 
 ### Fixed
 
@@ -102,6 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python SDK: pin `asyncio_default_fixture_loop_scope = "function"` in test configuration.
 - Tests: raise bulk orphan-sweep Jest timeouts to 30s.
 - Tests: close PostgreSQL import test `DataSource` pools in `try/finally` blocks.
+- Config & Security: track chunked request body byte budgets incrementally as chunks arrive, bound in-memory throttler fallback maps, add 10s SOCKS connect timeouts with abort cancellation, cap plugin upload multipart counts, and apply MCP rate limits without dropping tool errors.
+- Storage & Data: stream storage archive transfers with bounded temporary directories, resolve S3 local-fallback recovery sync races, keep SQLite media archive CAS predicates UTF-16 safe, and export PostgreSQL snapshots inside `REPEATABLE READ` transactions.
+- Search, Messages & Webhooks: prevent NULL SQLite FTS indexing corruption, normalize FTS trigger comparisons, isolate PostgreSQL connection cleanup, use UTC midnight quota bounds, cap automation rule cooldown maps, generate unique integration redrive keys, and drain periodic webhook prunes on shutdown.
+- Engines & Lifecycle: prevent regional JID `ephemeralExpiration` leaks on non-content sends, close inbound limiters on logout, fence adapter and LID store teardowns, separate session renewal DB passes from `onLeaseLost` teardown, serialize mid-boot signals, and redact sensitive keys in logs.
+- Dashboard & SDKs: isolate cross-tab and cross-actor query caches, lock active modals and search navigation during loading or saves, add Go retry backoff jitter, reject scalar 2xx payloads across PHP `HttpExecutor` calls, and clarify unsigned webhook headers vs signed bodies in docs.
 
 ## [0.31.0] - 2026-11-21
 

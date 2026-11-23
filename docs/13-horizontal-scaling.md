@@ -364,9 +364,9 @@ version: '3.8'
 services:
   openwa:
     image: ghcr.io/rmyndharis/openwa:latest
-    # Teardown takes up to 63 s with every datastore on; raise this by the amount SHUTDOWN_DELAY_MS or
+    # Teardown takes up to 75 s with every datastore on; raise this by the amount SHUTDOWN_DELAY_MS or
     # WEBHOOK_SHUTDOWN_DRAIN_MS exceeds its default, or the 10 s default kills the task mid-teardown.
-    stop_grace_period: 75s
+    stop_grace_period: 90s
     deploy:
       replicas: 1 # MUST stay 1 until multi-replica is supported — multiple replicas on one session volume corrupt WhatsApp auth
       update_config:
@@ -529,9 +529,9 @@ spec:
       labels:
         app: openwa
     spec:
-      # The teardown can take up to 63 s on a clustered replica (src/common/services/shutdown-budget.ts), so
+      # The teardown can take up to 75 s on a clustered replica (src/common/services/shutdown-budget.ts), so
       # Kubernetes' default grace of 30 s would SIGKILL a slow stop half way. Match the shipped chart.
-      terminationGracePeriodSeconds: 75
+      terminationGracePeriodSeconds: 90
       # OS-level containment is defence in depth for the plugin sandbox (see docs/30-plugin-sandboxing.md):
       # it limits the privileges the API process holds, not what a plugin inside that process can reach.
       # Without it the API process, and every plugin loaded into it, keeps whatever the container runtime

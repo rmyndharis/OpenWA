@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { HttpAdapterHost } from '@nestjs/core';
 import { setImmediate } from 'node:timers/promises';
 import { createLogger } from '../../../common/services/logger.service';
+import { SHUTDOWN_MAINTENANCE_WAIT_MS } from '../../../common/services/shutdown-budget';
 import { awaitNoOpenTransaction } from '../../../common/utils/shared-connection';
 import { repairSqliteMessageFts } from '../../../database/sqlite-message-fts';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -70,7 +71,7 @@ export const TRIGRAM_BUILD_LOCK = `$1, to_regclass('messages')::oid::int`;
 /** How long a build kept from running (see retryContainsBuild) waits before trying again. */
 const TRIGRAM_BUILD_RETRY_MS = 30_000;
 /** Upper bound on waiting for an active trigram index build during shutdown. */
-const TRIGRAM_BUILD_SHUTDOWN_WAIT_MS = 1_000;
+const TRIGRAM_BUILD_SHUTDOWN_WAIT_MS = SHUTDOWN_MAINTENANCE_WAIT_MS;
 
 /** Why match=contains answers 501, one message per cause, each naming what to change. */
 const CONTAINS_UNAVAILABLE = {

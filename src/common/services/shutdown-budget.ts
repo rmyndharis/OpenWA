@@ -12,9 +12,9 @@
  *   auto-start wait                          5 s     shutdown during the boot window
  *   bulk batch drain                         5 s     an in-flight batch at shutdown
  *   maintenance prune/index waits (4 x 1s)   4 s     active archive/status/fts/outbox pass
- *   webhook prune drain                      1 s     an active webhook prune pass
+ *   storage fallback sync drain              1 s     active S3 recovery sync in StorageModule
  *   throttler Redis quit                     2 s     REDIS_ENABLED
- *   webhook drain                            5 s     a delivery in flight (worst case; WEBHOOK_SHUTDOWN_DRAIN_MS)
+ *   webhook module drains (prune 1s || 5s)   5 s     delivery/reconciler/redrive/prune (parallel in module)
  *   queue worker close                      10 s     QUEUE_ENABLED
  *   producer queue close                     4 s     QUEUE_ENABLED (2 s per queue, one queue module each)
  *   API-key usage flush                      5 s     pending counters
@@ -73,8 +73,11 @@ export const DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS = 5_000;
 /** Shared cap of each bounded 1 s maintenance prune/index destroy hook (chat-media, status-store, fts, outbox). */
 export const SHUTDOWN_MAINTENANCE_WAIT_MS = 1_000;
 
-/** Shutdown wait cap for periodic webhook prune drain. */
+/** Shutdown wait cap for periodic webhook prune drain (parallel with delivery drain in WebhookModule). */
 export const WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS = 1_000;
+
+/** Shutdown wait cap for S3 fallback sync drain inside StorageModule. */
+export const STORAGE_FALLBACK_SHUTDOWN_WAIT_MS = 1_000;
 
 /**
  * Must equal docker-compose.yml and docker-compose.dev.yml stop_grace_period and

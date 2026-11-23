@@ -12,6 +12,7 @@ import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { startGuardedInterval } from '../../common/utils/guarded-interval';
 import { extFromMimetype } from '../../common/media/mime-ext';
 import { createLogger } from '../../common/services/logger.service';
+import { SHUTDOWN_MAINTENANCE_WAIT_MS } from '../../common/services/shutdown-budget';
 
 const ARCHIVE_CONCURRENCY = 4;
 const MAX_SQLITE_INLINE_CAS_CHARS = 65_536;
@@ -71,7 +72,7 @@ const MEDIA_URL_POINTER = /^https?:\/\//i;
 /** Largest stored metadata the purge checks for an archived marker in bulk; a larger one is checked on its own. */
 const ARCHIVED_MARKER_MAX_METADATA_BYTES = 64 * 1024;
 /** Upper bound on waiting for in-flight maintenance passes during shutdown. */
-const MAINTENANCE_SHUTDOWN_WAIT_MS = 1_000;
+const MAINTENANCE_SHUTDOWN_WAIT_MS = SHUTDOWN_MAINTENANCE_WAIT_MS;
 
 /** The inline media shape carried on a persisted row's `metadata.media`. */
 interface InlineMedia {

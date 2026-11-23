@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { And, EntityManager, In, IsNull, LessThan, Not, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
 import { WebhookOutboxEvent, WebhookOutboxState } from './entities/webhook-outbox-event.entity';
 import { createLogger } from '../../common/services/logger.service';
+import { SHUTDOWN_MAINTENANCE_WAIT_MS } from '../../common/services/shutdown-budget';
 import { pruneInBatches } from '../../common/utils/batched-prune';
 import { startGuardedInterval } from '../../common/utils/guarded-interval';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
@@ -11,7 +12,7 @@ import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-err
 const DEFAULT_OUTBOX_RETENTION_DAYS = 7;
 const DEFAULT_OUTBOX_PRUNE_MAX_ROWS = 100_000;
 /** Upper bound on waiting for an active outbox prune pass during shutdown. */
-const OUTBOX_PRUNE_SHUTDOWN_WAIT_MS = 1_000;
+const OUTBOX_PRUNE_SHUTDOWN_WAIT_MS = SHUTDOWN_MAINTENANCE_WAIT_MS;
 /**
  * Maximum outbox rows inserted per statement: 9 bound parameters per row yields at most 900
  * variables per query, safely below SQLite's 999 bind limit and PostgreSQL's 65535 limit.

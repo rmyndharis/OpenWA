@@ -7,6 +7,7 @@ import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.enti
 import { Session } from '../session/entities/session.entity';
 import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
+import { WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS } from '../../common/services/shutdown-budget';
 import { resolveSessionScope } from '../../common/security/session-scope';
 import { pruneInBatches } from '../../common/utils/batched-prune';
 import { startGuardedInterval } from '../../common/utils/guarded-interval';
@@ -41,8 +42,7 @@ const DEFAULT_WEBHOOK_MAX_PER_SESSION = 16;
  * listing/retention. Event delivery itself (fan-out, queueing, retries, dead-lettering) lives on
  * WebhookDeliveryService; dispatch() here is the stable facade every event producer calls.
  */
-/** Upper bound on waiting for in-flight webhook failure/payload prunes during shutdown. */
-export const WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS = 1_000;
+export { WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS };
 
 @Injectable()
 export class WebhookService implements OnModuleInit, OnModuleDestroy {
