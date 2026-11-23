@@ -1224,3 +1224,129 @@ describe('DockerService existing container inspection deadlines', () => {
     },
   );
 });
+
+describe('DockerService service-label lookup and call timeouts', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('createService(postgres) finds an existing container labeled com.openwa.service=database', async () => {
+    const start = jest.fn().mockResolvedValue(undefined);
+    const getContainer = jest.fn().mockReturnValue({
+      inspect: jest.fn().mockResolvedValue({ State: { Running: false } }),
+      start,
+    });
+    const listContainers = jest.fn().mockResolvedValue([{ Id: 'pg-custom-1', Names: ['/custom-pg-name'] }]);
+    const service = new DockerService();
+    Object.assign(service as unknown as Record<string, unknown>, {
+      docker: { listContainers, getContainer },
+      isAvailable: true,
+    });
+
+    await expect(service.createService('postgres')).resolves.toBe(true);
+    expect(listContainers).toHaveBeenCalledWith({
+      all: true,
+      filters: { label: ['com.openwa.service=database'] },
+      abortSignal: expect.any(AbortSignal) as unknown,
+    });
+    expect(getContainer).toHaveBeenCalledWith('pg-custom-1');
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds stalled pull, createVolume, createContainer, start, and stop calls cleanly', async () => {
+    jest.useFakeTimers();
+
+    const makeHung = () => new Promise<never>(() => undefined);
+
+    // 1. Stalled pull
+    {
+      const service = new DockerService();
+      service.callTimeoutMs = 30;
+      (service as unknown as { pullTimeoutMs?: number }).pullTimeoutMs = 50;
+      Object.assign(service as unknown as Record<string, unknown>, {
+        docker: {
+          modem: { followProgress: jest.fn() },
+          getImage: () => ({
+            inspect: jest.fn().mockRejectedValue(Object.assign(new Error('404'), { statusCode: 404 })),
+          }),
+          pull: (_img: string, cb: (err: Error | null, stream: unknown) => void) => cb(null, { destroy: jest.fn() }),
+        },
+        isAvailable: true,
+      });
+      jest.spyOn(service, 'getContainerByService').mockResolvedValue(null);
+      const p = service.createService('redis');
+      await jest.advanceTimersByTimeAsync(60);
+      await expect(p).resolves.toBe(false);
+    }
+
+    // 2. Stalled createVolume times out cleanly and proceeds to createContainer + start
+    {
+      const service = new DockerService();
+      service.callTimeoutMs = 30;
+      const start = jest.fn().mockResolvedValue(undefined);
+      const createContainer = jest.fn().mockResolvedValue({ start });
+      Object.assign(service as unknown as Record<string, unknown>, {
+        docker: {
+          modem: {},
+          getImage: () => ({ inspect: jest.fn().mockResolvedValue({ Id: 'sha256:abc' }) }),
+          createVolume: jest.fn().mockImplementation(makeHung),
+          createContainer,
+        },
+        isAvailable: true,
+      });
+      jest.spyOn(service, 'getContainerByService').mockResolvedValue(null);
+      const p = service.createService('redis');
+      await jest.advanceTimersByTimeAsync(40);
+      await expect(p).resolves.toBe(true);
+      expect(createContainer).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledTimes(1);
+    }
+
+    // 3. Stalled createContainer
+    {
+      const service = new DockerService();
+      service.callTimeoutMs = 30;
+      Object.assign(service as unknown as Record<string, unknown>, {
+        docker: {
+          modem: {},
+          getImage: () => ({ inspect: jest.fn().mockResolvedValue({ Id: 'sha256:abc' }) }),
+          createVolume: jest.fn().mockResolvedValue({}),
+          createContainer: jest.fn().mockImplementation(makeHung),
+        },
+        isAvailable: true,
+      });
+      jest.spyOn(service, 'getContainerByService').mockResolvedValue(null);
+      const p = service.createService('redis');
+      await jest.advanceTimersByTimeAsync(40);
+      await expect(p).resolves.toBe(false);
+    }
+
+    // 4. Stalled container.start()
+    {
+      const service = new DockerService();
+      service.callTimeoutMs = 30;
+      const container = { inspect: jest.fn().mockResolvedValue({ State: { Running: false } }), start: makeHung };
+      Object.assign(service as unknown as Record<string, unknown>, { docker: {}, isAvailable: true });
+      jest.spyOn(service, 'getContainerByService').mockResolvedValue(container as never);
+      const p = service.createService('redis');
+      await jest.advanceTimersByTimeAsync(40);
+      await expect(p).resolves.toBe(false);
+    }
+
+    // 5. Stalled container.stop()
+    {
+      const service = new DockerService();
+      service.callTimeoutMs = 30;
+      (service as unknown as { stopTimeoutMs?: number }).stopTimeoutMs = 45;
+      const container = { inspect: jest.fn().mockResolvedValue({ State: { Running: true } }), stop: makeHung };
+      Object.assign(service as unknown as Record<string, unknown>, { docker: {}, isAvailable: true });
+      jest
+        .spyOn(service as unknown as { findContainerByService: () => unknown }, 'findContainerByService')
+        .mockResolvedValue(container as never);
+      const p = service.stopService('cache');
+      await jest.advanceTimersByTimeAsync(50);
+      await expect(p).resolves.toBe(false);
+    }
+  });
+});

@@ -112,7 +112,7 @@ describe('RedriveService', () => {
         providerConversationId: 'conv-1',
         payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
       },
-      'redrive:f1',
+      expect.stringMatching(/^redrive:f1:0:.+/),
       expect.any(AbortSignal),
     );
     expect(repo.update).toHaveBeenCalledWith({ id: 'f1' }, { redriven: true });
@@ -239,11 +239,40 @@ describe('RedriveService', () => {
 
     expect(ingressEnqueue.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({ deliveryId: 'f3', sessionId: undefined }),
-      'redrive:f3',
+      expect.stringMatching(/^redrive:f3:0:.+/),
       expect.any(AbortSignal),
     );
     // A legacy row without a deliveryId predates persist-before-ack — there is no event row to retire.
     expect(events.update).not.toHaveBeenCalled();
+  });
+
+  it('mints distinct jobIds across retries even if a crash before DB update leaves attempts unchanged', async () => {
+    const row = {
+      id: 'f-crash',
+      direction: 'inbound',
+      pluginId: 'p',
+      instanceId: 'i',
+      deliveryId: 'd-crash',
+      payload: { route: 'chatwoot', ingress: { headers: {}, query: {}, body: '{}', rawBody: '{}' } },
+      sessionId: 's',
+      redriven: false,
+      attempts: 0,
+    };
+    setRows([row]);
+    (repo.update as jest.Mock).mockRejectedValueOnce(new Error('process crashed before DB update'));
+    const svc = makeSvc();
+
+    await expect(svc.redriveInstance('p', 'i', null)).rejects.toThrow('process crashed before DB update');
+
+    setRows([row]);
+    await expect(svc.redriveInstance('p', 'i', null)).resolves.toEqual({ redriven: 1, remaining: 0, batchSize: 100 });
+
+    const calls = (ingressEnqueue.enqueue as jest.Mock).mock.calls as [unknown, string, AbortSignal][];
+    const jobId1 = calls[0][1];
+    const jobId2 = calls[1][1];
+    expect(jobId1).toMatch(/^redrive:f-crash:0:.+/);
+    expect(jobId2).toMatch(/^redrive:f-crash:0:.+/);
+    expect(jobId2).not.toBe(jobId1);
   });
 
   describe('shutdown', () => {
