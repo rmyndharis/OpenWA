@@ -3507,3 +3507,42 @@ describe('InfraDataController.importData re-syncs plugin instance bindings', () 
     );
   });
 });
+
+describe('InfraDataService.exportData PostgreSQL snapshot isolation', () => {
+  it('wraps PostgreSQL export queries in one READ ONLY REPEATABLE READ transaction with statement_timeout = 0', async () => {
+    const runnerQueries: string[] = [];
+    const runner = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      startTransaction: jest.fn().mockResolvedValue(undefined),
+      commitTransaction: jest.fn().mockResolvedValue(undefined),
+      rollbackTransaction: jest.fn().mockResolvedValue(undefined),
+      release: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn((sql: string) => {
+        runnerQueries.push(sql);
+        return Promise.resolve([]);
+      }),
+      isTransactionActive: true,
+    };
+    const entityMetadatas = EXPORT_TABLES.map(e => ({ tableName: e.table }));
+    const pgDs = {
+      options: { type: 'postgres' },
+      entityMetadatas,
+      createQueryRunner: jest.fn().mockReturnValue(runner),
+      query: jest.fn().mockResolvedValue([]),
+    };
+    const svc = new InfraDataService(
+      { get: (k: string, d?: unknown) => (k === 'dataDatabase.type' ? 'postgres' : d) } as never,
+      pgDs as never,
+    );
+
+    await svc.exportData();
+
+    expect(pgDs.createQueryRunner).toHaveBeenCalledTimes(1);
+    expect(runner.startTransaction).toHaveBeenCalledWith('REPEATABLE READ');
+    expect(runnerQueries[0]).toMatch(/SET TRANSACTION READ ONLY/i);
+    expect(runnerQueries[1]).toMatch(/SET LOCAL statement_timeout = 0/i);
+    expect(runner.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(runner.release).toHaveBeenCalledTimes(1);
+    expect(pgDs.query).not.toHaveBeenCalled();
+  });
+});

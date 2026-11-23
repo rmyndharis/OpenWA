@@ -3,14 +3,48 @@ import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { In, IsNull, Not, Repository } from 'typeorm';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { Message } from '../message/entities/message.entity';
 import { updateMessageMetadata } from '../message/message-metadata';
 import { StorageService } from '../../common/storage/storage.service';
 import { sweepOrphanedFiles } from '../../common/storage/orphan-sweep';
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { startGuardedInterval } from '../../common/utils/guarded-interval';
 import { extFromMimetype } from '../../common/media/mime-ext';
 import { createLogger } from '../../common/services/logger.service';
+
+const ARCHIVE_CONCURRENCY = 4;
+const MAX_SQLITE_INLINE_CAS_CHARS = 65_536;
+const SQLITE_DATA_SLICE_LEN = 128;
+const ARCHIVE_CAS_MAX_ATTEMPTS = 3;
+
+function countCodePoints(str: string): number {
+  let count = 0;
+  for (let i = 0; i < str.length;) {
+    const point = str.codePointAt(i);
+    i += point !== undefined && point > 0xffff ? 2 : 1;
+    count++;
+  }
+  return count;
+}
+
+function sliceCodePoints(str: string, startCp: number, maxCp: number): string {
+  let cp = 0;
+  let i = 0;
+  while (i < str.length && cp < startCp) {
+    const point = str.codePointAt(i);
+    i += point !== undefined && point > 0xffff ? 2 : 1;
+    cp++;
+  }
+  const startIdx = i;
+  let taken = 0;
+  while (i < str.length && taken < maxCp) {
+    const point = str.codePointAt(i);
+    i += point !== undefined && point > 0xffff ? 2 : 1;
+    taken++;
+  }
+  return str.slice(startIdx, i);
+}
 
 /** Storage key prefix owned by the chat-media archive; the media bucket is shared with statuses. */
 export const CHAT_MEDIA_PREFIX = 'chat-media/';
@@ -76,8 +110,10 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
   private purgeCursor?: string;
   /** Set on module destroy: the schedule stops, and a purge already running stops at its next check. */
   private stopping = false;
-  /** Active purge and orphan sweep runs, awaited (bounded) by onModuleDestroy. */
+  /** Active purge, orphan sweep, and archive runs, awaited (bounded) by onModuleDestroy. */
   private readonly inFlightMaintenance = new Set<Promise<unknown>>();
+  /** Bounds simultaneous base64 decodes, uploads, and readback checks. */
+  private readonly archiveLimiter = new ConcurrencyLimiter(ARCHIVE_CONCURRENCY);
 
   constructor(
     @InjectRepository(Message, 'data')
@@ -116,6 +152,7 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     this.stopping = true;
+    this.archiveLimiter.close();
     for (const stop of this.stopMaintenance) stop();
     this.stopMaintenance = [];
     if (this.inFlightMaintenance.size === 0) return;
@@ -165,7 +202,7 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
    * surface on the receive path. Returns the storage key when a file was written.
    */
   async archive(row: Pick<Message, 'id' | 'sessionId' | 'metadata' | 'mediaPath'>): Promise<string | null> {
-    if (!this.enabled) return null;
+    if (!this.enabled || this.closed) return null;
     // Outbound rows have two possible writers (the REST/bulk persist and the engine echo), so the
     // same row can reach here twice. A second write would leave the first file referenced by
     // nothing but still inside the grace window — work and storage for no gain.
@@ -184,12 +221,32 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
     const sizeBytes = Buffer.byteLength(media.data, 'base64');
     if (sizeBytes > maxBytes) return null;
 
+    const admittedMedia = { ...media, data: media.data, mimetype: media.mimetype };
+    return this.trackMaintenance(
+      (async () => {
+        try {
+          return await this.archiveLimiter.run(() => this.archiveAdmitted(row, admittedMedia));
+        } catch (error) {
+          if (error instanceof Error && error.message === 'ConcurrencyLimiter closed') return null;
+          throw error;
+        }
+      })(),
+    );
+  }
+
+  private async archiveAdmitted(
+    row: Pick<Message, 'id' | 'sessionId' | 'metadata' | 'mediaPath'>,
+    media: InlineMedia & { data: string; mimetype: string },
+  ): Promise<string | null> {
+    if (this.closed) return null;
+
     // A random key rather than the WhatsApp message id: message ids are engine-controlled strings
     // that can carry '/' (base64 id segments), which would silently nest the object and leak the
     // id into S3 keys. The row is read on the way out anyway, so nothing is gained by a derivable
     // key. Mirrors the status store.
     const key = `${CHAT_MEDIA_PREFIX}${row.sessionId}/${randomUUID()}.${extFromMimetype(media.mimetype)}`;
     const bytes = Buffer.from(media.data, 'base64');
+    const expectedHash = createHash('sha256').update(bytes).digest();
     try {
       await this.storageService.putFile(key, bytes);
     } catch (error) {
@@ -201,49 +258,118 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      let result;
       if (this.replacesInline) {
-        const stored = await this.storageService.getFile(key);
-        if (!stored.equals(bytes)) throw new Error('Archived media did not read back intact');
-        const current = await this.repository.findOne({
-          where: { id: row.id, mediaPath: IsNull(), type: Not('revoked') },
-          select: { id: true, metadata: true, waMessageId: true },
-        });
-        const metadata = current?.metadata;
-        const currentMedia = (metadata as { media?: InlineMedia } | null | undefined)?.media;
-        // The media route needs a WhatsApp id. An id-less send must keep its inline bytes.
-        if (!current?.waMessageId || !currentMedia?.data || currentMedia.data !== media.data) {
-          await this.storageService.deleteFile(key).catch(() => undefined);
-          return null;
+        await this.verifyStoredReadback(key, bytes.length, expectedHash);
+        const isPostgres = this.repository.manager?.connection?.options?.type === 'postgres';
+        for (let attempt = 0; attempt < ARCHIVE_CAS_MAX_ATTEMPTS; attempt++) {
+          if (this.closed) {
+            await this.storageService.deleteFile(key).catch(() => undefined);
+            return null;
+          }
+          const current = await this.repository.findOne({
+            where: { id: row.id, mediaPath: IsNull(), type: Not('revoked') },
+            select: { id: true, metadata: true, waMessageId: true },
+          });
+          const metadata = current?.metadata;
+          const currentMedia = (metadata as { media?: InlineMedia } | null | undefined)?.media;
+          // The media route needs a WhatsApp id. An id-less send must keep its inline bytes.
+          if (!current?.waMessageId || !currentMedia?.data || currentMedia.data !== media.data) {
+            await this.storageService.deleteFile(key).catch(() => undefined);
+            return null;
+          }
+          const { data: _data, ...rest } = currentMedia;
+          void _data;
+          // Publish the verified pointer using compact metadata fingerprints in WHERE (never binding up to
+          // 33 MiB of raw base64 in SQL) so concurrent reactions, edits, or revokes win instead of being overwritten.
+          const qb = this.repository
+            .createQueryBuilder()
+            .update()
+            .set({
+              mediaPath: key,
+              mediaMimetype: media.mimetype,
+              metadata: {
+                ...metadata,
+                media: { ...rest, omitted: true, sizeBytes: bytes.length, archived: true },
+              },
+            })
+            .where({ id: row.id, type: Not('revoked'), mediaPath: IsNull() });
+
+          if (isPostgres) {
+            const nonMediaObj = { ...(metadata as Record<string, unknown>) };
+            delete nonMediaObj.media;
+            const mediaMetaObj = { ...(currentMedia as Record<string, unknown>) };
+            delete mediaMetaObj.data;
+            const dataMd5 = createHash('md5').update(currentMedia.data).digest('hex');
+            qb.andWhere(`("metadata"::jsonb - 'media') = CAST(:nonMedia AS jsonb)`, {
+              nonMedia: JSON.stringify(nonMediaObj),
+            })
+              .andWhere(`(("metadata"::jsonb -> 'media') - 'data') = CAST(:mediaMeta AS jsonb)`, {
+                mediaMeta: JSON.stringify(mediaMetaObj),
+              })
+              .andWhere(`md5("metadata"::jsonb -> 'media' ->> 'data') = :dataMd5`, { dataMd5 });
+          } else {
+            const rawSnapshot = JSON.stringify(metadata);
+            const dataLiteral = JSON.stringify(currentMedia.data);
+            const firstIdx = rawSnapshot.indexOf(dataLiteral);
+            const isUniqueData = firstIdx !== -1 && rawSnapshot.indexOf(dataLiteral, firstIdx + 1) === -1;
+            const prefix = isUniqueData ? rawSnapshot.slice(0, firstIdx) : '';
+            const suffix = isUniqueData ? rawSnapshot.slice(firstIdx + dataLiteral.length) : '';
+            if (
+              rawSnapshot.length <= MAX_SQLITE_INLINE_CAS_CHARS ||
+              !isUniqueData ||
+              prefix.length + suffix.length > MAX_SQLITE_INLINE_CAS_CHARS
+            ) {
+              qb.andWhere('"metadata" = :rawSnapshot', { rawSnapshot });
+            } else {
+              const byteLen = Buffer.byteLength(rawSnapshot, 'utf8');
+              const cpLen = countCodePoints(rawSnapshot);
+              const prefixCpLen = countCodePoints(prefix);
+              const dataLiteralCpLen = countCodePoints(dataLiteral);
+              const suffixStartCp = prefixCpLen + dataLiteralCpLen + 1;
+              const sliceLen = Math.min(SQLITE_DATA_SLICE_LEN, dataLiteralCpLen);
+              const midOffset = Math.floor(Math.max(0, dataLiteralCpLen - sliceLen) / 2);
+              const tailOffset = Math.max(0, dataLiteralCpLen - sliceLen);
+              qb.andWhere(
+                'OCTET_LENGTH("metadata") = :byteLen AND LENGTH("metadata") = :cpLen ' +
+                  'AND SUBSTR("metadata", 1, :prefixCpLen) = :prefix ' +
+                  'AND SUBSTR("metadata", :suffixStartCp) = :suffix ' +
+                  'AND SUBSTR("metadata", :dataStartCp, :sliceLen) = :dataStartSlice ' +
+                  'AND SUBSTR("metadata", :dataMidCp, :sliceLen) = :dataMidSlice ' +
+                  'AND SUBSTR("metadata", :dataTailCp, :sliceLen) = :dataTailSlice',
+                {
+                  byteLen,
+                  cpLen,
+                  prefixCpLen,
+                  prefix,
+                  suffixStartCp,
+                  suffix,
+                  dataStartCp: prefixCpLen + 1,
+                  dataMidCp: prefixCpLen + 1 + midOffset,
+                  dataTailCp: prefixCpLen + 1 + tailOffset,
+                  sliceLen,
+                  dataStartSlice: sliceCodePoints(dataLiteral, 0, sliceLen),
+                  dataMidSlice: sliceCodePoints(dataLiteral, midOffset, sliceLen),
+                  dataTailSlice: sliceCodePoints(dataLiteral, tailOffset, sliceLen),
+                },
+              );
+            }
+          }
+          const result = await qb.execute();
+          if (result.affected !== 0) {
+            return key;
+          }
         }
-        const { data: _data, ...rest } = currentMedia;
-        void _data;
-        // Publish the verified pointer and remove only the exact metadata snapshot we read.
-        // A concurrent reaction, edit or revoke wins instead of being overwritten.
-        result = await this.repository
-          .createQueryBuilder()
-          .update()
-          .set({
-            mediaPath: key,
-            mediaMimetype: media.mimetype,
-            metadata: {
-              ...metadata,
-              media: { ...rest, omitted: true, sizeBytes: bytes.length, archived: true },
-            },
-          })
-          .where({ id: row.id, type: Not('revoked'), mediaPath: IsNull() })
-          .andWhere('"metadata" = :snapshot', { snapshot: JSON.stringify(metadata) })
-          .execute();
-      } else {
-        // Conditional on the row not being revoked: a revoke that landed while the file was written
-        // cleared the row, and pointing it at the file would bring the deleted media back. And on no
-        // pointer yet: the other writer may have passed the snapshot guard above while this file was
-        // being written, and the first pointer wins so the losing file is deleted, not stranded.
-        result = await this.repository.update(
-          { id: row.id, type: Not('revoked'), mediaPath: IsNull() },
-          { mediaPath: key, mediaMimetype: media.mimetype },
-        );
+        await this.storageService.deleteFile(key).catch(() => undefined);
+        return null;
       }
+      // Conditional on the row not being revoked: a revoke that landed while the file was written
+      // cleared the row, and pointing it at the file would bring the deleted media back. And on no
+      // pointer yet: the other writer may have passed the snapshot guard above while this file was
+      // being written, and the first pointer wins so the losing file is deleted, not stranded.
+      const result = await this.repository.update(
+        { id: row.id, type: Not('revoked'), mediaPath: IsNull() },
+        { mediaPath: key, mediaMimetype: media.mimetype },
+      );
       if (result.affected === 0) {
         await this.storageService.deleteFile(key).catch(() => undefined); // else the orphan sweep reaps it
         return null;
@@ -260,6 +386,32 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
     return key;
+  }
+
+  private async verifyStoredReadback(key: string, expectedLength: number, expectedHash: Buffer): Promise<void> {
+    if (typeof this.storageService.openFile === 'function') {
+      const source = await this.storageService.openFile(key);
+      const hash = createHash('sha256');
+      let actualLength = 0;
+      try {
+        for await (const chunk of source.stream) {
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+          actualLength += buf.length;
+          hash.update(buf);
+        }
+      } finally {
+        source.stream.destroy();
+      }
+      if (actualLength !== expectedLength || !hash.digest().equals(expectedHash)) {
+        throw new Error('Archived media did not read back intact');
+      }
+      return;
+    }
+    const stored = await this.storageService.getFile(key);
+    const actualHash = createHash('sha256').update(stored).digest();
+    if (stored.length !== expectedLength || !actualHash.equals(expectedHash)) {
+      throw new Error('Archived media did not read back intact');
+    }
   }
 
   /**

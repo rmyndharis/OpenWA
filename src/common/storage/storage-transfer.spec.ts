@@ -1,7 +1,9 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { randomBytes } from 'crypto';
 import { PassThrough, Readable } from 'stream';
 import * as tar from 'tar-stream';
-import { createGzip } from 'zlib';
+import { createGzip, gzipSync } from 'zlib';
 
 import {
   createExportStream,
@@ -502,5 +504,187 @@ describe('storage import caps', () => {
     expect(DEFAULT_IMPORT_MAX_BYTES).toBe(209_715_200);
     expect(DEFAULT_IMPORT_MAX_ENTRIES).toBe(100_000);
     expect(DEFAULT_IMPORT_MAX_TOTAL_BYTES).toBe(10_737_418_240);
+  });
+});
+
+describe('streaming tar transfer avoids large heap buffering', () => {
+  it('spills unsized export streams cleanly and streams tar entries during import via putStream without Buffer.concat of whole payloads', async () => {
+    const payload = randomBytes(512 * 1024);
+    const largeConcatSizes: number[] = [];
+    const realConcat = Buffer.concat.bind(Buffer);
+    const concatSpy = jest
+      .spyOn(Buffer, 'concat')
+      .mockImplementation((list: readonly Uint8Array[], totalLength?: number) => {
+        const out = realConcat(list, totalLength);
+        if (out.length >= 256 * 1024) largeConcatSizes.push(out.length);
+        return out;
+      });
+
+    try {
+      const openUnsized = (): Promise<ExportFileSource> =>
+        Promise.resolve({
+          size: undefined,
+          stream: Readable.from(
+            Array.from({ length: payload.length / 4096 }, (_, i) => payload.subarray(i * 4096, (i + 1) * 4096)),
+          ),
+        });
+
+      const exported = await createExportStream(
+        () => Promise.resolve(['media/unsized.bin']),
+        openUnsized,
+        makeLogger() as never,
+      );
+
+      const streamed = new Map<string, { bytes: Buffer; reportedSize: number }>();
+      const putStream = async (filePath: string, stream: Readable, sizeBytes: number) => {
+        const chunks: Buffer[] = [];
+        for await (const c of stream as AsyncIterable<Buffer | Uint8Array | string>) {
+          chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+        }
+        streamed.set(filePath, { bytes: realConcat(chunks), reportedSize: sizeBytes });
+      };
+
+      const res = await importFromStream(
+        exported,
+        () => Promise.reject(new Error('should prefer streaming putStream over buffering putFile')),
+        makeLogger() as never,
+        { putStream },
+      );
+
+      expect(res).toEqual({ imported: 1, failed: 0 });
+      expect(largeConcatSizes).toEqual([]);
+      expect(streamed.get('media/unsized.bin')?.reportedSize).toBe(payload.length);
+      expect(streamed.get('media/unsized.bin')?.bytes.equals(payload)).toBe(true);
+    } finally {
+      concatSpy.mockRestore();
+    }
+  });
+
+  it('destroys output and cleans up spill files when an unsized export stream fails or output closes early', async () => {
+    const logger = makeLogger();
+    const failing = await createExportStream(
+      () => Promise.resolve(['media/fail.bin']),
+      () =>
+        Promise.resolve({
+          size: undefined,
+          stream: new Readable({
+            read() {
+              this.destroy(new Error('unsized read boom'));
+            },
+          }),
+        }),
+      logger as never,
+    );
+    await expect(
+      new Promise<void>((resolve, reject) => {
+        failing.on('error', reject);
+        failing.on('end', resolve);
+        failing.resume();
+      }),
+    ).rejects.toThrow('unsized read boom');
+    expect(logger.error).toHaveBeenCalledWith('Export failed reading file: media/fail.bin', 'Error: unsized read boom');
+
+    const slowSrc = new PassThrough();
+    const closedEarly = await createExportStream(
+      () => Promise.resolve(['media/slow.bin']),
+      () => Promise.resolve({ size: undefined, stream: slowSrc }),
+      logger as never,
+    );
+    await new Promise(resolve => setTimeout(resolve, 15));
+    closedEarly.destroy();
+    slowSrc.end(Buffer.alloc(32, 0x42));
+    await new Promise(resolve => setTimeout(resolve, 25));
+
+    // putStream error counts against failed imports without aborting the archive.
+    const validTarGz = await createExportStream(
+      () => Promise.resolve(['media/ok.bin']),
+      () => Promise.resolve({ size: 4, stream: Readable.from([Buffer.from('abcd')]) }),
+      logger as never,
+    );
+    const failedRes = await importFromStream(validTarGz, () => Promise.resolve(), logger as never, {
+      putStream: () => Promise.reject(new Error('stream upload failed')),
+    });
+    expect(failedRes).toEqual({ imported: 0, failed: 1 });
+
+    // Corrupt tar bytes inside valid gzip surface through extract.on('error').
+    await expect(
+      importFromStream(Readable.from([gzipSync(Buffer.alloc(1024, 0x78))]), () => Promise.resolve(), logger as never),
+    ).rejects.toThrow();
+  });
+
+  it('destroys output cleanly without rm(undefined) if mkdtemp rejects for an unsized export entry', async () => {
+    const logger = makeLogger();
+    const mkdtempErr = Object.assign(new Error('ENOSPC: tmp full'), { code: 'ENOSPC' });
+    const mkdtempSpy = jest.spyOn(fs.promises, 'mkdtemp').mockRejectedValueOnce(mkdtempErr);
+    const rmSpy = jest.spyOn(fs.promises, 'rm');
+
+    try {
+      const output = await createExportStream(
+        () => Promise.resolve(['media/unsized.bin']),
+        () => Promise.resolve({ size: undefined, stream: Readable.from([Buffer.from('hello')]) }),
+        logger as never,
+      );
+      await expect(
+        new Promise<void>((resolve, reject) => {
+          output.on('error', reject);
+          output.on('end', resolve);
+          output.resume();
+        }),
+      ).rejects.toThrow('ENOSPC: tmp full');
+      expect(rmSpy).not.toHaveBeenCalled();
+    } finally {
+      mkdtempSpy.mockRestore();
+      rmSpy.mockRestore();
+    }
+  });
+
+  it('keeps temp files alive for in-flight putStream until upload settles and removes tmpDir afterward on mid-import abort', async () => {
+    const logger = makeLogger();
+    let createdTmpDir = '';
+
+    const pack = tar.pack();
+    pack.entry({ name: 'first.bin' }, Buffer.from('first-payload'));
+    pack.entry({ name: 'second.bin' }, Buffer.from('second-payload'));
+    pack.finalize();
+    const archiveBytes = await new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      pack
+        .pipe(createGzip())
+        .on('data', (c: Buffer) => chunks.push(c))
+        .on('end', () => resolve(Buffer.concat(chunks)))
+        .on('error', reject);
+    });
+
+    const input = new PassThrough();
+    let releaseUpload!: () => void;
+    let uploadStarted!: () => void;
+    const uploadStartedP = new Promise<void>(resolve => (uploadStarted = resolve));
+    const readChunks: Buffer[] = [];
+
+    const importP = importFromStream(input, () => Promise.resolve(), logger as never, {
+      putStream: async (_key, stream) => {
+        const entryPath = String((stream as unknown as { path?: string }).path ?? '');
+        createdTmpDir = path.dirname(entryPath);
+        uploadStarted();
+        await new Promise<void>(resolve => (releaseUpload = resolve));
+        for await (const chunk of stream as AsyncIterable<Buffer | Uint8Array | string>) {
+          readChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+      },
+    });
+
+    // Feed enough bytes to deliver first.bin while leaving gzip incomplete, then fail input mid-import.
+    input.write(archiveBytes.subarray(0, archiveBytes.length - 4));
+    await uploadStartedP;
+
+    input.destroy(new Error('mid-import network drop'));
+    await expect(importP).rejects.toThrow('mid-import network drop');
+
+    // In-flight putStream must still be able to read its temp file without ENOENT from premature rm -rf.
+    expect(createdTmpDir).not.toBe('');
+    expect(fs.existsSync(createdTmpDir)).toBe(true);
+    releaseUpload();
+    await waitUntil(() => !fs.existsSync(createdTmpDir));
+    expect(Buffer.concat(readChunks).toString()).toBe('first-payload');
   });
 });

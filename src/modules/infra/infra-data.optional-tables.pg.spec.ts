@@ -186,4 +186,28 @@ describePostgres('PostgreSQL restore tolerates absent optional archive tables', 
     await expect(service.importData(dump)).rejects.toThrow('fixture blocked delete');
     expect(await ds.query('SELECT * FROM sessions ORDER BY id')).toEqual(before);
   });
+
+  it('exports PostgreSQL data inside a single READ ONLY REPEATABLE READ transaction with statement_timeout = 0', async () => {
+    const queryCalls: string[] = [];
+    const origCreateRunner = ds.createQueryRunner.bind(ds);
+    const createSpy = jest.spyOn(ds, 'createQueryRunner').mockImplementation((mode?: 'master' | 'slave') => {
+      const runner = origCreateRunner(mode);
+      const origQuery = runner.query.bind(runner) as (...args: unknown[]) => Promise<never>;
+      jest.spyOn(runner, 'query').mockImplementation((sql: string, ...rest: unknown[]) => {
+        queryCalls.push(sql);
+        return origQuery(sql, ...rest);
+      });
+      return runner;
+    });
+
+    try {
+      const dump = await service.exportData();
+      expect(dump.tables.sessions).toHaveLength(1);
+      expect(queryCalls.some(sql => /REPEATABLE READ/i.test(sql))).toBe(true);
+      expect(queryCalls.some(sql => /SET TRANSACTION READ ONLY/i.test(sql))).toBe(true);
+      expect(queryCalls.some(sql => /SET LOCAL statement_timeout = 0/i.test(sql))).toBe(true);
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
 });
