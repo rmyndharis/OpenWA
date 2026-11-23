@@ -384,6 +384,36 @@ const check = (id, ok, detail) => results.push({ id, ok, detail });
   );
 }
 
+// Replicating above 1 while main.sqlite is pod-local must fail both schema validation and template rendering.
+for (const [label, args] of [
+  ['replicaCount=2', ['--set', 'replicaCount=2']],
+  ['replicaCount=2 template fail guard', ['--skip-schema-validation', '--set', 'replicaCount=2']],
+  ['env.PORT=3000', ['--set-string', 'env.PORT=3000']],
+  ['secretEnv.PORT=3000', ['--set-string', 'secretEnv.PORT=3000']],
+]) {
+  let failedCleanly = false;
+  let detail = '';
+  try {
+    render(...args);
+    detail = `${label} rendered without failing`;
+  } catch (error) {
+    failedCleanly = true;
+    detail = String(error.stderr ?? error.message).split('\n')[0];
+  }
+  check(`rejects-${label.replaceAll(/[= ]/g, '-').toLowerCase()}`, failedCleanly, detail);
+}
+
+// Bounded /tmp emptyDir sizeLimit must be present on the StatefulSet volume.
+{
+  const sts = byKind(render(), 'StatefulSet')[0] ?? '';
+  const hasTmpLimit = /name:\s*tmp[\s\S]*?emptyDir:[\s\S]*?sizeLimit:\s*\S+/.test(sts);
+  check(
+    'tmp-emptydir-sizelimit',
+    hasTmpLimit,
+    hasTmpLimit ? '/tmp emptyDir has bounded sizeLimit' : 'StatefulSet /tmp emptyDir is missing sizeLimit',
+  );
+}
+
 const failed = results.filter(r => !r.ok);
 if (failed.length) {
   console.error('\n✖ Chart behaviour check failed:');

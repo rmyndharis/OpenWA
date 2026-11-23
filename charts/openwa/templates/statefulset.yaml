@@ -1,3 +1,6 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "replicaCount > 1 is not supported while main.sqlite is pod-local (see docs/13-horizontal-scaling.md)" }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -118,7 +121,8 @@ spec:
               mountPath: /tmp
       volumes:
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.tmpVolumeSizeLimit | default "512Mi" }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

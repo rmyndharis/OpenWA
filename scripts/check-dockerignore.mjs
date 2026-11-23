@@ -129,6 +129,12 @@ const mustReject = [
   'data/main.sqlite',
   'data/.api-key',
   'openwa.sqlite',
+  'db.sqlite-wal',
+  'db.sqlite-shm',
+  'nested/db.sqlite-wal',
+  'nested/db.sqlite3-shm',
+  'nested/db.db-wal',
+  'nested/db.db-shm',
   'backup.db',
   'uploads/s1/2026/10/photo.jpg',
   // Backup archives and pre-restore snapshots (scripts/backup.sh, scripts/restore.sh)

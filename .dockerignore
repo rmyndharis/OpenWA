@@ -28,8 +28,20 @@ data/
 # still write (src/config/storage-root.ts)
 uploads/
 *.db
+*.db-wal
+*.db-shm
+**/*.db-wal
+**/*.db-shm
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
+**/*.sqlite-wal
+**/*.sqlite-shm
 *.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+**/*.sqlite3-wal
+**/*.sqlite3-shm
 # scripts/backup.sh archives and restore.sh safety snapshots: copies of the same state
 backups/
 **/*.pre-restore-*

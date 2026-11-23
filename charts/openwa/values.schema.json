@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "env": {
+      "type": ["object", "null"],
+      "not": {
+        "required": ["PORT"]
+      },
+      "additionalProperties": {
+        "type": ["string", "number", "boolean", "null"]
+      }
+    },
+    "secretEnv": {
+      "type": ["object", "null"],
+      "not": {
+        "required": ["PORT"]
+      },
+      "additionalProperties": {
+        "type": ["string", "number", "boolean", "null"]
+      }
+    },
+    "secretChecksumAnnotation": {
+      "type": ["boolean", "null"]
+    },
+    "existingSecret": {
+      "type": ["string", "null"]
+    },
+    "tmpVolumeSizeLimit": {
+      "type": ["string", "null"]
+    },
+    "terminationGracePeriodSeconds": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "startupProbe": {
+      "type": ["object", "null"]
+    },
+    "podSecurityContext": {
+      "type": ["object", "null"]
+    },
+    "containerSecurityContext": {
+      "type": ["object", "null"]
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

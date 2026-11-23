@@ -219,7 +219,7 @@ replace_tree() {
       exit 1
       ;;
   esac
-  if [ "$PHASE" = snapshot ]; then
+  if [ "$PHASE" = check ]; then
     # An existing directory is emptied before it is refilled, which needs every directory in it.
     openwa_writable "$target_dir" || refuse_unwritable "$target_dir" "$label"
     if [ -d "$target_dir" ]; then
@@ -227,6 +227,9 @@ replace_tree() {
         -exec sh -c 'for d do [ -w "$d" ] || { echo "$d"; exit 1; }; done' sh {} + 2>/dev/null)" || true
       [ -z "$blocked" ] || refuse_unwritable "${blocked%%$'\n'*}" "$label"
     fi
+    return
+  fi
+  if [ "$PHASE" = snapshot ]; then
     snapshot_external "$target_dir"
     return
   fi
@@ -262,14 +265,13 @@ snapshot_external() {
   # Targets from different parents can share a name in one snapshot dir (a PLUGINS_DIR and a
   # PLUGIN_STATE_DIR both end in plugins); never copy one into the other's snapshot.
   n=1
-  while [ -e "$external_snapshot" ]; do
+  while [ -e "$external_snapshot" ] || [ -L "$external_snapshot" ]; do
     n=$((n + 1))
     external_snapshot="${snapshot_dir%/}/$(basename "$target").pre-restore-$RESTORE_TIMESTAMP-$n"
   done
   log "Snapshotting current $target -> $external_snapshot"
   mkdir -p "$snapshot_dir"
-  # -H copies what a symlinked target points at. The restore writes through such a link, so a copy of
-  # the link itself would end up showing the archive instead of the state it replaced.
+  # -H for a symlinked target, copying its referent rather than leaving a dangling link copy.
   cp -pRH "$target" "$external_snapshot"
 }
 
@@ -280,7 +282,7 @@ snapshot_external() {
 # removed before the copy, or the restored file reads back the old install's rows.
 restore_db() {
   resolved_db="$(resolve_path "$2")"
-  if [ "$PHASE" = snapshot ]; then
+  if [ "$PHASE" = check ]; then
     refuse_root_target "$2" "$3"
     refuse_directory_target "$2" "$3"
     openwa_writable "$2" || refuse_unwritable "$2" "$3"
@@ -291,6 +293,9 @@ restore_db() {
         fi
       done
     done
+    return
+  fi
+  if [ "$PHASE" = snapshot ]; then
     snapshot_external "$2"
     # Empty when the target lives in the data dir, whose own snapshot already holds the sidecars.
     if [ -n "$external_snapshot" ]; then
@@ -577,6 +582,35 @@ while [ "$i" -lt "${#TARGET_KEYS[@]}" ]; do
   i=$((i + 1))
 done
 
+# Fail fast BEFORE copying if OPENWA_RESTORE_SNAPSHOT_DIR resolves equal to or inside the data
+# directory or any directory target that replace_tree empties/refills (which would cause self-copy
+# recursion or destroy the snapshot before refill).
+if [ -n "${OPENWA_RESTORE_SNAPSHOT_DIR:-}" ]; then
+  RESOLVED_SNAPSHOT_DIR="$(resolve_path "$OPENWA_RESTORE_SNAPSHOT_DIR")"
+  if [ "$RESOLVED_SNAPSHOT_DIR" = / ] || [ "$OPENWA_RESTORE_SNAPSHOT_DIR" -ef / ]; then
+    log "ERROR: refusing unsafe OPENWA_RESTORE_SNAPSHOT_DIR target: $OPENWA_RESTORE_SNAPSHOT_DIR"
+    exit 1
+  fi
+  case "$RESOLVED_SNAPSHOT_DIR" in
+    "$RESOLVED_DATA_DIR" | "${RESOLVED_DATA_DIR%/}/"*)
+      log "ERROR: OPENWA_RESTORE_SNAPSHOT_DIR must not equal or lie inside OPENWA_DATA_DIR: $OPENWA_RESTORE_SNAPSHOT_DIR"
+      exit 1
+      ;;
+  esac
+  snap_idx=0
+  while [ "$snap_idx" -lt "${#TARGET_PATHS[@]}" ]; do
+    if [ "${TARGET_KINDS[snap_idx]}" = dir ]; then
+      case "$RESOLVED_SNAPSHOT_DIR" in
+        "${TARGET_PATHS[snap_idx]}" | "${TARGET_PATHS[snap_idx]%/}/"*)
+          log "ERROR: OPENWA_RESTORE_SNAPSHOT_DIR must not equal or lie inside ${TARGET_KEYS[snap_idx]}: $OPENWA_RESTORE_SNAPSHOT_DIR"
+          exit 1
+          ;;
+      esac
+    fi
+    snap_idx=$((snap_idx + 1))
+  done
+fi
+
 # A backup taken without sqlite3 .backup carries this marker: the database snapshots were
 # plain-copied from a possibly-live app and may be torn. Warn loudly and continue — unless
 # --strict makes it fatal. Refuse BEFORE touching any existing state.
@@ -614,20 +648,6 @@ if [ "$FORCE" -ne 1 ]; then
     exit 1
   fi
 fi
-
-# Safety snapshot of whatever is there now, next to the data dir unless OPENWA_RESTORE_SNAPSHOT_DIR
-# names another directory. The shipped compose file and Helm chart mount the data dir as a volume
-# under a read-only root, where that sibling cannot be written.
-if [ -d "$DATA_DIR" ] && [ -n "$(ls -A "$DATA_DIR" 2>/dev/null || true)" ]; then
-  SAFETY_DIR="${OPENWA_RESTORE_SNAPSHOT_DIR:-$(dirname "$DATA_DIR")}"
-  SAFETY="${SAFETY_DIR%/}/$(basename "$DATA_DIR").pre-restore-$RESTORE_TIMESTAMP"
-  log "Snapshotting current data dir -> $SAFETY"
-  mkdir -p "$SAFETY_DIR"
-  # -H for a symlinked data dir, as in snapshot_external.
-  cp -pRH "$DATA_DIR" "$SAFETY"
-fi
-
-mkdir -p "$DATA_DIR"
 
 if [ ! -f "$STAGE/main.sqlite" ]; then
   log "WARN: main.sqlite not in archive — API keys / audit log will NOT be restored"
@@ -682,10 +702,13 @@ restore_targets() {
 # The plaintext admin key goes where the app reads it. Checked and, outside the data dir, snapshotted
 # with the other targets: it may be the only plaintext copy of a key the replaced main.sqlite accepts.
 restore_admin_key() {
-  if [ "$PHASE" = snapshot ]; then
+  if [ "$PHASE" = check ]; then
     refuse_root_target "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
     refuse_directory_target "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
     openwa_writable "$ADMIN_KEY_FILE" || refuse_unwritable "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
+    return
+  fi
+  if [ "$PHASE" = snapshot ]; then
     snapshot_external "$ADMIN_KEY_FILE"
     return
   fi
@@ -695,9 +718,9 @@ restore_admin_key() {
   chmod 0600 "$ADMIN_KEY_FILE"
 }
 
-PHASE=snapshot
+PHASE=check
 restore_targets
-# Written into the data dir after the targets, so checked with them; the data-dir snapshot holds both.
+# Written into the data dir after the targets, so checked before taking any safety snapshot.
 if [ -f "$STAGE/.env.generated" ]; then
   openwa_writable "$DATA_DIR/.env.generated" ||
     refuse_unwritable "$DATA_DIR/.env.generated" "dashboard-generated configuration"
@@ -705,6 +728,27 @@ fi
 if [ -f "$STAGE/database.sql" ]; then
   openwa_writable "$DATA_DIR/database.sql" || refuse_unwritable "$DATA_DIR/database.sql" "PostgreSQL dump"
 fi
+
+# Take the data-dir and external safety snapshots only after all preflight validation checks pass.
+if [ -d "$DATA_DIR" ] && [ -n "$(ls -A "$DATA_DIR" 2>/dev/null || true)" ]; then
+  SAFETY_DIR="${OPENWA_RESTORE_SNAPSHOT_DIR:-$(dirname "$DATA_DIR")}"
+  SAFETY="${SAFETY_DIR%/}/$(basename "$DATA_DIR").pre-restore-$RESTORE_TIMESTAMP"
+  n=1
+  while [ -e "$SAFETY" ] || [ -L "$SAFETY" ]; do
+    n=$((n + 1))
+    SAFETY="${SAFETY_DIR%/}/$(basename "$DATA_DIR").pre-restore-$RESTORE_TIMESTAMP-$n"
+  done
+  log "Snapshotting current data dir -> $SAFETY"
+  mkdir -p "$SAFETY_DIR"
+  # -H for a symlinked data dir, as in snapshot_external.
+  cp -pRH "$DATA_DIR" "$SAFETY"
+fi
+
+PHASE=snapshot
+restore_targets
+
+mkdir -p "$DATA_DIR"
+
 PHASE=apply
 restore_targets
 
