@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Crown, Info, Loader2, RefreshCw, ShieldCheck, ShieldOff, UserMinus, UserPlus, Users } from 'lucide-react';
@@ -62,6 +62,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   const { success: showSuccess, error: showError } = useToast();
   const queryClient = useQueryClient();
 
+  const tabBaseId = useId();
   const [tab, setTab] = useState<Tab>('info');
   const infoQuery = useQuery({
     queryKey: ['group-info', session.id, group.id],
@@ -81,12 +82,21 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   const [draft, setDraft] = useState<{ name?: string; description?: string }>({});
   const [newPicture, setNewPicture] = useState<{ base64: string; mimetype: string; preview: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const name = draft.name ?? info?.name ?? '';
   const description = draft.description ?? info?.description ?? '';
+  const pictureReadSeq = useRef(0);
   const dropDraft = () => {
+    pictureReadSeq.current += 1;
     setDraft({});
     setNewPicture(null);
   };
+  useEffect(
+    () => () => {
+      pictureReadSeq.current += 1;
+    },
+    [],
+  );
   // The preview is an object URL: released when replaced and when the dialog closes.
   useEffect(() => {
     if (!newPicture) return;
@@ -101,8 +111,10 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
       showError(t('chats.errors.fileTooLarge'));
       return;
     }
+    const seq = ++pictureReadSeq.current;
     const reader = new FileReader();
     reader.onload = event => {
+      if (pictureReadSeq.current !== seq) return;
       const base64 = String(event.target?.result ?? '').split(',')[1] ?? '';
       setNewPicture({ base64, mimetype: file.type, preview: URL.createObjectURL(file) });
     };
@@ -114,10 +126,15 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   const descriptionChanged = Boolean(info) && description !== (info?.description ?? '');
   const dirty = nameChanged || descriptionChanged || Boolean(newPicture);
 
+  // --- Participants ---
+  const [pending, setPending] = useState<string | null>(null);
+  const pendingRef = useRef<string | null>(null);
+
   // Each field is its own route, called in turn: name, description, picture. Those before a refusal stay saved,
   // those after it are not tried, and the toast carries the gateway's text for the refusal.
   const save = async () => {
-    if (!info || !dirty || !trimmedName || saving) return;
+    if (!info || !dirty || !trimmedName || saving || savingRef.current || pendingRef.current !== null) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       if (nameChanged) {
@@ -136,12 +153,12 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
     } catch (err) {
       showError(t('chats.group.saveFailed'), errorText(err));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
 
-  // --- Participants ---
-  const [pending, setPending] = useState<string | null>(null);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [newMember, setNewMember] = useState('');
   // The gateway takes ASCII digits, whatever script the operator typed them in. 7-15 digits covers E.164: more is
   // two numbers run together, refused as the new-chat panel refuses it.
@@ -150,6 +167,8 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   // The gateway answers 200 for a membership write even when it refused some participants, and says
   // which in `results`. Returns whether every participant was accepted.
   const runMemberAction = async (key: string, action: () => Promise<GroupParticipantsAck>): Promise<boolean> => {
+    if (pendingRef.current !== null || savingRef.current) return false;
+    pendingRef.current = key;
     setPending(key);
     try {
       const { results } = await action();
@@ -163,11 +182,13 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
       showError(t('chats.group.memberActionFailed'), errorText(err));
       return false;
     } finally {
+      pendingRef.current = null;
       setPending(null);
     }
   };
   // A number is checked first, as in the new-chat panel: the gateway resolves it to the id WhatsApp uses.
   const addMember = async () => {
+    if (pendingRef.current !== null || savingRef.current) return;
     const added = await runMemberAction('add', async () => {
       const check = await contactApi.checkNumber(session.id, memberDigits);
       if (!check.exists || !check.whatsappId) {
@@ -180,18 +201,26 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   };
 
   const sessionName = session.name;
+  const modalBusy = saving || pending !== null;
   const subheader = (
     <div className="group-info-toolbar">
       <div className="chats-tabs" role="tablist" onKeyDown={onTabListKeyDown}>
         {(['info', 'participants'] as const).map(id => (
           <button
             key={id}
+            id={`${tabBaseId}-tab-${id}`}
             type="button"
             role="tab"
             aria-selected={tab === id}
+            aria-controls={`${tabBaseId}-panel-${id}`}
             tabIndex={tab === id ? 0 : -1}
+            disabled={modalBusy}
             className={`chats-tab ${tab === id ? 'active' : ''}`}
-            onClick={() => setTab(id)}
+            onClick={() => {
+              if (modalBusy) return;
+              setTab(id);
+              setConfirmRemoveId(null);
+            }}
           >
             {id === 'info' ? <Info size={16} /> : <Users size={16} />}
             {id === 'info' ? t('chats.group.tabInfo') : t('chats.group.tabParticipants')}
@@ -209,8 +238,17 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
       <button
         type="button"
         className="icon-btn"
-        onClick={() => void infoQuery.refetch().then(dropDraft)}
-        disabled={infoQuery.isFetching}
+        onClick={() => {
+          if (modalBusy || infoQuery.isFetching) return;
+          void infoQuery.refetch().then(res => {
+            if (res.isError) {
+              showError(t('chats.group.loadFailed'));
+              return;
+            }
+            dropDraft();
+          });
+        }}
+        disabled={infoQuery.isFetching || modalBusy}
         title={t('common.refresh')}
         aria-label={t('common.refresh')}
       >
@@ -222,7 +260,8 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   return (
     <Modal
       open
-      onClose={onClose}
+      onClose={() => !modalBusy && onClose()}
+      hideCloseButton={modalBusy}
       className="group-info-modal"
       closeLabel={t('common.close')}
       title={
@@ -240,7 +279,12 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
       footer={
         tab === 'info' ? (
           <>
-            <button type="button" className="btn-secondary" onClick={onClose} disabled={saving}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => !modalBusy && onClose()}
+              disabled={modalBusy}
+            >
               {t('common.cancel')}
             </button>
             <button
@@ -259,10 +303,15 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
         <div className="group-info-state">
           <Loader2 className="animate-spin" size={24} />
         </div>
-      ) : infoQuery.isError || !info ? (
+      ) : !info ? (
         <div className="group-info-state">{t('chats.group.loadFailed')}</div>
       ) : tab === 'info' ? (
-        <div className="group-info-form">
+        <div
+          className="group-info-form"
+          role="tabpanel"
+          id={`${tabBaseId}-panel-info`}
+          aria-labelledby={`${tabBaseId}-tab-info`}
+        >
           <label className="group-info-field">
             <span>
               {t('chats.group.name')} <span className="required">*</span>
@@ -325,23 +374,29 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
           </label>
         </div>
       ) : (
-        <div className="group-info-members">
+        <div
+          className="group-info-members"
+          role="tabpanel"
+          id={`${tabBaseId}-panel-participants`}
+          aria-labelledby={`${tabBaseId}-tab-participants`}
+        >
           {canManageMembers && (
             <form
               className="group-info-add"
               onSubmit={e => {
                 e.preventDefault();
-                if (memberNumberValid) void addMember();
+                if (memberNumberValid && !modalBusy) void addMember();
               }}
             >
               <input
                 type="tel"
                 value={newMember}
+                disabled={modalBusy}
                 onChange={e => setNewMember(e.target.value)}
                 placeholder={t('chats.group.addPlaceholder')}
                 aria-label={t('chats.group.addPlaceholder')}
               />
-              <button type="submit" className="btn-primary" disabled={!memberNumberValid || pending !== null}>
+              <button type="submit" className="btn-primary" disabled={!memberNumberValid || modalBusy}>
                 {pending === 'add' ? <Loader2 className="animate-spin" size={16} /> : <UserPlus size={16} />}
                 {t('chats.group.add')}
               </button>
@@ -377,35 +432,72 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
                   )}
                   {canManageMembers && !own && !p.isSuperAdmin && (
                     <span className="group-info-actions">
-                      <button
-                        type="button"
-                        className="icon-btn small"
-                        disabled={pending !== null}
-                        onClick={() =>
-                          void runMemberAction(p.id, () =>
-                            sessionApi.setGroupAdmins(session.id, group.id, [p.id], !p.isAdmin),
-                          )
-                        }
-                        title={p.isAdmin ? t('chats.group.removeAdmin') : t('chats.group.makeAdmin')}
-                        aria-label={`${p.isAdmin ? t('chats.group.removeAdmin') : t('chats.group.makeAdmin')}: ${spoken}`}
-                      >
-                        {p.isAdmin ? <ShieldOff size={16} /> : <ShieldCheck size={16} />}
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-btn small danger"
-                        disabled={pending !== null}
-                        onClick={() => {
-                          if (!window.confirm(t('chats.group.removeConfirm', { name: spoken }))) return;
-                          void runMemberAction(p.id, () =>
-                            sessionApi.removeGroupParticipants(session.id, group.id, [p.id]),
-                          );
-                        }}
-                        title={t('chats.group.remove')}
-                        aria-label={`${t('chats.group.remove')}: ${spoken}`}
-                      >
-                        {pending === p.id ? <Loader2 className="animate-spin" size={16} /> : <UserMinus size={16} />}
-                      </button>
+                      {confirmRemoveId === p.id ? (
+                        <span className="group-info-confirm" role="alert">
+                          <span className="group-info-confirm-text">
+                            {t('chats.group.removeConfirm', { name: spoken })}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn-danger"
+                            disabled={pending !== null}
+                            onClick={() => {
+                              setConfirmRemoveId(null);
+                              void runMemberAction(`remove:${p.id}`, () =>
+                                sessionApi.removeGroupParticipants(session.id, group.id, [p.id]),
+                              );
+                            }}
+                          >
+                            {t('chats.group.remove')}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={pending !== null}
+                            onClick={() => setConfirmRemoveId(null)}
+                          >
+                            {t('common.cancel')}
+                          </button>
+                        </span>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="icon-btn small"
+                            disabled={pending !== null}
+                            onClick={() => {
+                              setConfirmRemoveId(null);
+                              void runMemberAction(`admin:${p.id}`, () =>
+                                sessionApi.setGroupAdmins(session.id, group.id, [p.id], !p.isAdmin),
+                              );
+                            }}
+                            title={p.isAdmin ? t('chats.group.removeAdmin') : t('chats.group.makeAdmin')}
+                            aria-label={`${p.isAdmin ? t('chats.group.removeAdmin') : t('chats.group.makeAdmin')}: ${spoken}`}
+                          >
+                            {pending === `admin:${p.id}` ? (
+                              <Loader2 className="animate-spin" size={16} />
+                            ) : p.isAdmin ? (
+                              <ShieldOff size={16} />
+                            ) : (
+                              <ShieldCheck size={16} />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-btn small danger"
+                            disabled={pending !== null}
+                            onClick={() => setConfirmRemoveId(p.id)}
+                            title={t('chats.group.remove')}
+                            aria-label={`${t('chats.group.remove')}: ${spoken}`}
+                          >
+                            {pending === `remove:${p.id}` ? (
+                              <Loader2 className="animate-spin" size={16} />
+                            ) : (
+                              <UserMinus size={16} />
+                            )}
+                          </button>
+                        </>
+                      )}
                     </span>
                   )}
                 </li>

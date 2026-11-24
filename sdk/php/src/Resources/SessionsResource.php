@@ -27,7 +27,7 @@ class SessionsResource
      */
     public function list(array $query = []): array
     {
-        return $this->http->request('GET', '/api/sessions', $query) ?? [];
+        return $this->http->requestNullableArray('GET', '/api/sessions', $query) ?? [];
     }
 
     /**
@@ -37,7 +37,7 @@ class SessionsResource
      */
     public function getConfig(string $id): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($id)}/config");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($id)}/config");
     }
 
     /**
@@ -51,7 +51,7 @@ class SessionsResource
      */
     public function updateConfig(string $id, array $body): array
     {
-        return $this->http->request('PATCH', "/api/sessions/{$this->http->encodeSegment($id)}/config", [], $body);
+        return $this->http->requestArray('PATCH', "/api/sessions/{$this->http->encodeSegment($id)}/config", [], $body);
     }
 
     /**
@@ -61,7 +61,7 @@ class SessionsResource
      */
     public function getProxy(string $id): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($id)}/proxy");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($id)}/proxy");
     }
 
     /**
@@ -73,13 +73,13 @@ class SessionsResource
      */
     public function updateProxy(string $id, array $body): array
     {
-        return $this->http->request('PATCH', "/api/sessions/{$this->http->encodeSegment($id)}/proxy", [], $body);
+        return $this->http->requestArray('PATCH', "/api/sessions/{$this->http->encodeSegment($id)}/proxy", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function get(string $id): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($id)}");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($id)}");
     }
 
     /**
@@ -94,7 +94,7 @@ class SessionsResource
         if (isset($body['config']) && is_array($body['config'])) {
             $body = array_merge($body, ['config' => (object) $body['config']]);
         }
-        return $this->http->request('POST', '/api/sessions', [], $body);
+        return $this->http->requestArray('POST', '/api/sessions', [], $body);
     }
 
     public function delete(string $id): void
@@ -105,7 +105,7 @@ class SessionsResource
     /** @return array<string,mixed> */
     public function start(string $id): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($id)}/start");
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($id)}/start");
     }
 
     /**
@@ -120,7 +120,7 @@ class SessionsResource
      */
     public function stop(string $id): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($id)}/stop");
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($id)}/stop");
     }
 
     /**
@@ -141,7 +141,7 @@ class SessionsResource
      */
     public function logout(string $id): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($id)}/logout");
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($id)}/logout");
     }
 
     /**
@@ -155,13 +155,13 @@ class SessionsResource
      */
     public function forceKill(string $id): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($id)}/force-kill");
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($id)}/force-kill");
     }
 
     /** @return array<string,mixed> */
     public function getQrCode(string $id): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($id)}/qr");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($id)}/qr");
     }
 
     /**
@@ -173,13 +173,13 @@ class SessionsResource
      */
     public function requestPairingCode(string $id, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($id)}/pairing-code", [], $body);
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($id)}/pairing-code", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function stats(): array
     {
-        return $this->http->request('GET', '/api/sessions/stats/overview');
+        return $this->http->requestArray('GET', '/api/sessions/stats/overview');
     }
 
     /**
@@ -194,7 +194,7 @@ class SessionsResource
      */
     public function setOnlinePresence(string $id, array $body): array
     {
-        return $this->http->request('PUT', "/api/sessions/{$this->http->encodeSegment($id)}/presence", [], $body);
+        return $this->http->requestArray('PUT', "/api/sessions/{$this->http->encodeSegment($id)}/presence", [], $body);
     }
 
 }

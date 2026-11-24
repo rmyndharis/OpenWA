@@ -78,7 +78,7 @@ async function typeAndWaitForRequest(input: HTMLElement, value: string): Promise
 
 test('a slower earlier query does not overwrite the results of the latest one', async () => {
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = rtl.screen.getByRole('textbox');
+  const input = rtl.screen.getByRole('combobox');
 
   await typeAndWaitForRequest(input, 'inv');
   await typeAndWaitForRequest(input, 'invoice 2026');
@@ -95,7 +95,7 @@ test('a slower earlier query does not overwrite the results of the latest one', 
 
 test('a response for a query the user cleared does not fill the list', async () => {
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = rtl.screen.getByRole('textbox');
+  const input = rtl.screen.getByRole('combobox');
 
   await typeAndWaitForRequest(input, 'refund');
   rtl.fireEvent.change(input, { target: { value: '' } });
@@ -108,7 +108,7 @@ test('a response for a query the user cleared does not fill the list', async () 
 
 test('Escape during a pending keystroke keeps the dismissed results closed', async () => {
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = rtl.screen.getByRole('textbox');
+  const input = rtl.screen.getByRole('combobox');
 
   await typeAndWaitForRequest(input, 'refund');
   await rtl.act(async () => pending.get('refund')!(['refund issued']));
@@ -125,7 +125,7 @@ test('Escape during a pending keystroke keeps the dismissed results closed', asy
 test('Escape that cancels a search before any results opened is consumed', async () => {
   const { screen, fireEvent } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
 
   fireEvent.change(input, { target: { value: 'refund' } });
   // Inside the debounce window: nothing has opened yet, but the key cancels the pending search, so a
@@ -140,7 +140,7 @@ test('Escape that cancels a search before any results opened is consumed', async
 
 test("refocusing after Escape cancelled a search does not show the previous query's results", async () => {
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = rtl.screen.getByRole('textbox');
+  const input = rtl.screen.getByRole('combobox');
 
   await typeAndWaitForRequest(input, 'refund');
   await rtl.act(async () => pending.get('refund')!(['refund issued']));
@@ -158,7 +158,7 @@ test("refocusing after Escape cancelled a search does not show the previous quer
 test('the text typed back after Escape cancelled a search is answered, not left on a loading line', async () => {
   const { screen, fireEvent, act } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
 
   await typeAndWaitForRequest(input, 'refund');
   // A keystroke drops the answer that is still on its way, and Escape cancels the search the keystroke started.
@@ -179,7 +179,7 @@ const page = (from: number): string[] => Array.from({ length: 20 }, (_, i) => `r
 test('a mouse click on "more" keeps the results open and appends the next page', async () => {
   const { screen, fireEvent, act, waitFor } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   input.focus();
   await typeAndWaitForRequest(input, 'refund');
   await act(async () => pending.get('refund')!(page(0), 40));
@@ -198,7 +198,7 @@ test('a mouse click on "more" keeps the results open and appends the next page',
 test('"more" does not repeat a hit that a newly indexed message pushed onto the next page', async () => {
   const { screen, fireEvent, act, waitFor } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   input.focus();
   await typeAndWaitForRequest(input, 'refund');
   await act(async () => pending.get('refund')!(page(0), 40));
@@ -222,7 +222,7 @@ test('"more" does not repeat a hit that a newly indexed message pushed onto the 
 test('a failed "more" keeps the results already shown and offers the button again', async () => {
   const { screen, fireEvent, act, waitFor } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   input.focus();
   await typeAndWaitForRequest(input, 'refund');
   await act(async () => pending.get('refund')!(page(0), 40));
@@ -243,7 +243,7 @@ test('a failed "more" keeps the results already shown and offers the button agai
 test('a failed search shows only the error', async () => {
   const { screen, act } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   input.focus();
   await typeAndWaitForRequest(input, 'refund');
   await act(async () => pending.get('refund')!(page(0), 40));
@@ -260,7 +260,7 @@ test('a failed search shows only the error', async () => {
 test('Tab then Enter on "more" keeps the results open and returns focus to the input', async () => {
   const { screen, fireEvent, act, waitFor } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   input.focus();
   await typeAndWaitForRequest(input, 'refund');
   await act(async () => pending.get('refund')!(page(0), 40));
@@ -287,7 +287,7 @@ test('focus leaving the widget still closes the results', async () => {
   document.body.appendChild(outside);
   try {
     rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-    const input = screen.getByRole('textbox');
+    const input = screen.getByRole('combobox');
     input.focus();
     await typeAndWaitForRequest(input, 'refund');
     await act(async () => pending.get('refund')!(['refund issued']));
@@ -304,7 +304,7 @@ test('picking a hit with the mouse closes the results', async () => {
   const { screen, act, fireEvent } = rtl;
   const picked: string[] = [];
   rtl.render(createElement(GlobalSearch, { onHit: (h: { messageId: string }) => picked.push(h.messageId) }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   input.focus();
   await typeAndWaitForRequest(input, 'refund');
   await act(async () => pending.get('refund')!(['refund issued']));
@@ -323,7 +323,7 @@ test('picking a hit with the mouse closes the results', async () => {
 test('clicking the input after a pick or Escape shows the results again', async () => {
   const { screen, act, fireEvent } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   input.focus();
   await typeAndWaitForRequest(input, 'refund');
   await act(async () => pending.get('refund')!(['refund issued']));
@@ -346,7 +346,7 @@ test('clicking the input after a pick or Escape shows the results again', async 
 test('a click on the input while a keystroke search is pending sends that search once', async () => {
   const { screen, fireEvent } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   input.focus();
   fireEvent.change(input, { target: { value: 'refund' } });
   fireEvent.click(input); // before the 300 ms debounce fires
@@ -357,7 +357,7 @@ test('a click on the input while a keystroke search is pending sends that search
 test('clicking the input after Escape cancelled a scope change searches the scope shown', async () => {
   const { screen, act, fireEvent, waitFor } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined, currentSessionId: 'sess-1' }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   input.focus();
   await typeAndWaitForRequest(input, 'refund');
   await act(async () => pending.get('refund')!(['refund issued']));
@@ -374,7 +374,7 @@ test('a hit reached with Tab is picked with Enter or Space', async () => {
   const { screen, act, fireEvent } = rtl;
   const picked: string[] = [];
   rtl.render(createElement(GlobalSearch, { onHit: (h: { messageId: string }) => picked.push(h.messageId) }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   input.focus();
   await typeAndWaitForRequest(input, 'refund');
   await act(async () => pending.get('refund')!(['refund issued']));
@@ -390,7 +390,7 @@ test('a hit reached with Tab is picked with Enter or Space', async () => {
 test('Escape with focus on "more" closes the results and is consumed', async () => {
   const { screen, act, fireEvent } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   input.focus();
   await typeAndWaitForRequest(input, 'refund');
   await act(async () => pending.get('refund')!(page(0), 40));
@@ -404,7 +404,7 @@ test('Escape with focus on "more" closes the results and is consumed', async () 
 test('a hit shows its chat id and time as isolated runs, so a right-to-left page keeps them readable', async () => {
   const { screen, act } = rtl;
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  const input = screen.getByRole('textbox');
+  const input = screen.getByRole('combobox');
   await typeAndWaitForRequest(input, 'alice');
   await act(async () => pending.get('alice')!(['alice replied']));
   const meta = (await screen.findByRole('listbox')).querySelector('.global-search-hit-meta');

@@ -95,3 +95,15 @@ test('hardenConfigUiHtml reads openwa-csp-nonce meta when nonce arg is omitted a
   const explicitBlank = new DOMParser().parseFromString(hardenConfigUiHtml(source, ''), 'text/html');
   assert.equal(explicitBlank.getElementById('s')?.getAttribute('nonce'), null);
 });
+
+test('strips meta refresh directives while injecting CSP metadata', () => {
+  const source =
+    '<!doctype html><html><head><meta http-equiv="refresh" content="0;url=https://example.com"><meta HTTP-EQUIV=Refresh content="1;url=https://evil.example"></head><body><p>ok</p></body></html>';
+  const doc = new DOMParser().parseFromString(hardenConfigUiHtml(source, 'nonce-xyz'), 'text/html');
+  const metas = [...doc.querySelectorAll('meta')];
+  assert.equal(
+    metas.some(m => (m.getAttribute('http-equiv') ?? '').toLowerCase() === 'refresh'),
+    false,
+  );
+  assert.equal(doc.head.firstElementChild?.getAttribute('content'), CONFIG_UI_CSP);
+});

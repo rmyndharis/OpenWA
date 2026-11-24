@@ -215,6 +215,46 @@ class HttpExecutor
         return $decoded;
     }
 
+    /** @return array<mixed> */
+    public function requestArray(
+        string $method,
+        string $path,
+        array $query = [],
+        mixed $body = null,
+        ?string $idempotencyKey = null,
+        bool $emptyOnNull = false
+    ): array {
+        $decoded = $this->request($method, $path, $query, $body, $idempotencyKey);
+        if ($decoded === null) {
+            if ($emptyOnNull) {
+                return [];
+            }
+            throw new OpenWAException("OpenWA: expected JSON object/array response for {$method} {$path}");
+        }
+        if (!is_array($decoded)) {
+            throw new OpenWAException("OpenWA: expected JSON object/array response for {$method} {$path}");
+        }
+        return $decoded;
+    }
+
+    /** @return array<mixed>|null */
+    public function requestNullableArray(
+        string $method,
+        string $path,
+        array $query = [],
+        mixed $body = null,
+        ?string $idempotencyKey = null
+    ): ?array {
+        $decoded = $this->request($method, $path, $query, $body, $idempotencyKey);
+        if ($decoded === null) {
+            return null;
+        }
+        if (!is_array($decoded)) {
+            throw new OpenWAException("OpenWA: expected JSON object/array response for {$method} {$path}");
+        }
+        return $decoded;
+    }
+
     /**
      * Perform one request for a non-JSON (binary) 2xx body — e.g. stored
      * status media — and return it as ['data' => raw bytes, 'contentType' =>

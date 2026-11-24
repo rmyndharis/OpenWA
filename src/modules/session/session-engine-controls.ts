@@ -1467,13 +1467,10 @@ export class SessionEngineControls {
           return;
         }
         try {
-          const tornDown = await this.fences.destroyWithEscalation(id, engine);
-          // The engine leaves the Map regardless of teardown outcome so it stops holding a
-          // concurrency slot — but only a completed teardown counts as `stopped`. A throw/timeout
-          // means the Chromium/socket may still be alive and writing, so the id lands in `failed`
-          // and the caller (the infra import) can flag restartRequired instead of reporting a
-          // clean stop for a wedged engine.
+          // Evict from the live registry before teardown settles so concurrent callers stop seeing
+          // or reusing the departing engine immediately.
           this.engines.deleteIfLive(id, engine);
+          const tornDown = await this.fences.destroyWithEscalation(id, engine);
           if (tornDown) {
             stopped.push(id);
           } else {

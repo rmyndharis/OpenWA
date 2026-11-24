@@ -3,6 +3,7 @@ import { shouldOfferStopOrphansRetry } from '../utils/importRefusal';
 import { getActiveApiKeyId, keepsSameKey } from '../utils/authLifecycle';
 import { useTranslation } from 'react-i18next';
 import { infraApi } from '../services/api';
+import { scheduleObjectUrlRevoke } from '../utils/objectUrl';
 import { useToast } from './useToast';
 
 export interface DataBackup {
@@ -44,7 +45,7 @@ export function useDataBackup(): DataBackup {
       a.href = url;
       a.download = `openwa-backup-${dump.exportedAt?.slice(0, 10) || 'data'}.json`;
       a.click();
-      URL.revokeObjectURL(url);
+      scheduleObjectUrlRevoke(url);
 
       // The download itself is silent on success, which is fine when the backup is complete. It is
       // not fine when the budget dropped media: the archive restores without error and nothing else

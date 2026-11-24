@@ -18,6 +18,7 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { createProxyDispatcher, hasUnauthenticatableSocks4Credentials } from '../../common/security/proxy-dispatcher';
+import { type ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { type createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig } from '../types/baileys.types';
 import { useAtomicMultiFileAuthState } from './baileys-auth-store';
@@ -291,6 +292,8 @@ export interface BaileysLifecycleHost {
   handlePresenceUpdate: BaileysEvents['handlePresenceUpdate'];
   /** Drop the store writes of messages still being processed; called before an unlink wipes the store. */
   fenceStoredWrites: BaileysEvents['fenceStoredWrites'];
+  /** Inbound media download limiter closed on teardown so queued tasks fail fast when fenced. */
+  readonly inboundLimiter?: ConcurrencyLimiter;
   captureHistoryMessages: BaileysHistory['captureHistoryMessages'];
   /** Backfill names the initial sync skipped (runs on connection 'open'). */
   hydrateNames: BaileysHistory['hydrateNames'];
@@ -1410,6 +1413,8 @@ export class BaileysLifecycle {
 
   disconnect(): Promise<void> {
     this.teardown.abort();
+    this.host.fenceStoredWrites?.();
+    this.host.inboundLimiter?.close();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -1443,6 +1448,7 @@ export class BaileysLifecycle {
     // registered for the whole reconnect backoff.
     const sourceSock = this.sock;
     if (!sourceSock) {
+      this.closeFetchDispatcher();
       throw new Error('No live WhatsApp socket — the unlink was not sent');
     }
 
@@ -1525,6 +1531,7 @@ export class BaileysLifecycle {
    * every logout exit so the service's 502 genuinely means "stopped locally, operation incomplete".
    */
   private localSocketShutdown(sourceSock: WASocket): void {
+    this.host.inboundLimiter?.close();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -1555,6 +1562,8 @@ export class BaileysLifecycle {
    * drops connection-scoped caches, and transitions to FAILED before onError is emitted.
    */
   private teardownTerminalClose(): void {
+    this.host.fenceStoredWrites?.();
+    this.host.inboundLimiter?.close();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -1604,6 +1613,7 @@ export class BaileysLifecycle {
     this.dropConnectionState();
     // A message still being processed must not recreate a row of the unlinked account after the wipe below.
     this.host.fenceStoredWrites();
+    this.host.inboundLimiter?.close();
     this.detachSocketListeners(dead);
     try {
       void dead?.end(undefined);
@@ -1720,6 +1730,8 @@ export class BaileysLifecycle {
 
   destroy(): Promise<void> {
     this.teardown.abort();
+    this.host.fenceStoredWrites?.();
+    this.host.inboundLimiter?.close();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;

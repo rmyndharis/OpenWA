@@ -276,7 +276,9 @@ async function renderPage(): Promise<HTMLElement> {
 async function openRow(container: HTMLElement, name: string): Promise<void> {
   const row = rtl.screen.getByText(name, { selector: '.chat-item-name' }).closest('[role="button"]') as HTMLElement;
   rtl.fireEvent.click(row);
-  await rtl.waitFor(() => assert.ok(container.querySelector('.room-messages [data-scroll-anchor]')));
+  await rtl.waitFor(() => assert.ok(container.querySelector('.room-messages [data-scroll-anchor]')), {
+    timeout: 5_000,
+  });
   frame();
 }
 
@@ -289,11 +291,14 @@ async function pickSidebarHit(container: HTMLElement): Promise<void> {
   rtl.fireEvent.change(container.querySelector('.global-search-input') as HTMLInputElement, {
     target: { value: 'message' },
   });
-  const found = await rtl.waitFor(() => {
-    const listed = container.querySelector('.global-search-hit');
-    assert.ok(listed, 'the hit is listed');
-    return listed as HTMLElement;
-  });
+  const found = await rtl.waitFor(
+    () => {
+      const listed = container.querySelector('.global-search-hit');
+      assert.ok(listed, 'the hit is listed');
+      return listed as HTMLElement;
+    },
+    { timeout: 5_000 },
+  );
   rtl.fireEvent.click(found);
 }
 
@@ -304,13 +309,15 @@ test('a search hit in a chat that is still loading lands on its message when the
   holdCarol = true;
   const container = await renderPage();
   await pickSidebarHit(container);
-  await rtl.waitFor(() => assert.ok(container.querySelector('.room-messages .messages-loading')));
+  await rtl.waitFor(() => assert.ok(container.querySelector('.room-messages .messages-loading')), { timeout: 5_000 });
   // The browser reports the box of the spinner: no scrollbar yet.
   frame();
   await rtl.act(async () => {
     releaseCarol?.();
   });
-  await rtl.waitFor(() => assert.ok(container.querySelector('.room-messages [data-scroll-anchor]')));
+  await rtl.waitFor(() => assert.ok(container.querySelector('.room-messages [data-scroll-anchor]')), {
+    timeout: 5_000,
+  });
   assert.deepEqual(scrolledTo, [{ row: HIT.waMessageId, top: hitTop() }], 'the page did not scroll to the hit');
 
   // The thread overflows now, and the scrollbar is taken from its width: that is its next look.

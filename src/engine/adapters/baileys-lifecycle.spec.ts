@@ -14,6 +14,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as qrcode from 'qrcode';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import * as BaileysLib from '@whiskeysockets/baileys';
 import { useAtomicMultiFileAuthState } from './baileys-auth-store';
 import { BaileysLifecycle, type BaileysLifecycleHost } from './baileys-lifecycle';
@@ -776,5 +777,104 @@ describe('BaileysLifecycle socket fencing, one-shot remote logout, held chats, a
 
     expect(engine2.getQRCode()).toBeNull();
     expect(onQRCode).not.toHaveBeenCalled();
+  });
+});
+
+describe('BaileysLifecycle teardown fencing and dispatcher cleanup', () => {
+  const makeHost = (inboundLimiter: ConcurrencyLimiter) => {
+    const noCallback = (): undefined => undefined;
+    const fenceStoredWrites = jest.fn();
+    const dispatcher = {
+      destroy: jest.fn().mockResolvedValue(undefined),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+    const host = {
+      authPath: '/nonexistent/openwa-lifecycle-teardown/session-s1',
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+      config: { sessionId: 'sess-fence', dbSessionId: 'db-fence' },
+      liveCalls: new Map(),
+      inboundLimiter,
+      fenceStoredWrites,
+      getOnStateChanged: noCallback,
+      getOnDisconnected: noCallback,
+      getOnError: noCallback,
+      getOnCredentialTeardownStarted: noCallback,
+    } as unknown as BaileysLifecycleHost;
+    return { host, fenceStoredWrites, dispatcher };
+  };
+
+  it('calls fenceStoredWrites and inboundLimiter.close on disconnect, destroy, and teardownTerminalClose', async () => {
+    const limiter1 = new ConcurrencyLimiter(1);
+    const h1 = makeHost(limiter1);
+    const l1 = new BaileysLifecycle(h1.host);
+    await l1.disconnect();
+    expect(h1.fenceStoredWrites).toHaveBeenCalledTimes(1);
+    await expect(limiter1.run(() => Promise.resolve('x'))).rejects.toThrow(/closed/i);
+
+    const limiter2 = new ConcurrencyLimiter(1);
+    const h2 = makeHost(limiter2);
+    const l2 = new BaileysLifecycle(h2.host);
+    await l2.destroy();
+    expect(h2.fenceStoredWrites).toHaveBeenCalledTimes(1);
+    await expect(limiter2.run(() => Promise.resolve('x'))).rejects.toThrow(/closed/i);
+
+    const limiter3 = new ConcurrencyLimiter(1);
+    const h3 = makeHost(limiter3);
+    const l3 = new BaileysLifecycle(h3.host);
+    (l3 as unknown as { teardownTerminalClose(reason: string): void }).teardownTerminalClose('logged_out');
+    expect(h3.fenceStoredWrites).toHaveBeenCalledTimes(1);
+    await expect(limiter3.run(() => Promise.resolve('x'))).rejects.toThrow(/closed/i);
+  });
+
+  it('closes inboundLimiter on localSocketShutdown (logout) and handleRemoteLoggedOut', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    const makeSock = () =>
+      ({
+        user: { id: '628999:1@s.whatsapp.net' },
+        authState: { creds: { me: { id: '628999:1@s.whatsapp.net' }, account: {} } },
+        query: jest.fn().mockResolvedValue({ tag: 'iq' }),
+        generateMessageTag: () => 'tag-1',
+        end: jest.fn(),
+        ev: { removeAllListeners: jest.fn() },
+      }) as unknown as BaileysLifecycle['sock'];
+    try {
+      const limiterLocal = new ConcurrencyLimiter(1);
+      const localHost = makeHost(limiterLocal);
+      const localEngine = new BaileysLifecycle(localHost.host);
+      localEngine.sock = makeSock();
+      await localEngine.logout();
+      expect(localHost.fenceStoredWrites).toHaveBeenCalledTimes(1);
+      await expect(limiterLocal.run(() => Promise.resolve('x'))).rejects.toThrow(/closed/i);
+
+      const limiterFailedLogout = new ConcurrencyLimiter(1);
+      const failedHost = makeHost(limiterFailedLogout);
+      const failedEngine = new BaileysLifecycle(failedHost.host);
+      const failingSock = makeSock();
+      jest.mocked(failingSock!.query).mockRejectedValueOnce(new Error('iq timeout'));
+      failedEngine.sock = failingSock;
+      await expect(failedEngine.logout()).rejects.toThrow('iq timeout');
+      await expect(limiterFailedLogout.run(() => Promise.resolve('x'))).rejects.toThrow(/closed/i);
+
+      const limiterRemote = new ConcurrencyLimiter(1);
+      const remoteHost = makeHost(limiterRemote);
+      const remoteEngine = new BaileysLifecycle(remoteHost.host);
+      remoteEngine.sock = makeSock();
+      await (remoteEngine as unknown as { handleRemoteLoggedOut(): Promise<void> }).handleRemoteLoggedOut();
+      expect(remoteHost.fenceStoredWrites).toHaveBeenCalledTimes(1);
+      await expect(limiterRemote.run(() => Promise.resolve('x'))).rejects.toThrow(/closed/i);
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it('closes any pre-socket fetchDispatcher before throwing in pre-socket logout', async () => {
+    const limiter = new ConcurrencyLimiter(1);
+    const { host, dispatcher } = makeHost(limiter);
+    const lifecycle = new BaileysLifecycle(host);
+    (lifecycle as unknown as { dispatcher: unknown }).dispatcher = dispatcher;
+
+    await expect(lifecycle.logout()).rejects.toThrow(/No live WhatsApp socket/);
+    expect(dispatcher.close).toHaveBeenCalledTimes(1);
+    expect((lifecycle as unknown as { dispatcher: unknown }).dispatcher).toBeUndefined();
   });
 });

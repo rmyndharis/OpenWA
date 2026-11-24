@@ -5599,6 +5599,47 @@ describe('BaileysAdapter store-backed ops', () => {
     );
   });
 
+  it('omits ephemeralExpiration on react/pin/delete/edit while retaining it on content sends after regional JID canonicalization', async () => {
+    const rawChat = '5491112345678@c.us';
+    const preCanonical = '5491112345678@s.whatsapp.net';
+    const canonical = '541112345678@s.whatsapp.net';
+    const regionalStored = {
+      key: { id: 'TARGET', remoteJid: preCanonical, fromMe: true },
+      message: { conversation: 'hi' },
+      messageTimestamp: '1700000000',
+    };
+    fakeStore.getMessage.mockResolvedValue(regionalStored);
+    fakeSock.onWhatsApp.mockImplementation((jid: string) =>
+      Promise.resolve([{ jid: jid === preCanonical ? canonical : jid, exists: true }]),
+    );
+
+    const adapter = await ready();
+    fakeSock.fire('chats.upsert', [{ id: canonical, ephemeralExpiration: 86400 }]);
+
+    await adapter.reactToMessage(rawChat, 'TARGET', '👍');
+    await adapter.pinMessage(rawChat, 'TARGET', 604800);
+    await adapter.unpinMessage(rawChat, 'TARGET');
+    await adapter.editMessage(rawChat, 'TARGET', 'edited');
+    await adapter.deleteMessage(rawChat, 'TARGET', true);
+    await adapter.sendTextMessage(rawChat, 'hola');
+    await adapter.sendImageMessage(rawChat, { mimetype: 'image/png', data: Buffer.from([1]) });
+
+    const calls = fakeSock.sendMessage.mock.calls as Array<[string, Record<string, unknown>, Record<string, unknown>]>;
+    expect(calls).toHaveLength(7);
+
+    // Non-content sends (react, pin, unpin, edit, delete) must never inherit ephemeralExpiration.
+    for (let i = 0; i < 5; i++) {
+      expect(calls[i][0]).toBe(canonical);
+      expect(calls[i][2].ephemeralExpiration).toBeUndefined();
+    }
+
+    // Content sends (sendTextMessage and sendImageMessage via sendContent) retain ephemeralExpiration.
+    expect(calls[5][0]).toBe(canonical);
+    expect(calls[5][2].ephemeralExpiration).toBe(86400);
+    expect(calls[6][0]).toBe(canonical);
+    expect(calls[6][2].ephemeralExpiration).toBe(86400);
+  });
+
   it('throws when the referenced message is not in the store', async () => {
     fakeStore.getMessage.mockResolvedValue(null);
     const adapter = await ready();
@@ -10834,9 +10875,12 @@ describe('BaileysAdapter catalog (#905)', () => {
     const adapter = await ready();
     fakeSock.getCatalog.mockResolvedValue({ products: [baileysProduct()], nextPageCursor: undefined });
     fakeSock.sendMessage.mockResolvedValue({ key: { id: 'M1' }, messageTimestamp: 1700000005 });
+    const imgBuf = Buffer.from([1, 2, 3]);
+    (loadRemoteMediaBuffer as jest.Mock).mockResolvedValueOnce({ data: imgBuf, mimetype: 'image/jpeg' });
 
     const res = await adapter.sendProduct('628111@s.whatsapp.net', 'p1', 'check this');
 
+    expect(loadRemoteMediaBuffer).toHaveBeenCalledWith('https://img.example/x.jpg', undefined);
     expect(fakeSock.sendMessage).toHaveBeenCalledWith(
       '628111@s.whatsapp.net',
       {
@@ -10848,7 +10892,7 @@ describe('BaileysAdapter catalog (#905)', () => {
           priceAmount1000: 1500000,
           retailerId: 'SKU1',
           url: 'https://shop.example/p1',
-          productImage: { url: 'https://img.example/x.jpg' },
+          productImage: imgBuf,
         },
         businessOwnerJid: '628999@s.whatsapp.net',
         body: 'check this',
@@ -10862,6 +10906,7 @@ describe('BaileysAdapter catalog (#905)', () => {
     const adapter = await ready();
     fakeSock.getCatalog.mockResolvedValue({ products: [baileysProduct({ price: NaN })], nextPageCursor: undefined });
     fakeSock.sendMessage.mockResolvedValue({ key: { id: 'M1' }, messageTimestamp: 1700000005 });
+    (loadRemoteMediaBuffer as jest.Mock).mockResolvedValueOnce({ data: Buffer.from([1]), mimetype: 'image/jpeg' });
 
     await adapter.sendProduct('628111@s.whatsapp.net', 'p1');
 
@@ -10882,6 +10927,20 @@ describe('BaileysAdapter catalog (#905)', () => {
     fakeSock.getCatalog.mockResolvedValue({ products: [baileysProduct({ imageUrls: {} })], nextPageCursor: undefined });
 
     await expect(adapter.sendProduct('628111@s.whatsapp.net', 'p1')).rejects.toThrow(BadRequestException);
+    expect(fakeSock.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('sendProduct rejects non-http(s) imageUrl values as BadRequest without fetching or sending', async () => {
+    const adapter = await ready();
+    fakeSock.getCatalog.mockResolvedValue({
+      products: [baileysProduct({ imageUrls: { requested: 'file:///etc/passwd' } })],
+      nextPageCursor: undefined,
+    });
+
+    const error: unknown = await adapter.sendProduct('628111@s.whatsapp.net', 'p1').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect(sentNothing(error)).toBe(true);
+    expect(loadRemoteMediaBuffer).not.toHaveBeenCalled();
     expect(fakeSock.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -10926,6 +10985,7 @@ describe('BaileysAdapter catalog (#905)', () => {
   it('sendProduct leaves a failed write as unknown', async () => {
     const adapter = await ready();
     fakeSock.getCatalog.mockResolvedValue({ products: [baileysProduct()], nextPageCursor: undefined });
+    (loadRemoteMediaBuffer as jest.Mock).mockResolvedValueOnce({ data: Buffer.from([1]), mimetype: 'image/jpeg' });
     fakeSock.sendMessage.mockRejectedValue(new Boom('write failed', { statusCode: 500 }));
 
     const error: unknown = await adapter.sendProduct('628111@s.whatsapp.net', 'p1').catch((e: unknown) => e);

@@ -6,7 +6,7 @@ import {
   type QueryCacheNotifyEvent,
 } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import {
   mergeChatMessages,
   mapEngineHistoryMessage,
@@ -291,6 +291,19 @@ export function upsertCachedMessage(
   );
 }
 
+export function hasCachedSessionMessage(
+  queryClient: QueryClient,
+  sessionId: string,
+  matches: (message: ChatMessageView) => boolean,
+): boolean {
+  for (const [, data] of queryClient.getQueriesData<MessagesData>({ queryKey: ['messages', sessionId] })) {
+    if (data?.pages.some(page => page.db.some(matches) || page.history.some(matches))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * The cached chats under one session that hold a matching message, as [key, flat thread] pairs.
  *
@@ -320,15 +333,18 @@ export function cachedSessionThreads(
 export function useChatMessagesActions() {
   const qc = useQueryClient();
 
-  return {
-    appendMessage(sessionId: string, chatId: string, msg: ChatMessageView) {
-      upsertCachedMessage(qc, messagesQueryKey(sessionId, chatId), msg);
-    },
-    updateMessage(sessionId: string, chatId: string, id: string, patch: Partial<ChatMessageView>) {
-      updateCachedMessages(qc, messagesQueryKey(sessionId, chatId), list => updateMessageById(list, id, patch));
-    },
-    removeMessage(sessionId: string, chatId: string, id: string) {
-      updateCachedMessages(qc, messagesQueryKey(sessionId, chatId), list => removeMessageById(list, id));
-    },
-  };
+  return useMemo(
+    () => ({
+      appendMessage(sessionId: string, chatId: string, msg: ChatMessageView) {
+        upsertCachedMessage(qc, messagesQueryKey(sessionId, chatId), msg);
+      },
+      updateMessage(sessionId: string, chatId: string, id: string, patch: Partial<ChatMessageView>) {
+        updateCachedMessages(qc, messagesQueryKey(sessionId, chatId), list => updateMessageById(list, id, patch));
+      },
+      removeMessage(sessionId: string, chatId: string, id: string) {
+        updateCachedMessages(qc, messagesQueryKey(sessionId, chatId), list => removeMessageById(list, id));
+      },
+    }),
+    [qc],
+  );
 }

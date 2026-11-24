@@ -394,4 +394,72 @@ describe('BuiltInFtsProvider contains index build lock (postgres)', () => {
     expect(runner.query).not.toHaveBeenCalled();
     expect(runner.release).toHaveBeenCalledTimes(1);
   });
+
+  it('still runs pg_advisory_unlock when set_config fails and evicts the pooled PG connection', async () => {
+    const setConfigErr = new Error('connection reset during set_config');
+    const runner = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      manager: {
+        query: jest.fn((sql: string) => {
+          if (/datctype/.test(sql)) return Promise.resolve([{ ctype: 'en_US.UTF-8' }]);
+          if (/pg_try_advisory_lock/.test(sql)) return Promise.resolve([{ locked: true }]);
+          if (/SHOW statement_timeout/.test(sql)) return Promise.resolve([{ statement_timeout: '30s' }]);
+          return Promise.resolve([{ trgm: 'public', unaccent: 'public', fn: false, idx: null }]);
+        }),
+      },
+      query: jest.fn((sql: string) => {
+        if (/set_config\('statement_timeout'/.test(sql)) return Promise.reject(setConfigErr);
+        return Promise.resolve([]);
+      }),
+      release: jest.fn().mockResolvedValue(undefined),
+      releasePostgresConnection: jest.fn().mockResolvedValue(undefined),
+    };
+    const ds = {
+      options: { type: 'postgres' },
+      createQueryRunner: jest.fn().mockReturnValue(runner),
+      query: jest.fn().mockResolvedValue([]),
+      manager: {
+        query: jest.fn((sql: string) => {
+          if (/pg_extension/.test(sql)) return Promise.resolve([{ extname: 'pg_trgm' }, { extname: 'unaccent' }]);
+          if (/pg_class/.test(sql) && /pg_attribute/.test(sql)) return Promise.resolve([{ attname: 'body' }]);
+          if (/current_schemas/.test(sql)) return Promise.resolve([{ schema: 'public' }]);
+          if (/SHOW lc_ctype/.test(sql)) return Promise.resolve([{ lc_ctype: 'C.UTF-8' }]);
+          return Promise.resolve([]);
+        }),
+      },
+    } as unknown as DataSource;
+    const provider = new BuiltInFtsProvider(ds, new ConfigService({ search: { containsEnabled: true } }));
+
+    await provider.buildContainsIndex();
+
+    const runnerSqls = (runner.query as jest.Mock).mock.calls.map(([sql]) => String(sql));
+    expect(runnerSqls.some(sql => /pg_advisory_unlock/.test(sql))).toBe(true);
+    expect(runner.releasePostgresConnection).toHaveBeenCalledWith(setConfigErr);
+    expect(runner.release).not.toHaveBeenCalled();
+  });
+
+  it('evaluates ts_headline only in outer SELECT after CTE ORDER BY LIMIT/OFFSET on Postgres word search', async () => {
+    const query = jest.fn((sql: string) => {
+      if (/COUNT\(\*\)/.test(sql)) return Promise.resolve([{ count: '0' }]);
+      return Promise.resolve([]);
+    });
+    const ds = {
+      options: { type: 'postgres' },
+      query,
+      manager: { query: jest.fn().mockResolvedValue([]) },
+    } as unknown as DataSource;
+    const provider = new BuiltInFtsProvider(ds);
+    Object.assign(provider as unknown as Record<string, unknown>, { ftsAvailable: true, containsAvailable: true });
+
+    await provider.search({ q: 'hello', match: 'word', limit: 10, offset: 5 });
+
+    const dataCall = query.mock.calls.find(([sql]) => /ts_headline/i.test(String(sql)));
+    expect(dataCall).toBeDefined();
+    const sql = String(dataCall![0]);
+    const limitIdx = sql.search(/\bLIMIT\b/i);
+    const headlineIdx = sql.search(/\bts_headline\s*\(/i);
+    expect(sql).toMatch(/\bWITH\b/i);
+    expect(limitIdx).toBeGreaterThan(-1);
+    expect(headlineIdx).toBeGreaterThan(limitIdx);
+  });
 });

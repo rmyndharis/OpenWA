@@ -127,27 +127,25 @@ describe('WebhookOutboxService retention', () => {
     service = new WebhookOutboxService(repo as never);
   });
 
-  it('prunes settled and legacy null-state rows only, never one that can still be replayed', async () => {
+  it('prunes settled and legacy null-state rows in two indexed passes, never one that can still be replayed', async () => {
+    repo.find.mockResolvedValueOnce([{ id: 'a' }, { id: 'b' }]).mockResolvedValueOnce([{ id: 'c' }]);
+    repo.delete.mockResolvedValueOnce({ affected: 2 }).mockResolvedValueOnce({ affected: 1 });
+
     const removed = await service.pruneSettled(7);
 
     expect(removed).toBe(3);
-    // The ids are read with the OR condition (settled non-null OR null state) and removed by id.
-    const [[{ where }]] = repo.find.mock.calls as unknown as [
-      [
-        {
-          where: Array<{ state: { type: string; value?: unknown }; createdAt: { type: string } }>;
-        },
-      ],
+    expect(repo.find).toHaveBeenCalledTimes(2);
+    const [pass1Call, pass2Call] = repo.find.mock.calls as unknown as [
+      [{ where: { state: { type: string; value?: unknown }; createdAt: { type: string } } }],
+      [{ where: { state: { type: string }; createdAt: { type: string } } }],
     ];
-    expect(Array.isArray(where)).toBe(true);
-    expect(where).toHaveLength(2);
-    // Deleting a 'pending' or 'queued' row on age would discard the delivery this table exists to protect.
-    expect(where[0].state.type).toBe('not');
-    expect(where[0].state.value).toEqual(['pending', 'queued']);
-    expect(where[0].createdAt.type).toBe('lessThan');
-    expect(where[1].state.type).toBe('isNull');
-    expect(where[1].createdAt.type).toBe('lessThan');
-    expect(repo.delete).toHaveBeenCalledWith(['a', 'b', 'c']);
+    expect(pass1Call[0].where.state.type).toBe('in');
+    expect(pass1Call[0].where.state.value).toEqual(['dispatched', 'delivered', 'failed']);
+    expect(pass1Call[0].where.createdAt.type).toBe('lessThan');
+    expect(pass2Call[0].where.state.type).toBe('isNull');
+    expect(pass2Call[0].where.createdAt.type).toBe('lessThan');
+    expect(repo.delete).toHaveBeenNthCalledWith(1, ['a', 'b']);
+    expect(repo.delete).toHaveBeenNthCalledWith(2, ['c']);
   });
 
   it('prunes legacy null-state rows older than cutoff in SQLite while preserving pending, queued, and recent rows', async () => {
@@ -168,16 +166,18 @@ describe('WebhookOutboxService retention', () => {
       await insertRow('00000000-0000-4000-8000-000000000001', 'old-null', null, 14);
       await insertRow('00000000-0000-4000-8000-000000000002', 'old-dispatched', 'dispatched', 14);
       await insertRow('00000000-0000-4000-8000-000000000003', 'old-failed', 'failed', 14);
+      await insertRow('00000000-0000-4000-8000-000000000008', 'old-delivered', 'delivered', 14);
       await insertRow('00000000-0000-4000-8000-000000000004', 'old-pending', 'pending', 14);
       await insertRow('00000000-0000-4000-8000-000000000005', 'old-queued', 'queued', 14);
       await insertRow('00000000-0000-4000-8000-000000000006', 'recent-null', null, 1);
       await insertRow('00000000-0000-4000-8000-000000000007', 'recent-dispatched', 'dispatched', 1);
+      await insertRow('00000000-0000-4000-8000-000000000009', 'recent-delivered', 'delivered', 1);
 
       const sqliteService = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent));
-      expect(await sqliteService.pruneSettled(7)).toBe(3);
+      expect(await sqliteService.pruneSettled(7)).toBe(4);
 
       const survivors = (await ds.getRepository(WebhookOutboxEvent).find()).map(r => r.idempotencyKey).sort();
-      expect(survivors).toEqual(['old-pending', 'old-queued', 'recent-dispatched', 'recent-null']);
+      expect(survivors).toEqual(['old-pending', 'old-queued', 'recent-delivered', 'recent-dispatched', 'recent-null']);
     } finally {
       await ds.destroy();
     }

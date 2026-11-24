@@ -126,7 +126,7 @@ export class SessionLivenessWatchdog {
 
     // The session may have been stopped/restarted (engine superseded) while the probe was in flight;
     // a stale result must not touch it (mirrors the isLive gate on engine callbacks).
-    if (!this.engines.isLive(id, engine)) {
+    if (this.shutdownService?.isShuttingDown() || !this.engines.isLive(id, engine)) {
       return;
     }
     // The engine left the state this probe was taken in (a reconnect of its own, or a step only an

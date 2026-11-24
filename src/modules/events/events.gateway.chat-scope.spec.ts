@@ -2,6 +2,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { Server, Socket } from 'socket.io';
 import { CHAT_IDS_MEMO_TTL_MS, EventsGateway } from './events.gateway';
 import {
+  WS_RESTRICTED_CACHE_TTL_MS,
   WS_RESTRICTED_NODES_KEY,
   WS_RESTRICTED_NODE_KEY_PREFIX,
   WsRestrictedPresenceTracker,
@@ -507,67 +508,76 @@ describe('chat-scoped WebSocket rooms', () => {
     });
 
     it('skips chatIds lookup when Redis confirms 0 restricted nodes, fans out when a remote node registers, and fails open on Redis error', async () => {
-      const redis = createFakeRedis();
-      const tracker = new WsRestrictedPresenceTracker(redis.client, { nodeId: 'node-a' });
-      const scope = new ChatScopeService({
-        phonesForLidsPersisted: jest.fn().mockResolvedValue({}),
-        lidsForPhonesPersisted: jest.fn().mockResolvedValue({}),
-      } as unknown as LidMappingStoreService);
-      resolveIds = jest.spyOn(scope, 'idsForFilter');
-      const server = gateway.server;
-      gateway = new EventsGateway(
-        { validateApiKey: jest.fn((id: string) => Promise.resolve(current[id])) } as unknown as AuthService,
-        { logWarn: jest.fn().mockResolvedValue(null) } as unknown as AuditService,
-        { get: jest.fn((_name: string, fallback: unknown) => fallback) } as unknown as ConfigService,
-        scope,
-        undefined,
-        undefined,
-        tracker,
-      );
-      gateway.server = server;
+      let now = Date.now();
+      const clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        const redis = createFakeRedis();
+        const tracker = new WsRestrictedPresenceTracker(redis.client, { nodeId: 'node-a' });
+        const scope = new ChatScopeService({
+          phonesForLidsPersisted: jest.fn().mockResolvedValue({}),
+          lidsForPhonesPersisted: jest.fn().mockResolvedValue({}),
+        } as unknown as LidMappingStoreService);
+        resolveIds = jest.spyOn(scope, 'idsForFilter');
+        const server = gateway.server;
+        gateway = new EventsGateway(
+          { validateApiKey: jest.fn((id: string) => Promise.resolve(current[id])) } as unknown as AuthService,
+          { logWarn: jest.fn().mockResolvedValue(null) } as unknown as AuditService,
+          { get: jest.fn((_name: string, fallback: unknown) => fallback) } as unknown as ConfigService,
+          scope,
+          undefined,
+          undefined,
+          tracker,
+        );
+        gateway.server = server;
 
-      // Connect a remote restricted socket, then detach it from this node's local tracking while leaving its rooms.
-      const remote = await connect('remote', [PHONE]);
-      gateway.handleDisconnect(remote as unknown as Socket);
-      await flush();
-      const unrestricted = await connect('unrestricted', null);
+        // Connect a remote restricted socket, then detach it from this node's local tracking while leaving its rooms.
+        const remote = await connect('remote', [PHONE]);
+        gateway.handleDisconnect(remote as unknown as Socket);
+        await flush();
+        const unrestricted = await connect('unrestricted', null);
 
-      // With 0 restricted nodes registered in Redis, emit skips resolveIds and chat-room fan-out.
-      gateway.emitMessage('s1', { chatId: PHONE, id: 'skip-me' });
-      await flush();
-      expect(resolveIds).not.toHaveBeenCalled();
-      expect(events(remote)).toHaveLength(0);
-      expect(events(unrestricted)).toHaveLength(1);
+        // With 0 restricted nodes registered in Redis, emit skips resolveIds and chat-room fan-out.
+        gateway.emitMessage('s1', { chatId: PHONE, id: 'skip-me' });
+        await flush();
+        expect(resolveIds).not.toHaveBeenCalled();
+        expect(events(remote)).toHaveLength(0);
+        expect(events(unrestricted)).toHaveLength(1);
 
-      // A remote replica registers a restricted socket in Redis -> fan-out runs cleanly.
-      redis.strings.set(`${WS_RESTRICTED_NODE_KEY_PREFIX}node-b:1111`, '1');
-      redis.sets.set(WS_RESTRICTED_NODES_KEY, new Set(['node-b:1111']));
+        // A remote replica registers a restricted socket in Redis -> fan-out runs cleanly once short cache TTL expires.
+        redis.strings.set(`${WS_RESTRICTED_NODE_KEY_PREFIX}node-b:1111`, '1');
+        redis.sets.set(WS_RESTRICTED_NODES_KEY, new Set(['node-b:1111']));
+        now += WS_RESTRICTED_CACHE_TTL_MS + 1;
 
-      gateway.emitMessage('s1', { chatId: PHONE, id: 'remote-hit' });
-      await flush();
-      expect(resolveIds).toHaveBeenCalledTimes(1);
-      expect(events(remote)).toHaveLength(1);
-      expect(events(unrestricted)).toHaveLength(2);
+        gateway.emitMessage('s1', { chatId: PHONE, id: 'remote-hit' });
+        await flush();
+        expect(resolveIds).toHaveBeenCalledTimes(1);
+        expect(events(remote)).toHaveLength(1);
+        expect(events(unrestricted)).toHaveLength(2);
 
-      // Remote node crashes and its lease expires -> dead member pruned and lookups skipped again.
-      redis.strings.delete(`${WS_RESTRICTED_NODE_KEY_PREFIX}node-b:1111`);
-      gateway.emitMessage('s1', { chatId: PHONE, id: 'after-expiry' });
-      await flush();
-      expect(resolveIds).toHaveBeenCalledTimes(1);
-      expect(events(remote)).toHaveLength(1);
+        // Remote node crashes and its lease expires -> dead member pruned and lookups skipped again.
+        redis.strings.delete(`${WS_RESTRICTED_NODE_KEY_PREFIX}node-b:1111`);
+        now += WS_RESTRICTED_CACHE_TTL_MS + 1;
+        gateway.emitMessage('s1', { chatId: PHONE, id: 'after-expiry' });
+        await flush();
+        expect(resolveIds).toHaveBeenCalledTimes(1);
+        expect(events(remote)).toHaveLength(1);
 
-      // Redis errors -> fails open and runs chat-room fan-out cleanly.
-      redis.setFail(true);
-      gateway.emitMessage('s1', { chatId: OTHER, id: 'redis-err' });
-      await flush();
-      expect(resolveIds).toHaveBeenCalledTimes(2);
+        // Redis errors -> fails open and runs chat-room fan-out cleanly.
+        now += WS_RESTRICTED_CACHE_TTL_MS + 1;
+        redis.setFail(true);
+        gateway.emitMessage('s1', { chatId: OTHER, id: 'redis-err' });
+        await flush();
+        expect(resolveIds).toHaveBeenCalledTimes(2);
 
-      // Redis disconnected -> fails open cleanly as well.
-      redis.setFail(false);
-      redis.setStatus('reconnecting');
-      gateway.emitMessage('s1', { chatId: '628333000333@c.us', id: 'redis-reconnecting' });
-      await flush();
-      expect(resolveIds).toHaveBeenCalledTimes(3);
+        // Redis disconnected -> fails open cleanly as well.
+        redis.setFail(false);
+        redis.setStatus('reconnecting');
+        gateway.emitMessage('s1', { chatId: '628333000333@c.us', id: 'redis-reconnecting' });
+        await flush();
+        expect(resolveIds).toHaveBeenCalledTimes(3);
+      } finally {
+        clock.mockRestore();
+      }
     });
 
     it('registers, refreshes via heartbeat, and unregisters local restricted-socket presence cleanly on disconnect and destroy', async () => {

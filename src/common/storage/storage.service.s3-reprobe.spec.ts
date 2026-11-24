@@ -26,6 +26,7 @@ import {
   GetObjectCommand,
   HeadBucketCommand,
   ListObjectsV2Command,
+  PutObjectCommand,
 } from '@aws-sdk/client-s3';
 import {
   DEFAULT_S3_REPROBE_INTERVAL_MS,
@@ -605,5 +606,445 @@ describe('StorageService S3 re-probe and recovery', () => {
       undefined,
       'tok',
     ]);
+  });
+
+  it('syncs local fallback files written during transient S3 boot outage to S3 once S3 recovers', async () => {
+    const uploaded = new Map<string, Buffer>();
+    let healthy = false;
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof HeadBucketCommand) {
+        return healthy ? Promise.resolve({}) : Promise.reject(s3Error('NetworkingError'));
+      }
+      if (cmd instanceof PutObjectCommand) {
+        const input = (cmd as { input?: { Key?: string; Body?: Buffer | Readable } }).input;
+        if (input?.Key && input.Body) {
+          if (Buffer.isBuffer(input.Body)) {
+            uploaded.set(input.Key, Buffer.from(input.Body));
+          } else {
+            return (async () => {
+              const chunks: Buffer[] = [];
+              for await (const chunk of input.Body as AsyncIterable<Buffer | Uint8Array | string>) {
+                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+              }
+              uploaded.set(input.Key!, Buffer.concat(chunks));
+              return {};
+            })();
+          }
+        }
+        return Promise.resolve({});
+      }
+      if (cmd instanceof GetObjectCommand) {
+        const key = (cmd as { input?: { Key?: string } }).input?.Key;
+        const buf = key ? uploaded.get(key) : undefined;
+        if (!buf) return Promise.reject(s3Error('NoSuchKey'));
+        return Promise.resolve({ Body: Readable.from([buf]) });
+      }
+      return Promise.resolve({});
+    });
+    // Wire PutObjectCommand / GetObjectCommand mock constructors to capture `input` cleanly.
+    const MockPut = PutObjectCommand as unknown as jest.Mock;
+    MockPut.mockImplementation(function (this: { input: unknown }, input: unknown) {
+      this.input = input;
+    });
+    const MockGet = GetObjectCommand as unknown as jest.Mock;
+    MockGet.mockImplementation(function (this: { input: unknown }, input: unknown) {
+      this.input = input;
+    });
+
+    try {
+      const svc = new StorageService(makeConfig());
+      await flush();
+      expect(s3AvailableOf(svc)).toBe(false);
+
+      const payload = Buffer.from('offline-media-bytes');
+      await svc.putFile('sess-1/offline.png', payload);
+      expect(fs.existsSync(path.join(localPath, 'sess-1/offline.png'))).toBe(true);
+      expect(uploaded.has('sess-1/offline.png')).toBe(false);
+
+      healthy = true;
+      await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
+      await (svc as unknown as { fallbackSyncInFlight: Promise<void> | null }).fallbackSyncInFlight;
+
+      expect(s3AvailableOf(svc)).toBe(true);
+      const uploadedEntry = [...uploaded.entries()].find(([k]) => k.endsWith('sess-1/offline.png'));
+      expect(uploadedEntry?.[1]?.equals(payload)).toBe(true);
+      expect(fs.existsSync(path.join(localPath, 'sess-1/offline.png'))).toBe(false);
+      await expect(svc.getFile('sess-1/offline.png')).resolves.toEqual(payload);
+
+      // Streamed uploads route straight to S3 once recovered and enforce safe keys.
+      await svc.putStream('sess-1/streamed.bin', Readable.from([Buffer.from('streamed-bytes')]), 14);
+      await expect(svc.getFile('sess-1/streamed.bin')).resolves.toEqual(Buffer.from('streamed-bytes'));
+      expect([...uploaded.keys()].some(k => k.endsWith('sess-1/streamed.bin'))).toBe(true);
+      await expect(svc.putStream('../bad-key.bin', Readable.from([]), 0)).rejects.toThrow(
+        'Refusing to store an unsafe storage key',
+      );
+      const failingStream = Readable.from([Buffer.from('fail-bytes')]);
+      mockSend.mockRejectedValueOnce(s3Error('InternalError'));
+      await expect(svc.putStream('sess-1/fail.bin', failingStream, 10)).rejects.toThrow('InternalError');
+      expect(failingStream.destroyed).toBe(true);
+      await svc.onModuleDestroy?.();
+    } finally {
+      MockPut.mockReset();
+      MockGet.mockReset();
+    }
+  });
+
+  it('serializes putFile, putStream, and deleteFile against active fallback sync without overwriting newer S3 writes or resurrecting deleted keys', async () => {
+    const uploaded = new Map<string, Buffer>();
+    let healthy = false;
+    let releaseSyncUpload!: () => void;
+    let firstSyncPutStarted!: () => void;
+    const syncStarted = new Promise<void>(resolve => (firstSyncPutStarted = resolve));
+    let gateFirstSyncPut = true;
+
+    const MockPut = PutObjectCommand as unknown as jest.Mock;
+    MockPut.mockImplementation(function (this: { input: unknown }, input: unknown) {
+      this.input = input;
+    });
+    const MockGet = GetObjectCommand as unknown as jest.Mock;
+    MockGet.mockImplementation(function (this: { input: unknown }, input: unknown) {
+      this.input = input;
+    });
+    const MockDelete = DeleteObjectCommand as unknown as jest.Mock;
+    MockDelete.mockImplementation(function (this: { input: unknown }, input: unknown) {
+      this.input = input;
+    });
+
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof HeadBucketCommand) {
+        return healthy ? Promise.resolve({}) : Promise.reject(s3Error('NetworkingError'));
+      }
+      if (cmd instanceof PutObjectCommand) {
+        const input = (cmd as { input?: { Key?: string; Body?: Buffer | Readable } }).input;
+        return (async () => {
+          const buf = Buffer.isBuffer(input?.Body)
+            ? Buffer.from(input.Body)
+            : await (async () => {
+                const chunks: Buffer[] = [];
+                for await (const c of input?.Body as AsyncIterable<Buffer | Uint8Array | string>) {
+                  chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+                }
+                return Buffer.concat(chunks);
+              })();
+          if (gateFirstSyncPut && input?.Key?.endsWith('sess-1/a-sync.bin')) {
+            gateFirstSyncPut = false;
+            firstSyncPutStarted();
+            await new Promise<void>(resolve => (releaseSyncUpload = resolve));
+          }
+          if (input?.Key) uploaded.set(input.Key, buf);
+          return {};
+        })();
+      }
+      if (cmd instanceof GetObjectCommand) {
+        const key = (cmd as { input?: { Key?: string } }).input?.Key;
+        const buf = key ? uploaded.get(key) : undefined;
+        if (!buf) return Promise.reject(s3Error('NoSuchKey'));
+        return Promise.resolve({ Body: Readable.from([buf]) });
+      }
+      if (cmd instanceof DeleteObjectCommand) {
+        const key = (cmd as { input?: { Key?: string } }).input?.Key;
+        if (key) uploaded.delete(key);
+        return Promise.resolve({});
+      }
+      return Promise.resolve({});
+    });
+
+    try {
+      const svc = new StorageService(makeConfig());
+      await flush();
+
+      await svc.putFile('sess-1/a-sync.bin', Buffer.from('stale-a'));
+      await svc.putFile('sess-1/b-put.bin', Buffer.from('stale-b'));
+      await svc.putFile('sess-1/c-stream.bin', Buffer.from('stale-c'));
+      await svc.putFile('sess-1/d-del.bin', Buffer.from('stale-d'));
+
+      healthy = true;
+      await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
+      jest.useRealTimers();
+      await syncStarted;
+
+      // While sync is paused on a-sync.bin, overwrite b-put & c-stream and delete d-del.
+      const putB = svc.putFile('sess-1/b-put.bin', Buffer.from('fresh-b'));
+      const putC = svc.putStream('sess-1/c-stream.bin', Readable.from([Buffer.from('fresh-c')]), 7);
+      const delD = svc.deleteFile('sess-1/d-del.bin');
+
+      await Promise.all([putB, putC, delD]);
+      releaseSyncUpload();
+      await svc.onModuleDestroy?.();
+
+      const keyFor = (suffix: string) => [...uploaded.keys()].find(k => k.endsWith(suffix));
+      expect(uploaded.get(keyFor('sess-1/a-sync.bin')!)?.toString()).toBe('stale-a');
+      expect(uploaded.get(keyFor('sess-1/b-put.bin')!)?.toString()).toBe('fresh-b');
+      expect(uploaded.get(keyFor('sess-1/c-stream.bin')!)?.toString()).toBe('fresh-c');
+      expect(keyFor('sess-1/d-del.bin')).toBeUndefined();
+      expect(fs.existsSync(path.join(localPath, 'sess-1/b-put.bin'))).toBe(false);
+      expect(fs.existsSync(path.join(localPath, 'sess-1/c-stream.bin'))).toBe(false);
+      expect(fs.existsSync(path.join(localPath, 'sess-1/d-del.bin'))).toBe(false);
+    } finally {
+      MockPut.mockReset();
+      MockGet.mockReset();
+      MockDelete.mockReset();
+    }
+  });
+
+  it('retries partial transient fallback sync failures on the bounded retry timer and clears the timer on destroy', async () => {
+    const uploaded = new Map<string, Buffer>();
+    let healthy = false;
+    let failFlakyOnce = true;
+
+    const MockPut = PutObjectCommand as unknown as jest.Mock;
+    MockPut.mockImplementation(function (this: { input: unknown }, input: unknown) {
+      this.input = input;
+    });
+    const MockGet = GetObjectCommand as unknown as jest.Mock;
+    MockGet.mockImplementation(function (this: { input: unknown }, input: unknown) {
+      this.input = input;
+    });
+
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof HeadBucketCommand) {
+        return healthy ? Promise.resolve({}) : Promise.reject(s3Error('NetworkingError'));
+      }
+      if (cmd instanceof PutObjectCommand) {
+        const input = (cmd as { input?: { Key?: string; Body?: Buffer | Readable } }).input;
+        if (failFlakyOnce && input?.Key?.endsWith('sess-1/flaky.bin')) {
+          failFlakyOnce = false;
+          return Promise.reject(s3Error('SlowDown'));
+        }
+        return (async () => {
+          const buf = Buffer.isBuffer(input?.Body)
+            ? Buffer.from(input.Body)
+            : await (async () => {
+                const chunks: Buffer[] = [];
+                for await (const c of input?.Body as AsyncIterable<Buffer | Uint8Array | string>) {
+                  chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+                }
+                return Buffer.concat(chunks);
+              })();
+          if (input?.Key) uploaded.set(input.Key, buf);
+          return {};
+        })();
+      }
+      return Promise.resolve({});
+    });
+
+    try {
+      const svc = new StorageService(makeConfig());
+      await flush();
+
+      await svc.putFile('sess-1/good.bin', Buffer.from('good-bytes'));
+      await svc.putFile('sess-1/flaky.bin', Buffer.from('flaky-bytes'));
+
+      healthy = true;
+      await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
+      await (svc as unknown as { fallbackSyncInFlight: Promise<void> | null }).fallbackSyncInFlight;
+
+      // good.bin synced, flaky.bin remains locally with retry timer armed.
+      expect([...uploaded.keys()].some(k => k.endsWith('sess-1/good.bin'))).toBe(true);
+      expect([...uploaded.keys()].some(k => k.endsWith('sess-1/flaky.bin'))).toBe(false);
+      expect(fs.existsSync(path.join(localPath, 'sess-1/flaky.bin'))).toBe(true);
+      expect((svc as unknown as { mayHaveLocalFallback: boolean }).mayHaveLocalFallback).toBe(true);
+      expect(
+        (svc as unknown as { fallbackSyncRetryTimer: NodeJS.Timeout | null }).fallbackSyncRetryTimer,
+      ).not.toBeNull();
+
+      // Next retry interval uploads flaky.bin and clears mayHaveLocalFallback.
+      await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
+      await (svc as unknown as { fallbackSyncInFlight: Promise<void> | null }).fallbackSyncInFlight;
+
+      expect([...uploaded.keys()].some(k => k.endsWith('sess-1/flaky.bin'))).toBe(true);
+      expect(fs.existsSync(path.join(localPath, 'sess-1/flaky.bin'))).toBe(false);
+      expect((svc as unknown as { mayHaveLocalFallback: boolean }).mayHaveLocalFallback).toBe(false);
+      expect((svc as unknown as { fallbackSyncRetryTimer: NodeJS.Timeout | null }).fallbackSyncRetryTimer).toBeNull();
+      await svc.onModuleDestroy?.();
+
+      // Also verify onModuleDestroy clears an armed retry timer before it fires.
+      failFlakyOnce = true;
+      healthy = false;
+      const svc2 = new StorageService(makeConfig());
+      await flush();
+      await svc2.putFile('sess-1/flaky.bin', Buffer.from('flaky-2'));
+      healthy = true;
+      await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
+      await (svc2 as unknown as { fallbackSyncInFlight: Promise<void> | null }).fallbackSyncInFlight;
+      expect(
+        (svc2 as unknown as { fallbackSyncRetryTimer: NodeJS.Timeout | null }).fallbackSyncRetryTimer,
+      ).not.toBeNull();
+      await svc2.onModuleDestroy?.();
+      expect((svc2 as unknown as { fallbackSyncRetryTimer: NodeJS.Timeout | null }).fallbackSyncRetryTimer).toBeNull();
+      mockSend.mockClear();
+      await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS * 2);
+      expect(mockSend).not.toHaveBeenCalled();
+    } finally {
+      MockPut.mockReset();
+      MockGet.mockReset();
+    }
+  });
+
+  it('keeps mayHaveLocalFallback armed and immediately resyncs late-finishing putFile and putStream fallback writes across S3 recovery', async () => {
+    const uploaded = new Map<string, Buffer>();
+    let healthy = false;
+    let releaseBlockerUpload!: () => void;
+    let blockerUploadStarted!: () => void;
+    const blockerStartedP = new Promise<void>(resolve => (blockerUploadStarted = resolve));
+    let gateBlocker = false;
+
+    const MockPut = PutObjectCommand as unknown as jest.Mock;
+    MockPut.mockImplementation(function (this: { input: unknown }, input: unknown) {
+      this.input = input;
+    });
+    const MockGet = GetObjectCommand as unknown as jest.Mock;
+    MockGet.mockImplementation(function (this: { input: unknown }, input: unknown) {
+      this.input = input;
+    });
+
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof HeadBucketCommand) {
+        return healthy ? Promise.resolve({}) : Promise.reject(s3Error('NetworkingError'));
+      }
+      if (cmd instanceof PutObjectCommand) {
+        const input = (cmd as { input?: { Key?: string; Body?: Buffer | Readable } }).input;
+        return (async () => {
+          const buf = Buffer.isBuffer(input?.Body)
+            ? Buffer.from(input.Body)
+            : await (async () => {
+                const chunks: Buffer[] = [];
+                for await (const c of input?.Body as AsyncIterable<Buffer | Uint8Array | string>) {
+                  chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+                }
+                return Buffer.concat(chunks);
+              })();
+          if (gateBlocker && input?.Key?.endsWith('sess-1/blocker.bin')) {
+            gateBlocker = false;
+            blockerUploadStarted();
+            await new Promise<void>(resolve => (releaseBlockerUpload = resolve));
+          }
+          if (input?.Key) uploaded.set(input.Key, buf);
+          return {};
+        })();
+      }
+      if (cmd instanceof GetObjectCommand) {
+        const key = (cmd as { input?: { Key?: string } }).input?.Key;
+        const buf = key ? uploaded.get(key) : undefined;
+        if (!buf) return Promise.reject(s3Error('NoSuchKey'));
+        return Promise.resolve({ Body: Readable.from([buf]) });
+      }
+      return Promise.resolve({});
+    });
+
+    const realRealpath = fs.promises.realpath.bind(fs.promises);
+    const drainSyncs = async (service: StorageService): Promise<void> => {
+      for (;;) {
+        const inflight = (service as unknown as { fallbackSyncInFlight: Promise<void> | null }).fallbackSyncInFlight;
+        if (!inflight) break;
+        await inflight;
+      }
+    };
+
+    let realpathSpy: jest.SpyInstance | undefined;
+    let realpathSpy2: jest.SpyInstance | undefined;
+
+    try {
+      // Case 1: putFile suspends mid-resolveLocalWriteTarget while initial empty sync finishes.
+      const svc = new StorageService(makeConfig());
+      await flush();
+
+      let releasePutTarget!: () => void;
+      let putTargetEntered!: () => void;
+      const putTargetEnteredP = new Promise<void>(resolve => (putTargetEntered = resolve));
+      let pauseFirstPut = true;
+      realpathSpy = jest.spyOn(fs.promises, 'realpath').mockImplementation(async target => {
+        if (pauseFirstPut && String(target).endsWith(path.join('media', 'sess-1'))) {
+          pauseFirstPut = false;
+          putTargetEntered();
+          await new Promise<void>(resolve => (releasePutTarget = resolve));
+        }
+        return realRealpath(target);
+      });
+
+      const latePut = svc.putFile('sess-1/late-put.bin', Buffer.from('stale-put-v1'));
+      await putTargetEnteredP;
+      expect(fs.existsSync(path.join(localPath, 'sess-1/late-put.bin'))).toBe(false);
+
+      healthy = true;
+      await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
+      await drainSyncs(svc);
+      expect((svc as unknown as { mayHaveLocalFallback: boolean }).mayHaveLocalFallback).toBe(true);
+      expect([...uploaded.keys()].some(k => k.endsWith('sess-1/late-put.bin'))).toBe(false);
+
+      releasePutTarget();
+      await latePut;
+      realpathSpy.mockRestore();
+
+      // Immediate resync runs without advancing timers, uploads late-put, deletes local copy, and clears flag.
+      await drainSyncs(svc);
+      const putKey = [...uploaded.keys()].find(k => k.endsWith('sess-1/late-put.bin'));
+      expect(putKey).toBeDefined();
+      expect(uploaded.get(putKey!)?.toString()).toBe('stale-put-v1');
+      expect(fs.existsSync(path.join(localPath, 'sess-1/late-put.bin'))).toBe(false);
+      expect((svc as unknown as { mayHaveLocalFallback: boolean }).mayHaveLocalFallback).toBe(false);
+
+      // Subsequent overwrite serves fresh bytes and leaves nothing on local disk.
+      await svc.putFile('sess-1/late-put.bin', Buffer.from('fresh-put-v2'));
+      expect((await svc.getFile('sess-1/late-put.bin')).toString()).toBe('fresh-put-v2');
+      expect(fs.existsSync(path.join(localPath, 'sess-1/late-put.bin'))).toBe(false);
+      await svc.onModuleDestroy?.();
+
+      // Case 2: putStream finishes during an active sync pass (mid-enumeration/upload on another file).
+      uploaded.clear();
+      healthy = false;
+      const svc2 = new StorageService(makeConfig());
+      await flush();
+      await svc2.putFile('sess-1/blocker.bin', Buffer.from('blocker'));
+
+      let releaseStreamTarget!: () => void;
+      let streamTargetEntered!: () => void;
+      const streamTargetEnteredP = new Promise<void>(resolve => (streamTargetEntered = resolve));
+      let pauseFirstStream = true;
+      realpathSpy2 = jest.spyOn(fs.promises, 'realpath').mockImplementation(async target => {
+        if (pauseFirstStream && String(target).endsWith(path.join('media', 'sub-stream'))) {
+          pauseFirstStream = false;
+          streamTargetEntered();
+          await new Promise<void>(resolve => (releaseStreamTarget = resolve));
+        }
+        return realRealpath(target);
+      });
+
+      const lateStream = svc2.putStream(
+        'sub-stream/late-stream.bin',
+        Readable.from([Buffer.from('stale-stream-v1')]),
+        15,
+      );
+      await streamTargetEnteredP;
+
+      gateBlocker = true;
+      healthy = true;
+      await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
+      await blockerStartedP;
+
+      // Finish late putStream while sync pass #1 is active on blocker.bin.
+      releaseStreamTarget();
+      await lateStream;
+      realpathSpy2.mockRestore();
+      expect((svc2 as unknown as { localFallbackSyncPending: boolean }).localFallbackSyncPending).toBe(true);
+
+      releaseBlockerUpload();
+      await drainSyncs(svc2);
+
+      const streamKey = [...uploaded.keys()].find(k => k.endsWith('sub-stream/late-stream.bin'));
+      expect(streamKey).toBeDefined();
+      expect(uploaded.get(streamKey!)?.toString()).toBe('stale-stream-v1');
+      expect(fs.existsSync(path.join(localPath, 'sub-stream/late-stream.bin'))).toBe(false);
+      expect((svc2 as unknown as { mayHaveLocalFallback: boolean }).mayHaveLocalFallback).toBe(false);
+
+      await svc2.putStream('sub-stream/late-stream.bin', Readable.from([Buffer.from('fresh-stream-v2')]), 15);
+      expect((await svc2.getFile('sub-stream/late-stream.bin')).toString()).toBe('fresh-stream-v2');
+      await svc2.onModuleDestroy?.();
+    } finally {
+      realpathSpy?.mockRestore();
+      realpathSpy2?.mockRestore();
+      MockPut.mockReset();
+      MockGet.mockReset();
+    }
   });
 });

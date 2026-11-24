@@ -200,6 +200,7 @@ export class SessionEngineEventWiring {
      * the boot reset and the takeover sweep both exclude it by design, so the session leaves every
      * automatic recovery path until an operator restarts it by hand.
      */
+    const owns = (): boolean => (host.ownsSession ? host.ownsSession(id) : true);
     const persistStatus = (status: SessionStatus): void => {
       if (!host.ownsSession(id)) {
         this.logger.warn('Skipped an engine status write for a session this node no longer owns', {
@@ -312,21 +313,35 @@ export class SessionEngineEventWiring {
       ...(host.messages.holdsInbound
         ? { admitInbound: arrival => host.messages.admitInbound(id, engine, arrival) }
         : {}),
-      onMessage: (message, ticket) => host.messages.handleInboundMessage(id, engine, message, ticket),
+      onMessage: (message, ticket) => {
+        if (!owns()) return;
+        return host.messages.handleInboundMessage(id, engine, message, ticket);
+      },
       onHistoryMessages: messages => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
         // Persist for the chat view only; no dispatch (these predate the live session).
         return host.messages
           .persistHistoryMessages(id, engine, messages)
           .catch(err => this.logger.error(`Failed to persist history messages for ${id}`, String(err)));
       },
-      onMessageCreate: (message, ticket): void => host.messages.handleOwnSendEcho(id, engine, message, ticket),
-      onMessageAck: (messageId, status, chatId): void =>
-        host.messages.handleMessageAck(id, engine, messageId, status, chatId),
-      onMessageReceipt: (event): void => host.messages.handleMessageReceipt(id, engine, event),
-      onMessageRevoked: (message, actor): void => host.messages.handleMessageRevoked(id, engine, message, actor),
+      onMessageCreate: (message, ticket): void => {
+        if (!owns()) return;
+        host.messages.handleOwnSendEcho(id, engine, message, ticket);
+      },
+      onMessageAck: (messageId, status, chatId): void => {
+        if (!owns()) return;
+        host.messages.handleMessageAck(id, engine, messageId, status, chatId);
+      },
+      onMessageReceipt: (event): void => {
+        if (!owns()) return;
+        host.messages.handleMessageReceipt(id, engine, event);
+      },
+      onMessageRevoked: (message, actor): void => {
+        if (!owns()) return;
+        host.messages.handleMessageRevoked(id, engine, message, actor);
+      },
       onMessageReaction: (event): void => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
         if (!event.messageId) {
           this.logger.warn('Ignoring message reaction without a target message id', {
             sessionId: id,
@@ -343,7 +358,7 @@ export class SessionEngineEventWiring {
         host.messages.applyReactionQueued(id, event);
       },
       onMessageEdited: (message): void => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
         if (!message.messageId) {
           this.logger.warn('Ignoring message edit without a target message id', {
             sessionId: id,
@@ -360,7 +375,7 @@ export class SessionEngineEventWiring {
         host.messages.applyMessageEditQueued(id, message);
       },
       onEventResponse: (event): void => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
         this.logger.debug(`Event response: ${event.response} to ${event.eventMessageId}`, {
           sessionId: id,
           chatId: event.chatId,
@@ -372,7 +387,7 @@ export class SessionEngineEventWiring {
         void host.webhookService.dispatch(id, 'event.response', payload);
       },
       onPollVote: (event): void => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
         if (!event.pollMessageId) {
           this.logger.warn('Ignoring poll vote without a poll message id', {
             sessionId: id,
@@ -391,7 +406,7 @@ export class SessionEngineEventWiring {
         void host.webhookService.dispatch(id, 'poll.vote', payload);
       },
       onGroupEvent: (event): void => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
         this.logger.debug(`Group event: ${event.kind} in ${event.groupId}`, {
           sessionId: id,
           groupId: event.groupId,
@@ -401,7 +416,7 @@ export class SessionEngineEventWiring {
         host.leafEvents.dispatchGroupEvent(id, event);
       },
       onCall: (event: IncomingCallEvent): void => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
         this.logger.log('Incoming call', {
           sessionId: id,
           callId: event.callId,
@@ -541,7 +556,7 @@ export class SessionEngineEventWiring {
         applyActionRequired();
       },
       onCallOutcome: (event: CallOutcomeEvent): void => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
         this.logger.log(`Call ${event.outcome}: ${event.callId}`, {
           sessionId: id,
           callId: event.callId,
@@ -563,7 +578,7 @@ export class SessionEngineEventWiring {
         }
       },
       onPresenceUpdate: (event: PresenceUpdateEvent): void => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
         // WhatsApp reports presence on every transition and freely repeats itself, so only an actual
         // change is published. Without this, one watched chat with an active typist produces a
         // continuous stream of identical events — enough to drown every other webhook a consumer

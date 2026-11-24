@@ -116,7 +116,24 @@ describe('SQLite message full-text repair', () => {
   });
 
   it('repairs a legacy NULL-body document through the migration', async () => {
-    await legacy([null]);
+    await ds
+      .getRepository(Message)
+      .insert([row('lead', 'discarded'), row('alpha', 'alpha survivor'), row('tail-0', null)]);
+    // Simulate the pre-fix AddMessagesFts state where NULL bodies were omitted during backfill while triggers issued unconditional FTS5 deletes.
+    await ds.query(`CREATE VIRTUAL TABLE "messages_fts" USING fts5(body, content='messages', content_rowid='rowid')`);
+    await ds.query(
+      `INSERT INTO "messages_fts"("rowid", "body") SELECT "rowid", "body" FROM "messages" WHERE "body" IS NOT NULL`,
+    );
+    await ds.query(`CREATE TRIGGER messages_fts_ai AFTER INSERT ON "messages" BEGIN
+      INSERT INTO "messages_fts"("rowid", "body") VALUES (new."rowid", new."body");
+    END`);
+    await ds.query(`CREATE TRIGGER messages_fts_ad AFTER DELETE ON "messages" BEGIN
+      INSERT INTO "messages_fts"("messages_fts", "rowid", "body") VALUES ('delete', old."rowid", old."body");
+    END`);
+    await ds.query(`CREATE TRIGGER messages_fts_au AFTER UPDATE ON "messages" WHEN OLD.body IS NOT NEW.body BEGIN
+      INSERT INTO "messages_fts"("messages_fts", "rowid", "body") VALUES ('delete', old."rowid", old."body");
+      INSERT INTO "messages_fts"("rowid", "body") VALUES (new."rowid", new."body");
+    END`);
     await expect(integrity(ds)).rejects.toMatchObject({ driverError: { code: 'SQLITE_CORRUPT_VTAB' } });
 
     await migrate(new RepairSqliteMessageFts1791600000000());
@@ -126,6 +143,17 @@ describe('SQLite message full-text repair', () => {
     expect(await matches(ds, 'edited')).toEqual(['tail-0']);
     await ds.getRepository(Message).delete({ id: 'tail-0' });
     expect(await matches(ds, 'edited')).toEqual([]);
+  });
+
+  it('indexes NULL-body rows in AddMessagesFts so integrity-check, edit, delete, and search succeed without corruption', async () => {
+    await ds.getRepository(Message).insert([row('alpha', 'alpha survivor'), row('null-1', null), row('null-2', null)]);
+    await migrate(new AddMessagesFts1782400000000());
+
+    await expect(integrity(ds)).resolves.toBeDefined();
+    await expect(ds.getRepository(Message).delete({ id: 'null-1' })).resolves.toBeDefined();
+    await expect(ds.getRepository(Message).update({ id: 'null-2' }, { body: 'now populated' })).resolves.toBeDefined();
+    expect(await matches(ds, 'alpha')).toEqual(['alpha']);
+    expect(await matches(ds, 'populated')).toEqual(['null-2']);
   });
 
   it('leaves a healthy index alone', async () => {

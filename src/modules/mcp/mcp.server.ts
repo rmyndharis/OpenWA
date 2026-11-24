@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { ForbiddenException, HttpException, UnauthorizedException } from '@nestjs/common';
 import { createLogger } from '../../common/services/logger.service';
+import { getRequestId, runWithRequestId, setRequestActor } from '../../common/services/request-context';
 import type { HttpAdapterHost } from '@nestjs/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AnySchema } from '@modelcontextprotocol/sdk/server/zod-compat.js';
@@ -23,7 +25,7 @@ import {
   smartToolResult,
 } from './tool-result';
 import { deriveToolTitle } from './tool-title';
-import type { KeyRateLimiter } from './mcp-rate-limit';
+import { KeyRateLimiter, readRateLimitConfig } from './mcp-rate-limit';
 import { limiterKeyForIp, parseTrustedProxies, resolveClientIp } from '../../common/utils/ip';
 import { resolveBodyLimit } from '../../config/bootstrap-security';
 import { presentedApiKey } from '../../common/security/bearer-token';
@@ -91,6 +93,20 @@ function resolveReqContext(req: Request): McpRequestContext {
   };
 }
 
+/** Run `fn` inside a request context with the resolved client IP stamped for downstream audit rows. */
+function runWithMcpActor<T>(ipAddress: string | undefined, fn: () => T): T {
+  const execute = (): T => {
+    setRequestActor({ ipAddress });
+    return fn();
+  };
+  return getRequestId() ? execute() : runWithRequestId(randomUUID(), execute);
+}
+
+/** Count JSON-RPC messages in a parsed request body (batches charge once per element). */
+function jsonRpcMessageCount(body: unknown): number {
+  return Array.isArray(body) ? Math.max(1, body.length) : 1;
+}
+
 /**
  * The most array items and object keys, nested ones included, a tool call may carry. The SDK counts them before
  * it validates, so a call past it is refused at once; below it, one wrong value in a `vars` map costs one issue
@@ -156,27 +172,29 @@ function buildServer(
       },
       async (input: Record<string, unknown>, extra: ToolExtra) => {
         const rawKey = extra.authInfo?.token ?? extractApiKey(extra.requestInfo?.headers);
-        try {
-          const result = await invokeTool(
-            tool,
-            input,
-            rawKey,
-            authService,
-            id => rateLimiter.check(id),
-            // onAuthFailure: mirror the REST ApiKeyGuard — record rejected/denied auth attempts (401/403
-            // only) at the auth boundary so the audit trail covers MCP credential probing. Fires inside
-            // invokeTool's authorization checks (before the tool handler), so handler-thrown 403s are NOT mislabeled
-            // as auth failures. Best-effort; success and non-auth errors skip this.
-            error => auditMcpAuthFailure(auditService, error, reqContext),
-            chatScope,
-            extra.signal,
-          );
-          return smartToolResult(result as object, maxResultBytes, {
-            untrustedContent: tool.returnsUntrustedContent === true,
-          });
-        } catch (error) {
-          return capToolError(handleToolError(error), maxResultBytes);
-        }
+        return runWithMcpActor(reqContext.ipAddress, async () => {
+          try {
+            const result = await invokeTool(
+              tool,
+              input,
+              rawKey,
+              authService,
+              id => rateLimiter.check(id),
+              // onAuthFailure: mirror the REST ApiKeyGuard — record rejected/denied auth attempts (401/403
+              // only) at the auth boundary so the audit trail covers MCP credential probing. Fires inside
+              // invokeTool's authorization checks (before the tool handler), so handler-thrown 403s are NOT mislabeled
+              // as auth failures. Best-effort; success and non-auth errors skip this.
+              error => auditMcpAuthFailure(auditService, error, reqContext),
+              chatScope,
+              extra.signal,
+            );
+            return smartToolResult(result as object, maxResultBytes, {
+              untrustedContent: tool.returnsUntrustedContent === true,
+            });
+          } catch (error) {
+            return capToolError(handleToolError(error), maxResultBytes);
+          }
+        });
       },
     );
   }
@@ -220,7 +238,7 @@ export function createIpThrottle(ipRateLimiter: KeyRateLimiter): RequestHandler 
     // element of a batch, and each tools/call element runs its own key lookup and auth-failure audit.
     // An over-budget batch throws on the first check past the cap, so a huge array costs at most
     // `max + 1` checks.
-    const messages = Array.isArray(req.body) ? Math.max(1, req.body.length) : 1;
+    const messages = jsonRpcMessageCount(req.body);
     try {
       for (let i = 0; i < messages; i++) ipRateLimiter.check(ip);
       next();
@@ -240,23 +258,31 @@ export function createIpThrottle(ipRateLimiter: KeyRateLimiter): RequestHandler 
  * `initialize` (server version) and `tools/list` (tool catalogue). Runs after the per-IP throttle so a
  * flood never reaches the key lookup. Validated with no client IP and no session, as the per-tool check
  * does: a key with `allowedIps` is refused on MCP, and role, session and chat scope stay per tool call.
- * Neither the per-key limiter nor the key's usage stats are charged here; invokeTool charges both per
- * tool call, so a request counts once.
+ * Charges an optional per-key pre-dispatch envelope limiter once per JSON-RPC message to cap non-tool
+ * and invalid-schema floods across IPs before transport/Zod parsing, while invokeTool keeps enforcing
+ * the tool-call limiter with in-band responses.
  */
 export function createKeyGate(
   authService: Pick<AuthService, 'validateApiKey'>,
   auditService: Pick<AuditService, 'logWarn'> | undefined,
+  gateRateLimiter?: KeyRateLimiter,
 ): RequestHandler {
   return async (req, res, next) => {
+    const reqContext = resolveReqContext(req);
+    setRequestActor({ ipAddress: reqContext.ipAddress });
     try {
       const rawKey = extractApiKey(req.headers);
       if (!rawKey) throw new UnresolvedApiKeyException('Missing API key');
-      await authService.validateApiKey(rawKey, undefined, undefined, { recordUsage: false });
+      const apiKey = await authService.validateApiKey(rawKey, undefined, undefined, { recordUsage: false });
+      if (gateRateLimiter) {
+        const messages = jsonRpcMessageCount(req.body);
+        for (let i = 0; i < messages; i++) gateRateLimiter.check(apiKey.id);
+      }
       // The transport forwards req.auth to every tool call as extra.authInfo.
       (req as Request & { auth?: AuthInfo }).auth = { token: rawKey, clientId: 'api-key', scopes: [] };
     } catch (err) {
       if (err instanceof HttpException) {
-        auditMcpAuthFailure(auditService, err, resolveReqContext(req));
+        runWithMcpActor(reqContext.ipAddress, () => auditMcpAuthFailure(auditService, err, reqContext));
         const status = err.getStatus();
         if (status === 401) res.set('WWW-Authenticate', 'Bearer');
         res.status(status).json({ jsonrpc: '2.0', error: { code: -32000, message: err.message }, id: null });
@@ -301,7 +327,11 @@ export function mountMcpServer(
   const tools = registry.list({ readOnly });
   logger.log(`MCP server mounted at POST ${basePath} (${tools.length} tools, readOnly=${readOnly})`);
 
+  const rateLimitConfig = readRateLimitConfig();
+  const gateRateLimiter = new KeyRateLimiter(rateLimitConfig.max * 2, rateLimitConfig.windowMs);
+
   const handler: RequestHandler = async (req: Request, res: Response) => {
+    const reqContext = resolveReqContext(req);
     const server = buildServer(
       registry,
       authService,
@@ -309,7 +339,7 @@ export function mountMcpServer(
       readOnly,
       serverInfo,
       auditService,
-      resolveReqContext(req),
+      reqContext,
       chatScope,
       maxResultBytes,
     );
@@ -319,8 +349,10 @@ export function mountMcpServer(
         void transport.close();
         void server.close();
       });
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
+      await runWithMcpActor(reqContext.ipAddress, async () => {
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      });
     } catch (error) {
       logger.error('Error handling MCP request', error instanceof Error ? error.stack : String(error));
       if (!res.headersSent) {
@@ -345,7 +377,7 @@ export function mountMcpServer(
     basePath,
     express.json({ limit: bodyLimit, inflate: false }),
     createIpThrottle(ipRateLimiter),
-    createKeyGate(authService, auditService),
+    createKeyGate(authService, auditService, gateRateLimiter),
     handler,
   );
   // Stateless transport: no standalone SSE stream and no session to delete. The Streamable HTTP spec

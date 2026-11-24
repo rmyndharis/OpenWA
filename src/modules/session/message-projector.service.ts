@@ -12,6 +12,7 @@ import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { awaitNoOpenTransaction } from '../../common/utils/shared-connection';
 import { captureSessionWrites } from '../../common/utils/session-write-scope';
 import { SessionLidResolver } from './session-lid-resolver.service';
+import { SessionOwnershipService } from './session-ownership.service';
 import { buildMessageMetadata, REVOKED_ROW_PATCH, storableWaMessageId } from './message-row.mapper';
 import { MessageMutationProjector } from './message-mutation-projector';
 import {
@@ -401,6 +402,7 @@ export class MessageProjector {
     @Optional()
     private readonly automationRules?: AutomationRulesService,
     @Optional() private readonly lidMappingStore?: LidMappingStoreService,
+    @Optional() private readonly ownership?: SessionOwnershipService,
   ) {
     this.mutationProjector = new MessageMutationProjector(
       this.messageRepository,
@@ -432,7 +434,9 @@ export class MessageProjector {
     if (stamped !== undefined && now >= stamped && now - stamped < LAST_ACTIVE_WRITE_WINDOW_MS) return;
     this.lastActiveStamped.set(engine, now);
     // A write that fails leaves the next message to try again, not the rest of the window without a stamp.
-    void this.sessionRepository.update(id, { lastActiveAt: new Date(now) }).catch(() => {
+    // Fence on nodeId when cluster ownership is active so a lapsed-lease replica never updates a peer's row.
+    const nodeId = this.ownership?.nodeId;
+    void this.sessionRepository.update(nodeId ? { id, nodeId } : id, { lastActiveAt: new Date(now) }).catch(() => {
       if (this.lastActiveStamped.get(engine) === now) this.lastActiveStamped.delete(engine);
     });
   }

@@ -62,11 +62,11 @@ describe('the net allowlist admits every provisioned instance host', () => {
     const ctx = new PluginCapabilityContext(createLogger('net-allowlist.spec'), hostServices, new HookManager(), {
       createPluginStorage: () => ({}),
     } as unknown as PluginStorageService);
-    return ctx.createPluginContext(loaded()).net;
+    return { capCtx: ctx, net: ctx.createPluginContext(loaded()).net };
   };
 
   /** The allowlist refusal is thrown before any socket work, so it is distinguishable by message. */
-  const refusalFor = async (net: ReturnType<typeof netCapability>, url: string): Promise<string> => {
+  const refusalFor = async (net: { fetch: (url: string) => Promise<unknown> }, url: string): Promise<string> => {
     try {
       await net.fetch(url);
       return '(no error)';
@@ -75,53 +75,56 @@ describe('the net allowlist admits every provisioned instance host', () => {
     }
   };
 
-  it('admits the host of an instance that is not the last one projected onto the scope', async () => {
-    const net = netCapability([row('acct-a', 'https://tenant-a.invalid'), row('acct-b', 'https://tenant-b.invalid')]);
+  it('outside dispatch, never widens to multi-tenant instance or session allowConfigHosts', async () => {
+    const { net } = netCapability([
+      row('acct-a', 'https://tenant-a.invalid'),
+      row('acct-b', 'https://tenant-b.invalid'),
+    ]);
 
-    // A .invalid host cannot resolve, so anything that is NOT the allowlist refusal proves the URL
-    // cleared the gate and reached the socket — which is the whole claim.
-    expect(await refusalFor(net, 'https://tenant-a.invalid/api/x')).not.toMatch(/may not fetch/);
+    // Without an active dispatchId/session context (e.g. detached timer), no config-derived host is admitted.
+    expect(await refusalFor(net, 'https://tenant-a.invalid/api/x')).toMatch(/may not fetch/);
+    expect(await refusalFor(net, 'https://tenant-b.invalid/api/x')).toMatch(/may not fetch/);
   });
 
-  it('still admits the host the scope slice carries', async () => {
-    const net = netCapability([row('acct-a', 'https://tenant-a.invalid'), row('acct-b', 'https://tenant-b.invalid')]);
+  it('inside an instance dispatch, admits only that enabled instance host and refuses sibling tenants', async () => {
+    const { capCtx, net } = netCapability([
+      row('acct-a', 'https://tenant-a.invalid'),
+      row('acct-b', 'https://tenant-b.invalid'),
+    ]);
 
-    expect(await refusalFor(net, 'https://tenant-b.invalid/api/x')).not.toMatch(/may not fetch/);
-  });
-
-  // Negative twin: widening the allowlist to the instance rows must not open it to anything else.
-  it('still refuses a host no config names', async () => {
-    const net = netCapability([row('acct-a', 'https://tenant-a.invalid')]);
-
-    expect(await refusalFor(net, 'https://elsewhere.invalid/api/x')).toMatch(/may not fetch/);
+    await capCtx.runWithDispatchContext({ sessionId: SCOPE, instanceId: 'acct-a' }, async () => {
+      // A .invalid host cannot resolve, so anything that is NOT the allowlist refusal proves the URL cleared the gate.
+      expect(await refusalFor(net, 'https://tenant-a.invalid/api/x')).not.toMatch(/may not fetch/);
+      expect(await refusalFor(net, 'https://tenant-b.invalid/api/x')).toMatch(/may not fetch/);
+      expect(await refusalFor(net, 'https://elsewhere.invalid/api/x')).toMatch(/may not fetch/);
+    });
   });
 
   // A disabled instance is not a tenant the operator is running; its host must not stay admitted.
-  it('does not admit a disabled instance host', async () => {
-    const net = netCapability([row('acct-a', 'https://tenant-a.invalid', false)]);
+  it('does not admit a disabled instance host even during dispatch', async () => {
+    const { capCtx, net } = netCapability([row('acct-a', 'https://tenant-a.invalid', false)]);
 
-    expect(await refusalFor(net, 'https://tenant-a.invalid/api/x')).toMatch(/may not fetch/);
+    await capCtx.runWithDispatchContext({ sessionId: SCOPE, instanceId: 'acct-a' }, async () => {
+      expect(await refusalFor(net, 'https://tenant-a.invalid/api/x')).toMatch(/may not fetch/);
+    });
   });
 
   /**
    * Not every host exposes an instance service, and the store can fail. Neither is a reason to
-   * refuse a fetch the base config already allows — the lookup only ever ADDS hosts, so losing it
-   * must degrade to the previous allowlist rather than to a denial or a crash.
+   * allow cross-tenant hosts outside dispatch, nor to refuse static manifest hosts.
    */
-  it('falls back to the config-derived allowlist when the instance lookup is unavailable', async () => {
+  it('stays closed outside dispatch even when the instance lookup is unavailable', async () => {
     const hostServices = {
       getPluginInstancePort: () => {
         throw new Error('no instance service in this host');
       },
     } as unknown as PluginHostServices;
-    const ctx = new PluginCapabilityContext(createLogger('net-allowlist.spec'), hostServices, new HookManager(), {
+    const capCtx = new PluginCapabilityContext(createLogger('net-allowlist.spec'), hostServices, new HookManager(), {
       createPluginStorage: () => ({}),
     } as unknown as PluginStorageService);
-    const net = ctx.createPluginContext(loaded()).net;
+    const net = capCtx.createPluginContext(loaded()).net;
 
-    // The scope slice still admits its own host …
-    expect(await refusalFor(net, 'https://tenant-b.invalid/api/x')).not.toMatch(/may not fetch/);
-    // … and nothing else silently became allowed.
+    expect(await refusalFor(net, 'https://tenant-b.invalid/api/x')).toMatch(/may not fetch/);
     expect(await refusalFor(net, 'https://elsewhere.invalid/api/x')).toMatch(/may not fetch/);
   });
 });

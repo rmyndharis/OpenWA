@@ -1248,13 +1248,14 @@ export function Sessions() {
       {deleteConfirmId && (
         <Modal
           open
-          onClose={() => setDeleteConfirmId(null)}
+          onClose={() => deletingId === null && setDeleteConfirmId(null)}
+          hideCloseButton={deletingId !== null}
           title={t('sessions.delete.title')}
           className="confirm-modal"
           closeLabel={t('common.close')}
           footer={
             <>
-              <button className="btn-secondary" onClick={() => setDeleteConfirmId(null)}>
+              <button className="btn-secondary" onClick={() => setDeleteConfirmId(null)} disabled={deletingId !== null}>
                 {t('common.cancel')}
               </button>
               <button
@@ -1281,13 +1282,14 @@ export function Sessions() {
       {killConfirmId && (
         <Modal
           open
-          onClose={() => setKillConfirmId(null)}
+          onClose={() => killingId === null && setKillConfirmId(null)}
+          hideCloseButton={killingId !== null}
           title={t('sessions.forceKill.title')}
           className="confirm-modal"
           closeLabel={t('common.close')}
           footer={
             <>
-              <button className="btn-secondary" onClick={() => setKillConfirmId(null)}>
+              <button className="btn-secondary" onClick={() => setKillConfirmId(null)} disabled={killingId !== null}>
                 {t('common.cancel')}
               </button>
               <button
@@ -1314,13 +1316,18 @@ export function Sessions() {
       {unlinkConfirmId && (
         <Modal
           open
-          onClose={() => setUnlinkConfirmId(null)}
+          onClose={() => unlinkingId === null && setUnlinkConfirmId(null)}
+          hideCloseButton={unlinkingId !== null}
           title={t('sessions.unlink.title')}
           className="confirm-modal"
           closeLabel={t('common.close')}
           footer={
             <>
-              <button className="btn-secondary" onClick={() => setUnlinkConfirmId(null)}>
+              <button
+                className="btn-secondary"
+                onClick={() => setUnlinkConfirmId(null)}
+                disabled={unlinkingId !== null}
+              >
                 {t('common.cancel')}
               </button>
               <button

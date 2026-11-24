@@ -42,6 +42,9 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
    * for it covers them too.
    */
   private readonly pendingWrites = new Map<string, Promise<void>>();
+  /** Amortizes enforceLimit() checks under sustained write throughput (counts writes since last trim per session). */
+  private static readonly ENFORCE_INTERVAL_WRITES = 100;
+  private readonly writesSinceTrim = new Map<string, number>();
   /** One write chain per stored message, so a put and a later update of the same id land in call order. */
   private readonly writes = new KeyedMutationQueue();
 
@@ -159,7 +162,16 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
       }
       throw err; // a genuine persistence failure — let the adapter's catch surface it
     }
-    await this.enforceLimit(sessionId);
+    const limit = positiveIntFromEnv('BAILEYS_MESSAGE_STORE_LIMIT', 5000);
+    const prevWrites = this.writesSinceTrim.get(sessionId);
+    const interval = Math.min(BaileysMessageStoreService.ENFORCE_INTERVAL_WRITES, Math.max(1, Math.floor(limit / 2)));
+    const nextWrites = (prevWrites ?? 0) + 1;
+    if (prevWrites === undefined || nextWrites >= interval) {
+      this.writesSinceTrim.set(sessionId, 0);
+      await this.enforceLimit(sessionId, limit);
+    } else {
+      this.writesSinceTrim.set(sessionId, nextWrites);
+    }
   }
 
   async getMessage(sessionId: string, messageId: string): Promise<WAMessage | null> {
@@ -208,12 +220,15 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
         .filter(([key]) => key.startsWith(prefix))
         .map(([, write]) => write.catch(() => undefined)),
     );
+    this.writesSinceTrim.delete(sessionId);
     await this.repo.delete({ sessionId });
   }
 
   /** Per-session row cap: keep the newest N, delete the rest. Deterministic via (createdAt, id). */
-  private async enforceLimit(sessionId: string): Promise<void> {
-    const limit = positiveIntFromEnv('BAILEYS_MESSAGE_STORE_LIMIT', 5000);
+  private async enforceLimit(
+    sessionId: string,
+    limit = positiveIntFromEnv('BAILEYS_MESSAGE_STORE_LIMIT', 5000),
+  ): Promise<void> {
     const cutoff = await this.repo.find({
       where: { sessionId },
       order: { createdAt: 'DESC', id: 'DESC' },

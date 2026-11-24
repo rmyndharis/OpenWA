@@ -1,7 +1,7 @@
-import { useState, useCallback, type ReactNode } from 'react';
+import { useState, useCallback, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle, XCircle, AlertCircle, Info, X } from 'lucide-react';
-import { ToastContext, type Toast } from '../hooks/useToast';
+import { ToastActionsContext, ToastContext, type Toast } from '../hooks/useToast';
 import './Toast.css';
 
 // A toast id needs no cryptographic strength; crypto.randomUUID is undefined over plain HTTP on a LAN IP.
@@ -106,11 +106,19 @@ export function ToastProvider({ children }: ToastProviderProps) {
     [addToast],
   );
 
+  const actionsValue = useMemo(
+    () => ({ addToast, removeToast, success, error, warning, info }),
+    [addToast, removeToast, success, error, warning, info],
+  );
+  const value = useMemo(() => ({ toasts, ...actionsValue }), [toasts, actionsValue]);
+
   return (
-    <ToastContext.Provider value={{ toasts, addToast, removeToast, success, error, warning, info }}>
-      {children}
-      <ToastContainer toasts={toasts} removeToast={removeToast} />
-    </ToastContext.Provider>
+    <ToastActionsContext.Provider value={actionsValue}>
+      <ToastContext.Provider value={value}>
+        {children}
+        <ToastContainer toasts={toasts} removeToast={removeToast} />
+      </ToastContext.Provider>
+    </ToastActionsContext.Provider>
   );
 }
 

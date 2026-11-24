@@ -16,6 +16,8 @@ export const WS_RESTRICTED_NODE_KEY_PREFIX = 'openwa:ws:restricted-node:';
 export const WS_RESTRICTED_TTL_MS = 30_000;
 /** Heartbeat interval that renews a node's lease while it holds restricted sockets. */
 export const WS_RESTRICTED_HEARTBEAT_MS = 10_000;
+/** Short TTL cache for {@link WsRestrictedPresenceTracker.hasRestrictedNodes} between Redis checks. */
+export const WS_RESTRICTED_CACHE_TTL_MS = 2_000;
 
 /** Max stale node members pruned per atomic Lua EVAL call to stay well below Redis arg limits. */
 const PRUNE_CHUNK_SIZE = 500;
@@ -82,6 +84,7 @@ export interface WsRestrictedPresenceOptions {
   ownsClient?: boolean;
   ttlMs?: number;
   heartbeatMs?: number;
+  cacheTtlMs?: number;
   hasLocalRestricted?: () => boolean;
 }
 
@@ -104,6 +107,7 @@ export class WsRestrictedPresenceTracker {
   readonly nodeKey: string;
   private readonly ttlMs: number;
   private readonly heartbeatMs: number;
+  private readonly cacheTtlMs: number;
   private readonly ownsClient: boolean;
   private localCheck?: () => boolean;
   private desiredLocal = false;
@@ -116,6 +120,8 @@ export class WsRestrictedPresenceTracker {
   private syncLoop: Promise<void> | null = null;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private pendingCheck: Promise<boolean> | null = null;
+  private cachedCheck: { value: boolean; expiresAt: number } | null = null;
+  private checkEpoch = 0;
 
   constructor(
     private readonly client: RestrictedPresenceRedisClient | null,
@@ -124,6 +130,7 @@ export class WsRestrictedPresenceTracker {
     this.nodeKey = `${options.nodeId || 'node'}:${randomUUID().slice(0, 8)}`;
     this.ttlMs = options.ttlMs ?? WS_RESTRICTED_TTL_MS;
     this.heartbeatMs = options.heartbeatMs ?? WS_RESTRICTED_HEARTBEAT_MS;
+    this.cacheTtlMs = options.cacheTtlMs ?? WS_RESTRICTED_CACHE_TTL_MS;
     this.ownsClient = options.ownsClient ?? false;
     this.localCheck = options.hasLocalRestricted;
   }
@@ -175,6 +182,7 @@ export class WsRestrictedPresenceTracker {
   /** Re-synchronize local presence after the Redis client finishes connecting or reconnecting. */
   handleRedisReady(): void {
     if (this.destroyed) return;
+    this.invalidateCheckCache();
     if (this.localCheck) this.desiredLocal = this.localCheck();
     if (this.desiredLocal) {
       void this.scheduleSync(true);
@@ -186,8 +194,14 @@ export class WsRestrictedPresenceTracker {
   /** Update this node's Redis presence entry after a local restricted socket connects, subscribes, or disconnects. */
   syncLocal(hasLocalRestricted: boolean): Promise<void> {
     if (this.destroyed) return this.syncLoop ?? Promise.resolve();
+    this.invalidateCheckCache();
     this.desiredLocal = hasLocalRestricted;
     return this.scheduleSync(false);
+  }
+
+  private invalidateCheckCache(): void {
+    this.checkEpoch++;
+    this.cachedCheck = null;
   }
 
   /**
@@ -197,8 +211,13 @@ export class WsRestrictedPresenceTracker {
    */
   hasRestrictedNodes(): Promise<boolean> {
     if (!this.isReady()) return Promise.resolve(true);
+    const now = Date.now();
+    if (this.cacheTtlMs > 0 && this.cachedCheck && now < this.cachedCheck.expiresAt) {
+      return Promise.resolve(this.cachedCheck.value);
+    }
     if (this.pendingCheck) return this.pendingCheck;
-    const check = this.queryClusterRestrictedNodes().finally(() => {
+    const epoch = this.checkEpoch;
+    const check = this.queryClusterRestrictedNodes(epoch).finally(() => {
       if (this.pendingCheck === check) this.pendingCheck = null;
     });
     this.pendingCheck = check;
@@ -210,30 +229,31 @@ export class WsRestrictedPresenceTracker {
     this.destroyed = true;
     this.desiredLocal = false;
     this.renewRequested = false;
+    this.invalidateCheckCache();
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = undefined;
     }
-    let syncTimer: ReturnType<typeof setTimeout> | undefined;
-    const syncDeadline = new Promise<void>(resolve => {
-      syncTimer = setTimeout(resolve, WS_REDIS_QUIT_TIMEOUT_MS);
-      syncTimer.unref?.();
-    });
-    try {
-      await Promise.race([this.scheduleSync(false), syncDeadline]);
-    } finally {
-      if (syncTimer) clearTimeout(syncTimer);
-    }
+    const deadlineAt = Date.now() + WS_REDIS_QUIT_TIMEOUT_MS;
+    const raceDeadline = async (work: Promise<unknown>): Promise<void> => {
+      const remaining = deadlineAt - Date.now();
+      if (remaining <= 0) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<void>(resolve => {
+        timer = setTimeout(resolve, remaining);
+        timer.unref?.();
+      });
+      try {
+        await Promise.race([work, deadline]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    await raceDeadline(this.scheduleSync(false));
     if (!this.ownsClient || !this.client) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadline = new Promise<void>(resolve => {
-      timer = setTimeout(resolve, WS_REDIS_QUIT_TIMEOUT_MS);
-      timer.unref?.();
-    });
     try {
-      await Promise.race([this.client.quit?.().catch(() => undefined) ?? Promise.resolve(), deadline]);
+      await raceDeadline(this.client.quit?.().catch(() => undefined) ?? Promise.resolve());
     } finally {
-      if (timer) clearTimeout(timer);
       this.client.disconnect?.();
     }
   }
@@ -321,10 +341,15 @@ export class WsRestrictedPresenceTracker {
     }
   }
 
-  private async queryClusterRestrictedNodes(): Promise<boolean> {
+  private async queryClusterRestrictedNodes(epoch: number): Promise<boolean> {
     try {
       const members = await this.client!.smembers(WS_RESTRICTED_NODES_KEY);
-      if (!Array.isArray(members) || members.length === 0) return false;
+      if (!Array.isArray(members) || members.length === 0) {
+        if (this.cacheTtlMs > 0 && epoch === this.checkEpoch && !this.destroyed) {
+          this.cachedCheck = { value: false, expiresAt: Date.now() + this.cacheTtlMs };
+        }
+        return false;
+      }
       const leases = await this.client!.mget(...members.map(member => this.leaseKey(member)));
       const dead: string[] = [];
       let alive = false;
@@ -350,6 +375,9 @@ export class WsRestrictedPresenceTracker {
           );
           if (stillAlive === null || stillAlive > 0) alive = true;
         }
+      }
+      if (this.cacheTtlMs > 0 && epoch === this.checkEpoch && !this.destroyed) {
+        this.cachedCheck = { value: alive, expiresAt: Date.now() + this.cacheTtlMs };
       }
       return alive;
     } catch (err) {

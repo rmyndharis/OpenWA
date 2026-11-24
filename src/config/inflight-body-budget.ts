@@ -17,10 +17,10 @@
  * The bound is on WIRE bytes, and it holds as heap only while a body is stored as it arrives.
  * A compressed body would break that — admitted at its compressed length, then inflated by the
  * parser into memory nothing accounted for — so a non-identity Content-Encoding is refused with
- * 415 outright rather than priced. The remaining looseness in the wire-byte ACCOUNTING is
- * deliberate and bounded: a chunked identity body reserves a placeholder and is reconciled against
- * socket.bytesRead on the poll interval, so it can briefly under-report by the bytes that arrive
- * within one interval. Separately, and by design, an admitted identity body still costs a constant
+ * 415 outright rather than priced. A chunked identity body reserves a placeholder and is reconciled
+ * incrementally against socket.bytesRead on socket 'data' events as well as on the poll interval,
+ * without ever attaching a 'data' listener to the request stream itself. Separately, and by design,
+ * an admitted identity body still costs a constant
  * multiple of its wire size once parsed (the raw Buffer pinned on rawBody, plus the decoded string
  * and the parsed object) — the budget bounds the input, not the parse. Nor does it follow the body
  * into its handler: the request stream closes as soon as the whole body has been read, which releases
@@ -382,11 +382,19 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
     clientInFlight.set(clientKey, clientBusy + reserved);
 
     let released = false;
+    let settled = false;
     let stallTimer: ReturnType<typeof setInterval> | undefined;
+    let socketDataAttached = false;
+    const socket = req.socket;
     const disarmStallReaper = (): void => {
       if (stallTimer === undefined) return;
       clearInterval(stallTimer);
       stallTimer = undefined;
+    };
+    const detachSocketData = (): void => {
+      if (!socketDataAttached) return;
+      socketDataAttached = false;
+      if (typeof socket.off === 'function') socket.off('data', onSocketData);
     };
 
     // Exactly-once release: the first terminal event wins: the body has been read (req 'close', which
@@ -397,6 +405,7 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
       if (released) return;
       released = true;
       disarmStallReaper();
+      detachSocketData();
       inFlightBytes -= reserved;
       if (anonymous) anonInFlight -= reserved;
       const busy = (clientInFlight.get(clientKey) ?? reserved) - reserved;
@@ -410,11 +419,10 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
     req.on('error', release);
 
     // Stall reaper (see STALL_TIMEOUT_MS above). Progress is measured on the SOCKET byte counter,
-    // never on the request stream: attaching a 'data' listener would switch the stream to flowing
-    // mode and eat chunks before a late consumer (the async guards run before busboy/body-parser
-    // attach) ever sees them. 'end' is safe to observe (it does not start the flow) and disarms
-    // the reaper once the real consumer finished reading.
-    const socket = req.socket;
+    // never on the request stream: attaching a 'data' listener to req would switch the stream to
+    // flowing mode and eat chunks before a late consumer (the async guards run before
+    // busboy/body-parser attach) ever sees them. Observing socket 'data' reconciles chunked byte
+    // growth incrementally without touching req's stream state; 'end' disarms both once finished.
     const startBytes = socket.bytesRead;
     let lastBytes = startBytes;
     const admittedAt = Date.now();
@@ -451,9 +459,20 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
       }
     };
     const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      detachSocketData();
       reconcile(true);
       disarmStallReaper();
     };
+    function onSocketData(): void {
+      reconcile(false);
+      if (!released && req.complete) settle();
+    }
+    if (declared === undefined && typeof socket.on === 'function' && !req.complete) {
+      socketDataAttached = true;
+      socket.on('data', onSocketData);
+    }
 
     stallTimer = setInterval(() => {
       // The whole message is in (Node parsed it to the end), so there is nothing left to stall on,

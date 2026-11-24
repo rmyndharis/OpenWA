@@ -120,7 +120,7 @@ export class TemplateService {
 
   async delete(sessionId: string, id: string): Promise<void> {
     const template = await this.findOne(sessionId, id);
-    await this.templateRepository.remove(template);
+    await this.templateRepository.remove(template, { transaction: false });
     this.logger.log('Template deleted', { sessionId, templateId: id });
   }
 }

@@ -598,5 +598,38 @@ describe('RedisIoAdapter', () => {
         closeSpy.mockRestore();
       }
     });
+
+    it('makes pub/sub client teardown idempotent when close(server) runs twice (root and /events)', async () => {
+      process.env.REDIS_ENABLED = 'true';
+      const { server } = fakeServer();
+      const createSpy = withBaseServer(server);
+      const closeSpy = jest.spyOn(IoAdapter.prototype, 'close').mockResolvedValue(undefined);
+      try {
+        const adapter = new RedisIoAdapter({} as never);
+        adapter.createIOServer(2785);
+        const [pub, sub] = redisInstances;
+        let resolveQuit!: () => void;
+        pub.quit.mockImplementation(
+          () =>
+            new Promise<string>(res => {
+              resolveQuit = () => res('OK');
+            }),
+        );
+
+        const firstClose = adapter.close(server);
+        const secondClose = adapter.close(server);
+        await new Promise(resolve => setImmediate(resolve));
+        resolveQuit();
+        await Promise.all([firstClose, secondClose]);
+
+        expect(pub.quit).toHaveBeenCalledTimes(1);
+        expect(sub.quit).toHaveBeenCalledTimes(1);
+        expect(pub.disconnect).toHaveBeenCalledTimes(1);
+        expect(sub.disconnect).toHaveBeenCalledTimes(1);
+      } finally {
+        createSpy.mockRestore();
+        closeSpy.mockRestore();
+      }
+    });
   });
 });

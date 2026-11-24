@@ -616,7 +616,7 @@ export class BaileysMessaging {
           }
         : {}),
     });
-    const sent = await this.send(jid, content, options, socket);
+    const sent = await this.send(jid, content, options, socket, true);
     if (sent) {
       void this.host.putStoredMessage(sent)?.catch(err =>
         this.host.logger.warn('Failed to persist sent message to store', {
@@ -727,6 +727,12 @@ export class BaileysMessaging {
         new BadRequestException(`Product ${product.id} has no image — a product card requires one`),
       );
     }
+    if (!/^https?:\/\//i.test(product.imageUrl)) {
+      throw markNothingSent(new BadRequestException(`Product ${product.id} imageUrl must be an http(s) URL`));
+    }
+    // Pre-fetch via loadRemoteMediaBuffer so session proxy, SSRF guard, timeout, and size cap apply
+    // consistently (including on @newsletter recipients) instead of passing a raw URL to Baileys.
+    const { data: productImage } = await loadRemoteMediaBuffer(product.imageUrl, this.host.sessionProxyUrl());
     const content: AnyMessageContent = {
       product: {
         productId: product.id,
@@ -736,7 +742,7 @@ export class BaileysMessaging {
         priceAmount1000: product.price === undefined ? undefined : Math.round(product.price * 1000),
         retailerId: product.retailerId,
         url: product.url || undefined,
-        productImage: { url: product.imageUrl },
+        productImage,
       },
       businessOwnerJid: this.host.toEngineJid(this.host.normalizedSelfJid()),
       body,
@@ -1216,7 +1222,7 @@ export class BaileysMessaging {
       typeof content === 'function' ? async () => this.previewSafe(await content()) : this.previewSafe(content);
     const ephemeral = this.withEphemeral(jid, options);
     const merged = typeof safe === 'function' ? ephemeral : this.previewSafeOptions(safe, ephemeral);
-    const sent = await this.send(jid, safe, merged, expected);
+    const sent = await this.send(jid, safe, merged, expected, true);
     if (sent) {
       void this.host.putStoredMessage(sent)?.catch(err =>
         this.host.logger.warn('Failed to persist sent message to store', {
@@ -1271,6 +1277,7 @@ export class BaileysMessaging {
     content: Parameters<WASocket['sendMessage']>[1] | (() => Promise<Parameters<WASocket['sendMessage']>[1]>),
     options?: Parameters<WASocket['sendMessage']>[2],
     expected?: WASocket,
+    applyEphemeral = false,
   ): Promise<WAMessage | undefined> {
     const sock = this.sock(expected);
     const recipient = parseWaId(jid);
@@ -1299,7 +1306,10 @@ export class BaileysMessaging {
       }
       const canonical = this.host.toEngineJid(numberId);
       resolvedCacheKey = userPart(canonical);
-      if (canonical !== jid) jid = await this.toDeliverableJid(numberId, sock);
+      if (canonical !== jid) {
+        jid = await this.toDeliverableJid(numberId, sock);
+        if (applyEphemeral) options = this.withEphemeral(jid, options);
+      }
     }
     const message = typeof content === 'function' ? await content() : content;
     this.sock(sock);

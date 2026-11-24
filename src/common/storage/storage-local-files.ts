@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Readable } from 'stream';
+import { pipeline as pipelinePromise } from 'stream/promises';
 import type { LoggerService } from '../services/logger.service';
 import { isPathWithin } from '../utils/path-safety';
 
@@ -289,7 +290,7 @@ export async function openLocalFile(localPath: string, filePath: string): Promis
   }
 }
 
-export async function putLocalFile(localPath: string, filePath: string, data: Buffer): Promise<void> {
+async function resolveLocalWriteTarget(localPath: string, filePath: string): Promise<string> {
   if (!isPathWithin(localPath, filePath)) {
     throw new Error(`Refusing to write outside storage root: ${filePath}`);
   }
@@ -343,7 +344,11 @@ export async function putLocalFile(localPath: string, filePath: string, data: Bu
     throw new Error(`Refusing to write outside storage root: ${filePath}`);
   }
 
-  const targetPath = path.join(realParent, path.basename(fullPath));
+  return path.join(realParent, path.basename(fullPath));
+}
+
+export async function putLocalFile(localPath: string, filePath: string, data: Buffer): Promise<void> {
+  const targetPath = await resolveLocalWriteTarget(localPath, filePath);
   if (O_NOFOLLOW !== 0) {
     try {
       await fs.promises.writeFile(targetPath, data, { mode: 0o600, flag: NOFOLLOW_WRITE_FLAGS });
@@ -367,6 +372,45 @@ export async function putLocalFile(localPath: string, filePath: string, data: Bu
     throw new Error(`Refusing to write through symbolic link: ${filePath}`);
   }
   await fs.promises.writeFile(targetPath, data, { mode: 0o600 });
+}
+
+export async function putLocalStream(localPath: string, filePath: string, stream: Readable): Promise<void> {
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    const targetPath = await resolveLocalWriteTarget(localPath, filePath);
+    if (O_NOFOLLOW !== 0) {
+      try {
+        handle = await fs.promises.open(targetPath, NOFOLLOW_WRITE_FLAGS, 0o600);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | null | undefined)?.code;
+        if (code === 'ELOOP' || code === 'EMLINK') {
+          throw new Error(`Refusing to write through symbolic link: ${filePath}`, { cause: error });
+        }
+        throw error;
+      }
+    } else {
+      let targetStat: fs.Stats | null = null;
+      try {
+        targetStat = await fs.promises.lstat(targetPath);
+      } catch (error) {
+        if (!isEnoent(error)) throw error;
+      }
+      if (targetStat?.isSymbolicLink()) {
+        throw new Error(`Refusing to write through symbolic link: ${filePath}`);
+      }
+      handle = await fs.promises.open(
+        targetPath,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC,
+        0o600,
+      );
+    }
+    await pipelinePromise(stream, handle.createWriteStream());
+  } catch (error) {
+    stream.destroy();
+    throw error;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 export async function deleteLocalFile(localPath: string, filePath: string): Promise<void> {

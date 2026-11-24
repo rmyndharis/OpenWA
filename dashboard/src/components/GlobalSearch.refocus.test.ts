@@ -77,7 +77,7 @@ test('focus that returns to the input before the results close keeps them open',
   document.body.appendChild(outside);
   try {
     rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-    const input = screen.getByRole('textbox');
+    const input = screen.getByRole('combobox');
     input.focus();
     await typeAndWaitForRequest(input, 'refund');
     await act(async () => pending.get('refund')!(['refund issued']));

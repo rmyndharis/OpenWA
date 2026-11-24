@@ -3469,4 +3469,71 @@ fi
 pass "(ba) WAL online backup preserves -wal transactions and missing sqlite3 refuses non-empty -wal"
 
 echo ""
+echo "==> (bb) snapshot dir containment, preflight before data-dir snapshot, and sub-second collision naming"
+BB="$WORK/bb"
+mkdir -p "$BB/src/data" "$BB/out" "$BB/dst/data/sessions" "$BB/dst/ext-sessions"
+printf 'bb-key\n' >"$BB/src/data/.api-key"
+make_fixture "$BB/src/data/main.sqlite" "bb-main"
+make_fixture "$BB/src/data/openwa.sqlite" "bb-data"
+(
+  cd "$BB/src"
+  mkdir -p data/sessions/s1
+  printf 's1\n' >data/sessions/s1/marker
+  BACKUP_DIR="$BB/out" "$BACKUP" >/dev/null
+)
+ARCHIVE_BB="$(ls "$BB"/out/openwa-backup-*.tar.gz)"
+printf 'existing\n' >"$BB/dst/data/.api-key"
+
+# 1. OPENWA_RESTORE_SNAPSHOT_DIR inside $DATA_DIR or inside a replace_tree target must fail fast before copying.
+for bad_snap in "$BB/dst/data" "$BB/dst/data/snaps" "$BB/dst/data/sessions/snaps" "$BB/dst/ext-sessions/snaps"; do
+  set +e
+  OUT_BB="$(cd "$BB/dst" && OPENWA_DATA_DIR="$BB/dst/data" SESSION_DATA_PATH="$BB/dst/ext-sessions" OPENWA_RESTORE_SNAPSHOT_DIR="$bad_snap" "$RESTORE" "$ARCHIVE_BB" --force 2>&1)"
+  RC_BB=$?
+  set -e
+  if [ "$RC_BB" -eq 0 ]; then
+    fail "(bb) restore accepted unsafe OPENWA_RESTORE_SNAPSHOT_DIR: $bad_snap"
+  fi
+  if [ -n "$(find "$BB/dst" -name '*.pre-restore-*' -print -quit)" ]; then
+    fail "(bb) unsafe OPENWA_RESTORE_SNAPSHOT_DIR left pre-restore snapshots behind: $OUT_BB"
+  fi
+done
+
+# 2. Failed PHASE=snapshot preflight validation must NOT snapshot $DATA_DIR beforehand.
+if [ "$(id -u)" -ne 0 ]; then
+  mkdir -p "$BB/dst/ro-target"
+  chmod 0555 "$BB/dst/ro-target"
+  set +e
+  OUT_BB_RO="$(cd "$BB/dst" && OPENWA_DATA_DIR="$BB/dst/data" SESSION_DATA_PATH="$BB/dst/ro-target/sessions" "$RESTORE" "$ARCHIVE_BB" --force 2>&1)"
+  RC_BB_RO=$?
+  set -e
+  chmod 0755 "$BB/dst/ro-target"
+  if [ "$RC_BB_RO" -eq 0 ]; then
+    fail "(bb) expected unwritable target failure"
+  fi
+  if [ -n "$(find "$BB/dst" -name '*.pre-restore-*' -print -quit)" ]; then
+    fail "(bb) failed target preflight created a data-dir snapshot unnecessarily: $OUT_BB_RO"
+  fi
+fi
+
+# 3. Same-second collision creates distinct -2/-3 snapshots rather than nesting inside the first snapshot.
+mkdir -p "$BB/dst/snaps"
+BB_TS="$(date +%Y%m%d-%H%M%S)"
+# Pre-populate the current second and next second so even a 1s clock tick across second boundary triggers collision.
+for offset in 0 1 2; do
+  TS_CANDIDATE="$(node -e "const d = new Date(Date.now() + $offset * 1000); const p = n => String(n).padStart(2,'0'); console.log(d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()));")"
+  mkdir -p "$BB/dst/snaps/data.pre-restore-$TS_CANDIDATE"
+done
+(
+  cd "$BB/dst"
+  OPENWA_DATA_DIR="$BB/dst/data" OPENWA_RESTORE_SNAPSHOT_DIR="$BB/dst/snaps" "$RESTORE" "$ARCHIVE_BB" --force >/dev/null
+)
+if [ -z "$(ls -d "$BB/dst/snaps"/data.pre-restore-*-2 2>/dev/null || true)" ]; then
+  fail "(bb) same-second restore did not create -2 snapshot directory: $(ls -A "$BB/dst/snaps")"
+fi
+if [ -d "$BB/dst/snaps/data.pre-restore-$BB_TS/data" ]; then
+  fail "(bb) same-second restore nested data inside existing snapshot directory"
+fi
+pass "(bb) snapshot dir containment, preflight order, and -2/-3 collision naming verified"
+
+echo ""
 echo "All smoke tests passed!"

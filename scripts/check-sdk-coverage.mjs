@@ -32,7 +32,7 @@
  * Run locally: `npm run check:sdk-coverage`.
  */
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isUnexposedPath, unexposedResources } from './check-contract-shapes.mjs';
 
@@ -61,7 +61,7 @@ const walk = (dir, exts, out = []) => {
     }
   }
   return out;
-};
+}
 
 /** Comments describe routes in prose and in `:id` notation, which is not the contract's `{id}`. */
 const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*(\/\/|#).*$/gm, '');
@@ -343,6 +343,1057 @@ export function undeclaredVerbPairs(sdkName, pairs, specByPath) {
   return out;
 }
 
+/** Stale routes built by Go or Java clients that no longer exist in the OpenAPI contract. */
+export function staleRouteErrors(sdkName, dir, specByPath, contractShapes) {
+  const out = [];
+  const quoteOpts = { allowBacktick: sdkName === 'go', allowSingleQuote: true };
+  const hasContractOrPrefix = (shape) => {
+    if (contractShapes.has(shape)) return true;
+    const prefix = `${shape}/`;
+    for (const c of contractShapes) {
+      if (c.startsWith(prefix)) return true;
+    }
+    return false;
+  };
+  const isCheckedRouteFamily = (path) => isRouteNameFamily(path) && Boolean(FAMILY_CALLS[path]?.[sdkName]);
+
+  const skipStringLiteral = (src, i, opts = quoteOpts) => {
+    const q = src[i];
+    if (q !== '"' && !(opts.allowBacktick && q === '`') && !(opts.allowSingleQuote && q === "'")) return i;
+    for (let j = i + 1; j < src.length; j++) {
+      if (q !== '`' && src[j] === '\\') {
+        j++;
+        continue;
+      }
+      if (src[j] === q) return j;
+    }
+    return src.length - 1;
+  };
+
+  const stripInlineComments = (src, opts = quoteOpts) => {
+    let cleaned = '';
+    let last = 0;
+    for (let i = 0; i < src.length; i++) {
+      const endStr = skipStringLiteral(src, i, opts);
+      if (endStr !== i) {
+        i = endStr;
+        continue;
+      }
+      if (src[i] === '/' && src[i + 1] === '/') {
+        cleaned += src.slice(last, i);
+        const nl = src.indexOf('\n', i + 2);
+        if (nl === -1) {
+          last = src.length;
+          break;
+        }
+        last = nl;
+        i = nl - 1;
+      }
+    }
+    return cleaned + src.slice(last);
+  };
+
+  const findMatching = (src, openIdx, openCh, closeCh, limit = src.length, opts = quoteOpts) => {
+    let depth = 1;
+    for (let i = openIdx + 1; i < limit; i++) {
+      const endStr = skipStringLiteral(src, i, opts);
+      if (endStr !== i) {
+        i = endStr;
+        continue;
+      }
+      if (src[i] === openCh) depth++;
+      else if (src[i] === closeCh && --depth === 0) return i;
+    }
+    return -1;
+  };
+
+  const readCommaArg = (src, from) => {
+    let pDepth = 0;
+    let bDepth = 0;
+    let cDepth = 0;
+    let i = from;
+    for (; i < src.length; i++) {
+      const endStr = skipStringLiteral(src, i);
+      if (endStr !== i) {
+        i = endStr;
+        continue;
+      }
+      const ch = src[i];
+      if (ch === '(') pDepth++;
+      else if (ch === ')') {
+        if (pDepth === 0) break;
+        pDepth--;
+      } else if (ch === '[') bDepth++;
+      else if (ch === ']') bDepth = Math.max(0, bDepth - 1);
+      else if (ch === '{') cDepth++;
+      else if (ch === '}') {
+        if (cDepth === 0 && pDepth === 0) break;
+        cDepth = Math.max(0, cDepth - 1);
+      } else if (ch === ',' && pDepth === 0 && bDepth === 0 && cDepth === 0) break;
+    }
+    return src.slice(from, i).trim();
+  };
+
+  const splitConcatTerms = (rawExpr) => {
+    const terms = [];
+    let start = 0;
+    let depth = 0;
+    for (let i = 0; i < rawExpr.length; i++) {
+      const endStr = skipStringLiteral(rawExpr, i);
+      if (endStr !== i) {
+        i = endStr;
+        continue;
+      }
+      const ch = rawExpr[i];
+      if (ch === '(' || ch === '{' || ch === '[') depth++;
+      else if (ch === ')' || ch === '}' || ch === ']') depth--;
+      else if (ch === '+' && depth === 0) {
+        terms.push(rawExpr.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    terms.push(rawExpr.slice(start).trim());
+    return terms.filter(Boolean);
+  };
+
+  const stripOuterParens = (term) => {
+    let s = term.trim();
+    while (s.startsWith('(') && s.endsWith(')')) {
+      if (findMatching(s, 0, '(', ')') !== s.length - 1) break;
+      s = s.slice(1, -1).trim();
+    }
+    return s;
+  };
+
+  const parseQuotedLiteral = (term) => {
+    if (term.length < 2) return null;
+    const q = term[0];
+    if ((q !== '"' && q !== '`') || skipStringLiteral(term, 0) !== term.length - 1) return null;
+    return term.slice(1, -1);
+  };
+
+  const MAX_BRANCHES = 64;
+  const dedupBranches = (list) => {
+    const byKey = new Map();
+    for (const b of list) {
+      byKey.set(`${b.usesHelperParam}:${b.expr}`, b);
+      if (byKey.size >= MAX_BRANCHES) break;
+    }
+    return [...byKey.values()];
+  };
+
+  const resolveExprBranches = (rawExpr, locals, { bases = null, helperParamNames = null } = {}) => {
+    let acc = [{ expr: '', usesHelperParam: false }];
+    for (const rawTerm of splitConcatTerms(rawExpr)) {
+      const term = stripOuterParens(rawTerm);
+      let options;
+      const lit = parseQuotedLiteral(term);
+      const baseCall = bases && /^(?:[A-Za-z_]\w*\.)?(\w+)\(/.exec(term);
+      if (lit !== null) {
+        options = [{ expr: lit, usesHelperParam: false }];
+      } else if (/^[A-Za-z_]\w*$/.test(term) && locals.has(term)) {
+        options = locals.get(term);
+      } else if (baseCall && bases.has(baseCall[1])) {
+        options = [{ expr: bases.get(baseCall[1]), usesHelperParam: false }];
+      } else if (/^[A-Za-z_]\w*$/.test(term) && helperParamNames?.has(term)) {
+        options = [{ expr: '*', usesHelperParam: true }];
+      } else {
+        options = [{ expr: '*', usesHelperParam: false }];
+      }
+      const nextAcc = [];
+      for (const left of acc) {
+        for (const right of options) {
+          nextAcc.push({
+            expr: left.expr + right.expr,
+            usesHelperParam: left.usesHelperParam || right.usesHelperParam,
+          });
+          if (nextAcc.length >= MAX_BRANCHES) break;
+        }
+        if (nextAcc.length >= MAX_BRANCHES) break;
+      }
+      acc = dedupBranches(nextAcc);
+    }
+    return acc;
+  };
+
+  const cloneState = (state, freshScope = false) => ({
+    locals: new Map([...state.locals].map(([k, v]) => [k, [...v]])),
+    declaredHere: freshScope ? new Set() : new Set(state.declaredHere),
+    terminated: state.terminated,
+  });
+
+  const applyAssignment = (state, name, op, rhs, isDecl, opts) => {
+    const trimmed = rhs.trim();
+    if (op === '+=') {
+      if (!trimmed || trimmed === '""' || trimmed === '``' || trimmed === 'null') return;
+      const prior = state.locals.get(name) ?? [{ expr: '*', usesHelperParam: false }];
+      const rightList = resolveExprBranches(trimmed, state.locals, opts);
+      const combined = [];
+      for (const left of prior) {
+        for (const right of rightList) {
+          combined.push({
+            expr: left.expr + right.expr,
+            usesHelperParam: left.usesHelperParam || right.usesHelperParam,
+          });
+          if (combined.length >= MAX_BRANCHES) break;
+        }
+        if (combined.length >= MAX_BRANCHES) break;
+      }
+      state.locals.set(name, dedupBranches(combined));
+      return;
+    }
+    if (isDecl) state.declaredHere.add(name);
+    if (!trimmed || trimmed === 'null') {
+      state.locals.delete(name);
+      return;
+    }
+    if (trimmed === '""' || trimmed === '``') {
+      state.locals.set(name, [{ expr: '', usesHelperParam: false }]);
+      return;
+    }
+    state.locals.set(name, dedupBranches(resolveExprBranches(trimmed, state.locals, opts)));
+  };
+
+  const mergeBranchStates = (branches, fallbackState, declaredToRestore = null) => {
+    const live = branches.filter((b) => !b.terminated);
+    const terminated = live.length === 0;
+    const pool = terminated ? branches : live;
+    const mergedLocals = new Map();
+    const keys = new Set();
+    for (const b of pool) {
+      for (const k of b.locals.keys()) keys.add(k);
+    }
+    for (const k of keys) {
+      if (declaredToRestore?.has(k)) {
+        if (fallbackState.locals.has(k)) mergedLocals.set(k, [...fallbackState.locals.get(k)]);
+        continue;
+      }
+      const combined = [];
+      for (const b of pool) {
+        const vals = b.locals.get(k);
+        if (vals) combined.push(...vals);
+      }
+      mergedLocals.set(k, dedupBranches(combined));
+    }
+    return {
+      locals: mergedLocals,
+      declaredHere: new Set(fallbackState.declaredHere),
+      terminated,
+    };
+  };
+
+  const splitTopLevelSemi = (text) => {
+    const parts = [];
+    let start = 0;
+    let pDepth = 0;
+    let bDepth = 0;
+    let cDepth = 0;
+    for (let k = 0; k < text.length; k++) {
+      const endStr = skipStringLiteral(text, k);
+      if (endStr !== k) {
+        k = endStr;
+        continue;
+      }
+      const ch = text[k];
+      if (ch === '(') pDepth++;
+      else if (ch === ')') pDepth = Math.max(0, pDepth - 1);
+      else if (ch === '[') bDepth++;
+      else if (ch === ']') bDepth = Math.max(0, bDepth - 1);
+      else if (ch === '{') cDepth++;
+      else if (ch === '}') cDepth = Math.max(0, cDepth - 1);
+      else if (ch === ';' && pDepth === 0 && bDepth === 0 && cDepth === 0) {
+        parts.push(text.slice(start, k).trim());
+        start = k + 1;
+      }
+    }
+    parts.push(text.slice(start).trim());
+    return parts;
+  };
+
+  const parseStmtList = (src, from, to, singleStmt = false) => {
+    const nodes = [];
+    let i = from;
+
+    const skipWs = (includeSemi) => {
+      while (i < to && (/\s/.test(src[i]) || (includeSemi && src[i] === ';'))) i++;
+    };
+
+    const matchKw = (kw) => {
+      if (!src.startsWith(kw, i)) return false;
+      const prev = src[i - 1] ?? '';
+      const next = src[i + kw.length] ?? '';
+      return !/[A-Za-z0-9_]/.test(prev) && !/[A-Za-z0-9_]/.test(next);
+    };
+
+    const readToOpenBrace = () => {
+      let pDepth = 0;
+      let bDepth = 0;
+      for (let j = i; j < to; j++) {
+        const endStr = skipStringLiteral(src, j);
+        if (endStr !== j) {
+          j = endStr;
+          continue;
+        }
+        const ch = src[j];
+        if (ch === '(') pDepth++;
+        else if (ch === ')') pDepth = Math.max(0, pDepth - 1);
+        else if (ch === '[') bDepth++;
+        else if (ch === ']') bDepth = Math.max(0, bDepth - 1);
+        else if (ch === '{' && pDepth === 0 && bDepth === 0) return j;
+      }
+      return -1;
+    };
+
+    const parseBraceBlock = (openIdx) => {
+      const closeIdx = findMatching(src, openIdx, '{', '}', to);
+      const end = closeIdx === -1 ? to : closeIdx;
+      const inner = parseStmtList(src, openIdx + 1, end, false);
+      i = closeIdx === -1 ? to : closeIdx + 1;
+      return { kind: 'block', body: inner.nodes };
+    };
+
+    const parseSwitchBody = (openIdx) => {
+      const closeIdx = findMatching(src, openIdx, '{', '}', to);
+      const end = closeIdx === -1 ? to : closeIdx;
+      const bodyStart = openIdx + 1;
+      const labels = [];
+      let pDepth = 0;
+      let bDepth = 0;
+      let cDepth = 0;
+      for (let k = bodyStart; k < end; k++) {
+        const endStr = skipStringLiteral(src, k);
+        if (endStr !== k) {
+          k = endStr;
+          continue;
+        }
+        const ch = src[k];
+        if (ch === '(') pDepth++;
+        else if (ch === ')') pDepth = Math.max(0, pDepth - 1);
+        else if (ch === '[') bDepth++;
+        else if (ch === ']') bDepth = Math.max(0, bDepth - 1);
+        else if (ch === '{') cDepth++;
+        else if (ch === '}') cDepth = Math.max(0, cDepth - 1);
+        else if (pDepth === 0 && bDepth === 0 && cDepth === 0) {
+          const prev = src[k - 1] ?? '';
+          const isCase = src.startsWith('case', k) && !/[A-Za-z0-9_]/.test(prev) && !/[A-Za-z0-9_]/.test(src[k + 4] ?? '');
+          const isDefault =
+            src.startsWith('default', k) && !/[A-Za-z0-9_]/.test(prev) && !/[A-Za-z0-9_]/.test(src[k + 7] ?? '');
+          if (isCase || isDefault) {
+            let m = k + (isCase ? 4 : 7);
+            let lp = 0;
+            while (m < end) {
+              const eStr = skipStringLiteral(src, m);
+              if (eStr !== m) {
+                m = eStr;
+                continue;
+              }
+              if (src[m] === '(') lp++;
+              else if (src[m] === ')') lp = Math.max(0, lp - 1);
+              else if (lp === 0 && src[m] === ':') {
+                labels.push({ labelStart: k, stmtStart: m + 1, isDefault });
+                k = m;
+                break;
+              } else if (lp === 0 && src.startsWith('->', m)) {
+                labels.push({ labelStart: k, stmtStart: m + 2, isDefault });
+                k = m + 1;
+                break;
+              }
+              m++;
+            }
+          }
+        }
+      }
+      const clauses = [];
+      let hasDefault = false;
+      for (let idx = 0; idx < labels.length; idx++) {
+        if (labels[idx].isDefault) hasDefault = true;
+        const cEnd = idx + 1 < labels.length ? labels[idx + 1].labelStart : end;
+        clauses.push({ kind: 'block', body: parseStmtList(src, labels[idx].stmtStart, cEnd, false).nodes });
+      }
+      i = closeIdx === -1 ? to : closeIdx + 1;
+      return { clauses, hasDefault };
+    };
+
+    const parseIf = () => {
+      i += 2;
+      skipWs(false);
+      let initText = null;
+      let condText = '';
+      let thenNode = null;
+      let elseNode = null;
+      if (sdkName === 'java' && src[i] === '(') {
+        const cEnd = findMatching(src, i, '(', ')', to);
+        if (cEnd !== -1) {
+          condText = src.slice(i + 1, cEnd).trim();
+          i = cEnd + 1;
+        }
+        skipWs(false);
+        if (src[i] === '{') {
+          thenNode = parseBraceBlock(i);
+        } else {
+          const sub = parseStmtList(src, i, to, true);
+          thenNode = sub.nodes[0] ?? null;
+          i = sub.nextIdx;
+        }
+      } else {
+        const openIdx = readToOpenBrace();
+        if (openIdx === -1) return { kind: 'stmt', text: src.slice(i, to).trim() };
+        const hdr = src.slice(i, openIdx).trim();
+        const parts = splitTopLevelSemi(hdr);
+        if (parts.length >= 2) {
+          initText = parts[0];
+          condText = parts.slice(1).join('; ');
+        } else {
+          condText = hdr;
+        }
+        thenNode = parseBraceBlock(openIdx);
+      }
+      skipWs(false);
+      if (matchKw('else')) {
+        i += 4;
+        skipWs(false);
+        if (matchKw('if')) {
+          const sub = parseStmtList(src, i, to, true);
+          elseNode = sub.nodes[0] ?? null;
+          i = sub.nextIdx;
+        } else if (src[i] === '{') {
+          elseNode = parseBraceBlock(i);
+        } else {
+          const sub = parseStmtList(src, i, to, true);
+          elseNode = sub.nodes[0] ?? null;
+          i = sub.nextIdx;
+        }
+      }
+      return { kind: 'if', initText, condText, thenNode, elseNode };
+    };
+
+    const parseLoop = (kwLen) => {
+      i += kwLen;
+      skipWs(false);
+      let initText = null;
+      let condText = '';
+      let postText = null;
+      let bodyNode = null;
+      if (sdkName === 'java' && src[i] === '(') {
+        const cEnd = findMatching(src, i, '(', ')', to);
+        const hdr = cEnd === -1 ? '' : src.slice(i + 1, cEnd).trim();
+        i = cEnd === -1 ? i + 1 : cEnd + 1;
+        const parts = kwLen === 3 ? splitTopLevelSemi(hdr) : [hdr];
+        if (kwLen === 3 && parts.length === 3) {
+          [initText, condText, postText] = parts;
+        } else {
+          condText = hdr;
+        }
+        skipWs(false);
+        if (src[i] === '{') {
+          bodyNode = parseBraceBlock(i);
+        } else {
+          const sub = parseStmtList(src, i, to, true);
+          bodyNode = sub.nodes[0] ?? null;
+          i = sub.nextIdx;
+        }
+      } else {
+        const openIdx = readToOpenBrace();
+        if (openIdx === -1) return { kind: 'stmt', text: src.slice(i, to).trim() };
+        const hdr = src.slice(i, openIdx).trim();
+        const parts = splitTopLevelSemi(hdr);
+        if (parts.length === 3) {
+          [initText, condText, postText] = parts;
+        } else {
+          condText = hdr;
+        }
+        bodyNode = parseBraceBlock(openIdx);
+      }
+      return { kind: 'for', initText, condText, postText, bodyNode };
+    };
+
+    const readSimpleStmt = () => {
+      const start = i;
+      let pDepth = 0;
+      let bDepth = 0;
+      let cDepth = 0;
+      let lastNonWs = '';
+      let prevNonWs = '';
+      for (; i < to; i++) {
+        const endStr = skipStringLiteral(src, i);
+        if (endStr !== i) {
+          i = endStr;
+          prevNonWs = lastNonWs;
+          lastNonWs = src[i];
+          continue;
+        }
+        const ch = src[i];
+        if (ch === '(') pDepth++;
+        else if (ch === ')') pDepth = Math.max(0, pDepth - 1);
+        else if (ch === '[') bDepth++;
+        else if (ch === ']') bDepth = Math.max(0, bDepth - 1);
+        else if (ch === '{') cDepth++;
+        else if (ch === '}') {
+          if (pDepth === 0 && bDepth === 0 && cDepth === 0) {
+            const text = src.slice(start, i).trim();
+            return text ? { kind: 'stmt', text } : null;
+          }
+          cDepth = Math.max(0, cDepth - 1);
+        } else if (ch === ';' && pDepth === 0 && bDepth === 0 && cDepth === 0) {
+          const text = src.slice(start, i).trim();
+          i++;
+          return text ? { kind: 'stmt', text } : null;
+        } else if (sdkName === 'go' && ch === '\n' && pDepth === 0 && bDepth === 0 && cDepth === 0) {
+          const isIncrement = lastNonWs === '+' && prevNonWs === '+';
+          const isCont = !isIncrement && (lastNonWs === '+' || lastNonWs === ',' || lastNonWs === '.' || lastNonWs === '=');
+          if (!isCont) {
+            const text = src.slice(start, i).trim();
+            i++;
+            return text ? { kind: 'stmt', text } : null;
+          }
+        }
+        if (!/\s/.test(ch)) {
+          prevNonWs = lastNonWs;
+          lastNonWs = ch;
+        }
+      }
+      const text = src.slice(start, to).trim();
+      return text ? { kind: 'stmt', text } : null;
+    };
+
+    while (i < to) {
+      skipWs(true);
+      if (i >= to) break;
+      if (src[i] === '{') {
+        nodes.push(parseBraceBlock(i));
+      } else if (matchKw('if')) {
+        nodes.push(parseIf());
+      } else if (matchKw('for')) {
+        nodes.push(parseLoop(3));
+      } else if (sdkName === 'java' && matchKw('while')) {
+        nodes.push(parseLoop(5));
+      } else if (sdkName === 'java' && matchKw('do')) {
+        i += 2;
+        skipWs(false);
+        const bodyNode = src[i] === '{' ? parseBraceBlock(i) : parseStmtList(src, i, to, true).nodes[0];
+        skipWs(false);
+        let condText = '';
+        if (matchKw('while')) {
+          i += 5;
+          skipWs(false);
+          if (src[i] === '(') {
+            const cEnd = findMatching(src, i, '(', ')', to);
+            if (cEnd !== -1) {
+              condText = src.slice(i + 1, cEnd).trim();
+              i = cEnd + 1;
+            }
+          }
+        }
+        nodes.push({ kind: 'for', initText: null, condText, postText: null, bodyNode });
+      } else if (matchKw('switch') || (sdkName === 'go' && matchKw('select'))) {
+        const kwLen = matchKw('switch') ? 6 : 6;
+        i += kwLen;
+        skipWs(false);
+        let initText = null;
+        let condText = '';
+        if (sdkName === 'java' && src[i] === '(') {
+          const cEnd = findMatching(src, i, '(', ')', to);
+          if (cEnd !== -1) {
+            condText = src.slice(i + 1, cEnd).trim();
+            i = cEnd + 1;
+          }
+          skipWs(false);
+        } else {
+          const openIdx = readToOpenBrace();
+          if (openIdx !== -1) {
+            const hdr = src.slice(i, openIdx).trim();
+            const parts = splitTopLevelSemi(hdr);
+            if (parts.length >= 2) {
+              initText = parts[0];
+              condText = parts.slice(1).join('; ');
+            } else {
+              condText = hdr;
+            }
+            i = openIdx;
+          }
+        }
+        if (src[i] === '{') {
+          const { clauses, hasDefault } = parseSwitchBody(i);
+          nodes.push({ kind: 'switch', initText, condText, clauses, hasDefault });
+        }
+      } else if (sdkName === 'java' && matchKw('try')) {
+        i += 3;
+        skipWs(false);
+        let resourceText = null;
+        if (src[i] === '(') {
+          const rEnd = findMatching(src, i, '(', ')', to);
+          if (rEnd !== -1) {
+            resourceText = src.slice(i + 1, rEnd).trim();
+            i = rEnd + 1;
+          }
+          skipWs(false);
+        }
+        const tryNode = src[i] === '{' ? parseBraceBlock(i) : null;
+        const catchNodes = [];
+        let finallyNode = null;
+        while (i < to) {
+          skipWs(false);
+          if (matchKw('catch')) {
+            i += 5;
+            skipWs(false);
+            if (src[i] === '(') {
+              const cEnd = findMatching(src, i, '(', ')', to);
+              i = cEnd === -1 ? i + 1 : cEnd + 1;
+            }
+            skipWs(false);
+            if (src[i] === '{') catchNodes.push(parseBraceBlock(i));
+          } else if (matchKw('finally')) {
+            i += 7;
+            skipWs(false);
+            if (src[i] === '{') finallyNode = parseBraceBlock(i);
+          } else {
+            break;
+          }
+        }
+        nodes.push({ kind: 'try', resourceText, tryNode, catchNodes, finallyNode });
+      } else {
+        const st = readSimpleStmt();
+        if (st) nodes.push(st);
+        else if (src[i] === '}') break;
+        else i++;
+      }
+      if (singleStmt) break;
+    }
+    return { nodes, nextIdx: i };
+  };
+
+  const checkCallsInText = (text, state, opts) => {
+    if (!text) return;
+    const callRe =
+      sdkName === 'java'
+        ? /\.(?:request|requestList|requestVoid|requestBytes)\(\s*HttpMethod\.(GET|POST|PUT|PATCH|DELETE)\s*,\s*/g
+        : /\.do(?:Raw)?\(\s*[A-Za-z_][\w.]*(?:\([^)]*\))?\s*,\s*"(GET|POST|PUT|PATCH|DELETE)"\s*,\s*/g;
+    for (const call of text.matchAll(callRe)) {
+      const rawExpr = readCommaArg(text, call.index + call[0].length);
+      for (const branch of resolveExprBranches(rawExpr, state.locals, opts)) {
+        if (opts.isUnexported && branch.usesHelperParam) continue;
+        if (branch.expr.startsWith('/api/')) {
+          const normPath = normalize(branch.expr);
+          if (!isCheckedRouteFamily(normPath) && !specByPath.has(normPath)) {
+            out.push(`${call[1]} ${normPath}: built by ${sdkName}, not present in the contract`);
+          }
+        }
+      }
+    }
+  };
+
+  const evalSimpleStmt = (text, state, opts) => {
+    if (!text) return;
+    checkCallsInText(text, state, opts);
+    if (sdkName === 'go') {
+      const varDecl = /^var\s+([A-Za-z_]\w*)\s+string$/.exec(text);
+      if (varDecl) {
+        applyAssignment(state, varDecl[1], ':=', '""', true, opts);
+        return;
+      }
+      const m = /^(?:var\s+)?([A-Za-z_]\w*)(?:\s+string)?\s*(:=|\+=|=(?!=))\s*([\s\S]+)$/.exec(text);
+      if (m) {
+        const isDecl = m[2] === ':=' || /^var\s+/.test(text);
+        applyAssignment(state, m[1], m[2], m[3], isDecl, opts);
+      }
+    } else {
+      const m = /^(?:(?:final\s+)?(?:String|var)\s+)?([A-Za-z_]\w*)\s*(\+=|=(?!=))\s*([\s\S]+)$/.exec(text);
+      if (m) {
+        const isDecl = /^(?:final\s+)?(?:String|var)\s+/.test(text);
+        applyAssignment(state, m[1], m[2], m[3], isDecl, opts);
+      }
+    }
+    if (/^(?:return|throw)\b/.test(text)) state.terminated = true;
+  };
+
+  const evalNode = (node, state, opts) => {
+    if (!node) return state;
+    if (node.kind === 'stmt') {
+      evalSimpleStmt(node.text, state, opts);
+      return state;
+    }
+    if (node.kind === 'block') {
+      const inner = cloneState(state, true);
+      for (const child of node.body) {
+        if (inner.terminated) break;
+        const next = evalNode(child, inner, opts);
+        inner.locals = next.locals;
+        inner.terminated = next.terminated;
+      }
+      return mergeBranchStates([inner], state, inner.declaredHere);
+    }
+    if (node.kind === 'if') {
+      const headerState = cloneState(state, true);
+      if (node.initText) evalSimpleStmt(node.initText, headerState, opts);
+      checkCallsInText(node.condText, headerState, opts);
+      const thenState = evalNode(node.thenNode, cloneState(headerState, true), opts);
+      const elseState = node.elseNode ? evalNode(node.elseNode, cloneState(headerState, true), opts) : cloneState(headerState, false);
+      return mergeBranchStates([thenState, elseState], state, headerState.declaredHere);
+    }
+    if (node.kind === 'for') {
+      const loopHeader = cloneState(state, true);
+      if (node.initText) evalSimpleStmt(node.initText, loopHeader, opts);
+      checkCallsInText(node.condText, loopHeader, opts);
+      checkCallsInText(node.postText, loopHeader, opts);
+      const bodyState = evalNode(node.bodyNode, cloneState(loopHeader, true), opts);
+      // A loop may execute 0 times (fallthrough from loopHeader) or 1+ times (bodyState).
+      const candidates = [cloneState(loopHeader, false)];
+      if (!bodyState.terminated) candidates.push(bodyState);
+      return mergeBranchStates(candidates, state, loopHeader.declaredHere);
+    }
+    if (node.kind === 'switch') {
+      const switchHeader = cloneState(state, true);
+      if (node.initText) evalSimpleStmt(node.initText, switchHeader, opts);
+      checkCallsInText(node.condText, switchHeader, opts);
+      const branches = node.clauses.map((c) => evalNode(c, cloneState(switchHeader, true), opts));
+      if (!node.hasDefault) branches.push(cloneState(switchHeader, false));
+      return mergeBranchStates(branches, state, switchHeader.declaredHere);
+    }
+    if (node.kind === 'try') {
+      const tryHeader = cloneState(state, true);
+      if (node.resourceText) {
+        for (const res of splitTopLevelSemi(node.resourceText)) evalSimpleStmt(res, tryHeader, opts);
+      }
+      const tryOut = evalNode(node.tryNode, cloneState(tryHeader, true), opts);
+      const branches = [tryOut];
+      const catchSeed = mergeBranchStates([cloneState(tryHeader, false), tryOut], tryHeader, tryOut.declaredHere);
+      for (const cNode of node.catchNodes) {
+        branches.push(evalNode(cNode, cloneState(catchSeed, true), opts));
+      }
+      const joined = mergeBranchStates(branches, state, tryHeader.declaredHere);
+      if (node.finallyNode) {
+        const finallyEntry = { ...cloneState(joined, true), terminated: false };
+        const finallyOut = evalNode(node.finallyNode, finallyEntry, opts);
+        return {
+          locals: finallyOut.locals,
+          declaredHere: new Set(state.declaredHere),
+          terminated: joined.terminated || finallyOut.terminated,
+        };
+      }
+      return joined;
+    }
+    return state;
+  };
+
+  const analyzeBody = (body, opts) => {
+    const { nodes } = parseStmtList(body, 0, body.length, false);
+    const state = { locals: new Map(), declaredHere: new Set(), terminated: false };
+    for (const node of nodes) {
+      if (state.terminated) break;
+      const next = evalNode(node, state, opts);
+      state.locals = next.locals;
+      state.terminated = next.terminated;
+    }
+  };
+
+  const JAVA_NON_METHOD_KEYWORDS = new Set([
+    'if',
+    'else',
+    'for',
+    'while',
+    'switch',
+    'catch',
+    'synchronized',
+    'try',
+    'return',
+    'new',
+    'throw',
+    'assert',
+    'do',
+    'case',
+  ]);
+
+  const extractJavaMethods = (src) => {
+    const methods = [];
+    const hasTopLevelEquals = (header) => {
+      let depth = 0;
+      for (let k = 0; k < header.length; k++) {
+        const endStr = skipStringLiteral(header, k);
+        if (endStr !== k) {
+          k = endStr;
+          continue;
+        }
+        const ch = header[k];
+        if (ch === '(' || ch === '[' || ch === '<') depth++;
+        else if (ch === ')' || ch === ']' || ch === '>') depth = Math.max(0, depth - 1);
+        else if (ch === '=' && depth === 0) return true;
+      }
+      return false;
+    };
+
+    const stripAnnotations = (raw) => raw.replace(/@[\w.]+(?:\([^)]*\))?/g, ' ').trim();
+    const headerBeforeParen = (header) => {
+      const idx = header.indexOf('(');
+      return idx === -1 ? header : header.slice(0, idx);
+    };
+    const isJavaTypeHeader = (rawHeader) => {
+      const header = stripAnnotations(rawHeader);
+      const prefix = headerBeforeParen(header);
+      return /\b(?:class|interface|enum|record)\b/.test(prefix) && !/\bnew\b/.test(prefix) && !hasTopLevelEquals(header);
+    };
+
+    const parseJavaMethodHeader = (rawHeader) => {
+      const header = stripAnnotations(rawHeader);
+      const prefix = headerBeforeParen(header);
+      if (!header || /\b(?:class|interface|enum|record|new)\b/.test(prefix) || hasTopLevelEquals(header)) return null;
+      const suffixMatch = /\)\s*(?:throws\s+[\w.$,\s<>?[\]]+)?$/.exec(header);
+      if (!suffixMatch) return null;
+      const closeParen = suffixMatch.index;
+      let depth = 1;
+      let openParen = -1;
+      for (let k = closeParen - 1; k >= 0; k--) {
+        const ch = header[k];
+        if (ch === '"' || ch === "'") {
+          for (k--; k >= 0; k--) {
+            if (header[k] === ch && header[k - 1] !== '\\') break;
+          }
+          continue;
+        }
+        if (ch === ')') depth++;
+        else if (ch === '(' && --depth === 0) {
+          openParen = k;
+          break;
+        }
+      }
+      if (openParen <= 0) return null;
+      const beforeParen = header.slice(0, openParen).trim();
+      const nameMatch = /\b([A-Za-z_]\w*)$/.exec(beforeParen);
+      if (!nameMatch || JAVA_NON_METHOD_KEYWORDS.has(nameMatch[1])) return null;
+      const beforeName = beforeParen.slice(0, nameMatch.index).trim();
+      const prevWord = /\b([A-Za-z_]\w*)$/.exec(beforeName)?.[1];
+      if (prevWord && JAVA_NON_METHOD_KEYWORDS.has(prevWord)) return null;
+      return { name: nameMatch[1], params: header.slice(openParen + 1, closeParen) };
+    };
+
+    const scanScope = (from, to) => {
+      let memberStart = from;
+      for (let i = from; i < to; i++) {
+        const endStr = skipStringLiteral(src, i);
+        if (endStr !== i) {
+          i = endStr;
+          continue;
+        }
+        if (src[i] === ';') {
+          memberStart = i + 1;
+          continue;
+        }
+        if (src[i] === '(') {
+          const pEnd = findMatching(src, i, '(', ')', to);
+          if (pEnd !== -1) i = pEnd;
+          continue;
+        }
+        if (src[i] === '{') {
+          const closeIdx = findMatching(src, i, '{', '}', to);
+          const end = closeIdx === -1 ? to : closeIdx;
+          const header = src.slice(memberStart, i).trim();
+          if (isJavaTypeHeader(header)) {
+            scanScope(i + 1, end);
+          } else {
+            const parsed = parseJavaMethodHeader(header);
+            if (parsed) {
+              methods.push({ ...parsed, body: src.slice(i + 1, end) });
+            }
+          }
+          i = end;
+          memberStart = end + 1;
+        }
+      }
+    };
+
+    scanScope(0, src.length);
+    return methods;
+  };
+
+  const extractGoFunctions = (source) => {
+    const fns = [];
+    for (let i = 0; i < source.length; i++) {
+      const endStr = skipStringLiteral(source, i);
+      if (endStr !== i) {
+        i = endStr;
+        continue;
+      }
+      if (source[i] === '{') {
+        const closeIdx = findMatching(source, i, '{', '}');
+        if (closeIdx !== -1) i = closeIdx;
+        continue;
+      }
+      if (!source.startsWith('func', i) || /[A-Za-z0-9_]/.test(source[i - 1] ?? '') || /[A-Za-z0-9_]/.test(source[i + 4] ?? '')) {
+        continue;
+      }
+      let p = i + 4;
+      while (p < source.length && /\s/.test(source[p])) p++;
+      if (source[p] === '(') {
+        const rEnd = findMatching(source, p, '(', ')');
+        if (rEnd === -1) continue;
+        p = rEnd + 1;
+        while (p < source.length && /\s/.test(source[p])) p++;
+      }
+      const nameMatch = /^([A-Za-z_]\w*)/.exec(source.slice(p));
+      if (!nameMatch) continue;
+      const name = nameMatch[1];
+      p += name.length;
+      while (p < source.length && /\s/.test(source[p])) p++;
+      if (source[p] === '[') {
+        const gEnd = findMatching(source, p, '[', ']');
+        if (gEnd === -1) continue;
+        p = gEnd + 1;
+        while (p < source.length && /\s/.test(source[p])) p++;
+      }
+      if (source[p] !== '(') continue;
+      const pEnd = findMatching(source, p, '(', ')');
+      if (pEnd === -1) continue;
+      const params = source.slice(p + 1, pEnd);
+      let q = pEnd + 1;
+      let openBrace = -1;
+      for (; q < source.length; q++) {
+        const sEnd = skipStringLiteral(source, q);
+        if (sEnd !== q) {
+          q = sEnd;
+          continue;
+        }
+        if (source[q] === '(') {
+          const end = findMatching(source, q, '(', ')');
+          if (end === -1) break;
+          q = end;
+        } else if (source[q] === '[') {
+          const end = findMatching(source, q, '[', ']');
+          if (end === -1) break;
+          q = end;
+        } else if (source[q] === '{') {
+          openBrace = q;
+          break;
+        } else if (source[q] === '\n') {
+          break;
+        }
+      }
+      if (openBrace === -1) continue;
+      const closeBrace = findMatching(source, openBrace, '{', '}');
+      if (closeBrace === -1) continue;
+      fns.push({ name, params, body: source.slice(openBrace + 1, closeBrace) });
+      i = closeBrace;
+    }
+    return fns;
+  };
+
+  if (sdkName === 'java') {
+    for (const pair of verbPairsOf({ name: 'java', dir: relative(root, dir), exts: ['.java'] })) {
+      const [verb, path] = pair.split(' ');
+      if (!isCheckedRouteFamily(path) && !specByPath.has(path)) {
+        out.push(`${verb} ${path}: built by java, not present in the contract`);
+      }
+    }
+    const callRe = FAMILY_CALLS['/api/sessions/*/messages/*']?.java;
+    for (const file of walk(dir, ['.java'])) {
+      const src = stripInlineComments(strip(readFileSync(file, 'utf8')));
+      for (const m of src.matchAll(/["'](\/api\/[^"'\n]*)["']/g)) {
+        const clean = m[1].endsWith('/') ? m[1].slice(0, -1) : m[1];
+        const normPath = normalize(clean);
+        if (!hasContractOrPrefix(normPath)) {
+          out.push(`${normPath}: built by java, not present in the contract`);
+        }
+      }
+      if (callRe) {
+        for (const m of src.matchAll(callRe)) {
+          const target = `/api/sessions/*/messages/${m[1]}`;
+          if (!contractShapes.has(target)) out.push(`${target}: built by java, not present in the contract`);
+        }
+      }
+      for (const method of extractJavaMethods(src)) {
+        analyzeBody(method.body, { isUnexported: false });
+      }
+    }
+  } else if (sdkName === 'go') {
+    const parseParamNames = (params) => {
+      const names = new Set();
+      let start = 0;
+      let pDepth = 0;
+      let bDepth = 0;
+      const parts = [];
+      for (let i = 0; i < params.length; i++) {
+        if (params[i] === '(') pDepth++;
+        else if (params[i] === ')') pDepth = Math.max(0, pDepth - 1);
+        else if (params[i] === '[') bDepth++;
+        else if (params[i] === ']') bDepth = Math.max(0, bDepth - 1);
+        else if (params[i] === ',' && pDepth === 0 && bDepth === 0) {
+          parts.push(params.slice(start, i));
+          start = i + 1;
+        }
+      }
+      parts.push(params.slice(start));
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        const m = /^([A-Za-z_]\w*)/.exec(trimmed);
+        if (m) names.add(m[1]);
+      }
+      return names;
+    };
+
+    for (const file of walk(dir, ['.go']).filter((f) => !f.endsWith('_test.go'))) {
+      const source = stripInlineComments(strip(readFileSync(file, 'utf8')));
+      const bases = new Map();
+      for (const helper of source.matchAll(/func \(\w+ \*\w+Service\) (\w+)\([^)]*\) string \{\s*return ([^\n]+)\n/g)) {
+        const base = normalize(
+          helper[2]
+            .split('+')
+            .map((t) => t.trim())
+            .map((t) => /^"([^"]*)"$/.exec(t)?.[1] ?? '*')
+            .join(''),
+        );
+        if (base.startsWith('/api/')) {
+          bases.set(helper[1], base);
+          if (!hasContractOrPrefix(base)) {
+            out.push(`${base}: built by go base(), not present in the contract`);
+          }
+        }
+      }
+      for (const m of source.matchAll(/["`](\/api\/[^"`\n]*)["`]/g)) {
+        const clean = m[1].endsWith('/') ? m[1].slice(0, -1) : m[1];
+        const normPath = normalize(clean);
+        if (!hasContractOrPrefix(normPath)) {
+          out.push(`${normPath}: built by go, not present in the contract`);
+        }
+      }
+      for (const m of source.matchAll(/\.\w+\(\s*ctx\s*,\s*"(GET|POST|PUT|PATCH|DELETE)"\s*,[^)]*?"(\/[a-z0-9][\w.\/-]*)"/g)) {
+        if (m[2].startsWith('/api/')) continue;
+        const candidates = [];
+        for (const base of bases.values()) {
+          candidates.push(normalize(base + m[2]));
+          candidates.push(normalize(`${base}/*${m[2]}`));
+        }
+        if (candidates.length > 0 && !candidates.some((p) => specByPath.has(p))) {
+          out.push(`${m[1]} ${candidates[0]}: built by go, not present in the contract`);
+        }
+      }
+      for (const m of source.matchAll(/\bs\.[a-z]\w*\(\s*ctx\s*,\s*\w+\s*,\s*"(\/[a-z0-9][\w.\/-]*)"/g)) {
+        if (m[1].startsWith('/api/')) continue;
+        const candidates = [];
+        for (const base of bases.values()) {
+          candidates.push(normalize(base + m[1]));
+          candidates.push(normalize(`${base}/*${m[1]}`));
+        }
+        if (candidates.length > 0 && !candidates.some((p) => specByPath.has(p))) {
+          out.push(`${candidates[0]}: built by go, not present in the contract`);
+        }
+      }
+      for (const fn of extractGoFunctions(source)) {
+        const isUnexported = /^[a-z]/.test(fn.name);
+        const helperParamNames = isUnexported ? parseParamNames(fn.params) : new Set();
+        analyzeBody(fn.body, { bases, helperParamNames, isUnexported });
+      }
+      for (const m of source.matchAll(/\.membershipRequestAction\(\s*ctx\s*,\s*\w+\s*,\s*\w+\s*,\s*"([\w-]+)"/g)) {
+        const target = `/api/sessions/*/groups/*/membership-requests/${m[1]}`;
+        if (!contractShapes.has(target)) out.push(`${target}: built by go, not present in the contract`);
+      }
+      for (const m of source.matchAll(/\bs\.send\(\s*ctx\s*,\s*\w+\s*,\s*"([\w-]+)"/g)) {
+        const target = `/api/sessions/*/messages/${m[1]}`;
+        if (!contractShapes.has(target)) out.push(`${target}: built by go, not present in the contract`);
+      }
+    }
+  }
+  return out;
+}
+
 const verbPairsOf = (sdk) => {
   if (sdk.name === 'go') return goVerbPairs(join(root, sdk.dir));
   const pairs = new Set();
@@ -354,8 +1405,8 @@ const verbPairsOf = (sdk) => {
         : sdk.name === 'python'
           ? [/\.request\(\s*"(GET|POST|PUT|PATCH|DELETE)"\s*,\s*((?:f?"[^"\n]*"\s*)+)/g]
           : sdk.name === 'php'
-            ? [/->request\(\s*'(GET|POST|PUT|PATCH|DELETE)'\s*,\s*['"]([^'"]+)['"]/g]
-            : [/HttpMethod\.(GET|POST|PUT|PATCH|DELETE)\s*,\s*([\s\S]{2,400}?)\s*,\s*\n?\s*(?:null|new |[a-z]\w)/g];
+            ? [/->request(?:Array|NullableArray)?\(\s*'(GET|POST|PUT|PATCH|DELETE)'\s*,\s*['"]([^'"]+)['"]/g]
+            : [/HttpMethod\.(GET|POST|PUT|PATCH|DELETE)\s*,\s*([\s\S]{2,400}?)\s*,\s*\n?\s*(?:null|new |Map\.|Collections\.|[a-z]\w)/g];
     for (const re of patterns) {
       for (const m of src.matchAll(re)) {
         const path = sdk.name === 'java' ? literalsToPath(m[2]) : sdk.name === 'python' ? joinPythonLiterals(m[2]) : m[2];
@@ -389,6 +1440,9 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     }
     // Checked against the whole contract: a client that builds an excluded route still owes it a real verb.
     verbErrors.push(...undeclaredVerbPairs(sdk.name, pairs, specByPath));
+    if (sdk.name === 'go' || sdk.name === 'java') {
+      verbErrors.push(...staleRouteErrors(sdk.name, join(root, sdk.dir), specByPath, contractShapes));
+    }
   }
   if (multi.length < 15) {
     console.error('check-sdk-coverage: expected 15+ in-scope multi-verb contract paths, found ' + multi.length);

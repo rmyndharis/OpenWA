@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, Search, X } from 'lucide-react';
 import { searchApi, type SearchHit } from '../../services/api';
@@ -29,9 +29,11 @@ export interface RoomSearchProps {
  */
 export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: RoomSearchProps) {
   const { t } = useTranslation();
+  const listId = useId();
   const [q, setQ] = useState('');
   const [day, setDay] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const [total, setTotal] = useState(0);
   const [nextOffset, setNextOffset] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -79,6 +81,7 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
       try {
         const res = await searchApi.search(params);
         if (id !== requestId.current) return;
+        if (!append) setActiveIndex(-1);
         setHits(prev => {
           if (!append) return res.hits;
           const seen = new Set(prev.map(h => h.messageId));
@@ -116,6 +119,7 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
     if (timer.current) clearTimeout(timer.current);
     // An answer still on its way is for the text before this one.
     requestId.current += 1;
+    setActiveIndex(-1);
     if (!q.trim()) {
       setHits([]);
       setTotal(0);
@@ -138,6 +142,10 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
     };
   }, [q, run]);
 
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [q, day, run]);
+
   // The jump is the user's act (a day picked, or the text cleared with a day set), never an effect: an effect runs
   // again whenever the thread changes, and would pull a reader who scrolled away back to the day.
   const jumpToDay = (value: string) => {
@@ -151,6 +159,7 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
   const changeText = (value: string) => {
     setQ(value);
     setOpen(true);
+    setActiveIndex(-1);
     if (q.trim() && !value.trim()) jumpToDay(day);
     else setNotice(null);
   };
@@ -158,6 +167,7 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
   const changeDay = (value: string) => {
     setDay(value);
     setOpen(true);
+    setActiveIndex(-1);
     // With text the day only narrows the search.
     if (q.trim()) setNotice(null);
     else jumpToDay(value);
@@ -173,9 +183,13 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
     // the field opens the list, and the fold below is the later update.
     inputRef.current?.focus();
     setOpen(false);
+    setActiveIndex(-1);
   };
 
   const listed = open && q.trim() !== '';
+  const optionsReady = listed && (!loading || paging) && hits.length > 0;
+  const activeOptionId =
+    optionsReady && activeIndex >= 0 && hits[activeIndex] ? `${listId}-option-${activeIndex}` : undefined;
 
   return (
     <div
@@ -228,10 +242,28 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
           <input
             ref={inputRef}
             type="text"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={listed}
+            aria-controls={listed ? listId : undefined}
+            aria-activedescendant={activeOptionId}
             className="room-search-input"
             placeholder={t('chats.roomSearch.placeholder')}
             value={q}
             onChange={e => changeText(e.target.value)}
+            onKeyDown={e => {
+              if (!optionsReady || isComposingKey(e.nativeEvent)) return;
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setActiveIndex(prev => (prev + 1 < hits.length ? prev + 1 : 0));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActiveIndex(prev => (prev > 0 ? prev - 1 : hits.length - 1));
+              } else if (e.key === 'Enter' && activeIndex >= 0 && hits[activeIndex]) {
+                e.preventDefault();
+                pick(hits[activeIndex]);
+              }
+            }}
             onFocus={() => setOpen(true)}
             // A pick folds the list with focus still in the field, where a click fires no focus.
             onClick={() => setOpen(true)}
@@ -255,16 +287,18 @@ export function RoomSearch({ sessionId, chatId, onClose, onHit, onJumpToDate }: 
       {(notice || listed) && (
         <div className="room-search-results">
           {listed && (
-            <div role="listbox">
+            <div id={listId} role="listbox">
               {loading && !paging && <div className="room-search-state">{t('search.loading')}</div>}
               {!loading && !error && hits.length === 0 && <div className="room-search-state">{t('search.empty')}</div>}
               {(!loading || paging) &&
-                hits.map(h => (
+                hits.map((h, index) => (
                   <button
                     key={h.messageId}
+                    id={`${listId}-option-${index}`}
                     type="button"
                     className="room-search-hit"
                     role="option"
+                    aria-selected={index === activeIndex}
                     onMouseDown={e => e.preventDefault()}
                     onClick={() => pick(h)}
                   >

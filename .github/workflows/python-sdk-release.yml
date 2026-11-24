@@ -92,6 +92,17 @@ jobs:
           python -m pip install --upgrade build
           python -m build
 
+      - name: Smoke-test unpacked sdist
+        working-directory: sdk/python
+        run: |
+          sdist_tmp=$(mktemp -d)
+          tar -xzf dist/*.tar.gz -C "$sdist_tmp"
+          sdist_dir=$(find "$sdist_tmp" -mindepth 1 -maxdepth 1 -type d)
+          python -m pip install --no-deps --force-reinstall "$sdist_dir"
+          (cd "$sdist_tmp" && python -c "import openwa; assert 'site-packages' in openwa.__file__, openwa.__file__; print(openwa.__file__)")
+          (cd "$sdist_dir" && pytest)
+          rm -rf "$sdist_tmp"
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: python-sdk-dist

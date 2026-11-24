@@ -501,13 +501,14 @@ describe('PluginLoaderService capability facade — ctx.net', () => {
       };
     }
 
-    it('outside dispatch, excludes sessionConfig and instance hosts for inactive sessions', async () => {
+    it('outside dispatch, restricts ctx.net.fetch strictly to static manifest net.allow', async () => {
       const { loader } = buildNetLoader([
         instanceRow('inst-active', 'sess-1', 'https://inst-active.example'),
         instanceRow('inst-inactive', 'sess-2', 'https://inst-inactive.example'),
         instanceRow('inst-wild', null, 'https://inst-wild.example'),
       ]);
       const plugin = scopedNetPlugin({
+        allow: ['static.example:443'],
         config: { baseUrl: 'https://base.example' },
         sessionConfig: {
           'sess-1': { baseUrl: 'https://active.example' },
@@ -517,53 +518,106 @@ describe('PluginLoaderService capability facade — ctx.net', () => {
       });
       const ctx = contextFor(loader, plugin);
 
-      await expect(ctx.net.fetch('https://base.example/ping')).resolves.toMatchObject({ ok: true });
-      await expect(ctx.net.fetch('https://active.example/ping')).resolves.toMatchObject({ ok: true });
-      await expect(ctx.net.fetch('https://inst-active.example/ping')).resolves.toMatchObject({ ok: true });
-      await expect(ctx.net.fetch('https://inst-wild.example/ping')).resolves.toMatchObject({ ok: true });
-
+      await expect(ctx.net.fetch('https://static.example/ping')).resolves.toMatchObject({ ok: true });
+      await expect(ctx.net.fetch('https://base.example/ping')).rejects.toBeInstanceOf(PluginCapabilityError);
+      await expect(ctx.net.fetch('https://active.example/ping')).rejects.toBeInstanceOf(PluginCapabilityError);
+      await expect(ctx.net.fetch('https://inst-active.example/ping')).rejects.toBeInstanceOf(PluginCapabilityError);
+      await expect(ctx.net.fetch('https://inst-wild.example/ping')).rejects.toBeInstanceOf(PluginCapabilityError);
       await expect(ctx.net.fetch('https://staged.example/ping')).rejects.toBeInstanceOf(PluginCapabilityError);
       await expect(ctx.net.fetch('https://inst-inactive.example/ping')).rejects.toBeInstanceOf(PluginCapabilityError);
     });
 
-    it('outside dispatch, excludes sessionConfig and instance hosts disallowed by manifest.sessions even when activeSessions is wildcard', async () => {
+    it('inside a wildcard session dispatch without instanceId, restricts ctx.net.fetch strictly to static manifest net.allow', async () => {
       const { loader } = buildNetLoader([
         instanceRow('inst-allowed', 'sess-1', 'https://inst-allowed.example'),
         instanceRow('inst-denied', 'sess-2', 'https://inst-denied.example'),
       ]);
       const plugin = scopedNetPlugin({
-        sessions: ['sess-1'],
+        allow: ['static.example:443'],
         activeSessions: ['*'],
+        config: { baseUrl: 'https://base.example' },
         sessionConfig: {
           'sess-1': { baseUrl: 'https://allowed.example' },
           'sess-2': { baseUrl: 'https://denied.example' },
         },
       });
       const ctx = contextFor(loader, plugin);
+      const caps = capabilitiesOf(loader);
 
-      await expect(ctx.net.fetch('https://allowed.example/x')).resolves.toMatchObject({ ok: true });
-      await expect(ctx.net.fetch('https://inst-allowed.example/x')).resolves.toMatchObject({ ok: true });
-      await expect(ctx.net.fetch('https://denied.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
-      await expect(ctx.net.fetch('https://inst-denied.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+      await caps.runWithDispatchContext({ sessionId: '*' }, async () => {
+        await expect(ctx.net.fetch('https://static.example/x')).resolves.toMatchObject({ ok: true });
+        await expect(ctx.net.fetch('https://base.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+        await expect(ctx.net.fetch('https://allowed.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+        await expect(ctx.net.fetch('https://inst-allowed.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+        await expect(ctx.net.fetch('https://denied.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+        await expect(ctx.net.fetch('https://inst-denied.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+      });
     });
 
-    it('when sessionScoped is false, ignores sessionConfig and concrete-scoped instances completely', async () => {
+    it('when detached timer runs after sandboxed dispatch finally clears dispatchId, restricts ctx.net.fetch to static manifest net.allow', async () => {
       const { loader } = buildNetLoader([
-        instanceRow('inst-concrete', 'sess-1', 'https://inst-concrete.example'),
-        instanceRow('inst-wild', '*', 'https://inst-wild.example'),
+        instanceRow('inst-a', 'sess-1', 'https://inst-a.example'),
+        instanceRow('inst-b', 'sess-2', 'https://inst-b.example'),
       ]);
       const plugin = scopedNetPlugin({
-        sessionScoped: false,
+        allow: ['static.example:443'],
         config: { baseUrl: 'https://base.example' },
-        sessionConfig: { 'sess-1': { baseUrl: 'https://stale-session.example' } },
-        activeSessions: ['*'],
+        sessionConfig: {
+          'sess-1': { baseUrl: 'https://s1.example' },
+          'sess-2': { baseUrl: 'https://s2.example' },
+        },
+        activeSessions: ['sess-1', 'sess-2'],
       });
+      const caps = capabilitiesOf(loader);
       const ctx = contextFor(loader, plugin);
 
-      await expect(ctx.net.fetch('https://base.example/x')).resolves.toMatchObject({ ok: true });
-      await expect(ctx.net.fetch('https://inst-wild.example/x')).resolves.toMatchObject({ ok: true });
-      await expect(ctx.net.fetch('https://stale-session.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
-      await expect(ctx.net.fetch('https://inst-concrete.example/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+      let hostListener: ((m: WorkerToHostMessage) => void) | undefined;
+      const workerSend = (m: WorkerToHostMessage): void => {
+        setImmediate(() => hostListener?.(m));
+      };
+      const capClient = new WorkerCapabilityClient(workerSend);
+      const webhookReg = new WebhookRegistry(workerSend);
+      const channel: PluginWorkerChannel = {
+        postMessage: (msg: HostToWorkerMessage) => {
+          if (msg.kind === 'cap-result') capClient.handleResult(msg);
+          else if (msg.kind === 'webhook') void webhookReg.handleWebhook(msg);
+        },
+        onMessage: cb => {
+          hostListener = cb;
+        },
+        onExit: () => undefined,
+        terminate: () => Promise.resolve(),
+      };
+      const host = new PluginWorkerHost(channel, (verb, args, dispatchContext) => {
+        if (verb !== 'net.fetch') return Promise.resolve(null);
+        const run = () => ctx.net.fetch(args[0] as string, args[1] as pluginNet.PluginNetRequestInit);
+        return dispatchContext ? caps.runWithDispatchContext(dispatchContext, run) : run();
+      });
+
+      let detachedCall!: () => Promise<unknown>;
+      webhookReg.register('events', () => {
+        detachedCall = () => capClient.call('net.fetch', ['https://inst-b.example/leak']);
+        return { status: 200 };
+      });
+
+      await host.dispatchWebhook({
+        instanceId: 'inst-a',
+        route: 'events',
+        method: 'POST',
+        headers: {},
+        query: {},
+        body: '{}',
+        rawBody: '{}',
+        verified: true,
+        deliveryId: 'd-detached',
+        sessionId: 'sess-1',
+        timeoutMs: 5000,
+      });
+
+      await expect(detachedCall()).rejects.toThrow(/may not fetch/);
+      await expect(capClient.call('net.fetch', ['https://s2.example/leak'])).rejects.toThrow(/may not fetch/);
+      await expect(capClient.call('net.fetch', ['https://base.example/leak'])).rejects.toThrow(/may not fetch/);
+      await expect(capClient.call('net.fetch', ['https://static.example/ok'])).resolves.toMatchObject({ ok: true });
     });
 
     it('inside an in-process hook dispatch, admits only the firing session and wildcard or matching instances', async () => {

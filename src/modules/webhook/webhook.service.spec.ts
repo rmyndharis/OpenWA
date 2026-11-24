@@ -21,6 +21,7 @@ import { NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { fetch as undiciFetch } from 'undici';
 import { WebhookService } from './webhook.service';
+import * as webhookModule from './webhook.service';
 import { WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookDeliveryService } from './webhook-delivery.service';
 import { buildDeliveryHeaders } from './utils/deliver-once';
@@ -483,7 +484,7 @@ describe('WebhookService', () => {
 
       await service.delete('sess-1', 'wh-uuid-1');
 
-      expect(repository.remove).toHaveBeenCalledWith(webhook);
+      expect(repository.remove).toHaveBeenCalledWith(webhook, { transaction: false });
       expect(forget).toHaveBeenCalledWith('wh-uuid-1');
     });
   });
@@ -594,7 +595,7 @@ describe('WebhookService', () => {
         await jest.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
         expect(failureRepository.update).toHaveBeenCalledTimes(1);
       } finally {
-        service.onModuleDestroy();
+        await service.onModuleDestroy();
         jest.useRealTimers();
       }
     });
@@ -612,7 +613,7 @@ describe('WebhookService', () => {
         await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
         expect(failureRepository.update).toHaveBeenCalledTimes(2);
       } finally {
-        service.onModuleDestroy();
+        await service.onModuleDestroy();
         jest.useRealTimers();
       }
     });
@@ -882,6 +883,94 @@ describe('WebhookService.create beside other writes on one connection', () => {
         steps,
         status: SessionStatus.FAILED,
       });
+    }
+  });
+});
+
+describe('WebhookService.delete beside other writes on one connection', () => {
+  it('does not roll back a concurrent sibling write when remove fails after the write', async () => {
+    const ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Session, Webhook],
+      synchronize: true,
+    }).initialize();
+    try {
+      const sessions = ds.getRepository(Session);
+      await sessions.save({ id: 'sessA', name: 'sessA', status: SessionStatus.READY, config: {} });
+      await sessions.save({ id: 'sessB', name: 'sessB', status: SessionStatus.READY, config: {} });
+      const svc = new WebhookService(ds.getRepository(Webhook), {} as never, sessions, new ConfigService({}), {
+        invalidateOptInSubscriptions: jest.fn(),
+        forgetWebhook: jest.fn(),
+      } as never);
+      const created = await svc.create('sessA', { url: 'https://example.com/webhook' });
+
+      let beside = Promise.resolve();
+      ds.subscribers.push({
+        listenTo: () => Webhook,
+        beforeRemove: () => {
+          beside = (async () => {
+            await sessions.update('sessB', { status: SessionStatus.FAILED });
+          })();
+          throw new Error('abort webhook remove');
+        },
+      });
+
+      await expect(svc.delete('sessA', created.id)).rejects.toThrow('abort webhook remove');
+      await beside;
+      expect((await sessions.findOneByOrFail({ id: 'sessB' })).status).toBe(SessionStatus.FAILED);
+    } finally {
+      await ds.destroy();
+    }
+  });
+});
+
+describe('WebhookService prune shutdown drain and guarded intervals', () => {
+  it('exports WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS = 1_000 and boundedly waits for in-flight prunes in onModuleDestroy without stacking ticks', async () => {
+    expect((webhookModule as Record<string, unknown>).WEBHOOK_PRUNE_SHUTDOWN_WAIT_MS).toBe(1_000);
+
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    let releasePrune!: () => void;
+    const gate = new Promise<void>(resolve => (releasePrune = resolve));
+    let pruneCalls = 0;
+    const failureRepo = {
+      createQueryBuilder: jest.fn(),
+      find: jest.fn(),
+    };
+    const svc = new WebhookService(
+      { find: jest.fn(), createQueryBuilder: jest.fn() } as never,
+      failureRepo as never,
+      { exists: jest.fn() } as never,
+      new ConfigService({ webhook: { failureRetentionDays: 30, payloadRetentionDays: 7 } }),
+      {} as never,
+    );
+    jest.spyOn(svc, 'pruneDeliveryFailures').mockImplementation(async () => {
+      pruneCalls++;
+      await gate;
+      return 0;
+    });
+
+    try {
+      svc.onModuleInit();
+      expect(pruneCalls).toBe(1);
+
+      // Next daily tick while the first prune is still running must be skipped by startGuardedInterval.
+      await jest.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+      expect(pruneCalls).toBe(1);
+
+      let destroyed = false;
+      const destroyP = Promise.resolve(svc.onModuleDestroy()).then(() => {
+        destroyed = true;
+      });
+      await Promise.resolve();
+      expect(destroyed).toBe(false);
+
+      releasePrune();
+      await destroyP;
+      expect(destroyed).toBe(true);
+    } finally {
+      releasePrune();
+      jest.useRealTimers();
     }
   });
 });

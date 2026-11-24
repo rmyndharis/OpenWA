@@ -88,12 +88,19 @@ function isExternalScript(script: Element): boolean {
  * When `nonce` is omitted, reads `<meta name="openwa-csp-nonce">` from the current document.
  */
 export function hardenConfigUiHtml(source: string, nonce?: string): string {
-  const resolvedNonce =
+  const resolvedNonce = (
     nonce ??
     (typeof document !== 'undefined'
       ? (document.querySelector<HTMLMetaElement>('meta[name="openwa-csp-nonce"]')?.content ?? '')
-      : '');
+      : '')
+  ).trim();
   const doc = new DOMParser().parseFromString(source, 'text/html');
+  // Strip any meta refresh redirects before prepending the document CSP policy.
+  for (const meta of doc.querySelectorAll('meta[http-equiv]')) {
+    if (meta.getAttribute('http-equiv')?.trim().toLowerCase() === 'refresh') {
+      meta.remove();
+    }
+  }
   if (resolvedNonce && resolvedNonce !== NONCE_PLACEHOLDER) {
     // Vite development has no production CSP, so there is nothing to stamp. Config UIs are
     // required to be self-contained. Nonce only inline scripts; external script references are

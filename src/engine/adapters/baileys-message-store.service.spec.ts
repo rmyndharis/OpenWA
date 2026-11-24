@@ -512,4 +512,17 @@ describe('BaileysMessageStoreService', () => {
     expect(await repo.count({ where: { sessionId: 's1' } })).toBe(0);
     expect(await repo.count({ where: { sessionId: 's2' } })).toBe(1);
   });
+
+  it('amortizes enforceLimit under high caps instead of querying on every message write', async () => {
+    process.env.BAILEYS_MESSAGE_STORE_LIMIT = '500';
+    await seedSession('s1');
+    const findSpy = jest.spyOn(repo, 'find');
+
+    for (let i = 0; i < 20; i++) {
+      await service.put('s1', msg(`AMORT-${i}`));
+    }
+
+    // Only the initial baseline check (and periodic amortized checks) should run under a 500-message cap.
+    expect(findSpy.mock.calls.length).toBeLessThanOrEqual(2);
+  });
 });

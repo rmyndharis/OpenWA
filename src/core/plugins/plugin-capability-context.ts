@@ -460,45 +460,21 @@ export class PluginCapabilityContext {
     }
   }
 
-  /**
-   * Layer 1 (outside active hook/ingress dispatch): collect configs admitted for background or
-   * lifecycle fetches. Global plugins ignore sessionConfig and concrete-scoped instances; session-
-   * scoped plugins admit only active, manifest-permitted session slices and enabled wildcard or
-   * active-session instances.
-   */
-  private collectLayer1NetConfigs(
-    plugin: PluginInstance,
-    scoped: boolean,
-    rows: PluginInstanceRecord[],
-    out: Record<string, unknown>[],
-  ): void {
-    out.push(plugin.config ?? {});
-    if (scoped) {
-      for (const [sid, cfg] of Object.entries(plugin.sessionConfig ?? {})) {
-        if (this.isSessionActiveForNet(plugin, sid)) out.push(cfg);
-      }
-    }
-    for (const row of rows) {
-      if (this.isInstanceRowScopeActive(plugin, row)) out.push(row.config ?? {});
-    }
-  }
-
   private buildNetCapability(plugin: PluginInstance): PluginNetCapability {
     return {
       fetch: async (url, init, signal) => {
-        // Two gates: the declared permission, then a two-layer per-session host allowlist.
-        // Layer 2 (inside an active hook or ingress dispatch): scope config-derived hosts strictly
-        // to the firing session or ingress instance. Layer 1 (outside dispatch, e.g. onEnable or
-        // healthCheck): admit base config plus active, manifest-permitted sessions and enabled
-        // wildcard/active-session instances. The SSRF guard inside performPluginFetch still blocks
-        // internal IPs even when the host is allowlisted.
+        // Two gates: the declared permission, then strict Layer 2 per-dispatch host allowlisting.
+        // Inside an active hook or ingress dispatch, scope config-derived hosts strictly to the firing
+        // concrete session or ingress instance. Outside dispatch (e.g. detached timers after finally
+        // clears dispatchId) or on wildcard '*' dispatches without an instanceId, restrict strictly
+        // to static manifest net.allow so multi-tenant allowConfigHosts are never unioned.
         this.assertPermission(plugin.manifest, PluginCapabilityPermission.NET_FETCH);
         const scoped = plugin.manifest.sessionScoped !== false;
         const store = this.hookSession.getStore();
-        const { rows, listed } = await this.enabledInstanceRows(plugin.manifest.id);
         const netConfigs: Record<string, unknown>[] = [];
 
         if (store?.instanceId) {
+          const { rows, listed } = await this.enabledInstanceRows(plugin.manifest.id);
           const sid = store.sessionId;
           const hasConcreteSession = sid !== undefined && !isAllSessionsScope(sid);
           const sessionActive = hasConcreteSession ? this.isSessionActiveForNet(plugin, sid) : true;
@@ -516,11 +492,10 @@ export class PluginCapabilityContext {
                 : (plugin.config ?? {});
             netConfigs.push(resolveInstanceConfig(resolvedBase, match.config, plugin.manifest, plugin.config));
           }
-        } else if (store?.sessionId) {
+        } else if (store?.sessionId && !isAllSessionsScope(store.sessionId)) {
           const sid = store.sessionId;
-          if (isAllSessionsScope(sid)) {
-            this.collectLayer1NetConfigs(plugin, scoped, rows, netConfigs);
-          } else if (this.isSessionActiveForNet(plugin, sid)) {
+          if (this.isSessionActiveForNet(plugin, sid)) {
+            const { rows } = await this.enabledInstanceRows(plugin.manifest.id);
             netConfigs.push(
               resolvePluginConfig(plugin.config ?? {}, plugin.sessionConfig, sid, scoped, plugin.manifest),
             );
@@ -530,8 +505,6 @@ export class PluginCapabilityContext {
               }
             }
           }
-        } else {
-          this.collectLayer1NetConfigs(plugin, scoped, rows, netConfigs);
         }
 
         const allow = [

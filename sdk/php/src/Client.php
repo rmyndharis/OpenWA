@@ -168,7 +168,7 @@ class Client
     /** Validate the configured API key and resolve its role. */
     public function auth(): array
     {
-        return $this->http->request('POST', '/api/auth/validate') ?? [];
+        return $this->http->requestNullableArray('POST', '/api/auth/validate') ?? [];
     }
 
     /**

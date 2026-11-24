@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { configUiSafeConfig, sparseSessionOverride, missingRequiredConfig } from './pluginConfigRules.ts';
+import {
+  configUiSafeConfig,
+  isPlainObject,
+  sparseSessionOverride,
+  missingRequiredConfig,
+} from './pluginConfigRules.ts';
 import type { Plugin } from '../services/api';
 
 const plugin = (over: Partial<Plugin> = {}): Plugin =>
@@ -96,4 +101,13 @@ test('missing required config lists the keys with no usable value', () => {
 
   // null and '' count as missing; a set value does not; optional is never reported.
   assert.deepEqual(missingRequiredConfig(p), ['alsoNeeded', 'blank']);
+});
+
+test('isPlainObject accepts JSON objects and rejects arrays and primitives', () => {
+  assert.equal(isPlainObject({}), true);
+  assert.equal(isPlainObject({ key: 'val' }), true);
+  assert.equal(isPlainObject(null), false);
+  assert.equal(isPlainObject([]), false);
+  assert.equal(isPlainObject('text'), false);
+  assert.equal(isPlainObject(42), false);
 });

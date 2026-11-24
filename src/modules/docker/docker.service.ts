@@ -61,26 +61,53 @@ export class DockerService implements OnModuleInit {
   private reinitInFlight = false;
   /** Visible for testing. */
   callTimeoutMs = DOCKER_CALL_TIMEOUT_MS;
+  /** Visible for testing. Bounded timeout for image pulls when no cached image exists. */
+  pullTimeoutMs = 5 * 60 * 1000;
+  /** Visible for testing. Bounded timeout for container stop calls (exceeds Docker's 10s SIGTERM grace). */
+  stopTimeoutMs = 25 * 1000;
 
   /**
    * dockerode sets no timeout, so a daemon or socket proxy that accepts the connection and never
    * answers (a dropped SYN, a wedged upstream) would hold the caller, boot included, until the OS or
-   * the proxy gave up. Short calls are bounded here; image pulls and container starts are not.
+   * the proxy gave up. Short calls, pulls, starts, stops, and container/volume creation are bounded here.
    *
    * The call is aborted when the deadline passes, not only raced: a call left running keeps its request
    * and its socket open, and every later availability check would add one more.
    */
-  private async answered<T>(call: (signal: AbortSignal) => Promise<T>, what: string): Promise<T> {
+  private async answered<T>(
+    call: (signal: AbortSignal) => Promise<T>,
+    what: string,
+    timeoutMs = this.callTimeoutMs,
+  ): Promise<T> {
     const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        reject(new Error(`Docker did not answer ${what} within ${this.callTimeoutMs}ms`));
+        reject(new Error(`Docker did not answer ${what} within ${timeoutMs}ms`));
         controller.abort();
-      }, this.callTimeoutMs);
+      }, timeoutMs);
+      timer.unref?.();
     });
     try {
       return await Promise.race([call(controller.signal), deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async raceTimeout<T>(work: Promise<T>, timeoutMs: number, what: string, onTimeout?: () => void): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        onTimeout?.();
+        reject(new Error(`Docker did not complete ${what} within ${timeoutMs}ms`));
+      }, timeoutMs);
+      timer.unref?.();
+    });
+    // Suppress unhandled rejection if work settles after the timeout won the race.
+    work.catch(() => undefined);
+    try {
+      return await Promise.race([work, deadline]);
     } finally {
       clearTimeout(timer);
     }
@@ -308,13 +335,29 @@ export class DockerService implements OnModuleInit {
     if (!this.docker || !this.isAvailable) {
       throw new Error('Docker is not available');
     }
+    if (!service) {
+      return null;
+    }
+
+    const profileToService: Record<string, string> = {
+      postgres: 'database',
+      redis: 'cache',
+      minio: 'storage',
+    };
+    const serviceToProfile: Record<string, string> = {
+      database: 'postgres',
+      cache: 'redis',
+      storage: 'minio',
+    };
+    const canonicalService = profileToService[service] || service;
+    const canonicalProfile = serviceToProfile[service] || service;
 
     const containers = await this.answered(
       abortSignal =>
         this.docker!.listContainers({
           all: true,
           filters: {
-            label: [`com.openwa.service=${service}`],
+            label: [`com.openwa.service=${canonicalService}`],
           },
           abortSignal,
         }),
@@ -325,14 +368,19 @@ export class DockerService implements OnModuleInit {
       return this.docker.getContainer(containers[0].Id);
     }
 
-    // Fallback: try by EXACT name (never a substring — a substring, and especially the empty
-    // string, would resolve an arbitrary container). OpenWA-managed containers are `openwa-<service>`.
-    const target = `openwa-${service}`;
+    // Fallback: try matching com.openwa.service aliases or exact OpenWA-managed container names
+    // (never a substring, which would resolve and touch unrelated containers).
+    const exactNames = new Set([`openwa-${service}`, `openwa-${canonicalService}`, `openwa-${canonicalProfile}`]);
     const allContainers = await this.answered(
       abortSignal => this.docker!.listContainers({ all: true, abortSignal }),
       'a container list',
     );
-    const match = allContainers.find(c => c.Names?.some(n => n === target || n === `/${target}`));
+    const match = allContainers.find(
+      c =>
+        c.Labels?.['com.openwa.service'] === service ||
+        c.Labels?.['com.openwa.service'] === canonicalService ||
+        c.Names?.some(n => exactNames.has(n.replace(/^\//, ''))),
+    );
 
     if (match) {
       return this.docker.getContainer(match.Id);
@@ -517,7 +565,7 @@ export class DockerService implements OnModuleInit {
           return true;
         }
         // Start existing container
-        await existing.start();
+        await this.raceTimeout(existing.start(), this.callTimeoutMs, `starting existing container ${spec.name}`);
         this.logger.log(`Started existing container: ${spec.name}`);
         return true;
       }
@@ -526,7 +574,7 @@ export class DockerService implements OnModuleInit {
       // `pull_policy: missing` does: a host that has the image keeps working when the registry is
       // unreachable or has withdrawn it. As with compose, a cached floating tag is not refreshed
       // here. Only an answer that the image is absent pulls: a daemon that fails or does not answer the
-      // inspection could not complete a pull either, and the pull itself is not bounded.
+      // inspection could not complete a pull either, and the pull itself is bounded by pullTimeoutMs.
       const cached = await this.answered(abortSignal => {
         const image = Object.create(this.docker!.getImage(spec.image)) as Docker.Image;
         const modem = this.docker!.modem;
@@ -547,22 +595,36 @@ export class DockerService implements OnModuleInit {
       );
       if (!cached) {
         this.logger.log(`Pulling image: ${spec.image}`);
-        await new Promise<void>((resolve, reject) => {
-          void this.docker!.pull(spec.image, (err: Error | null, stream: NodeJS.ReadableStream) => {
-            if (err) return reject(err);
-            this.docker!.modem.followProgress(stream, (err2: Error | null) => {
-              if (err2) return reject(err2);
-              resolve();
-            });
-          });
-        });
+        let activePullStream: (NodeJS.ReadableStream & { destroy?: () => void }) | undefined;
+        await this.raceTimeout(
+          new Promise<void>((resolve, reject) => {
+            void this.docker!.pull(
+              spec.image,
+              (err: Error | null, stream: NodeJS.ReadableStream & { destroy?: () => void }) => {
+                if (err) return reject(err);
+                activePullStream = stream;
+                this.docker!.modem.followProgress(stream, (err2: Error | null) => {
+                  if (err2) return reject(err2);
+                  resolve();
+                });
+              },
+            );
+          }),
+          this.pullTimeoutMs,
+          `pulling image ${spec.image}`,
+          () => activePullStream?.destroy?.(),
+        );
       }
 
       // Create volume if needed
       if (spec.volumes) {
         for (const vol of spec.volumes) {
           try {
-            await this.docker.createVolume({ Name: vol.name });
+            await this.raceTimeout(
+              this.docker.createVolume({ Name: vol.name }),
+              this.callTimeoutMs,
+              `creating volume ${vol.name}`,
+            );
             this.logger.log(`Created volume: ${vol.name}`);
           } catch (error) {
             this.logger.debug(`Volume ${vol.name} creation skipped (may already exist)`, { error: String(error) });
@@ -604,8 +666,12 @@ export class DockerService implements OnModuleInit {
         },
       };
 
-      const container = await this.docker.createContainer(containerConfig);
-      await container.start();
+      const container = await this.raceTimeout(
+        this.docker.createContainer(containerConfig),
+        this.callTimeoutMs,
+        `creating container ${spec.name}`,
+      );
+      await this.raceTimeout(container.start(), this.callTimeoutMs, `starting container ${spec.name}`);
       this.logger.log(`Created and started container: ${spec.name}`);
       return true;
     } catch (error) {
@@ -647,7 +713,7 @@ export class DockerService implements OnModuleInit {
         return true;
       }
 
-      await container.start();
+      await this.raceTimeout(container.start(), this.callTimeoutMs, `starting service ${service}`);
       this.logger.log(`Started service: ${service}`);
       return true;
     } catch (error) {
@@ -734,7 +800,7 @@ export class DockerService implements OnModuleInit {
         return true;
       }
 
-      await container.stop();
+      await this.raceTimeout(container.stop(), this.stopTimeoutMs, `stopping service ${service}`);
       this.logger.log(`Stopped service: ${service}`);
       return true;
     } catch (error) {

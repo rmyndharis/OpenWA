@@ -13,7 +13,7 @@ import {
 import { dropMalformedConfigFields, dropMalformedDisplayFields, validatePluginManifest } from './plugin-manifest';
 import { PluginStorageService } from './plugin-storage.service';
 import { seedConfigDefaults } from './config-defaults.util';
-import { resolvePluginMainPath, pluginUpdateStagingDirName } from './plugin-paths';
+import { resolvePluginMainPath, pluginUpdateStagingDirName, assertPathContainedNoSymlinkEscape } from './plugin-paths';
 
 // Plugin ids whose bundled-extension code was permanently removed (v0.7 — superseded by the
 // marketplace chat-flow / group-translate; also reserved in plugin-installer). A leftover
@@ -347,6 +347,7 @@ export class PluginPackageScanner {
 
   loadPlugin(pluginPath: string): PluginInstance {
     const manifestPath = path.join(pluginPath, 'manifest.json');
+    assertPathContainedNoSymlinkEscape(pluginPath, manifestPath, detail => new Error(`Plugin manifest path ${detail}`));
     const manifestContent = fs.readFileSync(manifestPath, 'utf-8');
     const manifest = JSON.parse(manifestContent) as unknown;
 

@@ -11,7 +11,9 @@ import { ConfigService } from '@nestjs/config';
 import { HttpAdapterHost } from '@nestjs/core';
 import { setImmediate } from 'node:timers/promises';
 import { createLogger } from '../../../common/services/logger.service';
+import { SHUTDOWN_MAINTENANCE_WAIT_MS } from '../../../common/services/shutdown-budget';
 import { awaitNoOpenTransaction } from '../../../common/utils/shared-connection';
+import { repairSqliteMessageFts } from '../../../database/sqlite-message-fts';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, QueryRunner } from 'typeorm';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
@@ -69,7 +71,7 @@ export const TRIGRAM_BUILD_LOCK = `$1, to_regclass('messages')::oid::int`;
 /** How long a build kept from running (see retryContainsBuild) waits before trying again. */
 const TRIGRAM_BUILD_RETRY_MS = 30_000;
 /** Upper bound on waiting for an active trigram index build during shutdown. */
-const TRIGRAM_BUILD_SHUTDOWN_WAIT_MS = 1_000;
+const TRIGRAM_BUILD_SHUTDOWN_WAIT_MS = SHUTDOWN_MAINTENANCE_WAIT_MS;
 
 /** Why match=contains answers 501, one message per cause, each naming what to change. */
 const CONTAINS_UNAVAILABLE = {
@@ -464,46 +466,100 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
         if (this.destroyed) return false;
       }
     } else {
+      // Self-heal pre-existing corrupt messages_fts indexes (for example, pre-fix NULL-body gaps) before checking gaps.
+      await repairSqliteMessageFts(this.dataSource);
+      if (this.destroyed) return false;
       const gapRow: unknown[] = await this.dataSource.query(
-        `SELECT EXISTS(SELECT 1 FROM "messages" m WHERE m."body" IS NOT NULL
-         AND NOT EXISTS (SELECT 1 FROM "${docsize}" d WHERE d."rowid" = m."rowid")) AS missing`,
+        `SELECT EXISTS(SELECT 1 FROM "messages" m
+         WHERE NOT EXISTS (SELECT 1 FROM "${docsize}" d WHERE d."rowid" = m."rowid")) AS missing`,
       );
       if (this.destroyed) return false;
       if (Number((gapRow as Array<{ missing: number }>)[0]?.missing)) {
-        // `body IS NOT NULL` mirrors the migration's own backfill exactly: a repair that indexed a NULL
-        // body as an empty document would leave the index disagreeing with the schema it repairs.
+        // Index every row (including NULL bodies) to match _ai triggers and satisfy FTS5 integrity-check.
         await this.dataSource.query(
           `INSERT INTO "${table}"("rowid", "body")
-           SELECT m."rowid", m."body" FROM "messages" m WHERE m."body" IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM "${docsize}" d WHERE d."rowid" = m."rowid")`,
+           SELECT m."rowid", m."body" FROM "messages" m
+           WHERE NOT EXISTS (SELECT 1 FROM "${docsize}" d WHERE d."rowid" = m."rowid")`,
         );
         if (this.destroyed) return false;
       }
     }
-    // While a batched backfill runs, an edited or deleted row may not be indexed yet, and an FTS5
-    // 'delete' of a document an external-content index never held corrupts it: delete only what docsize
-    // lists.
-    const deleteOld = batched
-      ? `INSERT INTO "${table}"("${table}", "rowid", "body") SELECT 'delete', old."rowid", old."body" WHERE EXISTS (SELECT 1 FROM "${docsize}" WHERE "rowid" = old."rowid");`
-      : `INSERT INTO "${table}"("${table}", "rowid", "body") VALUES ('delete', old."rowid", old."body");`;
-    // The three sync triggers are CREATE-OR-REPLACE by name via DROP + CREATE; idempotent on re-run.
-    await this.dataSource.query(`DROP TRIGGER IF EXISTS ${table}_ai`);
-    await this.dataSource.query(`CREATE TRIGGER ${table}_ai AFTER INSERT ON "messages" BEGIN
+    // Delete only what docsize actually holds so deleting/updating an unindexed row never throws SQLITE_CORRUPT_VTAB.
+    const deleteOld = `INSERT INTO "${table}"("${table}", "rowid", "body") SELECT 'delete', old."rowid", old."body" WHERE EXISTS (SELECT 1 FROM "${docsize}" WHERE "rowid" = old."rowid");`;
+    const aiSql = `CREATE TRIGGER ${table}_ai AFTER INSERT ON "messages" BEGIN
       INSERT INTO "${table}"("rowid", "body") VALUES (new."rowid", new."body");
-    END`);
-    await this.dataSource.query(`DROP TRIGGER IF EXISTS ${table}_ad`);
-    await this.dataSource.query(`CREATE TRIGGER ${table}_ad AFTER DELETE ON "messages" BEGIN
+    END`;
+    const adSql = `CREATE TRIGGER ${table}_ad AFTER DELETE ON "messages" BEGIN
       ${deleteOld}
-    END`);
-    await this.dataSource.query(`DROP TRIGGER IF EXISTS ${table}_au`);
+    END`;
     // WHEN clause skips re-indexing on body-unchanged updates (acks/reactions/status), mirroring the
     // migration. NULL-safe via `IS NOT` so NULL to non-NULL body transitions still fire.
-    await this.dataSource.query(
-      `CREATE TRIGGER ${table}_au AFTER UPDATE ON "messages" WHEN OLD.body IS NOT NEW.body BEGIN
+    const auSql = `CREATE TRIGGER ${table}_au AFTER UPDATE ON "messages" WHEN OLD.body IS NOT NEW.body BEGIN
       ${deleteOld}
       INSERT INTO "${table}"("rowid", "body") VALUES (new."rowid", new."body");
-    END`,
+    END`;
+
+    const existingTriggers = await this.dataSource.query<Array<{ name: string; sql: string }>>(
+      `SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'messages' AND name IN ('${table}_ai', '${table}_ad', '${table}_au')`,
     );
+    if (this.destroyed) return false;
+    const byName = new Map(existingTriggers.map(r => [r.name, r.sql]));
+    const normalizeTriggerSql = (sql: string | undefined): string => (sql ?? '').replace(/\s+/g, ' ').trim();
+    const triggersMatch =
+      normalizeTriggerSql(byName.get(`${table}_ai`)) === normalizeTriggerSql(aiSql) &&
+      normalizeTriggerSql(byName.get(`${table}_ad`)) === normalizeTriggerSql(adSql) &&
+      normalizeTriggerSql(byName.get(`${table}_au`)) === normalizeTriggerSql(auSql);
+
+    let indexHealthy = false;
+    if (triggersMatch) {
+      try {
+        await this.dataSource.query(`INSERT INTO "${table}"("${table}", "rank") VALUES ('integrity-check', 1)`);
+        indexHealthy = true;
+      } catch {
+        indexHealthy = false;
+      }
+    }
+    if (this.destroyed) return false;
+
+    if (!triggersMatch || !indexHealthy) {
+      if (!(await awaitNoOpenTransaction(this.dataSource))) {
+        if (this.destroyed) return false;
+        throw new ConnectionBusyError('Another database transaction stayed open');
+      }
+      if (this.destroyed) return false;
+      const runTriggerDdl = async (exec: (sql: string) => Promise<unknown>): Promise<void> => {
+        await exec(`DROP TRIGGER IF EXISTS ${table}_ai`);
+        await exec(aiSql);
+        await exec(`DROP TRIGGER IF EXISTS ${table}_ad`);
+        await exec(adSql);
+        await exec(`DROP TRIGGER IF EXISTS ${table}_au`);
+        await exec(auSql);
+      };
+      if (typeof this.dataSource.createQueryRunner === 'function') {
+        const runner = this.dataSource.createQueryRunner();
+        let inTx = false;
+        try {
+          await runner.query('BEGIN IMMEDIATE');
+          inTx = true;
+          await runTriggerDdl(sql => runner.query(sql));
+          await runner.query('COMMIT');
+          inTx = false;
+        } catch (err) {
+          if (inTx) {
+            try {
+              await runner.query('ROLLBACK');
+            } catch {
+              // ignore rollback errors after an earlier DDL failure
+            }
+          }
+          throw err;
+        } finally {
+          await runner.release();
+        }
+      } else {
+        await runTriggerDdl(sql => this.dataSource.query(sql));
+      }
+    }
     if (this.destroyed) return false;
     if (batched) return this.backfillSqliteIndexInBatches(table);
     return true;
@@ -646,6 +702,7 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
     if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
     const runner = this.dataSource.createQueryRunner();
     await runner.connect();
+    let cleanupErr: unknown;
     try {
       if (this.destroyed) return CONTAINS_UNAVAILABLE.building;
       const [{ ctype }] = await runner.manager.query<Array<{ ctype: string }>>(
@@ -667,13 +724,32 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
         await runner.query('SET statement_timeout = 0');
         return await this.createPostgresTrigramSchema(runner);
       } finally {
-        // The connection returns to the pool: the next borrower must find its timeout and no lock. Put back
-        // by value: the pool sets the timeout on connect, and RESET would drop it to the server default.
-        if (bound !== undefined) await runner.query(`SELECT set_config('statement_timeout', $1, false)`, [bound]);
-        await runner.query(`SELECT pg_advisory_unlock(${TRIGRAM_BUILD_LOCK})`, [TRIGRAM_BUILD_LOCK_KEY]);
+        // Isolate statement_timeout restoration and advisory unlock; evict the pooled connection if either
+        // cleanup step fails so neither timeout=0 nor a held lock returns to the pool.
+        if (bound !== undefined) {
+          try {
+            await runner.query(`SELECT set_config('statement_timeout', $1, false)`, [bound]);
+          } catch (err) {
+            cleanupErr ??= err;
+          }
+        }
+        try {
+          await runner.query(`SELECT pg_advisory_unlock(${TRIGRAM_BUILD_LOCK})`, [TRIGRAM_BUILD_LOCK_KEY]);
+        } catch (err) {
+          cleanupErr ??= err;
+        }
       }
     } finally {
-      await runner.release();
+      if (cleanupErr !== undefined) {
+        const pgRunner = runner as unknown as { releasePostgresConnection?: (err?: unknown) => Promise<void> };
+        if (typeof pgRunner.releasePostgresConnection === 'function') {
+          await pgRunner.releasePostgresConnection(cleanupErr);
+        } else {
+          await runner.release();
+        }
+      } else {
+        await runner.release();
+      }
     }
   }
 
@@ -960,15 +1036,16 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
   private buildPostgres(q: SearchQuery, limit: number, offset: number) {
     const ph = this.pgPlaceholder();
     const params: unknown[] = [];
-    const ftsTerm = `websearch_to_tsquery('simple', ${ph()}) AS q(query)`;
+    const ftsParam = ph();
     params.push(q.q);
-    const where: string[] = [`m.body_ts @@ q.query`];
+    const where: string[] = [`m.body_ts @@ fts_query.query`];
     this.applyFilters(where, params, q, 'm.', ph);
-    // StartSel/StopSel are pinned to <mark>/</mark> to match the SQLite FTS5 snippet() output, so the
-    // SearchHit.snippet contract stays dialect-agnostic (PG's ts_headline defaults to <b>/</b>).
-    const cols = `m."id", m."waMessageId" AS wa_message_id, m."sessionId" AS session_id, m."chatId" AS chat_id, m."from", m."body", m."timestamp", m."type", m."direction", ts_headline('simple', m."body", q.query, 'MaxFragments=1, MaxWords=${MAX_SNIPPET_WORDS}, StartSel=<mark>, StopSel=</mark>') AS snippet, ts_rank(m.body_ts, q.query) AS score`;
-    const sql = `SELECT ${cols} FROM messages m, ${ftsTerm} WHERE ${where.join(' AND ')} ORDER BY score DESC, m."timestamp" DESC, m."id" DESC LIMIT ${ph()} OFFSET ${ph()}`;
+    const limitPh = ph();
+    const offsetPh = ph();
     params.push(limit, offset);
+    // Evaluate ts_headline only in the outer SELECT over the already paginated CTE so snippets are not
+    // computed for discarded non-page matches. StartSel/StopSel keep <mark>/</mark> to match SQLite.
+    const sql = `WITH fts_query AS (SELECT websearch_to_tsquery('simple', ${ftsParam}) AS query), ranked AS (SELECT m."id", m."waMessageId" AS wa_message_id, m."sessionId" AS session_id, m."chatId" AS chat_id, m."from", m."body", m."timestamp", m."type", m."direction", ts_rank(m.body_ts, fts_query.query) AS score FROM messages m, fts_query WHERE ${where.join(' AND ')} ORDER BY score DESC, m."timestamp" DESC, m."id" DESC LIMIT ${limitPh} OFFSET ${offsetPh}) SELECT r."id", r.wa_message_id, r.session_id, r.chat_id, r."from", r."body", r."timestamp", r."type", r."direction", ts_headline('simple', r."body", fts_query.query, 'MaxFragments=1, MaxWords=${MAX_SNIPPET_WORDS}, StartSel=<mark>, StopSel=</mark>') AS snippet, r.score FROM ranked r, fts_query ORDER BY r.score DESC, r."timestamp" DESC, r."id" DESC`;
     return { sql, params };
   }
 

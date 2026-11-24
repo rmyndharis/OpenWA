@@ -1,12 +1,14 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { Readable } from 'stream';
 import {
   deleteLocalFile,
   getLocalFile,
   iterateLocalFiles,
   openLocalFile,
   putLocalFile,
+  putLocalStream,
   StorageWalkRefusedError,
   type LocalWalkOptions,
 } from './storage-local-files';
@@ -387,6 +389,78 @@ describe('local storage file operations symlink containment', () => {
 
       jest.spyOn(fs.promises, 'writeFile').mockRejectedValueOnce(eio);
       await expect(putLocalFile(root, 'write-fail.bin', Buffer.from('x'))).rejects.toBe(eio);
+    });
+  });
+
+  describe('putLocalStream', () => {
+    it('rejects escaping directory symlinks before creating outside directories and destroys the stream', async () => {
+      fs.symlinkSync(outside, path.join(root, 'escape-dir'));
+      const stream = Readable.from([Buffer.from('bad')]);
+
+      await expect(putLocalStream(root, 'escape-dir/sub/pwned.bin', stream)).rejects.toThrow(/outside storage root/);
+      expect(fs.existsSync(path.join(outside, 'sub'))).toBe(false);
+      expect(stream.destroyed).toBe(true);
+    });
+
+    it('rejects dangling directory symlinks, target symlinks, lexical escapes, and root targets while destroying stream', async () => {
+      fs.symlinkSync(path.join(outside, 'missing-dir'), path.join(root, 'dangling-dir'));
+      fs.symlinkSync(path.join(outside, 'secret.bin'), path.join(root, 'escape-file.bin'));
+      fs.symlinkSync(path.join(outside, 'created-via-dangling.bin'), path.join(root, 'dangling.bin'));
+      fs.writeFileSync(path.join(root, 'inside.bin'), 'keep');
+      fs.symlinkSync(path.join(root, 'inside.bin'), path.join(root, 'intra-file-link.bin'));
+
+      const s1 = Readable.from([Buffer.from('bad')]);
+      await expect(putLocalStream(root, 'dangling-dir/file.bin', s1)).rejects.toThrow(/symbolic link/);
+      expect(s1.destroyed).toBe(true);
+
+      const s2 = Readable.from([Buffer.from('overwrite')]);
+      await expect(putLocalStream(root, 'escape-file.bin', s2)).rejects.toThrow(/outside storage root|symbolic link/);
+      expect(s2.destroyed).toBe(true);
+
+      const s3 = Readable.from([Buffer.from('create')]);
+      await expect(putLocalStream(root, 'dangling.bin', s3)).rejects.toThrow(/outside storage root|symbolic link/);
+      expect(s3.destroyed).toBe(true);
+
+      const s4 = Readable.from([Buffer.from('overwrite')]);
+      await expect(putLocalStream(root, 'intra-file-link.bin', s4)).rejects.toThrow(/symbolic link/);
+      expect(s4.destroyed).toBe(true);
+
+      const s5 = Readable.from([Buffer.from('bad')]);
+      await expect(putLocalStream(root, '../outside/pwn.bin', s5)).rejects.toThrow(/outside storage root/);
+      expect(s5.destroyed).toBe(true);
+
+      const s6 = Readable.from([Buffer.from('bad')]);
+      await expect(putLocalStream(root, '.', s6)).rejects.toThrow(/outside storage root/);
+      expect(s6.destroyed).toBe(true);
+
+      expect(fs.readFileSync(path.join(outside, 'secret.bin'), 'utf8')).toBe('outside-bytes');
+      expect(fs.existsSync(path.join(outside, 'created-via-dangling.bin'))).toBe(false);
+      expect(fs.readFileSync(path.join(root, 'inside.bin'), 'utf8')).toBe('keep');
+    });
+
+    it('writes streams cleanly into private dirs and destroys stream on open or read errors', async () => {
+      fs.mkdirSync(path.join(root, 'real'), { recursive: true });
+      fs.symlinkSync(path.join(root, 'real'), path.join(root, 'alias'));
+
+      await putLocalStream(root, 'nested/dir/stream.bin', Readable.from([Buffer.from('hello-')]));
+      await putLocalStream(root, 'alias/sub/stream.bin', Readable.from([Buffer.from('world')]));
+
+      expect(fs.readFileSync(path.join(root, 'nested/dir/stream.bin'), 'utf8')).toBe('hello-');
+      expect(fs.readFileSync(path.join(root, 'real/sub/stream.bin'), 'utf8')).toBe('world');
+
+      const openErr = Object.assign(new Error('EACCES: denied'), { code: 'EACCES' });
+      jest.spyOn(fs.promises, 'open').mockRejectedValueOnce(openErr);
+      const sOpenFail = Readable.from([Buffer.from('x')]);
+      await expect(putLocalStream(root, 'open-fail.bin', sOpenFail)).rejects.toBe(openErr);
+      expect(sOpenFail.destroyed).toBe(true);
+
+      const sBoom = new Readable({
+        read() {
+          this.destroy(new Error('source read boom'));
+        },
+      });
+      await expect(putLocalStream(root, 'read-fail.bin', sBoom)).rejects.toThrow('source read boom');
+      expect(sBoom.destroyed).toBe(true);
     });
   });
 

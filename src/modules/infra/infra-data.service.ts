@@ -411,68 +411,116 @@ export class InfraDataService {
 
   /** The table reads behind exportData, entered only through its import guard. */
   private async runExport(includePluginSecrets: boolean): Promise<InfraExportDataResult> {
-    // The tables below may legitimately not exist yet (created by migrations an older DB has not run).
-    // Only a GENUINE missing-table error (isMissingTableError) may be tolerated — anything else (lock,
-    // I/O, timeout, aborted connection) must FAIL the export. The old blind `catch { debug-log }`
-    // pattern reported those as "table is empty", producing a 200 "complete" backup that was actually
-    // partial — which the import then treated as authoritative and DELETEd the missing tables' rows.
-    // A skipped table is surfaced in `skippedTables` (and logged as a warning) so an operator can tell
-    // "not migrated yet" apart from "exported empty".
-    const skippedTables: string[] = [];
-    const readTable = async (entry: AnyExportTable, sql: string): Promise<unknown[]> => {
+    const isPostgres = this.dataDataSource.options?.type === 'postgres';
+    let skippedTables: string[] = [];
+    let tables = {} as MigrationTables;
+    let counts = {} as TableCounts;
+    let droppedByBucket: Record<'messages' | 'messageBatches', number> = { messages: 0, messageBatches: 0 };
+
+    const executeSnapshotReads = async (
+      queryFn: <T = unknown[]>(sql: string, params?: unknown[]) => Promise<T>,
+      useSavepoints: boolean,
+    ): Promise<void> => {
+      // The tables below may legitimately not exist yet (created by migrations an older DB has not run).
+      // Only a GENUINE missing-table error (isMissingTableError) may be tolerated; anything else (lock,
+      // I/O, timeout, aborted connection) must FAIL the export.
+      skippedTables = [];
+      const readTable = async (entry: AnyExportTable, sql: string): Promise<unknown[]> => {
+        if (useSavepoints && entry.optional) {
+          await queryFn('SAVEPOINT infra_export_optional');
+          try {
+            const rows = await queryFn<unknown[]>(sql);
+            await queryFn('RELEASE SAVEPOINT infra_export_optional');
+            return rows;
+          } catch (error) {
+            await queryFn('ROLLBACK TO SAVEPOINT infra_export_optional');
+            if (!isMissingTableError(error)) throw error;
+            skippedTables.push(entry.table);
+            this.logger.warn('Optional table does not exist in this DB; exporting without it', { table: entry.table });
+            return [];
+          }
+        }
+        try {
+          return await queryFn<unknown[]>(sql);
+        } catch (error) {
+          if (!entry.optional || !isMissingTableError(error)) throw error;
+          skippedTables.push(entry.table);
+          this.logger.warn('Optional table does not exist in this DB; exporting without it', { table: entry.table });
+          return [];
+        }
+      };
+
+      // One budget shared by the tables that carry a full inline payload (messages and
+      // message_batches today), so the total is what is bounded rather than each table separately.
+      const inlineMediaBudget = createInlineMediaBudget();
+      droppedByBucket = { messages: 0, messageBatches: 0 };
+      tables = {} as MigrationTables;
+      counts = {} as TableCounts;
+
+      const exportContext: ExportReadContext = {
+        includePluginSecrets,
+        resolvePluginConfigSchema: pluginId => this.resolvePluginConfigSchema(pluginId),
+      };
+
+      for (const entry of EXPORT_TABLES) {
+        const droppedBefore = inlineMediaBudget.droppedPayloads();
+        const rows: unknown[] = entry.inlineMedia
+          ? await this.readInlineMediaTable(
+              entry,
+              entry.inlineMedia,
+              sql => readTable(entry, sql),
+              inlineMediaBudget,
+              queryFn,
+            )
+          : await readTable(
+              entry,
+              `SELECT ${entry.columns?.map(column => `"${column}"`).join(', ') ?? '*'} FROM ${entry.table}`,
+            );
+        entry.afterRead?.(rows as never[], exportContext);
+        if (entry.inlineMedia) {
+          droppedByBucket[entry.inlineMedia.bucket] = inlineMediaBudget.droppedPayloads() - droppedBefore;
+        }
+        tables[entry.key] = rows as never;
+        counts[entry.key] = rows.length;
+      }
+
+      // See ExportTable.sessionFk: a child row of a session missing from the archive cannot be restored.
+      const exportedSessions = new Set(tables.sessions.map(session => session.id));
+      for (const entry of EXPORT_TABLES) {
+        if (!entry.sessionFk) continue;
+        const kept = (tables[entry.key] as Array<{ sessionId: string }>).filter(row =>
+          exportedSessions.has(row.sessionId),
+        );
+        tables[entry.key] = kept as never;
+        counts[entry.key] = kept.length;
+      }
+    };
+
+    if (isPostgres && typeof this.dataDataSource.createQueryRunner === 'function') {
+      const runner = this.dataDataSource.createQueryRunner();
+      await runner.connect();
       try {
-        return await this.dataDataSource.query(sql);
+        await runner.startTransaction('REPEATABLE READ');
+        await runner.query('SET TRANSACTION READ ONLY');
+        await runner.query('SET LOCAL statement_timeout = 0');
+        await executeSnapshotReads(
+          <T = unknown[]>(sql: string, params?: unknown[]) => runner.query(sql, params) as Promise<T>,
+          true,
+        );
+        await runner.commitTransaction();
       } catch (error) {
-        if (!entry.optional || !isMissingTableError(error)) throw error;
-        skippedTables.push(entry.table);
-        this.logger.warn('Optional table does not exist in this DB; exporting without it', { table: entry.table });
-        return [];
+        if (runner.isTransactionActive) {
+          await runner.rollbackTransaction().catch(() => undefined);
+        }
+        throw error;
+      } finally {
+        await runner.release();
       }
-    };
-
-    // One budget shared by the tables that carry a full inline payload (messages and
-    // message_batches today), so the total is what is bounded rather than each table separately.
-    const inlineMediaBudget = createInlineMediaBudget();
-    // The per-bucket drop counts are measured as the delta around each budgeted table's read, which
-    // attributes every refusal to the table that spent it and keeps the snapshot semantics the
-    // response documents: messages are served first, batches spend what is left.
-    const droppedByBucket: Record<'messages' | 'messageBatches', number> = { messages: 0, messageBatches: 0 };
-    const tables = {} as MigrationTables;
-    const counts = {} as TableCounts;
-
-    const exportContext: ExportReadContext = {
-      includePluginSecrets,
-      resolvePluginConfigSchema: pluginId => this.resolvePluginConfigSchema(pluginId),
-    };
-
-    for (const entry of EXPORT_TABLES) {
-      const droppedBefore = inlineMediaBudget.droppedPayloads();
-      const rows: unknown[] = entry.inlineMedia
-        ? await this.readInlineMediaTable(entry, entry.inlineMedia, sql => readTable(entry, sql), inlineMediaBudget)
-        : await readTable(
-            entry,
-            `SELECT ${entry.columns?.map(column => `"${column}"`).join(', ') ?? '*'} FROM ${entry.table}`,
-          );
-      // `rows` was read for exactly this entry's table, so it holds the row type the entry's hooks
-      // declare. That correlation is what the erased entry type cannot carry, and this loop is the
-      // one place it is known, so the casts live here rather than at each hook.
-      entry.afterRead?.(rows as never[], exportContext);
-      if (entry.inlineMedia) {
-        droppedByBucket[entry.inlineMedia.bucket] = inlineMediaBudget.droppedPayloads() - droppedBefore;
-      }
-      tables[entry.key] = rows as never;
-      counts[entry.key] = rows.length;
-    }
-
-    // See ExportTable.sessionFk: a child row of a session missing from the archive cannot be restored.
-    const exportedSessions = new Set(tables.sessions.map(session => session.id));
-    for (const entry of EXPORT_TABLES) {
-      if (!entry.sessionFk) continue;
-      const kept = (tables[entry.key] as Array<{ sessionId: string }>).filter(row =>
-        exportedSessions.has(row.sessionId),
+    } else {
+      await executeSnapshotReads(
+        <T = unknown[]>(sql: string, params?: unknown[]) => this.dataDataSource.query<T>(sql, params),
+        false,
       );
-      tables[entry.key] = kept as never;
-      counts[entry.key] = kept.length;
     }
 
     // Record who pulled a full-DB export, the per-table row counts, and whether plugin instance
@@ -510,6 +558,8 @@ export class InfraDataService {
     media: NonNullable<AnyExportTable['inlineMedia']>,
     readKeys: (sql: string) => Promise<unknown[]>,
     budget: InlineMediaBudget,
+    queryFn: <T = unknown[]>(sql: string, params?: unknown[]) => Promise<T> = (sql, params) =>
+      this.dataDataSource.query(sql, params),
   ): Promise<unknown[]> {
     const keys = (await readKeys(
       `SELECT id, "${media.recencyColumn}", OCTET_LENGTH("${media.payloadColumn}") AS "payloadBytes" FROM ${entry.table}`,
@@ -520,9 +570,9 @@ export class InfraDataService {
     let chunkBytes = 0;
 
     const flush = async (): Promise<void> => {
-      const isPostgres = this.dataDataSource.options.type === 'postgres';
+      const isPostgres = this.dataDataSource.options?.type === 'postgres';
       const placeholders = chunk.map((_, i) => (isPostgres ? `$${i + 1}` : '?')).join(', ');
-      const rows = await this.dataDataSource.query<Array<{ id: unknown }>>(
+      const rows = await queryFn<Array<{ id: unknown }>>(
         `SELECT * FROM ${entry.table} WHERE id IN (${placeholders})`,
         chunk,
       );

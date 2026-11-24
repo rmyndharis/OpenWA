@@ -4,12 +4,15 @@ import { randomUUID } from 'node:crypto';
 import { And, EntityManager, In, IsNull, LessThan, Not, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
 import { WebhookOutboxEvent, WebhookOutboxState } from './entities/webhook-outbox-event.entity';
 import { createLogger } from '../../common/services/logger.service';
+import { SHUTDOWN_MAINTENANCE_WAIT_MS } from '../../common/services/shutdown-budget';
 import { pruneInBatches } from '../../common/utils/batched-prune';
+import { startGuardedInterval } from '../../common/utils/guarded-interval';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
 
 const DEFAULT_OUTBOX_RETENTION_DAYS = 7;
+const DEFAULT_OUTBOX_PRUNE_MAX_ROWS = 100_000;
 /** Upper bound on waiting for an active outbox prune pass during shutdown. */
-const OUTBOX_PRUNE_SHUTDOWN_WAIT_MS = 1_000;
+const OUTBOX_PRUNE_SHUTDOWN_WAIT_MS = SHUTDOWN_MAINTENANCE_WAIT_MS;
 /**
  * Maximum outbox rows inserted per statement: 9 bound parameters per row yields at most 900
  * variables per query, safely below SQLite's 999 bind limit and PostgreSQL's 65535 limit.
@@ -49,7 +52,7 @@ export type OutboxOpenRow = Omit<ReplayableDelivery, 'id' | 'attempts'> & { deli
 @Injectable()
 export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookOutboxService');
-  private pruneTimer?: ReturnType<typeof setInterval>;
+  private stopPruneInterval?: () => void;
   private readonly inFlightPrunes = new Set<Promise<unknown>>();
   private stopped = false;
   // Row id to the time it may be read again, for rows whose stored payload could not be read.
@@ -82,21 +85,20 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       );
       days = DEFAULT_OUTBOX_RETENTION_DAYS;
     }
-    const run = (): void => {
-      this.pruneSettled(days)
-        .then(n => {
-          if (n > 0) this.logger.log(`Pruned ${n} settled outbound delivery record(s) older than ${days} day(s)`);
-        })
-        .catch(err => this.logger.error('Outbound delivery record prune failed', String(err)));
-    };
-    run();
-    this.pruneTimer = setInterval(run, 24 * 60 * 60 * 1000);
-    this.pruneTimer.unref?.();
+    this.stopPruneInterval = startGuardedInterval(
+      async () => {
+        const n = await this.pruneSettled(days);
+        if (n > 0) this.logger.log(`Pruned ${n} settled outbound delivery record(s) older than ${days} day(s)`);
+      },
+      24 * 60 * 60 * 1000,
+      err => this.logger.error('Outbound delivery record prune failed', String(err)),
+    );
   }
 
   async onModuleDestroy(): Promise<void> {
     this.stopped = true;
-    if (this.pruneTimer) clearInterval(this.pruneTimer);
+    this.stopPruneInterval?.();
+    this.stopPruneInterval = undefined;
     if (this.inFlightPrunes.size === 0) return;
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -112,19 +114,34 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Delete settled and legacy null-state rows older than the window, a batch at a time. Returns the number removed. */
-  async pruneSettled(olderThanDays: number): Promise<number> {
-    if (this.stopped) return 0;
+  /** Delete settled rows (indexed) and bounded legacy null-state rows older than the window. Returns the number removed. */
+  async pruneSettled(olderThanDays: number, maxRows = DEFAULT_OUTBOX_PRUNE_MAX_ROWS): Promise<number> {
+    if (this.stopped || maxRows <= 0) return 0;
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - olderThanDays);
-    const task = pruneInBatches({
-      repository: this.outbox,
-      where: [
-        { state: Not(In(['pending', 'queued'])), createdAt: LessThan(cutoff) },
-        { state: IsNull(), createdAt: LessThan(cutoff) },
-      ],
-      stopped: () => this.stopped,
-    });
+    const task = (async (): Promise<number> => {
+      const settledDeleted = await pruneInBatches({
+        repository: this.outbox,
+        where: { state: In(['dispatched', 'delivered', 'failed']), createdAt: LessThan(cutoff) },
+        maxRows,
+        stopped: () => this.stopped,
+      });
+      const remaining = Math.max(0, maxRows - settledDeleted);
+      if (remaining <= 0 || this.stopped) return settledDeleted;
+      // Avoid a full empty-result find() pass on Postgres/SQLite when no legacy NULL-state rows exist.
+      const hasLegacyNulls =
+        typeof this.outbox.exists === 'function'
+          ? await this.outbox.exists({ where: { state: IsNull(), createdAt: LessThan(cutoff) } })
+          : true;
+      if (!hasLegacyNulls || this.stopped) return settledDeleted;
+      const legacyDeleted = await pruneInBatches({
+        repository: this.outbox,
+        where: { state: IsNull(), createdAt: LessThan(cutoff) },
+        maxRows: remaining,
+        stopped: () => this.stopped,
+      });
+      return settledDeleted + legacyDeleted;
+    })();
     const settled = task.then(
       () => undefined,
       () => undefined,

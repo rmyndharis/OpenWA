@@ -27,7 +27,8 @@ export interface LogContext {
 // Defense-in-depth: redact the VALUES of secret-named keys before they reach the log sink, so a
 // careless `logger.info('…', { password })` can't leak a credential. Matches the key NAME only
 // (case-insensitive), never the value's content, to avoid false positives on innocuous fields.
-const SECRET_KEY_PATTERN = /password|passwd|secret|token|api[-_]?key|authorization|credential|pepper|private[-_]?key/i;
+const SECRET_KEY_PATTERN =
+  /password|passwd|secret|token|api[-_]?key|authorization|credential|pepper|private[-_]?key|(?:set[-_]?)?cookie|proxy[-_]?url|x-openwa-forwarded-sig/i;
 
 // Metadata is copied whole down to this depth, however wide, which is where it normally lives; only REDACT_MAX_ENTRIES
 // bounds that part. Below it one copy takes at most REDACT_DEEP_NODES more objects and arrays and writes the rest as

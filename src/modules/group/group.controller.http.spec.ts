@@ -94,3 +94,37 @@ describe('GroupController membership requests over HTTP: a body that was sent bu
     });
   });
 });
+
+describe('GroupController join-info query validation over HTTP', () => {
+  let app: INestApplication<App>;
+  const getGroupJoinInfo = jest.fn().mockResolvedValue({ id: '120363@g.us', name: 'Test' });
+
+  beforeAll(async () => {
+    const mod = await Test.createTestingModule({
+      controllers: [GroupController],
+      providers: [{ provide: GroupService, useValue: { getGroupJoinInfo } }],
+    }).compile();
+    app = mod.createNestApplication({ bodyParser: false, logger: false });
+    configureApp(app);
+    applyGlobalValidation(app);
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('rejects duplicate/array ?code query params with 400 instead of coercing to a comma-joined string', async () => {
+    const res = await request(app.getHttpServer()).get('/api/sessions/s1/groups/join-info?code=ABC123&code=DEF456');
+    expect(res.status).toBe(400);
+    expect(getGroupJoinInfo).not.toHaveBeenCalled();
+  });
+
+  it('still accepts a single scalar ?code query param', async () => {
+    const res = await request(app.getHttpServer()).get('/api/sessions/s1/groups/join-info?code=ABC123');
+    expect(res.status).toBe(200);
+    expect(getGroupJoinInfo).toHaveBeenCalledWith('s1', 'ABC123');
+  });
+});

@@ -12,8 +12,7 @@ export interface Toast {
   dedupeKey?: string;
 }
 
-export interface ToastContextValue {
-  toasts: Toast[];
+export interface ToastActionsContextValue {
   addToast: (toast: Omit<Toast, 'id'>) => void;
   removeToast: (id: string) => void;
   success: (title: string, message?: string) => void;
@@ -22,7 +21,12 @@ export interface ToastContextValue {
   info: (title: string, message?: string) => void;
 }
 
+export interface ToastContextValue extends ToastActionsContextValue {
+  toasts: Toast[];
+}
+
 export const ToastContext = createContext<ToastContextValue | null>(null);
+export const ToastActionsContext = createContext<ToastActionsContextValue | null>(null);
 
 export function useToast() {
   const context = useContext(ToastContext);
@@ -30,4 +34,12 @@ export function useToast() {
     throw new Error('useToast must be used within a ToastProvider');
   }
   return context;
+}
+
+export function useToastActions(): ToastActionsContextValue {
+  const actions = useContext(ToastActionsContext);
+  const full = useContext(ToastContext);
+  if (actions) return actions;
+  if (full) return full;
+  throw new Error('useToastActions must be used within a ToastProvider');
 }

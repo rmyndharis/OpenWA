@@ -1,6 +1,8 @@
+import { BadRequestException } from '@nestjs/common';
 import type { Request } from 'express';
 import { GroupController } from './group.controller';
 import { GroupService } from './group.service';
+import { REQUIRED_ROLE_KEY } from '../auth/decorators/auth.decorators';
 
 // The membership routes read the request to tell an empty body from one that was never parsed; the
 // body-shape cases run through real parsers in group.controller.http.spec.ts.
@@ -219,5 +221,22 @@ describe('GroupController OpenAPI responses', () => {
 
   it.each(['removeParticipants', 'promoteParticipants', 'demoteParticipants'])('%s keeps the unpaced 400', name => {
     expect(responsesOf(name)['400']?.description).not.toContain('cold-reachout');
+  });
+});
+
+describe('GroupController.joinInfo role and query validation', () => {
+  it('keeps joinInfo at default VIEWER role (no @RequireRole override)', () => {
+    const handler = Object.getOwnPropertyDescriptor(GroupController.prototype, 'joinInfo')?.value as object;
+    expect(Reflect.getMetadata(REQUIRED_ROLE_KEY, handler)).toBeUndefined();
+  });
+
+  it('rejects array or non-string code query parameters with BadRequestException before calling the service', async () => {
+    const getGroupJoinInfo = jest.fn();
+    const controller = new GroupController({ getGroupJoinInfo } as unknown as GroupService);
+    const arrayReq = { query: { code: ['ABC', 'DEF'] } } as unknown as Request;
+    await expect(controller.joinInfo('s1', 'ABC,DEF', arrayReq)).rejects.toThrow(BadRequestException);
+    const objReq = { query: { code: { nested: '1' } } } as unknown as Request;
+    await expect(controller.joinInfo('s1', '[object Object]', objReq)).rejects.toThrow(BadRequestException);
+    expect(getGroupJoinInfo).not.toHaveBeenCalled();
   });
 });

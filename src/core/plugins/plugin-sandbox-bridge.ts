@@ -293,6 +293,7 @@ export class PluginSandboxBridge {
       rawBody: d.payload.rawBody,
       verified,
       deliveryId: d.payload.providerDeliveryId ?? d.deliveryId,
+      dedupKey: d.deliveryId,
       sessionId: d.sessionId,
       config,
       timeoutMs: options?.queued

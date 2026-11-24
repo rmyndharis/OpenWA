@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   CallHandler,
   ConflictException,
   ExecutionContext,
@@ -24,6 +25,7 @@ import { createLogger } from '../../common/services/logger.service';
 import { getRequestId } from '../../common/services/request-context';
 import { isTransientDbError } from '../../common/utils/db-errors';
 import { normalizeIp } from '../../common/utils/ip';
+import { BODY_WIDTH_MESSAGES, exceededBodyWidth } from '../../common/validation/body-width';
 
 /**
  * The request headers a forwarded call carries over. Everything else is this hop's business.
@@ -155,6 +157,13 @@ function serializeFormBody(body: unknown): string {
 function prepareForwardPayload(request: Request): ForwardPayload {
   if (['GET', 'HEAD'].includes(request.method)) return {};
 
+  if (request.body !== undefined) {
+    const exceeded = exceededBodyWidth(request.body);
+    if (exceeded) {
+      throw new BadRequestException(BODY_WIDTH_MESSAGES[exceeded]);
+    }
+  }
+
   const rawContentType =
     typeof request.headers['content-type'] === 'string' ? request.headers['content-type'] : undefined;
   const rawBody = (request as Request & { rawBody?: unknown }).rawBody;
@@ -188,6 +197,22 @@ function prepareForwardPayload(request: Request): ForwardPayload {
   }
 
   const mediaType = mediaTypeOf(rawContentType);
+  if (
+    !Buffer.isBuffer(rawBody) &&
+    (request.method === 'POST' || request.method === 'PUT' || request.method === 'PATCH')
+  ) {
+    const rawContentLength = request.headers['content-length'];
+    const contentLength = rawContentLength !== undefined ? Number(rawContentLength) : Number.NaN;
+    const hasTransferEncoding = Boolean(request.headers['transfer-encoding']);
+    const hasUnreadBodyHeaders = (Number.isFinite(contentLength) && contentLength > 0) || hasTransferEncoding;
+    const parsedSupportedType = mediaType === 'application/json' || mediaType === 'application/x-www-form-urlencoded';
+    if (hasUnreadBodyHeaders && (request.body === undefined || !parsedSupportedType)) {
+      throw new BadRequestException(
+        'The request body was not read: send it as application/json or application/x-www-form-urlencoded, or send no body',
+      );
+    }
+  }
+
   if (mediaType === 'application/x-www-form-urlencoded') {
     return {
       body: serializeFormBody(request.body),
@@ -372,8 +397,9 @@ export class SessionProxyInterceptor implements NestInterceptor {
     const proxySecret =
       typeof rawProxySecret === 'string' && rawProxySecret.trim().length > 0 ? rawProxySecret.trim() : undefined;
     // Client-supplied hop markers and signature headers are never copied from request.headers.
-    // Always write our own nodeId and, when SESSION_PROXY_SECRET is set, sign the exact normalized
-    // wire path built by forwardTarget() below so the owner verifies the path it receives.
+    // Always write our own nodeId and, when SESSION_PROXY_SECRET is set, sign the normalized
+    // unprefixed request path (${requested.pathname}${requested.search}) matching what the owner's
+    // ProxyAwareThrottlerGuard verifies against req.originalUrl behind a reverse proxy.
     const headers: Record<string, string> = { [FORWARDED_HEADER]: nodeId };
     for (const name of FORWARDED_REQUEST_HEADERS) {
       const value = request.headers[name];
@@ -411,16 +437,17 @@ export class SessionProxyInterceptor implements NestInterceptor {
       // an unreachable-owner condition (the 503 below names the node and the setting), not a 500
       // on a request that had nothing wrong with it. Boot validation rejects such a value too.
       const rawPath = request.originalUrl || request.url || '/';
+      const ownerBase = new URL(ownerNodeUrl);
+      const requested = new URL(rawPath, ownerBase);
       target = forwardTarget(rawPath, ownerNodeUrl);
       if (proxySecret) {
-        const targetUrl = new URL(target);
         Object.assign(
           headers,
           signForwardedHop({
             secret: proxySecret,
             nodeId,
             method: request.method,
-            path: `${targetUrl.pathname}${targetUrl.search}`,
+            path: `${requested.pathname}${requested.search}`,
           }),
         );
       }

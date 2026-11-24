@@ -690,6 +690,7 @@ export class BaileysEvents {
       const processed = this.host.inboundLimiter
         .run(yieldSlot => this.processInboundMessage(msg, { generation, order, ticket, yieldSlot }))
         .catch((error: unknown) => {
+          if (generation !== this.storeGeneration) return;
           // Names the failure rather than calling it "saturated", which used to send operators to look
           // at concurrency settings for a problem that was never there. The retry below skips the
           // limiter and processInboundMessage handles its own errors, so it cannot reject.
@@ -1081,6 +1082,7 @@ export class BaileysEvents {
         });
         return;
       }
+      if (opts.generation !== this.storeGeneration) return;
       // The account's own status post reaches the projector and is dropped there: a story is not a
       // conversation, so no `message.sent` is emitted for it. Downloading its media first is work
       // nothing consumes, and a story is a full-size photo or video. Everything else about the path
@@ -1091,6 +1093,7 @@ export class BaileysEvents {
         ticket: opts.ticket,
         yieldSlot: opts.yieldSlot,
       });
+      if (opts.generation !== this.storeGeneration) return;
       // Stored before it is announced: whoever hears about this message may act on it at once (a quoted
       // reply, a reaction, a read receipt), and the store holds a read of an id until its write lands.
       // A message deleted for everyone or edited while it was being processed is stored as the change
@@ -1447,9 +1450,11 @@ export class BaileysEvents {
         const storedKey = (await this.readTarget(edited.messageId, 'reading an edit target'))?.key ?? target?.key;
         const resolveStored = await this.reportedPhones(storedKey, target?.key, msg.key);
         if (opts.generation !== this.storeGeneration) return;
-        const currentTarget = this.inboundInFlight.get(edited.messageId) ?? target;
+        const currentTarget = this.inboundInFlight.get(edited.messageId);
         if (currentTarget && this.mayChange(currentTarget.key, msg.key, false, resolveStored)) {
           recordInFlightEdit(resolveStored);
+        } else if (this.editedWhileInFlight.get(edited.messageId)?.envelope === msg.key) {
+          this.editedWhileInFlight.delete(edited.messageId);
         }
         const storedChatJid =
           storedKey?.remoteJid && this.mayChange(storedKey, msg.key, false, resolveStored)

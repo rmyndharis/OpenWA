@@ -41,16 +41,16 @@ export class AddMessagesFts1782400000000 implements MigrationInterface {
     await qr.query(
       `CREATE VIRTUAL TABLE IF NOT EXISTS "messages_fts" USING fts5(body, content='messages', content_rowid='rowid')`,
     );
-    await qr.query(
-      `INSERT INTO "messages_fts"("rowid", "body") SELECT "rowid", "body" FROM "messages" WHERE "body" IS NOT NULL`,
-    );
+    await qr.query(`INSERT INTO "messages_fts"("rowid", "body") SELECT "rowid", "body" FROM "messages"`);
     await qr.query(`DROP TRIGGER IF EXISTS messages_fts_ai`);
     await qr.query(`CREATE TRIGGER messages_fts_ai AFTER INSERT ON "messages" BEGIN
       INSERT INTO "messages_fts"("rowid", "body") VALUES (new."rowid", new."body");
     END`);
     await qr.query(`DROP TRIGGER IF EXISTS messages_fts_ad`);
     await qr.query(`CREATE TRIGGER messages_fts_ad AFTER DELETE ON "messages" BEGIN
-      INSERT INTO "messages_fts"("messages_fts", "rowid", "body") VALUES ('delete', old."rowid", old."body");
+      INSERT INTO "messages_fts"("messages_fts", "rowid", "body")
+      SELECT 'delete', old."rowid", old."body"
+      WHERE EXISTS (SELECT 1 FROM "messages_fts_docsize" WHERE "rowid" = old."rowid");
     END`);
     await qr.query(`DROP TRIGGER IF EXISTS messages_fts_au`);
     // The WHEN clause limits re-indexing to body changes: without it every ack (SENT→DELIVERED→READ),
@@ -59,7 +59,9 @@ export class AddMessagesFts1782400000000 implements MigrationInterface {
     // a NULL↔non-NULL body transition still fires, while ack-only updates skip. The INSERT and DELETE
     // triggers above are unchanged — only UPDATE gains the guard.
     await qr.query(`CREATE TRIGGER messages_fts_au AFTER UPDATE ON "messages" WHEN OLD.body IS NOT NEW.body BEGIN
-      INSERT INTO "messages_fts"("messages_fts", "rowid", "body") VALUES ('delete', old."rowid", old."body");
+      INSERT INTO "messages_fts"("messages_fts", "rowid", "body")
+      SELECT 'delete', old."rowid", old."body"
+      WHERE EXISTS (SELECT 1 FROM "messages_fts_docsize" WHERE "rowid" = old."rowid");
       INSERT INTO "messages_fts"("rowid", "body") VALUES (new."rowid", new."body");
     END`);
   }

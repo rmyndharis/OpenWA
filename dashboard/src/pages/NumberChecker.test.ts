@@ -666,13 +666,19 @@ test('NumberChecker: CSV export neutralizes error formulas and releases its obje
   rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: '919999999999' } });
   rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
   await rtl.screen.findByText('Failed', { selector: '.nc-status-badge' });
-  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Export Results/i }));
-
-  assert.equal(downloads.length, 1);
-  assert.ok((await downloads[0].text()).includes(`"'=HYPERLINK(""https://example.com"",""lookup"")"`));
-  assert.equal(revoke.mock.callCount(), 1);
-  assert.deepEqual(revoke.mock.calls[0].arguments, ['blob:number-checker-csv']);
-  assert.equal(document.querySelector('a[download]'), null);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Export Results/i }));
+    assert.equal(downloads.length, 1);
+    assert.ok((await downloads[0].text()).includes(`"'=HYPERLINK(""https://example.com"",""lookup"")"`));
+    assert.equal(revoke.mock.callCount(), 0);
+    t.mock.timers.tick(1_000);
+    assert.equal(revoke.mock.callCount(), 1);
+    assert.deepEqual(revoke.mock.calls[0].arguments, ['blob:number-checker-csv']);
+    assert.equal(document.querySelector('a[download]'), null);
+  } finally {
+    t.mock.timers.reset();
+  }
 });
 
 test('NumberChecker: the CSV carries each check as an ISO instant while the table shows the time of day', async t => {

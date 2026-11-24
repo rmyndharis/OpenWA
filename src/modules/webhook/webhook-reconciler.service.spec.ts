@@ -449,4 +449,90 @@ describe('WebhookReconcilerService', () => {
       else process.env.WEBHOOK_RECONCILE_INTERVAL_MS = prev;
     }
   });
+
+  it('closes a queued outbox row when a terminal WebhookDeliveryFailure (attempts > 0) already exists instead of re-enqueuing', async () => {
+    const failureRepo = {
+      findOne: jest.fn().mockResolvedValue({ id: 'fail-1' }),
+    };
+    const webhooks = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'wh-1',
+        sessionId: 'sess-1',
+        active: true,
+        events: ['message.received'],
+        url: 'https://example.com/hook',
+      }),
+    };
+    const outbox = {
+      findStale: jest
+        .fn()
+        .mockResolvedValue([row({ state: 'queued', deliveryId: 'dlv-failed-1', attempts: 0 } as never)]),
+      close: jest.fn().mockResolvedValue(undefined),
+      countAttempt: jest.fn().mockResolvedValue(true),
+    };
+    const delivery = {
+      isQueueJobPending: jest.fn().mockResolvedValue(false),
+      hasQueueJobCompleted: jest.fn().mockResolvedValue(false),
+      isLocallyPending: jest.fn().mockReturnValue(false),
+      redeliver: jest.fn().mockResolvedValue(undefined),
+      recordReplayExhaustion: jest.fn().mockResolvedValue(true),
+    };
+    const svc = new WebhookReconcilerService(
+      webhooks as never,
+      outbox as never,
+      delivery as never,
+      new ConfigService(),
+      failureRepo as never,
+    );
+
+    const stats = await svc.sweep(OPTS);
+
+    expect(outbox.close).toHaveBeenCalledWith('wh-1', 'stored-key_wh-1', 'failed');
+    expect(outbox.countAttempt).not.toHaveBeenCalled();
+    expect(delivery.redeliver).not.toHaveBeenCalled();
+    expect(stats.replayed).toBe(0);
+    expect(stats.skipped).toBe(1);
+  });
+
+  it('preserves crash-recovery re-enqueue for a queued outbox row when no terminal WebhookDeliveryFailure exists', async () => {
+    const failureRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+    };
+    const webhooks = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'wh-1',
+        sessionId: 'sess-1',
+        active: true,
+        events: ['message.received'],
+        url: 'https://example.com/hook',
+      }),
+    };
+    const outbox = {
+      findStale: jest
+        .fn()
+        .mockResolvedValue([row({ state: 'queued', deliveryId: 'dlv-crashed-1', attempts: 0 } as never)]),
+      close: jest.fn().mockResolvedValue(undefined),
+      countAttempt: jest.fn().mockResolvedValue(true),
+    };
+    const delivery = {
+      isQueueJobPending: jest.fn().mockResolvedValue(false),
+      hasQueueJobCompleted: jest.fn().mockResolvedValue(false),
+      isLocallyPending: jest.fn().mockReturnValue(false),
+      redeliver: jest.fn().mockResolvedValue(undefined),
+      recordReplayExhaustion: jest.fn().mockResolvedValue(true),
+    };
+    const svc = new WebhookReconcilerService(
+      webhooks as never,
+      outbox as never,
+      delivery as never,
+      new ConfigService(),
+      failureRepo as never,
+    );
+
+    const stats = await svc.sweep(OPTS);
+
+    expect(outbox.close).not.toHaveBeenCalled();
+    expect(delivery.redeliver).toHaveBeenCalledTimes(1);
+    expect(stats.replayed).toBe(1);
+  });
 });

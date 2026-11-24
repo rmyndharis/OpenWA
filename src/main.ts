@@ -49,6 +49,60 @@ import { prestartBuiltinDatabase } from './modules/docker/docker.service';
 // (engine sessions, Redis/pg) when bootstrap fails AFTER NestFactory.create succeeded — notably a
 // listen() bind failure (EADDRINUSE), where full init already ran.
 let appInstance: INestApplication | undefined;
+let closeAppHandler: (() => Promise<void>) | undefined;
+
+export interface BootstrapShutdownTarget {
+  listen(port: number | string): Promise<unknown>;
+  close(): Promise<void>;
+}
+
+export interface BootstrapShutdownService {
+  markShuttingDown(): void;
+  isShuttingDown(): boolean;
+  setShutdownCallback(cb: () => Promise<void>): void;
+}
+
+export function wireBootstrapShutdown(
+  shutdownService: BootstrapShutdownService,
+  getApp: () => BootstrapShutdownTarget | undefined,
+): {
+  listen(port: number | string): Promise<boolean>;
+  closeAppOnce(): Promise<void>;
+} {
+  let initPromise: Promise<unknown> | undefined;
+  let initSettled = false;
+  let closePromise: Promise<void> | undefined;
+
+  const closeAppOnce = (): Promise<void> => {
+    closePromise ??= Promise.resolve().then(() => getApp()?.close());
+    return closePromise;
+  };
+
+  shutdownService.setShutdownCallback(async () => {
+    if (initPromise && !initSettled) {
+      await initPromise.catch(() => undefined);
+    }
+    await closeAppOnce();
+  });
+
+  return {
+    listen: async (port: number | string): Promise<boolean> => {
+      if (shutdownService.isShuttingDown()) {
+        shutdownService.markShuttingDown();
+        await closeAppOnce();
+        return false;
+      }
+      const activeApp = getApp();
+      if (!activeApp) return false;
+      initPromise = activeApp.listen(port).finally(() => {
+        initSettled = true;
+      });
+      await initPromise;
+      return true;
+    },
+    closeAppOnce,
+  };
+}
 
 async function bootstrap() {
   // The env loader already applied LOG_LEVEL to its own lines once the env files were merged; applying
@@ -198,9 +252,8 @@ async function bootstrap() {
 
   // Wire up graceful shutdown service
   const shutdownService = app.get(ShutdownService);
-  shutdownService.setShutdownCallback(async () => {
-    await app.close();
-  });
+  const shutdownCoordinator = wireBootstrapShutdown(shutdownService, () => appInstance);
+  closeAppHandler = () => shutdownCoordinator.closeAppOnce();
 
   // On SIGTERM/SIGINT/SIGHUP: drain gracefully. shutdown() flips readiness to 503 immediately (the LB stops
   // routing), keeps serving in-flight requests for a bounded grace, then runs app.close() (every Nest
@@ -265,7 +318,9 @@ async function bootstrap() {
   );
 
   const port = process.env.PORT || 2785;
-  await app.listen(port);
+  if (!(await shutdownCoordinator.listen(port))) {
+    return;
+  }
 
   // Advertise the configured public URL, matching the AuthService banner (auth.service.ts). A bare
   // `localhost` literal here contradicted that banner and read as "the UI is pinned to localhost",
@@ -318,7 +373,9 @@ async function bootstrap() {
 // runBootstrapOrExit logs the failure, runs a bounded best-effort app.close() teardown, then exits(1); a
 // successful boot returns without touching exit. Puppeteer's own `exit` handlers kill any browser
 // children still up.
-void runBootstrapOrExit(bootstrap, {
-  logger: createLogger('Bootstrap'),
-  closeApp: () => (appInstance ? appInstance.close() : Promise.resolve()),
-});
+if (require.main === module) {
+  void runBootstrapOrExit(bootstrap, {
+    logger: createLogger('Bootstrap'),
+    closeApp: () => (closeAppHandler ? closeAppHandler() : appInstance ? appInstance.close() : Promise.resolve()),
+  });
+}

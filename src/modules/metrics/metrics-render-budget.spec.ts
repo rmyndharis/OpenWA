@@ -289,7 +289,7 @@ describe('MetricsService statistics slower than its budget, with the real stats 
     return pending;
   };
 
-  beforeEach(() => jest.useFakeTimers({ now: 1000000 }));
+  beforeEach(() => jest.useFakeTimers({ now: 1000000, doNotFake: ['setInterval'] }));
   afterEach(() => {
     for (const service of services.splice(0)) service.onModuleDestroy();
     jest.clearAllTimers();

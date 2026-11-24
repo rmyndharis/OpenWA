@@ -182,7 +182,11 @@ export class GroupController {
       'On whatsapp-web.js, answered when the WhatsApp Web build the session runs has no job to preview an invite with. ' +
       'Nothing was asked of WhatsApp: the invite code is not judged.',
   })
-  async joinInfo(@Param('sessionId') sessionId: string, @Query('code') code: string) {
+  async joinInfo(@Param('sessionId') sessionId: string, @Query('code') code: string, @Req() req?: Request) {
+    const rawCode: unknown = req?.query?.code ?? code;
+    if (rawCode !== undefined && typeof rawCode !== 'string') {
+      throw new BadRequestException('code must be a single string');
+    }
     return this.groupService.getGroupJoinInfo(sessionId, code);
   }
 

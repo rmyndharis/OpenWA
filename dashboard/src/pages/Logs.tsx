@@ -11,6 +11,7 @@ import { CustomSelect } from '../components/CustomSelect';
 import { pageWindow } from '../utils/pageWindow';
 import { fetchAllPages } from '../utils/fetchAllPages';
 import { escapeCsvCell } from '../utils/csv';
+import { scheduleObjectUrlRevoke } from '../utils/objectUrl';
 import './Logs.css';
 
 export function Logs() {
@@ -84,7 +85,7 @@ export function Logs() {
     a.href = url;
     a.download = `openwa-logs-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
-    URL.revokeObjectURL(url);
+    scheduleObjectUrlRevoke(url);
   };
 
   // Export the WHOLE audit history (honouring the active severity filter + search), not just the

@@ -18,6 +18,7 @@ import { ToolRegistryService } from '../../core/agent-tools/tool-registry.servic
 import type { AuthService } from '../auth/auth.service';
 import type { AuditService } from '../audit/audit.service';
 import { LoggerService } from '../../common/services/logger.service';
+import { getRequestActor, getRequestId, runWithRequestId } from '../../common/services/request-context';
 import { allAgentTools, type AgentToolDeps } from '../../core/agent-tools/tools';
 
 // The request-handling path news up an McpServer + StreamableHTTPServerTransport per POST. Both SDK
@@ -845,6 +846,192 @@ describe('mountMcpServer (raw-Express request-handling path)', () => {
       error: { code: -32603, message: 'Internal server error' },
       id: null,
     });
+  });
+
+  it('enforces a pre-dispatch envelope limiter in createKeyGate while preserving in-band tool rate limits', async () => {
+    const validateApiKey = jest.fn().mockImplementation((key: string) => Promise.resolve({ id: `id-${key}` }));
+    const logWarn = jest.fn();
+    const gateRateLimiter = new KeyRateLimiter(2, 60_000);
+    const gate = createKeyGate({ validateApiKey }, { logWarn }, gateRateLimiter);
+
+    const runGate = async (key: string, body: unknown) => {
+      const res = { status: jest.fn(), json: jest.fn(), set: jest.fn(), statusCode: 0, body: undefined as unknown };
+      res.status.mockImplementation((c: number) => {
+        res.statusCode = c;
+        return res;
+      });
+      res.json.mockImplementation((b: unknown) => {
+        res.body = b;
+        return res;
+      });
+      res.set.mockReturnValue(res);
+      const next = jest.fn();
+      const req = {
+        method: 'POST',
+        path: '/mcp',
+        headers: { 'x-api-key': key },
+        body,
+        socket: { remoteAddress: '203.0.113.7' },
+      } as unknown as Request;
+      await gate(req, res as unknown as Response, next);
+      return { res, next };
+    };
+
+    // initialize + tools/list consume the 2-token pre-dispatch envelope for key-a.
+    expect((await runGate('key-a', { jsonrpc: '2.0', id: 1, method: 'initialize' })).next).toHaveBeenCalledTimes(1);
+    expect((await runGate('key-a', { jsonrpc: '2.0', id: 2, method: 'tools/list' })).next).toHaveBeenCalledTimes(1);
+
+    // 3rd message (even invalid-schema tools/call) is blocked at the gate with JSON-RPC 429 and not audited as auth failure.
+    const blocked = await runGate('key-a', {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: { name: 'MessageSendText', arguments: {} },
+    });
+    expect(blocked.next).not.toHaveBeenCalled();
+    expect(blocked.res.statusCode).toBe(429);
+    expect(blocked.res.body).toEqual({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'MCP rate limit exceeded' },
+      id: null,
+    });
+    expect(logWarn).not.toHaveBeenCalled();
+
+    // Missing API key initializes ALS context via runWithMcpActor so getRequestId() and ipAddress exist during auth audit.
+    let capturedReqId: string | undefined;
+    let capturedActorIp: string | undefined;
+    logWarn.mockImplementationOnce(() => {
+      capturedReqId = getRequestId();
+      capturedActorIp = getRequestActor()?.ipAddress;
+    });
+    const unauth = await runGate('', { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    expect(unauth.res.statusCode).toBe(401);
+    expect(capturedReqId).toEqual(expect.any(String));
+    expect(capturedActorIp).toBe('203.0.113.7');
+
+    // Another key keeps its full envelope, and a batch of 3 exceeds its 2-token budget.
+    const batchBlocked = await runGate('key-b', [
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      { jsonrpc: '2.0', id: 3, method: 'tools/list' },
+    ]);
+    expect(batchBlocked.next).not.toHaveBeenCalled();
+    expect(batchBlocked.res.statusCode).toBe(429);
+
+    // mountMcpServer sizes the gate envelope at readRateLimitConfig().max * 2 while keeping tool-level in-band rate limits.
+    const prevMax = process.env.MCP_RATE_LIMIT_MAX;
+    process.env.MCP_RATE_LIMIT_MAX = '2';
+    try {
+      let routeHandlers: unknown[] = [];
+      const adapter = {
+        post: jest.fn((_path: string, ...handlers: unknown[]) => {
+          routeHandlers = handlers;
+        }),
+        get: jest.fn(),
+        delete: jest.fn(),
+      };
+      const tool = {
+        name: 'SessionFindAll',
+        description: 'List',
+        inputSchema: z.object({}),
+        tier: 'read',
+        handler: jest.fn().mockResolvedValue([]),
+      } as unknown as AnyToolDescriptor;
+      mockRegisteredTools.length = 0;
+      mountMcpServer(
+        adapter as unknown as Parameters<typeof mountMcpServer>[0],
+        { list: jest.fn(() => [tool]) } as unknown as ToolRegistryService,
+        { validateApiKey, hasPermission: jest.fn(() => true) } as unknown as AuthService,
+        new KeyRateLimiter(2, 60_000),
+        new KeyRateLimiter(100, 60_000),
+        { readOnly: true },
+      );
+      const mountedGate = routeHandlers[2] as (req: Request, res: Response, next: () => void) => Promise<void>;
+      const mountedHandler = routeHandlers[3] as (req: Request, res: Response) => Promise<void>;
+      const reqFor = (body: unknown) =>
+        ({
+          method: 'POST',
+          path: '/mcp',
+          headers: { 'x-api-key': 'single-shot' },
+          body,
+          socket: { remoteAddress: '203.0.113.7' },
+        }) as unknown as Request;
+
+      // 3rd request passes the gate (gateMax = 4), while the 3rd tools/call gets in-band isError from invokeTool,
+      // and the 5th request is stopped at the gate with 429.
+      for (let i = 1; i <= 4; i++) {
+        const nextFn = jest.fn();
+        await mountedGate(
+          reqFor({ jsonrpc: '2.0', id: i, method: 'tools/call', params: { name: 'SessionFindAll', arguments: {} } }),
+          makeRes() as unknown as Response,
+          nextFn,
+        );
+        expect(nextFn).toHaveBeenCalledTimes(1);
+      }
+      await mountedHandler(
+        reqFor({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'SessionFindAll', arguments: {} } }),
+        makeRes() as unknown as Response,
+      );
+      for (let i = 0; i < 2; i++) {
+        const okRes = (await mockRegisteredTools[0].callback(
+          {},
+          { authInfo: { token: 'single-shot', clientId: 'api-key', scopes: [] } },
+        )) as { isError?: boolean };
+        expect(okRes.isError).toBeFalsy();
+      }
+      const inBandLimited = (await mockRegisteredTools[0].callback(
+        {},
+        { authInfo: { token: 'single-shot', clientId: 'api-key', scopes: [] } },
+      )) as { isError?: boolean; content: Array<{ text: string }> };
+      expect(inBandLimited.isError).toBe(true);
+      expect(inBandLimited.content[0].text).toContain('MCP rate limit exceeded');
+
+      const gate5Res = makeRes();
+      const gate5Next = jest.fn();
+      await mountedGate(
+        reqFor({ jsonrpc: '2.0', id: 5, method: 'tools/list' }),
+        gate5Res as unknown as Response,
+        gate5Next,
+      );
+      expect(gate5Next).not.toHaveBeenCalled();
+      expect(gate5Res.status).toHaveBeenCalledWith(429);
+    } finally {
+      if (prevMax === undefined) delete process.env.MCP_RATE_LIMIT_MAX;
+      else process.env.MCP_RATE_LIMIT_MAX = prevMax;
+    }
+  });
+
+  it('propagates resolved client ipAddress into ALS around MCP tool execution', async () => {
+    process.env.TRUSTED_PROXIES = '127.0.0.1';
+    let observedInTransport: string | undefined;
+    let observedInTool: string | undefined;
+    mockHandleRequest.mockImplementationOnce(() => {
+      observedInTransport = getRequestActor()?.ipAddress;
+      return Promise.resolve();
+    });
+
+    const h = mount();
+    h.authService.validateApiKey.mockResolvedValue({ id: 'k1', name: 'mcp-key' });
+    h.tool.handler = () => {
+      observedInTool = getRequestActor()?.ipAddress;
+      return Promise.resolve({ ok: true });
+    };
+
+    const req = {
+      method: 'POST',
+      path: '/mcp',
+      headers: { 'x-api-key': 'good-key', 'x-forwarded-for': '198.51.100.42' },
+      body: { jsonrpc: '2.0', id: 1 },
+      socket: { remoteAddress: '127.0.0.1' },
+    } as unknown as Request;
+    await runWithRequestId('req-mcp-ip', () => h.routeHandler(req, makeRes() as unknown as Response));
+    expect(observedInTransport).toBe('198.51.100.42');
+
+    await toolCallback()(
+      { sessionId: 's1', to: '123', text: 'hi' },
+      { requestInfo: { headers: { 'x-api-key': 'good-key' } } },
+    );
+    expect(observedInTool).toBe('198.51.100.42');
   });
 });
 

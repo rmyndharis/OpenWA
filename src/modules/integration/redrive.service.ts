@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { randomUUID } from 'crypto';
 import { IsNull, Repository } from 'typeorm';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { IngressEvent } from './entities/ingress-event.entity';
@@ -121,8 +122,8 @@ export class RedriveService implements OnModuleDestroy {
       if (!row) continue;
       if (this.stop.signal.aborted) break;
       const stored = (row.payload ?? {}) as StoredDlqPayload;
-      // Re-mint a jobId so BullMQ accepts the replay even if the original jobId lingers.
-      const jobId = `redrive:${row.id}`;
+      // Re-mint a unique attempt-suffixed jobId so BullMQ never drops retries even if an earlier crash occurred between enqueue() and the DB update.
+      const jobId = `redrive:${row.id}:${Math.max(0, row.attempts ?? 0)}:${randomUUID()}`;
       // Given the stop signal, enqueue() throws instead of dispatching inline once it has aborted: the
       // row is left open and unchanged, since the plugin may already be torn down.
       const result = await this.ingressEnqueue

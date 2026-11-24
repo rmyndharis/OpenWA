@@ -23,18 +23,18 @@ class HealthResource
     /** @return array<string,mixed> */
     public function check(): array
     {
-        return $this->http->request('GET', '/api/health') ?? [];
+        return $this->http->requestNullableArray('GET', '/api/health') ?? [];
     }
 
     /** @return array<string,mixed> */
     public function live(): array
     {
-        return $this->http->request('GET', '/api/health/live') ?? [];
+        return $this->http->requestNullableArray('GET', '/api/health/live') ?? [];
     }
 
     /** @return array<string,mixed> */
     public function ready(): array
     {
-        return $this->http->request('GET', '/api/health/ready') ?? [];
+        return $this->http->requestNullableArray('GET', '/api/health/ready') ?? [];
     }
 }

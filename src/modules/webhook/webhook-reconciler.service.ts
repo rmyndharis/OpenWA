@@ -1,8 +1,9 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { MoreThan, Repository } from 'typeorm';
 import { Webhook } from './entities/webhook.entity';
+import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
 import { WebhookOutboxService } from './webhook-outbox.service';
 import {
   DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS,
@@ -77,6 +78,9 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
     private readonly outbox: WebhookOutboxService,
     private readonly delivery: WebhookDeliveryService,
     private readonly configService: ConfigService,
+    @Optional()
+    @InjectRepository(WebhookDeliveryFailure, 'data')
+    private readonly deliveryFailures?: Repository<WebhookDeliveryFailure>,
   ) {}
 
   onModuleInit(): void {
@@ -187,6 +191,17 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
           await this.outbox.close(row.webhookId, row.idempotencyKey, 'dispatched');
           stats.skipped++;
           continue;
+        }
+        if (row.state === 'queued' && this.deliveryFailures) {
+          const terminalFailure = await this.deliveryFailures.findOne({
+            select: { id: true },
+            where: { webhookId: row.webhookId, idempotencyKey: row.idempotencyKey, attempts: MoreThan(0) },
+          });
+          if (terminalFailure) {
+            await this.outbox.close(row.webhookId, row.idempotencyKey, 'failed');
+            stats.skipped++;
+            continue;
+          }
         }
         if (row.attempts >= opts.maxAttempts) {
           // A database fault may have prevented every terminal failure write. Keep the outbox

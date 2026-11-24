@@ -1,8 +1,12 @@
+import { BadRequestException } from '@nestjs/common';
 import type { WASocket } from '@whiskeysockets/baileys';
 import { BaileysMessaging, type BaileysMessagingHost } from './baileys-messaging';
+import * as loadRemoteMedia from '../../common/media/load-remote-media';
+import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { BaileysLifecycle, type BaileysLifecycleHost } from './baileys-lifecycle';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { EngineNotSentError, provesNothingSent } from '../../common/errors/engine-not-sent.error';
+import { sentNothing } from '../../modules/message/send-pacing.service';
 
 type FakeSock = {
   onWhatsApp: jest.Mock;
@@ -282,5 +286,82 @@ describe('BaileysMessaging onWhatsApp send cache', () => {
 
     await lifecycle.disconnect();
     expect(clearNumberIdCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-applies withEphemeral after onWhatsApp canonicalizes a regional recipient JID', async () => {
+    const sock = makeFakeSock();
+    sock.onWhatsApp.mockResolvedValueOnce([{ jid: '541112345678@s.whatsapp.net', exists: true }]);
+    const host = makeHost(() => sock);
+    host.getEphemeralExpiration = jest.fn((jid: string) => (jid === '541112345678@s.whatsapp.net' ? 86400 : undefined));
+    const messaging = new BaileysMessaging(host);
+
+    await messaging.sendTextMessage('5491112345678@c.us', 'hola');
+
+    expect(sock.sendMessage).toHaveBeenCalledWith(
+      '541112345678@s.whatsapp.net',
+      expect.objectContaining({ text: 'hola' }),
+      expect.objectContaining({ ephemeralExpiration: 86400 }),
+    );
+  });
+
+  it('pre-fetches product.imageUrl through loadRemoteMediaBuffer (with proxy & SSRF guard) and sends a Buffer', async () => {
+    const sock = makeFakeSock();
+    const host = makeHost(() => sock);
+    host.sessionProxyUrl = () => 'http://proxy.internal:8080';
+    const messaging = new BaileysMessaging(host);
+    const buf = Buffer.from([0xff, 0xd8, 0xff]);
+    const spy = jest.spyOn(loadRemoteMedia, 'loadRemoteMediaBuffer').mockResolvedValue({
+      data: buf,
+      mimetype: 'image/jpeg',
+    });
+    try {
+      await messaging.sendProductMessage('120363999@newsletter', {
+        id: 'P1',
+        name: 'Coffee',
+        description: 'Roast',
+        price: 12.5,
+        currency: 'USD',
+        retailerId: 'SKU1',
+        url: 'https://shop.example/p1',
+        imageUrl: 'https://cdn.example/coffee.jpg',
+        isAvailable: true,
+      });
+
+      expect(spy).toHaveBeenCalledWith('https://cdn.example/coffee.jpg', 'http://proxy.internal:8080');
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+      const [sentTo, sentContent] = sock.sendMessage.mock.calls[0] as [string, { product?: { productImage?: Buffer } }];
+      expect(sentTo).toBe('120363999@newsletter');
+      expect(sentContent.product?.productImage).toBe(buf);
+    } finally {
+      spy.mockRestore();
+    }
+
+    await expect(
+      messaging.sendProductMessage('120363999@newsletter', {
+        id: 'P2',
+        name: 'Internal',
+        description: 'SSRF',
+        imageUrl: 'http://127.0.0.1/secret.jpg',
+        url: 'https://shop.example/p2',
+        isAvailable: true,
+      }),
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
+    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+
+    for (const badImageUrl of ['file:///etc/passwd', 'data:image/png;base64,AQ==', 'not-a-url']) {
+      const error: unknown = await messaging
+        .sendProductMessage('120363999@newsletter', {
+          id: 'P3',
+          name: 'BadScheme',
+          description: 'Invalid scheme',
+          imageUrl: badImageUrl,
+          url: 'https://shop.example/p3',
+          isAvailable: true,
+        })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect(sentNothing(error)).toBe(true);
+    }
+    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
   });
 });

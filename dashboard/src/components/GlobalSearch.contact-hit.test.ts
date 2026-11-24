@@ -76,7 +76,7 @@ after(() => {
 /** The excerpt each listed hit shows, once the search for `term` has answered. */
 async function excerptsFor(term: string): Promise<HTMLElement[]> {
   rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
-  rtl.fireEvent.change(rtl.screen.getByRole('textbox'), { target: { value: term } });
+  rtl.fireEvent.change(rtl.screen.getByRole('combobox'), { target: { value: term } });
   const options = await rtl.screen.findAllByRole('option', undefined, { timeout: 10_000 });
   assert.equal(options.length, answer.length, 'the search did not list every hit');
   return options.map(option => option.querySelector('.global-search-hit-snippet') as HTMLElement);

@@ -26,13 +26,13 @@ class ContactsResource
      */
     public function list(string $sessionId, array $query = []): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts", $query) ?? [];
+        return $this->http->requestNullableArray('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts", $query) ?? [];
     }
 
     /** @return array<string,mixed> */
     public function get(string $sessionId, string $contactId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}");
     }
 
     /**
@@ -42,13 +42,13 @@ class ContactsResource
      */
     public function check(string $sessionId, string $number): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/check/{$this->http->encodeSegment($number)}");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/check/{$this->http->encodeSegment($number)}");
     }
 
     /** @return array<string,mixed> */
     public function profilePicture(string $sessionId, string $contactId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}/profile-picture");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}/profile-picture");
     }
 
     /**
@@ -59,7 +59,7 @@ class ContactsResource
      */
     public function profilePictures(string $sessionId, array $ids): array
     {
-        return $this->http->request(
+        return $this->http->requestArray(
             'GET',
             "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/profile-pictures",
             ['ids' => implode(',', $ids)]
@@ -69,7 +69,7 @@ class ContactsResource
     /** @return array<string,mixed> */
     public function phone(string $sessionId, string $contactId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}/phone");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}/phone");
     }
 
     /**
@@ -82,7 +82,7 @@ class ContactsResource
      */
     public function lid(string $sessionId, string $number): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($number)}/lid");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($number)}/lid");
     }
 
     /**
@@ -92,7 +92,7 @@ class ContactsResource
      */
     public function block(string $sessionId, string $contactId): array
     {
-        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}/block");
+        return $this->http->requestArray('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}/block");
     }
 
     /**
@@ -103,7 +103,7 @@ class ContactsResource
      */
     public function upsert(string $sessionId, string $contactId, array $body): array
     {
-        return $this->http->request('PUT', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}", [], $body) ?? [];
+        return $this->http->requestNullableArray('PUT', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}", [], $body) ?? [];
     }
 
     /**
@@ -113,7 +113,7 @@ class ContactsResource
      */
     public function delete(string $sessionId, string $contactId): array
     {
-        return $this->http->request('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}") ?? [];
+        return $this->http->requestNullableArray('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}") ?? [];
     }
 
     /**
@@ -123,7 +123,7 @@ class ContactsResource
      */
     public function unblock(string $sessionId, string $contactId): array
     {
-        return $this->http->request('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}/block");
+        return $this->http->requestArray('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}/block");
     }
 
     /**
@@ -136,6 +136,6 @@ class ContactsResource
      */
     public function listBlocked(string $sessionId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/blocked");
+        return $this->http->requestArray('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/blocked");
     }
 }

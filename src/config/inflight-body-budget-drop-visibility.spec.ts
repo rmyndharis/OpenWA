@@ -97,12 +97,9 @@ describe('a request body the in-flight budget drops mid-upload', () => {
   it('counts a chunked body that outgrows its client share as a 503 and names the cause in the log', async () => {
     await start({ perClientShare: 0.5 });
     const outcome = upload({ 'Transfer-Encoding': 'chunked' }, `{"data":"${'a'.repeat(1536 * 1024)}`);
-    await until(() => (serverSocket?.bytesRead ?? 0) >= 1536 * 1024, 'the body to arrive');
-
-    // The share check runs on the stall poll, every 5 s.
-    jest.advanceTimersByTime(5_000);
 
     expect(await outcome).toMatch(/^error /);
+    expect(serverSocket?.bytesRead ?? 0).toBeLessThan(1536 * 1024);
     await until(() => counted().length > 0, 'the request to be recorded');
     expect(counted()).toEqual(['http_requests_total{method="POST",route="(unmatched)",status="503"} 1']);
     expect(logged()).toEqual([

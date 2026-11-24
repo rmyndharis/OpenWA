@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OpenWA\Tests;
 
+use OpenWA\Exceptions\OpenWAException;
 use PHPUnit\Framework\TestCase;
 
 class HttpExecutorTest extends TestCase
@@ -200,5 +201,77 @@ class HttpExecutorTest extends TestCase
         $this->assertSame('/gateway/api/sessions/session%23one/contacts/contact%23two@c.us', $request->getRequestTarget());
         $this->assertSame('', $request->getUri()->getQuery());
         $this->assertSame('', $request->getUri()->getFragment());
+    }
+
+    public function testStrictArrayResourceCallsRejectEmptyAndScalarPayloads(): void
+    {
+        $responses = [
+            new \GuzzleHttp\Psr7\Response(204),
+            new \GuzzleHttp\Psr7\Response(200, [], ''),
+            new \GuzzleHttp\Psr7\Response(200, [], 'null'),
+            new \GuzzleHttp\Psr7\Response(200, [], '"ok"'),
+        ];
+        foreach ($responses as $response) {
+            $mock = new \GuzzleHttp\Handler\MockHandler([$response]);
+            $client = new \OpenWA\Client([
+                'baseUrl' => 'http://localhost',
+                'apiKey' => 'fixture-key',
+                'httpClient' => new \GuzzleHttp\Client(['handler' => \GuzzleHttp\HandlerStack::create($mock)]),
+            ]);
+            try {
+                $client->sessions->get('sess-1');
+                $this->fail('Expected OpenWAException for non-object 2xx payload');
+            } catch (OpenWAException $e) {
+                $this->assertStringContainsString('expected JSON object/array response', $e->getMessage());
+            }
+        }
+    }
+
+    public function testNullableArrayRejectsScalarWhileClientRequestAndVoidDeleteStayUnchanged(): void
+    {
+        $mock = new \GuzzleHttp\Handler\MockHandler([
+            new \GuzzleHttp\Psr7\Response(200, [], '42'),
+            new \GuzzleHttp\Psr7\Response(200, [], '"raw"'),
+            new \GuzzleHttp\Psr7\Response(204),
+        ]);
+        $client = new \OpenWA\Client([
+            'baseUrl' => 'http://localhost',
+            'apiKey' => 'fixture-key',
+            'httpClient' => new \GuzzleHttp\Client(['handler' => \GuzzleHttp\HandlerStack::create($mock)]),
+        ]);
+
+        try {
+            $client->webhooks->deliveryFailures();
+            $this->fail('Expected OpenWAException for scalar JSON');
+        } catch (OpenWAException $e) {
+            $this->assertStringContainsString('expected JSON object/array response', $e->getMessage());
+        }
+
+        $this->assertSame('raw', $client->request('GET', '/api/raw'));
+        $client->sessions->delete('sess-1');
+    }
+
+    public function testAuthRejectsScalarPayloadsAndAllowsEmptyOrObject(): void
+    {
+        $mock = new \GuzzleHttp\Handler\MockHandler([
+            new \GuzzleHttp\Psr7\Response(200, [], '"ok"'),
+            new \GuzzleHttp\Psr7\Response(204),
+            new \GuzzleHttp\Psr7\Response(200, [], '{"valid":true,"role":"admin"}'),
+        ]);
+        $client = new \OpenWA\Client([
+            'baseUrl' => 'http://localhost',
+            'apiKey' => 'fixture-key',
+            'httpClient' => new \GuzzleHttp\Client(['handler' => \GuzzleHttp\HandlerStack::create($mock)]),
+        ]);
+
+        try {
+            $client->auth();
+            $this->fail('Expected OpenWAException for scalar auth payload');
+        } catch (OpenWAException $e) {
+            $this->assertStringContainsString('expected JSON object/array response', $e->getMessage());
+        }
+
+        $this->assertSame([], $client->auth());
+        $this->assertSame(['valid' => true, 'role' => 'admin'], $client->auth());
     }
 }

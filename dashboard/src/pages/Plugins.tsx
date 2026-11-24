@@ -1,7 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizePlugin } from '../utils/localizePlugin';
-import { configUiSafeConfig, missingRequiredConfig, sparseSessionOverride } from '../utils/pluginConfigRules';
+import {
+  configUiSafeConfig,
+  isPlainObject,
+  missingRequiredConfig,
+  sparseSessionOverride,
+} from '../utils/pluginConfigRules';
 import { coerceFieldInput, emptyForField, fillClearedFields, seedForField } from '../utils/pluginConfigForm';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -261,7 +266,15 @@ function ConfigField({
  * appearance can, though: under the 'system' theme the dashboard repaints when it flips, while the
  * handshake theme stays as sent, so an editor that follows it should also watch `prefers-color-scheme`.
  */
-function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: string }) {
+function PluginConfigUi({
+  plugin,
+  sessionId,
+  onBusyDelta,
+}: {
+  plugin: Plugin;
+  sessionId?: string;
+  onBusyDelta?: (delta: 1 | -1) => void;
+}) {
   const { t, i18n } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -271,6 +284,19 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
   const [error, setError] = useState<string | null>(null);
   const [handshakeReceived, setHandshakeReceived] = useState(false);
   const [handshakeError, setHandshakeError] = useState<string | null>(null);
+  const savingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const onBusyDeltaRef = useRef(onBusyDelta);
+  useEffect(() => {
+    onBusyDeltaRef.current = onBusyDelta;
+  }, [onBusyDelta]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const hardenedHtml = useMemo(() => (html === null ? null : hardenConfigUiHtml(html)), [html]);
 
@@ -321,26 +347,37 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
           theme: resolvedTheme,
         });
       } else if (msg?.type === 'config:save') {
+        if (savingRef.current) return;
+        if (!isPlainObject(msg.config)) {
+          const message = t('plugins.toasts.saveFailed');
+          post({ type: 'config:error', message });
+          toast.error(message);
+          return;
+        }
+        const rawConfig = msg.config;
+        savingRef.current = true;
+        onBusyDeltaRef.current?.(1);
         void (async () => {
           try {
             // These endpoints report a failure as 200 + {success:false}, so the result has to be read.
             // Taking the absence of a throw as success told the operator "Saved!" — and told the editor
             // its values were stored — for a save the server had rejected.
             const res = sessionId
-              ? await pluginsApi.updateSessionConfig(
-                  plugin.id,
-                  sessionId,
-                  sparseSessionOverride(msg.config ?? {}, plugin),
-                )
-              : await pluginsApi.updateConfig(plugin.id, msg.config ?? {});
+              ? await pluginsApi.updateSessionConfig(plugin.id, sessionId, sparseSessionOverride(rawConfig, plugin))
+              : await pluginsApi.updateConfig(plugin.id, rawConfig);
             if (!res.success) throw new Error(res.message);
             void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
+            if (!mountedRef.current) return;
             post({ type: 'config:saved' });
             toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
           } catch (err) {
+            if (!mountedRef.current) return;
             const message = err instanceof Error ? err.message : t('common.unknownError');
             post({ type: 'config:error', message });
             toast.error(t('plugins.toasts.saveFailed'), message);
+          } finally {
+            savingRef.current = false;
+            onBusyDeltaRef.current?.(-1);
           }
         })();
       }
@@ -376,27 +413,46 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
  * (activation), and optionally a per-session config OVERRIDE on top of the Global (`'*'`) config.
  * Activation → PUT /plugins/:id/sessions; overrides → PUT /plugins/:id/config/:sessionId.
  */
-function SessionsTab({ plugin }: { plugin: Plugin }) {
+function SessionsTab({ plugin, onBusyDelta }: { plugin: Plugin; onBusyDelta?: (delta: 1 | -1) => void }) {
   const { t, i18n } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
   const { data: sessions = [] } = useSessionsQuery();
+  const mountedRef = useRef(true);
+  const onBusyDeltaRef = useRef(onBusyDelta);
+  useEffect(() => {
+    onBusyDeltaRef.current = onBusyDelta;
+  }, [onBusyDelta]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // ── Activation ────────────────────────────────────────────────────────────
   const [mode, setMode] = useState<'all' | 'specific'>(plugin.activeSessions.includes('*') ? 'all' : 'specific');
   const [picked, setPicked] = useState<Set<string>>(new Set(plugin.activeSessions.filter(s => s !== '*')));
   const [savingAct, setSavingAct] = useState(false);
+  const savingActRef = useRef(false);
 
   const saveActivation = async () => {
+    if (savingActRef.current || savingAct) return;
+    savingActRef.current = true;
     setSavingAct(true);
+    onBusyDeltaRef.current?.(1);
     try {
       await pluginsApi.setSessions(plugin.id, mode === 'all' ? ['*'] : Array.from(picked));
       void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
-      toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
+      if (mountedRef.current) toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
     } catch (err) {
-      toast.error(t('plugins.toasts.saveFailed'), err instanceof Error ? err.message : t('common.unknownError'));
+      if (mountedRef.current) {
+        toast.error(t('plugins.toasts.saveFailed'), err instanceof Error ? err.message : t('common.unknownError'));
+      }
     } finally {
-      setSavingAct(false);
+      savingActRef.current = false;
+      if (mountedRef.current) setSavingAct(false);
+      onBusyDeltaRef.current?.(-1);
     }
   };
 
@@ -408,7 +464,15 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
   const [selSession, setSelSession] = useState<string>('');
   const [overrideCfg, setOverrideCfg] = useState<Record<string, unknown>>({});
   const [savingOverride, setSavingOverride] = useState(false);
+  const savingOverrideRef = useRef(false);
+  const [uiBusyCount, setUiBusyCount] = useState(0);
   const overrideFormRef = useRef<HTMLFormElement>(null);
+  const onUiBusyDelta = useCallback((delta: 1 | -1) => {
+    if (mountedRef.current) setUiBusyCount(c => Math.max(0, c + delta));
+    onBusyDeltaRef.current?.(delta);
+  }, []);
+  const uiBusy = uiBusyCount > 0;
+
   // The session selected now, read by a request that resolves after the operator may have switched.
   const selSessionRef = useRef(selSession);
   useEffect(() => {
@@ -435,10 +499,12 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
   }, [selSession, plugin.id]);
 
   const saveOverride = async () => {
-    if (!selSession || !plugin.configSchema?.properties) return;
+    if (savingOverrideRef.current || savingOverride || !selSession || !plugin.configSchema?.properties) return;
     // Enforce the schema's HTML constraint hints (required/min/max/pattern) before saving.
     if (overrideFormRef.current && !overrideFormRef.current.reportValidity()) return;
+    savingOverrideRef.current = true;
     setSavingOverride(true);
+    onBusyDeltaRef.current?.(1);
     try {
       // A rejected save answers 200 + {success:false}; the absence of a throw is not success.
       const res = await pluginsApi.updateSessionConfig(
@@ -448,18 +514,24 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
       );
       if (!res.success) throw new Error(res.message);
       void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
-      toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
+      if (mountedRef.current) toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
     } catch (err) {
-      toast.error(t('plugins.toasts.saveFailed'), err instanceof Error ? err.message : t('common.unknownError'));
+      if (mountedRef.current) {
+        toast.error(t('plugins.toasts.saveFailed'), err instanceof Error ? err.message : t('common.unknownError'));
+      }
     } finally {
-      setSavingOverride(false);
+      savingOverrideRef.current = false;
+      if (mountedRef.current) setSavingOverride(false);
+      onBusyDeltaRef.current?.(-1);
     }
   };
 
   const clearOverride = async () => {
     const sid = selSession;
-    if (!sid) return;
+    if (savingOverrideRef.current || savingOverride || !sid) return;
+    savingOverrideRef.current = true;
     setSavingOverride(true);
+    onBusyDeltaRef.current?.(1);
     try {
       const res = await pluginsApi.updateSessionConfig(plugin.id, sid, {});
       if (!res.success) throw new Error(res.message);
@@ -467,7 +539,7 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
       // override). Left as it was, the form keeps the cleared values and the next save pins them back.
       // Skipped when the operator has since picked another session: the form now holds that one's values.
       const props = plugin.configSchema?.properties;
-      if (props && selSessionRef.current === sid) {
+      if (mountedRef.current && props && selSessionRef.current === sid) {
         setOverrideCfg(
           Object.fromEntries(
             Object.entries(props).map(([key, field]) => [key, seedForField(field, plugin.config, key)]),
@@ -475,11 +547,15 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
         );
       }
       void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
-      toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
+      if (mountedRef.current) toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
     } catch (err) {
-      toast.error(t('plugins.toasts.saveFailed'), err instanceof Error ? err.message : t('common.unknownError'));
+      if (mountedRef.current) {
+        toast.error(t('plugins.toasts.saveFailed'), err instanceof Error ? err.message : t('common.unknownError'));
+      }
     } finally {
-      setSavingOverride(false);
+      savingOverrideRef.current = false;
+      if (mountedRef.current) setSavingOverride(false);
+      onBusyDeltaRef.current?.(-1);
     }
   };
 
@@ -535,6 +611,7 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
             className="sessions-select"
             aria-label={t('plugins.sessions.selectSession')}
             value={selSession}
+            disabled={savingOverride || uiBusy}
             onChange={e => setSelSession(e.target.value)}
           >
             <option value="">{t('plugins.sessions.selectSession')}</option>
@@ -545,7 +622,7 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
             ))}
           </select>
           {selSession && hasUi ? (
-            <PluginConfigUi key={selSession} plugin={plugin} sessionId={selSession} />
+            <PluginConfigUi key={selSession} plugin={plugin} sessionId={selSession} onBusyDelta={onUiBusyDelta} />
           ) : selSession && hasSchema ? (
             <>
               <form ref={overrideFormRef} className="config-form" onSubmit={e => e.preventDefault()}>
@@ -640,15 +717,23 @@ export default function Plugins() {
   const configPlugin = configPluginId ? (plugins.find(p => p.id === configPluginId) ?? null) : null;
   const [configTab, setConfigTab] = useState<'config' | 'sessions' | 'instances'>('config');
   const [savingConfig, setSavingConfig] = useState(false);
+  const savingConfigRef = useRef(false);
+  const [childBusyCount, setChildBusyCount] = useState(0);
+  const onChildBusyDelta = useCallback((delta: 1 | -1) => {
+    setChildBusyCount(c => Math.max(0, c + delta));
+  }, []);
   // Values for a schema-driven (non-engine) plugin's config form, keyed by configSchema property.
   const [schemaConfig, setSchemaConfig] = useState<Record<string, unknown>>({});
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [installFile, setInstallFile] = useState<File | null>(null);
   const [installing, setInstalling] = useState(false);
+  const installBusyRef = useRef(false);
   const [installMode, setInstallMode] = useState<'upload' | 'catalog'>('upload');
   const { catalog, catalogLoading, catalogError, loadCatalog } = useCatalog();
   const [catalogSearch, setCatalogSearch] = useState('');
   const [installingId, setInstallingId] = useState<string | null>(null);
+  const installModalBusy = installing || installingId !== null;
+  const configModalBusy = savingConfig || childBusyCount > 0;
 
   const refetchAll = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
@@ -727,9 +812,10 @@ export default function Plugins() {
   };
 
   const handleSaveSchemaConfig = async () => {
-    if (!configPlugin) return;
+    if (savingConfigRef.current || savingConfig || !configPlugin) return;
     // Enforce the schema's HTML constraint hints (required/min/max/pattern) before saving.
     if (schemaFormRef.current && !schemaFormRef.current.reportValidity()) return;
+    savingConfigRef.current = true;
     setSavingConfig(true);
     try {
       // 200 + {success:false} is how a rejected save arrives; without this the modal closed on a
@@ -745,11 +831,13 @@ export default function Plugins() {
     } catch (err) {
       toast.error(t('plugins.toasts.saveFailed'), err instanceof Error ? err.message : t('common.unknownError'));
     } finally {
+      savingConfigRef.current = false;
       setSavingConfig(false);
     }
   };
 
   const handleInstall = async () => {
+    if (installBusyRef.current || installing || installingId !== null) return;
     if (!installFile) return;
     if (installFile.size > 5 * 1024 * 1024) {
       toast.error(
@@ -758,6 +846,7 @@ export default function Plugins() {
       );
       return;
     }
+    installBusyRef.current = true;
     setInstalling(true);
     try {
       const installed = await pluginsApi.install(installFile);
@@ -770,6 +859,7 @@ export default function Plugins() {
     } catch (err) {
       toast.error(t('plugins.toasts.installFailed', 'Install failed'), err instanceof Error ? err.message : '');
     } finally {
+      installBusyRef.current = false;
       setInstalling(false);
     }
   };
@@ -795,8 +885,15 @@ export default function Plugins() {
     () => new Map(catalog.filter(entry => entry.updateAvailable).map(entry => [entry.id, entry])),
     [catalog],
   );
+  const filteredCatalog = useMemo(() => {
+    const q = catalogSearch.trim().toLowerCase();
+    return q
+      ? catalog.filter(e => [e.name, e.description, e.author, e.id].some(f => f?.toLowerCase().includes(q)))
+      : catalog;
+  }, [catalog, catalogSearch]);
 
   const handleInstallFromCatalog = async (entry: CatalogPlugin) => {
+    if (installBusyRef.current || installing || installingId !== null) return;
     if (!entry.download) {
       toast.error(
         t('plugins.toasts.installFailed', 'Install failed'),
@@ -804,6 +901,7 @@ export default function Plugins() {
       );
       return;
     }
+    installBusyRef.current = true;
     setInstallingId(entry.id);
     try {
       const installed = await pluginsApi.installFromUrl(entry.download);
@@ -813,11 +911,13 @@ export default function Plugins() {
     } catch (err) {
       toast.error(t('plugins.toasts.installFailed', 'Install failed'), err instanceof Error ? err.message : '');
     } finally {
+      installBusyRef.current = false;
       setInstallingId(null);
     }
   };
 
   const handleUpdateFromCatalog = async (entry: CatalogPlugin) => {
+    if (installBusyRef.current || installing || installingId !== null) return;
     if (!entry.download) {
       toast.error(
         t('plugins.toasts.updateFailed', 'Update failed'),
@@ -825,6 +925,7 @@ export default function Plugins() {
       );
       return;
     }
+    installBusyRef.current = true;
     setInstallingId(entry.id);
     try {
       const updated = await pluginsApi.updateFromUrl(entry.id, entry.download);
@@ -834,6 +935,7 @@ export default function Plugins() {
     } catch (err) {
       toast.error(t('plugins.toasts.updateFailed', 'Update failed'), err instanceof Error ? err.message : '');
     } finally {
+      installBusyRef.current = false;
       setInstallingId(null);
     }
   };
@@ -1088,7 +1190,8 @@ export default function Plugins() {
       {showInstallModal && (
         <Modal
           open
-          onClose={() => setShowInstallModal(false)}
+          onClose={() => !installModalBusy && setShowInstallModal(false)}
+          hideCloseButton={installModalBusy}
           title={t('plugins.installModal.title', 'Install a plugin')}
           className="install-modal"
           closeLabel={t('common.close')}
@@ -1098,8 +1201,9 @@ export default function Plugins() {
                 role="tab"
                 aria-selected={installMode === 'upload'}
                 tabIndex={installMode === 'upload' ? 0 : -1}
+                disabled={installModalBusy}
                 className={`install-tab${installMode === 'upload' ? ' active' : ''}`}
-                onClick={() => setInstallMode('upload')}
+                onClick={() => !installModalBusy && setInstallMode('upload')}
               >
                 <Upload size={15} /> {t('plugins.installModal.tabUpload', 'Upload .zip')}
               </button>
@@ -1107,8 +1211,9 @@ export default function Plugins() {
                 role="tab"
                 aria-selected={installMode === 'catalog'}
                 tabIndex={installMode === 'catalog' ? 0 : -1}
+                disabled={installModalBusy}
                 className={`install-tab${installMode === 'catalog' ? ' active' : ''}`}
-                onClick={() => setInstallMode('catalog')}
+                onClick={() => !installModalBusy && setInstallMode('catalog')}
               >
                 <Globe size={15} /> {t('plugins.installModal.tabCatalog', 'Catalog')}
               </button>
@@ -1117,20 +1222,28 @@ export default function Plugins() {
           footer={
             installMode === 'upload' ? (
               <>
-                <button className="btn-secondary" onClick={() => setShowInstallModal(false)} disabled={installing}>
+                <button
+                  className="btn-secondary"
+                  onClick={() => !installModalBusy && setShowInstallModal(false)}
+                  disabled={installModalBusy}
+                >
                   {t('common.cancel', 'Cancel')}
                 </button>
                 <button
                   className="btn-primary"
                   onClick={() => void handleInstall()}
-                  disabled={!installFile || installing}
+                  disabled={!installFile || installModalBusy}
                 >
                   {installing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
                   {t('plugins.install', 'Install plugin')}
                 </button>
               </>
             ) : (
-              <button className="btn-secondary" onClick={() => setShowInstallModal(false)}>
+              <button
+                className="btn-secondary"
+                onClick={() => !installModalBusy && setShowInstallModal(false)}
+                disabled={installModalBusy}
+              >
                 {t('common.close', 'Close')}
               </button>
             )
@@ -1168,7 +1281,12 @@ export default function Plugins() {
                   and an operator only ever discovers plugins by hearing about one out-of-band. */}
               <p className="install-hint install-hint-sub">
                 {t('plugins.installModal.catalogTeaser', 'Looking for plugins?')}{' '}
-                <button type="button" className="install-inline-link" onClick={() => setInstallMode('catalog')}>
+                <button
+                  type="button"
+                  className="install-inline-link"
+                  disabled={installModalBusy}
+                  onClick={() => !installModalBusy && setInstallMode('catalog')}
+                >
                   {t('plugins.installModal.tabCatalog', 'Catalog')}
                 </button>{' '}
                 {t('plugins.installModal.catalogTeaserSuffix', 'browses the official marketplace.')}
@@ -1189,99 +1307,87 @@ export default function Plugins() {
               ) : catalogError ? (
                 <div className="catalog-empty catalog-error">
                   <AlertCircle size={16} /> {catalogError}
-                  <button className="btn-secondary" onClick={() => void loadCatalog()}>
+                  <button className="btn-secondary" onClick={() => void loadCatalog()} disabled={installModalBusy}>
                     {t('plugins.refresh', 'Refresh')}
                   </button>
                 </div>
               ) : catalog.length === 0 ? (
                 <div className="catalog-empty">{t('plugins.catalog.empty', 'No plugins in the catalog.')}</div>
               ) : (
-                (() => {
-                  const q = catalogSearch.trim().toLowerCase();
-                  const filtered = q
-                    ? catalog.filter(e =>
-                        [e.name, e.description, e.author, e.id].some(f => f?.toLowerCase().includes(q)),
-                      )
-                    : catalog;
-                  return (
-                    <>
-                      <div className="catalog-search">
-                        <Search size={15} />
-                        <input
-                          type="text"
-                          value={catalogSearch}
-                          onChange={e => setCatalogSearch(e.target.value)}
-                          placeholder={t('plugins.catalog.searchPlaceholder', 'Search plugins…')}
-                        />
-                      </div>
-                      {filtered.length === 0 ? (
-                        <div className="catalog-empty">
-                          {t('plugins.catalog.noMatch', 'No plugins match your search.')}
-                        </div>
-                      ) : (
-                        <div className="catalog-list">
-                          {filtered.map(entry => {
-                            const lz = localizePlugin(entry, i18n.language);
-                            return (
-                              <div className="catalog-row" key={entry.id}>
-                                <div className="catalog-row-info">
-                                  <div className="catalog-row-name">
-                                    {lz.name} <span className="catalog-row-version">v{entry.version}</span>
-                                  </div>
-                                  {lz.description && <div className="catalog-row-desc">{lz.description}</div>}
-                                  <div className="catalog-row-meta">
-                                    {entry.author && <span className="catalog-row-author">{entry.author}</span>}
-                                    {entry.updateAvailable && (
-                                      <span className="catalog-badge update">
-                                        {t('plugins.catalog.updateAvailable', 'Update available')} (v
-                                        {entry.installedVersion} → v{entry.version})
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="catalog-row-action">
-                                  {entry.installed ? (
-                                    entry.updateAvailable ? (
-                                      <button
-                                        className="btn-update"
-                                        disabled={installingId !== null || !entry.download}
-                                        onClick={() => void handleUpdateFromCatalog(entry)}
-                                      >
-                                        {installingId === entry.id ? (
-                                          <Loader2 size={15} className="animate-spin" />
-                                        ) : (
-                                          <Download size={15} />
-                                        )}
-                                        {t('plugins.catalog.update', 'Update')}
-                                      </button>
-                                    ) : (
-                                      <span className="catalog-installed">
-                                        <CheckCircle size={15} /> {t('plugins.catalog.installed', 'Installed')}
-                                      </span>
-                                    )
-                                  ) : (
-                                    <button
-                                      className="btn-primary"
-                                      disabled={installingId !== null || !entry.download}
-                                      onClick={() => void handleInstallFromCatalog(entry)}
-                                    >
-                                      {installingId === entry.id ? (
-                                        <Loader2 size={15} className="animate-spin" />
-                                      ) : (
-                                        <Download size={15} />
-                                      )}
-                                      {t('plugins.catalog.install', 'Install')}
-                                    </button>
-                                  )}
-                                </div>
+                <>
+                  <div className="catalog-search">
+                    <Search size={15} />
+                    <input
+                      type="text"
+                      value={catalogSearch}
+                      onChange={e => setCatalogSearch(e.target.value)}
+                      placeholder={t('plugins.catalog.searchPlaceholder', 'Search plugins…')}
+                    />
+                  </div>
+                  {filteredCatalog.length === 0 ? (
+                    <div className="catalog-empty">{t('plugins.catalog.noMatch', 'No plugins match your search.')}</div>
+                  ) : (
+                    <div className="catalog-list">
+                      {filteredCatalog.map(entry => {
+                        const lz = localizePlugin(entry, i18n.language);
+                        return (
+                          <div className="catalog-row" key={entry.id}>
+                            <div className="catalog-row-info">
+                              <div className="catalog-row-name">
+                                {lz.name} <span className="catalog-row-version">v{entry.version}</span>
                               </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </>
-                  );
-                })()
+                              {lz.description && <div className="catalog-row-desc">{lz.description}</div>}
+                              <div className="catalog-row-meta">
+                                {entry.author && <span className="catalog-row-author">{entry.author}</span>}
+                                {entry.updateAvailable && (
+                                  <span className="catalog-badge update">
+                                    {t('plugins.catalog.updateAvailable', 'Update available')} (v
+                                    {entry.installedVersion} → v{entry.version})
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="catalog-row-action">
+                              {entry.installed ? (
+                                entry.updateAvailable ? (
+                                  <button
+                                    className="btn-update"
+                                    disabled={installModalBusy || !entry.download}
+                                    onClick={() => void handleUpdateFromCatalog(entry)}
+                                  >
+                                    {installingId === entry.id ? (
+                                      <Loader2 size={15} className="animate-spin" />
+                                    ) : (
+                                      <Download size={15} />
+                                    )}
+                                    {t('plugins.catalog.update', 'Update')}
+                                  </button>
+                                ) : (
+                                  <span className="catalog-installed">
+                                    <CheckCircle size={15} /> {t('plugins.catalog.installed', 'Installed')}
+                                  </span>
+                                )
+                              ) : (
+                                <button
+                                  className="btn-primary"
+                                  disabled={installModalBusy || !entry.download}
+                                  onClick={() => void handleInstallFromCatalog(entry)}
+                                >
+                                  {installingId === entry.id ? (
+                                    <Loader2 size={15} className="animate-spin" />
+                                  ) : (
+                                    <Download size={15} />
+                                  )}
+                                  {t('plugins.catalog.install', 'Install')}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}
@@ -1298,7 +1404,8 @@ export default function Plugins() {
           return (
             <Modal
               open
-              onClose={() => setShowConfigModal(false)}
+              onClose={() => !configModalBusy && setShowConfigModal(false)}
+              hideCloseButton={configModalBusy}
               title={t('plugins.config.title', { name: lz.name })}
               className="config-modal"
               closeLabel={t('common.close')}
@@ -1309,8 +1416,9 @@ export default function Plugins() {
                       role="tab"
                       aria-selected={configTab === 'config'}
                       tabIndex={configTab === 'config' ? 0 : -1}
+                      disabled={configModalBusy}
                       className={`modal-tab ${configTab === 'config' ? 'active' : ''}`}
-                      onClick={() => setConfigTab('config')}
+                      onClick={() => !configModalBusy && setConfigTab('config')}
                     >
                       {t('plugins.config.tabConfig')}
                     </button>
@@ -1319,8 +1427,9 @@ export default function Plugins() {
                         role="tab"
                         aria-selected={configTab === 'sessions'}
                         tabIndex={configTab === 'sessions' ? 0 : -1}
+                        disabled={configModalBusy}
                         className={`modal-tab ${configTab === 'sessions' ? 'active' : ''}`}
-                        onClick={() => setConfigTab('sessions')}
+                        onClick={() => !configModalBusy && setConfigTab('sessions')}
                       >
                         {t('plugins.config.tabSessions')}
                       </button>
@@ -1330,8 +1439,9 @@ export default function Plugins() {
                         role="tab"
                         aria-selected={configTab === 'instances'}
                         tabIndex={configTab === 'instances' ? 0 : -1}
+                        disabled={configModalBusy}
                         className={`modal-tab ${configTab === 'instances' ? 'active' : ''}`}
-                        onClick={() => setConfigTab('instances')}
+                        onClick={() => !configModalBusy && setConfigTab('instances')}
                       >
                         {t('plugins.instances.title')}
                       </button>
@@ -1341,7 +1451,11 @@ export default function Plugins() {
               }
               footer={
                 <>
-                  <button className="btn-secondary" onClick={() => setShowConfigModal(false)}>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => !configModalBusy && setShowConfigModal(false)}
+                    disabled={configModalBusy}
+                  >
                     {t('common.close')}
                   </button>
                   {/* The Sessions and Instances tabs have their own actions; the footer Save is config-tab
@@ -1349,7 +1463,7 @@ export default function Plugins() {
                       omitted rather than left to save a form the operator cannot see. */}
                   {(showTabs && (configTab === 'sessions' || configTab === 'instances')) ||
                   configPlugin.configUi ? null : Object.keys(lz.configSchema?.properties ?? {}).length > 0 ? (
-                    <button className="btn-primary" onClick={handleSaveSchemaConfig} disabled={savingConfig}>
+                    <button className="btn-primary" onClick={handleSaveSchemaConfig} disabled={configModalBusy}>
                       {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}
                     </button>
                   ) : null}
@@ -1359,12 +1473,12 @@ export default function Plugins() {
               {showTabs && configTab === 'instances' && configPlugin.ingressCapable ? (
                 <PluginInstances pluginId={configPlugin.id} />
               ) : showTabs && configTab === 'sessions' && configPlugin.sessionScoped !== false ? (
-                <SessionsTab plugin={configPlugin} />
+                <SessionsTab plugin={configPlugin} onBusyDelta={onChildBusyDelta} />
               ) : /* A plugin that ships its own editor owns the whole config: rendering the generic
                      form underneath it too produced a second copy of every field and a second Save
                      button with different semantics, which is what the Chat Flow modal looked like. */
               configPlugin.configUi ? (
-                <PluginConfigUi plugin={configPlugin} />
+                <PluginConfigUi plugin={configPlugin} onBusyDelta={onChildBusyDelta} />
               ) : lz.configSchema && Object.keys(lz.configSchema.properties ?? {}).length > 0 ? (
                 <form ref={schemaFormRef} className="config-form" onSubmit={e => e.preventDefault()}>
                   {Object.entries(lz.configSchema.properties).map(([key, field]) => (

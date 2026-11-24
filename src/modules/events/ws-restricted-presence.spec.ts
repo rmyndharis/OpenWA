@@ -139,7 +139,7 @@ describe('WsRestrictedPresenceTracker', () => {
       return Promise.resolve(snapshot);
     });
 
-    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a' });
+    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a', cacheTtlMs: 0 });
     const hasRestricted = await tracker.hasRestrictedNodes();
     await new Promise<void>(resolve => setImmediate(resolve));
 
@@ -152,7 +152,7 @@ describe('WsRestrictedPresenceTracker', () => {
 
   it('clears presence when disconnect arrives while initial SET/SADD is still in flight (no zombie lease)', async () => {
     const { client, mocks, strings, sets } = createFakeRedis();
-    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a' });
+    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a', cacheTtlMs: 0 });
     const leaseKey = `${WS_RESTRICTED_NODE_KEY_PREFIX}${tracker.nodeKey}`;
 
     const setGate = deferred();
@@ -176,7 +176,7 @@ describe('WsRestrictedPresenceTracker', () => {
 
   it('clears presence when destroy() runs while initial SET/SADD is still in flight', async () => {
     const { client, mocks, strings, sets } = createFakeRedis();
-    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a' });
+    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a', cacheTtlMs: 0 });
     const leaseKey = `${WS_RESTRICTED_NODE_KEY_PREFIX}${tracker.nodeKey}`;
 
     const setGate = deferred();
@@ -198,7 +198,7 @@ describe('WsRestrictedPresenceTracker', () => {
 
   it('retains live presence when a second restricted socket subscribes while the first disconnect is still in flight', async () => {
     const { client, mocks, strings, sets } = createFakeRedis();
-    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a' });
+    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a', cacheTtlMs: 0 });
     const leaseKey = `${WS_RESTRICTED_NODE_KEY_PREFIX}${tracker.nodeKey}`;
 
     // S1 connects and registers cleanly.
@@ -247,7 +247,7 @@ describe('WsRestrictedPresenceTracker', () => {
       return Promise.resolve(snapshot);
     });
 
-    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a' });
+    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a', cacheTtlMs: 0 });
     expect(await tracker.hasRestrictedNodes()).toBe(true);
     expect(sets.get(WS_RESTRICTED_NODES_KEY)?.has(deadNode)).toBe(false);
     expect(sets.get(WS_RESTRICTED_NODES_KEY)?.has(renewedNode)).toBe(true);
@@ -282,7 +282,7 @@ describe('WsRestrictedPresenceTracker', () => {
 
   it('resets registered state when a renewal fails so the next syncLocal(true) immediately re-registers', async () => {
     const { client, mocks, strings, sets } = createFakeRedis();
-    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a' });
+    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a', cacheTtlMs: 0 });
     const leaseKey = `${WS_RESTRICTED_NODE_KEY_PREFIX}${tracker.nodeKey}`;
 
     await tracker.syncLocal(true);
@@ -358,7 +358,7 @@ describe('WsRestrictedPresenceTracker', () => {
       sets.set(WS_RESTRICTED_NODES_KEY, new Set(['node-stale:1111']));
       mocks.eval.mockResolvedValueOnce(badReply);
 
-      const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a' });
+      const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a', cacheTtlMs: 0 });
       expect(await tracker.hasRestrictedNodes()).toBe(true);
     },
   );
@@ -366,7 +366,7 @@ describe('WsRestrictedPresenceTracker', () => {
   it('accepts safe decimal-digit string replies from atomic prune eval', async () => {
     const { client, mocks, sets } = createFakeRedis();
     sets.set(WS_RESTRICTED_NODES_KEY, new Set(['node-stale:1111']));
-    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a' });
+    const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-a', cacheTtlMs: 0 });
 
     mocks.eval.mockResolvedValueOnce('0');
     expect(await tracker.hasRestrictedNodes()).toBe(false);
@@ -451,5 +451,60 @@ describe('WsRestrictedPresenceTracker', () => {
     const redis = redisInstances[0];
     expect(() => redis.handlers.error(new Error('socket reset'))).not.toThrow();
     await tracker.destroy();
+  });
+
+  it('shares a single WS_REDIS_QUIT_TIMEOUT_MS deadline across unregister and quit in destroy()', async () => {
+    jest.useFakeTimers();
+    try {
+      const { client, mocks } = createFakeRedis();
+      await new WsRestrictedPresenceTracker(client, { nodeId: 'node-a' }).syncLocal(true);
+
+      const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-shared', ownsClient: true });
+      await tracker.syncLocal(true);
+      mocks.srem.mockImplementation(() => new Promise(() => undefined));
+      client.quit = jest.fn(() => new Promise<string>(() => undefined));
+      const disconnectSpy = jest.fn();
+      client.disconnect = disconnectSpy;
+
+      let destroyed = false;
+      const done = tracker.destroy().then(() => {
+        destroyed = true;
+      });
+
+      await jest.advanceTimersByTimeAsync(WS_REDIS_QUIT_TIMEOUT_MS);
+      await done;
+
+      expect(destroyed).toBe(true);
+      expect(disconnectSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('caches hasRestrictedNodes for a short TTL and invalidates immediately on local restricted changes', async () => {
+    jest.useFakeTimers();
+    try {
+      const { client, mocks } = createFakeRedis();
+      const tracker = new WsRestrictedPresenceTracker(client, { nodeId: 'node-cache', cacheTtlMs: 2_000 });
+
+      expect(await tracker.hasRestrictedNodes()).toBe(false);
+      expect(mocks.smembers).toHaveBeenCalledTimes(1);
+
+      // Repeated lookups inside TTL use cached result without hitting Redis again.
+      expect(await tracker.hasRestrictedNodes()).toBe(false);
+      expect(mocks.smembers).toHaveBeenCalledTimes(1);
+
+      // Local restricted state update invalidates the cached answer immediately.
+      await tracker.syncLocal(true);
+      expect(await tracker.hasRestrictedNodes()).toBe(true);
+      expect(mocks.smembers).toHaveBeenCalledTimes(2);
+
+      // TTL expiry refreshes from Redis.
+      await jest.advanceTimersByTimeAsync(2_001);
+      expect(await tracker.hasRestrictedNodes()).toBe(true);
+      expect(mocks.smembers).toHaveBeenCalledTimes(3);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

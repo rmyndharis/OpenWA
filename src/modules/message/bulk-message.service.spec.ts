@@ -3038,4 +3038,46 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
     expect(batch.progress.sent).toBe(2);
     expect(batch.results).toHaveLength(2);
   });
+
+  it('refuses message dispatch in processBatchMessage when session ownership was lost', async () => {
+    const engine = {
+      sendTextMessage: jest.fn().mockResolvedValue({ id: 'wa-owned', timestamp: 1 }),
+    };
+    engines.set('s1', engine as unknown as IWhatsAppEngine);
+    let owns = true;
+    const ownedHookManager = {
+      execute: jest.fn((_ev: string, data: unknown) => {
+        // Simulate lease loss occurring while the pre-send hook awaits.
+        owns = false;
+        return Promise.resolve({ continue: true, data });
+      }),
+    };
+    const svcWithOwnership = new BulkMessageService(
+      repo as never,
+      engines,
+      { saveOutgoingMessage: jest.fn() } as never,
+      ownedHookManager as never,
+      {
+        assertSendAllowed: jest.fn().mockResolvedValue(undefined),
+        recordSendFailure: jest.fn(),
+        recordSendSuccess: jest.fn(),
+      } as never,
+      { owns: jest.fn(() => owns) } as never,
+    );
+
+    const dto = {
+      messages: [{ chatId: 'a@c.us', type: 'text' as const, content: { text: 'after lease loss' } }],
+      options: { delayBetweenMessages: 0, randomizeDelay: false, stopOnError: true },
+    } as unknown as SendBulkMessageDto;
+
+    const batch = await svcWithOwnership.createBatch('s1', dto);
+    repo.findOne.mockResolvedValue(batch);
+    await (
+      svcWithOwnership as unknown as {
+        processBatch: (id: string, reserved: boolean, lifetime: SessionWriteScope) => Promise<void>;
+      }
+    ).processBatch(batch.id, false, captureSessionWrites(repo, batch.sessionId));
+
+    expect(engine.sendTextMessage).not.toHaveBeenCalled();
+  });
 });

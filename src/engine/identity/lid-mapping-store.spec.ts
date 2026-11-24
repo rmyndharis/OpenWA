@@ -5417,3 +5417,105 @@ describe('LidMappingStoreService onMappingLearned notifications', () => {
     }
   });
 });
+
+describe('LidMappingStoreService concurrency and releaseSession guards', () => {
+  it('discards stale warmFromTable results from before reload (reloadSeq)', async () => {
+    let resolveFindOne!: (row: LidMapping | null) => void;
+    const repo = makeFakeRepo([]);
+    repo.findOne.mockImplementationOnce(
+      () =>
+        new Promise<LidMapping | null>(res => {
+          resolveFindOne = res;
+        }),
+    );
+    repo.find.mockResolvedValue([]);
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+
+    // Trigger warmFromTable before reload(); findOne hangs while reload runs.
+    expect(store.getCached('stale-lid')).toBeUndefined();
+    await store.reload();
+
+    // Pre-reload DB snapshot returns an old mapping even though reload restored an empty table.
+    resolveFindOne({
+      lid: 'stale-lid',
+      phone: '628000111222',
+      sessionId: null,
+      isReported: true,
+      updatedAt: new Date(0),
+    });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(store.getCached('stale-lid')).toBeUndefined();
+
+    // Reverse: pre-reload findOne returns null while reload restores row above cache or resets table;
+    // stale absence must not be recorded in absentFromTable.
+    let resolveNull!: (row: LidMapping | null) => void;
+    repo.findOne
+      .mockImplementationOnce(
+        () =>
+          new Promise<LidMapping | null>(res => {
+            resolveNull = res;
+          }),
+      )
+      .mockResolvedValueOnce({
+        lid: 'restored-lid',
+        phone: '628999888777',
+        sessionId: null,
+        isReported: true,
+        updatedAt: new Date(),
+      });
+    expect(store.getCached('restored-lid')).toBeUndefined();
+    await store.reload();
+    resolveNull(null);
+    await new Promise(resolve => setImmediate(resolve));
+
+    // If stale null wrote absentFromTable, this miss won't even query findOne a second time.
+    expect(store.getCached('restored-lid')).toBeUndefined();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(store.getCached('restored-lid')).toBe('628999888777');
+    store.onModuleDestroy();
+  });
+
+  it('clears failedWrites on write completion even after releaseSession cleared seenBy', async () => {
+    let releaseFirstFail!: () => void;
+    let releaseSecondOk!: () => void;
+    const repo = makeFakeRepo([]);
+    repo.upsert
+      .mockImplementationOnce(
+        () =>
+          new Promise((_res, rej) => {
+            releaseFirstFail = () => rej(new Error('transient db lock'));
+          }),
+      )
+      .mockImplementationOnce(
+        (values: Partial<LidMapping>) =>
+          new Promise(res => {
+            releaseSecondOk = () => {
+              repo.rows.push(values as LidMapping);
+              res({});
+            };
+          }),
+      );
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+
+    // Concurrent failing write shares the same UnsettledWrite (sets writing.failed = true), so endWrite cannot clear failedWrites.
+    const failing = store.remember('rel-lid', '628000000000', 'sess-0');
+    const succeeding = store.remember('rel-lid', '628111999000', 'sess-1');
+    await new Promise(resolve => setImmediate(resolve));
+
+    releaseFirstFail();
+    await expect(failing).resolves.toBe(false);
+    await new Promise(resolve => setImmediate(resolve));
+
+    // Unrelated session deletion clears seenBy while succeeding write's upsert is still in flight.
+    await store.releaseSession('other-sess');
+    releaseSecondOk();
+    await expect(succeeding).resolves.toBe(true);
+
+    // failedWrites must not be stranded after the latest operation settled cleanly.
+    expect(store.getCached('rel-lid')).toBe('628111999000');
+    const inner = store as unknown as { failedWrites: Set<string> };
+    expect(inner.failedWrites.has('rel-lid')).toBe(false);
+    store.onModuleDestroy();
+  });
+});

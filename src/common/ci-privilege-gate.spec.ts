@@ -554,7 +554,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
     {
       name: 'Use an npm that supports trusted publishing',
       run: [
-        /^npm install -g npm@\d+\.\d+\.\d+$/,
+        /^npm install -g --ignore-scripts --no-audit --fund=false npm@\d+\.\d+\.\d+$/,
         'npm_bundle_dir="$(npm root --global)/npm/node_modules"',
         `node -e "if (require(process.argv[1]).version !== '6.29.0') throw new Error('Recheck npm Undici replacement');" "$npm_bundle_dir/undici/package.json"`,
         'npm_http_patch_dir=$(mktemp -d)',

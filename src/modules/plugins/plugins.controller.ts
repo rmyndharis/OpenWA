@@ -85,7 +85,11 @@ export class PluginsController {
   @Post('install')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_PLUGIN_UPLOAD_BYTES } }))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_PLUGIN_UPLOAD_BYTES, fields: 0, files: 1, parts: 1 },
+    }),
+  )
   @ApiConsumes('multipart/form-data')
   // @ApiConsumes only names the media type; without a body schema the upload this route exists for is
   // invisible in the contract, and a generated client has no parameter to attach the file to.

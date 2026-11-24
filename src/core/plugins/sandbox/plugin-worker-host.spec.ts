@@ -2428,4 +2428,328 @@ describe('capability cancellation, unsettled zombie cap, idle liveness, and orig
     finishTerminate();
     await terminating;
   });
+
+  describe('webhook capability deadline alignment, abort on timeout, and retry idempotency', () => {
+    it('aborts an in-flight conversation.send cap when dispatchWebhook hits its timeout before capTimeoutMs * 4', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+      try {
+        const ch = new FakeChannel();
+        let capturedSignal: AbortSignal | undefined;
+        const dispatcher = jest.fn(
+          (_verb: string, _args: unknown[], _ctx?: unknown, signal?: AbortSignal) =>
+            new Promise((_resolve, reject) => {
+              capturedSignal = signal;
+              signal?.addEventListener('abort', () => reject(new Error('aborted by webhook timeout')));
+            }),
+        );
+        // capTimeoutMs=30000 -> SEND_CAP_VERBS would otherwise allow 120000ms while webhook timeoutMs=5000.
+        const host = new PluginWorkerHost(
+          ch,
+          dispatcher,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          4,
+          undefined,
+          undefined,
+          30000,
+        );
+
+        const pending = host.dispatchWebhook({
+          instanceId: 'inst-1',
+          route: 'chatwoot',
+          method: 'POST',
+          headers: {},
+          query: {},
+          body: '{}',
+          rawBody: '{}',
+          verified: true,
+          deliveryId: 'del-abort-1',
+          sessionId: 'sess-1',
+          timeoutMs: 5000,
+        });
+        const sent = ch.sent.find(m => m.kind === 'webhook') as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+
+        ch.reply({
+          kind: 'cap',
+          id: 1,
+          verb: 'conversation.send',
+          args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'hello' }],
+          dispatchId: sent.dispatchId,
+        });
+        await microFlush();
+        expect(capturedSignal?.aborted).toBe(false);
+
+        jest.advanceTimersByTime(5000);
+        await microFlush();
+
+        await expect(pending).resolves.toMatchObject({ ok: false, status: 504 });
+        expect(capturedSignal?.aborted).toBe(true);
+        // Stale cap-result must not be posted back after the webhook dispatch timed out.
+        expect(ch.sent.filter(m => m.kind === 'cap-result')).toEqual([]);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('caps conversation.send timeout to remaining webhook dispatch deadline rather than 120s', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+      try {
+        const ch = new FakeChannel();
+        let capturedSignal: AbortSignal | undefined;
+        const dispatcher = jest.fn(
+          (_verb: string, _args: unknown[], _ctx?: unknown, signal?: AbortSignal) =>
+            new Promise((_resolve, reject) => {
+              capturedSignal = signal;
+              signal?.addEventListener('abort', () => reject(new Error('aborted on remaining deadline')));
+            }),
+        );
+        const host = new PluginWorkerHost(
+          ch,
+          dispatcher,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          4,
+          undefined,
+          undefined,
+          30000,
+        );
+
+        const pending = host.dispatchWebhook({
+          instanceId: 'inst-1',
+          route: 'chatwoot',
+          method: 'POST',
+          headers: {},
+          query: {},
+          body: '{}',
+          rawBody: '{}',
+          verified: true,
+          deliveryId: 'del-rem-1',
+          sessionId: 'sess-1',
+          timeoutMs: 5000,
+        });
+        const sent = ch.sent.find(m => m.kind === 'webhook') as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+
+        jest.advanceTimersByTime(3000);
+        ch.reply({
+          kind: 'cap',
+          id: 1,
+          verb: 'conversation.send',
+          args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'late cap' }],
+          dispatchId: sent.dispatchId,
+        });
+        await microFlush();
+        expect(capturedSignal?.aborted).toBe(false);
+
+        jest.advanceTimersByTime(2000);
+        await microFlush();
+
+        await expect(pending).resolves.toMatchObject({ ok: false, status: 504 });
+        expect(capturedSignal?.aborted).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('deduplicates outbound send caps across webhook retry boundaries using a deterministic per-dispatch key', async () => {
+      const ch = new FakeChannel();
+      const dispatcher = jest.fn().mockResolvedValue({ messageId: 'wamid-once' });
+      const host = new PluginWorkerHost(ch, dispatcher);
+
+      const baseOpts = {
+        instanceId: 'inst-1',
+        route: 'chatwoot',
+        method: 'POST',
+        headers: {},
+        query: {},
+        body: '{}',
+        rawBody: '{}',
+        verified: true,
+        deliveryId: 'del-retry-1',
+        sessionId: 'sess-1',
+        timeoutMs: 5000,
+      };
+
+      // Attempt 1 executes the outbound send, then returns 500 so BullMQ retries the delivery.
+      const attempt1 = host.dispatchWebhook(baseOpts);
+      const msg1 = ch.sent.find(m => m.kind === 'webhook') as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+      ch.reply({
+        kind: 'cap',
+        id: 1,
+        verb: 'conversation.send',
+        args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'hello' }],
+        dispatchId: msg1.dispatchId,
+      });
+      await flush();
+      expect(dispatcher).toHaveBeenCalledTimes(1);
+      expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toMatchObject({
+        ok: true,
+        result: { messageId: 'wamid-once' },
+      });
+      ch.reply({ kind: 'webhook-result', id: msg1.id, status: 500, error: 'transient downstream' });
+      await expect(attempt1).resolves.toMatchObject({ ok: false, status: 500 });
+
+      // Attempt 2 replays the same deliveryId: ordinal #0 send must reuse the prior outcome, while ordinal #1 runs fresh.
+      const attempt2 = host.dispatchWebhook(baseOpts);
+      const msg2 = ch.sent.filter(
+        (m): m is Extract<HostToWorkerMessage, { kind: 'webhook' }> => m.kind === 'webhook',
+      )[1];
+      ch.reply({
+        kind: 'cap',
+        id: 2,
+        verb: 'conversation.send',
+        args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'hello' }],
+        dispatchId: msg2.dispatchId,
+      });
+      await flush();
+      expect(dispatcher).toHaveBeenCalledTimes(1);
+      expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 2)).toMatchObject({
+        ok: true,
+        result: { messageId: 'wamid-once' },
+      });
+
+      ch.reply({
+        kind: 'cap',
+        id: 3,
+        verb: 'conversation.send',
+        args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'second msg' }],
+        dispatchId: msg2.dispatchId,
+      });
+      await flush();
+      expect(dispatcher).toHaveBeenCalledTimes(2);
+      ch.reply({ kind: 'webhook-result', id: msg2.id, status: 200 });
+      await expect(attempt2).resolves.toMatchObject({ ok: true, status: 200 });
+    });
+
+    it('honors caller-supplied idempotencyKey and does not poison retries after a rejected send', async () => {
+      const ch = new FakeChannel();
+      const dispatcher = jest
+        .fn()
+        .mockRejectedValueOnce(new Error('engine offline'))
+        .mockResolvedValueOnce({ messageId: 'wamid-k1' })
+        .mockResolvedValueOnce({ messageId: 'wamid-k2' });
+      const host = new PluginWorkerHost(ch, dispatcher);
+
+      const opts = {
+        instanceId: 'inst-1',
+        route: 'chatwoot',
+        method: 'POST',
+        headers: {},
+        query: {},
+        body: '{}',
+        rawBody: '{}',
+        verified: true,
+        deliveryId: 'del-retry-2',
+        sessionId: 'sess-1',
+        timeoutMs: 5000,
+      };
+
+      const attempt1 = host.dispatchWebhook(opts);
+      const msg1 = ch.sent.find(m => m.kind === 'webhook') as Extract<HostToWorkerMessage, { kind: 'webhook' }>;
+      ch.reply({
+        kind: 'cap',
+        id: 1,
+        verb: 'conversation.send',
+        args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'hi' }],
+        dispatchId: msg1.dispatchId,
+      });
+      await flush();
+      ch.reply({ kind: 'webhook-result', id: msg1.id, status: 500, error: 'send failed' });
+      await expect(attempt1).resolves.toMatchObject({ ok: false, status: 500 });
+
+      // Failed send did not poison the retry; explicit distinct idempotencyKey also runs independently.
+      const attempt2 = host.dispatchWebhook(opts);
+      const msg2 = ch.sent.filter(
+        (m): m is Extract<HostToWorkerMessage, { kind: 'webhook' }> => m.kind === 'webhook',
+      )[1];
+      ch.reply({
+        kind: 'cap',
+        id: 2,
+        verb: 'conversation.send',
+        args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'hi', idempotencyKey: 'custom-1' }],
+        dispatchId: msg2.dispatchId,
+      });
+      ch.reply({
+        kind: 'cap',
+        id: 3,
+        verb: 'conversation.send',
+        args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'hi', idempotencyKey: 'custom-2' }],
+        dispatchId: msg2.dispatchId,
+      });
+      await flush();
+      expect(dispatcher).toHaveBeenCalledTimes(3);
+      ch.reply({ kind: 'webhook-result', id: msg2.id, status: 200 });
+      await expect(attempt2).resolves.toMatchObject({ ok: true, status: 200 });
+    });
+
+    it('isolates distinct dedupKey values sharing a provider deliveryId (dedupBodyMismatchAsNew) while deduplicating retries', async () => {
+      const ch = new FakeChannel();
+      const dispatcher = jest
+        .fn()
+        .mockResolvedValueOnce({ messageId: 'wamid-body-1' })
+        .mockResolvedValueOnce({ messageId: 'wamid-body-2' });
+      const host = new PluginWorkerHost(ch, dispatcher);
+
+      const common = {
+        instanceId: 'inst-1',
+        route: 'chatwoot',
+        method: 'POST',
+        headers: {},
+        query: {},
+        body: '{}',
+        rawBody: '{}',
+        verified: true,
+        deliveryId: 'provider-shared',
+        sessionId: 'sess-1',
+        timeoutMs: 5000,
+      };
+
+      const d1 = host.dispatchWebhook({ ...common, dedupKey: 'provider-shared:hash-a' });
+      const w1 = ch.sent.filter((m): m is Extract<HostToWorkerMessage, { kind: 'webhook' }> => m.kind === 'webhook')[0];
+      ch.reply({
+        kind: 'cap',
+        id: 1,
+        verb: 'conversation.send',
+        args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'first body' }],
+        dispatchId: w1.dispatchId,
+      });
+      await flush();
+      ch.reply({ kind: 'webhook-result', id: w1.id, status: 500, error: 'transient failure' });
+      await expect(d1).resolves.toMatchObject({ ok: false, status: 500 });
+
+      // Retry of hash-a must deduplicate, while distinct body hash-b with the same deliveryId runs fresh.
+      const d1Retry = host.dispatchWebhook({ ...common, dedupKey: 'provider-shared:hash-a' });
+      const w1Retry = ch.sent.filter(
+        (m): m is Extract<HostToWorkerMessage, { kind: 'webhook' }> => m.kind === 'webhook',
+      )[1];
+      ch.reply({
+        kind: 'cap',
+        id: 2,
+        verb: 'conversation.send',
+        args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'first body' }],
+        dispatchId: w1Retry.dispatchId,
+      });
+      await flush();
+      expect(dispatcher).toHaveBeenCalledTimes(1);
+      ch.reply({ kind: 'webhook-result', id: w1Retry.id, status: 200 });
+      await expect(d1Retry).resolves.toMatchObject({ ok: true, status: 200 });
+
+      const d2 = host.dispatchWebhook({ ...common, dedupKey: 'provider-shared:hash-b' });
+      const w2 = ch.sent.filter((m): m is Extract<HostToWorkerMessage, { kind: 'webhook' }> => m.kind === 'webhook')[2];
+      ch.reply({
+        kind: 'cap',
+        id: 3,
+        verb: 'conversation.send',
+        args: [{ sessionId: 'sess-1', chatId: '123@c.us', type: 'text', text: 'second body' }],
+        dispatchId: w2.dispatchId,
+      });
+      await flush();
+      expect(dispatcher).toHaveBeenCalledTimes(2);
+      ch.reply({ kind: 'webhook-result', id: w2.id, status: 200 });
+      await expect(d2).resolves.toMatchObject({ ok: true, status: 200 });
+    });
+  });
 });

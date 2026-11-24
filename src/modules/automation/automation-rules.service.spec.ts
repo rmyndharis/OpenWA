@@ -895,5 +895,136 @@ describe('AutomationRulesService', () => {
       expect(sends).toHaveLength(0);
       expect(cooldowns.size).toBe(0);
     });
+
+    it('enforces a 50_000 hard ceiling on cooldowns, sweeps by rule expiry, and resets threshold after eviction', async () => {
+      const rule = await service.create('sessA', { name: 'short', replyText: 'ack', cooldownSeconds: 60 });
+      const cooldowns = (service as unknown as { cooldowns: Map<string, number> }).cooldowns;
+
+      // 1) Sweep by per-entry rule expiry: live-rule expired keys at 120s must be evicted (not kept 24h).
+      const start = Date.now();
+      const now = jest.spyOn(Date, 'now').mockReturnValue(start);
+      try {
+        await service.evaluateInbound('sessA', inbound({ id: 'w0', chatId: '628111@c.us', from: '628111@c.us' }));
+        for (let i = 0; i < 9_999; i++) {
+          const chat = `c-${i}@c.us`;
+          (service as unknown as { enterCooldown: (s: string, r: unknown, c: string) => void }).enterCooldown(
+            'sessA',
+            rule,
+            chat,
+          );
+        }
+        now.mockReturnValue(start + 120_000);
+        await service.evaluateInbound(
+          'sessA',
+          inbound({ id: 'w1', chatId: 'trigger-sweep@c.us', from: 'trigger-sweep@c.us' }),
+        );
+        expect(cooldowns.has(`sessA:${rule.id}:628111@c.us`)).toBe(false);
+        expect(cooldowns.size).toBeLessThan(100);
+      } finally {
+        now.mockRestore();
+      }
+
+      // 2) Reset sweep threshold after eviction (size grew past 20_000 then evicted back to small size).
+      cooldowns.clear();
+      const meta = (service as unknown as { cooldownMeta?: Map<string, unknown> }).cooldownMeta;
+      meta?.clear();
+      (service as unknown as { nextCooldownSweepAt: number }).nextCooldownSweepAt = 40_000;
+      const oldTime = Date.now() - 120_000;
+      for (let i = 0; i < 40_000; i++) {
+        cooldowns.set(`sessA:${rule.id}:old-${i}`, oldTime);
+        meta?.set(`sessA:${rule.id}:old-${i}`, { sessionId: 'sessA', ruleId: rule.id });
+      }
+      await service.evaluateInbound(
+        'sessA',
+        inbound({ id: 'w2', chatId: 'fresh-after-big@c.us', from: 'fresh-after-big@c.us' }),
+      );
+      expect((service as unknown as { nextCooldownSweepAt: number }).nextCooldownSweepAt).toBe(10_000);
+
+      // 3) Hard ceiling 50_000: live unexpired entries cannot push size beyond 50_000.
+      cooldowns.clear();
+      meta?.clear();
+      const fresh = Date.now();
+      for (let i = 0; i < 50_000; i++) cooldowns.set(`live-${i}`, fresh);
+      for (let i = 0; i < 5; i++) {
+        await service.evaluateInbound(
+          'sessA',
+          inbound({ id: `w-cap-${i}`, chatId: `cap-${i}@c.us`, from: `cap-${i}@c.us` }),
+        );
+      }
+      expect(cooldowns.size).toBeLessThanOrEqual(50_000);
+    });
+
+    it('sweeps expired short-TTL entries before FIFO eviction at cap and cleans ruleCooldownSeconds on forgetSession', async () => {
+      const longRule = await service.create('sessA', { name: 'long24h', replyText: 'long', cooldownSeconds: 86_400 });
+      const shortRule = await service.create('sessA', { name: 'short1s', replyText: 'short', cooldownSeconds: 1 });
+      const otherRule = await service.create('sessB', { name: 'other', replyText: 'other', cooldownSeconds: 30 });
+      const svcPriv = service as unknown as {
+        cooldowns: Map<string, number>;
+        cooldownMeta: Map<string, { sessionId: string; ruleId: string }>;
+        ruleCooldownSeconds: Map<string, { sessionId: string; cooldownSeconds: number }>;
+        nextCooldownSweepAt: number;
+        lastCapSweepAt: number;
+        enterCooldown: (s: string, r: unknown, c: string) => void;
+      };
+
+      const start = Date.now();
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(start);
+      try {
+        // Put 24h entry at the front (oldest FIFO slot), then fill up to 50_000 with 1s entries.
+        svcPriv.enterCooldown('sessA', longRule, 'vip@c.us');
+        svcPriv.ruleCooldownSeconds.set(shortRule.id, { sessionId: 'sessA', cooldownSeconds: 1 });
+        for (let i = 0; i < 49_999; i++) {
+          const k = `sessA:${shortRule.id}:s-${i}@c.us`;
+          svcPriv.cooldowns.set(k, start);
+          svcPriv.cooldownMeta.set(k, { sessionId: 'sessA', ruleId: shortRule.id });
+        }
+        // Even if nextCooldownSweepAt is past cap and lastCapSweepAt was at `start`, advancing 2s must sweep first.
+        svcPriv.nextCooldownSweepAt = 50_001;
+        svcPriv.lastCapSweepAt = start;
+        nowSpy.mockReturnValue(start + 2_000);
+
+        svcPriv.enterCooldown('sessA', longRule, 'new-vip@c.us');
+        expect(svcPriv.cooldowns.has(`sessA:${longRule.id}:vip@c.us`)).toBe(true);
+        expect(svcPriv.cooldowns.has(`sessA:${longRule.id}:new-vip@c.us`)).toBe(true);
+        expect(svcPriv.cooldowns.size).toBe(2);
+
+        // forgetSession removes ruleCooldownSeconds for sessA while retaining sessB.
+        svcPriv.enterCooldown('sessB', otherRule, 'b@c.us');
+        expect(svcPriv.ruleCooldownSeconds.has(longRule.id)).toBe(true);
+        expect(svcPriv.ruleCooldownSeconds.has(shortRule.id)).toBe(true);
+        expect(svcPriv.ruleCooldownSeconds.has(otherRule.id)).toBe(true);
+
+        service.forgetSession('sessA');
+        expect(svcPriv.ruleCooldownSeconds.has(longRule.id)).toBe(false);
+        expect(svcPriv.ruleCooldownSeconds.has(shortRule.id)).toBe(false);
+        expect(svcPriv.ruleCooldownSeconds.has(otherRule.id)).toBe(true);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('delete executes without opening an implicit SQLite transaction that rolls back sibling writes', async () => {
+      const rule = await service.create('sessA', { name: 'del-no-tx', replyText: 'ack' });
+      const sessions = ds.getRepository(Session);
+      let sibling = Promise.resolve();
+      const sub = {
+        listenTo: () => AutomationRule,
+        beforeRemove: () => {
+          sibling = (async () => {
+            await sessions.update('sessB', { status: SessionStatus.FAILED });
+          })();
+          throw new Error('abort remove after sibling write');
+        },
+      };
+      ds.subscribers.push(sub);
+      try {
+        await sessions.update('sessB', { status: SessionStatus.READY });
+        await expect(service.remove('sessA', rule.id)).rejects.toThrow('abort remove after sibling write');
+        await sibling;
+        expect((await sessions.findOneByOrFail({ id: 'sessB' })).status).toBe(SessionStatus.FAILED);
+      } finally {
+        ds.subscribers.pop();
+      }
+    });
   });
 });
