@@ -1047,7 +1047,9 @@ describe('PluginLoaderService capability facade — ctx.net', () => {
       const caps = capabilitiesOf(loader);
 
       // Background timer scoped to active concrete session sess-1.
-      await expect(ctx.net.fetch('https://s1.example/ok', { sessionId: 'sess-1' })).resolves.toMatchObject({ ok: true });
+      await expect(ctx.net.fetch('https://s1.example/ok', { sessionId: 'sess-1' })).resolves.toMatchObject({
+        ok: true,
+      });
       await expect(ctx.net.fetch('https://inst-1.example/ok', { sessionId: 'sess-1' })).resolves.toMatchObject({
         ok: true,
       });

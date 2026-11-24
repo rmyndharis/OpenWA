@@ -2841,9 +2841,8 @@ describe('capability cancellation, unsettled zombie cap, idle liveness, and orig
       const sent: WorkerToHostMessage[] = [];
       const capClient = new WorkerCapabilityClient(m => sent.push(m));
       const webhookReg = new WebhookRegistry(m => sent.push(m));
-      let floatedFromWebhook!: Promise<unknown>;
       webhookReg.register('events', () => {
-        floatedFromWebhook = Promise.resolve().then(() => capClient.call('net.fetch', ['https://s1.example']));
+        void Promise.resolve().then(() => capClient.call('net.fetch', ['https://s1.example']));
         return { status: 200 };
       });
       await webhookReg.handleWebhook({
