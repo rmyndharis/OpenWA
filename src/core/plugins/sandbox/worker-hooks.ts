@@ -15,6 +15,7 @@ export interface WorkerDispatchStore {
   config?: Record<string, unknown>;
   inFlight?: string[];
   dispatchId?: string;
+  netScopeId?: string;
 }
 
 export const hookConfigStore = new AsyncLocalStorage<WorkerDispatchStore>();
@@ -93,6 +94,14 @@ function safeFormatWorkerHookError(
 
 export type WorkerHookHandler = (ctx: WorkerHookContext) => Promise<WorkerHookResult> | WorkerHookResult;
 
+export function isThenable<T = unknown>(value: unknown): value is PromiseLike<T> {
+  return (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as PromiseLike<T>).then === 'function'
+  );
+}
+
 /**
  * Worker-side hook handling. A sandboxed plugin registers handlers here (via ctx.registerHook). The
  * registry subscribes the host to each event the first time it sees a handler for it, and on a `hook`
@@ -128,24 +137,34 @@ export class WorkerHookRegistry {
     // Run the whole dispatch inside the per-session config scope so every handler (and any async work
     // it awaits) sees ctx.config resolved for THIS event's session. Absent config => the bootstrap
     // getter falls back to the base config.
-    // The store outlives the dispatch in any timer or detached promise a handler starts; drop the
-    // chain once it settles so such a later call is not treated as re-entrant.
+    // The store outlives the dispatch in any floated promise a handler starts; clear dispatchId/inFlight
+    // synchronously BEFORE posting hook-result so no microtask sends a stale dispatchId after the host
+    // removes it, while retaining netScopeId on this tree for floated net.fetch calls.
     const store: WorkerDispatchStore = {
       config: message.config,
       inFlight: message.inFlight ?? [message.event],
       dispatchId: message.dispatchId,
+      netScopeId: message.netScopeId,
     };
     const originScope: { event?: HookEvent } = { event: message.event as HookEvent };
-    try {
-      await hookConfigStore.run(store, () => hookOriginStore.run(originScope, () => this.dispatch(message)));
-    } finally {
+    const clearActiveDispatch = (): void => {
       store.inFlight = undefined;
       store.dispatchId = undefined;
       originScope.event = undefined;
+    };
+    try {
+      await hookConfigStore.run(store, () =>
+        hookOriginStore.run(originScope, () => this.dispatch(message, clearActiveDispatch)),
+      );
+    } finally {
+      clearActiveDispatch();
     }
   }
 
-  private async dispatch(message: Extract<HostToWorkerMessage, { kind: 'hook' }>): Promise<void> {
+  private async dispatch(
+    message: Extract<HostToWorkerMessage, { kind: 'hook' }>,
+    onBeforePost?: () => void,
+  ): Promise<void> {
     const list = this.handlers.get(message.event) ?? [];
     // Guard only a chain that starts from a usable value: there is nothing to keep otherwise.
     const check = HOOK_RESULT_ACCEPT[message.event as HookEvent];
@@ -156,13 +175,15 @@ export class WorkerHookRegistry {
     let firstError: string | undefined;
     for (const { handler } of list) {
       try {
-        const rawResult: unknown = await handler({
+        const called: unknown = handler({
           event: message.event,
           data,
           sessionId: message.sessionId,
           source: message.source,
           timestamp: new Date(),
         });
+        // Skip `await` on synchronous returns so floated microtasks run AFTER dispatchId is cleared and hook-result posts.
+        const rawResult: unknown = isThenable(called) ? await called : called;
         if (failClosed) {
           if (rawResult === null || typeof rawResult !== 'object') {
             firstError ??= 'hook handler returned an invalid result: continue must be a boolean';
@@ -227,6 +248,7 @@ export class WorkerHookRegistry {
       data,
     };
     if (firstError !== undefined) result.error = firstError;
+    onBeforePost?.();
     try {
       this.post(result);
     } catch (error) {

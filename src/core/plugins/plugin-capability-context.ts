@@ -460,14 +460,32 @@ export class PluginCapabilityContext {
     }
   }
 
+  private async collectConcreteSessionNetConfigs(
+    plugin: PluginInstance,
+    sessionId: string,
+    scoped: boolean,
+  ): Promise<Record<string, unknown>[]> {
+    if (!this.isSessionActiveForNet(plugin, sessionId)) return [];
+    const { rows } = await this.enabledInstanceRows(plugin.manifest.id);
+    const configs: Record<string, unknown>[] = [
+      resolvePluginConfig(plugin.config ?? {}, plugin.sessionConfig, sessionId, scoped, plugin.manifest),
+    ];
+    for (const row of rows) {
+      if (isAllSessionsScope(row.sessionScope) || (scoped && row.sessionScope === sessionId)) {
+        configs.push(row.config ?? {});
+      }
+    }
+    return configs;
+  }
+
   private buildNetCapability(plugin: PluginInstance): PluginNetCapability {
     return {
       fetch: async (url, init, signal) => {
         // Two gates: the declared permission, then strict Layer 2 per-dispatch host allowlisting.
         // Inside an active hook or ingress dispatch, scope config-derived hosts strictly to the firing
-        // concrete session or ingress instance. Outside dispatch (e.g. detached timers after finally
-        // clears dispatchId) or on wildcard '*' dispatches without an instanceId, restrict strictly
-        // to static manifest net.allow so multi-tenant allowConfigHosts are never unioned.
+        // concrete session or ingress instance. Outside dispatch (e.g. background timers), allow an
+        // explicit concrete init.sessionId only after verifying manifest scope and operator activation;
+        // otherwise restrict strictly to static manifest net.allow so tenants never leak across sessions.
         this.assertPermission(plugin.manifest, PluginCapabilityPermission.NET_FETCH);
         const scoped = plugin.manifest.sessionScoped !== false;
         const store = this.hookSession.getStore();
@@ -493,18 +511,15 @@ export class PluginCapabilityContext {
             netConfigs.push(resolveInstanceConfig(resolvedBase, match.config, plugin.manifest, plugin.config));
           }
         } else if (store?.sessionId && !isAllSessionsScope(store.sessionId)) {
-          const sid = store.sessionId;
-          if (this.isSessionActiveForNet(plugin, sid)) {
-            const { rows } = await this.enabledInstanceRows(plugin.manifest.id);
-            netConfigs.push(
-              resolvePluginConfig(plugin.config ?? {}, plugin.sessionConfig, sid, scoped, plugin.manifest),
-            );
-            for (const row of rows) {
-              if (isAllSessionsScope(row.sessionScope) || (scoped && row.sessionScope === sid)) {
-                netConfigs.push(row.config ?? {});
-              }
-            }
-          }
+          netConfigs.push(...(await this.collectConcreteSessionNetConfigs(plugin, store.sessionId, scoped)));
+        } else if (
+          !store &&
+          typeof init?.sessionId === 'string' &&
+          init.sessionId.trim().length > 0 &&
+          init.sessionId === init.sessionId.trim() &&
+          !isAllSessionsScope(init.sessionId)
+        ) {
+          netConfigs.push(...(await this.collectConcreteSessionNetConfigs(plugin, init.sessionId, scoped)));
         }
 
         const allow = [

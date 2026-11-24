@@ -52,6 +52,7 @@ const MAX_LATE_HOOK_CLAIMS = 32;
 /** Bounded cache sizing for per-dispatch deterministic send deduplication across webhook retries. */
 const WEBHOOK_SEND_DEDUP_MAX = 1024;
 const WEBHOOK_SEND_DEDUP_TTL_MS = 15 * 60 * 1000;
+const MAX_NET_SCOPE_CACHE = 4096;
 
 interface ActiveCapEntry {
   controller: AbortController;
@@ -156,6 +157,9 @@ export class PluginWorkerHost {
   private readonly webhookSendDedups = new Map<string, WebhookSendDedupEntry>();
   // Active capability calls; cancelled (signal aborted + timeout timer cleared) on terminate() or exit.
   private readonly activeCaps = new Set<ActiveCapEntry>();
+  // Host-minted opaque tokens mapping concrete hook sessionIds for floated off-dispatch net.fetch calls.
+  private readonly sessionToNetScopeId = new Map<string, string>();
+  private readonly netScopeIdToSession = new Map<string, string>();
 
   // Worker-initiated capability calls currently running host-side, bounded by maxInFlightCaps.
   private inFlightCaps = 0;
@@ -225,6 +229,28 @@ export class PluginWorkerHost {
     this.channel.onExit(code => this.handleExit(code));
   }
 
+  private getOrCreateNetScopeId(sessionId: string): string {
+    const existing = this.sessionToNetScopeId.get(sessionId);
+    if (existing !== undefined) {
+      this.sessionToNetScopeId.delete(sessionId);
+      this.sessionToNetScopeId.set(sessionId, existing);
+      this.netScopeIdToSession.delete(existing);
+      this.netScopeIdToSession.set(existing, sessionId);
+      return existing;
+    }
+    while (this.sessionToNetScopeId.size >= MAX_NET_SCOPE_CACHE) {
+      const oldestSession = this.sessionToNetScopeId.keys().next().value;
+      if (oldestSession === undefined) break;
+      const oldestToken = this.sessionToNetScopeId.get(oldestSession);
+      this.sessionToNetScopeId.delete(oldestSession);
+      if (oldestToken !== undefined) this.netScopeIdToSession.delete(oldestToken);
+    }
+    const token = randomUUID();
+    this.sessionToNetScopeId.set(sessionId, token);
+    this.netScopeIdToSession.set(token, sessionId);
+    return token;
+  }
+
   /**
    * Dispatch a hook event to the worker and await its handler result. Bounded by `timeoutMs`: if the
    * worker's handler is slow or wedged, this resolves `{ continue: true }` so the host's hook chain
@@ -251,6 +277,8 @@ export class PluginWorkerHost {
     if (this.dead) return Promise.resolve({ continue: true, error: 'plugin worker is no longer running' });
     const id = this.nextId++;
     const dispatchId = randomUUID();
+    const netScopeId =
+      options.sessionId && options.sessionId !== '*' ? this.getOrCreateNetScopeId(options.sessionId) : undefined;
     const inFlight = [...new Set([...(options.inFlight ?? []), options.event])];
     this.inFlightDispatches.set(dispatchId, {
       context: { sessionId: options.sessionId },
@@ -291,6 +319,7 @@ export class PluginWorkerHost {
           kind: 'hook',
           id,
           dispatchId,
+          ...(netScopeId ? { netScopeId } : {}),
           event: options.event,
           data: options.data,
           sessionId: options.sessionId,
@@ -591,6 +620,8 @@ export class PluginWorkerHost {
     this.stopIdleLivenessMonitor();
     this.abortActiveCaps(new Error('plugin worker terminated'));
     this.inFlightDispatches.clear();
+    this.sessionToNetScopeId.clear();
+    this.netScopeIdToSession.clear();
     return this.channel.terminate();
   }
 
@@ -752,6 +783,7 @@ export class PluginWorkerHost {
       return;
     }
     let dispatchEntry: InFlightDispatchEntry | undefined;
+    let dispatchContext: SandboxDispatchContext | undefined;
     if (message.dispatchId !== undefined) {
       if (typeof message.dispatchId !== 'string' || !this.inFlightDispatches.has(message.dispatchId)) {
         this.channel.postMessage({
@@ -763,8 +795,19 @@ export class PluginWorkerHost {
         return;
       }
       dispatchEntry = this.inFlightDispatches.get(message.dispatchId);
+      dispatchContext = dispatchEntry?.context;
+    } else if (message.verb === 'net.fetch' && message.netScopeId !== undefined) {
+      if (typeof message.netScopeId !== 'string' || !this.netScopeIdToSession.has(message.netScopeId)) {
+        this.channel.postMessage({
+          kind: 'cap-result',
+          id: message.id,
+          ok: false,
+          error: 'capability call rejected: unknown or expired net scope context',
+        });
+        return;
+      }
+      dispatchContext = { sessionId: this.netScopeIdToSession.get(message.netScopeId)! };
     }
-    const dispatchContext = dispatchEntry?.context;
     const controller = new AbortController();
     let cancelledByTeardown = false;
     const capEntry: ActiveCapEntry = {
@@ -989,6 +1032,8 @@ export class PluginWorkerHost {
     this.stopIdleLivenessMonitor();
     this.abortActiveCaps(new Error(`plugin worker exited (code ${code})`));
     this.inFlightDispatches.clear();
+    this.sessionToNetScopeId.clear();
+    this.netScopeIdToSession.clear();
     if (this.probe) {
       clearTimeout(this.probe.timer);
       this.probe = undefined;
