@@ -82,6 +82,8 @@ export type HostToWorkerMessage =
       kind: 'hook';
       id: number;
       dispatchId?: string;
+      /** Host-generated opaque token bound to the concrete sessionId of this hook dispatch for floated net.fetch calls. */
+      netScopeId?: string;
       event: string;
       data: unknown;
       sessionId?: string;
@@ -151,6 +153,8 @@ export type WorkerToHostMessage =
       args: unknown[];
       inFlight?: string[];
       dispatchId?: string;
+      /** Sent for `net.fetch` after a concrete-session hook dispatch has already returned, keeping floated fetches session-scoped. */
+      netScopeId?: string;
       originHook?: HookEvent;
     }
   // The worker asks the host to dispatch `event` to it (registered a handler for it).

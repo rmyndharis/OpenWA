@@ -1028,6 +1028,65 @@ describe('PluginLoaderService capability facade — ctx.net', () => {
         webhookOtherSession: false,
       });
     });
+
+    it('outside dispatch, scopes init.sessionId strictly to that active concrete session and ignores init.sessionId inside dispatch', async () => {
+      const { loader } = buildNetLoader([
+        instanceRow('inst-1', 'sess-1', 'https://inst-1.example'),
+        instanceRow('inst-2', 'sess-2', 'https://inst-2.example'),
+      ]);
+      const plugin = scopedNetPlugin({
+        allow: ['static.example:443'],
+        config: { baseUrl: 'https://base.example' },
+        sessionConfig: {
+          'sess-1': { baseUrl: 'https://s1.example' },
+          'sess-2': { baseUrl: 'https://s2.example' },
+        },
+        activeSessions: ['sess-1'],
+      });
+      const ctx = contextFor(loader, plugin);
+      const caps = capabilitiesOf(loader);
+
+      // Background timer scoped to active concrete session sess-1.
+      await expect(ctx.net.fetch('https://s1.example/ok', { sessionId: 'sess-1' })).resolves.toMatchObject({
+        ok: true,
+      });
+      await expect(ctx.net.fetch('https://inst-1.example/ok', { sessionId: 'sess-1' })).resolves.toMatchObject({
+        ok: true,
+      });
+      await expect(ctx.net.fetch('https://s2.example/no', { sessionId: 'sess-1' })).rejects.toBeInstanceOf(
+        PluginCapabilityError,
+      );
+      await expect(ctx.net.fetch('https://inst-2.example/no', { sessionId: 'sess-1' })).rejects.toBeInstanceOf(
+        PluginCapabilityError,
+      );
+
+      // Inactive session, wildcard '*', or whitespace/untrimmed sessionId cannot unlock allowConfigHosts.
+      await expect(ctx.net.fetch('https://s2.example/no', { sessionId: 'sess-2' })).rejects.toBeInstanceOf(
+        PluginCapabilityError,
+      );
+      await expect(ctx.net.fetch('https://base.example/no', { sessionId: '*' })).rejects.toBeInstanceOf(
+        PluginCapabilityError,
+      );
+      await expect(ctx.net.fetch('https://s1.example/no', { sessionId: '   ' })).rejects.toBeInstanceOf(
+        PluginCapabilityError,
+      );
+      await expect(ctx.net.fetch('https://s1.example/no', { sessionId: ' sess-1 ' })).rejects.toBeInstanceOf(
+        PluginCapabilityError,
+      );
+      await expect(ctx.net.fetch('https://static.example/ok', { sessionId: '*' })).resolves.toMatchObject({
+        ok: true,
+      });
+
+      // Active dispatch context always wins over caller-supplied init.sessionId.
+      await caps.runWithDispatchContext({ sessionId: 'sess-1' }, async () => {
+        await expect(ctx.net.fetch('https://s2.example/no', { sessionId: 'sess-2' })).rejects.toBeInstanceOf(
+          PluginCapabilityError,
+        );
+        await expect(ctx.net.fetch('https://s1.example/ok', { sessionId: 'sess-2' })).resolves.toMatchObject({
+          ok: true,
+        });
+      });
+    });
   });
 });
 

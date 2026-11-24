@@ -1,4 +1,5 @@
 import { WorkerHookHandler, WorkerHookRegistry } from './worker-hooks';
+import { WorkerCapabilityClient } from './worker-capability';
 import { WorkerToHostMessage } from './protocol';
 
 const collect = () => {
@@ -417,4 +418,54 @@ describe('WorkerHookRegistry', () => {
       });
     },
   );
+
+  it('clears dispatchId before posting hook-result and retains netScopeId only for floated net.fetch', async () => {
+    const { sent, post } = collect();
+    const reg = new WorkerHookRegistry(post);
+    const client = new WorkerCapabilityClient(post);
+    let floatedStorage!: Promise<unknown>;
+    let floatedFetch!: Promise<unknown>;
+
+    reg.register('message:received', () => {
+      floatedStorage = Promise.resolve().then(() => client.call('storage.get', ['k1']));
+      floatedFetch = floatedStorage.then(() => client.call('net.fetch', ['https://s1.example/ok']));
+      return { continue: true };
+    });
+
+    await reg.handleHook({
+      kind: 'hook',
+      id: 21,
+      dispatchId: 'disp-21',
+      netScopeId: 'net-21',
+      event: 'message:received',
+      data: {},
+      source: 'Engine',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const storageReq = sent.find(m => m.kind === 'cap' && m.verb === 'storage.get') as Extract<
+      WorkerToHostMessage,
+      { kind: 'cap' }
+    >;
+    expect(storageReq).toBeDefined();
+    expect(storageReq.dispatchId).toBeUndefined();
+    expect(storageReq.netScopeId).toBeUndefined();
+
+    client.handleResult({ kind: 'cap-result', id: storageReq.id, ok: true, result: null });
+    await Promise.resolve();
+    await Promise.resolve();
+    const fetchReq = sent.find(m => m.kind === 'cap' && m.verb === 'net.fetch') as Extract<
+      WorkerToHostMessage,
+      { kind: 'cap' }
+    >;
+    expect(fetchReq).toBeDefined();
+    expect(fetchReq.dispatchId).toBeUndefined();
+    expect(fetchReq.netScopeId).toBe('net-21');
+    client.handleResult({ kind: 'cap-result', id: fetchReq.id, ok: true, result: null });
+    await floatedFetch;
+    const hookResIdx = sent.findIndex(m => m.kind === 'hook-result');
+    const storageIdx = sent.findIndex(m => m.kind === 'cap' && m.verb === 'storage.get');
+    expect(hookResIdx).toBeGreaterThanOrEqual(0);
+    expect(hookResIdx).toBeLessThan(storageIdx);
+  });
 });

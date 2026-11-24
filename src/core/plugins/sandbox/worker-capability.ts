@@ -19,7 +19,7 @@ interface Call {
   verb: string;
   args: unknown[];
   // The dispatch a hook or webhook handler made the call in, and its chain/id at that time. Absent outside a handler.
-  store?: { inFlight?: string[]; dispatchId?: string };
+  store?: { inFlight?: string[]; dispatchId?: string; netScopeId?: string };
   originScope?: { event?: HookEvent };
   inFlight?: string[];
   dispatchId?: string;
@@ -91,10 +91,11 @@ export class WorkerCapabilityClient {
     // The chain is the dispatch's own while it is in flight, and gone once it settles: the host honours it no longer
     // either. A send the handler made and left held then runs outside the re-entrancy guard, so the hooks of the send
     // dispatch the handler again, and each pass holds more sends than the last. Refuse it, as a call past the bound was
-    // before calls were held. A held net.fetch that outlives its dispatch is refused too so it never loses its
-    // dispatchId and widens to the background allowlist.
+    // before calls were held. A held net.fetch without a concrete session netScopeId is refused if it outlives its dispatch
+    // so webhook or wildcard fetches never widen to the background allowlist.
     const chain = store?.inFlight;
     const dispatchId = store?.dispatchId;
+    const netScopeId = store?.netScopeId;
     const originHook = originScope?.event;
     if (inFlight && !chain && SEND_CAP_VERBS.has(verb)) {
       waiter.reject(
@@ -105,7 +106,7 @@ export class WorkerCapabilityClient {
       );
       return;
     }
-    if (originDispatchId && !dispatchId && verb === 'net.fetch') {
+    if (originDispatchId && !dispatchId && !netScopeId && verb === 'net.fetch') {
       waiter.reject(
         new Error(
           `capability call rejected: too many unanswered capability calls (limit ${SANDBOX_MAX_PENDING_CAPS}) ` +
@@ -121,6 +122,7 @@ export class WorkerCapabilityClient {
       const message: Extract<WorkerToHostMessage, { kind: 'cap' }> = { kind: 'cap', id, verb, args };
       if (chain) message.inFlight = chain;
       if (dispatchId) message.dispatchId = dispatchId;
+      else if (netScopeId && verb === 'net.fetch') message.netScopeId = netScopeId;
       if (originHook) message.originHook = originHook;
       this.post(message);
       this.pending.set(id, waiter);

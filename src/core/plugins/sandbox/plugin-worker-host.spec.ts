@@ -2752,4 +2752,120 @@ describe('capability cancellation, unsettled zombie cap, idle liveness, and orig
       await expect(d2).resolves.toMatchObject({ ok: true, status: 200 });
     });
   });
+
+  describe('floated hook netScopeId and pre-result dispatchId clearing', () => {
+    const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+    it('lets floated hook work call storage.get then net.fetch after hook-result with host-resolved sessionId', async () => {
+      const seen: Array<{ verb: string; ctx?: { sessionId?: string; instanceId?: string } }> = [];
+      const dispatcher = jest.fn(
+        (verb: string, _args: unknown[], dispatchContext?: { sessionId?: string; instanceId?: string }) => {
+          seen.push({ verb, ctx: dispatchContext });
+          return Promise.resolve({ ok: true });
+        },
+      );
+      let hostListener: ((m: WorkerToHostMessage) => void) | undefined;
+      const workerSend = (m: WorkerToHostMessage): void => {
+        setImmediate(() => hostListener?.(m));
+      };
+      const capClient = new WorkerCapabilityClient(workerSend);
+      const hookReg = new WorkerHookRegistry(workerSend);
+      const channel: PluginWorkerChannel = {
+        postMessage: (msg: HostToWorkerMessage) => {
+          if (msg.kind === 'cap-result') capClient.handleResult(msg);
+          else if (msg.kind === 'hook') void hookReg.handleHook(msg);
+        },
+        onMessage: cb => {
+          hostListener = cb;
+        },
+        onExit: () => undefined,
+        terminate: () => Promise.resolve(),
+      };
+
+      const host = new PluginWorkerHost(channel, dispatcher);
+      let bgWork!: Promise<unknown>;
+      hookReg.register('message:received', () => {
+        bgWork = (async () => {
+          await Promise.resolve();
+          await capClient.call('storage.get', ['seen:1']);
+          return capClient.call('net.fetch', ['https://s1.example/api']);
+        })();
+        return { continue: true };
+      });
+
+      await host.dispatchHook({
+        event: 'message:received',
+        data: {},
+        sessionId: 'sess-1',
+        source: 'Engine',
+        timeoutMs: 5000,
+      });
+      await expect(bgWork).resolves.toEqual({ ok: true });
+      expect(seen).toEqual([
+        { verb: 'storage.get', ctx: undefined },
+        { verb: 'net.fetch', ctx: { sessionId: 'sess-1' } },
+      ]);
+    });
+
+    it('rejects a forged or unknown netScopeId, omits netScopeId for wildcard hooks and webhooks, and clears webhook dispatchId before result', async () => {
+      const ch = new FakeChannel();
+      const dispatcher = jest.fn().mockResolvedValue({ ok: true });
+      const host = new PluginWorkerHost(ch, dispatcher);
+
+      ch.reply({
+        kind: 'cap',
+        id: 1,
+        verb: 'net.fetch',
+        args: ['https://evil.example'],
+        netScopeId: 'forged-token',
+      });
+      await flush();
+      expect(dispatcher).not.toHaveBeenCalled();
+      expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toMatchObject({
+        ok: false,
+        error: 'capability call rejected: unknown or expired net scope context',
+      });
+
+      const wild = host.dispatchHook({
+        event: 'message:received',
+        data: {},
+        sessionId: '*',
+        source: 'Engine',
+        timeoutMs: 5000,
+      });
+      const wildMsg = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+      expect(wildMsg.netScopeId).toBeUndefined();
+      ch.reply({ kind: 'hook-result', id: wildMsg.id, continue: true });
+      await wild;
+
+      const sent: WorkerToHostMessage[] = [];
+      const capClient = new WorkerCapabilityClient(m => sent.push(m));
+      const webhookReg = new WebhookRegistry(m => sent.push(m));
+      webhookReg.register('events', () => {
+        void Promise.resolve().then(() => capClient.call('net.fetch', ['https://s1.example']));
+        return { status: 200 };
+      });
+      await webhookReg.handleWebhook({
+        kind: 'webhook',
+        id: 10,
+        dispatchId: 'wh-disp-10',
+        instanceId: 'inst-1',
+        route: 'events',
+        method: 'POST',
+        headers: {},
+        query: {},
+        body: '{}',
+        rawBody: '{}',
+        verified: true,
+        deliveryId: 'd-10',
+        sessionId: 'sess-1',
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      const whCap = sent.find(m => m.kind === 'cap') as Extract<WorkerToHostMessage, { kind: 'cap' }>;
+      expect(whCap).toBeDefined();
+      expect(whCap.dispatchId).toBeUndefined();
+      expect(whCap.netScopeId).toBeUndefined();
+    });
+  });
 });

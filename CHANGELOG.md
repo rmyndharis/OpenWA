@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Plugins: clear worker `dispatchId` synchronously before posting hook and webhook results so queued microtasks do not send expired dispatch contexts.
+- Plugins: preserve `allowConfigHosts` for floated hook `ctx.net.fetch` calls via host-bound `netScopeId`, and accept an explicit active `sessionId` for off-dispatch background calls.
+
 ## [0.32.0] - 2026-11-24
 
 ### Upgrade notes (behavior changes)

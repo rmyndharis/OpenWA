@@ -22,6 +22,12 @@ export interface PluginNetRequestInit {
   headers?: Record<string, string>;
   body?: string | Uint8Array;
   timeoutMs?: number;
+  /**
+   * Concrete session id for background tasks (such as retry timers) running outside an active
+   * hook or webhook dispatch. Ignored inside an active dispatch, where the host-recorded session
+   * and instance always take precedence.
+   */
+  sessionId?: string;
 }
 
 /**
