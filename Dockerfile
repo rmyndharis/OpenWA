@@ -273,7 +273,7 @@ RUN if [ "$TARGETARCH" = arm64 ]; then \
         ln -s /usr/bin/chromium /usr/local/bin/puppeteer-chrome; \
     else \
         mkdir -p /opt/puppeteer && \
-        PUPPETEER_CACHE_DIR=/opt/puppeteer ./node_modules/.bin/puppeteer browsers install 'chrome@158.0.8127.36' && \
+        PUPPETEER_CACHE_DIR=/opt/puppeteer ./node_modules/.bin/puppeteer browsers install 'chrome@158.0.8127.88' && \
         chown -R openwa:openwa /opt/puppeteer && \
         chrome_path=$(find /opt/puppeteer/chrome/linux*/chrome-linux64/chrome | head -n 1) && \
         test -n "$chrome_path" && \
