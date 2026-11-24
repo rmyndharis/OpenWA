@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bound plugin webhook delivery capability timeouts to the dispatch deadline with retry deduplication, scope `ctx.net.fetch` allowlists outside active dispatches, and check symlink containment recursively across plugin package installs.
 - Enforce `replicaCount <= 1`, valid `terminationGracePeriodSeconds` and `tmpVolumeSizeLimit` inputs, and disallow `PORT` overrides in Helm `values.schema.json`, bound `/tmp` `emptyDir.sizeLimit` in the chart template, and harden `scripts/restore.sh` path containment and pre-restore checks.
 - Exclude `*.sqlite-wal` and `*.sqlite-shm` (alongside existing `.db-wal`/`.db-shm`) patterns from Docker build contexts in `.dockerignore`.
+- The amd64 image's Chrome for Testing 158.0.8127.36 to 158.0.8127.88, picking up the browser security fixes released since; the arm64 image keeps the chromium package Debian ships.
 
 ### Fixed
 
