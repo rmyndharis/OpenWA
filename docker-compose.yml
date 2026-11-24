@@ -9,7 +9,7 @@ services:
   docker-proxy:
     # Pinned by release tag and digest: this container holds the Docker socket, so a re-pushed tag
     # must not change what runs here.
-    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    image: tecnativa/docker-socket-proxy:3.4@sha256:027f9fa5ee70be5836eeaa10ce889d7a83f34a8db16a7f412818b92997e0beab
     container_name: openwa-docker-proxy
     profiles: ['docker-proxy']
     restart: unless-stopped
