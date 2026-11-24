@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-11-24
+
 ### Upgrade notes (behavior changes)
 
 - `WWEBJS_WEB_VERSION` defaults to native WhatsApp Web (`off`) instead of fetching remote HTML from GitHub.
