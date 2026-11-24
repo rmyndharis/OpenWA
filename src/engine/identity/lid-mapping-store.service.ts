@@ -2,7 +2,7 @@ import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Raw, Repository } from 'typeorm';
 import { LidMapping } from './lid-mapping.entity';
-import { userPart } from './wa-id';
+import { parseWaId, userPart } from './wa-id';
 import { createLogger } from '../../common/services/logger.service';
 import { outsideRequest } from '../../common/services/request-context';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
@@ -148,6 +148,12 @@ export interface LidMappingStore {
   remember(lid: string, phone: string | null, sessionId?: string): Promise<boolean>;
   /** Keep a cached lookup for display without authorizing it or replacing a stored phone or negative. */
   rememberIfUnknown?(lid: string, phone: string, sessionId?: string): Promise<boolean>;
+  /**
+   * Promote display-only lid↔phone rows for a chat the session just sent into, so message history
+   * filters that require an engine-reported pair can join the chat-list `@lid` id with outbound
+   * rows stored under `@c.us` (and the reverse).
+   */
+  confirmSendAddress?(chatId: string, sessionId?: string): Promise<void>;
 }
 
 /**
@@ -542,6 +548,33 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit, On
       this.logger.warn(`Could not read the phone for a lid: ${err instanceof Error ? err.message : String(err)}`);
     }
     return this.resolveLid(lid);
+  }
+
+  /**
+   * A successful API/engine send to `chatId` confirms the address. Any display-only
+   * (`isReported=false`) lid↔phone row for that person is promoted via {@link remember}, so
+   * `GET .../messages?chatId=<lid>` can see outbound rows stored under the phone JID (the chat list
+   * shows the lid with a preview while history used to stay empty).
+   */
+  async confirmSendAddress(chatId: string, sessionId?: string): Promise<void> {
+    const parsed = parseWaId(chatId);
+    try {
+      if (parsed.kind === 'user') {
+        const rows = await this.repo.find({ where: { phone: parsed.userPart } });
+        for (const row of rows) {
+          if (row.phone) await this.remember(row.lid, row.phone, sessionId);
+        }
+        return;
+      }
+      if (parsed.kind === 'lid') {
+        const row = await this.repo.findOne({ where: { lid: parsed.userPart } });
+        if (row?.phone) await this.remember(row.lid, row.phone, sessionId);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Could not confirm lid mapping after send to ${chatId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**

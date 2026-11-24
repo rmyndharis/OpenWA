@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Baileys: after an API send to a phone JID, promote any display-only lid↔phone mapping for that contact so opening the chat-list `@lid` row shows the outbound message (it already appeared in the preview while `GET .../messages?chatId=<lid>` stayed empty).
+
 ## [0.32.1] - 2026-11-24
 
 ### Fixed

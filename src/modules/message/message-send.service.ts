@@ -1099,6 +1099,8 @@ export class MessageSendService {
     if (result.id) message.waMessageId = result.id;
     message.status = MessageStatus.SENT;
     message.timestamp = result.timestamp;
+    // Promote display-only lid↔phone rows so the chat-list `@lid` can read this `@c.us` outbound row.
+    void this.lidMappingStore?.confirmSendAddress?.(message.chatId, message.sessionId);
     // Set when the row was no longer PENDING at the first write: the pending reaper failed it while the engine answered.
     // The reaper can also fail it later, while the echo merge below is tried; the recovery there covers both.
     let reaped = false;

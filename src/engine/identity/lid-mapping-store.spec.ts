@@ -1403,6 +1403,19 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     expect(await store.findPhoneForLid('111@lid')).toBe('628111');
   });
 
+  it('confirmSendAddress promotes a display-only pair after a send to the phone or lid', async () => {
+    await store.rememberIfUnknown('111', '628111', s1);
+    expect(await store.findPhoneForLid('111@lid')).toBeNull();
+    await store.confirmSendAddress('628111@c.us', s1);
+    expect(await row('111')).toMatchObject({ phone: '628111', isReported: true });
+    expect(await store.findPhoneForLid('111@lid')).toBe('628111');
+
+    await store.rememberIfUnknown('222', '628222', s1);
+    expect(await store.findPhoneForLid('222@lid')).toBeNull();
+    await store.confirmSendAddress('222@lid', s1);
+    expect(await store.findPhoneForLid('222@lid')).toBe('628222');
+  });
+
   it('revokes a conflicting lookup without replacing the stored phone, then accepts an actual same-phone report', async () => {
     await store.remember('111', '628111', s1);
     const peer = new LidMappingStoreService(repo);
