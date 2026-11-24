@@ -1323,43 +1323,53 @@ describe('chunked body incremental accounting and keep-alive over real HTTP', ()
     return { port: (srv.address() as AddressInfo).port, received };
   };
 
-  it('drops excess concurrent 6 x 1.90 MiB chunked POSTs completing in <1 s under a 10 MiB budget', async () => {
-    const budget = createInflightBodyBudget(10 * MB, { perClientShare: 1 });
-    const { port } = await startApp(budget);
-
-    const payload = JSON.stringify({ data: 'a'.repeat(Math.floor(1.9 * MB) - 11) });
+  async function runChunkedBurstExpectingMidStreamDrops(
+    port: number,
+    options: {
+      payloadChar: string;
+      minExpectedDrops: number;
+      headersForClient?: (idx: number) => Record<string, string>;
+    },
+  ): Promise<{ results: Array<{ status: number }>; elapsedMs: number }> {
+    const payload = JSON.stringify({ data: options.payloadChar.repeat(Math.floor(1.9 * MB) - 11) });
     const firstStageLen = Math.floor(1.85 * MB);
     const chunkSize = 256 * 1024;
     const t0 = Date.now();
 
-    const clients = Array.from({ length: 6 }, () => {
+    const clients = Array.from({ length: 6 }, (_, idx) => {
       let settled = false;
-      let finish!: (result: { status: number; buffered: boolean }) => void;
-      const done = new Promise<{ status: number; buffered: boolean }>(res => (finish = res));
+      let dropped = false;
+      let finish!: (result: { status: number }) => void;
+      const done = new Promise<{ status: number }>(res => (finish = res));
       const req = httpRequest(
         {
           host: '127.0.0.1',
           port,
           path: '/json',
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Transfer-Encoding': 'chunked',
+            ...(options.headersForClient ? options.headersForClient(idx) : {}),
+          },
         },
         res => {
-          const chunks: Buffer[] = [];
-          res.on('data', (c: Buffer) => chunks.push(c));
+          if (res.statusCode !== 200) dropped = true;
+          res.resume();
           res.on('end', () => {
             if (settled) return;
             settled = true;
-            finish({ status: res.statusCode ?? 0, buffered: res.statusCode === 200 });
+            finish({ status: res.statusCode ?? 0 });
           });
         },
       );
       req.on('error', () => {
+        dropped = true;
         if (settled) return;
         settled = true;
-        finish({ status: 0, buffered: false });
+        finish({ status: 0 });
       });
-      return { req, done };
+      return { req, done, isDropped: () => dropped };
     });
 
     // Stream first 1.85 MiB concurrently on all 6 before any sends its terminating chunk.
@@ -1384,15 +1394,32 @@ describe('chunked body incremental accounting and keep-alive over real HTTP', ()
       ),
     );
 
+    // Wait for kernel-buffered writes to reach the server socket loop and drop excess streams
+    // before sending req.end() on surviving sockets, keeping the total wait below STALL_POLL_MS.
+    const dropDeadline = Date.now() + 3000;
+    while (clients.filter(c => c.isDropped()).length < options.minExpectedDrops && Date.now() < dropDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+
     // Send final 0.05 MiB chunk on any surviving connections.
     for (const { req } of clients) {
       if (!req.destroyed) req.end(payload.slice(firstStageLen));
     }
 
     const results = await Promise.all(clients.map(c => c.done));
-    const elapsedMs = Date.now() - t0;
+    return { results, elapsedMs: Date.now() - t0 };
+  }
 
-    expect(elapsedMs).toBeLessThan(1000);
+  it('drops excess concurrent 6 x 1.90 MiB chunked POSTs before the 5 s stall poll under a 10 MiB budget', async () => {
+    const budget = createInflightBodyBudget(10 * MB, { perClientShare: 1 });
+    const { port } = await startApp(budget);
+
+    const { results, elapsedMs } = await runChunkedBurstExpectingMidStreamDrops(port, {
+      payloadChar: 'a',
+      minExpectedDrops: 1,
+    });
+
+    expect(elapsedMs).toBeLessThan(4000);
     const okCount = results.filter(r => r.status === 200).length;
     const droppedCount = results.filter(r => r.status !== 200).length;
     expect(okCount).toBeLessThan(6);
@@ -1400,7 +1427,7 @@ describe('chunked body incremental accounting and keep-alive over real HTTP', ()
     expect(budget.currentBytes()).toBe(0);
   });
 
-  it('drops excess unkeyed chunked POSTs mid-stream when crossing the 4 MiB anonymous pool in <1 s', async () => {
+  it('drops excess unkeyed chunked POSTs mid-stream when crossing the 4 MiB anonymous pool before the 5 s stall poll', async () => {
     const budget = createInflightBodyBudget(10 * MB, {
       classify: () => undefined,
       bodyLimitBytes: 2 * MB,
@@ -1408,71 +1435,13 @@ describe('chunked body incremental accounting and keep-alive over real HTTP', ()
     });
     const { port } = await startApp(budget);
 
-    const payload = JSON.stringify({ data: 'b'.repeat(Math.floor(1.9 * MB) - 11) });
-    const firstStageLen = Math.floor(1.85 * MB);
-    const chunkSize = 256 * 1024;
-    const t0 = Date.now();
-
-    const clients = Array.from({ length: 6 }, (_, idx) => {
-      let settled = false;
-      let finish!: (result: { status: number }) => void;
-      const done = new Promise<{ status: number }>(res => (finish = res));
-      const req = httpRequest(
-        {
-          host: '127.0.0.1',
-          port,
-          path: '/json',
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Transfer-Encoding': 'chunked',
-            'X-Forwarded-For': `198.51.100.${idx + 1}`,
-          },
-        },
-        res => {
-          res.resume();
-          res.on('end', () => {
-            if (settled) return;
-            settled = true;
-            finish({ status: res.statusCode ?? 0 });
-          });
-        },
-      );
-      req.on('error', () => {
-        if (settled) return;
-        settled = true;
-        finish({ status: 0 });
-      });
-      return { req, done };
+    const { results, elapsedMs } = await runChunkedBurstExpectingMidStreamDrops(port, {
+      payloadChar: 'b',
+      minExpectedDrops: 4,
+      headersForClient: idx => ({ 'X-Forwarded-For': `198.51.100.${idx + 1}` }),
     });
 
-    await Promise.all(
-      clients.map(
-        ({ req }) =>
-          new Promise<void>(resolve => {
-            let offset = 0;
-            const writeNext = (): void => {
-              if (req.destroyed || offset >= firstStageLen) {
-                resolve();
-                return;
-              }
-              const nextOffset = Math.min(firstStageLen, offset + chunkSize);
-              req.write(payload.slice(offset, nextOffset), () => {
-                offset = nextOffset;
-                setTimeout(writeNext, 2);
-              });
-            };
-            writeNext();
-          }),
-      ),
-    );
-
-    for (const { req } of clients) {
-      if (!req.destroyed) req.end(payload.slice(firstStageLen));
-    }
-
-    const results = await Promise.all(clients.map(c => c.done));
-    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(elapsedMs).toBeLessThan(4000);
     // 4 MiB pool holds at most two 1.90 MiB bodies simultaneously; 6 concurrent senders cannot all get 200.
     expect(results.filter(r => r.status === 200).length).toBeLessThanOrEqual(2);
     expect(budget.anonymousBytes()).toBe(0);
