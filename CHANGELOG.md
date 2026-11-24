@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.1] - 2026-11-24
+
 ### Fixed
 
 - Plugins: clear worker `dispatchId` synchronously before posting hook and webhook results so queued microtasks do not send expired dispatch contexts.
