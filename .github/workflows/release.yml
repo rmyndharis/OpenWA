@@ -31,13 +31,25 @@ jobs:
   # Mirror the CI workflow's gate jobs so a tag can never publish an image or GitHub Release that
   # lint, the spec type-check, OpenAPI snapshot, unit + e2e tests, the Postgres migration smoke, or the
   # dashboard build/lint/type-check would have rejected. Each job below matches its CI counterpart; only the tag-match
-  # guard and the publish jobs (docker, release) are release-specific.
+  # and on-main guards and the publish jobs (docker, release) are release-specific.
   lint:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # A tag can be pushed on any commit, and a stable tag's run moves `latest` on both registries, so
+      # only a commit main already holds is released. The checkout is the tag alone, one commit deep, so
+      # main's history is fetched down to the tagged commit, or all of it when a later merge reaches older history.
+      - name: Verify the tagged commit is on main
+        run: |
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Tag '$GITHUB_REF_NAME' points at $(git rev-parse HEAD), which main does not hold. Merge it to main and tag the merged commit."
+            exit 1
+          fi
+          echo "$(git rev-parse HEAD) is on main"
 
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7

@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The release workflow refuses a tag whose commit `main` does not hold, so unmerged code cannot publish `latest`.
 - The release workflow fails before promotion when the exact `X.Y.Z` image tag already serves another digest, so a second full run of a published version cannot re-point it.
 
 ### Fixed

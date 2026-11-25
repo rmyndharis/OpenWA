@@ -748,7 +748,8 @@ git push origin v<version>
 ```
 
 The tag must be annotated and `v`-prefixed; `release.yml` triggers on `v*` and refuses to proceed if
-the tag string and `package.json` disagree.
+the tag string and `package.json` disagree. Its `lint` job also refuses a tag whose commit `main` does not
+hold, so a tag pushed on an unmerged branch publishes nothing.
 
 Release runs share one concurrency group, which holds the running release and at most one pending run.
 A tag pushed while one release runs and another waits cancels the waiting one, so push the next tag
@@ -765,7 +766,7 @@ flowchart TB
     T --> D
     D --> E[boot-smoke: run the image on amd64 + arm64]
     D --> F[image-scan: Trivy, CRITICAL/HIGH, fixable only]
-    D --> R[release-tags: drop X.Y and latest when a newer release holds them]
+    D --> R[release-tags: drop X.Y and latest when a newer release holds them, and refuse an exact tag that serves another digest]
     E --> G[promote: apply X.Y.Z, X.Y, latest to GHCR + Docker Hub]
     F --> G
     R --> G
