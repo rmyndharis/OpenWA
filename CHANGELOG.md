@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Plugins: reject a `ctx` call still in flight when its webhook dispatch times out instead of leaving it unanswered, which held every later capability call of the plugin after 64 such timeouts.
+- Plugins: a webhook delivery whose handler awaits a `ctx` call when the dispatch budget runs out always fails as a dispatch timeout (504), no longer sometimes with the handler's error.
+
 ## [0.32.1] - 2026-11-24
 
 ### Fixed

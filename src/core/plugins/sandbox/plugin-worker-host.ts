@@ -56,7 +56,10 @@ const MAX_NET_SCOPE_CACHE = 4096;
 
 interface ActiveCapEntry {
   controller: AbortController;
+  // Teardown: the worker is gone, so the call is dropped and nothing is posted.
   cancel?: (reason: Error) => void;
+  // Out of time while the worker lives: the call is answered with `reason`, as at its own timeout.
+  expire?: (reason: Error) => void;
 }
 
 interface InFlightDispatchEntry {
@@ -65,6 +68,8 @@ interface InFlightDispatchEntry {
   inFlight?: string[];
   kind: 'hook' | 'webhook';
   deadlineAt?: number;
+  // Webhook: ends the dispatch as timed out (504) and answers its in-flight calls with the dispatch timeout.
+  timeOut?: () => void;
   deliveryKey?: string;
   sendSeq: number;
   activeCaps: Set<ActiveCapEntry>;
@@ -400,21 +405,23 @@ export class PluginWorkerHost {
         this.inFlightDispatches.delete(dispatchId);
         resolve(result);
       };
-      const timer = setTimeout(() => {
-        this.webhookPending.delete(id);
-        this.inFlightDispatches.delete(dispatchId);
+      // Run by the dispatch timer, and by the timer of a call the deadline ends, whichever comes due first: the
+      // plugin and the delivery then report this timeout however the two timers are ordered.
+      const timeOut = (): void => {
+        // Each call is answered: a call left without a reply keeps its place among the worker's unanswered
+        // calls for good.
         const timeoutReason = new Error(`webhook dispatch timed out after ${options.timeoutMs}ms`);
-        for (const cap of dispatchEntry.activeCaps) {
-          if (!cap.controller.signal.aborted) {
-            cap.controller.abort(timeoutReason);
-          }
-          cap.cancel?.(timeoutReason);
-        }
+        for (const cap of dispatchEntry.activeCaps) cap.expire?.(timeoutReason);
         dispatchEntry.activeCaps.clear();
+        if (!this.webhookPending.delete(id)) return; // the handler already answered, or the worker exited
+        clearTimeout(timer);
+        this.inFlightDispatches.delete(dispatchId);
         options.onTimeout?.();
         this.probeLiveness();
         resolve({ ok: false, status: 504 }); // the ingress job retries or dead-letters the delivery
-      }, options.timeoutMs);
+      };
+      dispatchEntry.timeOut = timeOut;
+      const timer = setTimeout(timeOut, options.timeoutMs);
       this.webhookPending.set(id, { resolve: settle, timer });
       try {
         this.channel.postMessage({
@@ -839,7 +846,7 @@ export class PluginWorkerHost {
         () => {
           cancelledByTeardown = true;
         },
-        dispatchEntry?.kind === 'webhook' ? dispatchEntry.deadlineAt : undefined,
+        dispatchEntry?.kind === 'webhook' ? dispatchEntry : undefined,
       );
       if (!cancelledByTeardown && !this.dead && !this.terminated) {
         this.channel.postMessage({ kind: 'cap-result', id: message.id, ok: true, result });
@@ -931,14 +938,16 @@ export class PluginWorkerHost {
    * wedge all maxInFlightCaps slots into a self-DoS. If the underlying verb does not support cancellation,
    * its unsettled promise is counted against unsettledTimedOutCaps (capped at 2 * maxInFlightCaps combined
    * with inFlightCaps) and WARN-logged once it eventually settles. Send verbs (SEND_CAP_VERBS) run on a
-   * wider budget that covers normal execution unless bounded by an active webhook deadline.
+   * wider budget that covers normal execution unless bounded by an active webhook deadline. A webhook
+   * dispatch that reaches its deadline ends its in-flight calls the same way, through entry.expire, with
+   * the dispatch timeout as the reason.
    */
   private withCapTimeout(
     verb: string,
     work: Promise<unknown>,
     entry: ActiveCapEntry,
     onTeardownCancel?: () => void,
-    dispatchDeadlineAt?: number,
+    webhookDispatch?: InFlightDispatchEntry,
   ): Promise<unknown> {
     const configuredTimeoutMs =
       this.capTimeoutMs === undefined
@@ -946,7 +955,8 @@ export class PluginWorkerHost {
         : SEND_CAP_VERBS.has(verb)
           ? this.capTimeoutMs * SEND_CAP_TIMEOUT_FACTOR
           : this.capTimeoutMs;
-    const remainingMs = dispatchDeadlineAt !== undefined ? Math.max(0, dispatchDeadlineAt - Date.now()) : undefined;
+    const deadlineAt = webhookDispatch?.deadlineAt;
+    const remainingMs = deadlineAt !== undefined ? Math.max(0, deadlineAt - Date.now()) : undefined;
     const timeoutMs =
       configuredTimeoutMs !== undefined && remainingMs !== undefined
         ? Math.min(configuredTimeoutMs, remainingMs)
@@ -954,15 +964,14 @@ export class PluginWorkerHost {
     if (timeoutMs === undefined) return work;
     return new Promise((resolve, reject) => {
       let settled = false;
-      const timer = setTimeout(() => {
+      const expire = (reason: Error): void => {
         if (settled) return;
         settled = true;
         entry.cancel = undefined;
+        clearTimeout(timer);
         this.activeCaps.delete(entry);
         this.unsettledTimedOutCaps++;
-        if (!entry.controller.signal.aborted) {
-          entry.controller.abort(new Error(`capability '${verb}' timed out after ${timeoutMs}ms`));
-        }
+        if (!entry.controller.signal.aborted) entry.controller.abort(reason);
         // Late settle: warn exactly once, whichever way the work ends, and release the unsettled slot.
         // These handlers also keep a late rejection from surfacing as an unhandled promise rejection.
         work.then(
@@ -989,9 +998,16 @@ export class PluginWorkerHost {
             }
           },
         );
-        reject(new Error(`capability '${verb}' timed out after ${timeoutMs}ms`));
+        reject(reason);
+      };
+      const timer = setTimeout(() => {
+        // When the dispatch's deadline is what ends this call, the dispatch ends with it, which answers this
+        // call with the dispatch timeout and leaves the expiry below nothing to do.
+        if (timeoutMs === remainingMs) webhookDispatch?.timeOut?.();
+        expire(new Error(`capability '${verb}' timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       timer.unref?.();
+      entry.expire = expire;
       entry.cancel = (reason: Error) => {
         if (settled) return;
         settled = true;
