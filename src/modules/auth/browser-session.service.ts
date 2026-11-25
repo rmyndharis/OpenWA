@@ -90,7 +90,8 @@ export class BrowserSessionService implements OnApplicationBootstrap, OnModuleDe
       expiresAt,
       revokedAt: null,
     });
-    const session = await this.sessionRepository.save(entity);
+    // No implicit transaction: on SQLite's shared connection its rollback would undo other callers' writes.
+    const session = await this.sessionRepository.save(entity, { transaction: false });
     this.keyIndex?.refreshSoon();
     return { token, session, ttlMs };
   }

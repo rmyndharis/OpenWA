@@ -761,7 +761,9 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       },
     });
     if (existing > 0) return undefined;
-    return (await this.failures.save({ ...buildIngressDeadLetterRow(data, error), attempts })).id;
+    // No implicit transaction: on SQLite's shared connection its rollback would undo other callers' writes.
+    const row = { ...buildIngressDeadLetterRow(data, error), attempts };
+    return (await this.failures.save(row, { transaction: false })).id;
   }
 }
 

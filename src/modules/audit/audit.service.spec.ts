@@ -1,7 +1,7 @@
 import { DataSource, Repository } from 'typeorm';
 import { AuditService } from './audit.service';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
-import type { ApiKey } from '../auth/entities/api-key.entity';
+import { ApiKey } from '../auth/entities/api-key.entity';
 import { runWithRequestId, setRequestActor } from '../../common/services/request-context';
 
 describe('AuditService', () => {
@@ -264,5 +264,38 @@ describe('AuditService.findAll paging on a real database', () => {
     await expect(service.cleanup(30)).resolves.toBe(500);
 
     expect(await repo.count()).toBe(703 + 3);
+  });
+});
+
+// SQLite serves every caller on one connection: a write another request makes while an implicit save
+// transaction is open becomes part of it, and the rollback of a failed insert would discard it too.
+describe('AuditService.log beside other writes on one SQLite connection', () => {
+  it('does not roll back a concurrent write when the audit insert fails', async () => {
+    const ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [AuditLog, ApiKey],
+      synchronize: true,
+    }).initialize();
+    try {
+      const keys = ds.getRepository(ApiKey);
+      const key = await keys.save(keys.create({ name: 'before', keyHash: 'h1', keyPrefix: 'owa_k1_aaaaa' }));
+      let beside = Promise.resolve();
+      ds.subscribers.push({
+        listenTo: () => AuditLog,
+        beforeInsert: () => {
+          beside = (async () => {
+            await keys.update(key.id, { name: 'after' });
+          })();
+          throw new Error('abort audit insert');
+        },
+      });
+
+      await expect(new AuditService(ds.getRepository(AuditLog)).log(AuditAction.SESSION_CREATED)).resolves.toBeNull();
+      await beside;
+      expect((await keys.findOneByOrFail({ id: key.id })).name).toBe('after');
+    } finally {
+      await ds.destroy();
+    }
   });
 });

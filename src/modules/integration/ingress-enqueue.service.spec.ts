@@ -7,6 +7,12 @@ import {
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { ConfigService } from '@nestjs/config';
 import { producerConnectWaitMs } from '../queue/redis-connection';
+import { DataSource } from 'typeorm';
+import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
+import { PluginInstance } from './entities/plugin-instance.entity';
+import { IntegrationModule } from './integration.module';
+import { IngressService } from './ingress.service';
+import type { IngressJobData } from '../queue/processors/ingress.processor';
 
 describe('IngressEnqueueService', () => {
   const data = {
@@ -398,5 +404,69 @@ describe('IngressEnqueueService', () => {
       expect(row.sessionId).toBeNull();
       expect(row.lastError).toBe('inline ingress dispatch failed');
     });
+  });
+});
+
+// SQLite serves every caller on one connection: a write another request makes while an implicit save
+// transaction is open becomes part of it, and the rollback of a failed insert would discard it too.
+describe('IntegrationModule inline-failure dead letter beside other writes on one SQLite connection', () => {
+  it('does not roll back a concurrent write when writing the dead letter fails', async () => {
+    const ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [IntegrationDeliveryFailure, PluginInstance],
+      synchronize: true,
+    }).initialize();
+    try {
+      const instances = ds.getRepository(PluginInstance);
+      await instances.save({
+        id: 'chatwoot:acct1',
+        pluginId: 'chatwoot',
+        instanceId: 'acct1',
+        secret: 's',
+        enabled: true,
+      });
+      let beside = Promise.resolve();
+      ds.subscribers.push({
+        listenTo: () => IntegrationDeliveryFailure,
+        beforeInsert: () => {
+          beside = (async () => {
+            await instances.update('chatwoot:acct1', { enabled: false });
+          })();
+          throw new Error('abort dead letter');
+        },
+      });
+      const providers = Reflect.getMetadata('providers', IntegrationModule) as Array<{
+        provide?: unknown;
+        useFactory?: (...deps: unknown[]) => IngressService;
+      }>;
+      const factory = providers.find(provider => provider.provide === IngressService)?.useFactory;
+      const ingress = factory!(
+        {},
+        { markDispatchOutcome: jest.fn().mockResolvedValue(undefined) },
+        {},
+        { enqueue: jest.fn().mockResolvedValue({ outcome: 'failed', error: 'boom' }) },
+        ds.getRepository(IntegrationDeliveryFailure),
+        {},
+        {},
+      );
+      const { enqueue } = (
+        ingress as unknown as { deps: { enqueue: (data: IngressJobData, jobId: string) => Promise<unknown> } }
+      ).deps;
+      const data = {
+        pluginId: 'chatwoot',
+        instanceId: 'acct1',
+        route: 'chatwoot',
+        deliveryId: 'd1',
+        payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+      };
+
+      await expect(enqueue(data, 'd1')).resolves.toEqual({ outcome: 'failed', error: 'boom' });
+      await beside;
+
+      expect((await instances.findOneByOrFail({ id: 'chatwoot:acct1' })).enabled).toBe(false);
+    } finally {
+      await ds.destroy();
+    }
   });
 });

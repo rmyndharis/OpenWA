@@ -339,23 +339,27 @@ export class IngressProcessor extends WorkerHost {
     ) {
       return;
     }
-    await this.failures.save({
-      direction: 'inbound',
-      pluginId: d.pluginId,
-      instanceId: d.instanceId,
-      sessionId: d.sessionId ?? null,
-      deliveryId: d.deliveryId,
-      attempts,
-      lastError: errorMessage,
-      // Persist the FULL ingress payload (route + headers/rawBody) so P1 redrive is
-      // self-contained and never has to re-read ingress_events.
-      payload: {
-        route: d.route,
-        method: d.method,
-        providerConversationId: d.providerConversationId,
-        ingress: d.payload,
+    // No implicit transaction: on SQLite's shared connection its rollback would undo other callers' writes.
+    await this.failures.save(
+      {
+        direction: 'inbound',
+        pluginId: d.pluginId,
+        instanceId: d.instanceId,
+        sessionId: d.sessionId ?? null,
+        deliveryId: d.deliveryId,
+        attempts,
+        lastError: errorMessage,
+        // Persist the FULL ingress payload (route + headers/rawBody) so P1 redrive is
+        // self-contained and never has to re-read ingress_events.
+        payload: {
+          route: d.route,
+          method: d.method,
+          providerConversationId: d.providerConversationId,
+          ingress: d.payload,
+        },
+        redriven: false,
       },
-      redriven: false,
-    });
+      { transaction: false },
+    );
   }
 }

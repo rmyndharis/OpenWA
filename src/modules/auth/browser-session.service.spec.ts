@@ -541,6 +541,26 @@ describe('BrowserSessionService & CreateBrowserSessions migration (SQLite)', () 
     if (ds?.isInitialized) await ds.destroy();
   });
 
+  // SQLite serves every caller on one connection: a write another request makes while an implicit save
+  // transaction is open becomes part of it, and the rollback of a failed insert would discard it too.
+  it('does not roll back a concurrent write when storing a session fails', async () => {
+    const keys = ds.getRepository(ApiKey);
+    let beside = Promise.resolve();
+    ds.subscribers.push({
+      listenTo: () => BrowserSession,
+      beforeInsert: () => {
+        beside = (async () => {
+          await keys.update(activeKey.id, { name: 'Renamed Admin' });
+        })();
+        throw new Error('abort session insert');
+      },
+    });
+
+    await expect(service.createSession(activeKey)).rejects.toThrow('abort session insert');
+    await beside;
+    expect((await keys.findOneByOrFail({ id: activeKey.id })).name).toBe('Renamed Admin');
+  });
+
   it('stores only a hashed session token and re-validates live ApiKey permissions on every lookup', async () => {
     const { token, session } = await service.createSession(activeKey);
     expect(token.length).toBeGreaterThanOrEqual(40);

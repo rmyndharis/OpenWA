@@ -262,7 +262,8 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       role,
     });
 
-    return this.apiKeyRepository.save(apiKey);
+    // No implicit transaction: on SQLite's shared connection its rollback would undo other callers' writes.
+    return this.apiKeyRepository.save(apiKey, { transaction: false });
   }
 
   async createApiKey(dto: CreateApiKeyDto): Promise<{ apiKey: ApiKey; rawKey: string }> {
@@ -282,7 +283,8 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       expiresAt: dto.expiresAt ? AuthService.parseExpiry(dto.expiresAt) : null,
     });
 
-    const saved = await this.apiKeyRepository.save(apiKey);
+    // No implicit transaction: on SQLite's shared connection its rollback would undo other callers' writes.
+    const saved = await this.apiKeyRepository.save(apiKey, { transaction: false });
     this.keyIndex?.refreshSoon();
     this.logger.log(`API key created: ${saved.name}`, {
       keyId: saved.id,

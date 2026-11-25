@@ -133,7 +133,8 @@ if (process.env.QUEUE_ENABLED === 'true') {
             }
             if (result.outcome === 'failed') {
               try {
-                await failures.save(buildIngressDeadLetterRow(data, result.error));
+                // No implicit transaction: on SQLite's shared connection its rollback would undo other writes.
+                await failures.save(buildIngressDeadLetterRow(data, result.error), { transaction: false });
               } catch (err) {
                 dlqLogger.error(
                   'Failed to persist ingress dead-letter row after inline dispatch failure',

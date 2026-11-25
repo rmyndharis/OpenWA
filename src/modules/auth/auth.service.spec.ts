@@ -4,7 +4,7 @@ jest.mock('fs', () => ({ __esModule: true, ...jest.requireActual<typeof import('
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository, type QueryDeepPartialEntity } from 'typeorm';
+import { DataSource, Repository, type QueryDeepPartialEntity } from 'typeorm';
 import {
   BadRequestException,
   UnauthorizedException,
@@ -19,6 +19,7 @@ import { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
 import { getRequestActor, runWithRequestId } from '../../common/services/request-context';
 import { ActiveKeyIndex } from './active-key-index';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
+import { BrowserSession } from './entities/browser-session.entity';
 
 // Helpers
 const hashKey = (key: string) => createHash('sha256').update(key).digest('hex');
@@ -1412,5 +1413,55 @@ describe('AuthService', () => {
       const queried = await queriedHash('owa_raw_key');
       expect(queried).toBe(createHash('sha256').update('owa_raw_key').digest('hex'));
     });
+  });
+});
+
+// SQLite serves every caller on one connection: a write another request makes while an implicit save
+// transaction is open becomes part of it, and the rollback of a failed insert would discard it too.
+describe('AuthService key inserts beside other writes on one SQLite connection', () => {
+  let ds: DataSource;
+  let service: AuthService;
+  /** Waits for the write the failing insert let through, and reports whether it is on disk. */
+  let besideWriteKept: () => Promise<boolean>;
+
+  beforeEach(async () => {
+    ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [ApiKey, BrowserSession],
+      synchronize: true,
+    }).initialize();
+    const sessions = ds.getRepository(BrowserSession);
+    const { identifiers } = await sessions.insert({ tokenHash: 't1', apiKeyId: 'k1', expiresAt: new Date() });
+    const id = (identifiers[0] as { id: string }).id;
+    let beside = Promise.resolve();
+    ds.subscribers.push({
+      listenTo: () => ApiKey,
+      beforeInsert: () => {
+        beside = (async () => {
+          await sessions.update(id, { revokedAt: new Date() });
+        })();
+        throw new Error('abort key insert');
+      },
+    });
+    besideWriteKept = async () => {
+      await beside;
+      return (await sessions.findOneByOrFail({ id })).revokedAt !== null;
+    };
+    service = new AuthService(ds.getRepository(ApiKey), {} as never, {} as never);
+  });
+
+  afterEach(async () => {
+    await ds.destroy();
+  });
+
+  it('does not roll back a concurrent write when creating a key fails', async () => {
+    await expect(service.createApiKey({ name: 'ops' })).rejects.toThrow('abort key insert');
+    expect(await besideWriteKept()).toBe(true);
+  });
+
+  it('does not roll back a concurrent write when seeding the first key fails', async () => {
+    await expect(service.onModuleInit()).rejects.toThrow('abort key insert');
+    expect(await besideWriteKept()).toBe(true);
   });
 });

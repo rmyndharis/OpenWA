@@ -123,9 +123,10 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Audit logging is best-effort: a failed insert must never turn a succeeded operation into a 500
-    // (callers await this after the primary side-effect). Log and swallow.
+    // (callers await this after the primary side-effect). Log and swallow. No implicit transaction: on SQLite's
+    // shared connection the rollback of a failed insert would undo other callers' writes.
     try {
-      return await this.auditRepository.save(auditLog);
+      return await this.auditRepository.save(auditLog, { transaction: false });
     } catch (error) {
       this.logger.error(
         `Failed to write audit log for ${String(action)}`,
