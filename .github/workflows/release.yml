@@ -727,8 +727,11 @@ jobs:
   # release older than what a channel already serves (a re-run of an old tag, a patch to an earlier
   # line) leaves that channel alone and is published under the channels it still leads. A channel
   # whose state cannot be read fails the release instead of being treated as absent; only the
-  # registry's own "manifest unknown" answer counts as absent. The lookups are anonymous pulls,
-  # made here so that the job holding the push, id-token and attestation grants issues none.
+  # registry's own "manifest unknown" answer counts as absent. The exact X.Y.Z tag is selected only
+  # where it is absent or already serves the digest this run built: an image build is not
+  # reproducible, so a second full run of a published tag would re-point it at other content.
+  # The lookups are anonymous pulls, made here so that the job holding the push, id-token and
+  # attestation grants issues none.
   release-tags:
     name: Resolve release image channels
     runs-on: ubuntu-latest
@@ -751,14 +754,14 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           VERSION: ${{ needs.docker.outputs.version }}
           TAGS: ${{ needs.docker.outputs.tags }}
+          EXPECTED_DIGEST: ${{ needs.docker.outputs.digest }}
         run: |
           set -euo pipefail
           stable='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
           channel_version() {
-            local ref="$1" image config version token_url manifest_url token status
-            image="${ref%:*}"
+            local ref="$1" config version
             if config="$(docker buildx imagetools inspect "$ref" --format '{{json .Image}}' 2>"$work/inspect.err")"; then
               # Both published architectures must identify the same stable application version.
               version="$(jq -er '[.["linux/amd64"].config.Labels["org.opencontainers.image.version"], ((.["linux/arm64"] // .["linux/arm64/v8"]).config.Labels["org.opencontainers.image.version"])] | if all(.[]; type == "string") and (unique | length) == 1 then .[0] else error("missing or inconsistent platform versions") end' <<< "$config")" || { echo "::error::$ref has no consistent version label on both platforms" >&2; return 1; }
@@ -769,8 +772,23 @@ jobs:
               printf '%s\n' "$version"
               return 0
             fi
-            # A failed inspect is not evidence of absence. Only a registry 404 carrying its
-            # structured manifest/repository-not-found code permits creating a missing channel.
+            absent_or_fail "$ref"
+          }
+          # The digest an exact version tag serves, or `absent`.
+          tag_digest() {
+            local ref="$1" digest
+            if digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2>"$work/inspect.err")"; then
+              printf '%s\n' "$digest"
+              return 0
+            fi
+            absent_or_fail "$ref"
+          }
+          # Called after an inspect of $1 failed. A failed inspect is not evidence of absence. Only a
+          # registry 404 carrying its structured manifest/repository-not-found code permits creating
+          # a missing tag.
+          absent_or_fail() {
+            local ref="$1" image token_url manifest_url token status
+            image="${ref%:*}"
             case "$image" in
               ghcr.io/*)
                 token_url="https://ghcr.io/token?service=ghcr.io&scope=repository:${image#ghcr.io/}:pull"
@@ -816,6 +834,13 @@ jobs:
             elif [ "$channel" != "$VERSION" ]; then
               echo "::error::Unexpected release tag $tag for version $VERSION"
               exit 1
+            else
+              # The same digest is this run's own build, promoted again by "Re-run failed jobs".
+              current="$(tag_digest "$tag")"
+              if [ "$current" != absent ] && [ "$current" != "$EXPECTED_DIGEST" ]; then
+                echo "::error::$tag is already published as $current, not this run's $EXPECTED_DIGEST. Release a new version instead of re-running this tag."
+                exit 1
+              fi
             fi
             selected+=("$tag")
           done <<< "$TAGS"

@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SDKs: `npm run check:sdk-coverage` compares the query keys each SDK call sends with the parameters the contract declares, so a renamed or dropped query parameter fails CI instead of leaving a client on the old key.
 - Audit: `browser_session_created` and `browser_session_ended` rows record which key opened or ended a dashboard browser session, with the client IP and user agent.
 
+### Changed
+
+- The release workflow fails before promotion when the exact `X.Y.Z` image tag already serves another digest, so a second full run of a published version cannot re-point it.
+
 ### Fixed
 
 - Infrastructure: keep a storage or session data path already in effect outside `./data` (such as the `./uploads` v0.2.0 to v0.7.3 saved) instead of answering `400` to every configuration save; only a changed path must be inside `./data`.

@@ -785,7 +785,9 @@ mutable `X.Y` and `latest` channels and is flagged prerelease on GitHub.
 
 For a stable tag, `release-tags` reads which release `X.Y` and `latest` serve on each registry and leaves
 a channel alone when it already serves a newer one, so releasing a patch to an older line or re-running an
-old tag never moves a channel backwards; the exact `X.Y.Z` tag is still applied. A channel it cannot read
+old tag never moves a channel backwards. The exact `X.Y.Z` tag, a prerelease's included, is applied only where
+it is absent or already serves the digest this run built, so a second full run of a published version fails
+before promotion while **Re-run failed jobs**, which keeps the build, still finishes. A channel or tag it cannot read
 fails the release rather than counting as absent; only the registry's own "manifest unknown" answer does.
 `verify-published` then expects only the tags `release-tags` selected. `release-tags` also decides whether
 the GitHub Release is marked Latest: only when this release took every `latest` channel, never for a
