@@ -801,8 +801,11 @@
   },
   "apiKeys": {
     "capabilities": {
+      "accessLabel": "권한 접근",
       "label": "차단된 권한",
-      "hint": "비어 있음 = 차단 없음"
+      "hint": "비어 있음 = 차단 없음",
+      "blockAll": "모두 차단",
+      "clearAll": "모두 지우기"
     },
     "title": "API 키",
     "subtitle": "인증 및 접근 제어를 위한 API 키를 관리하세요",

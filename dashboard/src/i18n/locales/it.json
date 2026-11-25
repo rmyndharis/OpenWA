@@ -807,8 +807,11 @@
   },
   "apiKeys": {
     "capabilities": {
+      "accessLabel": "Accesso ai permessi",
       "label": "Capacità bloccate",
-      "hint": "Vuoto = nulla bloccato"
+      "hint": "Vuoto = nulla bloccato",
+      "blockAll": "Blocca tutto",
+      "clearAll": "Cancella tutto"
     },
     "title": "Chiavi API",
     "subtitle": "Gestisci le chiavi API per l'autenticazione e il controllo degli accessi",

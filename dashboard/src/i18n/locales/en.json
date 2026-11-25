@@ -801,8 +801,11 @@
   },
   "apiKeys": {
     "capabilities": {
+      "accessLabel": "Permission access",
       "label": "Blocked capabilities",
-      "hint": "Empty = nothing blocked"
+      "hint": "Empty = nothing blocked",
+      "blockAll": "Block all",
+      "clearAll": "Clear all"
     },
     "title": "API Keys",
     "subtitle": "Manage API keys for authentication and access control",

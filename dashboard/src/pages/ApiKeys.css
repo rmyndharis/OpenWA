@@ -165,8 +165,64 @@
   color: var(--text-muted);
 }
 
-.api-keys-page .session-scope-picker {
+.api-keys-page .access-scope-picker {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.api-keys-page .access-scope-label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: 0.375rem;
+}
+
+.api-keys-page .access-scope-summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+}
+
+.api-keys-page .access-scope-summary::before {
+  content: '›';
+  flex: 0 0 auto;
+  transition: transform 0.15s ease;
+}
+
+.api-keys-page .access-scope-picker[open] > .access-scope-summary::before {
+  transform: rotate(90deg);
+}
+
+.api-keys-page .access-scope-summary::marker,
+.api-keys-page .access-scope-summary::-webkit-details-marker {
+  display: none;
+}
+
+.api-keys-page .access-scope-summary > span:first-of-type {
+  flex: 1;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.api-keys-page .access-scope-count {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.api-keys-page .access-scope-content {
+  border-top: 1px solid var(--border);
+  padding: 0.625rem 0.75rem;
+}
+
+.api-keys-page .session-scope-field {
   margin: 0.75rem 0 0.5rem;
+}
+
+.api-keys-page .access-scope-content > .session-scope-toggle {
+  margin-bottom: 0.5rem;
 }
 
 .api-keys-page .session-scope-toggle {
@@ -435,24 +491,8 @@
   margin-bottom: 0.25rem;
 }
 
-.api-keys-page .key-permissions {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.625rem 0.75rem;
+.api-keys-page .key-permissions-field {
   margin: 0 0 0.875rem;
-}
-
-.api-keys-page .key-permissions legend {
-  padding: 0 0.375rem;
-  font-size: 0.8125rem;
-  font-weight: 600;
-}
-
-.api-keys-page .permission-count {
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  font-weight: 400;
-  margin-inline-start: 0.5rem;
 }
 
 .api-keys-page .permission-toolbar {
@@ -549,9 +589,29 @@
   white-space: nowrap;
 }
 
-.api-keys-page .permission-group .permission-options {
+.api-keys-page .permission-group-content {
   border-top: 1px solid var(--border);
   padding: 0.5rem 0.625rem;
+}
+
+.api-keys-page .permission-group-action {
+  background: none;
+  border: 0;
+  color: var(--primary-text);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-bottom: 0.375rem;
+  padding: 0;
+}
+
+.api-keys-page .permission-group-action:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.api-keys-page .permission-group-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .api-keys-page .permission-search-results {

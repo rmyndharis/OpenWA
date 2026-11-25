@@ -814,8 +814,11 @@
   },
   "apiKeys": {
     "capabilities": {
+      "accessLabel": "גישה להרשאות",
       "label": "יכולות חסומות",
-      "hint": "ריק = לא חסום דבר"
+      "hint": "ריק = לא חסום דבר",
+      "blockAll": "חסימת הכול",
+      "clearAll": "ניקוי הכול"
     },
     "title": "מפתחות API",
     "subtitle": "ניהול מפתחות API לאימות ובקרת גישה",

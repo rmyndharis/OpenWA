@@ -801,8 +801,11 @@
   },
   "apiKeys": {
     "capabilities": {
+      "accessLabel": "İzin erişimi",
       "label": "Engellenen yetenekler",
-      "hint": "Boş = engellenen yok"
+      "hint": "Boş = engellenen yok",
+      "blockAll": "Tümünü engelle",
+      "clearAll": "Tümünü temizle"
     },
     "title": "API Anahtarları",
     "subtitle": "Kimlik doğrulama ve erişim denetimi için API anahtarlarını yönetin",

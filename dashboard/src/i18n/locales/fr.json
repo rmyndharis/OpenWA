@@ -807,8 +807,11 @@
   },
   "apiKeys": {
     "capabilities": {
+      "accessLabel": "Accès aux autorisations",
       "label": "Capacités bloquées",
-      "hint": "Vide = rien de bloqué"
+      "hint": "Vide = rien de bloqué",
+      "blockAll": "Tout bloquer",
+      "clearAll": "Tout effacer"
     },
     "title": "Clés API",
     "subtitle": "Gérez les clés API pour l'authentification et le contrôle d'accès",

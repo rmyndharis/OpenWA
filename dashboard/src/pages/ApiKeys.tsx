@@ -145,6 +145,7 @@ function KeyLimitFields({
   // A datetime-local with a blank segment reports value '', like an empty field, so only badInput says
   // there are leftover segments to clear.
   const [partialExpiry, setPartialExpiry] = useState(false);
+  const [capabilityExpanded, setCapabilityExpanded] = useState(() => deniedPermissions.length > 0);
   const [capabilityQuery, setCapabilityQuery] = useState('');
   const normalizedCapabilityQuery = capabilityQuery.trim().toLocaleLowerCase();
   const matchingCapabilities = normalizedCapabilityQuery
@@ -167,51 +168,84 @@ function KeyLimitFields({
       <code>{capability}</code>
     </label>
   );
+  const setCapabilityGroup = (capabilities: ApiKeyCapability[], blocked: boolean) => {
+    const group = new Set(capabilities);
+    onChange({
+      deniedPermissions: blocked
+        ? API_KEY_CAPABILITIES.filter(capability => group.has(capability) || deniedPermissions.includes(capability))
+        : deniedPermissions.filter(capability => !group.has(capability)),
+    });
+  };
   const lidHintId = normalizeChatScope(chats).some(entry => /@lid$/i.test(entry)) ? `${idPrefix}-chats-lid` : undefined;
   return (
     <>
-      <fieldset className="key-permissions">
-        <legend>
-          {t('apiKeys.capabilities.label')}
-          <span className="permission-count">
-            {t('apiKeys.restrictions.capabilities', { count: deniedPermissions.length })}
-          </span>
-        </legend>
-        <div className="permission-toolbar">
-          <span className="key-field-hint">{t('apiKeys.capabilities.hint')}</span>
-          <label className="permission-search">
-            <Search size={14} aria-hidden="true" />
-            <input
-              type="search"
-              value={capabilityQuery}
-              disabled={disabled}
-              aria-label={`${t('common.search')} ${t('apiKeys.capabilities.label')}`}
-              placeholder={t('common.search')}
-              onChange={event => setCapabilityQuery(event.target.value)}
-            />
-          </label>
-        </div>
-        {normalizedCapabilityQuery ? (
-          <div className="permission-options permission-search-results">
-            {matchingCapabilities.map(renderCapability)}
+      <div className="access-scope-field key-permissions-field">
+        <span className="access-scope-label">
+          {t('apiKeys.capabilities.accessLabel')} ({t('common.optional')})
+        </span>
+        <details
+          className="access-scope-picker key-permissions"
+          open={capabilityExpanded}
+          onToggle={event => setCapabilityExpanded(event.currentTarget.open)}
+        >
+          <summary className="access-scope-summary">
+            <span>{t('apiKeys.capabilities.label')}</span>
+            <span className="access-scope-count">
+              {t('apiKeys.restrictions.capabilities', { count: deniedPermissions.length })}
+            </span>
+          </summary>
+          <div className="access-scope-content">
+            <div className="permission-toolbar">
+              <span className="key-field-hint">{t('apiKeys.capabilities.hint')}</span>
+              <label className="permission-search">
+                <Search size={14} aria-hidden="true" />
+                <input
+                  type="search"
+                  value={capabilityQuery}
+                  disabled={disabled}
+                  aria-label={`${t('common.search')} ${t('apiKeys.capabilities.label')}`}
+                  placeholder={t('common.search')}
+                  onChange={event => setCapabilityQuery(event.target.value)}
+                />
+              </label>
+            </div>
+            {normalizedCapabilityQuery ? (
+              <div className="permission-options permission-search-results">
+                {matchingCapabilities.map(renderCapability)}
+              </div>
+            ) : (
+              <div className="permission-groups">
+                {CAPABILITY_GROUPS.map(([namespace, capabilities]) => {
+                  const blockedCount = capabilities.filter(capability => deniedPermissions.includes(capability)).length;
+                  return (
+                    <details key={namespace} className="permission-group">
+                      <summary>
+                        <code>{namespace}</code>
+                        <span>{t('apiKeys.restrictions.capabilities', { count: blockedCount })}</span>
+                      </summary>
+                      <div className="permission-group-content">
+                        <button
+                          type="button"
+                          className="permission-group-action"
+                          disabled={disabled}
+                          onClick={() => setCapabilityGroup(capabilities, blockedCount !== capabilities.length)}
+                        >
+                          {t(
+                            blockedCount === capabilities.length
+                              ? 'apiKeys.capabilities.clearAll'
+                              : 'apiKeys.capabilities.blockAll',
+                          )}
+                        </button>
+                        <div className="permission-options">{capabilities.map(renderCapability)}</div>
+                      </div>
+                    </details>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="permission-groups">
-            {CAPABILITY_GROUPS.map(([namespace, capabilities]) => {
-              const blockedCount = capabilities.filter(capability => deniedPermissions.includes(capability)).length;
-              return (
-                <details key={namespace} className="permission-group">
-                  <summary>
-                    <code>{namespace}</code>
-                    <span>{t('apiKeys.restrictions.capabilities', { count: blockedCount })}</span>
-                  </summary>
-                  <div className="permission-options">{capabilities.map(renderCapability)}</div>
-                </details>
-              );
-            })}
-          </div>
-        )}
-      </fieldset>
+        </details>
+      </div>
       <label htmlFor={`${idPrefix}-ips`}>{t('apiKeys.ips.label')}</label>
       <textarea
         id={`${idPrefix}-ips`}

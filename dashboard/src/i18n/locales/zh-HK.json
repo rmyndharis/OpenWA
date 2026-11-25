@@ -801,8 +801,11 @@
   },
   "apiKeys": {
     "capabilities": {
+      "accessLabel": "權限存取",
       "label": "已封鎖權限",
-      "hint": "留空 = 不封鎖任何權限"
+      "hint": "留空 = 不封鎖任何權限",
+      "blockAll": "全部封鎖",
+      "clearAll": "全部清除"
     },
     "title": "API 金鑰",
     "subtitle": "管理用於認證及存取控制的 API 金鑰",

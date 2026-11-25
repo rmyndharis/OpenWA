@@ -757,8 +757,11 @@
   },
   "apiKeys": {
     "capabilities": {
+      "accessLabel": "Acesso a permissões",
       "label": "Capacidades bloqueadas",
-      "hint": "Vazio = nada bloqueado"
+      "hint": "Vazio = nada bloqueado",
+      "blockAll": "Bloquear tudo",
+      "clearAll": "Limpar tudo"
     },
     "title": "Chaves API",
     "subtitle": "Gerencie as chaves API para autenticação e controle de acesso",

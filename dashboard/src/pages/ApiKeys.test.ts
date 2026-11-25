@@ -158,19 +158,47 @@ async function openCreate(): Promise<HTMLButtonElement> {
 }
 
 test('blocked capabilities stay compact, can be searched, and are submitted', async () => {
-  const { screen, fireEvent, waitFor } = rtl;
+  const { screen, fireEvent, waitFor, within } = rtl;
   const create = await openCreate();
   const dialog = screen.getByRole('dialog');
+  within(dialog).getByText('Session access (optional)');
+  within(dialog).getByText('Permission access (optional)');
+  const sessionPicker = dialog.querySelector<HTMLDetailsElement>('.session-scope-picker');
+  assert.ok(sessionPicker);
+  assert.equal(sessionPicker.open, false, 'an unrestricted session picker should start collapsed');
+  fireEvent.click(sessionPicker.querySelector('summary') as HTMLElement);
+  assert.equal(sessionPicker.open, true, 'the session picker did not expand');
+  fireEvent.click(sessionPicker.querySelector('summary') as HTMLElement);
+  assert.equal(sessionPicker.open, false, 'the session picker did not collapse');
+
+  const capabilityPicker = dialog.querySelector<HTMLDetailsElement>('.key-permissions');
+  assert.ok(capabilityPicker);
+  assert.equal(capabilityPicker.open, false, 'an empty capability picker should start collapsed');
+  fireEvent.click(capabilityPicker.querySelector('summary') as HTMLElement);
+  assert.equal(capabilityPicker.open, true, 'the capability picker did not expand');
   const groups = dialog.querySelectorAll<HTMLDetailsElement>('.permission-group');
   assert.ok(groups.length > 1, 'capabilities were not grouped');
   assert.ok(
     [...groups].every(group => !group.open),
     'capability groups should start collapsed',
   );
+  fireEvent.click(groups[0].querySelector('summary') as HTMLElement);
+  const blockAll = within(groups[0]).getByRole('button', { name: 'Block all' });
+  fireEvent.click(blockAll);
+  assert.ok(
+    within(groups[0])
+      .getAllByRole<HTMLInputElement>('checkbox')
+      .every(checkbox => checkbox.checked),
+    'Block all did not select the whole group',
+  );
+  fireEvent.click(within(groups[0]).getByRole('button', { name: 'Clear all' }));
 
   fireEvent.change(screen.getByLabelText('Search Blocked capabilities'), { target: { value: 'messages:send' } });
-  const blocked = screen.getByRole('checkbox', { name: 'messages:send' });
+  const blocked = screen.getByRole<HTMLInputElement>('checkbox', { name: 'messages:send' });
   fireEvent.click(blocked);
+  fireEvent.click(capabilityPicker.querySelector('summary') as HTMLElement);
+  assert.equal(capabilityPicker.open, false, 'the capability picker did not collapse');
+  assert.equal(blocked.checked, true, 'collapsing the picker cleared the selected capability');
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'send-only' } });
   fireEvent.click(create);
 

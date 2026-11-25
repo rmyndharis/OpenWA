@@ -801,8 +801,11 @@
   },
   "apiKeys": {
     "capabilities": {
+      "accessLabel": "Akses izin",
       "label": "Kemampuan diblokir",
-      "hint": "Kosong = tidak ada yang diblokir"
+      "hint": "Kosong = tidak ada yang diblokir",
+      "blockAll": "Blokir semua",
+      "clearAll": "Hapus semua"
     },
     "title": "Kunci API",
     "subtitle": "Kelola kunci API untuk autentikasi dan kontrol akses",

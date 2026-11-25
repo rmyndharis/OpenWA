@@ -801,8 +801,11 @@
   },
   "apiKeys": {
     "capabilities": {
+      "accessLabel": "Berechtigungszugriff",
       "label": "Blockierte Fähigkeiten",
-      "hint": "Leer = nichts blockiert"
+      "hint": "Leer = nichts blockiert",
+      "blockAll": "Alle blockieren",
+      "clearAll": "Alle löschen"
     },
     "title": "API-Schlüssel",
     "subtitle": "API-Schlüssel für Authentifizierung und Zugriffskontrolle verwalten",

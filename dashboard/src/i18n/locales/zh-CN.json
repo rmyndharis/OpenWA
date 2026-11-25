@@ -801,8 +801,11 @@
   },
   "apiKeys": {
     "capabilities": {
+      "accessLabel": "权限访问",
       "label": "已封禁权限",
-      "hint": "留空 = 不封禁任何权限"
+      "hint": "留空 = 不封禁任何权限",
+      "blockAll": "全部封禁",
+      "clearAll": "全部清除"
     },
     "title": "API 密钥",
     "subtitle": "管理用于认证和访问控制的 API 密钥",
