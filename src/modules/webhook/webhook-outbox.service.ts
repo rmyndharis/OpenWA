@@ -11,6 +11,11 @@ import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-err
 
 const DEFAULT_OUTBOX_RETENTION_DAYS = 7;
 const DEFAULT_OUTBOX_PRUNE_MAX_ROWS = 100_000;
+/**
+ * Delay before the next prune pass when one stopped at its cap. Without it an installation that settles more
+ * than one pass's worth of rows a day never catches up, and the table grows without bound.
+ */
+const CAPPED_PRUNE_FOLLOW_UP_MS = 60_000;
 /** Upper bound on waiting for an active outbox prune pass during shutdown. */
 const OUTBOX_PRUNE_SHUTDOWN_WAIT_MS = SHUTDOWN_MAINTENANCE_WAIT_MS;
 /**
@@ -53,6 +58,8 @@ export type OutboxOpenRow = Omit<ReplayableDelivery, 'id' | 'attempts'> & { deli
 export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookOutboxService');
   private stopPruneInterval?: () => void;
+  private pruneFollowUp?: ReturnType<typeof setTimeout>;
+  private readonly pruneMaxRows = DEFAULT_OUTBOX_PRUNE_MAX_ROWS;
   private readonly inFlightPrunes = new Set<Promise<unknown>>();
   private stopped = false;
   // Row id to the time it may be read again, for rows whose stored payload could not be read.
@@ -85,20 +92,27 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       );
       days = DEFAULT_OUTBOX_RETENTION_DAYS;
     }
-    this.stopPruneInterval = startGuardedInterval(
-      async () => {
-        const n = await this.pruneSettled(days);
-        if (n > 0) this.logger.log(`Pruned ${n} settled outbound delivery record(s) older than ${days} day(s)`);
-      },
-      24 * 60 * 60 * 1000,
-      err => this.logger.error('Outbound delivery record prune failed', String(err)),
-    );
+    const onError = (err: unknown): void => this.logger.error('Outbound delivery record prune failed', String(err));
+    const run = async (): Promise<void> => {
+      const n = await this.pruneSettled(days);
+      if (n > 0) this.logger.log(`Pruned ${n} settled outbound delivery record(s) older than ${days} day(s)`);
+      if (n >= this.pruneMaxRows && !this.stopped) {
+        this.logger.warn('Outbound delivery record prune hit its cap; expired rows remain, running again shortly', {
+          action: 'webhook_outbox_prune_capped',
+        });
+        clearTimeout(this.pruneFollowUp);
+        this.pruneFollowUp = setTimeout(() => void run().catch(onError), CAPPED_PRUNE_FOLLOW_UP_MS);
+        this.pruneFollowUp.unref?.();
+      }
+    };
+    this.stopPruneInterval = startGuardedInterval(run, 24 * 60 * 60 * 1000, onError);
   }
 
   async onModuleDestroy(): Promise<void> {
     this.stopped = true;
     this.stopPruneInterval?.();
     this.stopPruneInterval = undefined;
+    clearTimeout(this.pruneFollowUp);
     if (this.inFlightPrunes.size === 0) return;
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -114,9 +128,12 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Delete settled rows (indexed) and bounded legacy null-state rows older than the window. Returns the number removed. */
-  async pruneSettled(olderThanDays: number, maxRows = DEFAULT_OUTBOX_PRUNE_MAX_ROWS): Promise<number> {
-    if (this.stopped || maxRows <= 0) return 0;
+  /**
+   * Delete settled rows (indexed) and bounded legacy null-state rows older than the window. Returns the number removed.
+   * A call while a pass is running returns 0: the follow-up of a capped pass and the daily one never run at once.
+   */
+  async pruneSettled(olderThanDays: number, maxRows = this.pruneMaxRows): Promise<number> {
+    if (this.stopped || maxRows <= 0 || this.inFlightPrunes.size > 0) return 0;
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - olderThanDays);
     const task = (async (): Promise<number> => {

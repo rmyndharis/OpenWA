@@ -2,6 +2,8 @@ import { DataSource, In } from 'typeorm';
 import { WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookOutboxEvent } from './entities/webhook-outbox-event.entity';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 const base = {
   webhookId: 'wh-1',
   sessionId: 'sess-1',
@@ -230,6 +232,95 @@ describe('WebhookOutboxService retention', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  /**
+   * One pass deletes at most 100,000 rows. An installation that settles more than that a day never
+   * caught up while the next pass waited a whole day, and the table grew without bound.
+   */
+  it('runs again a minute later while a pass keeps hitting its cap, then waits a day', async () => {
+    jest.useFakeTimers();
+    try {
+      const prune = jest
+        .spyOn(service, 'pruneSettled')
+        .mockResolvedValueOnce(100_000)
+        .mockResolvedValueOnce(100_000)
+        .mockResolvedValue(42);
+      const warn = jest.spyOn(service['logger'], 'warn');
+
+      service.onModuleInit();
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(prune).toHaveBeenCalledTimes(2);
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(prune).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenCalledTimes(2);
+
+      await jest.advanceTimersByTimeAsync(DAY_MS - 120_001);
+      expect(prune).toHaveBeenCalledTimes(3);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(prune).toHaveBeenCalledTimes(4);
+    } finally {
+      await service.onModuleDestroy();
+      jest.useRealTimers();
+    }
+  });
+
+  it('drops a pending follow-up pass on destroy', async () => {
+    jest.useFakeTimers();
+    try {
+      const prune = jest.spyOn(service, 'pruneSettled').mockResolvedValue(100_000);
+
+      service.onModuleInit();
+      await jest.advanceTimersByTimeAsync(0);
+      await service.onModuleDestroy();
+      expect(jest.getTimerCount()).toBe(0);
+      await jest.advanceTimersByTimeAsync(60_000);
+
+      expect(prune).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not follow a failed pass with another one before the next day', async () => {
+    jest.useFakeTimers();
+    try {
+      const prune = jest
+        .spyOn(service, 'pruneSettled')
+        .mockResolvedValueOnce(100_000)
+        .mockRejectedValue(new Error('database is locked'));
+      const error = jest.spyOn(service['logger'], 'error');
+
+      service.onModuleInit();
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(prune).toHaveBeenCalledTimes(2);
+      expect(error).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(DAY_MS - 60_001);
+      expect(prune).toHaveBeenCalledTimes(2);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(prune).toHaveBeenCalledTimes(3);
+    } finally {
+      await service.onModuleDestroy();
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not start a second pass while one is running', async () => {
+    let releaseFind!: () => void;
+    repo.find.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          releaseFind = () => resolve([]);
+        }),
+    );
+
+    const first = service.pruneSettled(7);
+    await expect(service.pruneSettled(7)).resolves.toBe(0);
+    expect(repo.find).toHaveBeenCalledTimes(1);
+
+    releaseFind();
+    await first;
   });
 
   it('refuses a retention window that would let the table grow without bound', async () => {

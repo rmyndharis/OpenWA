@@ -80,6 +80,40 @@ describe('webhook retention prunes on SQLite', () => {
     expect(await ds.getRepository(WebhookOutboxEvent).count()).toBe(3 + 2 + 4);
   });
 
+  it('follows an outbox pass that hit its cap with another until the backlog is gone', async () => {
+    await outboxRows(7, 'dispatched', 30, 'old');
+    await outboxRows(2, 'pending', 30, 'held');
+    const outbox = ds.getRepository(WebhookOutboxEvent);
+    const service = new WebhookOutboxService(outbox);
+    Object.assign(service, { pruneMaxRows: 3 });
+    const prune = jest.spyOn(service, 'pruneSettled');
+    // The pause between statements is not on the faked clock, so each pass is awaited rather than timed.
+    const pass = (n: number): Promise<number> => prune.mock.results[n].value as Promise<number>;
+
+    jest.useFakeTimers();
+    try {
+      service.onModuleInit();
+      await expect(pass(0)).resolves.toBe(3);
+      expect(await outbox.count()).toBe(2 + 4);
+
+      await jest.advanceTimersByTimeAsync(60_000);
+      await expect(pass(1)).resolves.toBe(3);
+      expect(await outbox.count()).toBe(2 + 1);
+
+      await jest.advanceTimersByTimeAsync(60_000);
+      await expect(pass(2)).resolves.toBe(1);
+      expect(await outbox.count()).toBe(2);
+
+      // The last pass removed one row, under its cap of three: nothing more runs before the next day.
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(prune).toHaveBeenCalledTimes(3);
+      expect(jest.getTimerCount()).toBe(1);
+    } finally {
+      await service.onModuleDestroy();
+      jest.useRealTimers();
+    }
+  });
+
   it('removes a backlog of expired delivery failures in bounded statements, and keeps the recent ones', async () => {
     await failureRows(BACKLOG, 200, 'old');
     await failureRows(6, 5, 'recent');
