@@ -3675,4 +3675,59 @@ describe('InfraConfigController.saveConfig PUPPETEER_ARGS allowlist and data-dir
       fs.rmSync(outside, { recursive: true, force: true });
     }
   });
+
+  describe('paths already in effect outside ./data', () => {
+    // What the page sends: every path as GET /api/infra/config reported it, beside the setting actually changed.
+    const page = (localPath: string, sessionDataPath: string) =>
+      ({
+        database: { type: 'sqlite' },
+        queue: { enabled: false },
+        storage: { type: 'local', localPath },
+        engine: { headless: false, sessionDataPath },
+      }) as never;
+    const writtenEnv = () =>
+      jest
+        .requireActual<typeof import('dotenv')>('dotenv')
+        .parse(jest.mocked(fs.writeFileSync).mock.calls.at(-1)![1] as string);
+
+    afterEach(() => {
+      delete process.env.SESSION_DATA_PATH;
+      recordPinnedEnvKeys({});
+    });
+
+    it('saves the rest of the page beside a stored storage path it sends back unchanged', () => {
+      (fs.existsSync as jest.Mock).mockReturnValue(true);
+      (fs.readFileSync as jest.Mock).mockReturnValue(
+        'DATABASE_TYPE=sqlite\nSTORAGE_TYPE=local\nSTORAGE_LOCAL_PATH=./uploads\nPUPPETEER_HEADLESS=true\n',
+      );
+
+      expect(newController().saveConfig(page('./uploads', './data/sessions')).saved).toBe(true);
+
+      expect(writtenEnv()).toMatchObject({ STORAGE_LOCAL_PATH: './uploads', PUPPETEER_HEADLESS: 'false' });
+    });
+
+    it('saves beside a session data path the environment pins, and leaves it out of the file', () => {
+      process.env.SESSION_DATA_PATH = '/var/lib/openwa/sessions';
+      recordPinnedEnvKeys({ SESSION_DATA_PATH: '/var/lib/openwa/sessions' });
+
+      expect(newController().saveConfig(page('./data/media', '/var/lib/openwa/sessions')).saved).toBe(true);
+
+      expect(writtenEnv()).not.toHaveProperty('SESSION_DATA_PATH');
+      expect(writtenEnv().PUPPETEER_HEADLESS).toBe('false');
+    });
+
+    it('still refuses a stored storage path moved to another place outside ./data', () => {
+      (fs.existsSync as jest.Mock).mockReturnValue(true);
+      (fs.readFileSync as jest.Mock).mockReturnValue('STORAGE_TYPE=local\nSTORAGE_LOCAL_PATH=./uploads\n');
+
+      expect(() => newController().saveConfig(page('./uploads-2', './data/sessions'))).toThrow(BadRequestException);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('saves a default install', () => {
+      expect(newController().saveConfig(page('./data/media', './data/sessions')).saved).toBe(true);
+
+      expect(writtenEnv()).toMatchObject({ STORAGE_LOCAL_PATH: './data/media', SESSION_DATA_PATH: './data/sessions' });
+    });
+  });
 });
