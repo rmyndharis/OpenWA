@@ -1,5 +1,6 @@
 import { SetMetadata, createParamDecorator, ExecutionContext } from '@nestjs/common';
 import { ApiKeyRole } from '../entities/api-key.entity';
+import type { ApiKeyCapability } from '../api-key-permissions';
 import { Request } from 'express';
 import { ApiKey } from '../entities/api-key.entity';
 
@@ -10,12 +11,27 @@ export const UNSCOPED_KEY = 'requireUnscopedKey';
 export const CHAT_SCOPED_KEY = 'chatScoped';
 export const CHAT_QUOTED_ALLOWED_KEY = 'chatQuotedAllowed';
 export const HEADER_AUTH_ONLY_KEY = 'headerAuthOnly';
+export const CAPABILITIES_KEY = 'routeCapabilities';
 
 /**
  * Mark a route as requiring a specific role
  * @example @RequireRole(ApiKeyRole.ADMIN)
  */
 export const RequireRole = (role: ApiKeyRole) => SetMetadata(REQUIRED_ROLE_KEY, role);
+
+/**
+ * Tag a route (handler or controller) with the capability it belongs to, so a key whose
+ * `deniedPermissions` blocks that capability is refused with 403.
+ *
+ * This is a BLOCKLIST: an untagged route can never be blocked, and a key with no
+ * `deniedPermissions` reaches everything its role and scopes allow. A route that serves more than
+ * one surface (e.g. a read a sender also needs) lists every capability it touches, and blocking ANY
+ * of them refuses the route — the safe direction, since the caller blocked a capability for the
+ * data it reaches.
+ *
+ * @example @Capability(ApiKeyCapability.MESSAGES_SEND)
+ */
+export const Capability = (...capabilities: ApiKeyCapability[]) => SetMetadata(CAPABILITIES_KEY, capabilities);
 
 /**
  * Mark a controller (or route) whose `:id` route param denotes a WhatsApp session id, so the

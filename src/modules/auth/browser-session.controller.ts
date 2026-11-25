@@ -15,6 +15,7 @@ import {
 } from './browser-session.util';
 import { EngineFactory } from '../../engine/engine.factory';
 import { presentedApiKey } from '../../common/security/bearer-token';
+import { apiKeyDeniedCapabilities } from './api-key-permissions';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -60,6 +61,7 @@ export class BrowserSessionController {
       role: apiKey.role,
       engineType: this.engineFactory.getCurrentEngine(),
       scoped: (apiKey.allowedSessions?.length ?? 0) > 0,
+      deniedPermissions: apiKeyDeniedCapabilities(apiKey),
       apiKeyId: apiKey.id,
     };
   }
@@ -82,6 +84,7 @@ export class BrowserSessionController {
       role: apiKey.role,
       engineType: this.engineFactory.getCurrentEngine(),
       scoped: (apiKey.allowedSessions?.length ?? 0) > 0,
+      deniedPermissions: apiKeyDeniedCapabilities(apiKey),
       apiKeyId: apiKey.id,
     };
   }

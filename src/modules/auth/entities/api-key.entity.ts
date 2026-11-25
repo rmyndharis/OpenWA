@@ -1,4 +1,5 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
+import type { ApiKeyCapability } from '../api-key-permissions';
 
 export enum ApiKeyRole {
   ADMIN = 'admin',
@@ -42,6 +43,12 @@ export class ApiKey {
   // sends; see src/common/security/chat-scope.ts.
   @Column({ type: 'simple-array', nullable: true })
   allowedChats!: string[] | null;
+
+  // Blocked-capability list, independent of role and of both id scopes: NULL or empty means
+  // "nothing blocked". Each entry turns off the routes tagged with that capability; see
+  // src/modules/auth/api-key-permissions.ts.
+  @Column({ type: 'simple-array', nullable: true })
+  deniedPermissions!: ApiKeyCapability[] | null;
 
   @Column({ type: 'boolean', default: true })
   isActive!: boolean;

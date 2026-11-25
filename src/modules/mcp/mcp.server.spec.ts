@@ -333,6 +333,18 @@ describe('createKeyGate (every MCP request needs a valid key)', () => {
     },
   );
 
+  it('refuses a capability-scoped key with 403 and audits it: MCP tools are not capability-classified', async () => {
+    const validateApiKey = jest.fn().mockResolvedValue({ id: 'k1', deniedPermissions: ['messages:send'] });
+    const { res, next, logWarn } = await run(validateApiKey, { 'x-api-key': 'scoped-key' });
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+    expect(logWarn).toHaveBeenCalledWith(
+      AuditAction.API_KEY_AUTH_FAILED,
+      expect.objectContaining({ errorMessage: expect.stringContaining('not permitted on MCP') as unknown as string }),
+    );
+  });
+
   it('refuses a malformed Authorization header without a lookup', async () => {
     const validateApiKey = jest.fn();
     const { res, next } = await run(validateApiKey, { authorization: 'Bearer good-key extra' });

@@ -1,7 +1,8 @@
 import { Controller, Get, Query, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { SearchResultsResponseDto } from './dto/search-response.dto';
-import { ChatScoped, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, ChatScoped, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ChatScopeService } from '../auth/chat-scope.service';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { SearchService } from './search.service';
@@ -23,6 +24,7 @@ export class SearchController {
   ) {}
 
   @ChatScoped('filtered')
+  @Capability(ApiKeyCapability.SEARCH_READ)
   @Get()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Search messages across sessions (active search provider)' })

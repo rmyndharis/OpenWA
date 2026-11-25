@@ -35,6 +35,7 @@ function makeRow(overrides: Partial<ApiKey> = {}): ApiKey {
     allowedIps: null,
     allowedSessions: null,
     allowedChats: null,
+    deniedPermissions: null,
     isActive: true,
     expiresAt: null,
     lastUsedAt: null,

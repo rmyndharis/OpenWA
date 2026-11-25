@@ -19,6 +19,7 @@ import { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
 import { getRequestActor, runWithRequestId } from '../../common/services/request-context';
 import { ActiveKeyIndex } from './active-key-index';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
+import { ApiKeyCapability } from './api-key-permissions';
 
 // Helpers
 const hashKey = (key: string) => createHash('sha256').update(key).digest('hex');
@@ -33,6 +34,7 @@ function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
     allowedIps: null,
     allowedSessions: null,
     allowedChats: null,
+    deniedPermissions: null,
     isActive: true,
     expiresAt: null,
     lastUsedAt: null,
@@ -269,14 +271,15 @@ describe('AuthService', () => {
   }
 
   /** JS mirror of the guard's "usable admin" row predicate (the SQL definition lives in the
-   * service): an active, unexpired ADMIN key with no session OR chat scope. */
+   * service): an active, unexpired ADMIN key with no session, chat OR capability scope. */
   function isUsableAdminRow(key: ApiKey): boolean {
     return (
       key.role === ApiKeyRole.ADMIN &&
       key.isActive &&
       (!key.expiresAt || key.expiresAt.getTime() > Date.now()) &&
       (!key.allowedSessions || key.allowedSessions.length === 0) &&
-      (!key.allowedChats || key.allowedChats.length === 0)
+      (!key.allowedChats || key.allowedChats.length === 0) &&
+      (!key.deniedPermissions || key.deniedPermissions.length === 0)
     );
   }
 
@@ -312,6 +315,22 @@ describe('AuthService', () => {
       await service.createApiKey({ name: 'Admin Key', role: ApiKeyRole.ADMIN });
 
       expect(repository.create).toHaveBeenCalledWith(expect.objectContaining({ role: ApiKeyRole.ADMIN }));
+    });
+
+    it('stores the blocked-capability list normalized, and NULL when nothing known was named', async () => {
+      (repository.create as jest.Mock).mockImplementation((dto: Partial<ApiKey>) => ({ ...dto, id: 'uuid-new' }));
+      (repository.save as jest.Mock).mockImplementation((key: ApiKey) => Promise.resolve(key));
+
+      await service.createApiKey({
+        name: 'no reads',
+        deniedPermissions: [ApiKeyCapability.MESSAGES_READ, ApiKeyCapability.MESSAGES_READ],
+      });
+      expect(repository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ deniedPermissions: [ApiKeyCapability.MESSAGES_READ] }),
+      );
+
+      await service.createApiKey({ name: 'unblocked' });
+      expect(repository.create).toHaveBeenLastCalledWith(expect.objectContaining({ deniedPermissions: null }));
     });
 
     it('should store the SHA-256 hash, not the raw key', async () => {
@@ -702,6 +721,10 @@ describe('AuthService', () => {
     // @ChatScoped, so the guard refuses it), so it must not count as a usable admin either.
     const chatScopedAdmin = (id: string) =>
       createMockApiKey({ id, role: ApiKeyRole.ADMIN, allowedChats: ['123@g.us'] });
+    // A capability-scoped admin is fenced out of key management too (those routes carry no
+    // capability tag), so it must not count as a usable admin either.
+    const permissionScopedAdmin = (id: string) =>
+      createMockApiKey({ id, role: ApiKeyRole.ADMIN, deniedPermissions: [ApiKeyCapability.MESSAGES_SEND] });
 
     it('rejects deleting the last unscoped admin even while a session-scoped admin survives', async () => {
       setupKeys([unscopedAdmin('admin-a'), scopedAdmin('admin-scoped')]);
@@ -768,6 +791,35 @@ describe('AuthService', () => {
 
       await expect(service.update('admin-a', { allowedChats: ['123@g.us'] })).rejects.toThrow(/last active admin/i);
       expect(committedWrites).toHaveLength(0); // the refused write never landed
+    });
+
+    it('the guard SQL excludes a capability-scoped key', async () => {
+      setupKeys([unscopedAdmin('admin-a'), permissionScopedAdmin('admin-perm')]);
+
+      await expect(service.update('admin-a', { role: ApiKeyRole.OPERATOR })).rejects.toThrow(/last active admin/i);
+      expect(lastAdminFragments.join(' ')).toContain('deniedPermissions');
+    });
+
+    it('rejects scoping the last unscoped admin to capabilities — the same capability-stripping', async () => {
+      setupKeys([unscopedAdmin('admin-a'), permissionScopedAdmin('admin-perm')]);
+
+      await expect(service.update('admin-a', { deniedPermissions: [ApiKeyCapability.MESSAGES_READ] })).rejects.toThrow(
+        /last active admin/i,
+      );
+      expect(committedWrites).toHaveLength(0); // the refused write never landed
+    });
+
+    it('treats an empty blocked-capability write as nothing blocked — not capability-stripping', async () => {
+      setupKeys([unscopedAdmin('admin-a')]);
+
+      await expect(service.update('admin-a', { deniedPermissions: [] })).resolves.toBeDefined();
+    });
+
+    it('lets a capability-scoped admin be deleted — it never counted toward the invariant', async () => {
+      setupKeys([unscopedAdmin('admin-a'), permissionScopedAdmin('admin-perm')]);
+
+      await expect(service.delete('admin-perm')).resolves.toBeUndefined();
+      await expect(service.findOne('admin-a')).resolves.toBeDefined();
     });
 
     it('lets a chat-scoped admin be deleted — it never counted toward the invariant', async () => {

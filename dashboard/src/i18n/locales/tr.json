@@ -800,6 +800,10 @@
     "sessionSelect": "Oturum"
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "Engellenen yetenekler",
+      "hint": "Boş = engellenen yok"
+    },
     "title": "API Anahtarları",
     "subtitle": "Kimlik doğrulama ve erişim denetimi için API anahtarlarını yönetin",
     "createBtn": "API Anahtarı Oluştur",
@@ -871,6 +875,7 @@
       "signedIn": "Bu panel bu anahtarla oturum açtı. Rolünü, IP adreslerini, sohbetlerini veya son kullanma tarihini değiştirmek oturumunuzu kapatabilir."
     },
     "restrictions": {
+      "capabilities": "{{count}} engelli",
       "none": "Yok",
       "ips": "IP'ler: {{count}}",
       "chats": "Sohbetler: {{count}}",

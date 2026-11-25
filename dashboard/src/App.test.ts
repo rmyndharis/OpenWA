@@ -5,9 +5,11 @@ import './test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
+import { DASHBOARD_PAGE_CAPABILITIES } from './utils/dashboardAccess.ts';
 
 let role = 'operator';
 let scoped = false;
+let deniedPermissions: string[] = [];
 const requested: string[] = [];
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -22,7 +24,7 @@ function installFetchStub(): void {
     requested.push(path);
     if (path === '/api/auth/session') {
       if (method === 'DELETE') return Promise.resolve(jsonResponse({ ok: true }));
-      return Promise.resolve(jsonResponse({ valid: true, role, scoped, apiKeyId: 'key-test-1' }));
+      return Promise.resolve(jsonResponse({ valid: true, role, scoped, deniedPermissions, apiKeyId: 'key-test-1' }));
     }
     if (path === '/api/audit' || path.startsWith('/api/audit?'))
       return Promise.resolve(jsonResponse({ data: [], total: 0 }));
@@ -69,6 +71,7 @@ before(async () => {
 afterEach(() => {
   rtl.cleanup();
   scoped = false;
+  deniedPermissions = [];
   window.sessionStorage.clear();
 });
 
@@ -105,6 +108,49 @@ test('an operator opening /number-checker gets the Number Checker page', async (
     timeout: 10_000,
   });
   assert.equal(window.location.pathname, '/number-checker');
+});
+
+for (const [page, capability] of [
+  ['sessions', 'sessions:read'],
+  ['chats', 'chats:read'],
+  ['number-checker', 'contacts:read'],
+  ['webhooks', 'webhooks:read'],
+  ['templates', 'templates:read'],
+  ['message-tester', 'messages:send'],
+] as const) {
+  test(`blocking ${capability} hides /${page} and rejects its direct route`, async () => {
+    deniedPermissions = [capability];
+    window.sessionStorage.setItem('openwa_denied_permissions', JSON.stringify(deniedPermissions));
+    renderAt(`/${page}`, 'operator');
+    await rtl.waitFor(() => assert.ok(document.querySelector('a[href="/sessions"], a[href="/chats"]')));
+    await rtl.waitFor(() => assert.notEqual(window.location.pathname, `/${page}`));
+    assert.equal(document.querySelector(`a[href="/${page}"]`), null);
+  });
+}
+
+for (const [page, capability] of [
+  ['api-keys', 'apikeys:manage'],
+  ['infrastructure', 'infra:read'],
+  ['plugins', 'plugins:read'],
+  ['logs', 'audit:read'],
+] as const) {
+  test(`an admin blocked from ${capability} cannot see or open /${page}`, async () => {
+    deniedPermissions = [capability];
+    window.sessionStorage.setItem('openwa_denied_permissions', JSON.stringify(deniedPermissions));
+    renderAt(`/${page}`, 'admin');
+    await rtl.waitFor(() => assert.ok(document.querySelector('a[href="/sessions"]')));
+    await rtl.waitFor(() => assert.notEqual(window.location.pathname, `/${page}`));
+    assert.equal(document.querySelector(`a[href="/${page}"]`), null);
+  });
+}
+
+test('a key blocked from every page gets a stable no-access screen instead of a redirect loop', async () => {
+  deniedPermissions = [...new Set(Object.values(DASHBOARD_PAGE_CAPABILITIES).flat())];
+  window.sessionStorage.setItem('openwa_denied_permissions', JSON.stringify(deniedPermissions));
+  renderAt('/', 'operator');
+  await rtl.screen.findByRole('alert');
+  assert.match(document.querySelector('[role="alert"]')?.textContent ?? '', /blocked from every dashboard page/i);
+  assert.equal(document.querySelector('.sidebar-nav a'), null);
 });
 
 // API keys, Infrastructure and Plugins read routes that refuse any session-scoped key, so a scoped

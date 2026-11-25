@@ -157,6 +157,32 @@ async function openCreate(): Promise<HTMLButtonElement> {
   return rtl.screen.getByRole<HTMLButtonElement>('button', { name: 'Create' });
 }
 
+test('blocked capabilities stay compact, can be searched, and are submitted', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const create = await openCreate();
+  const dialog = screen.getByRole('dialog');
+  const groups = dialog.querySelectorAll<HTMLDetailsElement>('.permission-group');
+  assert.ok(groups.length > 1, 'capabilities were not grouped');
+  assert.ok(
+    [...groups].every(group => !group.open),
+    'capability groups should start collapsed',
+  );
+
+  fireEvent.change(screen.getByLabelText('Search Blocked capabilities'), { target: { value: 'messages:send' } });
+  const blocked = screen.getByRole('checkbox', { name: 'messages:send' });
+  fireEvent.click(blocked);
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'send-only' } });
+  fireEvent.click(create);
+
+  await waitFor(() => assert.ok(createBody));
+  assert.deepEqual(createBody, {
+    name: 'send-only',
+    role: 'operator',
+    allowedSessions: [],
+    deniedPermissions: ['messages:send'],
+  });
+});
+
 test('a create sends the IP allow-list, chats and expiry only when filled in', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   let create = await openCreate();

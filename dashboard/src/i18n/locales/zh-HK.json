@@ -800,6 +800,10 @@
     "sessionSelect": "工作階段"
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "已封鎖權限",
+      "hint": "留空 = 不封鎖任何權限"
+    },
     "title": "API 金鑰",
     "subtitle": "管理用於認證及存取控制的 API 金鑰",
     "createBtn": "建立 API 金鑰",
@@ -871,6 +875,7 @@
       "signedIn": "此控制台正以此金鑰登入。更改其角色、IP 位址、聊天或到期時間可能會令你登出。"
     },
     "restrictions": {
+      "capabilities": "{{count}} 項封鎖",
       "none": "無",
       "ips": "IP：{{count}}",
       "chats": "聊天：{{count}}",

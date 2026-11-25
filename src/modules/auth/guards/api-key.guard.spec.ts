@@ -20,6 +20,7 @@ function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
     allowedIps: null,
     allowedSessions: null,
     allowedChats: null,
+    deniedPermissions: null,
     isActive: true,
     expiresAt: null,
     lastUsedAt: null,
@@ -302,6 +303,7 @@ describe('ApiKeyGuard', () => {
       .mockReturnValueOnce(false) // not public
       .mockReturnValueOnce(ApiKeyRole.ADMIN) // required role = ADMIN
       .mockReturnValueOnce(undefined) // not @SessionScoped
+      .mockReturnValueOnce(undefined) // no capability tag
       .mockReturnValueOnce(true); // @RequireUnscopedKey
 
     const apiKey = createMockApiKey({ role: ApiKeyRole.ADMIN, allowedSessions: ['sess-A'] });
@@ -354,7 +356,8 @@ describe('ApiKeyGuard', () => {
         reflector.getAllAndOverride
           .mockReturnValueOnce(false)
           .mockReturnValueOnce(ApiKeyRole.ADMIN)
-          .mockReturnValueOnce(undefined)
+          .mockReturnValueOnce(undefined) // not @SessionScoped
+          .mockReturnValueOnce(undefined) // no capability tag
           .mockReturnValueOnce(true);
       }, apiKey);
 
@@ -384,6 +387,7 @@ describe('ApiKeyGuard', () => {
       .mockReturnValueOnce(false) // not public
       .mockReturnValueOnce(ApiKeyRole.ADMIN) // required role = ADMIN
       .mockReturnValueOnce(undefined) // not @SessionScoped
+      .mockReturnValueOnce(undefined) // no capability tag
       .mockReturnValueOnce(true); // @RequireUnscopedKey
 
     const apiKey = createMockApiKey({ role: ApiKeyRole.ADMIN, allowedSessions: null });
@@ -400,6 +404,7 @@ describe('ApiKeyGuard', () => {
       .mockReturnValueOnce(false) // not public
       .mockReturnValueOnce(undefined) // no required role
       .mockReturnValueOnce(undefined) // not @SessionScoped
+      .mockReturnValueOnce(undefined) // no capability tag
       .mockReturnValueOnce(undefined); // not @RequireUnscopedKey
 
     const apiKey = createMockApiKey({ allowedSessions: ['sess-A'] });

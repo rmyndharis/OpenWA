@@ -800,6 +800,10 @@
     "sessionSelect": "Session"
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "Blocked capabilities",
+      "hint": "Empty = nothing blocked"
+    },
     "title": "API Keys",
     "subtitle": "Manage API keys for authentication and access control",
     "createBtn": "Create API Key",
@@ -871,6 +875,7 @@
       "signedIn": "This dashboard is signed in with this key. Changing its role, IP addresses, chats or expiry can sign you out."
     },
     "restrictions": {
+      "capabilities": "{{count}} blocked",
       "none": "None",
       "ips": "IPs: {{count}}",
       "chats": "Chats: {{count}}",

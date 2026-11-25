@@ -52,6 +52,7 @@ import { DEFAULT_WEBHOOK_MEDIA_INLINE_MAX_BYTES, shedInlineMedia } from '../../c
 import { isSafeSessionName } from '../../common/utils/path-safety';
 import { ApiKeyRole, type ApiKey } from '../auth/entities/api-key.entity';
 import { apiKeyAuthorizationFingerprint, apiKeyExpiryTime } from '../auth/api-key-authorization';
+import { ApiKeyCapability, isCapabilityDenied } from '../auth/api-key-permissions';
 import {
   readWsRateLimitConfig,
   TokenBucketLimiter,
@@ -733,6 +734,16 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         browserSessionExpiresAt = validated.session.expiresAt ?? null;
       }
 
+      // The event stream is a READ surface, so a key blocked from `events:read` is refused at the
+      // handshake rather than admitted to a socket every subscribe would then reject. A key with
+      // nothing blocked is unaffected.
+      if (isCapabilityDenied(validKey, ApiKeyCapability.EVENTS_READ)) {
+        this.logger.warn(`Client ${client.id} rejected: key ${validKey.id} is blocked from events`);
+        client.emit('message', this.createError('UNAUTHORIZED', 'API key is blocked from the event stream'));
+        client.disconnect(true);
+        return;
+      }
+
       // Cap simultaneous sockets per key: each socket holds rooms, engine fan-out, and memory,
       // so one key must not open connections without bound. Enough for multi-tab dashboards;
       // excess connections get a clear error, not a silent drop.
@@ -973,6 +984,12 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       client.emit('message', this.createError('UNAUTHORIZED', 'API key is no longer valid', requestId));
       client.disconnect(true);
       return this.createError('UNAUTHORIZED', 'API key is no longer valid', requestId);
+    }
+
+    // Same rule as the handshake, re-checked against the FRESH key: one whose blocked capabilities
+    // gained `events:read` since connect must not open another subscription.
+    if (isCapabilityDenied(subscriberKey, ApiKeyCapability.EVENTS_READ)) {
+      return this.createError('FORBIDDEN_EVENTS', 'API key is blocked from the event stream', requestId);
     }
 
     // The socket can have been evicted while this re-validation was in flight (a revoke landing on

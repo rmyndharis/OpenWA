@@ -3,7 +3,8 @@ import { Controller, Get, Post, Put, Delete, Param, Body, HttpCode, HttpStatus }
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { WebhookService } from './webhook.service';
 import { CreateWebhookDto, UpdateWebhookDto, WebhookResponseDto, WebhookTestResponseDto } from './dto';
-import { CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -51,6 +52,7 @@ export class WebhookController {
     void this.audit.logInfo(action, { apiKey, sessionId, metadata });
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_WRITE)
   @Post()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Create a webhook for the session' })
@@ -76,6 +78,7 @@ export class WebhookController {
     return WebhookResponseDto.fromEntity(webhook);
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_READ)
   @Get()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'List all webhooks for a session' })
@@ -89,6 +92,7 @@ export class WebhookController {
     return WebhookResponseDto.fromEntities(await this.webhookService.findBySession(sessionId));
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_READ)
   @Get(':id')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Get a webhook by ID' })
@@ -104,6 +108,7 @@ export class WebhookController {
     return WebhookResponseDto.fromEntity(await this.webhookService.findOne(sessionId, id));
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_WRITE)
   @Put(':id')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Update a webhook' })
@@ -140,6 +145,7 @@ export class WebhookController {
     return WebhookResponseDto.fromEntity(after);
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_WRITE)
   @Post(':id/test')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -155,6 +161,7 @@ export class WebhookController {
     return this.webhookService.test(sessionId, id);
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_WRITE)
   @Delete(':id')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.NO_CONTENT)

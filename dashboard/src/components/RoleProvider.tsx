@@ -1,7 +1,12 @@
 import { useState, useCallback, useMemo, type ReactNode } from 'react';
 import type { UserRole, RoleContextType } from '../types/role';
 import { RoleContext } from '../hooks/useRole';
-import { getActiveApiKeyId, setActiveApiKeyId } from '../utils/authLifecycle';
+import {
+  DENIED_PERMISSIONS_STORAGE_KEY,
+  getActiveApiKeyId,
+  normalizeDeniedPermissions,
+  setActiveApiKeyId,
+} from '../utils/authLifecycle';
 
 export function RoleProvider({ children }: { children: ReactNode }) {
   // Per tab, next to the active session actor id it was hydrated for: a role outliving its session
@@ -54,6 +59,29 @@ export function RoleProvider({ children }: { children: ReactNode }) {
 
   const [apiKeyId, setApiKeyIdState] = useState<string | null>(() => getActiveApiKeyId());
 
+  const [deniedPermissions, setDeniedPermissionsState] = useState<string[]>(() => {
+    try {
+      return normalizeDeniedPermissions(JSON.parse(sessionStorage.getItem(DENIED_PERMISSIONS_STORAGE_KEY) ?? '[]'));
+    } catch {
+      return [];
+    }
+  });
+
+  const setDeniedPermissions = useCallback((permissions: readonly string[]) => {
+    const normalized = normalizeDeniedPermissions(permissions);
+    setDeniedPermissionsState(normalized);
+    if (normalized.length > 0) {
+      sessionStorage.setItem(DENIED_PERMISSIONS_STORAGE_KEY, JSON.stringify(normalized));
+    } else {
+      sessionStorage.removeItem(DENIED_PERMISSIONS_STORAGE_KEY);
+    }
+  }, []);
+
+  const isCapabilityDenied = useCallback(
+    (capability: string) => deniedPermissions.includes(capability),
+    [deniedPermissions],
+  );
+
   const setApiKeyId = useCallback((newApiKeyId: string | null) => {
     setApiKeyIdState(newApiKeyId);
     setActiveApiKeyId(newApiKeyId);
@@ -72,6 +100,9 @@ export function RoleProvider({ children }: { children: ReactNode }) {
       isOperator: role === 'operator',
       isViewer: role === 'viewer',
       canWrite: role === 'admin' || role === 'operator',
+      deniedPermissions,
+      setDeniedPermissions,
+      isCapabilityDenied,
       engineType,
       setEngineType,
       scoped,
@@ -84,6 +115,9 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     [
       role,
       setRole,
+      deniedPermissions,
+      setDeniedPermissions,
+      isCapabilityDenied,
       engineType,
       setEngineType,
       scoped,

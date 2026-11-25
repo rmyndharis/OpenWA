@@ -4,6 +4,7 @@ import { CurrentApiKey } from './decorators/auth.decorators';
 import { ApiKey } from './entities/api-key.entity';
 import { ValidateApiKeyResponseDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
+import { apiKeyDeniedCapabilities, ApiKeyCapability } from './api-key-permissions';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -11,6 +12,7 @@ export class AuthValidateController {
   constructor(private readonly engineFactory: EngineFactory) {}
 
   @Post('validate')
+  // The key's own self-check names no data surface, so any capability-scoped key may use it.
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Validate an API key' })
   @ApiHeader({ name: 'X-API-Key', description: 'API key to validate' })
@@ -26,6 +28,7 @@ export class AuthValidateController {
     role?: string;
     engineType?: string;
     scoped?: boolean;
+    deniedPermissions?: ApiKeyCapability[];
   } {
     // This route is behind the global API-key guard, so only a validated key reaches this handler
     // (a missing/invalid key 401s first). The guard has already verified the key — including its
@@ -45,6 +48,7 @@ export class AuthValidateController {
       role: apiKey.role,
       engineType: this.engineFactory.getCurrentEngine(),
       scoped: (apiKey.allowedSessions?.length ?? 0) > 0,
+      deniedPermissions: apiKeyDeniedCapabilities(apiKey),
     };
   }
 }

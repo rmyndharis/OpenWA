@@ -800,6 +800,10 @@
     "sessionSelect": "세션"
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "차단된 권한",
+      "hint": "비어 있음 = 차단 없음"
+    },
     "title": "API 키",
     "subtitle": "인증 및 접근 제어를 위한 API 키를 관리하세요",
     "createBtn": "API 키 생성",
@@ -871,6 +875,7 @@
       "signedIn": "이 대시보드는 이 키로 로그인되어 있습니다. 역할, IP 주소, 채팅 또는 만료를 변경하면 로그아웃될 수 있습니다."
     },
     "restrictions": {
+      "capabilities": "{{count}}개 차단",
       "none": "없음",
       "ips": "IP: {{count}}",
       "chats": "채팅: {{count}}",

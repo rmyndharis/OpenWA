@@ -5,7 +5,8 @@ import { ChatSummaryDto } from '../session/dto/chat-summary.dto';
 import { LabelService } from './label.service';
 import { AddLabelDto } from './dto/add-label.dto';
 import { UpsertLabelDto } from './dto/upsert-label.dto';
-import { ChatScoped, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, ChatScoped, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { ChatScopeService } from '../auth/chat-scope.service';
 import {
@@ -22,6 +23,7 @@ export class LabelController {
     private readonly chatScope: ChatScopeService,
   ) {}
 
+  @Capability(ApiKeyCapability.LABELS_READ)
   @Get()
   @ApiOperation({ summary: 'Get all labels (WhatsApp Business only)' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -43,6 +45,7 @@ export class LabelController {
     return this.labelService.getLabels(sessionId);
   }
 
+  @Capability(ApiKeyCapability.LABELS_READ)
   @Get(':labelId')
   @ApiOperation({ summary: 'Get a specific label by ID' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -63,6 +66,7 @@ export class LabelController {
   }
 
   @ChatScoped('filtered')
+  @Capability(ApiKeyCapability.LABELS_READ)
   @Get(':labelId/chats')
   @ApiOperation({
     summary: 'Get every chat carrying a label',
@@ -91,6 +95,7 @@ export class LabelController {
     return this.chatScope.filter(apiKey, await this.labelService.getChatsByLabel(sessionId, labelId), c => c.id);
   }
 
+  @Capability(ApiKeyCapability.LABELS_WRITE)
   @Put(':labelId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -127,6 +132,7 @@ export class LabelController {
     return { success: true };
   }
 
+  @Capability(ApiKeyCapability.LABELS_WRITE)
   @Delete(':labelId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -157,6 +163,7 @@ export class LabelController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.LABELS_READ)
   @Get('chat/:chatId')
   @ApiOperation({ summary: 'Get labels for a specific chat' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -176,6 +183,7 @@ export class LabelController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.LABELS_WRITE)
   @Post('chat/:chatId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -220,6 +228,7 @@ export class LabelController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.LABELS_WRITE)
   @Delete('chat/:chatId/:labelId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Remove a label from a chat' })

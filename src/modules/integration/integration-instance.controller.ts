@@ -12,7 +12,8 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import { CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
@@ -53,6 +54,7 @@ export class IntegrationInstanceController {
     private readonly scopeBinding: ScopeBindingService,
   ) {}
 
+  @Capability(ApiKeyCapability.INTEGRATIONS_MANAGE)
   @Post()
   @HttpCode(201)
   @ApiResponse({
@@ -92,6 +94,7 @@ export class IntegrationInstanceController {
     }
   }
 
+  @Capability(ApiKeyCapability.INTEGRATIONS_MANAGE)
   @Get()
   @ApiResponse({ status: 200, description: 'Instances for the plugin (secrets masked).', type: [InstanceView] })
   async list(@Param('pluginId') pluginId: string, @CurrentApiKey() apiKey?: ApiKey): Promise<InstanceView[]> {
@@ -102,6 +105,7 @@ export class IntegrationInstanceController {
       .map(r => this.view(r, routes, false));
   }
 
+  @Capability(ApiKeyCapability.INTEGRATIONS_MANAGE)
   @Get(':instanceId')
   @ApiResponse({ status: 200, description: 'The instance (secret masked).', type: InstanceView })
   @ApiResponse({ status: 404, description: "Unknown instance, or one outside the key's allowedSessions." })
@@ -114,6 +118,7 @@ export class IntegrationInstanceController {
     return this.view(inst, this.pluginRoutes(pluginId), false);
   }
 
+  @Capability(ApiKeyCapability.INTEGRATIONS_MANAGE)
   @Post(':instanceId/regenerate-secret')
   @HttpCode(200)
   @ApiResponse({
@@ -138,6 +143,7 @@ export class IntegrationInstanceController {
     return this.view(inst, this.pluginRoutes(pluginId), true);
   }
 
+  @Capability(ApiKeyCapability.INTEGRATIONS_MANAGE)
   @Patch(':instanceId')
   @ApiResponse({ status: 200, description: 'Instance updated (secret masked).', type: InstanceView })
   @ApiResponse({ status: 400, description: 'Validation failed, or the masked config could not be restored.' })
@@ -204,6 +210,7 @@ export class IntegrationInstanceController {
     return this.view(updated, this.pluginRoutes(pluginId), false);
   }
 
+  @Capability(ApiKeyCapability.INTEGRATIONS_MANAGE)
   @Delete(':instanceId')
   @HttpCode(204)
   @ApiResponse({ status: 204, description: 'Instance deleted and its session scope torn down.' })

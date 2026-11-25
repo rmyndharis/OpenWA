@@ -1,6 +1,7 @@
 import { ConflictException, Controller, NotFoundException, Param, Post } from '@nestjs/common';
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
-import { CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
@@ -22,6 +23,7 @@ export class RedriveController {
     private readonly audit: AuditService,
   ) {}
 
+  @Capability(ApiKeyCapability.INTEGRATIONS_MANAGE)
   @Post(':pluginId/:instanceId/redrive')
   @ApiResponse({
     status: 201,

@@ -3,7 +3,8 @@ import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { AuditListResponseDto } from './dto/audit-response.dto';
 import { AuditService, AuditQueryOptions } from './audit.service';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
-import { RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 
 @ApiTags('audit')
@@ -11,6 +12,7 @@ import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
+  @Capability(ApiKeyCapability.AUDIT_READ)
   @Get()
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'List audit logs with optional filters' })

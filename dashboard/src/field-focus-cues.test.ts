@@ -41,7 +41,10 @@ const FOCUS_CUES: [string, string[]][] = [
       "input[type='radio']:not(.toggle-switch input):focus-visible",
     ],
   ],
-  ['pages/ApiKeys.css', ['.api-keys-page .modal-body > textarea:focus']],
+  [
+    'pages/ApiKeys.css',
+    ['.api-keys-page .modal-body > textarea:focus', '.api-keys-page .permission-search:focus-within'],
+  ],
   [
     'pages/Chats.css',
     [

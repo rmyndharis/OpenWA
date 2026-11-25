@@ -2,7 +2,8 @@ import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Post,
 import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { InfraExportDataResponseDto, InfraImportDataResponseDto } from './dto/infra-response.dto';
 import { ImportDataDto } from './dto/import-data.dto';
-import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { InfraDataService, InfraExportDataResult, InfraImportDataResult } from './infra-data.service';
 
@@ -22,6 +23,7 @@ import { InfraDataService, InfraExportDataResult, InfraImportDataResult } from '
 export class InfraDataController {
   constructor(private readonly infraData: InfraDataService) {}
 
+  @Capability(ApiKeyCapability.INFRA_WRITE)
   @Get('export-data')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Export all data from Data DB for migration' })
@@ -55,6 +57,7 @@ export class InfraDataController {
     return this.infraData.exportData({ includePluginSecrets: includeSecrets });
   }
 
+  @Capability(ApiKeyCapability.INFRA_WRITE)
   @Post('import-data')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.ADMIN)

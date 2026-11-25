@@ -806,6 +806,10 @@
     "sessionSelect": "Sessione"
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "Capacità bloccate",
+      "hint": "Vuoto = nulla bloccato"
+    },
     "title": "Chiavi API",
     "subtitle": "Gestisci le chiavi API per l'autenticazione e il controllo degli accessi",
     "createBtn": "Crea Chiave API",
@@ -877,6 +881,7 @@
       "signedIn": "Questa dashboard ha effettuato l'accesso con questa chiave. Modificarne ruolo, indirizzi IP, chat o scadenza può disconnetterti."
     },
     "restrictions": {
+      "capabilities": "{{count}} bloccate",
       "none": "Nessuna",
       "ips": "IP: {{count}}",
       "chats": "Chat: {{count}}",

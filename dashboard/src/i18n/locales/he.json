@@ -813,6 +813,10 @@
     "sessionSelect": "Session"
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "יכולות חסומות",
+      "hint": "ריק = לא חסום דבר"
+    },
     "title": "מפתחות API",
     "subtitle": "ניהול מפתחות API לאימות ובקרת גישה",
     "createBtn": "יצירת מפתח API",
@@ -884,6 +888,7 @@
       "signedIn": "לוח הבקרה הזה מחובר עם המפתח הזה. שינוי התפקיד, כתובות ה-IP, הצ'אטים או התפוגה שלו עלול לנתק אתכם."
     },
     "restrictions": {
+      "capabilities": "{{count}} חסומות",
       "none": "אין",
       "ips": "כתובות IP: {{count}}",
       "chats": "צ'אטים: {{count}}",

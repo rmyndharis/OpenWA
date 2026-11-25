@@ -756,6 +756,10 @@
     }
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "Capacidades bloqueadas",
+      "hint": "Vacío = nada bloqueado"
+    },
     "title": "Claves API",
     "subtitle": "Gestiona las claves API para autenticación y control de acceso",
     "createBtn": "Crear clave API",
@@ -827,6 +831,7 @@
       "signedIn": "Este panel ha iniciado sesión con esta clave. Cambiar su rol, direcciones IP, chats o caducidad puede cerrar tu sesión."
     },
     "restrictions": {
+      "capabilities": "{{count}} bloqueadas",
       "none": "Ninguna",
       "ips": "IP: {{count}}",
       "chats": "Chats: {{count}}",

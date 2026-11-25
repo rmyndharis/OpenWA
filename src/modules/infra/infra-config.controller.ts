@@ -14,7 +14,8 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { InfraConfigResponseDto, InfraConfigSaveResponseDto, InfraRestartResponseDto } from './dto/infra-response.dto';
 import { RestartDto } from './dto/restart.dto';
-import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { writeSecretFile } from '../../common/utils/secret-file';
 import { EngineFactory } from '../../engine/engine.factory';
@@ -132,6 +133,7 @@ export class InfraConfigController {
     private readonly auditService?: AuditService,
   ) {}
 
+  @Capability(ApiKeyCapability.INFRA_READ)
   @Get('config')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Read the effective infrastructure configuration for the dashboard form' })
@@ -199,6 +201,7 @@ export class InfraConfigController {
     };
   }
 
+  @Capability(ApiKeyCapability.INFRA_WRITE)
   @Put('config')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Save infrastructure configuration to .env file' })
@@ -530,6 +533,7 @@ export class InfraConfigController {
     };
   }
 
+  @Capability(ApiKeyCapability.INFRA_WRITE)
   @Post('restart')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.ADMIN)

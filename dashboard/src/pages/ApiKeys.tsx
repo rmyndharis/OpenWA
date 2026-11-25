@@ -20,8 +20,9 @@ import {
   AlertTriangle,
   AlertCircle,
   Pencil,
+  Search,
 } from 'lucide-react';
-import type { ApiKey } from '../services/api';
+import { API_KEY_CAPABILITIES, type ApiKey, type ApiKeyCapability } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
   useApiKeysQuery,
@@ -58,7 +59,23 @@ import './ApiKeys.css';
 
 const roleNames = ['admin', 'operator', 'viewer'] as const;
 
-const emptyKeyForm = { name: '', role: 'operator', allowedSessions: [] as string[], ips: '', chats: '', expires: '' };
+const CAPABILITY_GROUPS = Object.entries(
+  API_KEY_CAPABILITIES.reduce<Record<string, ApiKeyCapability[]>>((groups, capability) => {
+    const namespace = capability.split(':', 1)[0];
+    (groups[namespace] ??= []).push(capability);
+    return groups;
+  }, {}),
+);
+
+const emptyKeyForm = {
+  name: '',
+  role: 'operator',
+  allowedSessions: [] as string[],
+  ips: '',
+  chats: '',
+  deniedPermissions: [] as ApiKeyCapability[],
+  expires: '',
+};
 
 // What the gateway lists for the key seeded from API_MASTER_KEY: its first characters are secret, so none is shown.
 const MASTER_KEY_PREFIX = '(master key)';
@@ -106,6 +123,7 @@ function KeyLimitFields({
   role,
   ips,
   chats,
+  deniedPermissions,
   expires,
   errors,
   onChange,
@@ -116,9 +134,10 @@ function KeyLimitFields({
   role: string;
   ips: string;
   chats: string;
+  deniedPermissions: ApiKeyCapability[];
   expires: string;
   errors: LimitErrors;
-  onChange: (patch: { ips?: string; chats?: string; expires?: string }) => void;
+  onChange: (patch: { ips?: string; chats?: string; deniedPermissions?: ApiKeyCapability[]; expires?: string }) => void;
   disabled?: boolean;
   expiresRef: RefObject<HTMLInputElement | null>;
 }) {
@@ -126,9 +145,73 @@ function KeyLimitFields({
   // A datetime-local with a blank segment reports value '', like an empty field, so only badInput says
   // there are leftover segments to clear.
   const [partialExpiry, setPartialExpiry] = useState(false);
+  const [capabilityQuery, setCapabilityQuery] = useState('');
+  const normalizedCapabilityQuery = capabilityQuery.trim().toLocaleLowerCase();
+  const matchingCapabilities = normalizedCapabilityQuery
+    ? API_KEY_CAPABILITIES.filter(capability => capability.toLocaleLowerCase().includes(normalizedCapabilityQuery))
+    : [];
+  const renderCapability = (capability: ApiKeyCapability) => (
+    <label key={capability} className="permission-option">
+      <input
+        type="checkbox"
+        checked={deniedPermissions.includes(capability)}
+        disabled={disabled}
+        onChange={() =>
+          onChange({
+            deniedPermissions: deniedPermissions.includes(capability)
+              ? deniedPermissions.filter(entry => entry !== capability)
+              : [...deniedPermissions, capability],
+          })
+        }
+      />
+      <code>{capability}</code>
+    </label>
+  );
   const lidHintId = normalizeChatScope(chats).some(entry => /@lid$/i.test(entry)) ? `${idPrefix}-chats-lid` : undefined;
   return (
     <>
+      <fieldset className="key-permissions">
+        <legend>
+          {t('apiKeys.capabilities.label')}
+          <span className="permission-count">
+            {t('apiKeys.restrictions.capabilities', { count: deniedPermissions.length })}
+          </span>
+        </legend>
+        <div className="permission-toolbar">
+          <span className="key-field-hint">{t('apiKeys.capabilities.hint')}</span>
+          <label className="permission-search">
+            <Search size={14} aria-hidden="true" />
+            <input
+              type="search"
+              value={capabilityQuery}
+              disabled={disabled}
+              aria-label={`${t('common.search')} ${t('apiKeys.capabilities.label')}`}
+              placeholder={t('common.search')}
+              onChange={event => setCapabilityQuery(event.target.value)}
+            />
+          </label>
+        </div>
+        {normalizedCapabilityQuery ? (
+          <div className="permission-options permission-search-results">
+            {matchingCapabilities.map(renderCapability)}
+          </div>
+        ) : (
+          <div className="permission-groups">
+            {CAPABILITY_GROUPS.map(([namespace, capabilities]) => {
+              const blockedCount = capabilities.filter(capability => deniedPermissions.includes(capability)).length;
+              return (
+                <details key={namespace} className="permission-group">
+                  <summary>
+                    <code>{namespace}</code>
+                    <span>{t('apiKeys.restrictions.capabilities', { count: blockedCount })}</span>
+                  </summary>
+                  <div className="permission-options">{capabilities.map(renderCapability)}</div>
+                </details>
+              );
+            })}
+          </div>
+        )}
+      </fieldset>
       <label htmlFor={`${idPrefix}-ips`}>{t('apiKeys.ips.label')}</label>
       <textarea
         id={`${idPrefix}-ips`}
@@ -294,6 +377,7 @@ export function ApiKeys() {
         ...(scoped ? { allowedSessions: newKey.allowedSessions } : {}),
         ...(allowedIps.length > 0 ? { allowedIps } : {}),
         ...(allowedChats.length > 0 ? { allowedChats } : {}),
+        ...(newKey.deniedPermissions.length > 0 ? { deniedPermissions: newKey.deniedPermissions } : {}),
         ...(newKey.expires ? { expiresAt: new Date(newKey.expires).toISOString() } : {}),
       });
       setCreatedKey(created.apiKey || null);
@@ -438,8 +522,15 @@ export function ApiKeys() {
           id: 'restrictions',
           header: () => t('apiKeys.columns.restrictions'),
           cell: info => {
-            const { allowedIps, allowedChats, expiresAt } = info.row.original;
+            const { allowedIps, allowedChats, deniedPermissions, expiresAt } = info.row.original;
             const badges = [];
+            if (deniedPermissions?.length) {
+              badges.push(
+                <span key="capabilities" className="restriction-badge" title={deniedPermissions.join('\n')}>
+                  {t('apiKeys.restrictions.capabilities', { count: deniedPermissions.length })}
+                </span>,
+              );
+            }
             if (allowedIps?.length) {
               badges.push(
                 <span key="ips" className="restriction-badge" title={allowedIps.join('\n')}>
@@ -670,6 +761,7 @@ export function ApiKeys() {
                 role={newKey.role}
                 ips={newKey.ips}
                 chats={newKey.chats}
+                deniedPermissions={newKey.deniedPermissions}
                 expires={newKey.expires}
                 errors={newErrors}
                 onChange={patch => setNewKey(prev => ({ ...prev, ...patch }))}
@@ -733,6 +825,7 @@ export function ApiKeys() {
             role={editDraft.role}
             ips={editDraft.ips}
             chats={editDraft.chats}
+            deniedPermissions={editDraft.deniedPermissions}
             expires={editDraft.expires}
             errors={editErrors ?? { ip: null, chat: null, chatCount: null }}
             onChange={patch => setEditDraft(prev => (prev ? { ...prev, ...patch } : prev))}
@@ -804,6 +897,16 @@ export function ApiKeys() {
               </div>
             ))}
           </div>
+          <details className="capabilities-reference">
+            <summary>{t('apiKeys.capabilities.label')}</summary>
+            <div className="permissions-list">
+              {API_KEY_CAPABILITIES.map(capability => (
+                <div key={capability} className="perm-item">
+                  <code>{capability}</code>
+                </div>
+              ))}
+            </div>
+          </details>
         </div>
       </div>
 

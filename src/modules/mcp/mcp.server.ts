@@ -14,6 +14,7 @@ import express, { type Request, type RequestHandler, type Response } from 'expre
 import { invokeTool } from '../../core/agent-tools/tool-invoker';
 import type { ToolRegistryService } from '../../core/agent-tools/tool-registry.service';
 import { UnresolvedApiKeyException, type AuthService } from '../auth/auth.service';
+import { hasBlockedCapabilities } from '../auth/api-key-permissions';
 import { allowUnauthenticatedAuditRow } from '../audit/auth-failure-audit-limiter';
 import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -274,6 +275,12 @@ export function createKeyGate(
       const rawKey = extractApiKey(req.headers);
       if (!rawKey) throw new UnresolvedApiKeyException('Missing API key');
       const apiKey = await authService.validateApiKey(rawKey, undefined, undefined, { recordUsage: false });
+      // MCP tools are classified by role, tier, session and chat scope — not by capability — so a
+      // key with blocked capabilities would bypass the REST blocklist. Refuse it at the mount rather
+      // than silently granting more than the operator allowed.
+      if (hasBlockedCapabilities(apiKey)) {
+        throw new ForbiddenException('API keys with blocked capabilities are not permitted on MCP; use the REST API');
+      }
       if (gateRateLimiter) {
         const messages = jsonRpcMessageCount(req.body);
         for (let i = 0; i < messages; i++) gateRateLimiter.check(apiKey.id);

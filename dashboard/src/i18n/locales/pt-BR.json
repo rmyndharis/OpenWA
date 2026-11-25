@@ -756,6 +756,10 @@
     }
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "Capacidades bloqueadas",
+      "hint": "Vazio = nada bloqueado"
+    },
     "title": "Chaves API",
     "subtitle": "Gerencie as chaves API para autenticação e controle de acesso",
     "createBtn": "Criar chave API",
@@ -827,6 +831,7 @@
       "signedIn": "Este painel está conectado com esta chave. Alterar a função, os endereços IP, os chats ou a expiração pode desconectar você."
     },
     "restrictions": {
+      "capabilities": "{{count}} bloqueadas",
       "none": "Nenhuma",
       "ips": "IPs: {{count}}",
       "chats": "Chats: {{count}}",

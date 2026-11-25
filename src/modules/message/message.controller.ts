@@ -48,7 +48,14 @@ import {
   ClickButtonDto,
   UnpinMessageDto,
 } from './dto/message-actions.dto';
-import { ChatQuotedAllowed, ChatScoped, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import {
+  Capability,
+  ChatQuotedAllowed,
+  ChatScoped,
+  CurrentApiKey,
+  RequireRole,
+} from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { ChatScopeService } from '../auth/chat-scope.service';
 import { parseMessageWindow } from './message-window';
@@ -100,6 +107,7 @@ export class MessageController {
     description: 'Exact WhatsApp message reference; remains scoped to the session and chat.',
   })
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_READ)
   @Get()
   @ApiOperation({ summary: 'Get message history for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -210,6 +218,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('send-text')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -237,6 +246,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('send-template')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -262,6 +272,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('send-image')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -292,6 +303,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('send-video')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -320,6 +332,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('send-audio')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -348,6 +361,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('send-document')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -378,6 +392,7 @@ export class MessageController {
   // ========== Phase 3: Extended Messaging ==========
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('send-location')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -399,6 +414,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('send-contact')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -420,6 +436,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('send-sticker')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -451,6 +468,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('send-poll')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -478,6 +496,7 @@ export class MessageController {
 
   @ChatQuotedAllowed()
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('reply')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -498,6 +517,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('click-button')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -531,6 +551,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('forward')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -554,6 +575,7 @@ export class MessageController {
   // ========== Phase 3: Reactions ==========
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('react')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -586,6 +608,7 @@ export class MessageController {
 
   // Declared before ':chatId/history': Express takes the first matching route, so a batch whose
   // caller-supplied id is 'history' would otherwise be read as the chat history of chat 'batch'.
+  @Capability(ApiKeyCapability.MESSAGES_READ)
   @Get('batch/:batchId')
   @ApiOperation({ summary: 'Get batch processing status' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -618,6 +641,7 @@ export class MessageController {
     };
   }
 
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('batch/:batchId/cancel')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -653,6 +677,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_READ)
   @Get(':chatId/history')
   @ApiOperation({
     summary: 'Fetch chat history live from WhatsApp',
@@ -719,6 +744,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_READ)
   @Get(':chatId/:messageId/reactions')
   @ApiOperation({ summary: 'Get reactions for a specific message' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -748,6 +774,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_READ)
   @Get(':chatId/:messageId/receipts')
   @ApiOperation({ summary: 'Get delivery and read receipts for a specific message' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -793,6 +820,7 @@ export class MessageController {
   // Three path segments, so it never collides with `:chatId/history` (two) regardless of
   // declaration order — Nest/Express match on segment count first.
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_READ)
   @Get(':chatId/:messageId/media')
   @ApiOperation({ summary: 'Download a message’s stored media' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -837,6 +865,7 @@ export class MessageController {
   // ========== Delete Message ==========
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_DELETE)
   @Post('delete')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -870,6 +899,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_MODERATE)
   @Post('vote-poll')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -899,6 +929,7 @@ export class MessageController {
   // ========== Pin / Unpin ==========
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_MODERATE)
   @Post('pin')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -940,6 +971,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_MODERATE)
   @Post('unpin')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -981,6 +1013,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_MODERATE)
   @Post('star')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -1009,6 +1042,7 @@ export class MessageController {
   // ========== Edit Message ==========
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_EDIT)
   @Post('edit')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.OPERATOR)
@@ -1050,6 +1084,7 @@ export class MessageController {
   // ========== Bulk Messaging ==========
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.MESSAGES_SEND)
   @Post('send-bulk')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.ACCEPTED)

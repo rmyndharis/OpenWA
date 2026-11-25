@@ -29,8 +29,10 @@ import {
   CHAT_SCOPED_KEY,
   CHAT_QUOTED_ALLOWED_KEY,
   HEADER_AUTH_ONLY_KEY,
+  CAPABILITIES_KEY,
   ChatScopeKind,
 } from '../decorators/auth.decorators';
+import { isCapabilityDenied, type ApiKeyCapability } from '../api-key-permissions';
 import { resolveClientIp } from '../../../common/utils/ip';
 import { presentedApiKey } from '../../../common/security/bearer-token';
 import { setRequestActor } from '../../../common/services/request-context';
@@ -154,6 +156,21 @@ export class ApiKeyGuard implements CanActivate {
 
     if (requiredRole && !this.authService.hasPermission(apiKey, requiredRole)) {
       throw new ForbiddenException(`Insufficient permissions. Required: ${requiredRole}`);
+    }
+
+    // Capability blocklist — DEFAULT ALLOW. A key may list capabilities it is BLOCKED from; a route
+    // tagged with any of them is refused. Untagged routes (health, metrics, the key's own validate
+    // self-check, session-cookie login) are never blocked, and a key with nothing blocked skips this
+    // entirely, so every key minted before the field existed behaves exactly as it did.
+    const routeCapabilities = this.reflector.getAllAndOverride<ApiKeyCapability[]>(CAPABILITIES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (routeCapabilities?.length) {
+      const blocked = routeCapabilities.find(capability => isCapabilityDenied(apiKey, capability));
+      if (blocked) {
+        throw new ForbiddenException(`API key is blocked from this capability (${blocked})`);
+      }
     }
 
     // Chat fence — DEFAULT DENY. A key carrying `allowedChats` may reach only a handler marked

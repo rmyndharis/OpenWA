@@ -800,6 +800,10 @@
     "sessionSelect": "Sesi"
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "Kemampuan diblokir",
+      "hint": "Kosong = tidak ada yang diblokir"
+    },
     "title": "Kunci API",
     "subtitle": "Kelola kunci API untuk autentikasi dan kontrol akses",
     "createBtn": "Buat Kunci API",
@@ -871,6 +875,7 @@
       "signedIn": "Anda masuk ke dasbor ini menggunakan kunci ini. Mengubah peran, alamat IP, obrolan, atau tanggal kedaluwarsanya dapat membuat Anda keluar."
     },
     "restrictions": {
+      "capabilities": "{{count}} diblokir",
       "none": "Tidak ada",
       "ips": "IP: {{count}}",
       "chats": "Obrolan: {{count}}",

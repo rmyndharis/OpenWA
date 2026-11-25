@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Put } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AutomationRulesService } from './automation-rules.service';
 import { AutomationRuleResponseDto, CreateAutomationRuleDto, UpdateAutomationRuleDto } from './dto/automation-rule.dto';
@@ -10,6 +11,7 @@ import { AutomationRuleResponseDto, CreateAutomationRuleDto, UpdateAutomationRul
 export class AutomationRuleController {
   constructor(private readonly automationRules: AutomationRulesService) {}
 
+  @Capability(ApiKeyCapability.AUTOMATION_WRITE)
   @Post()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Create an autoreply rule' })
@@ -28,6 +30,7 @@ export class AutomationRuleController {
     return AutomationRuleResponseDto.fromEntity(await this.automationRules.create(sessionId, dto));
   }
 
+  @Capability(ApiKeyCapability.AUTOMATION_READ)
   @Get()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'List the session’s autoreply rules' })
@@ -42,6 +45,7 @@ export class AutomationRuleController {
     return (await this.automationRules.findAll(sessionId)).map(rule => AutomationRuleResponseDto.fromEntity(rule));
   }
 
+  @Capability(ApiKeyCapability.AUTOMATION_READ)
   @Get(':ruleId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Get one autoreply rule' })
@@ -56,6 +60,7 @@ export class AutomationRuleController {
     return AutomationRuleResponseDto.fromEntity(await this.automationRules.findOne(sessionId, ruleId));
   }
 
+  @Capability(ApiKeyCapability.AUTOMATION_WRITE)
   @Put(':ruleId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Update an autoreply rule' })
@@ -72,6 +77,7 @@ export class AutomationRuleController {
     return AutomationRuleResponseDto.fromEntity(await this.automationRules.update(sessionId, ruleId, dto));
   }
 
+  @Capability(ApiKeyCapability.AUTOMATION_WRITE)
   @Delete(':ruleId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.NO_CONTENT)

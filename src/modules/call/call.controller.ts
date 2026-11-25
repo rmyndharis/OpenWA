@@ -4,7 +4,8 @@ import { CallAckResponseDto } from './dto/call-response.dto';
 import { CreateCallLinkDto } from './dto/create-call-link.dto';
 import { CallLinkResponseDto } from './dto/call-link-response.dto';
 import { CallService } from './call.service';
-import { RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { ENGINE_NOT_READY_409 } from '../../common/openapi/engine-status-responses';
 
@@ -13,6 +14,7 @@ import { ENGINE_NOT_READY_409 } from '../../common/openapi/engine-status-respons
 export class CallController {
   constructor(private readonly callService: CallService) {}
 
+  @Capability(ApiKeyCapability.CALLS_MANAGE)
   @Post('link')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -30,6 +32,7 @@ export class CallController {
     return { link };
   }
 
+  @Capability(ApiKeyCapability.CALLS_MANAGE)
   @Post(':callId/reject')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)

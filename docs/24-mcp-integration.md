@@ -307,6 +307,10 @@ before.
 - **Chat-restricted keys use the REST chat fence.** Message, contact, presence, label membership, and group detail/settings tools authorize their chat arguments against `allowedChats`, including persisted phone/LID aliases. Forwarding requires both chats to be allowed. Message listing requires an explicit chat; chat, contact, group, and label chat lists filter the complete result before pagination. Ordinary send quotes are refused; `MessageReply` resolves its quote inside the authorized chat. Account-wide tools without a chat fence remain refused, including session discovery/statistics, webhook management, and group creation/invites. `SessionFindOne` remains available within `allowedSessions`. Rejections return an `isError` tool result with `ForbiddenException`; role and session restrictions still apply.
 - **IP-restricted keys are refused.** The `/mcp` gate cannot check the client address, so a key
   with `allowedIps` gets `403` on every request. Use a key without an IP allow-list for MCP.
+- **Keys with blocked capabilities are refused.** Tools are classified by role, tier, session
+  and chat scope, not by the REST capability blocklist (`deniedPermissions`), so a key carrying any
+  blocked capability gets `403` on every `/mcp` request rather than silently reaching a surface the
+  operator blocked. Use the REST API for such a key, or a separate key with nothing blocked for MCP.
 
 ### Threat model: untrusted message content
 
@@ -344,6 +348,7 @@ Keep the blast radius small:
 - Give a read-only agent a `VIEWER` key, and scope every MCP key to the sessions it needs
   (`allowedSessions`).
 - Set `allowedChats` when the client should read or send only selected conversations.
+- Do not block any capability (`deniedPermissions`) on an MCP key: such keys are refused at the `/mcp` mount.
 - When write tools are on, have the MCP client ask a human to confirm each write call.
 
 ## 24.6 Enabling & Client Setup

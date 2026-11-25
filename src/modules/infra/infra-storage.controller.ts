@@ -17,7 +17,8 @@ import {
   StorageFileCountResponseDto,
   StorageImportResponseDto,
 } from './dto/infra-response.dto';
-import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { isPathWithin } from '../../common/utils/path-safety';
 import { ensurePrivateDir } from '../../common/utils/private-dir.util';
@@ -149,6 +150,7 @@ export class InfraStorageController implements OnApplicationBootstrap {
     );
   }
 
+  @Capability(ApiKeyCapability.INFRA_READ)
   @Get('storage/files/count')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get file count in current storage' })
@@ -173,6 +175,7 @@ export class InfraStorageController implements OnApplicationBootstrap {
     };
   }
 
+  @Capability(ApiKeyCapability.INFRA_WRITE)
   @Get('storage/export')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Export all storage files as tar.gz' })
@@ -265,6 +268,7 @@ export class InfraStorageController implements OnApplicationBootstrap {
     };
   }
 
+  @Capability(ApiKeyCapability.INFRA_WRITE)
   @Post('storage/import')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.ADMIN)

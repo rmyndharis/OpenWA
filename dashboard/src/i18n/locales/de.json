@@ -800,6 +800,10 @@
     "sessionSelect": "Sitzung"
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "Blockierte Fähigkeiten",
+      "hint": "Leer = nichts blockiert"
+    },
     "title": "API-Schlüssel",
     "subtitle": "API-Schlüssel für Authentifizierung und Zugriffskontrolle verwalten",
     "createBtn": "API-Schlüssel erstellen",
@@ -871,6 +875,7 @@
       "signedIn": "Dieses Dashboard ist mit diesem Schlüssel angemeldet. Wenn du Rolle, IP-Adressen, Chats oder Ablauf änderst, kannst du abgemeldet werden."
     },
     "restrictions": {
+      "capabilities": "{{count}} blockiert",
       "none": "Keine",
       "ips": "IPs: {{count}}",
       "chats": "Chats: {{count}}",

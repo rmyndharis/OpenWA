@@ -31,6 +31,7 @@ import { useRole, type UserRole } from '../hooks/useRole';
 import { languageOptions, resolveSupportedLanguage, rtlLanguages, type SupportedLanguage } from '../i18n';
 import { healthApi, infraApi } from '../services/api';
 import { isComposingKey } from '../utils/composition';
+import { canAccessDashboardPage, type DashboardPagePath } from '../utils/dashboardAccess';
 import './Layout.css';
 
 interface LayoutProps {
@@ -77,9 +78,12 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
     }),
   });
 
-  const { scoped } = useRole();
+  const { scoped, deniedPermissions = [] } = useRole();
   const navItems = allNavItems.filter(
-    item => (!item.adminOnly || userRole === 'admin') && (!item.unscopedOnly || !scoped),
+    item =>
+      (!item.adminOnly || userRole === 'admin') &&
+      (!item.unscopedOnly || !scoped) &&
+      canAccessDashboardPage(item.to as DashboardPagePath, deniedPermissions),
   );
 
   const [isCollapsed, setIsCollapsed] = useState(false);

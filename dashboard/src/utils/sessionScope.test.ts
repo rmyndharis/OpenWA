@@ -136,6 +136,17 @@ test('a draft in native digits patches exactly as the same draft in ASCII digits
   assert.deepEqual(native('6281234\n62812349'), { allowedChats: ['6281234@c.us', '62812349@c.us'] });
 });
 
+test('a blocked-capability list is patched only when it changed, and an empty list clears it', () => {
+  const key = { role: 'operator', deniedPermissions: ['messages:read' as const] };
+  const draft = apiKeyDraft(key);
+  assert.deepEqual(draft.deniedPermissions, ['messages:read']);
+  assert.deepEqual(apiKeyPatch(key, draft), {});
+  assert.deepEqual(apiKeyPatch(key, { ...draft, deniedPermissions: [] }), { deniedPermissions: [] });
+  assert.deepEqual(apiKeyPatch(key, { ...draft, deniedPermissions: ['messages:read', 'messages:send'] }), {
+    deniedPermissions: ['messages:read', 'messages:send'],
+  });
+});
+
 test('an expiry round-trips through the datetime-local value in local time', () => {
   const local = toDateTimeLocal('2027-03-04T05:06:59.000Z');
   assert.match(local, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);

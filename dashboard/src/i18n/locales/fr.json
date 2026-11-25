@@ -806,6 +806,10 @@
     "sessionSelect": "Session"
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "Capacités bloquées",
+      "hint": "Vide = rien de bloqué"
+    },
     "title": "Clés API",
     "subtitle": "Gérez les clés API pour l'authentification et le contrôle d'accès",
     "createBtn": "Créer une clé API",
@@ -877,6 +881,7 @@
       "signedIn": "Ce tableau de bord est connecté avec cette clé. Modifier son rôle, ses adresses IP, ses discussions ou son expiration peut vous déconnecter."
     },
     "restrictions": {
+      "capabilities": "{{count}} bloquées",
       "none": "Aucune",
       "ips": "IP : {{count}}",
       "chats": "Discussions : {{count}}",

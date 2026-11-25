@@ -26,7 +26,8 @@ import {
   PluginCatalogEntryDto,
 } from './dto/plugin.dto';
 import type { CatalogPlugin } from './catalog';
-import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -73,6 +74,7 @@ export class PluginsController {
     }
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_READ)
   @Get()
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -82,6 +84,7 @@ export class PluginsController {
     return this.pluginsService.findAll();
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
   @Post('install')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -112,6 +115,7 @@ export class PluginsController {
     return plugin;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
   @Post('install-url')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -132,6 +136,7 @@ export class PluginsController {
   }
 
   // Declared before `:id` so `GET /plugins/catalog` is not captured by the `:id` route.
+  @Capability(ApiKeyCapability.PLUGINS_READ)
   @Get('catalog')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -142,6 +147,7 @@ export class PluginsController {
     return await this.pluginsService.getCatalog();
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_READ)
   @Get(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -152,6 +158,7 @@ export class PluginsController {
     return this.pluginsService.findOne(id);
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
   @Post(':id/enable')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -166,6 +173,7 @@ export class PluginsController {
     return result;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
   @Post(':id/disable')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -180,6 +188,7 @@ export class PluginsController {
     return result;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
   @Put(':id/config')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -202,6 +211,7 @@ export class PluginsController {
   // The dashboard fetches this WITH the API key and injects the body as an opaque-origin sandboxed
   // iframe srcdoc. It attaches that document's response-specific nonce to inline scripts so the
   // inherited CSP allows only the isolated editor bootstrap, without enabling parent unsafe-inline.
+  @Capability(ApiKeyCapability.PLUGINS_READ)
   @Get(':id/config-ui')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -221,6 +231,7 @@ export class PluginsController {
     return this.pluginsService.getConfigUiHtml(id);
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
   @Put(':id/config/:sessionId')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Set a plugin config override for a specific session (empty = clear it)' })
@@ -240,6 +251,7 @@ export class PluginsController {
     return result;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
   @Put(':id/sessions')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -263,6 +275,7 @@ export class PluginsController {
     return plugin;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
   @Post(':id/update')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -284,6 +297,7 @@ export class PluginsController {
     return plugin;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
   @Delete(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -306,6 +320,7 @@ export class PluginsController {
     return result;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_READ)
   @Get(':id/health')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()

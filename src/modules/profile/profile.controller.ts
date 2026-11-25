@@ -3,7 +3,8 @@ import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/s
 import { ProfileAckResponseDto } from './dto/profile-response.dto';
 import { ProfileService } from './profile.service';
 import { SetProfileNameDto, SetProfileStatusDto, SetProfilePictureDto } from './dto/profile.dto';
-import { RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import {
   ENGINE_NOT_READY_409,
@@ -16,6 +17,7 @@ import {
 export class ProfileController {
   constructor(private readonly profileService: ProfileService) {}
 
+  @Capability(ApiKeyCapability.PROFILE_WRITE)
   @Put('name')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Set the account display name' })
@@ -41,6 +43,7 @@ export class ProfileController {
     return { success: true, message: 'Profile name updated' };
   }
 
+  @Capability(ApiKeyCapability.PROFILE_WRITE)
   @Put('status')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Set the account about/status text' })
@@ -66,6 +69,7 @@ export class ProfileController {
     return { success: true, message: 'Profile status updated' };
   }
 
+  @Capability(ApiKeyCapability.PROFILE_WRITE)
   @Put('picture')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Set the account profile picture (URL or base64 image)' })
@@ -106,6 +110,7 @@ export class ProfileController {
     return { success: true, message: 'Profile picture updated' };
   }
 
+  @Capability(ApiKeyCapability.PROFILE_WRITE)
   @Delete('picture')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: "Remove the account's profile picture" })

@@ -3,7 +3,8 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { CreateApiKeyDto, UpdateApiKeyDto, ApiKeyResponseDto, ApiKeyCreatedResponseDto } from './dto';
-import { RequireRole, CurrentApiKey, RequireUnscopedKey } from './decorators/auth.decorators';
+import { Capability, RequireRole, CurrentApiKey, RequireUnscopedKey } from './decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { type ApiKey, ApiKeyRole } from './entities/api-key.entity';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from './../audit/entities/audit-log.entity';
@@ -48,6 +49,7 @@ export class AuthController {
       allowedIps: key.allowedIps,
       allowedSessions: key.allowedSessions,
       allowedChats: key.allowedChats,
+      deniedPermissions: key.deniedPermissions,
       expiresAt: readableExpiry(key.expiresAt),
     };
   }
@@ -61,6 +63,7 @@ export class AuthController {
       allowedIps: k.allowedIps || undefined,
       allowedSessions: k.allowedSessions || undefined,
       allowedChats: k.allowedChats || undefined,
+      deniedPermissions: k.deniedPermissions || undefined,
       isActive: k.isActive,
       expiresAt: readableExpiry(k.expiresAt) || undefined,
       lastUsedAt: k.lastUsedAt || undefined,
@@ -69,6 +72,7 @@ export class AuthController {
     };
   }
 
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Post()
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Create a new API key (admin only)' })
@@ -96,6 +100,7 @@ export class AuthController {
     return { ...this.toResponse(apiKey), apiKey: rawKey };
   }
 
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Get()
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'List all API keys (admin only)' })
@@ -109,6 +114,7 @@ export class AuthController {
     return keys.map(k => this.toResponse(k));
   }
 
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Get(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get API key details (admin only)' })
@@ -123,6 +129,7 @@ export class AuthController {
     return this.toResponse(k);
   }
 
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Put(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Update API key (admin only)' })
@@ -153,6 +160,7 @@ export class AuthController {
     return this.toResponse(k);
   }
 
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Delete(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -172,6 +180,7 @@ export class AuthController {
     });
   }
 
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Post(':id/revoke')
   @RequireRole(ApiKeyRole.ADMIN)
   @HttpCode(HttpStatus.OK)

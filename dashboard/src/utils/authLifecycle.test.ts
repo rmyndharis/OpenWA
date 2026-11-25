@@ -4,7 +4,13 @@ import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
-import { clearActorState, isKeyUnusable, isUserRole, resolveStartupValidation } from './authLifecycle.ts';
+import {
+  clearActorState,
+  isKeyUnusable,
+  isUserRole,
+  normalizeDeniedPermissions,
+  resolveStartupValidation,
+} from './authLifecycle.ts';
 
 test('logout cleanup wipes the React Query cache (no cross-actor residue)', () => {
   const queryClient = new QueryClient();
@@ -71,6 +77,23 @@ test('startup validation: ok + role carries whether the key is session-scoped', 
   });
 });
 
+test('startup validation carries a normalized capability blocklist', () => {
+  assert.deepEqual(
+    resolveStartupValidation(200, {
+      valid: true,
+      role: 'operator',
+      deniedPermissions: ['chats:read', ' chats:read ', null, 'messages:read'],
+    }),
+    {
+      action: 'role',
+      role: 'operator',
+      scoped: false,
+      deniedPermissions: ['chats:read', 'messages:read'],
+    },
+  );
+  assert.deepEqual(normalizeDeniedPermissions('chats:read'), []);
+});
+
 test('startup validation: ok without a usable role keeps the cached role', () => {
   assert.deepEqual(resolveStartupValidation(200, { valid: false }), { action: 'keep' });
   assert.deepEqual(resolveStartupValidation(200, { valid: true, role: 'superuser' }), { action: 'keep' });
@@ -104,7 +127,14 @@ interface FetchCall {
 const fetchCalls: FetchCall[] = [];
 
 // Per-test session state returned by POST /auth/session and GET /auth/session.
-let sessionBody: { valid?: boolean; role?: string; engineType?: string; scoped?: boolean; apiKeyId?: string } = {
+let sessionBody: {
+  valid?: boolean;
+  role?: string;
+  engineType?: string;
+  scoped?: boolean;
+  apiKeyId?: string;
+  deniedPermissions?: string[];
+} = {
   valid: true,
   role: 'operator',
   engineType: 'whatsapp-web.js',

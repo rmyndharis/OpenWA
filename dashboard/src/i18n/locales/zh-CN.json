@@ -800,6 +800,10 @@
     "sessionSelect": "会话"
   },
   "apiKeys": {
+    "capabilities": {
+      "label": "已封禁权限",
+      "hint": "留空 = 不封禁任何权限"
+    },
     "title": "API 密钥",
     "subtitle": "管理用于认证和访问控制的 API 密钥",
     "createBtn": "创建 API 密钥",
@@ -871,6 +875,7 @@
       "signedIn": "此仪表板正使用该密钥登录。更改其角色、IP 地址、聊天或过期时间可能会使你退出登录。"
     },
     "restrictions": {
+      "capabilities": "{{count}} 项封禁",
       "none": "无",
       "ips": "IP：{{count}}",
       "chats": "聊天：{{count}}",
