@@ -60,6 +60,12 @@ export function Login({ onLogin }: LoginProps) {
           setError(t('login.connectionError'));
           return;
         }
+        // The exchange answers 200 even when the browser drops its cookie (the API on another site, blocked
+        // cookies), and every request after it would answer 401 and land back here with no message.
+        if ((await authApi.getSession()).status === 401) {
+          setError(t('login.sessionNotKept'));
+          return;
+        }
         setApiKey('');
         onLogin({
           role: data.role,

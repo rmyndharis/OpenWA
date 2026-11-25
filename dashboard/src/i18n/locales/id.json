@@ -388,6 +388,7 @@
     "connecting": "Menghubungkan...",
     "invalidKey": "Kunci API tidak valid",
     "connectionError": "Tidak dapat terhubung ke server. Silakan coba lagi.",
+    "sessionNotKept": "Kunci diterima, tetapi browser ini tidak menyimpan cookie sesi. Dasbor dan API harus berada di situs yang sama, atau disajikan dari origin yang sama.",
     "help": "Butuh bantuan?",
     "viewDocs": "Lihat Dokumentasi",
     "footer": "Dibuat dengan ❤️ oleh Yudhi Armyndharis dan Komunitas OpenWA",

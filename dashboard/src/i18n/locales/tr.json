@@ -388,6 +388,7 @@
     "connecting": "Bağlanıyor...",
     "invalidKey": "Geçersiz API anahtarı",
     "connectionError": "Sunucuya bağlanılamadı. Lütfen tekrar deneyin.",
+    "sessionNotKept": "Anahtar kabul edildi, ancak bu tarayıcı oturum çerezini saklamadı. Kontrol paneli ile API aynı sitede olmalı ya da aynı kaynaktan (origin) sunulmalıdır.",
     "help": "Yardıma mı ihtiyacınız var?",
     "viewDocs": "Dokümantasyonu Görüntüle",
     "footer": "Yudhi Armyndharis ve OpenWA Topluluğu tarafından ❤️ ile yapılmıştır",

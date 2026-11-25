@@ -388,6 +388,7 @@
     "connecting": "Connecting...",
     "invalidKey": "Invalid API key",
     "connectionError": "Unable to connect to server. Please try again.",
+    "sessionNotKept": "The key was accepted, but this browser did not keep the session cookie. The dashboard and the API must be on the same site, or served from the same origin.",
     "help": "Need help?",
     "viewDocs": "View Documentation",
     "footer": "Made with ❤️ by Yudhi Armyndharis and the OpenWA Community",

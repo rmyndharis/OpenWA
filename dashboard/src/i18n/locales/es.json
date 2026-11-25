@@ -393,6 +393,7 @@
     "connecting": "Conectando...",
     "invalidKey": "Clave API no válida",
     "connectionError": "No se puede conectar al servidor. Por favor, inténtalo de nuevo.",
+    "sessionNotKept": "La clave es válida, pero este navegador no guardó la cookie de sesión. El panel y la API deben estar en el mismo sitio o servirse desde el mismo origen.",
     "help": "¿Necesitas ayuda?",
     "viewDocs": "Ver documentación",
     "footer": "Hecho con ❤️ por Yudhi Armyndharis y la comunidad OpenWA",

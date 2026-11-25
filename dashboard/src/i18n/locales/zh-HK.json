@@ -388,6 +388,7 @@
     "connecting": "正在連線...",
     "invalidKey": "API 金鑰無效",
     "connectionError": "無法連線到伺服器。請再試一次。",
+    "sessionNotKept": "金鑰已通過驗證，但此瀏覽器沒有保留工作階段 Cookie。控制面板與 API 必須屬於同一網站，或者部署在同一來源（origin）下。",
     "help": "需要協助？",
     "viewDocs": "查看文件",
     "footer": "由 Yudhi Armyndharis 及 OpenWA 社群用 ❤️ 打造",

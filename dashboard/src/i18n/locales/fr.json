@@ -393,6 +393,7 @@
     "connecting": "Connexion...",
     "invalidKey": "Clé API invalide",
     "connectionError": "Impossible de se connecter au serveur. Veuillez réessayer.",
+    "sessionNotKept": "La clé a été acceptée, mais ce navigateur n'a pas conservé le cookie de session. Le tableau de bord et l'API doivent se trouver sur le même site, ou être servis depuis la même origine.",
     "help": "Besoin d'aide ?",
     "viewDocs": "Voir la documentation",
     "footer": "Fait avec ❤️ par Yudhi Armyndharis et la communauté OpenWA",

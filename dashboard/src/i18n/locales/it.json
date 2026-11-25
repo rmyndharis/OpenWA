@@ -393,6 +393,7 @@
     "connecting": "Connessione in corso...",
     "invalidKey": "Chiave API non valida",
     "connectionError": "Impossibile connettersi al server. Riprova.",
+    "sessionNotKept": "La chiave è stata accettata, ma questo browser non ha conservato il cookie di sessione. La dashboard e l'API devono trovarsi sullo stesso sito o essere servite dalla stessa origine.",
     "help": "Serve aiuto?",
     "viewDocs": "Visualizza la documentazione",
     "footer": "Fatto con il ❤️ da Yudhi Armyndharis e dalla Community di OpenWA",

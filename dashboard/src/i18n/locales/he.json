@@ -399,6 +399,7 @@
     "connecting": "מתחבר...",
     "invalidKey": "מפתח API שגוי",
     "connectionError": "לא ניתן להתחבר לשרת. יש לנסות שוב.",
+    "sessionNotKept": "המפתח התקבל, אבל הדפדפן הזה לא שמר את ה-Cookie של ה-Session. הדאשבורד וה-API צריכים להיות באותו אתר, או להיות מוגשים מאותו Origin.",
     "help": "צריך עזרה?",
     "viewDocs": "לצפייה בתיעוד",
     "footer": "נבנה באהבה על ידי Yudhi Armyndharis וקהילת OpenWA",

@@ -388,6 +388,7 @@
     "connecting": "연결하는 중...",
     "invalidKey": "잘못된 API 키입니다",
     "connectionError": "서버에 연결할 수 없습니다. 다시 시도해 주세요.",
+    "sessionNotKept": "키는 확인되었지만 이 브라우저가 세션 쿠키를 저장하지 않았습니다. 대시보드와 API는 같은 사이트에 있거나 같은 출처(origin)에서 제공되어야 합니다.",
     "help": "도움이 필요하신가요?",
     "viewDocs": "문서 보기",
     "footer": "Yudhi Armyndharis와 OpenWA 커뮤니티가 ❤️로 만들었습니다",

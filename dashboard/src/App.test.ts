@@ -132,9 +132,11 @@ test('a startup validation that lands after a sign-in with another key is ignore
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const method = init?.method ?? 'GET';
     if (url.endsWith('/api/auth/session')) {
-      if (method === 'GET') return new Promise<Response>(resolve => (answerStale = resolve));
+      const newViewer = jsonResponse({ valid: true, role: 'viewer', apiKeyId: 'key-new-viewer' });
+      // Only the startup validation is held; the sign-in's own check of the new cookie answers at once.
+      if (method === 'GET' && !answerStale) return new Promise<Response>(resolve => (answerStale = resolve));
       if (method === 'DELETE') return Promise.resolve(jsonResponse({ ok: true }));
-      return Promise.resolve(jsonResponse({ valid: true, role: 'viewer', apiKeyId: 'key-new-viewer' }));
+      return Promise.resolve(newViewer);
     }
     return previous(input, init);
   }) as typeof fetch;

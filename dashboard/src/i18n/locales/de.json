@@ -388,6 +388,7 @@
     "connecting": "Verbindung wird hergestellt...",
     "invalidKey": "Ungültiger API-Schlüssel",
     "connectionError": "Verbindung zum Server nicht möglich. Bitte versuche es erneut.",
+    "sessionNotKept": "Der Schlüssel wurde akzeptiert, aber dieser Browser hat das Sitzungs-Cookie nicht gespeichert. Dashboard und API müssen auf derselben Website liegen oder vom selben Origin ausgeliefert werden.",
     "help": "Brauchst du Hilfe?",
     "viewDocs": "Dokumentation ansehen",
     "footer": "Mit ❤️ erstellt von Yudhi Armyndharis und der OpenWA-Community",

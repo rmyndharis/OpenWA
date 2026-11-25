@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - whatsapp-web.js: `GET /api/sessions/{sessionId}/messages/{chatId}/history` answers `503` when the page dies mid-read, where it returned the messages read so far as a complete list.
 - Infrastructure: keep a storage or session data path already in effect outside `./data` (such as the `./uploads` v0.2.0 to v0.7.3 saved) instead of answering `400` to every configuration save; only a changed path must be inside `./data`.
 - Baileys: inbound media whose download address has expired (404 or 410 from the media host) is requested again from the sender and downloaded, instead of always arriving as the omitted marker.
+- Dashboard: say so on the login form when the browser does not keep the session cookie (API on another site, blocked cookies), instead of returning to the form with no message.
 - Plugins: reject a `ctx` call still in flight when its webhook dispatch times out instead of leaving it unanswered, which held every later capability call of the plugin after 64 such timeouts.
 - Webhooks: the settled outbox prune runs again a minute after a pass that hit its 100,000-row cap, so an installation settling more rows a day no longer grows `webhook_outbox_events` without bound.
 - Database: on SQLite, a failed audit log, API key, dashboard session or ingress dead-letter insert no longer rolls back writes other requests made on the shared connection while it was open.
