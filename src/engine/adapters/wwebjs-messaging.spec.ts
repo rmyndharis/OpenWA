@@ -1,6 +1,7 @@
 import { RESOLVED_SEND_IDS_MAX, WwebjsMessaging } from './wwebjs-messaging';
 import { createLogger } from '../../common/services/logger.service';
 import type { WwebjsEngineHost } from './wwebjs-host';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 
 const logger = createLogger('wwebjs-messaging.spec');
 
@@ -56,7 +57,7 @@ describe('WwebjsMessaging resolvedSendIds LRU cap', () => {
   });
 });
 
-describe('WwebjsMessaging bare message ID parity and history transport breaks', () => {
+describe('WwebjsMessaging bare message ID parity and history page death', () => {
   const bareIdMsg = () => ({
     id: { _serialized: 'false_628111@c.us_BARE1', id: 'BARE1' },
     reply: jest.fn().mockResolvedValue({ id: { _serialized: 'SENT-REPLY' }, timestamp: 1_700_000_000 }),
@@ -109,39 +110,55 @@ describe('WwebjsMessaging bare message ID parity and history transport breaks', 
     await expect(messaging.getMessageReactions('628111@c.us', 'BARE1')).resolves.toEqual([]);
   });
 
-  it('breaks out of getChatHistory pagination loop and reports transport death on page error', async () => {
-    const getContact1 = jest.fn();
-    const getContact2 = jest.fn();
-    const chat = {
+  // Each message of a history page costs up to three more page calls: its sender, its quoted message and its
+  // media. Three messages from different senders, and the second one's call fails, so what was read before the
+  // failure and what is asked after it are both observable.
+  const historyPage = () => {
+    const historyMsg = (n: number) => ({
+      id: { _serialized: `M${n}` },
+      from: `62811${n}@c.us`,
+      to: '628999@c.us',
+      type: 'chat',
+      body: `body ${n}`,
+      timestamp: 1_700_000_000 + n,
+      hasMedia: true,
+      hasQuotedMsg: true,
+      getContact: jest.fn().mockResolvedValue(undefined),
+      getQuotedMessage: jest.fn().mockResolvedValue({ id: { _serialized: `Q${n}` }, type: 'chat', body: 'quoted' }),
+    });
+    const [m1, m2, m3] = [historyMsg(1), historyMsg(2), historyMsg(3)];
+    const setup = makeMsgHost({
       id: { _serialized: '628111@c.us' },
-      fetchMessages: jest.fn().mockResolvedValue([
-        {
-          id: { _serialized: 'M1' },
-          from: '628111@c.us',
-          to: '628999@c.us',
-          type: 'chat',
-          body: 'one',
-          timestamp: 1_700_000_001,
-          getContact: getContact1,
-        },
-        {
-          id: { _serialized: 'M2' },
-          from: '628111@c.us',
-          to: '628999@c.us',
-          type: 'chat',
-          body: 'two',
-          timestamp: 1_700_000_002,
-          getContact: getContact2,
-        },
-      ]),
+      fetchMessages: jest.fn().mockResolvedValue([m1, m2, m3]),
+    });
+    const failSecond = (site: 'sender' | 'quoted message' | 'media', error: unknown) => {
+      if (site === 'sender') m2.getContact.mockRejectedValue(error);
+      else if (site === 'quoted message') m2.getQuotedMessage.mockRejectedValue(error);
+      else (setup.host.capInboundMediaFor as jest.Mock).mockResolvedValueOnce(undefined).mockRejectedValueOnce(error);
     };
-    const { messaging, reportIfPageTransportError, transportErr } = makeMsgHost(chat);
-    getContact1.mockRejectedValue(transportErr);
+    return { ...setup, m3, failSecond };
+  };
+  const SITES = ['sender', 'quoted message', 'media'] as const;
 
-    const rows = await messaging.getChatHistory('628111@c.us', 10);
+  it.each(SITES)(
+    'answers a page that dies reading the %s of a message with the 503, not the messages read before it',
+    async site => {
+      const { messaging, reportIfPageTransportError, transportErr, m3, failSecond } = historyPage();
+      failSecond(site, transportErr);
 
-    expect(reportIfPageTransportError).toHaveBeenCalledWith(transportErr, 'getChatHistory');
-    expect(getContact2).not.toHaveBeenCalled();
-    expect(rows).toEqual([]);
+      await expect(messaging.getChatHistory('628111@c.us', 10, true)).rejects.toThrow(EngineTransportError);
+      expect(reportIfPageTransportError).toHaveBeenCalledWith(transportErr, 'getChatHistory');
+      expect(m3.getContact).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(SITES)('still lists every message when reading the %s of one fails for another reason', async site => {
+    const { messaging, reportIfPageTransportError, failSecond } = historyPage();
+    failSecond(site, new Error('Evaluation failed: lookup refused'));
+
+    const rows = await messaging.getChatHistory('628111@c.us', 10, true);
+
+    expect(rows.map(row => row.id)).toEqual(['M1', 'M2', 'M3']);
+    expect(reportIfPageTransportError).not.toHaveBeenCalled();
   });
 });

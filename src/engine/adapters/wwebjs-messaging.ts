@@ -18,6 +18,7 @@ import { MessageWithReactions, SerializedWid, readWid } from '../types/whatsapp-
 import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import {
   SERIALIZED_MESSAGE_ID,
@@ -1332,7 +1333,7 @@ export class WwebjsMessaging {
         } catch (error) {
           if (this.host.isPageTransportError(error)) {
             this.host.reportIfPageTransportError(error, 'getChatHistory');
-            break;
+            throw new EngineTransportError('Transport died during getChatHistory');
           }
           this.host.logger.warn(
             `Failed to resolve contact for history message ${msg.id._serialized}: ${String(error)}`,
@@ -1364,7 +1365,7 @@ export class WwebjsMessaging {
         } catch (error) {
           if (this.host.isPageTransportError(error)) {
             this.host.reportIfPageTransportError(error, 'getChatHistory');
-            break;
+            throw new EngineTransportError('Transport died during getChatHistory');
           }
           this.host.logger.warn(`Failed to resolve quoted message for ${msg.id._serialized}: ${String(error)}`);
         }
@@ -1387,7 +1388,7 @@ export class WwebjsMessaging {
           } catch (error) {
             if (this.host.isPageTransportError(error)) {
               this.host.reportIfPageTransportError(error, 'getChatHistory');
-              break;
+              throw new EngineTransportError('Transport died during getChatHistory');
             }
             this.host.logger.warn(`Failed to download media for ${msg.id._serialized}: ${String(error)}`);
           }
