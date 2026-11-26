@@ -1186,6 +1186,10 @@ adapter boundary — none silently stubs.
   sends the edit or pin as an ordinary protocol message and is never told the outcome. So a pin
   refused because the account is not a group admin answers `403` on whatsapp-web.js and `200` on
   Baileys.
+- **`starMessage` refusals (wwjs).** whatsapp-web.js's `Message.star()` and `unstar()` resolve with
+  nothing, and do nothing when WhatsApp Web will not star the message (`canStarMsg()`), so the call
+  resolves without effect and the route answers `200` with `{ success: true }`: a refused star cannot be
+  told from an accepted one.
 - **Inbound edits and reactions (baileys).** WhatsApp sends a contact's edit, and a reaction in some
   chats, encrypted under the secret of the message it changes, which the library does not decrypt. The
   adapter reads them with the stored copy of that message (the session's message store, bounded by

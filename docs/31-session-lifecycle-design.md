@@ -121,12 +121,11 @@ takeover adoption whose launch fails, say) releases its claim and then writes DI
 row that no node holds and that still has an active status: a row no node holds is revisited by
 neither `markLapsedDisconnected` nor the adoption sweep, so the READY a vanished node left on it would
 otherwise stand until a boot, and any claim since sets `nodeId`, so a row B claimed matches nothing.
-The writes an engine's own reports make are not among the five: the row write of `handleEngineReady`, the DISCONNECTED
-of `handleEngineDisconnected` and the INITIALIZING of `initializeEngine` go by id, so an engine that still runs on a
-node whose lease lapsed can write onto the row of the node that adopted the session until the heartbeat's teardown
-reaches it, within one interval; a stale READY or INITIALIZING is reset by the boot reset and the correction of a
-lapsed claim, but a wrong DISCONNECTED is not, and stays until the adopter's engine next reports a state or its node
-restarts.
+The writes an engine's own reports make are not among the five, and they are fenced more tightly: the row write of
+`handleEngineReady`, the DISCONNECTED of `handleEngineDisconnected` and the INITIALIZING of `initializeEngine` match
+only a row whose `nodeId` is this node's (`ownedRowWhere`, and the `ownerNodeId` fence of `updateStatus`). An engine
+that still runs on a node whose lease lapsed therefore changes nothing on the row of the node that adopted the session,
+and a write that matched no row announces nothing; the heartbeat's teardown ends that engine within one interval.
 Four writes change the binding of a session: the unlink's clear, the number and push name a READY links, the
 push name an engine syncs after it, and the clear of a logout. The first three are not awaited by their issuer;
 the logout awaits its own. They are issued one after another per session, so the database receives them in the

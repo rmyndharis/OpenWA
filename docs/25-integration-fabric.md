@@ -280,9 +280,11 @@ Four tables live on the data connection, each created by a hand-authored dual-di
 Persist-before-acknowledge; best-effort de-duplication keyed by a stable provider delivery id and queue
 job id; per-instance fairness via a token bucket; and a dead-letter record with bounded redrive. On the
 queued worker path, an **in-process** per-conversation lock prevents concurrent starts for the same lane;
-strict FIFO is not preserved across retry/redrive, and the lock is single-node state rather than Redis or
-PostgreSQL state. When the queue is disabled, ingress dispatches inline after persisting and does not
-serialize concurrent same-conversation deliveries. A queued delivery falls back to the same inline
+strict FIFO is not preserved across retry/redrive, nor on a busy key: a delivery whose key is already
+running goes back to the delayed set for 250 ms, so another delivery for that key arriving in between can
+run first. The lock is single-node state rather than Redis or PostgreSQL state. When the queue is
+disabled, ingress dispatches inline after persisting and does not serialize concurrent same-conversation
+deliveries. A queued delivery falls back to the same inline
 dispatch when Redis is unreachable. Before Redis has ever connected, queue calls wait for it at most
 `REDIS_CONNECT_TIMEOUT_MS` (5s when unset or 0) from the first one, then fall back at once until it
 connects. Providers already deliver over unordered, at-least-once HTTP, so plugin handlers must be

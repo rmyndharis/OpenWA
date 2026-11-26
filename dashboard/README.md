@@ -94,6 +94,13 @@ VITE_API_URL=http://localhost:2785
 VITE_WS_URL=http://localhost:2785
 ```
 
+Sign-in trades the API key for an `HttpOnly; SameSite=Strict` session cookie that the API sets on its
+own host, and every request and the WebSocket handshake ride on that cookie. Serve the dashboard from the
+same site as the API (same registrable domain; another subdomain or port is fine), since the browser
+does not keep that cookie across sites, and list its origin explicitly in the API's `CORS_ORIGINS`
+(`*` never admits cookie requests); see
+[docs/17](../docs/17-dashboard-design.md#178-build--deployment) for what the API checks.
+
 ## 📄 License
 
 MIT License - Part of the [OpenWA](https://github.com/rmyndharis/OpenWA) project.

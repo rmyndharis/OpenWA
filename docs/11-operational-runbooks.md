@@ -847,7 +847,7 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 > docker exec -e BACKUP_DIR=/app/data/backups -e TMPDIR=/app/data/backups openwa-api ./scripts/backup.sh
 > docker cp openwa-api:/app/data/backups/. ./backups/ \
 >   && docker exec openwa-api sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'   # do not let archives pile up on the volume
-> # Helm: kubectl exec <pod> -- env BACKUP_DIR=/app/data/backups ./scripts/backup.sh
+> # Helm: kubectl exec <pod> -- env BACKUP_DIR=/app/data/backups TMPDIR=/app/data/backups ./scripts/backup.sh
 > #       kubectl cp <pod>:/app/data/backups ./backups \
 > #         && kubectl exec <pod> -- sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'
 > ```
@@ -856,8 +856,9 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 > `/tmp` as a tmpfs charged to the container's memory limit, so the compose line points `TMPDIR` at
 > the data volume, which then needs free space for about the size of the data plus the archive;
 > staging in the tmpfs gets the running gateway OOM-killed. The Helm chart's `/tmp` is an `emptyDir`
-> on node disk, so the Helm lines leave it alone. A run killed outright, such as by a container
-> restart mid-backup, leaves its `tmp.*` staging directory behind in `TMPDIR`; delete it.
+> capped at `tmpVolumeSizeLimit` (`512Mi` by default), and the kubelet evicts the pod once it outgrows
+> that, so the Helm line points `TMPDIR` at the data volume too. A run killed outright, such as by a
+> container restart mid-backup, leaves its `tmp.*` staging directory behind in `TMPDIR`; delete it.
 >
 > The scripts resolve every other path the way the application does: an explicit environment value
 > first, then `./.env`, then `<data dir>/.env.generated`. Settings made through Dashboard >

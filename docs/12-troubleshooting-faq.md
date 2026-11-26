@@ -1291,12 +1291,11 @@ lsof ./data/openwa.sqlite
 # scripts/backup.sh
 docker exec <container> ps aux
 
-# Check WAL mode
+# Check the journal mode
 sqlite3 ./data/openwa.sqlite "PRAGMA journal_mode;"
-# Default is: delete (rollback journal) — OpenWA does not force WAL
-
-# Optionally enable WAL mode to reduce writer/reader lock contention
-sqlite3 ./data/openwa.sqlite "PRAGMA journal_mode=WAL;"
+# Default is: wal. OpenWA sets it on every open, so readers do not wait on a writer; it answers delete
+# only with SQLITE_JOURNAL_MODE=DELETE (the opt-out for network filesystems), or when the filesystem
+# cannot hold WAL (the boot log then warns with the mode in effect)
 ```
 
 There is no `DATABASE_SQLITE_BUSY_TIMEOUT`-style env knob — both SQLite connections wait a
@@ -1315,7 +1314,7 @@ flowchart TD
     D -->|Yes| C
     D -->|No| E[Optimize SQLite]
 
-    E --> E1[Enable WAL mode]
+    E --> E1[Keep the default WAL mode]
 ```
 
 ### Issue: Database Migration Failed

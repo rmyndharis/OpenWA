@@ -148,11 +148,11 @@ export function webhookWorkerConcurrency(): number {
 const DEFAULT_INGRESS_WORKER_CONCURRENCY = 10;
 
 /**
- * Ingress Worker concurrency. Ordering within a conversation is guaranteed per ordering key in
- * IngressProcessor, not by a single-worker queue, so raising concurrency here parallelizes
- * unrelated conversations. When a BullMQ job arrives for a key already running in this worker,
- * IngressProcessor defers it back to the delayed set via DelayedError rather than holding a worker
- * slot, so a burst on one slow key no longer head-of-line-blocks unrelated keys; KeyedAsyncLock
+ * Ingress Worker concurrency. IngressProcessor keeps two deliveries of one ordering key from running
+ * at once (their order is best-effort, see there), not a single-worker queue, so raising concurrency
+ * here parallelizes unrelated conversations. When a BullMQ job arrives for a key already running in
+ * this worker, IngressProcessor defers it back to the delayed set via DelayedError rather than
+ * holding a worker slot, so a burst on one slow key no longer head-of-line-blocks unrelated keys; KeyedAsyncLock
  * remains as the in-process fallback for direct or token-less callers. Size this value to the
  * number of distinct conversations you want executing concurrently; the key is the whole instance
  * unless the route declares a conversationId pointer. Override via INGRESS_WORKER_CONCURRENCY;

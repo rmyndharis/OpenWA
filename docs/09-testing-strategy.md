@@ -53,7 +53,7 @@ npm --prefix dashboard run test:unit
 | `cd dashboard && npm run lint`                                   | Run dashboard ESLint                                                                                         |
 | `cd dashboard && npm run typecheck`                              | Type-check dashboard test files                                                                              |
 | `cd dashboard && npm run test:unit`                              | Run dashboard pure utility/unit tests                                                                        |
-| `cd dashboard && npm run test:cov`                               | Measure dashboard unit-test coverage (on demand, no enforced floor)                                          |
+| `cd dashboard && npm run test:cov`                               | Run dashboard unit tests with coverage floors (82% lines, 88% branches, 86% functions)                       |
 | `cd dashboard && npm run i18n:check`                             | Verify dashboard locale key parity                                                                           |
 | `cd dashboard && npm run build`                                  | Type-check and build the dashboard                                                                           |
 | `cd sdk/javascript && npm test && npm run typecheck`             | Type-check and unit-test the JavaScript SDK                                                                  |
@@ -246,8 +246,9 @@ The stricter scoped gates protect security-sensitive code and high-risk boundary
 security, engine-adapter, or integration-fabric behavior, add focused regression tests instead of relying
 on broad integration coverage.
 
-The dashboard is outside these floors. `npm --prefix dashboard run test:cov` measures its coverage on
-demand (Node's built-in coverage, test files and `src/test-helpers/` excluded); no CI floor is enforced.
+The dashboard is outside these Jest floors and has its own. `npm --prefix dashboard run test:cov`
+measures its coverage with Node's built-in coverage (test files, `src/test-helpers/` and assets
+excluded) and fails below 82% lines, 88% branches and 86% functions; the `dashboard` CI job runs it.
 
 ## 9.6 CI Checks
 
