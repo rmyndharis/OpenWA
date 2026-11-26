@@ -202,6 +202,23 @@ export function isWhatsAppMediaSource(
   }
 }
 
+/**
+ * Re-upload requests one socket may leave unanswered. rc14 waits for the phone's answer with no timeout and
+ * keeps two listeners on the socket's emitter until it comes or the connection closes; Node warns at eleven.
+ */
+const MAX_UNANSWERED_REUPLOADS = 5;
+
+/**
+ * Whether a media fetch failed because its address expired: the host answers 404 or 410 and the
+ * sender's phone has to upload the file again. rc14's downloadMediaMessage retries only an error with
+ * a numeric `status`, but its own fetch throws a Boom that keeps the status in `output.statusCode`.
+ */
+function isExpiredMediaAddress(error: unknown): boolean {
+  const e = error as { status?: unknown; output?: { statusCode?: unknown } } | null | undefined;
+  const status = typeof e?.status === 'number' ? e.status : e?.output?.statusCode;
+  return status === 404 || status === 410;
+}
+
 const BAILEYS_MEDIA_TYPES = new Set([
   'imageMessage',
   'videoMessage',
@@ -381,6 +398,7 @@ interface CallRejection {
 }
 
 export class BaileysEvents {
+  private readonly unansweredReuploads = new WeakMap<object, number>();
   /** How long a received call's handle stays rejectable. Calls ring for roughly a minute, so
    *  two minutes covers the ringing window with margin without pinning dead calls for long. */
   private static readonly LIVE_CALL_TTL_MS = 2 * 60_000;
@@ -2806,8 +2824,8 @@ export class BaileysEvents {
    * running total exceeds `maxBytes`. On that abort it resolves `{ overflowBytes }`, the bytes received
    * when the cap tripped; past the wall-clock deadline it resolves null. Uses
    * `downloadMediaMessage(..., 'stream')` (not the raw `downloadContentFromMessage`) so the library's
-   * expired-media re-upload retry is kept; for under-cap media the concatenated buffer is byte-identical
-   * to the 'buffer' mode it replaces.
+   * re-upload hook stays wired, and retries an expired address itself when the library does not; for
+   * under-cap media the concatenated buffer is byte-identical to the 'buffer' mode it replaces.
    */
   private async downloadInboundMediaCapped(
     msg: WAMessage,
@@ -2852,35 +2870,52 @@ export class BaileysEvents {
       // from the nested `options`; a top-level one is ignored. Read after the socket: once the session
       // is torn down getSocket() throws, and a dispatcher built then would never be closed.
       const dispatcher = this.host.getFetchDispatcher();
-      try {
-        stream = (await b.downloadMediaMessage(
-          msg,
+      const requestReupload = async (m: WAMessage): Promise<WAMessage> => {
+        if (abort.signal.aborted) {
+          throw abortReason();
+        }
+        let onAbort: (() => void) | undefined;
+        const unanswered = this.unansweredReuploads.get(sock) ?? 0;
+        if (unanswered >= MAX_UNANSWERED_REUPLOADS) {
+          throw new Error('Too many media re-uploads are unanswered on this connection; not asking again');
+        }
+        this.unansweredReuploads.set(sock, unanswered + 1);
+        const reupload = (async () => sock.updateMediaMessage(m))();
+        // Counted until the library gives the request up, whenever that is. Handled here, so a late rejection
+        // after abort never goes unhandled.
+        const answered = (): void => {
+          this.unansweredReuploads.set(sock, (this.unansweredReuploads.get(sock) ?? 1) - 1);
+        };
+        void reupload.then(answered, answered);
+        const updated = await new Promise<WAMessage>((resolve, reject) => {
+          onAbort = () => reject(abortReason());
+          abort.signal.addEventListener('abort', onAbort, { once: true });
+          reupload.then(resolve, reject);
+        }).finally(() => {
+          if (onAbort) abort.signal.removeEventListener('abort', onAbort);
+        });
+        if (abort.signal.aborted) {
+          throw abortReason();
+        }
+        return assertWhatsAppSource(updated);
+      };
+      // One request per download, whether Baileys makes it or the expired-address retry below does.
+      let reuploaded: Promise<WAMessage> | undefined;
+      const reuploadRequest = (m: WAMessage): Promise<WAMessage> => (reuploaded ??= requestReupload(m));
+      const fetchStream = async (m: WAMessage) =>
+        (await b.downloadMediaMessage(
+          m,
           'stream',
           { options: { ...(dispatcher ? { dispatcher } : {}), signal: abort.signal } },
-          {
-            logger: createSilentLogger(),
-            reuploadRequest: async m => {
-              if (abort.signal.aborted) {
-                throw abortReason();
-              }
-              let onAbort: (() => void) | undefined;
-              const reupload = Promise.resolve(sock.updateMediaMessage(m));
-              // Attach a no-op rejection handler so a late rejection after abort never goes unhandled.
-              reupload.catch(() => undefined);
-              const updated = await new Promise<WAMessage>((resolve, reject) => {
-                onAbort = () => reject(abortReason());
-                abort.signal.addEventListener('abort', onAbort, { once: true });
-                reupload.then(resolve, reject);
-              }).finally(() => {
-                if (onAbort) abort.signal.removeEventListener('abort', onAbort);
-              });
-              if (abort.signal.aborted) {
-                throw abortReason();
-              }
-              return assertWhatsAppSource(updated);
-            },
-          },
+          { logger: createSilentLogger(), reuploadRequest },
         )) as AsyncIterable<Buffer> & { destroy?: () => void };
+      try {
+        // Baileys does not retry its own expired-address failure (see isExpiredMediaAddress): ask the
+        // sender's phone for a new upload and fetch that once.
+        stream = await fetchStream(msg).catch(async (error: unknown) => {
+          if (reuploaded || !isExpiredMediaAddress(error)) throw error;
+          return fetchStream(await reuploadRequest(msg));
+        });
         if (timedOut || abort.signal.aborted) {
           stream.destroy?.();
           return Buffer.alloc(0);

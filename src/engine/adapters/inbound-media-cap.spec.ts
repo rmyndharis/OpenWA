@@ -1,3 +1,4 @@
+import { Boom } from '@hapi/boom';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { createLogger } from '../../common/services/logger.service';
@@ -415,9 +416,9 @@ describe('process-wide inbound media gate (INBOUND_MEDIA_GLOBAL_CONCURRENCY)', (
       messageTimestamp: 1_700_000_000,
       message: { imageMessage: { mimetype: 'image/png', fileLength: 64 } },
     });
-    const build = (downloadMediaMessage: jest.Mock): BaileysEvents =>
+    const build = (downloadMediaMessage: jest.Mock, updateMediaMessage = jest.fn()): BaileysEvents =>
       new BaileysEvents({
-        getSocket: () => ({ updateMediaMessage: jest.fn() }) as unknown as WASocket,
+        getSocket: () => ({ updateMediaMessage }) as unknown as WASocket,
         getSocketOrNull: () => null,
         logger: { ...createLogger('InboundMediaGateSpec'), warn: () => undefined },
         loadLib: () =>
@@ -488,6 +489,37 @@ describe('process-wide inbound media gate (INBOUND_MEDIA_GLOBAL_CONCURRENCY)', (
 
       expect((await pendingB).media).toEqual(expect.objectContaining({ data: Buffer.from('ok').toString('base64') }));
       expect(stuck).toHaveBeenCalledTimes(1);
+    });
+
+    it('frees the slot at the deadline while an expired-media upload request waits, and never fetches its answer', async () => {
+      process.env.INBOUND_MEDIA_GLOBAL_CONCURRENCY = '1';
+      process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '50';
+      jest.useFakeTimers();
+      const expired = jest.fn().mockRejectedValue(new Boom('Failed to fetch stream', { statusCode: 410 }));
+      const answer = defer<WAMessage>();
+      const updateMediaMessage = jest.fn(() => answer.promise);
+      const stream: Stream = {
+        // eslint-disable-next-line @typescript-eslint/require-await
+        async *[Symbol.asyncIterator]() {
+          yield Buffer.from('ok');
+        },
+        destroy: jest.fn(),
+      };
+      const downloadB = jest.fn().mockResolvedValue(stream);
+
+      const pendingA = build(expired, updateMediaMessage).mapMessage(imageMessage('A3'), 'imageMessage');
+      await jest.advanceTimersByTimeAsync(60);
+      expect((await pendingA).media).toEqual(expect.objectContaining({ omitted: true, sizeBytes: 64 }));
+      expect(updateMediaMessage).toHaveBeenCalledTimes(1);
+
+      const pendingB = build(downloadB).mapMessage(imageMessage('B3'), 'imageMessage');
+      await jest.advanceTimersByTimeAsync(60);
+      expect((await pendingB).media).toEqual(expect.objectContaining({ data: Buffer.from('ok').toString('base64') }));
+
+      // The phone answers after the deadline: the abandoned download must not fetch the new copy.
+      answer.resolve(imageMessage('A3'));
+      await jest.advanceTimersByTimeAsync(0);
+      expect(expired).toHaveBeenCalledTimes(1);
     });
 
     it('downloads immediately when the gate is off', async () => {

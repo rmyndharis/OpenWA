@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Infrastructure: keep a storage or session data path already in effect outside `./data` (such as the `./uploads` v0.2.0 to v0.7.3 saved) instead of answering `400` to every configuration save; only a changed path must be inside `./data`.
+- Baileys: inbound media whose download address has expired (404 or 410 from the media host) is requested again from the sender and downloaded, instead of always arriving as the omitted marker.
 - Plugins: reject a `ctx` call still in flight when its webhook dispatch times out instead of leaving it unanswered, which held every later capability call of the plugin after 64 such timeouts.
 - Baileys: confirm a contact's LID with WhatsApp after an API send to its phone number, so the sent message shows in the chat listed under that `@lid` without waiting for the contact to reply. Thanks @juanbracamonte for the report.
 - Messages: store a send to a number WhatsApp holds under other digits (a Brazilian ninth digit) under the number WhatsApp resolved, not under the `chatId` of the request, so it shows in the same chat as the contact's replies; on whatsapp-web.js only when the number lookup answers a phone number, not the contact's LID.
