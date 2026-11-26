@@ -16,7 +16,9 @@ describe('DTO numeric fields with positive minimums reject boolean and blank inp
     ['ProductQueryDto.page', ProductQueryDto, 'page'],
     ['ProductQueryDto.limit', ProductQueryDto, 'limit'],
   ] as const)('%s rejects boolean true instead of coercing it to 1', async (_label, cls, prop) => {
-    const instance = plainToInstance(cls, { [prop]: true }, PIPE_TRANSFORM_OPTS);
+    // Typed as one class of plain objects: with the union of the rows, which overload applies depended on
+    // the order the checker visited the files, and an incremental run could reject this line.
+    const instance: object = plainToInstance(cls as new () => object, { [prop]: true }, PIPE_TRANSFORM_OPTS);
     const errors = await validate(instance, PIPE_VALIDATOR_OPTS);
     const propErrors = errors.filter(e => e.property === prop);
 
