@@ -8811,7 +8811,27 @@
             }
           },
           "409": {
-            "description": "Refused with code IMPORT_ALREADY_RUNNING: a data import is running; export after it finishes.",
+            "description": "Refused, with the reason in `code`. IMPORT_ALREADY_RUNNING: a data import is running; export after it finishes. EXPORT_IN_PROGRESS: another export is still being downloaded; one runs at a time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Refused with code EXPORT_TIMED_OUT: the export had not sent its first byte 60 minutes after the request. Back the database up with scripts/backup.sh instead. Refused with code EXPORT_STOPPED: the gateway stopped before the export sent its first byte, ending and removing a copy of the database written for it; export again once it is back.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Refused with code EXPORT_NO_ROOM_FOR_SNAPSHOT before anything was read: a SQLite database that is not in WAL mode is exported from a copy written beside it, and the volume has no room for one that leaves a tenth of the database, at least 256 MiB, free for the database to go on writing. The message names the bytes the copy needs, that headroom and the bytes free.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8885,6 +8905,16 @@
           },
           "409": {
             "description": "Refused, with the reason in `code`. IMPORT_ALREADY_RUNNING: another import is running — wait for it. EXPORT_IN_PROGRESS: a data export is running; wait for it. IMPORT_NESTED_TRANSACTION: another database transaction holds this connection, so a restore could not be made durable — retry with nothing else in flight. IMPORT_WOULD_ORPHAN_ENGINES: sessions the backup would remove are running, starting or waiting to relaunch here — retry with stopOrphans=true to stop them in-request, or force=true to proceed and restart after. Only the last of these is retryable with stopOrphans; the others leave nothing to decide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body refused before it was parsed. Above `BODY_SIZE_LIMIT` or half the in-flight body budget: raise the limit. With code IMPORT_TOO_LARGE: the body is within the limit, but this process has no memory to restore it. The body is decoded to one string and parsed whole, which takes about 2.2 bytes of heap per byte of a backup all in ASCII, so before the body is read one above the free heap divided by 2.5, or above 536870888 bytes, is refused. A body with any character outside ASCII decodes to two bytes a character, so once read it is refused above the free heap divided by 4. The message names both figures; nothing was written. A caller without an admin key that no session or chat restriction limits (the only kind the route accepts) is refused above 26214400 bytes whatever the memory, and is not told the figures. A body without Content-Length counts as BODY_SIZE_LIMIT long; when that is above the limit, the message says the length is needed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -26834,7 +26864,7 @@
           },
           "code": {
             "type": "string",
-            "description": "A stable machine-readable reason, on some errors only: SESSION_NAME_TEARDOWN_PENDING (409), SESSION_STOP_INCOMPLETE, SESSION_LOGOUT_INCOMPLETE and SESSION_FORCE_KILL_INCOMPLETE (502), SEND_PACING_LIMITED (429), ENGINE_PAGE_ERROR (500, whatsapp-web.js: WhatsApp Web threw inside the page during a send or status post), ENGINE_PAGE_RELOADING (409, whatsapp-web.js: WhatsApp Web is reloading its page; the request is safe to repeat, except that a repeated channel delete or unsubscription that the first attempt had already applied answers 403), IMPORT_ALREADY_RUNNING, EXPORT_IN_PROGRESS, IMPORT_WOULD_ORPHAN_ENGINES, IMPORT_NESTED_TRANSACTION, RESTART_DATABASE_NOT_STARTED and RESTART_ALREADY_RUNNING (409), IDEMPOTENCY_KEY_INVALID (400), IDEMPOTENCY_KEY_REUSED (422), IDEMPOTENCY_KEY_IN_PROGRESS and IDEMPOTENCY_OUTCOME_UNKNOWN (409), POLL_OPTION_NOT_FOUND (400, whatsapp-web.js vote-poll)."
+            "description": "A stable machine-readable reason, on some errors only: SESSION_NAME_TEARDOWN_PENDING (409), SESSION_STOP_INCOMPLETE, SESSION_LOGOUT_INCOMPLETE and SESSION_FORCE_KILL_INCOMPLETE (502), SEND_PACING_LIMITED (429), ENGINE_PAGE_ERROR (500, whatsapp-web.js: WhatsApp Web threw inside the page during a send or status post), ENGINE_PAGE_RELOADING (409, whatsapp-web.js: WhatsApp Web is reloading its page; the request is safe to repeat, except that a repeated channel delete or unsubscription that the first attempt had already applied answers 403), IMPORT_ALREADY_RUNNING, EXPORT_IN_PROGRESS, IMPORT_WOULD_ORPHAN_ENGINES, IMPORT_NESTED_TRANSACTION, RESTART_DATABASE_NOT_STARTED and RESTART_ALREADY_RUNNING (409), IMPORT_TOO_LARGE (413), EXPORT_TIMED_OUT and EXPORT_STOPPED (503), EXPORT_NO_ROOM_FOR_SNAPSHOT (507), IDEMPOTENCY_KEY_INVALID (400), IDEMPOTENCY_KEY_REUSED (422), IDEMPOTENCY_KEY_IN_PROGRESS and IDEMPOTENCY_OUTCOME_UNKNOWN (409), POLL_OPTION_NOT_FOUND (400, whatsapp-web.js vote-poll)."
           },
           "retryAfterSeconds": {
             "type": "integer",

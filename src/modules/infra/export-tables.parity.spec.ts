@@ -4,6 +4,7 @@ import { DataSource, getMetadataArgsStorage } from 'typeorm';
 import { EXPORT_TABLES, EXPORT_TABLE_EXCLUSIONS } from './export-tables';
 import { TABLE_IMPORTERS } from './table-importers';
 import { InfraDataService } from './infra-data.service';
+import { readExport } from '../../../test/helpers/read-export';
 
 /**
  * The backup parity guard. The export registry is the one place the table set may be decided, and
@@ -205,7 +206,7 @@ describe('InfraDataService.exportData validates the registry against live entity
         .filter(table => table !== 'messages')
         .map(tableName => ({ tableName })),
     };
-    await expect(build(ds).exportData()).rejects.toThrow(/entity metadata does not know it/);
+    await expect(readExport(build(ds).exportData())).rejects.toThrow(/entity metadata does not know it/);
     expect(query).not.toHaveBeenCalled(); // refused BEFORE a single table was read
   });
 
@@ -215,7 +216,7 @@ describe('InfraDataService.exportData validates the registry against live entity
       query,
       entityMetadatas: [...registryTables(), 'shiny_new_table'].map(tableName => ({ tableName })),
     };
-    await expect(build(ds).exportData()).rejects.toThrow(/no backup decision/);
+    await expect(readExport(build(ds).exportData())).rejects.toThrow(/no backup decision/);
     expect(query).not.toHaveBeenCalled();
   });
 });

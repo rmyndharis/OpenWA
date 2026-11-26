@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes (behavior changes)
 
+- `GET /api/infra/export-data` runs one export at a time (a second answers `409` `EXPORT_IN_PROGRESS`) and ends a download that has not finished after 60 minutes.
+- On SQLite with `SQLITE_JOURNAL_MODE=DELETE`, `GET /api/infra/export-data` reads from a copy of the database written beside it and needs as much free space as the database plus a tenth of it, at least 256 MiB (`507` `EXPORT_NO_ROOM_FOR_SNAPSHOT` otherwise); a stop while the copy is written removes it and answers `503` `EXPORT_STOPPED`.
+- `POST /api/infra/import-data` refuses a backup above `25mb` that is larger than the free heap divided by 2.5 (about 411 MB on a 1 GiB heap), or by 4 when it holds any character outside Latin-1, such as an emoji (about 259 MB), with `413` `IMPORT_TOO_LARGE`; use `scripts/backup.sh` and `scripts/restore.sh` for a larger database.
 - A send to a number WhatsApp holds under other digits (a Brazilian, Mexican or Argentine mobile written in its other spelling) is stored under the number WhatsApp resolved, or under the contact's `@lid` when the message went to the lid and the engine recorded the send first, no longer under the `chatId` of the request. Read its history and follow up with the id `GET /api/sessions/{sessionId}/contacts/check/{number}` returns; a row under the lid is listed under that id only once WhatsApp reports the pair, and until then under the lid `message.sent` names. Name that id in `allowedChats`: a key scoped to the other spelling no longer reads the rows of its own sends. Rows stored before the upgrade keep their chat id.
 
 ### Fixed
@@ -33,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Webhooks: close the pending outbox row of a message revoked just before its commit when the engine retires before the commit's failure is handled; the sweep delivered the taken-back text afterwards.
 - Plugins: keep the gateway's `from`, `to`, `fromMe`, `timestamp`, `type`, `author`, `isLidSender` and `ephemeralDuration`, and the chat's `isGroup` and `kind`, when a `message:received` or `message:sent` handler leaves them out, returns them as `null` or in another type, or removes them from the message it was handed; such a message was not stored.
 - Plugins: keep one handler's redaction when a later `message:received` or `message:sent` handler removes the `id` or `chatId` of the message it was handed; the original text and media were stored and delivered.
+- Infrastructure: `GET /api/infra/export-data` streams the backup from one snapshot of the database, a batch of rows at a time, instead of building it in memory, so a large table no longer fails with `Invalid string length` or exhausts the heap.
+- Infrastructure: one data export runs at a time (`409` `EXPORT_IN_PROGRESS`), a download is ended after 60 minutes or 10 idle minutes, and a failure after the first byte resets the connection instead of ending the body.
+- Infrastructure: `POST /api/infra/import-data` refuses a backup the process has no memory to parse instead of running out of heap on it (a 483 MB body ended a gateway with a 1 GiB heap).
+- Database: SQLite in WAL mode cuts the `-wal` file back to 64 MiB once the log starts over, instead of keeping the size a long read such as a data export let it reach.
 - Plugins: a webhook delivery whose handler awaits a `ctx` call when the dispatch budget runs out always fails as a dispatch timeout (504), no longer sometimes with the handler's error.
 
 ## [0.32.1] - 2026-11-24

@@ -294,17 +294,22 @@ export interface ExportTable<K extends keyof MigrationTables = keyof MigrationTa
   /** Columns read from SQL, excluding transient payloads before they can be materialized. */
   columns?: readonly string[];
   /**
-   * Rows carry an FK `sessionId` to sessions. The reads share no snapshot, so a session created after
-   * `sessions` was read can leave child rows here that would fail the restore's FK check and roll the
-   * whole import back; the export drops rows whose session is not in the archive.
+   * Rows carry an FK `sessionId` to sessions. A row whose session the archive does not hold would fail
+   * the restore's FK check and roll the whole import back, so the export drops it. Every read comes
+   * from one snapshot, which leaves this to a database whose rows predate the constraint.
    */
   sessionFk?: boolean;
-  /** In-place row mutation applied right after the read (redaction, artifact stripping). */
+  /**
+   * In-place row mutation applied right after the read (redaction, artifact stripping). An
+   * inline-media table hands its rows over a chunk at a time, so this must treat each row on its own.
+   */
   afterRead?: (rows: MigrationTables[K], context?: ExportReadContext) => void;
   /**
-   * Spends the export's shared inline-media budget on this table's payloads. Such a table is never
-   * read whole: the export reads `id`, `recencyColumn` and the stored size of `payloadColumn` for
-   * every row, then the full rows in chunks, newest-first, stripping each chunk before reading the next.
+   * Spends the export's shared inline-media budget on this table's payloads. No read of such a table
+   * returns more payload than a chunk may hold: the export reads `id`, `recencyColumn` and the stored
+   * size of `payloadColumn` first, then the full rows in chunks, stripping each chunk before reading
+   * the next. Rows with a payload are read newest-first to spend the budget; the table is then
+   * written in table order.
    */
   inlineMedia?: {
     /** Which arm of `omittedInlineMedia` reports this table's dropped payloads. */
@@ -319,7 +324,11 @@ export interface ExportTable<K extends keyof MigrationTables = keyof MigrationTa
      * nothing but `recencyColumn`.
      */
     newestFirst: (row: MigrationTables[K][number]) => number;
-    /** Drops the row's inline payload in place when it does not fit the budget. */
+    /**
+     * Drops the row's inline payload in place when it does not fit the budget. A row that kept no
+     * payload is read and stripped a second time when it is written, so for the same row this must
+     * make the same calls with the same sizes.
+     */
     strip: (row: MigrationTables[K][number], exceedsBudget: (encodedBytes: number) => boolean) => void;
   };
 }

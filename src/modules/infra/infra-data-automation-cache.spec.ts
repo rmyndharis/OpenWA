@@ -1,6 +1,7 @@
 import { DataSource } from 'typeorm';
 import type { ModuleRef } from '@nestjs/core';
 import { InfraDataService } from './infra-data.service';
+import { readExport } from '../../../test/helpers/read-export';
 import type { MigrationTables } from './migration-tables.types';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
@@ -135,7 +136,7 @@ describe('InfraDataService.importData automation rule cache reconciliation', () 
       replyText: 'old-reply',
       cooldownSeconds: 300,
     });
-    const dump = await infraData.exportData();
+    const dump = await readExport(infraData.exportData());
 
     // Warm the rule cache and enter a long cooldown for the retained live session.
     const findSpy = jest.spyOn(ds.getRepository(AutomationRule), 'find');
@@ -166,7 +167,7 @@ describe('InfraDataService.importData automation rule cache reconciliation', () 
       replyText: 'live-reply',
       cooldownSeconds: 300,
     });
-    const dump = await infraData.exportData();
+    const dump = await readExport(infraData.exportData());
 
     const findSpy = jest.spyOn(ds.getRepository(AutomationRule), 'find');
     await automationRules.evaluateInbound('s-live', inbound('wamid.1'));
@@ -196,7 +197,7 @@ describe('InfraDataService.importData automation rule cache reconciliation', () 
       replyText: 'stale-reply',
       cooldownSeconds: 60,
     });
-    const dump = await infraData.exportData();
+    const dump = await readExport(infraData.exportData());
 
     // Add a second rule that is NOT in the archive, then disable FK cascades before importing.
     const extra = await automationRules.create('s-live', {

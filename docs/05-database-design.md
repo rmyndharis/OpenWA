@@ -89,7 +89,7 @@ others.
 
 #### SQLite Journal Mode (WAL)
 
-OpenWA opens all file-backed SQLite databases (`main.sqlite`, `openwa.sqlite`, and CLI migration connections) in **WAL** (`Write-Ahead Logging`) mode with `PRAGMA synchronous = NORMAL` by default, tightening the database file to mode `0600` before enabling WAL so the `-wal` and `-shm` sidecars inherit owner-only permissions. During clean shutdown, OpenWA runs `PRAGMA wal_checkpoint(TRUNCATE)` on each initialized SQLite connection so committed WAL frames are flushed back into the main database file.
+OpenWA opens all file-backed SQLite databases (`main.sqlite`, `openwa.sqlite`, and CLI migration connections) in **WAL** (`Write-Ahead Logging`) mode with `PRAGMA synchronous = NORMAL` and `PRAGMA journal_size_limit = 67108864` by default (a log that grew while a long read such as a data export held it back is cut to 64 MiB once it starts over), tightening the database file to mode `0600` before enabling WAL so the `-wal` and `-shm` sidecars inherit owner-only permissions. During clean shutdown, OpenWA runs `PRAGMA wal_checkpoint(TRUNCATE)` on each initialized SQLite connection so committed WAL frames are flushed back into the main database file.
 
 For deployments storing SQLite files on network filesystems (such as NFS or SMB) where WAL shared-memory locking is unsupported, set `SQLITE_JOURNAL_MODE=DELETE`. OpenWA explicitly runs `PRAGMA journal_mode = DELETE` and `PRAGMA synchronous = FULL` on open, converting an existing WAL database cleanly back to rollback-journal mode.
 
@@ -167,7 +167,7 @@ OpenWA provides endpoints for migrating data between database types:
 
 ```bash
 # 1. Export from current database
-curl -s 'http://localhost:2785/api/infra/export-data' \
+curl -fsS 'http://localhost:2785/api/infra/export-data' \
   -H 'X-API-Key: YOUR_KEY' > backup.json
 
 # 2. Change database configuration (SQLite → PostgreSQL or vice versa)

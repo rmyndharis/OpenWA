@@ -5,6 +5,7 @@ import { DataSource, EntitySchema, LessThan } from 'typeorm';
 import type { ClientBase } from 'pg';
 import { assertDataConnectionUtc, postgresUtcExtra } from './postgres-utc';
 import { InfraDataService, sqliteDatetimeColumns, toSqliteDatetime } from '../modules/infra/infra-data.service';
+import { readExport } from '../../test/helpers/read-export';
 import { Session, SessionStatus } from '../modules/session/entities/session.entity';
 import { Webhook } from '../modules/webhook/entities/webhook.entity';
 import { Message, MessageDirection, MessageStatus } from '../modules/message/entities/message.entity';
@@ -23,7 +24,6 @@ import { IntegrationDeliveryFailure } from '../modules/integration/entities/inte
 import { StatusUpdate } from '../modules/status-store/entities/status-update.entity';
 import { AutomationRule } from '../modules/automation/entities/automation-rule.entity';
 import { StatsService } from '../modules/stats/stats.service';
-import type { MigrationTables } from '../modules/infra/migration-tables.types';
 
 /**
  * Runtime proof of the UTC pin against a real PostgreSQL, with the process deliberately OFF UTC.
@@ -270,12 +270,12 @@ const SqliteSession = new EntitySchema<Record<string, unknown>>({
     expect(Math.abs((before.created ?? 0) - Date.now())).toBeLessThan(60_000);
 
     // The archive travels as JSON, which is where a Date becomes ISO text.
-    const first = JSON.parse(JSON.stringify(await infra.exportData())) as { tables: MigrationTables };
+    const first = await readExport(infra.exportData());
     expect(await infra.importData({ tables: first.tables })).toMatchObject({ imported: true, warnings: [] });
     expect(await stamps()).toEqual(before);
 
     // Restoring the restore is the shape that used to compound the shift once per round.
-    const second = JSON.parse(JSON.stringify(await infra.exportData())) as { tables: MigrationTables };
+    const second = await readExport(infra.exportData());
     expect(await infra.importData({ tables: second.tables })).toMatchObject({ imported: true, warnings: [] });
     expect(await stamps()).toEqual(before);
     expect(first.tables.sessions[0].connectedAt).toBe('2026-01-01T00:00:00.000Z');
@@ -320,7 +320,7 @@ const SqliteSession = new EntitySchema<Record<string, unknown>>({
     await seedSession(SESSION_ID, connectedAt);
     const created = (await ds.getRepository(Session).findOneByOrFail({ id: SESSION_ID })).createdAt;
 
-    const archive = JSON.parse(JSON.stringify(await infra.exportData())) as { tables: MigrationTables };
+    const archive = await readExport(infra.exportData());
     const row = archive.tables.sessions[0] as unknown as Record<string, unknown>;
 
     // The two steps importData takes on a SQLite target, with its own helpers: normalise the archived
@@ -417,7 +417,7 @@ const SqliteSession = new EntitySchema<Record<string, unknown>>({
     const leaseExpiresAt = new Date(Date.now() + 60_000);
     await repo.update({ id: SESSION_ID }, { nodeId: 'node-a', claimedAt: new Date(), leaseExpiresAt });
 
-    const archive = JSON.parse(JSON.stringify(await infra.exportData())) as { tables: MigrationTables };
+    const archive = await readExport(infra.exportData());
     expect(await infra.importData({ tables: archive.tables })).toMatchObject({ imported: true, warnings: [] });
 
     // The claim is live, so it must not read as lapsed after the restore that carried it.
@@ -435,7 +435,7 @@ const SqliteSession = new EntitySchema<Record<string, unknown>>({
       { sessionId: session.name, chatId: 'by-name@c.us', archived: true, pinned: false },
       { sessionId: SESSION_ID, chatId: 'by-id@c.us', archived: false, pinned: true },
     ]);
-    const archive = JSON.parse(JSON.stringify(await infra.exportData())) as { tables: MigrationTables };
+    const archive = await readExport(infra.exportData());
 
     expect(await infra.importData({ tables: archive.tables })).toMatchObject({ imported: true, warnings: [] });
 
@@ -448,7 +448,7 @@ const SqliteSession = new EntitySchema<Record<string, unknown>>({
 
   it('rolls back a rejected row with its real error instead of an aborted-transaction failure', async () => {
     await seedSession(SESSION_ID, new Date('2026-01-01T00:00:00.000Z'));
-    const archive = JSON.parse(JSON.stringify(await infra.exportData())) as { tables: MigrationTables };
+    const archive = await readExport(infra.exportData());
     const [row] = archive.tables.sessions;
 
     const res = await infra.importData({

@@ -94,8 +94,9 @@ flowchart TD
 OpenWA v0.2+ includes built-in migration API endpoints that leverage the **Dual-Database Architecture**:
 
 ```bash
-# Step 1: Export all Data DB tables
-curl -s 'http://localhost:2785/api/infra/export-data' \
+# Step 1: Export all Data DB tables. -f keeps an error answer out of the file; a non-zero exit
+#   status means the file is not a backup (see the note on the streamed export below).
+curl -fsS 'http://localhost:2785/api/infra/export-data' \
   -H 'X-API-Key: YOUR_KEY' > data-backup.json
 
 # Step 2: Change the database configuration
@@ -126,6 +127,32 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
 > `scripts/backup.sh`, which snapshots the database file itself.
 
 > [!IMPORTANT]
+> **The export is streamed, so its size does not have to fit in memory.** It is written while the
+> rows are read, at the pace the client downloads, a batch of rows at a time. It is a point-in-time
+> copy: every row comes from one snapshot of the database, taken when the export starts, and the
+> gateway goes on working meanwhile. On SQLite with `SQLITE_JOURNAL_MODE=DELETE` that snapshot is a
+> copy of the database file written beside it for the length of the download, so the data volume
+> needs as much free space as the database, plus a tenth of it or 256 MiB, whichever is larger,
+> left for the database to go on writing (`507` otherwise); in WAL mode, the default, the
+> write-ahead log grows by what is written during the download instead, and the second write
+> after it cuts the file back to 64 MiB. One export runs at a time, and one that has not finished
+> after 60 minutes is ended.
+>
+> A failure after the download has started cannot answer with a status any more: the gateway resets
+> the connection instead, and `curl` exits with a non-zero status (56 when the reset reaches it, 18
+> through a proxy that ends the response short). Check that exit status, and check the file too,
+> because a reset can be lost behind a proxy that buffers the response. A complete export ends with
+> its last member:
+>
+> ```bash
+> tail -c 80 data-backup.json   # ..."omittedInlineMedia":{"messages":0,"messageBatches":0}}
+> ```
+>
+> Do not go on to Step 2 with a file that ends any other way. The import is not streamed: it parses
+> the file whole, so compare the file's size with the limit in the next note before Step 2, while
+> the old database is still the one in use.
+
+> [!IMPORTANT]
 > **The import is one request, bounded by the target's `BODY_SIZE_LIMIT`** (default `25mb`); a larger
 > file is refused with `413`, as is one above half the in-flight body budget (twice `BODY_SIZE_LIMIT`
 > at the default budget). Retrying does not help either way; raise the limit as below, which clears
@@ -136,7 +163,68 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
 > An explicit `INFLIGHT_BODY_BUDGET_BYTES` must stay at least twice the file size, because one caller
 > may hold only half of it; a body above that share is refused with `413`. `EXPORT_INLINE_MEDIA_BUDGET_BYTES`
 > bounds inline media only, so a long text history can still pass the limit and needs the memory to
-> parse it on both ends.
+> parse it on the target.
+>
+> **Raising the limit does not make every backup restorable.** The import decodes the file to one
+> string and parses it whole, which takes about 2.2 bytes of heap for every byte of a file all in
+> ASCII. A file above the default `25mb` is therefore also checked against the memory the target has
+> free, and refused with `413` `IMPORT_TOO_LARGE` before it is read when it is larger than the free
+> heap divided by 2.5. Measured on a gateway started with a 1 GiB heap (`--max-old-space-size=1024`,
+> close to what the default 2 GiB container gets), the limit its refusal named was about 411 MB: a
+> 376 MB export (700,000 text messages) was restored and a 429 MB one was refused, where a 483 MB
+> one ran the gateway out of memory before this check existed. Every such file is checked once more
+> after it is read and before it is decoded, against the memory free by then, so a restore sent
+> while another one is still arriving is weighed against what that one holds. One character outside
+> Latin-1 anywhere in the file, an emoji or a typographic apostrophe, which a real WhatsApp history
+> nearly always holds, makes the whole decoded string two bytes a character, so this second check
+> weighs such a file against the free heap divided by 4: about 259 MB on that heap. There a 402 MB
+> export all in ASCII was restored, and the same file with one emoji in it was refused instead of
+> running the gateway out of memory as it did before this check; with an emoji in every message, a
+> 246 MB export was restored and a 324 MB one was refused. Accented letters such as é or ñ are
+> Latin-1 and cost no more than ASCII. No file above 536,870,888 bytes (512 MiB) can be restored
+> through the API whatever the memory, because a string cannot be longer: with a 4 GiB heap a 536.6
+> MB export (1,000,000 messages) was restored and a 644 MB one was refused.
+> The limit weighs the heap alone, and resident memory is higher: the 402 MB restore all in ASCII
+> peaked at about 1.9 GB of it. That is close to the 2 GiB memory limit that `docker-compose.yml`
+> (`OPENWA_MEM_LIMIT`) and the Helm chart (`resources.limits.memory`) set by default, which the
+> Chromium of every whatsapp-web.js session shares. In a container, stop those sessions or raise the
+> limit before restoring hundreds of megabytes, or restore with `scripts/restore.sh`.
+>
+> Move a database whose export is larger with `scripts/backup.sh` and `scripts/restore.sh`, which
+> work when both sides use the same database type; between types the import is the only way, and
+> an export above the limit cannot be moved with it.
+>
+> **On a SQLite target the restore holds the gateway until it commits.** It runs on the event loop
+> from its first statement to its last, so no request is answered meanwhile, `GET /api/health/live`
+> included. Measured with a 1 GiB heap, a 268 MB export (500,000 messages) took 74 s, a 322 MB one
+> 60 s and a 376 MB one 68 s, and with a 4 GiB heap the 536.6 MB one took 103 s; in each the slowest
+> `/api/health/live` answer took as long as the restore. A PostgreSQL target was not measured.
+>
+> A stop signal waits for the restore too: a gateway sent SIGTERM 30 s into one committed all
+> 500,000 rows, answered `200` and exited 16 s after the signal. Only SIGKILL cuts it short, and the
+> restore is one transaction: a gateway killed that way 30 s in came back with the data it had
+> before.
+>
+> **On the Helm chart a long restore is killed.** The chart's liveness probe asks
+> `/api/health/live` every 10 s with a 5 s timeout and stops the container after 6 failures in a
+> row, 55 to 65 s after the gateway stopped answering: SIGTERM first, then SIGKILL once
+> `terminationGracePeriodSeconds` (90 s by default) has passed. So a restore that commits within
+> about 145 s of its start completes and the pod restarts right after it, and a longer one is rolled
+> back and has to start again, against the same probe (worked out from the chart, not observed on a
+> cluster). The margin is small: the same 376 MB restore took 68 s on one run and 109 s on a busier one.
+> When both sides use the same database type, restore a `scripts/backup.sh` archive with
+> `scripts/restore.sh` instead, with the StatefulSet scaled to 0, as
+> [11 - Runbook: Restore from Backup](./11-operational-runbooks.md#runbook-restore-from-backup)
+> shows for the chart. When the target is SQLite and the source is not, relax the probe for the
+> restore. The chart writes it into its template rather than taking it from its values, so patch the
+> StatefulSet, which rolls the pod, and patch it back to `6` the same way once the restore has
+> answered:
+>
+> ```bash
+> # For a release named openwa (`kubectl get statefulset` shows the name of another).
+> kubectl patch statefulset/openwa --type=json -p \
+>   '[{"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/failureThreshold","value":60}]'
+> ```
 >
 > **Webhook, proxy, and plugin credentials do not travel by default.** Webhooks are restored without their `secret` and
 > custom `headers`, so deliveries go unsigned until you set them again with
@@ -774,7 +862,7 @@ _records_, not the on-disk authentication state. A server-to-server move is ther
 
 ```bash
 # 1. Move the Data DB records (sessions, webhooks, messages, …)
-curl -s 'http://old-server:2785/api/infra/export-data' \
+curl -fsS 'http://old-server:2785/api/infra/export-data' \
   -H 'X-API-Key: OLD_KEY' > data-backup.json
 
 curl -X POST 'http://new-server:2785/api/infra/import-data' \
@@ -1206,7 +1294,7 @@ migration:
   steps:
     - name: Export the Data DB from development
       command: |
-        curl -s 'http://dev-host:2785/api/infra/export-data' \
+        curl -fsS 'http://dev-host:2785/api/infra/export-data' \
           -H "X-API-Key: $DEV_API_KEY" > /tmp/dev-data.json
 
     - name: Start staging on an empty data store

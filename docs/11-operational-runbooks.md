@@ -543,7 +543,7 @@ docker cp openwa-api:/app/data/backups/. "$BACKUP_DIR"/ \
   && docker exec openwa-api sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'   # the copy off the volume is the backup
 
 # 3. Export the Data DB as JSON alongside the archive (admin key)
-curl -H "X-API-Key: $ADMIN_API_KEY" \
+curl -f -H "X-API-Key: $ADMIN_API_KEY" \
   http://localhost:2785/api/infra/export-data > "$BACKUP_DIR/export-data.json"
 
 # Started with docker-compose.dev.yml (the README Quick Start)? Add `-f docker-compose.dev.yml`

@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
 import { InfraDataService } from './infra-data.service';
+import { readExport } from '../../../test/helpers/read-export';
 import { EXPORT_TABLES } from './export-tables';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
@@ -292,7 +293,7 @@ describe('real SQLite export reads templated batch payloads', () => {
     const id = await seedBatch(1);
     const before = await ds.getRepository(MessageBatch).findOneByOrFail({ id });
     const original = JSON.stringify(before.messages);
-    const dump = await service.exportData();
+    const dump = await readExport(service.exportData());
     const messages = JSON.parse(dump.tables.messageBatches[0].messages as string) as MediaItem[];
     expect(messages[0].variables.photo).toBeUndefined();
     expect(messages[0].content.image.base64).toBeUndefined();
@@ -305,52 +306,49 @@ describe('real SQLite export reads templated batch payloads', () => {
     process.env.EXPORT_INLINE_MEDIA_BUDGET_BYTES = '4';
     let newest = '';
     for (let index = 0; index < 201; index++) newest = await seedBatch(index);
-    let keyOrder: string[] = [];
-    const query = ds.query.bind(ds);
-    const spy = jest.spyOn(ds, 'query').mockImplementation((async (...args: Parameters<typeof query>) => {
-      const sql = args[0];
-      const rows: unknown = await query(...args);
-      if (sql.startsWith('SELECT id, "created_at"') && sql.endsWith('FROM message_batches')) {
-        keyOrder = (rows as Array<{ id: string }>).map(row => row.id);
-      }
-      return rows;
-    }) as typeof ds.query);
-    try {
-      const dump = await service.exportData();
-      const rows = dump.tables.messageBatches;
-      expect(keyOrder).toHaveLength(201);
-      expect(rows.map(row => row.id)).toEqual(keyOrder);
-      const retained = rows.filter(
-        row => (JSON.parse(row.messages as string) as MediaItem[])[0].variables.photo !== undefined,
-      );
-      expect(retained.map(row => row.id)).toEqual([newest]);
-      expect(
-        rows.filter(row => (JSON.parse(row.messages as string) as MediaItem[])[0].content.image.base64 !== undefined),
-      ).toHaveLength(1);
-      expect(dump.omittedInlineMedia.messageBatches).toBe(200);
-    } finally {
-      spy.mockRestore();
-    }
+    // The order a read of the whole table returns its rows in. A read of the id alone would follow the key's index.
+    const tableOrder = (await ds.query<Array<{ id: string }>>('SELECT id FROM message_batches ORDER BY rowid')).map(
+      row => row.id,
+    );
+
+    const dump = await readExport(service.exportData());
+
+    const rows = dump.tables.messageBatches;
+    expect(tableOrder).toHaveLength(201);
+    expect(rows.map(row => row.id)).toEqual(tableOrder);
+    const retained = rows.filter(
+      row => (JSON.parse(row.messages as string) as MediaItem[])[0].variables.photo !== undefined,
+    );
+    expect(retained.map(row => row.id)).toEqual([newest]);
+    expect(
+      rows.filter(row => (JSON.parse(row.messages as string) as MediaItem[])[0].content.image.base64 !== undefined),
+    ).toHaveLength(1);
+    expect(dump.omittedInlineMedia.messageBatches).toBe(200);
   });
-  it('excludes rows inserted after the key read and drops rows deleted before their chunk', async () => {
+  it('exports the batches as they were when it started: one deleted meanwhile is in it, one added is not', async () => {
     process.env.EXPORT_INLINE_MEDIA_BUDGET_BYTES = '100';
     const kept = await seedBatch(1);
     const deleted = await seedBatch(2);
-    let added = '';
-    const query = ds.query.bind(ds);
-    const spy = jest.spyOn(ds, 'query').mockImplementation((async (...args: Parameters<typeof query>) => {
-      const sql = args[0];
-      const rows: unknown = await query(...args);
+    // The writes start when the export prepares its first read of the table, on any connection.
+    let written: Promise<string> | undefined;
+    const connection = (ds.driver as unknown as { databaseConnection: object }).databaseConnection;
+    const proto = Object.getPrototypeOf(connection) as { prepare: (sql: string) => unknown };
+    const prepare = proto.prepare;
+    const spy = jest.spyOn(proto, 'prepare').mockImplementation(function (this: unknown, sql: string) {
       if (sql.startsWith('SELECT id, "created_at"')) {
-        await ds.getRepository(MessageBatch).delete({ id: deleted });
-        added = await seedBatch(3);
+        written ??= ds
+          .getRepository(MessageBatch)
+          .delete({ id: deleted })
+          .then(() => seedBatch(3));
       }
-      return rows;
-    }) as typeof ds.query);
+      return prepare.call(this, sql);
+    });
     try {
-      const dump = await service.exportData();
-      expect(dump.tables.messageBatches.map(row => row.id)).toEqual([kept]);
-      expect(added).not.toBe('');
+      const dump = await readExport(service.exportData());
+      expect(dump.tables.messageBatches.map(row => row.id)).toEqual([kept, deleted]);
+      const added = await written;
+      expect(added).toEqual(expect.any(String));
+      expect(await ds.getRepository(MessageBatch).findOneBy({ id: deleted })).toBeNull();
       expect(await ds.getRepository(MessageBatch).findOneBy({ id: added })).not.toBeNull();
     } finally {
       spy.mockRestore();

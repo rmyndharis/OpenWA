@@ -125,3 +125,64 @@ describe('TypeORM CLI data-source SQLITE_JOURNAL_MODE validation', () => {
     },
   );
 });
+
+// A data export holds a read transaction for as long as its download runs, and the write-ahead log
+// cannot start over past it, so it grows by everything written meanwhile and kept that size afterwards.
+describe('the write-ahead log of a file database', () => {
+  const MiB = 1024 * 1024;
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'owa-sqlite-wal-size-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is held to 64 MiB once it starts over', () => {
+    const pragma = jest.fn();
+    createSqlitePrepareDatabase(join(dir, 'test.sqlite'), 'WAL')({ pragma });
+    expect(pragma).toHaveBeenCalledWith('journal_size_limit = 67108864');
+  });
+
+  it('comes back to at most 64 MiB after a long reader has left and two more commits', async () => {
+    const dbPath = join(dir, 'test.sqlite');
+    const ds = new DataSource({
+      type: 'better-sqlite3',
+      database: dbPath,
+      prepareDatabase: createSqlitePrepareDatabase(dbPath, 'WAL'),
+    });
+    await ds.initialize();
+    type Connection = {
+      exec(sql: string): unknown;
+      prepare(sql: string): { run(...params: unknown[]): unknown; all(): unknown[] };
+      close(): void;
+    };
+    const writer = (ds.driver as unknown as { databaseConnection: Connection }).databaseConnection;
+    const walBytes = (): number => statSync(`${dbPath}-wal`).size;
+    try {
+      writer.exec('CREATE TABLE blobs (id INTEGER PRIMARY KEY, b BLOB); CREATE TABLE rows (v TEXT)');
+      writer.exec('INSERT INTO blobs (id, b) VALUES (1, zeroblob(1048576))');
+      // As an export holds its snapshot: a read-only connection with a read transaction open.
+      const reader = new (writer.constructor as new (file: string, options: object) => Connection)(dbPath, {
+        readonly: true,
+        fileMustExist: true,
+      });
+      reader.exec('BEGIN');
+      reader.prepare('SELECT COUNT(*) FROM blobs').all();
+      const rewrite = writer.prepare('UPDATE blobs SET b = randomblob(1048576) WHERE id = 1');
+      for (let i = 0; i < 96; i++) rewrite.run();
+      expect(walBytes()).toBeGreaterThan(90 * MiB);
+
+      reader.close();
+      const insert = writer.prepare('INSERT INTO rows (v) VALUES (?)');
+      insert.run('first');
+      insert.run('second');
+
+      expect(walBytes()).toBeLessThanOrEqual(64 * MiB);
+    } finally {
+      await ds.destroy();
+    }
+  });
+});

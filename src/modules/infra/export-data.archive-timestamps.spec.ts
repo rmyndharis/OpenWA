@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { DataSource } from 'typeorm';
 import { InfraDataService } from './infra-data.service';
+import { readExport } from '../../../test/helpers/read-export';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { Message, MessageDirection } from '../message/entities/message.entity';
@@ -97,7 +98,7 @@ describe('a SQLite-made export archive', () => {
 
   it('keeps SQLite text for created and updated columns and ISO 8601 with Z for the others', async () => {
     const cfg = { get: (_key: string, def?: unknown) => def };
-    const archive = await new InfraDataService(cfg as never, ds).exportData();
+    const archive = await readExport(new InfraDataService(cfg as never, ds).exportData());
     const [session] = archive.tables.sessions;
     const [message] = archive.tables.messages;
     expect([session.createdAt, session.updatedAt, message.createdAt]).toEqual([

@@ -1,4 +1,12 @@
-import { BadRequestException, ConflictException, Injectable, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  type OnApplicationBootstrap,
+  type OnModuleDestroy,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { DataSource, QueryRunner } from 'typeorm';
@@ -28,6 +36,7 @@ import { DateUtils } from 'typeorm/util/DateUtils';
 import type { MigrationTables, PluginInstanceRow, TableCounts } from './migration-tables.types';
 import { EXPORT_TABLES, EXPORT_TABLE_EXCLUSIONS, type AnyExportTable, type ExportReadContext } from './export-tables';
 import { TABLE_IMPORTERS, deduplicateArchivedWebhookFailures, isRedactedPluginSecret } from './table-importers';
+import { openExportSnapshot, sweepExportSnapshotCopies, type ExportSnapshot } from './export-snapshot';
 
 /**
  * The ownership quartet SessionOwnershipService maintains: which process holds a session's engine and
@@ -175,22 +184,6 @@ function exportInlineMediaBudgetBytes(): number {
 }
 
 /**
- * Order rows so the media budget is spent newest-first, keeping the most recent media when it cannot
- * hold everything. `SELECT *` carries no ORDER BY: rows arrive in rowid order on SQLite — oldest
- * first, the exact inverse of what a backup wants — and in physical-tuple order on Postgres, which
- * routine UPDATEs reshuffle, so two exports of an unchanged DB need not agree. Sorts a COPY, leaving
- * the exported array's own order untouched. A row with no usable timestamp sorts last, as the least
- * worth spending the budget on.
- */
-function newestFirst<T>(rows: readonly T[], at: (row: T) => number): T[] {
-  const key = (row: T): number => {
-    const value = at(row);
-    return Number.isFinite(value) ? value : 0;
-  };
-  return [...rows].sort((a, b) => key(b) - key(a));
-}
-
-/**
  * A chunk of full-row reads from an inline-media table holds at most max(budget, 1 MiB) of stored
  * payload (and always at least one row), as the message list does. The row cap keeps a chunk of
  * small rows well inside every driver's bound-parameter limit.
@@ -198,40 +191,146 @@ function newestFirst<T>(rows: readonly T[], at: (row: T) => number): T[] {
 const EXPORT_READ_CHUNK_MIN_BYTES = 1024 * 1024;
 const EXPORT_READ_CHUNK_MAX_ROWS = 200;
 
+/** Rows of a table read at a time. A table read whole grew with it: two million rows took a 1 GiB heap. */
+const EXPORT_READ_BATCH_ROWS = 500;
+/** Keys of an inline-media table (id and payload size) read at a time. */
+const EXPORT_KEY_BATCH_ROWS = 1000;
+
 /**
- * Spends the shared budget, and remembers what it refused.
- *
- * `exceeds` returns true when this payload does not fit and must be dropped. The tally matters as
- * much as the bound: an over-budget payload is replaced with the engine's own omitted marker, which
- * is deliberately the same shape a payload skipped on the way in gets — so without a count, a
- * truncated backup is indistinguishable from a complete one, both on inspection and on restore.
+ * Keys held at once while the budget is spent, about 13 MB. A table with more rows that carry a
+ * payload has its keys read again for every further window, instead of a list of all of them.
  */
+const EXPORT_KEY_WINDOW = 100_000;
+
+/**
+ * Characters of the export document handed on at a time. One JSON.stringify of the whole result
+ * held the rows and their text together, and failed outright past V8's string limit of about half a
+ * gigabyte, which a million text messages reach.
+ */
+const EXPORT_WRITE_CHUNK_CHARS = 64 * 1024;
+
+/** What a key read returns for a row of an inline-media table, beside its recency column. */
+interface InlineMediaKey {
+  id: unknown;
+  payloadBytes: number | string | null;
+}
+
+/** A key with what orders it for the budget: its recency, and where the database returned it. */
+interface OrderedKey extends InlineMediaKey {
+  recency: number;
+  position: number;
+}
+
+/**
+ * The order the media budget is spent in: newest first, keeping the most recent media when it cannot
+ * hold everything. A table carries no order of its own: rows arrive in rowid order on SQLite, oldest
+ * first, the exact inverse of what a backup wants, and in physical-tuple order on Postgres. Rows of
+ * one recency keep the order they were returned in.
+ */
+const newestFirst = (a: OrderedKey, b: OrderedKey): number => b.recency - a.recency || a.position - b.position;
+
+/**
+ * The keys `scanKeys` returns whose payload is not empty, newest first, at most `window` at a time.
+ * Each window is found by reading the keys again and keeping the newest that come after the last one
+ * handed on, so what is held never grows with the table. The scan must return the same keys in the
+ * same order every time, which a fixed snapshot does. A key with no usable recency sorts last, as
+ * the least worth spending the budget on.
+ */
+export async function* newestFirstWindows(
+  scanKeys: () => Promise<AsyncIterable<unknown[]>>,
+  recencyOf: (key: unknown) => number,
+  window: number,
+): AsyncGenerator<OrderedKey[], void, undefined> {
+  let last: OrderedKey | undefined;
+  for (;;) {
+    let newest: OrderedKey[] = [];
+    let more = false;
+    let position = 0;
+    for await (const keys of await scanKeys()) {
+      for (const key of keys as InlineMediaKey[]) {
+        // A row whose payload column is empty has nothing to spend the budget on.
+        if (!(Number(key.payloadBytes) > 0)) continue;
+        const recency = recencyOf(key);
+        const ordered = { ...key, recency: Number.isFinite(recency) ? recency : 0, position: position++ };
+        if (!last || newestFirst(last, ordered) < 0) newest.push(ordered);
+      }
+      if (newest.length >= 2 * window) {
+        newest = newest.sort(newestFirst).slice(0, window);
+        more = true;
+      }
+    }
+    newest.sort(newestFirst);
+    if (newest.length > window) {
+      newest.length = window;
+      more = true;
+    }
+    if (newest.length > 0) yield newest;
+    if (!more) return;
+    last = newest[newest.length - 1];
+  }
+}
+
+/** Split keys, in their order, into the chunks their full rows are read in. */
+function* chunkKeys(keys: readonly InlineMediaKey[], chunkLimit: number): Generator<unknown[]> {
+  let chunk: unknown[] = [];
+  let chunkBytes = 0;
+  for (const key of keys) {
+    const bytes = Number(key.payloadBytes) || 0;
+    if (chunk.length > 0 && (chunk.length === EXPORT_READ_CHUNK_MAX_ROWS || chunkBytes + bytes > chunkLimit)) {
+      yield chunk;
+      chunk = [];
+      chunkBytes = 0;
+    }
+    chunk.push(key.id);
+    chunkBytes += bytes;
+  }
+  if (chunk.length > 0) yield chunk;
+}
+
+/** The shared budget: `spend` takes a payload's bytes out of what is left, and says whether they fitted. */
 interface InlineMediaBudget {
   /** The configured budget, which also sizes the export's chunked reads. */
   bytes: number;
-  exceeds: (encodedBytes: number) => boolean;
-  droppedPayloads: () => number;
+  spend: (encodedBytes: number) => boolean;
 }
 
 function createInlineMediaBudget(): InlineMediaBudget {
-  const budget = exportInlineMediaBudgetBytes();
+  const bytes = exportInlineMediaBudgetBytes();
   let spent = 0;
-  let dropped = 0;
   return {
-    bytes: budget,
-    exceeds: (encodedBytes: number): boolean => {
-      if (spent + encodedBytes > budget) {
-        dropped += 1;
-        return true;
-      }
+    bytes,
+    spend: (encodedBytes: number): boolean => {
+      if (spent + encodedBytes > bytes) return false;
       spent += encodedBytes;
-      return false;
+      return true;
     },
-    droppedPayloads: () => dropped,
   };
 }
 
-/** Result of GET /infra/export-data; InfraExportDataResponseDto is the published contract. */
+/** What spending the budget on an inline-media table leaves for writing it out. */
+interface InlineMediaPlan {
+  /** The rows the budget left a payload on, already stripped, with the payloads each of them lost. */
+  kept: Map<unknown, { row: unknown; dropped: number }>;
+}
+
+/** Opens the first statement on a table: undefined when the table is optional and does not exist. */
+type OpenTable = (
+  entry: AnyExportTable,
+  sql: string,
+  rows: number,
+) => Promise<AsyncGenerator<unknown[], void, undefined> | undefined>;
+
+/** What an export learns while its tables are written, reported after them. */
+interface ExportSummary {
+  /** Rows written per table so far. */
+  counts: TableCounts;
+  skippedTables: string[];
+  omittedInlineMedia: Record<'messages' | 'messageBatches', number>;
+  /** Whether any of the document has been handed on. */
+  started: boolean;
+}
+
+/** The document GET /infra/export-data sends; InfraExportDataResponseDto is the published contract. */
 export interface InfraExportDataResult {
   exportedAt: string;
   dataDbType: string;
@@ -296,7 +395,7 @@ export interface InfraImportDataResult {
  * published response metadata.
  */
 @Injectable()
-export class InfraDataService {
+export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = createLogger('InfraDataService');
 
   /**
@@ -310,11 +409,20 @@ export class InfraDataService {
   private importInFlight = false;
 
   /**
-   * Exports running in this process. On better-sqlite3 an export's reads share the import's connection,
-   * so an export and an import that overlap would archive the import's uncommitted (possibly rolled-back)
-   * tables. Each refuses while the other runs.
+   * Whether an export is running in this process. An import refuses while one runs: it would replace
+   * the tables an archive is still being read from on PostgreSQL, and on SQLite the two would wait on
+   * each other. A second export refuses too, because each one holds a snapshot until its download
+   * ends: on PostgreSQL a pooled connection and a transaction that holds back vacuum, on SQLite the
+   * write-ahead log or a whole copy of the database.
    */
-  private exportsInFlight = 0;
+  private exportInFlight = false;
+
+  /** The snapshot the running export reads, closed at a stop before the WAL checkpoint, which it would hold back. */
+  private openSnapshot?: ExportSnapshot;
+  /** The running export's snapshot while it opens: a copy of the database is written then, for as long as that takes. */
+  private openingSnapshot?: Promise<unknown>;
+  /** Aborted at a stop: it ends a copy being written and refuses an export started after it. */
+  private readonly stopping = new AbortController();
 
   constructor(
     private readonly configService: ConfigService,
@@ -347,6 +455,44 @@ export class InfraDataService {
     private readonly moduleRef?: ModuleRef,
   ) {}
 
+  /** An export that died with its process may have left a copy of the database beside it. */
+  async onApplicationBootstrap(): Promise<void> {
+    await sweepExportSnapshotCopies(this.dataDataSource, this.logger);
+  }
+
+  /**
+   * Nest runs this before any beforeApplicationShutdown, so the shutdown checkpoint finds no reader
+   * left. The download fails at its next read and is reset, as any failure after the first byte is.
+   */
+  async onModuleDestroy(): Promise<void> {
+    this.stopping.abort(
+      new ServiceUnavailableException({
+        statusCode: 503,
+        error: 'Service Unavailable',
+        message: 'The gateway stopped before the export sent its first byte; export again once it is back.',
+        code: 'EXPORT_STOPPED',
+      }),
+    );
+    const closed = this.closeStoppedSnapshot();
+    // Only a SQLite reader holds the shutdown checkpoint back. On PostgreSQL the open can wait for a pool
+    // connection and the rollback for a read in flight; DataSource.destroy() waits for the connection.
+    if (this.dataDataSource.options.type === 'postgres') {
+      void closed.catch((error: unknown) =>
+        this.logger.warn('Could not close the export snapshot at the stop', { error: String(error) }),
+      );
+      return;
+    }
+    await closed;
+  }
+
+  private async closeStoppedSnapshot(): Promise<void> {
+    // A copy being written ends at its next step and is removed: a few milliseconds, not the copy.
+    await this.openingSnapshot?.catch(() => undefined);
+    const snapshot = this.openSnapshot;
+    this.openSnapshot = undefined;
+    await snapshot?.close(false);
+  }
+
   /**
    * Fail loudly when EXPORT_TABLES and the data connection's entity metadata disagree, BEFORE a
    * single table is read. A registry table the metadata does not know means a renamed or dropped
@@ -378,7 +524,18 @@ export class InfraDataService {
     }
   }
 
-  async exportData(options?: { includePluginSecrets?: boolean }): Promise<InfraExportDataResult> {
+  /**
+   * The export as the pieces of one JSON document, in order: the text of an InfraExportDataResult,
+   * written without ever holding the document or a table whole. Every row is read from one fixed
+   * state of the database. The first piece comes only after every refusal and the spending of the
+   * inline media budget, so until then a failure is an ordinary rejection. The export counts as
+   * running until the pieces are read to the end or the generator is returned; `signal` ends it
+   * while it is reading, where a return would wait.
+   */
+  async *exportData(options?: {
+    includePluginSecrets?: boolean;
+    signal?: AbortSignal;
+  }): AsyncGenerator<string, void, undefined> {
     this.assertExportRegistryMatchesMetadata();
     if (this.importInFlight) {
       throw new ConflictException({
@@ -388,11 +545,19 @@ export class InfraDataService {
         code: 'IMPORT_ALREADY_RUNNING',
       });
     }
-    this.exportsInFlight++;
+    if (this.exportInFlight) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        message: 'A data export is already running; start another after its download has ended.',
+        code: 'EXPORT_IN_PROGRESS',
+      });
+    }
+    this.exportInFlight = true;
     try {
-      return await this.runExport(options?.includePluginSecrets === true);
+      yield* this.runExport(options?.includePluginSecrets === true, options?.signal);
     } finally {
-      this.exportsInFlight--;
+      this.exportInFlight = false;
     }
   }
 
@@ -409,194 +574,301 @@ export class InfraDataService {
     }
   }
 
-  /** The table reads behind exportData, entered only through its import guard. */
-  private async runExport(includePluginSecrets: boolean): Promise<InfraExportDataResult> {
-    const isPostgres = this.dataDataSource.options?.type === 'postgres';
-    let skippedTables: string[] = [];
-    let tables = {} as MigrationTables;
-    let counts = {} as TableCounts;
-    let droppedByBucket: Record<'messages' | 'messageBatches', number> = { messages: 0, messageBatches: 0 };
-
-    const executeSnapshotReads = async (
-      queryFn: <T = unknown[]>(sql: string, params?: unknown[]) => Promise<T>,
-      useSavepoints: boolean,
-    ): Promise<void> => {
-      // The tables below may legitimately not exist yet (created by migrations an older DB has not run).
-      // Only a GENUINE missing-table error (isMissingTableError) may be tolerated; anything else (lock,
-      // I/O, timeout, aborted connection) must FAIL the export.
-      skippedTables = [];
-      const readTable = async (entry: AnyExportTable, sql: string): Promise<unknown[]> => {
-        if (useSavepoints && entry.optional) {
-          await queryFn('SAVEPOINT infra_export_optional');
-          try {
-            const rows = await queryFn<unknown[]>(sql);
-            await queryFn('RELEASE SAVEPOINT infra_export_optional');
-            return rows;
-          } catch (error) {
-            await queryFn('ROLLBACK TO SAVEPOINT infra_export_optional');
-            if (!isMissingTableError(error)) throw error;
-            skippedTables.push(entry.table);
-            this.logger.warn('Optional table does not exist in this DB; exporting without it', { table: entry.table });
-            return [];
-          }
-        }
-        try {
-          return await queryFn<unknown[]>(sql);
-        } catch (error) {
-          if (!entry.optional || !isMissingTableError(error)) throw error;
-          skippedTables.push(entry.table);
-          this.logger.warn('Optional table does not exist in this DB; exporting without it', { table: entry.table });
-          return [];
-        }
-      };
-
-      // One budget shared by the tables that carry a full inline payload (messages and
-      // message_batches today), so the total is what is bounded rather than each table separately.
-      const inlineMediaBudget = createInlineMediaBudget();
-      droppedByBucket = { messages: 0, messageBatches: 0 };
-      tables = {} as MigrationTables;
-      counts = {} as TableCounts;
-
-      const exportContext: ExportReadContext = {
-        includePluginSecrets,
-        resolvePluginConfigSchema: pluginId => this.resolvePluginConfigSchema(pluginId),
-      };
-
-      for (const entry of EXPORT_TABLES) {
-        const droppedBefore = inlineMediaBudget.droppedPayloads();
-        const rows: unknown[] = entry.inlineMedia
-          ? await this.readInlineMediaTable(
-              entry,
-              entry.inlineMedia,
-              sql => readTable(entry, sql),
-              inlineMediaBudget,
-              queryFn,
-            )
-          : await readTable(
-              entry,
-              `SELECT ${entry.columns?.map(column => `"${column}"`).join(', ') ?? '*'} FROM ${entry.table}`,
-            );
-        entry.afterRead?.(rows as never[], exportContext);
-        if (entry.inlineMedia) {
-          droppedByBucket[entry.inlineMedia.bucket] = inlineMediaBudget.droppedPayloads() - droppedBefore;
-        }
-        tables[entry.key] = rows as never;
-        counts[entry.key] = rows.length;
-      }
-
-      // See ExportTable.sessionFk: a child row of a session missing from the archive cannot be restored.
-      const exportedSessions = new Set(tables.sessions.map(session => session.id));
-      for (const entry of EXPORT_TABLES) {
-        if (!entry.sessionFk) continue;
-        const kept = (tables[entry.key] as Array<{ sessionId: string }>).filter(row =>
-          exportedSessions.has(row.sessionId),
-        );
-        tables[entry.key] = kept as never;
-        counts[entry.key] = kept.length;
-      }
+  /** The table reads behind exportData, entered only through its guards. */
+  private async *runExport(
+    includePluginSecrets: boolean,
+    signal: AbortSignal | undefined,
+  ): AsyncGenerator<string, void, undefined> {
+    const summary: ExportSummary = {
+      counts: {} as TableCounts,
+      skippedTables: [],
+      omittedInlineMedia: { messages: 0, messageBatches: 0 },
+      started: false,
     };
+    let unsent: string;
+    let complete = false;
 
-    if (isPostgres && typeof this.dataDataSource.createQueryRunner === 'function') {
-      const runner = this.dataDataSource.createQueryRunner();
-      await runner.connect();
+    // Held as soon as it opens, so a stop waiting for the open finds it to close.
+    const opening = openExportSnapshot(
+      this.dataDataSource,
+      signal ? AbortSignal.any([this.stopping.signal, signal]) : this.stopping.signal,
+    ).then(opened => (this.openSnapshot = opened));
+    this.openingSnapshot = opening;
+    const snapshot = await opening;
+    try {
       try {
-        await runner.startTransaction('REPEATABLE READ');
-        await runner.query('SET TRANSACTION READ ONLY');
-        await runner.query('SET LOCAL statement_timeout = 0');
-        await executeSnapshotReads(
-          <T = unknown[]>(sql: string, params?: unknown[]) => runner.query(sql, params) as Promise<T>,
-          true,
-        );
-        await runner.commitTransaction();
+        // A PostgreSQL open does not watch the stop: one that ends after it sends nothing.
+        this.stopping.signal.throwIfAborted();
+        unsent = yield* this.writeTables(snapshot, includePluginSecrets, summary, signal);
+        complete = true;
       } catch (error) {
-        if (runner.isTransactionActive) {
-          await runner.rollbackTransaction().catch(() => undefined);
-        }
-        throw error;
+        // A stop closed the snapshot before the first byte, so the stop is what the request is told.
+        throw this.stopping.signal.aborted && !summary.started ? this.stopping.signal.reason : error;
       } finally {
-        await runner.release();
+        // Unless a stop has closed it already.
+        if (this.openSnapshot === snapshot) {
+          this.openSnapshot = undefined;
+          await snapshot.close(complete);
+        }
       }
-    } else {
-      await executeSnapshotReads(
-        <T = unknown[]>(sql: string, params?: unknown[]) => this.dataDataSource.query<T>(sql, params),
-        false,
-      );
+    } finally {
+      // Record who pulled a full-DB export, the per-table row counts, and whether plugin instance
+      // secrets were opted in. Data itself is never logged. Rows leave the gateway while later ones
+      // are still unread, so an export that failed or was abandoned after its first piece is on
+      // record too, marked incomplete, with the rows written up to then.
+      if (complete || summary.started) {
+        await this.auditService?.logInfo(AuditAction.INFRA_DATA_EXPORTED, {
+          metadata: { counts: summary.counts, includePluginSecrets, ...(complete ? {} : { incomplete: true }) },
+        });
+      }
     }
 
-    // Record who pulled a full-DB export, the per-table row counts, and whether plugin instance
-    // secrets were opted in. Data itself is never logged.
-    await this.auditService?.logInfo(AuditAction.INFRA_DATA_EXPORTED, {
-      metadata: { counts, includePluginSecrets },
-    });
-
-    return {
-      exportedAt: new Date().toISOString(),
-      dataDbType: this.configService.get<string>('dataDatabase.type', 'sqlite'),
-      tables,
-      counts,
-      skippedTables,
-      omittedInlineMedia: droppedByBucket,
-    };
+    yield (
+      `${unsent}},"counts":${JSON.stringify(summary.counts)},"skippedTables":${JSON.stringify(summary.skippedTables)}` +
+      `,"omittedInlineMedia":${JSON.stringify(summary.omittedInlineMedia)}}`
+    );
   }
 
   /**
-   * Read a table whose rows carry inline media without ever holding all of its payloads at once.
+   * Read every table from the snapshot, a batch at a time, and write the document up to the end of
+   * its last table, in pieces of about EXPORT_WRITE_CHUNK_CHARS. Returns the text not yet handed on,
+   * which the caller closes the document after. Nothing is handed on before the first table has
+   * been read.
+   */
+  private async *writeTables(
+    snapshot: ExportSnapshot,
+    includePluginSecrets: boolean,
+    summary: ExportSummary,
+    signal: AbortSignal | undefined,
+  ): AsyncGenerator<string, string, undefined> {
+    // The tables below may legitimately not exist yet (created by migrations an older DB has not run).
+    // Only a GENUINE missing-table error (isMissingTableError) may be tolerated; anything else (lock,
+    // I/O, timeout, aborted connection) must FAIL the export.
+    const skip = (entry: AnyExportTable, error: unknown): undefined => {
+      if (!entry.optional || !isMissingTableError(error)) throw error;
+      summary.skippedTables.push(entry.table);
+      this.logger.warn('Optional table does not exist in this DB; exporting without it', { table: entry.table });
+      return undefined;
+    };
+    const open: OpenTable = async (entry, sql, rows) => {
+      if (!snapshot.failedStatementAborts || !entry.optional) {
+        return snapshot.scan(sql, rows).catch((error: unknown) => skip(entry, error));
+      }
+      await snapshot.query('SAVEPOINT infra_export_optional');
+      try {
+        const scan = await snapshot.scan(sql, rows);
+        await snapshot.query('RELEASE SAVEPOINT infra_export_optional');
+        return scan;
+      } catch (error) {
+        await snapshot.query('ROLLBACK TO SAVEPOINT infra_export_optional');
+        return skip(entry, error);
+      }
+    };
+
+    const exportContext: ExportReadContext = {
+      includePluginSecrets,
+      resolvePluginConfigSchema: pluginId => this.resolvePluginConfigSchema(pluginId),
+    };
+
+    // One budget shared by the tables that carry a full inline payload (messages and
+    // message_batches today), so the total is what is bounded rather than each table separately.
+    // It is spent here, before anything is written, because the document reports each table in turn
+    // and the budget is spent across them newest-first.
+    const inlineMediaBudget = createInlineMediaBudget();
+    const plans = new Map<AnyExportTable, InlineMediaPlan | undefined>();
+    for (const entry of EXPORT_TABLES) {
+      if (!entry.inlineMedia) continue;
+      plans.set(
+        entry,
+        await this.planInlineMediaTable(snapshot, entry, entry.inlineMedia, inlineMediaBudget, open, signal),
+      );
+    }
+
+    let unsent =
+      `{"exportedAt":${JSON.stringify(snapshot.at.toISOString())}` +
+      `,"dataDbType":${JSON.stringify(this.configService.get<string>('dataDatabase.type', 'sqlite'))},"tables":{`;
+    for (const [index, entry] of EXPORT_TABLES.entries()) {
+      unsent += `${index === 0 ? '' : ','}${JSON.stringify(entry.key)}:[`;
+      const plan = plans.get(entry);
+      const batches = !entry.inlineMedia
+        ? await open(
+            entry,
+            `SELECT ${entry.columns?.map(column => `"${column}"`).join(', ') ?? '*'} FROM ${entry.table}`,
+            EXPORT_READ_BATCH_ROWS,
+          )
+        : plan &&
+          this.readInlineMediaRows(
+            snapshot,
+            entry,
+            entry.inlineMedia,
+            plan,
+            inlineMediaBudget.bytes,
+            summary.omittedInlineMedia,
+          );
+      summary.counts[entry.key] = 0;
+      for await (const rows of batches ?? []) {
+        signal?.throwIfAborted();
+        entry.afterRead?.(rows as never[], exportContext);
+        const restorable = entry.sessionFk ? await this.rowsOfArchivedSessions(snapshot, rows) : rows;
+        for (const row of restorable) {
+          unsent += `${summary.counts[entry.key]++ === 0 ? '' : ','}${JSON.stringify(row)}`;
+          if (unsent.length >= EXPORT_WRITE_CHUNK_CHARS) {
+            summary.started = true;
+            yield unsent;
+            unsent = '';
+          }
+        }
+      }
+      unsent += ']';
+    }
+    return unsent;
+  }
+
+  /**
+   * See ExportTable.sessionFk: a child row of a session missing from the archive cannot be restored.
+   * Asked of the snapshot per batch, so no list of the sessions is held. Compared as text: a value
+   * that is not an id must drop its row, not fail the statement.
+   */
+  private async rowsOfArchivedSessions(snapshot: ExportSnapshot, rows: unknown[]): Promise<unknown[]> {
+    const ids = [...new Set((rows as Array<{ sessionId: string }>).map(row => row.sessionId))];
+    if (ids.length === 0) return rows;
+    const archived = await snapshot.query<Array<{ id: string }>>(
+      `SELECT CAST(id AS TEXT) AS "id" FROM sessions WHERE CAST(id AS TEXT) IN (${ids.map((_, i) => snapshot.placeholder(i + 1)).join(', ')})`,
+      ids,
+    );
+    const present = new Set(archived.map(session => session.id));
+    return (rows as Array<{ sessionId: string }>).filter(row => present.has(row.sessionId));
+  }
+
+  /**
+   * Spend the budget on a table whose rows carry inline media, without ever holding all of its
+   * payloads at once, and keep only the rows it left a payload on. Undefined when the table is
+   * optional and does not exist.
    *
    * A `SELECT *` put every payload on the heap before the budget could drop one, so a media-heavy
    * database could exhaust memory for a response that only ever carries the budget's worth. Instead
-   * every row is read as `id`, its recency key and its payload's stored size; the full rows follow
-   * newest-first in chunks, and each chunk is stripped against the budget before the next is read.
-   * Peak memory is the stripped rows, one chunk and the budget.
+   * the rows that carry a payload are read as `id`, recency key and the payload's stored size, a
+   * window of keys at a time, newest first; their full rows follow in chunks, and each chunk is
+   * stripped against the budget before the next is read. A row that lost every payload is let go
+   * again: writing the table reads it a second time, so what stays in memory is one window of keys,
+   * one chunk and the budget.
    *
-   * The budget sees the rows in exactly the order `newestFirst` gave it over a `SELECT *`, and the
-   * result keeps the key read's row order, which is the order `SELECT *` returned; the caller applies
-   * `afterRead` to it as to any other table. A row deleted between the key read and its chunk is left
-   * out; one inserted after the key read is not exported.
+   * The budget sees the rows in exactly the order a sort of the whole table would give it.
    */
-  private async readInlineMediaTable(
+  private async planInlineMediaTable(
+    snapshot: ExportSnapshot,
     entry: AnyExportTable,
     media: NonNullable<AnyExportTable['inlineMedia']>,
-    readKeys: (sql: string) => Promise<unknown[]>,
     budget: InlineMediaBudget,
-    queryFn: <T = unknown[]>(sql: string, params?: unknown[]) => Promise<T> = (sql, params) =>
-      this.dataDataSource.query(sql, params),
-  ): Promise<unknown[]> {
-    const keys = (await readKeys(
-      `SELECT id, "${media.recencyColumn}", OCTET_LENGTH("${media.payloadColumn}") AS "payloadBytes" FROM ${entry.table}`,
-    )) as Array<{ id: unknown; payloadBytes: number | string | null }>;
-    const chunkLimit = Math.max(budget.bytes, EXPORT_READ_CHUNK_MIN_BYTES);
-    const stripped = new Map<unknown, unknown>();
-    let chunk: unknown[] = [];
-    let chunkBytes = 0;
-
-    const flush = async (): Promise<void> => {
-      const isPostgres = this.dataDataSource.options?.type === 'postgres';
-      const placeholders = chunk.map((_, i) => (isPostgres ? `$${i + 1}` : '?')).join(', ');
-      const rows = await queryFn<Array<{ id: unknown }>>(
-        `SELECT * FROM ${entry.table} WHERE id IN (${placeholders})`,
-        chunk,
-      );
-      // IN returns the rows in no particular order; the budget is spent in the chunk's own order.
-      const byId = new Map(rows.map(row => [row.id, row]));
-      for (const id of chunk) {
-        const row = byId.get(id);
-        if (!row) continue;
-        media.strip(row as never, budget.exceeds);
-        stripped.set(id, row);
-      }
-      chunk = [];
-      chunkBytes = 0;
+    open: OpenTable,
+    signal: AbortSignal | undefined,
+  ): Promise<InlineMediaPlan | undefined> {
+    // Every row, although only those with a payload matter here: left to the database to pass over,
+    // a history without media would be walked in one step, however long it is.
+    const keySql = `SELECT id, "${media.recencyColumn}", OCTET_LENGTH("${media.payloadColumn}") AS "payloadBytes" FROM ${entry.table}`;
+    // Only this first statement may find the table missing.
+    let opened = await open(entry, keySql, EXPORT_KEY_BATCH_ROWS);
+    if (!opened) return undefined;
+    const scanKeys = async (): Promise<AsyncIterable<unknown[]>> => {
+      const scan = opened ?? (await snapshot.scan(keySql, EXPORT_KEY_BATCH_ROWS));
+      opened = undefined;
+      return scan;
     };
 
-    for (const key of newestFirst(keys, media.newestFirst as (row: unknown) => number)) {
-      const bytes = Number(key.payloadBytes) || 0;
-      const full = chunk.length === EXPORT_READ_CHUNK_MAX_ROWS || chunkBytes + bytes > chunkLimit;
-      if (chunk.length > 0 && full) await flush();
-      chunk.push(key.id);
-      chunkBytes += bytes;
+    const kept: InlineMediaPlan['kept'] = new Map();
+    const chunkLimit = Math.max(budget.bytes, EXPORT_READ_CHUNK_MIN_BYTES);
+    const windows = newestFirstWindows(scanKeys, media.newestFirst as (key: unknown) => number, EXPORT_KEY_WINDOW);
+    for await (const keys of windows) {
+      for (const ids of chunkKeys(keys, chunkLimit)) {
+        // A client that left before the first byte has nothing waiting on this pass.
+        signal?.throwIfAborted();
+        const byId = await this.readRowsById(snapshot, entry, ids);
+        // IN returns the rows in no particular order; the budget is spent in the chunk's own order.
+        for (const id of ids) {
+          const row = byId.get(id);
+          if (!row) continue;
+          let fittedBytes = 0;
+          let dropped = 0;
+          media.strip(row as never, encodedBytes => {
+            if (!budget.spend(encodedBytes)) {
+              dropped += 1;
+              return true;
+            }
+            fittedBytes += encodedBytes;
+            return false;
+          });
+          if (fittedBytes > 0) kept.set(id, { row, dropped });
+        }
+      }
     }
-    if (chunk.length > 0) await flush();
-    return keys.filter(key => stripped.has(key.id)).map(key => stripped.get(key.id));
+    return { kept };
+  }
+
+  /**
+   * The rows of a planned inline-media table in the order the table returns them, one chunk at a
+   * time: ids and payload sizes first, so that a chunk of full rows stays within its byte limit. A
+   * row the budget left a payload on comes from the plan; every other row is read here and loses the
+   * payloads it carries.
+   *
+   * Each payload dropped from a row written here is tallied in `omitted`. The tally matters as much
+   * as the bound: an over-budget payload is replaced with the engine's own omitted marker, which is
+   * deliberately the same shape a payload skipped on the way in gets, so without a count a truncated
+   * backup is indistinguishable from a complete one, both on inspection and on restore.
+   */
+  private async *readInlineMediaRows(
+    snapshot: ExportSnapshot,
+    entry: AnyExportTable,
+    media: NonNullable<AnyExportTable['inlineMedia']>,
+    plan: InlineMediaPlan,
+    budgetBytes: number,
+    omitted: ExportSummary['omittedInlineMedia'],
+  ): AsyncGenerator<unknown[], void, undefined> {
+    const keys = await snapshot.scan(
+      `SELECT id, OCTET_LENGTH("${media.payloadColumn}") AS "payloadBytes" FROM ${entry.table}`,
+      EXPORT_KEY_BATCH_ROWS,
+    );
+    const chunkLimit = Math.max(budgetBytes, EXPORT_READ_CHUNK_MIN_BYTES);
+    for await (const batch of keys) {
+      for (const ids of chunkKeys(batch as InlineMediaKey[], chunkLimit)) {
+        const byId = await this.readRowsById(
+          snapshot,
+          entry,
+          ids.filter(id => !plan.kept.has(id)),
+        );
+        const rows: unknown[] = [];
+        for (const id of ids) {
+          const held = plan.kept.get(id);
+          const row = held?.row ?? byId.get(id);
+          if (!row) continue;
+          if (held) {
+            omitted[media.bucket] += held.dropped;
+          } else {
+            media.strip(row as never, encodedBytes => {
+              // A payload of no bytes fitted whatever was left of the budget, and stays as it did then.
+              if (encodedBytes === 0) return false;
+              omitted[media.bucket] += 1;
+              return true;
+            });
+          }
+          rows.push(row);
+        }
+        yield rows;
+      }
+    }
+  }
+
+  /** One chunk of full rows by id. */
+  private async readRowsById(
+    snapshot: ExportSnapshot,
+    entry: AnyExportTable,
+    ids: unknown[],
+  ): Promise<Map<unknown, unknown>> {
+    if (ids.length === 0) return new Map();
+    const rows = await snapshot.query<Array<{ id: unknown }>>(
+      `SELECT * FROM ${entry.table} WHERE id IN (${ids.map((_, i) => snapshot.placeholder(i + 1)).join(', ')})`,
+      ids,
+    );
+    return new Map(rows.map(row => [row.id, row]));
   }
 
   async importData(data: {
@@ -616,7 +888,7 @@ export class InfraDataService {
         code: 'IMPORT_ALREADY_RUNNING',
       });
     }
-    if (this.exportsInFlight > 0) {
+    if (this.exportInFlight) {
       throw new ConflictException({
         statusCode: 409,
         error: 'Conflict',

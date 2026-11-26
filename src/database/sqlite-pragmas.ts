@@ -10,6 +10,13 @@ export interface BetterSqlite3Like {
 const logger = createLogger('SqlitePragmas');
 
 /**
+ * What the write-ahead log is cut back to when it starts over. A reader holding a snapshot (a data
+ * export, for as long as its download runs) keeps it from starting over, so it grows by everything
+ * written meanwhile, and without a limit it kept that size until a clean stop.
+ */
+const WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
+
+/**
  * Resolves the configured SQLite journal mode from environment or config.
  * Defaults to WAL for concurrent reads during writes and crash resilience;
  * DELETE is the opt-out for network filesystems (NFS/SMB) where WAL shared memory is unsafe.
@@ -34,9 +41,9 @@ export function parseStrictSqliteJournalMode(raw?: string): SqliteJournalMode {
  * 1. Skips `:memory:` databases.
  * 2. Tightens the database file (and any existing sidecars) to 0600 before switching journal mode
  *    so newly created `-wal` and `-shm` sidecars inherit owner-only permissions automatically.
- * 3. Configures WAL with `synchronous = NORMAL` by default, or explicitly switches back to
- *    `journal_mode = DELETE` with `synchronous = FULL` so existing WAL databases convert cleanly
- *    back to rollback-journal mode when opted out.
+ * 3. Configures WAL with `synchronous = NORMAL` and a 64 MiB `journal_size_limit` by default, or
+ *    explicitly switches back to `journal_mode = DELETE` with `synchronous = FULL` so existing WAL
+ *    databases convert cleanly back to rollback-journal mode when opted out.
  */
 export function createSqlitePrepareDatabase(
   dbPath: string,
@@ -50,6 +57,7 @@ export function createSqlitePrepareDatabase(
     if (journalMode === 'WAL') {
       db.pragma('journal_mode = WAL');
       db.pragma('synchronous = NORMAL');
+      db.pragma(`journal_size_limit = ${WAL_SIZE_LIMIT_BYTES}`);
     } else {
       db.pragma('journal_mode = DELETE');
       db.pragma('synchronous = FULL');

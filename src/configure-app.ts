@@ -12,6 +12,7 @@ import {
   resolveInflightBodyBudgetBytes,
 } from './config/inflight-body-budget';
 import { ActiveKeyIndex } from './modules/auth/active-key-index';
+import { refuseUnrestorableImport, refuseUnrestorableImportBody } from './modules/infra/import-body-guard';
 import { requestContextMiddleware } from './common/middleware/request-context.middleware';
 import { requestMetricsBoundaryMiddleware } from './common/middleware/request-metrics.middleware';
 import { createLogger } from './common/services/logger.service';
@@ -19,7 +20,7 @@ import { ShutdownService } from './common/services/shutdown.service';
 import { injectDashboardCspNonce } from './config/dashboard-csp';
 import { resolveCorsPolicy, isUpgradeInsecureRequestsEnabled, resolveBodyLimit } from './config/bootstrap-security';
 import { resolveRequestTimeoutMs } from './config/http-timeouts';
-import { parseTrustedProxies } from './common/utils/ip';
+import { parseTrustedProxies, resolveClientIp } from './common/utils/ip';
 import {
   BODY_NESTING_MESSAGE,
   exceedsBodyNesting,
@@ -285,6 +286,21 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
       requestTimeoutMs: resolveRequestTimeoutMs(process.env.REQUEST_TIMEOUT_MS),
     }).middleware,
   );
+  // The budget above bounds the bytes held, not what parsing them costs. The one body that runs to
+  // hundreds of megabytes is a restore, with the cap raised for it, and it is refused here when the
+  // heap cannot take its parse.
+  const trustedProxies = parseTrustedProxies(process.env.TRUSTED_PROXIES);
+  // Only a restore above the default cap is judged here, so the keys are read again for it: the index is
+  // otherwise up to 30 s behind a key made, demoted or scoped on another node, or still empty after a failed
+  // load at boot.
+  app.use(
+    refuseUnrestorableImport(parseBodyLimitBytes(bodyLimit), req => {
+      if (!keyIndex) return false;
+      return keyIndex
+        .refresh()
+        .then(() => keyIndex.isUnscopedAdmin(req.headers, resolveClientIp(req, trustedProxies), req.path));
+    }),
+  );
   // The `verify` callback stashes the EXACT bytes json() received on req.rawBody, byte-identical to
   // what a provider signed, so the @Public ingress controller can HMAC-verify over the raw body
   // (JSON.stringify(req.body) is NOT byte-identical). Cheap for every route; non-ingress routes ignore it.
@@ -301,12 +317,15 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
   // stack trace in the log. A body is refused here for the price of one pass over its bytes, ahead of the
   // parse, authentication, and every guard, interceptor and pipe. body-parser reports an error thrown from
   // `verify` as 403 unless it carries a status; this one carries 400, and Nest answers it in the usual shape.
+  // A restore is weighed here a second time, now that its bytes show whether it decodes to a string of one
+  // or of two bytes a character, and refused with 413 before it is decoded.
   app.use(
     json({
       limit: bodyLimit,
       inflate: false,
       verify: (req: Request & { rawBody?: Buffer; nestingScanned?: boolean }, _res, buf, encoding) => {
         req.rawBody = buf;
+        refuseUnrestorableImportBody(req, buf);
         if (isUtf8Charset(encoding)) {
           if (exceedsJsonNesting(buf)) throw new BadRequestException(BODY_NESTING_MESSAGE);
           req.nestingScanned = true;
@@ -323,6 +342,7 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
       // as json(); other content types remain unsupported rather than installing a global catch-all.
       verify: (req: Request & { rawBody?: Buffer }, _res, buf) => {
         req.rawBody = buf;
+        refuseUnrestorableImportBody(req, buf);
       },
     }),
   );

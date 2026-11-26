@@ -1,11 +1,12 @@
 import { createHash, createHmac } from 'crypto';
 import { Repository } from 'typeorm';
 import { ActiveKeyIndex } from './active-key-index';
-import { ApiKey } from './entities/api-key.entity';
+import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 
 const sha = (key: string) => createHash('sha256').update(key).digest('hex');
 
-type Row = Pick<ApiKey, 'keyHash' | 'allowedIps' | 'expiresAt'>;
+type Row = Pick<ApiKey, 'keyHash' | 'allowedIps' | 'expiresAt'> &
+  Partial<Pick<ApiKey, 'id' | 'role' | 'allowedSessions' | 'allowedChats'>>;
 
 const indexOver = (rows: Row[] | (() => Promise<Row[]>)) => {
   const find = jest.fn(typeof rows === 'function' ? rows : () => Promise.resolve(rows));
@@ -21,6 +22,49 @@ const row = (key: string, extra: Partial<Row> = {}): Row => ({
 });
 
 describe('ActiveKeyIndex', () => {
+  // It runs for a request nothing has authenticated or throttled yet, so callers cannot make it read in a loop.
+  it('refresh() forces at most one reload a second', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const { index, find } = indexOver([row('k1')]);
+    await index.onApplicationBootstrap();
+    index.onModuleDestroy();
+    (index as unknown as { destroyed: boolean }).destroyed = false;
+    find.mockClear();
+    try {
+      await index.refresh();
+      now.mockReturnValue(1_000_999);
+      await index.refresh();
+      expect(find).toHaveBeenCalledTimes(1);
+      now.mockReturnValue(1_001_000);
+      await index.refresh();
+      expect(find).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  // The import guard waits on this: the view it then reads has every key written before it asked.
+  it('refresh() resolves with a view that holds a key written while an earlier load was running', async () => {
+    const rows: Row[] = [row('k1')];
+    let release!: () => void;
+    let loads = 0;
+    const { index } = indexOver(async () => {
+      const snapshot = [...rows];
+      if (loads++ === 1) await new Promise<void>(resolve => (release = resolve));
+      return snapshot;
+    });
+    await index.onApplicationBootstrap();
+    index.onModuleDestroy();
+    (index as unknown as { destroyed: boolean }).destroyed = false;
+    index.refreshSoon();
+    rows.push(row('k2'));
+    const refreshed = index.refresh();
+    release();
+    await refreshed;
+
+    expect(index.recognise({ 'x-api-key': 'k2' }, '192.0.2.1')).toBe(sha('k2'));
+  });
+
   const pepper = process.env.API_KEY_PEPPER;
   afterEach(() => {
     if (pepper === undefined) delete process.env.API_KEY_PEPPER;
@@ -38,6 +82,31 @@ describe('ActiveKeyIndex', () => {
     expect(index.recognise({ authorization: 'Bearer k1' }, '192.0.2.1')).toBe(sha('k1'));
     expect(index.recognise({ 'x-api-key': 'nope' }, '192.0.2.1')).toBeUndefined();
     expect(index.recognise({}, '192.0.2.1')).toBeUndefined();
+  });
+
+  it('names as an unscoped admin only an admin key that no session or chat restriction limits', async () => {
+    const { index } = indexOver([
+      row('admin', { role: ApiKeyRole.ADMIN }),
+      row('operator', { role: ApiKeyRole.OPERATOR }),
+      row('viewer', { role: ApiKeyRole.VIEWER }),
+      row('one-session', { role: ApiKeyRole.ADMIN, allowedSessions: ['s1'] }),
+      row('one-chat', { role: ApiKeyRole.ADMIN, allowedChats: ['628@c.us'] }),
+      row('empty-lists', { role: ApiKeyRole.ADMIN, allowedSessions: [], allowedChats: [] }),
+    ]);
+    await index.onApplicationBootstrap();
+    index.onModuleDestroy();
+    const asked = (key: string) => index.isUnscopedAdmin({ 'x-api-key': key }, '192.0.2.1');
+
+    expect(['admin', 'empty-lists'].map(asked)).toEqual([true, true]);
+    expect(['operator', 'viewer', 'one-session', 'one-chat', 'nope'].map(asked)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    // Still a recognised key for the body budget, whatever its role.
+    expect(index.recognise({ 'x-api-key': 'viewer' }, '192.0.2.1')).toBe(sha('viewer'));
   });
 
   it('reads X-API-Key before the Bearer token, as the guard does', async () => {
