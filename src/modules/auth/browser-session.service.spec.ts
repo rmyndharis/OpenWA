@@ -922,6 +922,115 @@ describe('BrowserSessionController audit trail (SQLite)', () => {
   });
 });
 
+// Behind a TLS-terminating proxy that TRUSTED_PROXIES does not name, the gateway ignores X-Forwarded-Proto and
+// issues the admin cookie without Secure. A sign-in is the only place that can see it happening.
+describe('BrowserSessionController warning for a cookie issued without Secure behind a proxy', () => {
+  const savedSecure = process.env.DASHBOARD_SESSION_COOKIE_SECURE;
+
+  beforeEach(() => {
+    delete process.env.DASHBOARD_SESSION_COOKIE_SECURE;
+  });
+
+  afterEach(() => {
+    if (savedSecure === undefined) delete process.env.DASHBOARD_SESSION_COOKIE_SECURE;
+    else process.env.DASHBOARD_SESSION_COOKIE_SECURE = savedSecure;
+  });
+
+  const setup = (config: { trustedProxies?: string[]; override?: boolean } = {}) => {
+    const controller = new BrowserSessionController(
+      {
+        createSession: jest.fn().mockResolvedValue({ token: 'tok', session: { id: 'bs-1' }, ttlMs: 3600_000 }),
+        revokeByToken: jest.fn(),
+      } as unknown as BrowserSessionService,
+      { getCurrentEngine: () => 'baileys' } as unknown as EngineFactory,
+      {
+        get: (key: string) =>
+          key === 'security.trustedProxies'
+            ? (config.trustedProxies ?? [])
+            : key === 'auth.dashboardSessionCookieSecure'
+              ? config.override
+              : undefined,
+      } as unknown as ConfigService,
+      { logInfo: jest.fn() } as unknown as AuditService,
+      { findAuthorizationStates: jest.fn(() => []) } as unknown as AuthService,
+    );
+    const warn = jest
+      .spyOn((controller as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    const signIn = async (forwardedProto?: string, peer = '198.51.100.10'): Promise<string> => {
+      const setHeader = jest.fn();
+      await controller.createSession(
+        { id: 'k-admin', role: ApiKeyRole.ADMIN } as ApiKey,
+        {
+          method: 'POST',
+          path: '/api/auth/session',
+          secure: false,
+          socket: { remoteAddress: peer },
+          headers: {
+            'x-api-key': 'ow_raw_secret',
+            ...(forwardedProto === undefined ? {} : { 'x-forwarded-proto': forwardedProto }),
+          },
+        } as unknown as Request,
+        { setHeader } as unknown as Response,
+      );
+      return (setHeader.mock.calls as string[][]).find(([name]) => name === 'Set-Cookie')![1];
+    };
+    return { warn, signIn };
+  };
+
+  it('warns, naming both settings, when a sign-in forwarded as https gets a cookie without Secure', async () => {
+    const { warn, signIn } = setup();
+
+    // The last entry is the one the nearest proxy appended, the one the cookie decision reads.
+    expect(await signIn('http ,  HTTPS ')).not.toContain('Secure');
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message).toContain('TRUSTED_PROXIES');
+    expect(message).toContain('DASHBOARD_SESSION_COOKIE_SECURE');
+  });
+
+  it('warns once per process, not once per sign-in', async () => {
+    const { warn, signIn } = setup();
+
+    await signIn('https');
+    await signIn('https');
+
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  // Every row carries all five values: a shorter row would hand jest's done callback to the test as `peer`.
+  it.each<[string, Parameters<typeof setup>[0], string | undefined, string | undefined, string | undefined]>([
+    ['plain HTTP with no forwarded scheme', {}, undefined, undefined, undefined],
+    ['a forwarded scheme of http', {}, 'http', undefined, undefined],
+    ['an https the client sent, before a proxy that saw plain http', {}, 'https, http', undefined, undefined],
+    [
+      'a trusted proxy that appended http after a client-sent https',
+      { trustedProxies: ['10.0.0.1'] },
+      'https, http',
+      '10.0.0.1',
+      undefined,
+    ],
+    [
+      'a trusted proxy, whose https already makes the cookie Secure',
+      { trustedProxies: ['10.0.0.1'] },
+      'https',
+      '10.0.0.1',
+      undefined,
+    ],
+    ['an override of true', { override: true }, 'https', undefined, undefined],
+    ['an override of false', { override: false }, 'https', undefined, undefined],
+    ['an override of false from the environment alone', {}, 'https', undefined, 'false'],
+  ])('stays silent for %s', async (_case, config, forwardedProto, peer, envOverride) => {
+    if (envOverride !== undefined) process.env.DASHBOARD_SESSION_COOKIE_SECURE = envOverride;
+    const { warn, signIn } = setup(config);
+
+    await signIn(forwardedProto, peer);
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
 describe('BrowserSessionController', () => {
   const createSession = jest.fn();
   const revokeByToken = jest.fn();

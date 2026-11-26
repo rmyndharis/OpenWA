@@ -12,6 +12,7 @@ import {
   formatSessionClearCookie,
   formatSessionSetCookie,
   isSecureCookieRequest,
+  rightmostHeaderEntry,
 } from './browser-session.util';
 import { EngineFactory } from '../../engine/engine.factory';
 import { presentedApiKey } from '../../common/security/bearer-token';
@@ -19,10 +20,14 @@ import { resolveClientIp } from '../../common/utils/ip';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuthService } from './auth.service';
+import { createLogger } from '../../common/services/logger.service';
 
 @ApiTags('auth')
 @Controller('auth')
 export class BrowserSessionController {
+  private readonly logger = createLogger('BrowserSessionController');
+  private insecureCookieWarned = false;
+
   constructor(
     private readonly browserSessionService: BrowserSessionService,
     private readonly engineFactory: EngineFactory,
@@ -89,6 +94,24 @@ export class BrowserSessionController {
     const trustedProxies = this.configService.get<string[]>('security.trustedProxies') ?? [];
     const secureOverride = this.configService.get<boolean | undefined>('auth.dashboardSessionCookieSecure');
     const secure = isSecureCookieRequest(req, trustedProxies, secureOverride);
+    // A sign-in forwarded as https whose cookie still lacks Secure came through a proxy TRUSTED_PROXIES does not
+    // name: the only point where a TLS proxy and plain HTTP can be told apart. Said once per process.
+    if (
+      !secure &&
+      !this.insecureCookieWarned &&
+      secureOverride !== false &&
+      process.env.DASHBOARD_SESSION_COOKIE_SECURE?.trim() !== 'false' &&
+      // The entry the nearest proxy appended, as the Secure decision reads it: a leading one is the client's.
+      rightmostHeaderEntry(req.headers['x-forwarded-proto'])?.toLowerCase() === 'https'
+    ) {
+      this.insecureCookieWarned = true;
+      this.logger.warn(
+        'A dashboard sign-in arrived through a proxy that forwards https, but the session cookie was issued ' +
+          'without Secure because the proxy is not listed in TRUSTED_PROXIES. Add the proxy to TRUSTED_PROXIES, ' +
+          'or set DASHBOARD_SESSION_COOKIE_SECURE=true.',
+        { action: 'session_cookie_not_secure' },
+      );
+    }
     res.setHeader('Set-Cookie', formatSessionSetCookie(token, Math.floor(ttlMs / 1000), secure));
     res.setHeader('Cache-Control', 'no-store');
     return {

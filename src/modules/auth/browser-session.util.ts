@@ -97,7 +97,7 @@ function isTrustedProxyPeer(req: CookieRequestLike, trustedProxies: string[]): b
  * `X-Forwarded-Proto` or `X-Forwarded-Host`) so a client-supplied leading entry cannot spoof the
  * hop added by a trusted reverse proxy.
  */
-function rightmostHeaderEntry(value: string | string[] | undefined): string | undefined {
+export function rightmostHeaderEntry(value: string | string[] | undefined): string | undefined {
   const parts = (Array.isArray(value) ? value : value !== undefined ? [value] : [])
     .flatMap(entry => entry.split(','))
     .map(entry => entry.trim())
