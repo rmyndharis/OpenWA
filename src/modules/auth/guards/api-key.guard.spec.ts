@@ -8,7 +8,12 @@ import { ChatScopeService } from '../chat-scope.service';
 import { ApiKey, ApiKeyRole } from '../entities/api-key.entity';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/entities/audit-log.entity';
-import { CHAT_QUOTED_ALLOWED_KEY, CHAT_SCOPED_KEY, REQUIRED_ROLE_KEY } from '../decorators/auth.decorators';
+import {
+  CHAT_QUOTED_ALLOWED_KEY,
+  CHAT_SCOPED_KEY,
+  REQUIRED_ROLE_KEY,
+  SIGNED_OUT_PROBE_KEY,
+} from '../decorators/auth.decorators';
 
 function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
   return {
@@ -1066,6 +1071,157 @@ describe('ApiKeyGuard', () => {
       });
       await expect(cookieGuard.canActivate(ctx)).rejects.toThrow(UnauthorizedException);
       expect(browserSessionService.validateSessionToken).not.toHaveBeenCalled();
+    });
+  });
+
+  // The dashboard asks GET /auth/session on every start; signed out, that request carries nothing.
+  // IPs here are used by no other test: the unresolved-rejection budget is a module-level singleton.
+  describe('a @SignedOutProbe route', () => {
+    const settle = () => new Promise(resolve => setImmediate(resolve));
+    let browserSessionService: { validateSessionToken: jest.Mock };
+    let probeGuard: ApiKeyGuard;
+
+    beforeEach(() => {
+      browserSessionService = { validateSessionToken: jest.fn() };
+      const GuardCtor = ApiKeyGuard as unknown as new (...args: unknown[]) => ApiKeyGuard;
+      probeGuard = new GuardCtor(
+        authService,
+        reflector,
+        configService,
+        auditService,
+        new ChatScopeService(),
+        browserSessionService,
+      );
+      metadata[SIGNED_OUT_PROBE_KEY] = true;
+    });
+
+    it.each([
+      ['no headers', {}],
+      ['only unrelated cookies', { cookie: 'theme=dark; lang=en' }],
+      ['an empty session cookie', { cookie: 'openwa_session=' }],
+      ['a quoted empty session cookie', { cookie: 'openwa_session=""' }],
+      ['an empty X-API-Key', { 'x-api-key': '' }],
+      ['a Bearer scheme with no token', { authorization: 'Bearer' }],
+      ['a non-Bearer Authorization scheme', { authorization: 'Basic dXNlcjpwYXNz' }],
+    ])('refuses a request presenting no credential (%s) with 401 and records nothing', async (_shape, headers) => {
+      await expect(probeGuard.canActivate(createMockContext(headers, {}, '198.51.100.80'))).rejects.toThrow(
+        new UnresolvedApiKeyException('API key is required'),
+      );
+      await settle();
+
+      expect(auditService.logWarn).not.toHaveBeenCalled();
+      expect(authService.validateApiKey).not.toHaveBeenCalled();
+      expect(browserSessionService.validateSessionToken).not.toHaveBeenCalled();
+    });
+
+    it('answers with the 401 every route gives, and leaves the client budget untouched', async () => {
+      const ip = '198.51.100.81';
+      const refusal = async (): Promise<UnauthorizedException> =>
+        probeGuard.canActivate(createMockContext({}, {}, ip)).then(
+          () => {
+            throw new Error('expected a 401');
+          },
+          (err: UnauthorizedException) => err,
+        );
+
+      const probeRefusals: UnauthorizedException[] = [];
+      for (let i = 0; i < 20; i++) probeRefusals.push(await refusal());
+      await settle();
+      expect(auditService.logWarn).not.toHaveBeenCalled();
+
+      // Any other route still records an anonymous request, with the full budget left.
+      delete metadata[SIGNED_OUT_PROBE_KEY];
+      const otherRefusals: UnauthorizedException[] = [];
+      for (let i = 0; i < 11; i++) otherRefusals.push(await refusal());
+      await settle();
+      expect(auditService.logWarn).toHaveBeenCalledTimes(10);
+      expect(auditService.logWarn).toHaveBeenLastCalledWith(
+        AuditAction.API_KEY_AUTH_FAILED,
+        expect.objectContaining({ ipAddress: ip, errorMessage: 'API key is required' }),
+      );
+
+      for (const err of [...probeRefusals, ...otherRefusals]) {
+        expect(err.getStatus()).toBe(401);
+        expect(err.getResponse()).toEqual(otherRefusals[0].getResponse());
+      }
+    });
+
+    it.each([
+      ['an unknown key', '198.51.100.82', { 'x-api-key': 'unknown' }, new UnresolvedApiKeyException('Invalid API key')],
+      [
+        'an unknown Bearer token',
+        '198.51.100.83',
+        { authorization: 'Bearer unknown' },
+        new UnresolvedApiKeyException('Invalid API key'),
+      ],
+      ['a revoked key', '198.51.100.84', { 'x-api-key': 'revoked' }, new UnauthorizedException('API key is revoked')],
+      ['an expired key', '198.51.100.85', { 'x-api-key': 'expired' }, new UnauthorizedException('API key has expired')],
+      [
+        'an IP-refused key',
+        '198.51.100.86',
+        { 'x-api-key': 'fenced' },
+        new ForbiddenException('IP address not allowed'),
+      ],
+    ])('records %s presented in the header', async (_shape, ip, headers, err) => {
+      (authService.validateApiKey as jest.Mock).mockRejectedValue(err);
+
+      await expect(probeGuard.canActivate(createMockContext(headers, {}, ip))).rejects.toBe(err);
+      await settle();
+
+      expect(auditService.logWarn).toHaveBeenCalledWith(
+        AuditAction.API_KEY_AUTH_FAILED,
+        expect.objectContaining({ ipAddress: ip, errorMessage: err.message }),
+      );
+    });
+
+    it.each([
+      ['an unknown session cookie', '203.0.113.81', 'openwa_session=bogus-tok', 'bogus-tok', 'Invalid session'],
+      ['a revoked session cookie', '203.0.113.82', 'openwa_session=old-tok', 'old-tok', 'Session has been revoked'],
+      ['an expired session cookie', '203.0.113.83', 'theme=dark; openwa_session=stale', 'stale', 'Session has expired'],
+      [
+        'a cookie with malformed percent-encoding',
+        '203.0.113.84',
+        'openwa_session=%E0%A4%A',
+        '%E0%A4%A',
+        'Invalid session',
+      ],
+    ])('records %s', async (_shape, ip, cookie, token, message) => {
+      browserSessionService.validateSessionToken.mockRejectedValue(new UnresolvedApiKeyException(message));
+
+      await expect(probeGuard.canActivate(createMockContext({ cookie }, {}, ip))).rejects.toThrow(message);
+      await settle();
+
+      expect(browserSessionService.validateSessionToken).toHaveBeenCalledWith(token, ip, undefined);
+      expect(auditService.logWarn).toHaveBeenCalledWith(
+        AuditAction.API_KEY_AUTH_FAILED,
+        expect.objectContaining({ ipAddress: ip, errorMessage: message }),
+      );
+    });
+
+    it('records a stored key refused after it resolves (a chat-restricted key)', async () => {
+      (authService.validateApiKey as jest.Mock).mockResolvedValue(createMockApiKey({ allowedChats: ['1@c.us'] }));
+
+      await expect(
+        probeGuard.canActivate(createMockContext({ 'x-api-key': 'chat-key' }, {}, '198.51.100.89')),
+      ).rejects.toThrow(new ForbiddenException('API key is restricted to selected chats'));
+      await settle();
+
+      expect(auditService.logWarn).toHaveBeenCalledWith(
+        AuditAction.API_KEY_AUTH_FAILED,
+        expect.objectContaining({ errorMessage: 'API key is restricted to selected chats' }),
+      );
+    });
+
+    it('admits a valid session cookie and records nothing', async () => {
+      const apiKey = createMockApiKey();
+      browserSessionService.validateSessionToken.mockResolvedValue({ session: { id: 'bs-probe' }, apiKey });
+
+      await expect(probeGuard.canActivate(createMockContext({ cookie: 'openwa_session=live-tok' }))).resolves.toBe(
+        true,
+      );
+      await settle();
+
+      expect(auditService.logWarn).not.toHaveBeenCalled();
     });
   });
 });

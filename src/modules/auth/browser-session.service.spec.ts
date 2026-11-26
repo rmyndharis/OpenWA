@@ -9,7 +9,7 @@ import { BrowserSession } from './entities/browser-session.entity';
 import { AuthService, UnresolvedApiKeyException } from './auth.service';
 import { BrowserSessionService } from './browser-session.service';
 import { BrowserSessionController } from './browser-session.controller';
-import { HEADER_AUTH_ONLY_KEY, PUBLIC_KEY } from './decorators/auth.decorators';
+import { HEADER_AUTH_ONLY_KEY, PUBLIC_KEY, SIGNED_OUT_PROBE_KEY } from './decorators/auth.decorators';
 import {
   DEFAULT_BROWSER_SESSION_TTL_MS,
   MAX_BROWSER_SESSION_TTL_MS,
@@ -1086,6 +1086,15 @@ describe('BrowserSessionController', () => {
     expect(Reflect.getMetadata(HEADER_AUTH_ONLY_KEY, createHandler)).toBe(true);
     expect(Reflect.getMetadata(PUBLIC_KEY, deleteHandler)).toBe(true);
     expect(Object.keys(deleteResponses)).toContain('403');
+  });
+
+  it('marks only GET /auth/session as @SignedOutProbe(), not the controller or its other routes', () => {
+    const handler = (name: keyof BrowserSessionController) =>
+      Object.getOwnPropertyDescriptor(BrowserSessionController.prototype, name)?.value as object;
+    expect(Reflect.getMetadata(SIGNED_OUT_PROBE_KEY, handler('getSession'))).toBe(true);
+    expect(Reflect.getMetadata(SIGNED_OUT_PROBE_KEY, handler('createSession'))).toBeUndefined();
+    expect(Reflect.getMetadata(SIGNED_OUT_PROBE_KEY, handler('deleteSession'))).toBeUndefined();
+    expect(Reflect.getMetadata(SIGNED_OUT_PROBE_KEY, BrowserSessionController)).toBeUndefined();
   });
 
   it('POST /auth/session mints opaque cookie with HttpOnly SameSite=Strict and never leaks secrets in body', async () => {

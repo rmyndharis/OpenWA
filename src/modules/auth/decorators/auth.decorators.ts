@@ -10,6 +10,7 @@ export const UNSCOPED_KEY = 'requireUnscopedKey';
 export const CHAT_SCOPED_KEY = 'chatScoped';
 export const CHAT_QUOTED_ALLOWED_KEY = 'chatQuotedAllowed';
 export const HEADER_AUTH_ONLY_KEY = 'headerAuthOnly';
+export const SIGNED_OUT_PROBE_KEY = 'signedOutProbe';
 
 /**
  * Mark a route as requiring a specific role
@@ -80,6 +81,15 @@ export const ChatQuotedAllowed = () => SetMetadata(CHAT_QUOTED_ALLOWED_KEY, true
  * Mark a route as requiring API-key header authentication (never browser session cookies).
  */
 export const HeaderAuthOnly = () => SetMetadata(HEADER_AUTH_ONLY_KEY, true);
+
+/**
+ * Mark a route a signed-out client asks to learn whether it holds a session (the dashboard asks
+ * `GET /auth/session` on every start). A request to it that presents no credential at all is still
+ * refused with 401, but writes no API_KEY_AUTH_FAILED row: it is not an authentication attempt, and
+ * recording every login-page visit would bury the real failures. A presented credential that is
+ * rejected is recorded as on any other route.
+ */
+export const SignedOutProbe = () => SetMetadata(SIGNED_OUT_PROBE_KEY, true);
 
 /**
  * Get the current API key from request

@@ -2,7 +2,7 @@ import { Controller, Delete, Get, HttpCode, HttpStatus, Post, Req, Res, Unauthor
 import { ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import type { Request, Response } from 'express';
-import { CurrentApiKey, HeaderAuthOnly, Public } from './decorators/auth.decorators';
+import { CurrentApiKey, HeaderAuthOnly, Public, SignedOutProbe } from './decorators/auth.decorators';
 import { ApiKey } from './entities/api-key.entity';
 import { BrowserSessionLogoutResponseDto, BrowserSessionResponseDto } from './dto';
 import { BrowserSessionService } from './browser-session.service';
@@ -124,6 +124,7 @@ export class BrowserSessionController {
   }
 
   @Get('session')
+  @SignedOutProbe()
   @ApiOperation({ summary: 'Validate the active browser session cookie or API key header' })
   @ApiResponse({ status: 200, description: 'Active session details', type: BrowserSessionResponseDto })
   @ApiResponse({ status: 401, description: 'Missing, expired, or revoked session' })

@@ -677,7 +677,8 @@ synchronize pass after the chain replaces them with the TypeORM-derived hash nam
 `api_key_updated`, `api_key_used`, `api_key_revoked`, `api_key_deleted`, `api_key_auth_failed`, capped
 at 10 rows per client IP per minute for a REST, queue-dashboard or MCP rejection that names no stored
 key, where a rejection of a stored key is recorded every time, and at 10 per client IP per minute for
-any rejection on `/api/health`), dashboard browser sessions (`browser_session_created`; `browser_session_ended`,
+any rejection on `/api/health`; the dashboard's signed-out `GET /api/auth/session` check, a request
+carrying no API key and no `openwa_session` cookie, writes none), dashboard browser sessions (`browser_session_created`; `browser_session_ended`,
 written only when a logout or a replacing login revoked a live session, under the key that session belonged to), session
 lifecycle (`session_created`, `session_started`, `session_stopped`, `session_force_killed`,
 `session_logged_out`, `session_deleted`, `session_qr_generated`, `session_connected`,
