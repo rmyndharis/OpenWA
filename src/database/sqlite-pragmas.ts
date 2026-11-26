@@ -4,7 +4,7 @@ import { tightenSqliteFilePermissions } from './sqlite-file-permissions';
 export type SqliteJournalMode = 'WAL' | 'DELETE';
 
 export interface BetterSqlite3Like {
-  pragma(source: string): unknown;
+  pragma(source: string, options?: { simple?: boolean }): unknown;
 }
 
 const logger = createLogger('SqlitePragmas');
@@ -55,8 +55,17 @@ export function createSqlitePrepareDatabase(
     tightenSqliteFilePermissions([dbPath], message => logger.warn(message));
 
     if (journalMode === 'WAL') {
-      db.pragma('journal_mode = WAL');
-      db.pragma('synchronous = NORMAL');
+      // SQLite answers with the mode in effect, and keeps the previous one when the filesystem cannot hold WAL.
+      const mode = String(db.pragma('journal_mode = WAL', { simple: true }));
+      const inWal = mode.toLowerCase() === 'wal';
+      if (!inWal) {
+        logger.warn(
+          `SQLite kept journal mode "${mode}" for ${dbPath} instead of WAL; ` +
+            'set SQLITE_JOURNAL_MODE=DELETE when the database is on a filesystem without WAL support',
+        );
+      }
+      // NORMAL is corruption-safe only in WAL; under a rollback journal it takes FULL, as the opt-out does.
+      db.pragma(`synchronous = ${inWal ? 'NORMAL' : 'FULL'}`);
       db.pragma(`journal_size_limit = ${WAL_SIZE_LIMIT_BYTES}`);
     } else {
       db.pragma('journal_mode = DELETE');

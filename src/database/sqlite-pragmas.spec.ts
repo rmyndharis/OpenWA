@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { DataSource } from 'typeorm';
+import { LoggerService } from '../common/services/logger.service';
 import { createSqlitePrepareDatabase, resolveSqliteJournalMode } from './sqlite-pragmas';
 
 const modeOf = (filePath: string): number => statSync(filePath).mode & 0o777;
@@ -87,6 +88,30 @@ describe('createSqlitePrepareDatabase', () => {
       expect(rows).toEqual([{ name: 'from-wal' }]);
     } finally {
       await deleteDs.destroy();
+    }
+  });
+
+  // NORMAL is corruption-safe only in WAL: under the rollback journal SQLite kept, FULL is needed.
+  it('warns once with the mode in effect when SQLite stays out of WAL, and keeps synchronous = FULL', () => {
+    const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const pragma = jest.fn((source: string) => (source === 'journal_mode = WAL' ? 'delete' : undefined));
+      createSqlitePrepareDatabase(dbPath, 'WAL')({ pragma });
+
+      const walWarnings = warn.mock.calls.filter(([message]) => String(message).includes('WAL'));
+      expect(walWarnings).toHaveLength(1);
+      expect(String(walWarnings[0][0])).toContain('"delete"');
+      expect(String(walWarnings[0][0])).toContain('SQLITE_JOURNAL_MODE=DELETE');
+      expect(pragma).toHaveBeenCalledWith('synchronous = FULL');
+      expect(pragma).not.toHaveBeenCalledWith('synchronous = NORMAL');
+
+      warn.mockClear();
+      const inWal = jest.fn(() => 'wal');
+      createSqlitePrepareDatabase(dbPath, 'WAL')({ pragma: inWal });
+      expect(warn).not.toHaveBeenCalled();
+      expect(inWal).toHaveBeenCalledWith('synchronous = NORMAL');
+    } finally {
+      warn.mockRestore();
     }
   });
 
