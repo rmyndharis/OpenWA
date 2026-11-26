@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes (behavior changes)
+
+- A send to a number WhatsApp holds under other digits (a Brazilian, Mexican or Argentine mobile written in its other spelling) is stored under the number WhatsApp resolved, or under the contact's `@lid` when the message went to the lid and the engine recorded the send first, no longer under the `chatId` of the request. Read its history and follow up with the id `GET /api/sessions/{sessionId}/contacts/check/{number}` returns; a row under the lid is listed under that id only once WhatsApp reports the pair, and until then under the lid `message.sent` names. Name that id in `allowedChats`: a key scoped to the other spelling no longer reads the rows of its own sends. Rows stored before the upgrade keep their chat id.
+
 ### Fixed
 
 - Plugins: reject a `ctx` call still in flight when its webhook dispatch times out instead of leaving it unanswered, which held every later capability call of the plugin after 64 such timeouts.
+- Baileys: confirm a contact's LID with WhatsApp after an API send to its phone number, so the sent message shows in the chat listed under that `@lid` without waiting for the contact to reply. Thanks @juanbracamonte for the report.
+- Messages: store a send to a number WhatsApp holds under other digits (a Brazilian ninth digit) under the number WhatsApp resolved, not under the `chatId` of the request, so it shows in the same chat as the contact's replies; on whatsapp-web.js only when the number lookup answers a phone number, not the contact's LID.
+- Send pacing: find a contact's history under either spelling of a Brazilian, Mexican or Argentine mobile number, and under a number an earlier send showed WhatsApp resolves it to, so a send to a known contact is not counted as a new conversation.
 - Plugins: a webhook delivery whose handler awaits a `ctx` call when the dispatch budget runs out always fails as a dispatch timeout (504), no longer sometimes with the handler's error.
 
 ## [0.32.1] - 2026-11-24

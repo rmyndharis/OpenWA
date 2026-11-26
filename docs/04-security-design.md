@@ -98,6 +98,11 @@ lookups require OPERATOR. These permissions still apply within the key's IP, ses
 | Sessions  | `allowedSessions` | Empty/absent = every session; non-empty = a session named in the route path outside the list is rejected with `403`, and a `sessionId` filter in the query or body is narrowed to the list (an empty result, `200`) |
 | Chats     | `allowedChats`    | Empty/absent = every chat; non-empty = default-deny: only chat-scoped routes, MCP tools and events, only for a listed chat, else `403` (an event outside the list is never delivered); Bull Board refuses it        |
 
+Scope a chat-restricted key by the number WhatsApp holds for a contact (the number check returns it).
+A key scoped to another spelling of that number, a Brazilian mobile with or without its ninth digit for
+one, can send to it but reads neither the contact's replies nor the rows of its own sends: both are
+stored under the number WhatsApp holds.
+
 The key-lifecycle routes (`/api/auth/api-keys`) are additionally fenced with `@RequireUnscopedKey()`:
 a session-scoped key is refused there whatever its role, so it cannot mint or widen credentials
 beyond its own confinement. The same fence covers the other routes that act on the whole deployment:

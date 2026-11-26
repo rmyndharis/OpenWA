@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, MoreThanOrEqual, Raw, Repository } from 'typeorm';
 import { Message, MessageDirection } from './entities/message.entity';
 import { Session } from '../session/entities/session.entity';
+import { phoneKey, phoneSpellings } from '../session/message-mutation-guard';
 import { resolveSendPacingConfig, type SendPacingConfig } from './send-pacing.config';
 import { incrementSendPacingRefusals, type SendPacingRefusalReason } from '../../common/metrics/send-pacing-metrics';
 import { createLogger } from '../../common/services/logger.service';
@@ -177,6 +178,8 @@ interface RefusalSample {
 const REFUSAL_AUDIT_WINDOW_MS = 60_000;
 /** Bound on the sampling map, so a churn of session ids cannot grow it without limit. */
 const MAX_REFUSAL_KEYS = 1000;
+/** Written chat ids a session keeps the resolved number of (see rememberResolvedNumber). */
+const MAX_RESOLVED_NUMBERS = 1000;
 /** Ids per IN list in a history read: SQLite binds at most 32766 variables in a statement, PostgreSQL 65535. */
 const LOOKUP_CHUNK = 500;
 
@@ -226,11 +229,13 @@ export class SendPacingService {
    * afresh, making the cap per-request instead of per-day. In memory like the breaker (the service
    * doc explains why); it resets by UTC day, and also on restart — which for this half of the budget
    * means a restart FORGETS what was already spent and hands out the allowance again. That errs
-   * toward more reachouts, not fewer, and is the one place this feature is not restart-proof: the
-   * chat half is counted from the messages table and is.
+   * toward more reachouts, not fewer. The chat half is counted from the messages table and survives a
+   * restart; the resolved numbers (see rememberResolvedNumber) are the other thing a restart forgets.
    */
   private readonly groupReachoutTally = new Map<string, { dayStartMs: number; count: number }>();
   private readonly holds = new Map<string, AdmissionHold>();
+  /** Per session, the written chat ids whose number WhatsApp resolved to another one (see rememberResolvedNumber). */
+  private readonly resolvedNumbers = new Map<string, Map<string, string>>();
   private readonly refusalSamples = new Map<string, RefusalSample>();
 
   constructor(
@@ -431,11 +436,17 @@ export class SendPacingService {
     this.assertBreakerClosed(sessionId, config);
     if (config.coldSchedule.length === 0 || contactIds.length === 0) return NO_RESERVATION;
 
-    // The same id twice in one request is one contact, and must cost one. Each contact is probed under
-    // every form it is stored under (see storedForms): a contact known under the other user-id spelling,
-    // or under its lid or phone, is not a stranger.
-    const unique = [...new Set(contactIds.map(toParticipantWid))];
-    const formsByContact = await this.storedForms(unique);
+    // The same id twice in one request is one contact, and must cost one, and so must the two spellings of
+    // one number (see numberKey) and a written id with the number it resolved to (see resolvedNumberOf). Each
+    // contact is probed under every form it is stored under (see storedForms): a contact known under the other
+    // user-id spelling, or under its lid or phone, is not a stranger.
+    const named = new Map<string, string>();
+    for (const id of contactIds.map(toParticipantWid)) {
+      const key = numberKey(this.resolvedNumberOf(sessionId, id));
+      if (!named.has(key)) named.set(key, id);
+    }
+    const unique = [...named.values()];
+    const formsByContact = await this.storedForms(sessionId, unique);
     const knownRows = await this.messageRepository
       .createQueryBuilder('m')
       .select('DISTINCT m.chatId', 'chatId')
@@ -665,6 +676,8 @@ export class SendPacingService {
    * its phone but not that phone's other lids): answering someone who wrote to you first is not a
    * reachout, and counting it as one would throttle exactly the traffic WhatsApp wants to see. A chat
    * with no `chatId` (a status post) is not addressed to anyone, so the rule does not apply to it.
+   * A number is looked for under each of its spellings (see spellingsOf): the history sits under the
+   * one WhatsApp holds, whichever the caller writes.
    *
    * The cheap probe runs first and settles most sends in one indexed lookup; the aggregate that
    * counts the day's cold reachouts only runs when this send is itself cold.
@@ -682,7 +695,8 @@ export class SendPacingService {
     // and this is an existing relationship rather than a reachout. Probed under both user-id
     // dialects (see dialectVariants). The send being checked has not persisted its own row yet —
     // the gate runs before saveOutgoingMessage — so this cannot see it.
-    const variants = dialectVariants(chatId);
+    const spellings = this.spellingsOf(sessionId, chatId);
+    const variants = [...new Set(spellings.flatMap(dialectVariants))];
     const hasHistory = await this.messageRepository.exists({
       where: variants.map(id => ({ sessionId, chatId: id })),
     });
@@ -690,7 +704,15 @@ export class SendPacingService {
 
     // Only on a miss: the same contact under the forms the lid table pairs with this one, as the message
     // list reads it. History stored under its lid makes a send addressed by phone a reply, and the reverse.
-    const twins = (await resolveJidCandidates(chatId, this.lidDirectory())).filter(id => !variants.includes(id));
+    // The pair is recorded with the number WhatsApp holds, so each spelling is looked up, and a phone the table
+    // gives for a lid is read under its other spelling as well.
+    const directory = this.lidDirectory();
+    const forms = await Promise.all(spellings.map(id => resolveJidCandidates(id, directory)));
+    const every = forms
+      .flat()
+      .flatMap(id => this.spellingsOf(sessionId, id))
+      .flatMap(dialectVariants);
+    const twins = [...new Set(every)].filter(id => !variants.includes(id));
     if (twins.length > 0 && (await this.messageRepository.exists({ where: { sessionId, chatId: In(twins) } }))) {
       return null;
     }
@@ -789,12 +811,13 @@ export class SendPacingService {
    *
    * The other forms are read for history from before today together, in chunks of LOOKUP_CHUNK ids, which
    * settles the common chat (a reply to a contact with older history under its other form) without a
-   * statement of its own. A chat whose other forms hold no such history, and whose contact is not counted
-   * yet, is checked on its own (answeredUnderOtherForm), one statement each.
+   * statement of its own. Which other forms received anything today is read the same way, and only a chat
+   * with such a form, whose contact is not counted yet, is checked on its own (answeredUnderOtherForm), one
+   * statement each.
    */
   private async countColdReachoutsToday(sessionId: string, dayStart: Date): Promise<number> {
     const chats = await this.startedChatsToday(sessionId, dayStart);
-    const forms = await this.storedForms(chats);
+    const forms = await this.storedForms(sessionId, chats);
     const twinsOf = new Map<string, string[]>();
     for (const chatId of chats) {
       const own = dialectVariants(chatId);
@@ -802,15 +825,24 @@ export class SendPacingService {
       twinsOf.set(chatId, twins);
     }
     const older = await this.chatsWithRowsBefore(sessionId, dayStart, [...new Set([...twinsOf.values()].flat())]);
+    const started = chats.filter(chatId => !twinsOf.get(chatId)!.some(id => older.has(id)));
+    // Only another form that received something today can show a chat to be an answer. Read for all of them in
+    // one statement per chunk, so that only such a chat costs a statement of its own (answeredUnderOtherForm):
+    // with the other spelling of a number among its forms, nearly every chat has another form.
+    const wrote = await this.chatsWithIncomingSince(sessionId, dayStart, [
+      ...new Set(started.flatMap(chatId => twinsOf.get(chatId)!)),
+    ]);
     const contacts = new Set<string>();
-    for (const chatId of chats) {
+    for (const chatId of started) {
       const twins = twinsOf.get(chatId)!;
-      if (twins.some(id => older.has(id))) continue;
-      // Keyed by the phone form when the table gives one, so a lid and its phone reached today are one
-      // reachout, and so are two lids of one phone.
-      const contact = forms.get(chatId)!.find(id => id.endsWith('@c.us')) ?? chatId;
+      // Keyed by the phone when the table gives one, so a lid and its phone reached today are one
+      // reachout, and so are two lids of one phone, the two spellings of one number, and a written id
+      // and the number a send showed it resolves to.
+      const phone = forms.get(chatId)!.find(id => id.endsWith('@c.us')) ?? chatId;
+      const contact = numberKey(this.resolvedNumberOf(sessionId, phone));
       if (contacts.has(contact)) continue;
-      if (twins.length > 0 && (await this.answeredUnderOtherForm(sessionId, dayStart, chatId, twins))) continue;
+      if (twins.some(id => wrote.has(id)) && (await this.answeredUnderOtherForm(sessionId, dayStart, chatId, twins)))
+        continue;
       contacts.add(contact);
     }
     return contacts.size;
@@ -820,8 +852,26 @@ export class SendPacingService {
    * Which of these chats hold a row from before today, in either direction. One statement per chunk of ids
    * (see LOOKUP_CHUNK), however many chats there are.
    */
-  private async chatsWithRowsBefore(sessionId: string, dayStart: Date, chatIds: string[]): Promise<Set<string>> {
-    const dayStartParam = this.toBoundaryParam(dayStart);
+  private chatsWithRowsBefore(sessionId: string, dayStart: Date, chatIds: string[]): Promise<Set<string>> {
+    return this.chatsWith(sessionId, chatIds, 't.createdAt < :dayStart', {
+      dayStart: this.toBoundaryParam(dayStart),
+    });
+  }
+
+  /** Which of these chats hold a row received since the day started. One statement per chunk of ids as well. */
+  private chatsWithIncomingSince(sessionId: string, dayStart: Date, chatIds: string[]): Promise<Set<string>> {
+    return this.chatsWith(sessionId, chatIds, 't.createdAt >= :dayStart AND t.direction = :incoming', {
+      dayStart: this.toBoundaryParam(dayStart),
+      incoming: MessageDirection.INCOMING,
+    });
+  }
+
+  private async chatsWith(
+    sessionId: string,
+    chatIds: string[],
+    condition: string,
+    parameters: Record<string, unknown>,
+  ): Promise<Set<string>> {
     const found = new Set<string>();
     for (let i = 0; i < chatIds.length; i += LOOKUP_CHUNK) {
       const rows = await this.messageRepository
@@ -829,7 +879,7 @@ export class SendPacingService {
         .select('DISTINCT t.chatId', 'chatId')
         .where('t.sessionId = :sessionId', { sessionId })
         .andWhere('t.chatId IN (:...ids)', { ids: chatIds.slice(i, i + LOOKUP_CHUNK) })
-        .andWhere('t.createdAt < :dayStart', { dayStart: dayStartParam })
+        .andWhere(condition, parameters)
         .getRawMany<{ chatId: string }>();
       for (const row of rows) found.add(row.chatId);
     }
@@ -876,12 +926,15 @@ export class SendPacingService {
    * Every id each of these chats is stored under: its user dialects and the lids or phone the lid table
    * pairs with it, by the rules the message list and the chat fence share (resolveJidCandidates). The table
    * is read once for the whole list, not once per chat. A pairing it does not hold, or holds only as a
-   * display lookup, links nothing: the chat stays a separate one.
+   * display lookup, links nothing: the chat stays a separate one. A number comes with its other spelling
+   * (see numberSpellings) and what the table pairs with that one, its own forms first, and a phone the table
+   * gives for a lid comes with its other spelling too.
    */
-  private async storedForms(chatIds: string[]): Promise<Map<string, string[]>> {
+  private async storedForms(sessionId: string, chatIds: string[]): Promise<Map<string, string[]>> {
+    const spelled = new Map(chatIds.map(id => [id, this.spellingsOf(sessionId, id)] as const));
     const phones = new Set<string>();
     const lids = new Set<string>();
-    for (const id of chatIds) {
+    for (const id of [...spelled.values()].flat()) {
       const { kind, userPart } = parseWaId(id);
       // A bare number parses as unknown, and resolveJidCandidates qualifies it as a phone.
       if (kind === 'lid') lids.add(userPart);
@@ -897,8 +950,65 @@ export class SendPacingService {
       lidsForPhone: phone => lidsByPhone[phone] ?? [],
     };
     return new Map(
-      await Promise.all(chatIds.map(async id => [id, await resolveJidCandidates(id, directory)] as const)),
+      await Promise.all(
+        chatIds.map(async id => {
+          const forms = await Promise.all(spelled.get(id)!.map(spelling => resolveJidCandidates(spelling, directory)));
+          const every = forms
+            .flat()
+            .flatMap(form => this.spellingsOf(sessionId, form))
+            .flatMap(dialectVariants);
+          return [id, [...new Set(every)]] as [string, string[]];
+        }),
+      ),
     );
+  }
+
+  /**
+   * Note that a send addressed to `writtenChatId` went to the number `resolvedChatId`: WhatsApp holds the number
+   * under other digits than the caller wrote, and the send is stored under those. The cold-reachout rule then
+   * reads the two ids as one number for this session (see spellingsOf), so a caller that goes on writing the
+   * first is not judged to start a new conversation on every send. For a Brazilian, Mexican or Argentine mobile
+   * the rule is known (numberSpellings); this covers a number no rule names.
+   *
+   * Kept in memory only, 1000 written ids a session for the 1000 sessions that noted one last. After a restart, or
+   * once the id was dropped, the first send to the written id is judged as it was before any send had shown the
+   * number: cold, unless rows sit under that id. That send notes it again.
+   */
+  rememberResolvedNumber(sessionId: string, writtenChatId: string, resolvedChatId: string): void {
+    const config = resolveSendPacingConfig(this.configService);
+    // Only the cold rule reads a note, and numberSpellings already reads two ids of one numberKey as one.
+    if (!config.enabled || config.coldSchedule.length === 0) return;
+    if (numberKey(writtenChatId) === numberKey(resolvedChatId)) return;
+    const written = phoneId(writtenChatId);
+    const resolved = phoneId(resolvedChatId);
+    const numbers = this.resolvedNumbers.get(sessionId) ?? new Map<string, string>();
+    // The session and the id are entered anew, so each bound drops the one that noted longest ago.
+    this.resolvedNumbers.delete(sessionId);
+    this.resolvedNumbers.set(sessionId, numbers);
+    if (this.resolvedNumbers.size > MAX_REFUSAL_KEYS) {
+      this.resolvedNumbers.delete(this.resolvedNumbers.keys().next().value!);
+    }
+    numbers.delete(written);
+    numbers.set(written, resolved);
+    if (numbers.size > MAX_RESOLVED_NUMBERS) numbers.delete(numbers.keys().next().value!);
+  }
+
+  /** The number a send of this session showed this id resolves to (see rememberResolvedNumber), else the id. */
+  private resolvedNumberOf(sessionId: string, chatId: string): string {
+    return this.resolvedNumbers.get(sessionId)?.get(phoneId(chatId)) ?? chatId;
+  }
+
+  /**
+   * A chat id with every other id the cold-reachout rule reads as the same number: its other spelling by rule
+   * (numberSpellings), the number a send of this session showed it resolves to, and the ids written for it.
+   */
+  private spellingsOf(sessionId: string, chatId: string): string[] {
+    const numbers = this.resolvedNumbers.get(sessionId);
+    if (!numbers) return numberSpellings(chatId);
+    const id = phoneId(chatId);
+    const resolved = numbers.get(id);
+    const written = [...numbers].filter(([, to]) => to === id).map(([from]) => from);
+    return [...new Set([...numberSpellings(chatId), ...(resolved ? [resolved] : []), ...written])];
   }
 
   private refuse(
@@ -941,6 +1051,36 @@ const DAY_MS = 86_400_000;
  */
 const DIALECT_PAIR = (alias: string): string =>
   `REPLACE(${alias}."chatId", '@s.whatsapp.net', '@c.us'), REPLACE(${alias}."chatId", '@c.us', '@s.whatsapp.net')`;
+
+/**
+ * A chat id with the other spelling of its number as a phone id beside it, where the code base treats two
+ * spellings as one number (see phoneSpellings): a Brazilian, Mexican or Argentine mobile with or without its
+ * marker digit. WhatsApp holds one of them and a send is stored under that one, whichever the caller wrote.
+ * Anything but a phone number, and a number no rule covers, is only itself.
+ */
+function numberSpellings(chatId: string): string[] {
+  const { kind, userPart: number } = parseWaId(chatId);
+  // An id whose user part is not a plain number has no other spelling: phoneSpellings would read the digits
+  // out of it.
+  if (kind !== 'user' || !/^\d+$/.test(number)) return [chatId];
+  const others = phoneSpellings(number).filter(spelling => spelling !== number);
+  return [chatId, ...others.map(spelling => `${spelling}@c.us`)];
+}
+
+/** A phone id in the neutral dialect, without a device suffix; any other id as it is. */
+function phoneId(chatId: string): string {
+  const { kind, userPart: number } = parseWaId(chatId);
+  return kind === 'user' ? `${number}@c.us` : chatId;
+}
+
+/**
+ * What two ids of one contact share when both are phone ids: the number, folded as phoneKey folds its two
+ * spellings. Any other id (a lid, a group, a user part that is not a plain number) is only itself.
+ */
+function numberKey(chatId: string): string {
+  const { kind, userPart: number } = parseWaId(chatId);
+  return kind === 'user' && /^\d+$/.test(number) ? phoneKey(number) : chatId;
+}
 
 /**
  * A chat id folded per user dialect, so the window counts the two spellings of a contact alike. Not folded

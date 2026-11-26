@@ -51,7 +51,7 @@ import {
   markOutcomeUnknown,
   provesNothingSent,
 } from '../../common/errors/engine-not-sent.error';
-import { parseWaId, userPart } from '../identity/wa-id';
+import { isIndividualWid, parseWaId, userPart } from '../identity/wa-id';
 import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, guardLookup, withQueryDeadline } from './baileys-query-deadline';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { describeAudio, describeVideo } from './baileys-audio-probe';
@@ -396,6 +396,12 @@ export function uploadBeforeRelay(sock: WASocket): WAMediaUploadFunction {
 const NUMBER_ID_CACHE_MAX_ENTRIES = 5000;
 /** Positive TTL for cached onWhatsApp recipient resolutions used on outbound sends. */
 const NUMBER_ID_CACHE_TTL_MS = 15 * 60_000;
+/** Max phone/LID pairs a session remembers having asked WhatsApp about; past it the one asked about longest ago goes. */
+const LID_CONFIRMATION_MAX_ENTRIES = 5000;
+/** Max confirmations waiting their turn behind the one whose query is out. */
+const LID_CONFIRMATION_MAX_QUEUED = 1000;
+/** How long a pair is not asked about again after a send asked, whatever the answer was. */
+const LID_CONFIRMATION_TTL_MS = 15 * 60_000;
 
 function isInvalidRecipientSendError(error: unknown): boolean {
   if (error instanceof RecipientUnreachableError) return true;
@@ -406,6 +412,15 @@ function isInvalidRecipientSendError(error: unknown): boolean {
   return status === 400 || status === 404;
 }
 
+/**
+ * What send() reports when the number check answered another number than the one addressed: that number as a
+ * neutral phone id, and the jid the message went to (its LID when one is known).
+ */
+interface RenamedRecipient {
+  phone?: string;
+  jid?: string;
+}
+
 export class BaileysMessaging {
   // Positive-only LRU + TTL cache of canonical phone digits -> neutral JID for outbound sends.
   private readonly numberIdCache = new Map<string, { numberId: string; storedAt: number }>();
@@ -413,17 +428,27 @@ export class BaileysMessaging {
   private readonly numberIdInFlight = new Map<string, Promise<string | null>>();
   // Generation fence bumped on clearNumberIdCache() so stale in-flight lookups cannot repopulate.
   private numberIdCacheGeneration = 0;
+  // Phone/LID pairs a send asked WhatsApp to confirm, keyed `<lid>:<phone>`, each with its last ask, oldest ask first.
+  private readonly lidConfirmations = new Map<string, { at: number }>();
+  // One confirmation query at a time, so a run of sends to cold contacts cannot fire a burst of them.
+  private readonly lidConfirmationGate = new ConcurrencyLimiter(1, LID_CONFIRMATION_MAX_QUEUED);
+  // Until when no pair is asked about: WhatsApp rate-limited a confirmation query.
+  private lidConfirmationPausedUntil = 0;
 
   constructor(
     private readonly host: BaileysMessagingHost,
     private readonly queryBudgetMs: number = BAILEYS_QUERY_BUDGET_MS,
   ) {}
 
-  /** Drop cached send-path recipient number-id resolutions and fence any in-flight lookups. */
+  /**
+   * Drop cached send-path recipient number-id resolutions and fence any in-flight lookups. The pairs a send asked
+   * about go with them: the socket that was to answer is gone, so the next send asks again.
+   */
   clearNumberIdCache(): void {
     this.numberIdCacheGeneration++;
     this.numberIdCache.clear();
     this.numberIdInFlight.clear();
+    this.lidConfirmations.clear();
   }
 
   private resolveNumberIdCached(jid: string, sock: WASocket): Promise<string | null> {
@@ -616,7 +641,8 @@ export class BaileysMessaging {
           }
         : {}),
     });
-    const sent = await this.send(jid, content, options, socket, true);
+    const renamed: RenamedRecipient = {};
+    const sent = await this.send(jid, content, options, socket, true, renamed);
     if (sent) {
       void this.host.putStoredMessage(sent)?.catch(err =>
         this.host.logger.warn('Failed to persist sent message to store', {
@@ -626,10 +652,12 @@ export class BaileysMessaging {
       this.host.recordMessage(sent, 'text');
       // Parity with the wwjs engine's message_create → message.sent (see emitOwnSendEcho).
       void this.emitOwnSendEcho(sent);
+      this.confirmLidAfterSend(renamed.phone ?? chatId, renamed.jid ?? jid, socket);
     }
     return {
       id: sent?.key?.id ?? '',
       timestamp: this.host.toUnixSeconds(sent?.messageTimestamp),
+      ...(renamed.phone ? { resolvedChatId: renamed.phone } : {}),
     };
   }
 
@@ -1158,6 +1186,70 @@ export class BaileysMessaging {
   }
 
   /**
+   * After a send addressed to a phone id went out to the contact's LID, ask WhatsApp which LID it holds for that
+   * phone, and record the pair as reported only when the answer names the LID the send used. The phone is the one
+   * the number check answered when that is not the one the caller wrote. The resolution above
+   * read Baileys' own mapping, which is display data, and the send going through proves nothing about the pair:
+   * until it is reported, the row stored under the phone id is not part of the chat listed under the LID. Runs
+   * after the send and off its path, so a query WhatsApp refuses, throttles or never answers costs the send nothing.
+   * A rate-limited query stops the asking for LID_CONFIRMATION_TTL_MS, for every contact of the session.
+   */
+  private confirmLidAfterSend(chatId: string, jid: string, expected?: WASocket): void {
+    const { kind, userPart: phone } = parseWaId(chatId);
+    const { kind: sentTo, userPart: lid } = parseWaId(jid);
+    // A user part that is not a number (an agent suffix, a '+') is not what WhatsApp would answer under.
+    if (kind !== 'user' || sentTo !== 'lid' || !isIndividualWid(chatId)) return;
+    const now = Date.now();
+    // Not entered below either: a contact skipped while WhatsApp is turning the query away is asked about later.
+    if (now < this.lidConfirmationPausedUntil) return;
+    const pair = `${lid}:${phone}`;
+    const asked = this.lidConfirmations.get(pair);
+    if (asked && now - asked.at < LID_CONFIRMATION_TTL_MS) return;
+    const ask = { at: now };
+    // Entered anew, so the map stays ordered by the last ask and the cap drops the pair asked about longest ago.
+    this.lidConfirmations.delete(pair);
+    this.lidConfirmations.set(pair, ask);
+    if (this.lidConfirmations.size > LID_CONFIRMATION_MAX_ENTRIES) {
+      const [oldest] = this.lidConfirmations.keys();
+      this.lidConfirmations.delete(oldest);
+    }
+    void this.lidConfirmationGate
+      .run(async () => {
+        // The pair was asked about again while this ask waited, or forgotten with its socket: the turn is not its own.
+        if (this.lidConfirmations.get(pair) !== ask) return;
+        // It waited behind the query WhatsApp rate-limited.
+        if (Date.now() < this.lidConfirmationPausedUntil) return;
+        const socket = this.sock(expected);
+        // Bounded like the query: a read that never came back would keep every later confirmation waiting.
+        const reported = await withQueryDeadline(
+          Promise.resolve(this.host.findPersistedLidPhone?.(`${lid}@lid`)),
+          this.queryBudgetMs,
+          'The phone the LID is reported with was not read in time',
+        );
+        if (reported === phone) return;
+        const library = await this.host.loadLib();
+        this.sock(socket);
+        const confirmed = await queryLidPhone(socket, library, phone, lid, this.queryBudgetMs).catch(
+          (error: unknown) => {
+            // Set while the gate is still held: asking about the next contact would add to what WhatsApp is refusing.
+            if (error instanceof EngineThrottledError) {
+              this.lidConfirmationPausedUntil = Date.now() + LID_CONFIRMATION_TTL_MS;
+            }
+            throw error;
+          },
+        );
+        // A socket replaced or stopped since the query left must not record what the old one was told.
+        this.sock(socket);
+        if (confirmed) this.host.recordLidMapping(`${lid}@lid`, `${phone}@s.whatsapp.net`);
+      })
+      .catch((error: unknown) =>
+        this.host.logger.warn('Could not confirm the LID a send went out to; the pair stays display data', {
+          error: String(error),
+        }),
+      );
+  }
+
+  /**
    * Fold the chat's known disappearing-messages timer into Baileys' send options so outbound messages
    * honor the chat's ephemeral setting (#473). Returns `options` unchanged when no positive timer is
    * cached: omitting `ephemeralExpiration` reproduces today's behavior (Baileys' send guard is truthy),
@@ -1222,7 +1314,8 @@ export class BaileysMessaging {
       typeof content === 'function' ? async () => this.previewSafe(await content()) : this.previewSafe(content);
     const ephemeral = this.withEphemeral(jid, options);
     const merged = typeof safe === 'function' ? ephemeral : this.previewSafeOptions(safe, ephemeral);
-    const sent = await this.send(jid, safe, merged, expected, true);
+    const renamed: RenamedRecipient = {};
+    const sent = await this.send(jid, safe, merged, expected, true, renamed);
     if (sent) {
       void this.host.putStoredMessage(sent)?.catch(err =>
         this.host.logger.warn('Failed to persist sent message to store', {
@@ -1251,8 +1344,13 @@ export class BaileysMessaging {
       // and off the response path. No media re-download: the API caller already holds the
       // payload and the REST send path persists it (wwjs, by contrast, does download it on its echo).
       void this.emitOwnSendEcho(sent);
+      this.confirmLidAfterSend(renamed.phone ?? chatId, renamed.jid ?? jid, expected);
     }
-    return { id: sent?.key?.id ?? '', timestamp: this.host.toUnixSeconds(sent?.messageTimestamp) };
+    return {
+      id: sent?.key?.id ?? '',
+      timestamp: this.host.toUnixSeconds(sent?.messageTimestamp),
+      ...(renamed.phone ? { resolvedChatId: renamed.phone } : {}),
+    };
   }
 
   /**
@@ -1271,6 +1369,10 @@ export class BaileysMessaging {
    *
    * `content` may be a function, for content that costs work to build (a link preview image): it is
    * called after the recipient check, and its own errors are not send refusals.
+   *
+   * `renamed` is filled when the number check answered another number than `jid` names (WhatsApp holds some
+   * numbers under other digits than people type): the message goes to that number, or to its LID, and a caller
+   * that stores the message files it there.
    */
   private async send(
     jid: string,
@@ -1278,6 +1380,7 @@ export class BaileysMessaging {
     options?: Parameters<WASocket['sendMessage']>[2],
     expected?: WASocket,
     applyEphemeral = false,
+    renamed?: RenamedRecipient,
   ): Promise<WAMessage | undefined> {
     const sock = this.sock(expected);
     const recipient = parseWaId(jid);
@@ -1309,6 +1412,7 @@ export class BaileysMessaging {
       if (canonical !== jid) {
         jid = await this.toDeliverableJid(numberId, sock);
         if (applyEphemeral) options = this.withEphemeral(jid, options);
+        if (renamed && parseWaId(numberId).kind === 'user') Object.assign(renamed, { phone: numberId, jid });
       }
     }
     const message = typeof content === 'function' ? await content() : content;

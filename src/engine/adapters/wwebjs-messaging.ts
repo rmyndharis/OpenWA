@@ -565,6 +565,19 @@ export class WwebjsMessaging {
     }
   }
 
+  /**
+   * `result`, naming the phone id the send was handed (`handedTo`, see sendResolved) when it is not the one the
+   * caller wrote: WhatsApp holds the recipient under other digits (see MessageResult.resolvedChatId). Read from
+   * the send itself, not from the lookup memory, which another send to the same number may have changed since.
+   * A send handed the contact's `@lid` names no phone, and its pair is reported under the id the caller wrote
+   * (see reportLid), so it names nothing. Only a phone id is ever resolved to another phone id.
+   */
+  private resolvedResult(chatId: string, handedTo: string | undefined, result: MessageResult): MessageResult {
+    if (!handedTo || parseWaId(handedTo).kind !== 'user') return result;
+    const resolvedChatId = toNeutralJid(handedTo);
+    return resolvedChatId === toNeutralJid(chatId) ? result : { ...result, resolvedChatId };
+  }
+
   private rememberResolvedSendId(chatId: string, wid: string): void {
     this.resolvedSendIds.delete(chatId);
     this.resolvedSendIds.set(chatId, wid);
@@ -662,6 +675,7 @@ export class WwebjsMessaging {
     chatId: string,
     send: (to: string) => Promise<T>,
     quotedMessageId?: string,
+    handed?: { to?: string },
   ): Promise<T> {
     if (quotedMessageId) ensureSendable(chatId, 'reply');
     const to = await this.resolveSendId(chatId);
@@ -670,6 +684,7 @@ export class WwebjsMessaging {
     // readiness check on getClient never sees, so a send must not leave for a closing page from here.
     this.ensureReadyToSend();
     const since = navigationsSeen(this.host);
+    if (handed) handed.to = to;
     try {
       return await send(to);
     } catch (err) {
@@ -709,6 +724,7 @@ export class WwebjsMessaging {
         freshId: fresh,
       });
       const retrySince = navigationsSeen(this.host);
+      if (handed) handed.to = fresh;
       try {
         return await send(fresh);
       } catch (retryErr) {
@@ -761,6 +777,7 @@ export class WwebjsMessaging {
     if (mentions?.length) sendOptions.mentions = neutralMentions(mentions);
     if (options?.linkPreview === false) sendOptions.linkPreview = false;
 
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to =>
@@ -768,8 +785,9 @@ export class WwebjsMessaging {
           ? this.client().sendMessage(to, text, sendOptions)
           : this.client().sendMessage(to, text),
       options?.quotedMessageId,
+      handed,
     );
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   async sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -818,6 +836,7 @@ export class WwebjsMessaging {
     if (extraOptions?.sendMediaAsDocument && !messageMedia.filename) {
       messageMedia.filename = 'file';
     }
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to =>
@@ -830,12 +849,13 @@ export class WwebjsMessaging {
           ...this.quoteOptions(media.quotedMessageId),
         }),
       media.quotedMessageId,
+      handed,
     ).catch((error: unknown) => {
       noteVideoLoadTimeout(this.host, error, messageMedia.mimetype);
       throw error;
     });
 
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   async sendLocationMessage(chatId: string, location: LocationInput): Promise<MessageResult> {
@@ -849,12 +869,14 @@ export class WwebjsMessaging {
       name: location.description || '',
       address: location.address || '',
     });
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to => this.client().sendMessage(to, loc, this.quoteOptions(location.quotedMessageId)),
       location.quotedMessageId,
+      handed,
     );
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   async sendContactMessage(chatId: string, contact: ContactCard): Promise<MessageResult> {
@@ -864,6 +886,7 @@ export class WwebjsMessaging {
     // can't inject extra vCard fields — the previous inline build interpolated raw values.
     const vcard = buildVCard(contact);
 
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to =>
@@ -872,8 +895,9 @@ export class WwebjsMessaging {
           ...this.quoteOptions(contact.quotedMessageId),
         }),
       contact.quotedMessageId,
+      handed,
     );
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   async sendStickerMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -902,6 +926,7 @@ export class WwebjsMessaging {
     // It exports nothing to run that apart from the send, so a failure of it is told by what it throws. A retry
     // after "No LID for user" follows an attempt that reached the page, so it proves nothing about the message.
     let attempts = 0;
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to => {
@@ -921,8 +946,9 @@ export class WwebjsMessaging {
           });
       },
       media.quotedMessageId,
+      handed,
     );
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   /**
@@ -967,6 +993,7 @@ export class WwebjsMessaging {
     // allowMultipleAnswers.
     type PollSendOptions = ConstructorParameters<typeof Poll>[2];
     const pollOptions = { allowMultipleAnswers: poll.allowMultipleAnswers === true } as PollSendOptions;
+    const handed: { to?: string } = {};
     const msg = await this.sendResolved(
       chatId,
       to =>
@@ -976,8 +1003,9 @@ export class WwebjsMessaging {
           this.quoteOptions(poll.quotedMessageId),
         ),
       poll.quotedMessageId,
+      handed,
     );
-    return toMessageResult(msg);
+    return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
   }
 
   async replyToMessage(chatId: string, quotedMsgId: string, text: string, mentions?: string[]): Promise<MessageResult> {
@@ -999,12 +1027,17 @@ export class WwebjsMessaging {
       // tags participants exactly as a plain one does. The options argument is omitted entirely when
       // no tags were asked for, keeping an ordinary reply's call shape untouched (same rule as the
       // send path).
-      const msg = await this.sendResolved(chatId, to =>
-        mentions?.length
-          ? quotedMsg.reply(text, to, { mentions: neutralMentions(mentions) })
-          : quotedMsg.reply(text, to),
+      const handed: { to?: string } = {};
+      const msg = await this.sendResolved(
+        chatId,
+        to =>
+          mentions?.length
+            ? quotedMsg.reply(text, to, { mentions: neutralMentions(mentions) })
+            : quotedMsg.reply(text, to),
+        undefined,
+        handed,
       );
-      return toMessageResult(msg);
+      return this.resolvedResult(chatId, handed.to, toMessageResult(msg));
     } catch (error) {
       this.host.reportIfPageTransportError(error, 'replyToMessage');
       throw error;
@@ -1078,7 +1111,7 @@ export class WwebjsMessaging {
           const forwarded = fresh.filter(m => m.isForwarded);
           const sent = fresh.length === 1 ? fresh[0] : forwarded.length === 1 ? forwarded[0] : undefined;
           if (sent) {
-            return toMessageResult(sent);
+            return this.resolvedResult(toChatId, resolvedTo, toMessageResult(sent));
           }
         }
       } catch (error) {
@@ -1087,7 +1120,7 @@ export class WwebjsMessaging {
         this.host.reportIfPageTransportError(error, 'forwardMessage');
         this.host.logger.warn(`Forward succeeded but recovering the sent message id failed: ${String(error)}`);
       }
-      return { id: '', timestamp: Math.floor(Date.now() / 1000) };
+      return this.resolvedResult(toChatId, resolvedTo, { id: '', timestamp: Math.floor(Date.now() / 1000) });
     } catch (error) {
       this.host.reportIfPageTransportError(error, 'forwardMessage');
       throw error;

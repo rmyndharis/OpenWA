@@ -1287,6 +1287,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
         {
           waMessageId: result.id,
           chatId,
+          resolvedChatId: result.resolvedChatId,
           body: body ?? '',
           type: messageTypeOf(type, content),
           timestamp: result.timestamp,

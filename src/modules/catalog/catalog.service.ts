@@ -81,7 +81,10 @@ export class CatalogService {
       engineAsked = true;
       const result = await this.recordedSend(sessionId, () => engine.sendProduct(chatId, gatedProductId, gatedBody));
       settle?.(true);
-      return result;
+      if (result.resolvedChatId) this.pacing.rememberResolvedNumber(sessionId, chatId, result.resolvedChatId);
+      // The answer of the route, named field by field: what else the engine result carries (the number WhatsApp
+      // resolved, for the row a send stores) is not part of it, and no row is stored here.
+      return { id: result.id, timestamp: result.timestamp };
     } catch (error) {
       // No row is written here, so a send that provably never went out gives its pacing admission back.
       // One whose outcome is unknown stays held for a window from now: its own-send echo may still write

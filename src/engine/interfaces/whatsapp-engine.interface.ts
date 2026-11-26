@@ -35,6 +35,13 @@ export interface MessageResult {
    * row can store that label instead of the raw `buttonId`.
    */
   body?: string;
+  /**
+   * The phone id the message was addressed to, when the engine's number lookup answered another number than the
+   * caller's chat id names. WhatsApp holds some numbers under other digits than people type (a Brazilian mobile
+   * with or without its ninth digit), and the conversation lives under the number it holds, so the persisted row
+   * is filed there. Neutral dialect (`<phone>@c.us`), also when the engine sent to that number's LID.
+   */
+  resolvedChatId?: string;
 }
 
 /**

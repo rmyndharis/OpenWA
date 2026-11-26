@@ -86,6 +86,12 @@ export interface SaveOutgoingMessageData {
    * '', which the preview renders as an empty box.
    */
   quotedMessageId?: string;
+  /**
+   * The phone id the engine addressed, when its number lookup answered another number than `chatId` names (see
+   * MessageResult.resolvedChatId). The row is filed under it. When the own-send echo wrote its row first, that
+   * row stays in the chat the echo names, as it does for a send to the number WhatsApp holds.
+   */
+  resolvedChatId?: string;
 }
 
 /**
@@ -951,6 +957,8 @@ export class MessageSendService {
       const quotedMessage = data.quotedMessageId
         ? { id: data.quotedMessageId, body: await this.resolveQuotedBody(sessionId, data.quotedMessageId) }
         : undefined;
+      const chatId = data.resolvedChatId ?? data.chatId;
+      if (data.resolvedChatId) this.pacing.rememberResolvedNumber(sessionId, data.chatId, data.resolvedChatId);
       const message = this.messageRepository.create({
         sessionId,
         // An engine that sent a message but could not read its id back reports an empty id (see the
@@ -960,11 +968,11 @@ export class MessageSendService {
         // swallowed into a warning, losing the row silently. Normalizing at this one chokepoint covers
         // every caller instead of relying on each to remember.
         waMessageId: data.waMessageId || undefined,
-        chatId: data.chatId,
+        chatId,
         // The account's JID, the form the engines' own-send echo stores for the same message; 'me' only while the
         // session has no number to name it by.
         from: session?.phone ? `${session.phone}@c.us` : 'me',
-        to: data.chatId,
+        to: chatId,
         body: data.body,
         type: data.type,
         direction: MessageDirection.OUTGOING,
@@ -1088,7 +1096,7 @@ export class MessageSendService {
     // fixed columns, so anything not listed here (the resolved button label, for one) is never stored.
     // `metadata` is listed only when it changed: the insert already stored it, and a base64 media
     // payload inside it would otherwise be written a second time on every send.
-    changed: Pick<QueryDeepPartialEntity<Message>, 'body' | 'metadata'> = {},
+    changed: Pick<QueryDeepPartialEntity<Message>, 'body' | 'metadata' | 'chatId' | 'to'> = {},
   ): Promise<MessageResponseDto> {
     // A send whose engine couldn't read the sent message's id back reports an empty id — a forward that
     // can't recover the copy, or a WhatsApp Web build that renamed the id field out from under the
@@ -1099,6 +1107,15 @@ export class MessageSendService {
     if (result.id) message.waMessageId = result.id;
     message.status = MessageStatus.SENT;
     message.timestamp = result.timestamp;
+    // WhatsApp holds the number under other digits than the caller wrote. The message went to the number it
+    // holds and the reply arrives there, so the row is filed there too, not under a spelling nothing else uses.
+    const resolved = result.resolvedChatId ? { chatId: result.resolvedChatId, to: result.resolvedChatId } : {};
+    // The id the caller wrote holds no row from here on: pacing has to know it is a contact the account knows.
+    if (result.resolvedChatId) {
+      this.pacing.rememberResolvedNumber(message.sessionId, message.chatId, result.resolvedChatId);
+    }
+    Object.assign(message, resolved);
+    changed = { ...changed, ...resolved };
     // Set when the row was no longer PENDING at the first write: the pending reaper failed it while the engine answered.
     // The reaper can also fail it later, while the echo merge below is tried; the recovery there covers both.
     let reaped = false;
@@ -1144,7 +1161,9 @@ export class MessageSendService {
         );
         // `status` is deliberately absent: the echo row is already SENT, and an ack that landed
         // first has advanced it further. Writing SENT here would undo that. See the sibling merge
-        // in saveOutgoingMessage.
+        // in saveOutgoingMessage. `chatId` is absent too: the echo names the chat the message went to, the
+        // number's LID when the engine knows one, and the reactions, edits and revokes that follow name that chat.
+        // Moved under the resolved number, the row would be out of their reach until the pair is reported.
         const patch: QueryDeepPartialEntity<Message> = { timestamp: result.timestamp };
         const metadata = message.metadata;
         let metadataMerged = true;

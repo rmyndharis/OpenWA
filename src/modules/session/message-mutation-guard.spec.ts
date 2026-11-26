@@ -1,5 +1,10 @@
 import { MessageDirection } from '../message/entities/message.entity';
-import { mutationTargetsForeignRow, mutationTargetsForeignRowPersisted } from './message-mutation-guard';
+import {
+  mutationTargetsForeignRow,
+  mutationTargetsForeignRowPersisted,
+  phoneKey,
+  phoneSpellings,
+} from './message-mutation-guard';
 
 const OUT = MessageDirection.OUTGOING;
 const IN = MessageDirection.INCOMING;
@@ -185,5 +190,37 @@ describe('mutationTargetsForeignRow', () => {
     expect(
       mutationTargetsForeignRow({ chatId: direct, direction: OUT }, { kind: 'revoke', chatId: direct }),
     ).toBeNull();
+  });
+});
+
+describe('phoneSpellings', () => {
+  it.each([
+    ['a Brazilian mobile written with its ninth digit', '5511987654321', ['5511987654321', '551187654321']],
+    ['a Brazilian mobile written without it', '551187654321', ['551187654321', '5511987654321']],
+    ['a Mexican mobile written with the 1', '5215512345678', ['5215512345678', '525512345678']],
+    ['a Mexican mobile written without it', '525512345678', ['525512345678', '5215512345678']],
+    ['an Argentine mobile written with the 9', '5491123456789', ['5491123456789', '541123456789']],
+    ['an Argentine mobile written without it', '541123456789', ['541123456789', '5491123456789']],
+  ])('gives both spellings of %s, and phoneKey folds them into one number', (_case, number, spellings) => {
+    expect(phoneSpellings(number)).toEqual(spellings);
+    expect(new Set(spellings.map(phoneKey)).size).toBe(1);
+  });
+
+  it.each(['6281234567890', '14155550123', '447911123456'])('gives only %s itself, which no rule covers', number => {
+    expect(phoneSpellings(number)).toEqual([number]);
+  });
+
+  it('reads the number out of the way it is written', () => {
+    expect(phoneSpellings('+55 11 98765-4321')).toEqual(['5511987654321', '551187654321']);
+    expect(phoneSpellings('not a number')).toEqual([]);
+  });
+
+  it('never gives a spelling that phoneKey folds into another number', () => {
+    // After its marker this Argentine number goes on with a 9: taking a 9 off twice names somebody else.
+    for (const number of ['54991123456', '5499', '549', '55119', '521']) {
+      const spellings = phoneSpellings(number);
+      expect(spellings).toContain(number);
+      expect(new Set(spellings.map(phoneKey))).toEqual(new Set([phoneKey(number)]));
+    }
   });
 });

@@ -23,8 +23,9 @@ export interface MutationSource {
 /**
  * What two spellings of one phone number share: its digits, without a '+', spaces or dashes, and without
  * the mobile marker digit that a Brazilian (`55` + area + `9`), Mexican (`521`) or Argentine (`549`) number
- * is written with in one spelling and without in the other. A send stores the chat id as its caller wrote
- * it, so the stored form and the one the engine reports can differ in either direction.
+ * is written with in one spelling and without in the other. A send is stored under the number WhatsApp
+ * resolved, but a row written by an earlier release keeps the chat id as its caller wrote it, so the stored
+ * form and the one the engine reports can still differ in either direction.
  */
 export function phoneKey(local: string): string {
   return local
@@ -32,6 +33,22 @@ export function phoneKey(local: string): string {
     .replace(/^55(\d{2})9(\d{8})$/, '55$1$2')
     .replace(/^521(\d{10})$/, '52$1')
     .replace(/^549(\d+)$/, '54$1');
+}
+
+/**
+ * Every spelling of a phone number that {@link phoneKey} folds into one: its digits as written, and its other
+ * spelling where it is a Brazilian, Mexican or Argentine number, with the mobile marker digit or without it.
+ * A number none of the three rules covers is only itself, and what holds no digit is no number at all.
+ */
+export function phoneSpellings(local: string): string[] {
+  const digits = local.replace(/\D/g, '');
+  const key = phoneKey(digits);
+  const marked = key
+    .replace(/^55(\d{2})(\d{8})$/, (_match, area: string, line: string) => `55${area}9${line}`)
+    .replace(/^52(\d{10})$/, '521$1')
+    .replace(/^54(\d+)$/, '549$1');
+  // A spelling has to fold back into the same number: taking the marker off twice would name another one.
+  return [...new Set([digits, key, marked])].filter(spelling => spelling !== '' && phoneKey(spelling) === key);
 }
 
 /**

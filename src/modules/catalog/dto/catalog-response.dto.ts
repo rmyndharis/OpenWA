@@ -108,8 +108,8 @@ export class PaginatedProductsDto {
 /**
  * What POST /messages/send-product answers.
  *
- * Deliberately NOT MessageResponseDto: this route returns the engine's MessageResult unmapped, so
- * the id field is `id`, whereas every route that goes through MessageService answers `messageId`.
+ * Deliberately NOT MessageResponseDto: this route answers the `id` and `timestamp` of the engine's
+ * MessageResult under their own names, whereas every route that goes through MessageService answers `messageId`.
  * Documenting it as `messageId` here would be a contract that the code does not honour.
  */
 export class ProductMessageResponseDto {
