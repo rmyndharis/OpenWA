@@ -1152,7 +1152,12 @@ export class SessionEngineLifecycle {
     if (this.ownership) {
       // With ownership enabled, wait for the fenced DB write so a stale-owned TOCTOU race where a
       // peer already claimed the row (affected === 0) suppresses ready webhooks, WS events, and hooks.
+      // A write that fails says nothing about the owner: it is logged, and the gate below still decides.
       void statusWrite
+        .catch((err: unknown) => {
+          persistFailed(err);
+          return undefined;
+        })
         .then(result => {
           const updated = (result as { affected?: number } | undefined)?.affected !== 0;
           if (!updated || !this.ownsSession(id) || !this.isLiveEngine(id, engine)) {
@@ -1648,20 +1653,24 @@ export class SessionEngineLifecycle {
       // automatically. The in-memory error above is per-process and harmless either way.
       if (this.ownsSession(id)) {
         const ownerNodeId = this.ownership?.nodeId;
+        const persistFailed = (err: unknown): void =>
+          this.logger.warn('Failed to persist the reconnect-exhausted FAILED state', {
+            sessionId: id,
+            error: err instanceof Error ? err.message : String(err),
+          });
         void this.updateStatus(id, SessionStatus.FAILED, { ownerNodeId })
-          .then(updated => {
-            if (updated) {
-              // The hook signal a terminal failure carries: a failed re-init no longer fires session:error per
-              // attempt, so the episode's one terminal end reports it here.
-              void this.hookManager.execute('session:error', { reason }, { sessionId: id, source: 'SessionService' });
-            }
+          // A write that fails says nothing about the owner: it is logged, and the gate below decides.
+          .catch((err: unknown) => {
+            persistFailed(err);
+            return undefined;
           })
-          .catch(err =>
-            this.logger.warn('Failed to persist the reconnect-exhausted FAILED state', {
-              sessionId: id,
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          );
+          .then(updated => {
+            if (updated === false || (updated === undefined && !this.ownsSession(id))) return;
+            // The hook signal a terminal failure carries: a failed re-init no longer fires session:error per
+            // attempt, so the episode's one terminal end reports it here.
+            void this.hookManager.execute('session:error', { reason }, { sessionId: id, source: 'SessionService' });
+          })
+          .catch(persistFailed);
       }
       // Terminal path: evict the dead engine so it neither holds a concurrency slot nor makes a
       // subsequent start() reject the session as "already started". This mirrors onError's terminal

@@ -180,7 +180,10 @@
 > where a claim may already have been released) and confirm live row ownership before launching
 > reconnect engines or emitting external side effects. When a peer takes over a row mid-flight, a
 > stale node's write matches zero rows and suppresses status, QR, ready, disconnect, restriction,
-> reconnect-loop, and error webhooks, WebSocket events, audits, and hooks.
+> reconnect-loop, and error webhooks, WebSocket events, audits, and hooks. A write that fails with a
+> database error proves nothing about the owner: it is logged, and the QR, ready and disconnect
+> notifications still go out while this node owns the session and the engine is the live one, as does
+> the `session:error` hook of a failed or given-up session while this node owns it.
 >
 > **Forwarded requests can be single-counted with `SESSION_PROXY_SECRET`.** Without
 > `SESSION_PROXY_SECRET`, a forwarded request is throttled on both nodes: the receiving node counts
