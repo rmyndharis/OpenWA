@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plugins: reject a `ctx` call still in flight when its webhook dispatch times out instead of leaving it unanswered, which held every later capability call of the plugin after 64 such timeouts.
 - Webhooks: the settled outbox prune runs again a minute after a pass that hit its 100,000-row cap, so an installation settling more rows a day no longer grows `webhook_outbox_events` without bound.
 - Database: when SQLite cannot switch a database to WAL, log a boot warning naming the mode in effect and keep `synchronous = FULL` instead of the WAL-only `NORMAL`.
+- Scripts: the `backup.sh` hint for an unwritable `BACKUP_DIR` asks Helm installs for `TMPDIR=/app/data/backups` too, since the chart caps `/tmp`.
 - Docker: the bundled Redis runs with `--maxmemory 256mb` under its 512 MB limit, so a full queue refuses new jobs (delivered directly) instead of being OOM-killed on every restart.
 - WebSocket: while Redis refuses writes, chat-restricted subscribers on another replica keep receiving chat events.
 - Queue: finished jobs past their declared retention age are removed every five minutes, so a Redis at its memory ceiling takes jobs again without manual cleanup.
