@@ -376,7 +376,8 @@ sweep saw it, and a job removed in the queue dashboard is added again until the 
 spent. A Redis you run yourself should keep its keys: `maxmemory-policy noeviction`, and persistence
 (`appendonly yes`), so a restart does not begin with an empty queue; the bundled container and
 `docker-compose.yml` set both, plus a `maxmemory` of half the container's memory limit, so a full Redis
-refuses new jobs (and the gateway dispatches inline) instead of being OOM-killed. With the queue off, the reconciler cannot ask Redis about a job, so it replays a
+refuses new jobs (and the gateway dispatches inline) instead of being OOM-killed. BullMQ applies the `removeOnComplete` and `removeOnFail` ages only when another job finishes, which a full Redis never lets happen, so the
+gateway also removes finished jobs past their age every five minutes. With the queue off, the reconciler cannot ask Redis about a job, so it replays a
 `pending` row inline whatever Redis still holds, and a job left in `ingress-queue` runs again when the queue is
 turned back on: a second delivery of the same event. Before turning the queue off, wait until `ingress-queue` has
 no waiting, delayed or active jobs (the commands are in [14](./14-migration-guide.md), BullMQ Migration). A

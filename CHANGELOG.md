@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plugins: reject a `ctx` call still in flight when its webhook dispatch times out instead of leaving it unanswered, which held every later capability call of the plugin after 64 such timeouts.
 - Docker: the bundled Redis runs with `--maxmemory 256mb` under its 512 MB limit, so a full queue refuses new jobs (delivered directly) instead of being OOM-killed on every restart.
 - WebSocket: while Redis refuses writes, chat-restricted subscribers on another replica keep receiving chat events.
+- Queue: finished jobs past their declared retention age are removed every five minutes, so a Redis at its memory ceiling takes jobs again without manual cleanup.
 - Baileys: confirm a contact's LID with WhatsApp after an API send to its phone number, so the sent message shows in the chat listed under that `@lid` without waiting for the contact to reply. Thanks @juanbracamonte for the report.
 - Messages: store a send to a number WhatsApp holds under other digits (a Brazilian ninth digit) under the number WhatsApp resolved, not under the `chatId` of the request, so it shows in the same chat as the contact's replies; on whatsapp-web.js only when the number lookup answers a phone number, not the contact's LID.
 - Send pacing: find a contact's history under either spelling of a Brazilian, Mexican or Argentine mobile number, and under a number an earlier send showed WhatsApp resolves it to, so a send to a known contact is not counted as a new conversation.

@@ -448,6 +448,10 @@ LOG_FORMAT=json
 # The built-in container (and the compose redis service) caps Redis at 256 MB of its 512 MB memory limit,
 # leaving the rest for fragmentation and the append-only rewrite. Once full it refuses new jobs and the
 # gateway dispatches webhooks and ingress deliveries directly instead of queueing them.
+# Finished jobs past their retention age (an hour, failed ones a day) are also removed every five minutes,
+# so a full Redis takes new jobs again once they have aged out, even when no job can finish.
+# A load whose jobs younger than that need more than 256 MB is delivered directly while Redis is full: raise
+# the redis service's mem_limit and --maxmemory together in a compose override (maxmemory about half).
 # Deployments that use the queue on one shared Redis need a distinct QUEUE_PREFIX each (default bull; up
 # to 64 letters, digits, dots, underscores or hyphens, starting with a letter or digit). A queue is named
 # only by its prefix and name, so two deployments on the same prefix take each other's webhook jobs and

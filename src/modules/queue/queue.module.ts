@@ -9,6 +9,7 @@ import { IngressProcessor } from './processors/ingress.processor';
 import { QUEUE_NAMES } from './queue-names';
 import { queueRootOptions } from './redis-connection';
 import { ShutdownSafeQueue } from './shutdown-safe-queue';
+import { QueueRetentionService } from './queue-retention.service';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookOutboxModule } from '../webhook/webhook-outbox.module';
 import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
@@ -74,7 +75,7 @@ BullModule.queueClass = ShutdownSafeQueue;
       adapter: BullMQAdapter,
     }),
   ],
-  providers: [WebhookProcessor, IngressProcessor],
+  providers: [WebhookProcessor, IngressProcessor, QueueRetentionService],
   exports: [BullModule],
 })
 export class QueueModule {}
