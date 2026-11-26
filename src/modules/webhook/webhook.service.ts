@@ -449,8 +449,9 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     event: string,
     finalData: Record<string, unknown>,
     owned?: readonly PreparedWebhookDelivery[],
+    openNew?: boolean,
   ): Promise<PreparedWebhookDelivery[]> {
-    return this.delivery.reconcilePrepared(committed, sessionId, event, finalData, owned);
+    return this.delivery.reconcilePrepared(committed, sessionId, event, finalData, owned, openNew);
   }
 
   /** Post-commit async dispatch phase: run webhook:before hooks and deliver/enqueue prepared rows. */

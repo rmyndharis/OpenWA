@@ -542,8 +542,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * message edit) changed the message between transaction commit and dispatch. Re-evaluates webhook
    * filters against `finalData`, closes owned outbox rows for webhooks that no longer match, updates
    * pending outbox payloads in place for webhooks that still match, and opens rows for any newly
-   * matching webhooks. On a transient webhook lookup error, committed outbox rows are never closed:
-   * their stored payloads are updated in place to `finalData` and returned for live dispatch.
+   * matching webhooks, unless `openNew` is false. On a transient webhook lookup error, committed outbox
+   * rows are never closed: their stored payloads are updated in place to `finalData` and returned for live
+   * dispatch.
    */
   async reconcilePrepared(
     committed: readonly PreparedWebhookDelivery[],
@@ -551,6 +552,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     event: string,
     finalData: Record<string, unknown>,
     owned?: readonly PreparedWebhookDelivery[],
+    openNew = true,
   ): Promise<PreparedWebhookDelivery[]> {
     const keyOf = (item: Pick<PreparedWebhookDelivery, 'webhook' | 'idempotencyKey'>): string =>
       `${item.webhook.id}\u0000${item.idempotencyKey}`;
@@ -618,6 +620,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           .map(item => this.outbox.updatePendingPayload(item.webhook.id, item.idempotencyKey, item.baseData)),
       );
     }
+    if (!openNew) return updated;
     if (added.length > 0) {
       await this.openPrepared(added);
     }

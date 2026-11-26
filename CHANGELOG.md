@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Baileys: confirm a contact's LID with WhatsApp after an API send to its phone number, so the sent message shows in the chat listed under that `@lid` without waiting for the contact to reply. Thanks @juanbracamonte for the report.
 - Messages: store a send to a number WhatsApp holds under other digits (a Brazilian ninth digit) under the number WhatsApp resolved, not under the `chatId` of the request, so it shows in the same chat as the contact's replies; on whatsapp-web.js only when the number lookup answers a phone number, not the contact's LID.
 - Send pacing: find a contact's history under either spelling of a Brazilian, Mexican or Argentine mobile number, and under a number an earlier send showed WhatsApp resolves it to, so a send to a known contact is not counted as a new conversation.
+- Messages: store inbound messages and own-send echoes when the session's webhooks cannot be read; since 0.32.0 a failed webhook lookup dropped them from history.
+- Messages: store a message on its own when it cannot be committed together with its webhook outbox rows; since 0.32.0 a failed outbox write dropped it from history.
+- Messages: store a message whose id the engine could not read once when its insert is tried again; an attempt that followed a commit that had landed stored it twice.
+- Messages: store a message revoked or edited while its insert is tried again as that change left it; `message:persisted` and the media archive were handed the earlier text once.
+- Messages: clear the stored row of a message revoked just before its commit when the engine retires in the same moment; the row kept the taken-back text and media.
+- Messages: write an edit, a reaction or a delivery receipt that reached a message in flight to its row when the engine retires as the commit lands; the row kept the text from before the edit, and the sweep delivered it.
+- Messages: write a revoke or an edit that reached a message in flight to the row a commit stored before reporting an error, when the row could not then be stored alone; the row kept the earlier text, and the sweep delivered it.
+- Messages: clear the stored row of a message revoked just before its commit when a `message:received` or `message:sent` handler filed it under another chat; the row kept the taken-back text and media.
+- Webhooks: close the pending outbox row of a message revoked just before its commit when the engine retires before the commit's failure is handled; the sweep delivered the taken-back text afterwards.
+- Plugins: keep the gateway's `from`, `to`, `fromMe`, `timestamp`, `type`, `author`, `isLidSender` and `ephemeralDuration`, and the chat's `isGroup` and `kind`, when a `message:received` or `message:sent` handler leaves them out, returns them as `null` or in another type, or removes them from the message it was handed; such a message was not stored.
+- Plugins: keep one handler's redaction when a later `message:received` or `message:sent` handler removes the `id` or `chatId` of the message it was handed; the original text and media were stored and delivered.
 - Plugins: a webhook delivery whose handler awaits a `ctx` call when the dispatch budget runs out always fails as a dispatch timeout (504), no longer sometimes with the handler's error.
 
 ## [0.32.1] - 2026-11-24

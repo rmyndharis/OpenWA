@@ -464,7 +464,16 @@ the operator's own history. For the same reason the gateway only keeps a returne
 events while it is still a message (an object with a string `id` and `chatId`): `data: null`, a
 primitive or `{}` is logged and skipped, and the chain carries on with the last message it held, so an
 earlier handler's rewrite (a redaction) still applies. `webhook:before` treats a result without a
-plain-object `payload` the same way.
+plain-object `payload` the same way. A returned message that leaves out `from`, `to`, `fromMe`,
+`timestamp`, `type`, `author`, `isGroup`, `kind`, `isLidSender` or `ephemeralDuration`, or returns it as
+`null` or in another type than the gateway reports it in (an object for `from`, a string for `fromMe`),
+keeps the gateway's value for it, so a redaction may return only `id`, `chatId` and the new `body`. When
+it names another `chatId` as well, the `isGroup` and `kind` it leaves out are those of that chat instead.
+A value of the right type stays as returned, an empty string, `false` and `0` included (the way to blank
+one of these fields), and content it leaves out, such as `media`, stays out. A handler that changes the
+message it was handed instead of returning one is held to the same rule, `id` and `chatId` included.
+Damaging that message (removing its `id`, say) does not bring back what an earlier handler removed: the
+gateway goes on with the message as the chain left it, never with the one that arrived.
 
 On a **pre-action** event it is a veto, because the action has not been taken yet: `false` on
 `message:sending` blocks the send (the caller gets a `400`), and on `webhook:before` it cancels that one

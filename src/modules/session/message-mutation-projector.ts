@@ -64,13 +64,14 @@ export class MessageMutationProjector {
 
   /**
    * What the stored row says of a change: whether there is one to ask, and why the change must not touch
-   * it (null when it may). A row that cannot be read is reported absent with no reason, as before.
+   * it (null when it may). A row that cannot be read is reported absent with no reason, as before, and
+   * marked unread.
    */
   async storedRowVerdict(
     sessionId: string,
     waMessageId: string,
     source: MutationSource,
-  ): Promise<{ exists: boolean; reason: string | null }> {
+  ): Promise<{ exists: boolean; reason: string | null; unread?: boolean }> {
     if (!waMessageId) return { exists: false, reason: null };
     try {
       const row = await this.messageRepository.findOne({
@@ -81,7 +82,7 @@ export class MessageMutationProjector {
         ? { exists: true, reason: await mutationTargetsForeignRowPersisted(row, source, this.resolveLid) }
         : { exists: false, reason: null };
     } catch {
-      return { exists: false, reason: null };
+      return { exists: false, reason: null, unread: true };
     }
   }
 
