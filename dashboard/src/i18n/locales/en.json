@@ -1269,6 +1269,7 @@
       "exportFailed": "Couldn't export data",
       "exportPartialTitle": "Backup is missing some media",
       "exportPartial": "{{count}} attachment payload(s) exceeded the export media budget and were saved as placeholders. The messages restore; their media does not.",
+      "exportIncomplete": "The download ended before the backup was complete, so nothing was saved. Try again.",
       "importFailed": "Couldn't import data",
       "importOk": "Data imported",
       "importConfirm": "Importing will REPLACE all current data with the backup ({{rows}} rows). This cannot be undone. Continue?",

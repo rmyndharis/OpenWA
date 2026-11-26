@@ -18,6 +18,8 @@ let ToastContext: typeof ToastContextType;
 let exportAnswer: Promise<Response> = new Promise(() => {});
 const exportUrls: string[] = [];
 const saved: HTMLAnchorElement[] = [];
+// What each saved link points at.
+const savedBodies: Blob[] = [];
 // Answers of the import route in order, and what it was sent.
 let importAnswers: Array<Response | Promise<Response>> = [];
 const importKeys: Array<string | null> = [];
@@ -30,8 +32,17 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
+// The members and their order are the export route's own: the hook reads the two ends of the body.
 function dump(extra: Record<string, unknown> = {}): Response {
-  return json({ exportedAt: '2026-10-09T10:00:00.000Z', dataDbType: 'sqlite', tables: {}, counts: {}, ...extra });
+  return json({
+    exportedAt: '2026-10-09T10:00:00.000Z',
+    dataDbType: 'sqlite',
+    tables: {},
+    counts: {},
+    skippedTables: [],
+    omittedInlineMedia: { messages: 0, messageBatches: 0 },
+    ...extra,
+  });
 }
 
 before(async () => {
@@ -54,7 +65,10 @@ before(async () => {
     }
     return Promise.resolve(new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } }));
   };
-  URL.createObjectURL = () => 'blob:backup';
+  URL.createObjectURL = (body: Blob | MediaSource) => {
+    savedBodies.push(body as Blob);
+    return 'blob:backup';
+  };
   URL.revokeObjectURL = () => {};
   rtl = await import('@testing-library/react');
   ({ useDataBackup } = await import('./useDataBackup.ts'));
@@ -64,6 +78,7 @@ before(async () => {
 afterEach(() => {
   rtl.cleanup();
   saved.length = 0;
+  savedBodies.length = 0;
   exportUrls.length = 0;
   exportAnswer = new Promise(() => {});
   window.sessionStorage.removeItem('openwa_api_key_id');
@@ -109,6 +124,80 @@ test('an export that completes while signed in saves the backup file', async () 
     ['openwa-backup-2026-10-09.json'],
   );
   assert.ok(exportUrls[0]?.endsWith('/api/infra/export-data'));
+});
+
+test('the saved file is the response body as received, not a parsed and re-serialized copy', async () => {
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
+  // Spacing that a parse followed by a serialize would not keep, around a history too long to copy twice.
+  const rows = Array.from({ length: 2000 }, (_, i) => `{"id":"m-${i}","body":"${'x'.repeat(100)}"}`).join(',');
+  const body =
+    `{"exportedAt":"2026-10-09T10:00:00.000Z",  "tables":{"messages":[${rows}]},` +
+    '"omittedInlineMedia":{"messages":4,"messageBatches":1}}';
+  exportAnswer = Promise.resolve(
+    new Response(body, { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' } }),
+  );
+  const { result } = renderBackup();
+  await rtl.act(() => result.current.exportBackup());
+  assert.equal(savedBodies.length, 1);
+  // Not assert.equal: a mismatch would print both quarter-megabyte bodies.
+  assert.ok((await savedBodies[0].text()) === body, 'the saved file is not the body the route sent');
+  assert.equal(saved[0]?.download, 'openwa-backup-2026-10-09.json');
+  // The name and the warning still come from the document, read from its two ends.
+  assert.deepEqual(
+    toastLog.map(toast => [toast.kind, toast.detail]),
+    [['warning', i18nT('infrastructure.migration.exportPartial', { count: 5 })]],
+  );
+});
+
+test('a row that quotes the closing counts is not read as them', async () => {
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
+  exportAnswer = Promise.resolve(
+    dump({ tables: { messages: [{ body: '"omittedInlineMedia":{"messages":9,"messageBatches":9}}' }] } }),
+  );
+  const { result } = renderBackup();
+  await rtl.act(() => result.current.exportBackup());
+  assert.equal(saved.length, 1);
+  assert.deepEqual(toastLog, []);
+});
+
+test('a download cut short is reported and saves nothing', async () => {
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
+  const cut = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"exportedAt":"2026-10-09T10:00:00.000Z","tables":{"messages":['));
+      controller.error(new TypeError('terminated'));
+    },
+  });
+  exportAnswer = Promise.resolve(new Response(cut, { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  const { result } = renderBackup();
+  await rtl.act(() => result.current.exportBackup());
+  assert.deepEqual(saved, []);
+  assert.deepEqual(
+    toastLog.map(toast => [toast.kind, toast.title]),
+    [['error', i18nT('infrastructure.migration.exportFailed')]],
+  );
+});
+
+test('a body that ends before the document does is reported as a failed export and saves nothing', async () => {
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
+  // What a proxy that speaks HTTP/1.0 to the gateway hands on when the export fails midway: a complete 200.
+  exportAnswer = Promise.resolve(
+    new Response(
+      '{"exportedAt":"2026-10-09T10:00:00.000Z","dataDbType":"sqlite","tables":{"sessions":[{"id":"s1"}],"messages":[{"id":"m-1"},',
+      { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' } },
+    ),
+  );
+  const { result } = renderBackup();
+  await rtl.act(() => result.current.exportBackup());
+  assert.deepEqual(saved, []);
+  assert.deepEqual(toastLog, [
+    {
+      kind: 'error',
+      title: i18nT('infrastructure.migration.exportFailed'),
+      detail: i18nT('infrastructure.migration.exportIncomplete'),
+    },
+  ]);
+  assert.equal(result.current.migrating, false);
 });
 
 test('exportBackup(true) appends includePluginSecrets=true to the export request', async () => {
@@ -265,6 +354,19 @@ test('a backup over the request body cap gets the actionable message, not a bare
       title: i18nT('infrastructure.migration.importFailed'),
       detail: i18nT('infrastructure.migration.importTooLarge'),
     },
+  ]);
+});
+
+test('a backup the gateway has no memory to restore gets its own message, since raising the body cap would not help', async () => {
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
+  const message =
+    'The backup is 482879428 bytes, and with the memory this process has free it can restore at most 383000000.';
+  importAnswers = [json({ statusCode: 413, message, error: 'Payload Too Large', code: 'IMPORT_TOO_LARGE' }, 413)];
+  answerConfirms(true);
+  const { result } = renderBackup();
+  await rtl.act(() => result.current.importBackup(backupFile({ tables: { sessions: [{ id: 'a' }] } })));
+  assert.deepEqual(toastLog, [
+    { kind: 'error', title: i18nT('infrastructure.migration.importFailed'), detail: message },
   ]);
 });
 

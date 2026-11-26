@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Infrastructure: one data export runs at a time (`409` `EXPORT_IN_PROGRESS`), a download is ended after 60 minutes or 10 idle minutes, and a failure after the first byte resets the connection instead of ending the body.
 - Infrastructure: `POST /api/infra/import-data` refuses a backup the process has no memory to parse instead of running out of heap on it (a 483 MB body ended a gateway with a 1 GiB heap).
 - Database: SQLite in WAL mode cuts the `-wal` file back to 64 MiB once the log starts over, instead of keeping the size a long read such as a data export let it reach.
+- Dashboard: the backup download saves the export as received (compact JSON) instead of parsing and re-serializing it, which copied a large backup twice in the browser, and reports a download that was cut short instead of saving it.
 - Plugins: a webhook delivery whose handler awaits a `ctx` call when the dispatch budget runs out always fails as a dispatch timeout (504), no longer sometimes with the handler's error.
 
 ## [0.32.1] - 2026-11-24

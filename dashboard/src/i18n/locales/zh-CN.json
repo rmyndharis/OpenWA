@@ -1290,6 +1290,7 @@
       "exportFailed": "无法导出数据",
       "exportPartialTitle": "备份缺少部分媒体",
       "exportPartial": "{{count}} 个附件超出了导出的媒体容量上限，已保存为占位符。消息可以恢复，但其媒体无法恢复。",
+      "exportIncomplete": "下载在备份完成之前就结束了，因此未保存任何内容。请重试。",
       "importFailed": "无法导入数据",
       "importOk": "数据已导入",
       "importConfirm": "导入操作将用备份数据替换（REPLACE）当前所有数据（{{rows}} 行）。此操作无法撤销。是否继续？",

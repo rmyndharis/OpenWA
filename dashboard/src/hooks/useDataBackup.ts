@@ -36,22 +36,35 @@ export function useDataBackup(): DataBackup {
     setMigrating(true);
     const sameKey = keepsSameKey();
     try {
-      const dump = await infraApi.exportData(includePluginSecrets);
+      const backup = await infraApi.exportData(includePluginSecrets);
+      // The body is saved as it arrived: parsing it and serializing it again copied a large backup
+      // twice. The two values needed from it are the first member of the document and the last.
+      const head = await backup.slice(0, 200).text();
+      const tail = await backup.slice(-200).text();
       // Do not save an exported dump onto a signed-out page.
       if (!sameKey()) return;
-      const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
+      // The export fails after its first byte by cutting the connection, which a proxy on the way can
+      // turn into a complete response. A body that does not end as the document does is half a
+      // backup: saved, it would be found out at restore time, after the old database is gone.
+      const omitted =
+        /"omittedInlineMedia"\s*:\s*\{\s*"messages"\s*:\s*(\d+)\s*,\s*"messageBatches"\s*:\s*(\d+)\s*\}\s*\}\s*$/.exec(
+          tail,
+        );
+      if (!omitted) {
+        toast.error(t('infrastructure.migration.exportFailed'), t('infrastructure.migration.exportIncomplete'));
+        return;
+      }
+      const url = URL.createObjectURL(backup);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `openwa-backup-${dump.exportedAt?.slice(0, 10) || 'data'}.json`;
+      a.download = `openwa-backup-${/^\s*\{\s*"exportedAt"\s*:\s*"(\d{4}-\d{2}-\d{2})/.exec(head)?.[1] ?? 'data'}.json`;
       a.click();
       scheduleObjectUrlRevoke(url);
 
       // The download itself is silent on success, which is fine when the backup is complete. It is
       // not fine when the budget dropped media: the archive restores without error and nothing else
       // would ever tell the operator that some history came back without its attachments.
-      const omitted = dump.omittedInlineMedia;
-      const dropped = (omitted?.messages ?? 0) + (omitted?.messageBatches ?? 0);
+      const dropped = Number(omitted[1]) + Number(omitted[2]);
       if (dropped > 0) {
         toast.warning(
           t('infrastructure.migration.exportPartialTitle'),
@@ -123,8 +136,10 @@ export function useDataBackup(): DataBackup {
       }
       // A large backup can exceed the request body cap (default 25mb) — give an actionable message
       // instead of a bare "Payload Too Large". The status is carried on the Error by the api client.
+      // IMPORT_TOO_LARGE is a different refusal: the gateway has no memory to restore the backup, and
+      // its message says how much it can, which raising the cap would not change.
       const detail =
-        status === 413
+        status === 413 && code !== 'IMPORT_TOO_LARGE'
           ? t('infrastructure.migration.importTooLarge')
           : err instanceof Error
             ? err.message

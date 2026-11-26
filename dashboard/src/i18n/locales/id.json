@@ -1269,6 +1269,7 @@
       "exportFailed": "Gagal mengekspor data",
       "exportPartialTitle": "Cadangan kehilangan beberapa media",
       "exportPartial": "{{count}} payload lampiran melebihi anggaran media ekspor dan disimpan sebagai placeholder. Pesan dipulihkan; medianya tidak.",
+      "exportIncomplete": "Unduhan berakhir sebelum cadangan lengkap, sehingga tidak ada yang disimpan. Coba lagi.",
       "importFailed": "Gagal mengimpor data",
       "importOk": "Data diimpor",
       "importConfirm": "Mengimpor akan MENGGANTI semua data saat ini dengan cadangan ({{rows}} baris). Ini tidak dapat dibatalkan. Lanjutkan?",

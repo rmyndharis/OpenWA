@@ -1299,6 +1299,7 @@
       "exportFailed": "Não foi possível exportar os dados",
       "exportPartialTitle": "Faltam algumas mídias no backup",
       "exportPartial": "Anexos acima do limite de mídia da exportação: {{count}}. Eles foram salvos como marcadores de posição. As mensagens são restauradas; as mídias delas, não.",
+      "exportIncomplete": "O download terminou antes de o backup estar completo, então nada foi salvo. Tente novamente.",
       "importFailed": "Não foi possível importar os dados",
       "importOk": "Dados importados",
       "importConfirm": "A importação IRÁ SUBSTITUIR todos os dados atuais pelo backup ({{rows}} linhas). Isso não pode ser desfeito. Continuar?",

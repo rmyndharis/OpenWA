@@ -1299,6 +1299,7 @@
       "exportFailed": "Impossible d'exporter les données",
       "exportPartialTitle": "Il manque des médias dans la sauvegarde",
       "exportPartial": "Pièces jointes au-delà de la limite de médias de l'exportation : {{count}}. Elles ont été enregistrées comme espaces réservés. Les messages sont restaurés ; leurs médias ne le sont pas.",
+      "exportIncomplete": "Le téléchargement s'est terminé avant que la sauvegarde soit complète, rien n'a donc été enregistré. Réessayez.",
       "importFailed": "Impossible d'importer les données",
       "importOk": "Données importées",
       "importConfirm": "L'importation REMPLACERA toutes les données actuelles par la sauvegarde ({{rows}} lignes). Cette action est irréversible. Continuer ?",

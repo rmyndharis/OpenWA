@@ -1299,6 +1299,7 @@
       "exportFailed": "No se pudieron exportar los datos",
       "exportPartialTitle": "A la copia de seguridad le faltan algunos archivos multimedia",
       "exportPartial": "Adjuntos que superaron el límite multimedia de la exportación: {{count}}. Se guardaron como marcadores de posición. Los mensajes se restauran; sus archivos multimedia, no.",
+      "exportIncomplete": "La descarga terminó antes de que la copia de seguridad estuviera completa, así que no se guardó nada. Inténtalo de nuevo.",
       "importFailed": "No se pudieron importar los datos",
       "importOk": "Datos importados",
       "importConfirm": "La importación REEMPLAZARÁ todos los datos actuales con la copia de seguridad ({{rows}} filas). Esto no se puede deshacer. ¿Continuar?",

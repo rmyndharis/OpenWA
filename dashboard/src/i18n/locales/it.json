@@ -1299,6 +1299,7 @@
       "exportFailed": "Impossibile esportare i dati",
       "exportPartialTitle": "Nel backup mancano alcuni file multimediali",
       "exportPartial": "{{count}} allegato/i ha/hanno superato il limite di spazio per l'esportazione dei file multimediali e sono stati salvati come segnaposto. I messaggi verranno ripristinati, ma non i relativi file multimediali.",
+      "exportIncomplete": "Il download è terminato prima che il backup fosse completo, quindi non è stato salvato nulla. Riprova.",
       "importFailed": "Impossibile importare i dati",
       "importOk": "Dati importati",
       "importConfirm": "L'importazione SOSTITUIRÀ tutti i dati attuali con il backup ({{rows}} righe). Questa operazione non può essere annullata. Continuare?",
