@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `POST /api/infra/import-data` refuses a backup above `25mb` that is larger than the free heap divided by 2.5 (about 411 MB on a 1 GiB heap), or by 4 when it holds any character outside Latin-1, such as an emoji (about 259 MB), with `413` `IMPORT_TOO_LARGE`; use `scripts/backup.sh` and `scripts/restore.sh` for a larger database.
 - A send to a number WhatsApp holds under other digits (a Brazilian, Mexican or Argentine mobile written in its other spelling) is stored under the number WhatsApp resolved, or under the contact's `@lid` when the message went to the lid and the engine recorded the send first, no longer under the `chatId` of the request. Read its history and follow up with the id `GET /api/sessions/{sessionId}/contacts/check/{number}` returns; a row under the lid is listed under that id only once WhatsApp reports the pair, and until then under the lid `message.sent` names. Name that id in `allowedChats`: a key scoped to the other spelling no longer reads the rows of its own sends. Rows stored before the upgrade keep their chat id.
 
+### Added
+
+- SDKs: `npm run check:sdk-coverage` compares the query keys each SDK call sends with the parameters the contract declares, so a renamed or dropped query parameter fails CI instead of leaving a client on the old key.
+
 ### Fixed
 
 - Infrastructure: keep a storage or session data path already in effect outside `./data` (such as the `./uploads` v0.2.0 to v0.7.3 saved) instead of answering `400` to every configuration save; only a changed path must be inside `./data`.
