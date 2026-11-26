@@ -553,11 +553,21 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async revokeBrowserSessionsForKey(keyId: string): Promise<void> {
+    let sessions: BrowserSessionService | undefined;
     try {
-      const sessions = this.moduleRef.get(BrowserSessionService, { strict: false });
-      await sessions?.revokeByApiKeyId(keyId);
+      sessions = this.moduleRef.get(BrowserSessionService, { strict: false });
     } catch {
-      // BrowserSessionService may be absent in minimal unit-test modules.
+      return; // BrowserSessionService may be absent in minimal unit-test modules.
+    }
+    try {
+      await sessions?.revokeByApiKeyId(keyId);
+    } catch (error) {
+      // The key change itself stands, and each cookie request re-validates the key, so a session left
+      // live is still refused; the warning says which key's rows to clear.
+      this.logger.warn(`Failed to revoke browser sessions for key ${keyId}`, {
+        keyId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

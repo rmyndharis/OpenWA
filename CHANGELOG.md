@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs: correct the SQLite WAL default, dashboard cookie sign-in (a separately hosted dashboard must share the API's site), plugin secret export, CORS headers, webhook job retention, dashboard coverage floors, session row fences, ingress order on a busy key, data a session delete keeps, routes without `Idempotency-Key` and the whatsapp-web.js star caveat, and list the WAL, `DOCKER_HOST`, index, sidecar limit and Helm `/tmp` changes in the 0.32.0 upgrade hazards.
 - Database: when SQLite cannot switch a database to WAL, log a boot warning naming the mode in effect and keep `synchronous = FULL` instead of the WAL-only `NORMAL`.
 - Scripts: the `backup.sh` hint for an unwritable `BACKUP_DIR` asks Helm installs for `TMPDIR=/app/data/backups` too, since the chart caps `/tmp`.
+- Auth: a failed revoke of a key's dashboard browser sessions, on key revoke or delete, is now logged as a warning naming the key instead of being silently dropped.
 - Docker: the bundled Redis runs with `--maxmemory 256mb` under its 512 MB limit, so a full queue refuses new jobs (delivered directly) instead of being OOM-killed on every restart.
 - WebSocket: while Redis refuses writes, chat-restricted subscribers on another replica keep receiving chat events.
 - Queue: finished jobs past their declared retention age are removed every five minutes, so a Redis at its memory ceiling takes jobs again without manual cleanup.

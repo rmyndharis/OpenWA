@@ -3,7 +3,7 @@ import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import type { ModuleRef } from '@nestjs/core';
 import type { ConfigService } from '@nestjs/config';
 import type { Request, Response } from 'express';
-import { DataSource } from 'typeorm';
+import { DataSource, QueryFailedError } from 'typeorm';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 import { BrowserSession } from './entities/browser-session.entity';
 import { AuthService, UnresolvedApiKeyException } from './auth.service';
@@ -586,6 +586,36 @@ describe('BrowserSessionService & CreateBrowserSessions migration (SQLite)', () 
     await expect(service.validateSessionToken(token, '127.0.0.1')).rejects.toThrow(UnauthorizedException);
     await expect(service.validateSessionById(session.id, '127.0.0.1')).rejects.toThrow(UnauthorizedException);
   });
+
+  // Revoking or deleting a key also revokes its browser sessions. When that write fails the key change
+  // still stands, so the failure is logged with the key id, and the session left live is refused anyway
+  // because every cookie request re-validates the key it belongs to.
+  it.each([
+    ['revoke', (id: string) => authService.revoke(id), 'API key is revoked'],
+    ['delete', (id: string) => authService.delete(id), 'Invalid API key'],
+  ])(
+    'a failed browser-session revoke on key %s is logged with the key id and the session still cannot act',
+    async (_name, change, refusal) => {
+      const { token } = await service.createSession(activeKey);
+      const warn = jest
+        .spyOn((authService as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn')
+        .mockImplementation(() => undefined);
+      jest
+        .spyOn(ds.getRepository(BrowserSession), 'update')
+        .mockRejectedValueOnce(new QueryFailedError('UPDATE', [], new Error('SQLITE_BUSY: database is locked')));
+
+      await change(activeKey.id);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(activeKey.id),
+        expect.objectContaining({ keyId: activeKey.id, error: expect.stringContaining('SQLITE_BUSY') as string }),
+      );
+      const row = await ds.getRepository(BrowserSession).findOneByOrFail({ apiKeyId: activeKey.id });
+      expect(row.revokedAt).toBeNull();
+      await expect(service.validateSessionToken(token, '127.0.0.1')).rejects.toThrow(refusal);
+      await expect(service.validateSessionById(row.id, '127.0.0.1')).rejects.toThrow(UnauthorizedException);
+    },
+  );
 
   it('revokeByToken marks revokedAt, refreshes key index, evicts WS sockets, and blocks reuse', async () => {
     const { token, session } = await service.createSession(activeKey);
