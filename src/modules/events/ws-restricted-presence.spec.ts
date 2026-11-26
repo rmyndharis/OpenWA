@@ -121,6 +121,51 @@ describe('WsRestrictedPresenceTracker', () => {
     redisInstances.length = 0;
   });
 
+  // A Redis over maxmemory answers reads and refuses writes, so a node cannot renew or register its lease.
+  describe('while Redis refuses writes', () => {
+    const OOM = (): Promise<never> =>
+      Promise.reject(new Error("OOM command not allowed when used memory > 'maxmemory'."));
+    const refuseWrites = ({ mocks }: FakeRedisStore): (() => void) => {
+      const set = mocks.set.getMockImplementation()!;
+      const sadd = mocks.sadd.getMockImplementation()!;
+      mocks.set.mockImplementation(OOM);
+      mocks.sadd.mockImplementation(OOM);
+      return () => {
+        mocks.set.mockImplementation(set);
+        mocks.sadd.mockImplementation(sadd);
+      };
+    };
+
+    it('neither prunes a live node whose lease ran out nor reports that no node holds a restricted socket', async () => {
+      const redis = createFakeRedis();
+      const nodeA = 'node-a:1111';
+      redis.sets.set(WS_RESTRICTED_NODES_KEY, new Set([nodeA]));
+      refuseWrites(redis);
+      const tracker = new WsRestrictedPresenceTracker(redis.client, { cacheTtlMs: 0 });
+
+      await expect(tracker.hasRestrictedNodes()).resolves.toBe(true);
+      expect(redis.sets.get(WS_RESTRICTED_NODES_KEY)).toEqual(new Set([nodeA]));
+    });
+
+    it('does not trust an empty set, and keeps failing open while nodes register again', async () => {
+      const redis = createFakeRedis();
+      const restore = refuseWrites(redis);
+      const tracker = new WsRestrictedPresenceTracker(redis.client, { cacheTtlMs: 0, heartbeatMs: 10_000 });
+      const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+      try {
+        await expect(tracker.hasRestrictedNodes()).resolves.toBe(true);
+
+        restore();
+        now.mockReturnValue(1_000_000 + 19_999);
+        await expect(tracker.hasRestrictedNodes()).resolves.toBe(true);
+        now.mockReturnValue(1_000_000 + 20_000);
+        await expect(tracker.hasRestrictedNodes()).resolves.toBe(false);
+      } finally {
+        now.mockRestore();
+      }
+    });
+  });
+
   it('prunes stale members atomically via Lua so a concurrent Node B renewal between MGET and prune is never removed', async () => {
     const { client, mocks, strings, sets } = createFakeRedis();
     const nodeB = 'node-b:2222';

@@ -444,12 +444,14 @@ export class DockerService implements OnModuleInit {
         name: 'openwa-redis',
         alias: 'redis', // DNS alias for resolution
         // noeviction mirrors docker-compose.yml: BullMQ requires it, or Redis may evict queue keys
-        // once maxmemory is reached and silently drop queued jobs. Enforces --requirepass when
-        // REDIS_PASSWORD is configured; stays passwordless on the internal network when unset.
+        // once maxmemory is reached and silently drop queued jobs. maxmemory is half of memoryBytes,
+        // so a full Redis refuses writes instead of being OOM-killed (see the compose comment).
+        // Enforces --requirepass when REDIS_PASSWORD is configured; stays passwordless on the
+        // internal network when unset.
         cmd: [
           'sh',
           '-c',
-          'if [ -n "$REDIS_PASSWORD" ]; then exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory-policy noeviction --requirepass "$REDIS_PASSWORD"; else exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory-policy noeviction; fi',
+          'if [ -n "$REDIS_PASSWORD" ]; then exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction --requirepass "$REDIS_PASSWORD"; else exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction; fi',
         ],
         ...(redisPassword ? { env: [`REDIS_PASSWORD=${redisPassword}`] } : {}),
         volumes: [{ name: 'openwa_redis-data', path: '/data' }],
@@ -724,19 +726,31 @@ export class DockerService implements OnModuleInit {
 
   /**
    * A retained container is only ever restarted, never recreated (see stopManagedService), so it
-   * keeps the image it was created from after the pin moves. Warn with the way out; start and stop
-   * behaviour stay as they are.
+   * keeps the image and the command it was created with after this release changes them. Warn with
+   * the way out; start and stop behaviour stay as they are.
    */
   private warnOnImageDrift(profile: string, name: string, info: Docker.ContainerInspectInfo): void {
-    const pinned = this.getContainerSpec(profile)?.image;
+    const spec = this.getContainerSpec(profile);
     const running = info.Config?.Image;
-    if (!pinned || !running || running === pinned) return;
-    this.logger.warn(
-      `Container ${name} runs image ${running}, but this release pins ${pinned}. Remove it with ` +
-        `\`docker rm -f ${name}\` (its named data volume is kept) and restart OpenWA or re-enable the ` +
-        `service so it is recreated from the pin.` +
-        (profile === 'postgres' ? ' A PostgreSQL major version change needs a data migration first.' : ''),
-    );
+    if (!spec || !running) return;
+    const recreate =
+      `Remove it with \`docker rm -f ${name}\` (its named data volume is kept) and restart OpenWA or ` +
+      're-enable the service so it is recreated';
+    if (running !== spec.image) {
+      this.logger.warn(
+        `Container ${name} runs image ${running}, but this release pins ${spec.image}. ${recreate} from the pin.` +
+          (profile === 'postgres' ? ' A PostgreSQL major version change needs a data migration first.' : ''),
+      );
+      return;
+    }
+    // Compared, never printed: a command can carry settings an operator would not want in the log.
+    const command = info.Config?.Cmd;
+    if (spec.cmd && command && JSON.stringify(command) !== JSON.stringify(spec.cmd)) {
+      this.logger.warn(
+        `Container ${name} was created with another command than this release gives it, so it runs without ` +
+          `the settings this release added. ${recreate}.`,
+      );
+    }
   }
 
   /**

@@ -523,12 +523,14 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     # noeviction is required by BullMQ: under any other policy Redis may evict queue keys once
-    # maxmemory is reached, silently dropping queued jobs. When REDIS_PASSWORD is set, enforce it
-    # via --requirepass; otherwise keep passwordless internal-network mode.
+    # maxmemory is reached, silently dropping queued jobs. maxmemory stays at half of mem_limit, so a
+    # full Redis refuses writes (the gateway then delivers directly) instead of being OOM-killed: the
+    # rest covers fragmentation and the pages an append-only rewrite copies. When REDIS_PASSWORD is
+    # set, enforce it via --requirepass; otherwise keep passwordless internal-network mode.
     command:
       - sh
       - -c
-      - 'if [ -n "$$REDIS_PASSWORD" ]; then exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"; else exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory-policy noeviction; fi'
+      - 'if [ -n "$$REDIS_PASSWORD" ]; then exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"; else exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction; fi'
     volumes:
       - redis-data:/data
     healthcheck:

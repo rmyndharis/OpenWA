@@ -445,6 +445,9 @@ LOG_FORMAT=json
 # for the queue alone therefore also enables the cache.
 # CACHE_ENABLED=true
 # QUEUE_ENABLED=true   # process webhooks/ingress through the BullMQ queue
+# The built-in container (and the compose redis service) caps Redis at 256 MB of its 512 MB memory limit,
+# leaving the rest for fragmentation and the append-only rewrite. Once full it refuses new jobs and the
+# gateway dispatches webhooks and ingress deliveries directly instead of queueing them.
 # Deployments that use the queue on one shared Redis need a distinct QUEUE_PREFIX each (default bull; up
 # to 64 letters, digits, dots, underscores or hyphens, starting with a letter or digit). A queue is named
 # only by its prefix and name, so two deployments on the same prefix take each other's webhook jobs and

@@ -211,8 +211,9 @@
 > lightweight Redis presence lease (`openwa:ws:restricted-nodes` set plus a 30-second per-node TTL
 > key refreshed every 10 seconds and removed on disconnect or shutdown). When Redis confirms zero
 > restricted nodes exist cluster-wide, emitting nodes skip `lid_mappings` lookups and chat-room
-> fan-out completely. If the Redis presence client is absent, disconnected, or errors, the emitting
-> node fails open and expands the chat so restricted subscribers on peers never miss events. When
+> fan-out completely. If the Redis presence client is absent, disconnected, or errors, or Redis
+> refuses writes (over `maxmemory`, or a read-only replica), the emitting node fails open and
+> expands the chat so restricted subscribers on peers never miss events. When
 > chat-restricted expansion runs (because this node or a peer holds a restricted socket, or during a
 > fail-open fallback), an event of a one-to-one chat costs the emitting node one or two `lid_mappings`
 > lookups (one for a `@lid` chat, none for a group). Events about one chat of one session that are
@@ -423,7 +424,12 @@ services:
     image: redis:7-alpine
     deploy:
       replicas: 1
-    command: redis-server --appendonly yes --maxmemory-policy noeviction
+      resources:
+        limits:
+          memory: 512M
+    # maxmemory at half the limit, like the bundled container: a full Redis refuses new jobs (the
+    # gateway then delivers directly) instead of being OOM-killed while an AOF rewrite copies pages.
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
     volumes:
       - redis-data:/data
     networks:

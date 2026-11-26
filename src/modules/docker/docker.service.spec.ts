@@ -804,6 +804,38 @@ describe('DockerService image drift warning', () => {
     return { service, warn };
   };
 
+  // The bundled Redis got its memory ceiling in its command, so a retained container goes without it.
+  it('warns when a retained container runs another command than this release gives it', async () => {
+    const OLD_CMD = [
+      'sh',
+      '-c',
+      'exec docker-entrypoint.sh redis-server --appendonly yes --maxmemory-policy noeviction',
+    ];
+    const retainedRedis = (cmd: string[]) => ({
+      inspect: jest.fn().mockResolvedValue({
+        Name: '/openwa-redis',
+        State: { Running: true },
+        Config: { Image: 'redis:7-alpine', Cmd: cmd },
+      }),
+      start: jest.fn().mockResolvedValue(undefined),
+    });
+    const { service, warn } = setup(retainedRedis(OLD_CMD));
+
+    await expect(service.startService('cache')).resolves.toBe(true);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = String((warn.mock.calls[0] as unknown[])[0]);
+    expect(message).toContain('openwa-redis');
+    expect(message).toContain('docker rm -f openwa-redis');
+    expect(message).not.toContain('redis-server');
+
+    const spec = (service as unknown as { getContainerSpec(p: string): { cmd: string[] } }).getContainerSpec('redis');
+    warn.mockClear();
+    jest.spyOn(service, 'getContainerByService').mockResolvedValue(retainedRedis(spec.cmd) as never);
+    await expect(service.startService('cache')).resolves.toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('warns when a stopped retained container runs an older image, and still starts it', async () => {
     const container = retained(false, OLD_IMAGE);
     const { service, warn } = setup(container);

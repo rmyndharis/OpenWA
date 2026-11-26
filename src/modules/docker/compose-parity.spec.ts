@@ -501,6 +501,22 @@ describe('DockerService managed specs ↔ docker-compose.yml parity', () => {
     expect(cfg.Cmd?.join(' ')).toContain('--maxmemory-policy noeviction');
   });
 
+  // Without a ceiling, noeviction never refuses a write: Redis grows to the container limit, is OOM-killed,
+  // and then dies again replaying the same append-only file on every restart. The ceiling has to sit well
+  // under the limit, which also counts allocator fragmentation and the pages an AOF rewrite fork copies.
+  it('redis: caps its memory at half the container limit, on both launch paths and with or without a password', async () => {
+    const limit = parseComposeMemLimit(compose.services.redis.mem_limit!);
+    const cfg = await capture('redis');
+    for (const cmd of [(compose.services.redis.command as string[]).join(' '), cfg.Cmd!.join(' ')]) {
+      const caps = [...cmd.matchAll(/--maxmemory (\d+)mb\b/g)].map(m => parseInt(m[1], 10) * 1024 * 1024);
+      expect(caps).toHaveLength(2);
+      for (const cap of caps) {
+        expect(cap).toBeGreaterThan(0);
+        expect(cap).toBeLessThanOrEqual(limit / 2);
+      }
+    }
+  });
+
   it('redis: publishes no host ports, like compose', async () => {
     const cfg = await capture('redis');
     expect(compose.services.redis.ports).toBeUndefined();
