@@ -37,7 +37,12 @@ import {
 } from './session-engine-controls';
 import { decideReconnect, STABLE_READY_MS } from './reconnect-policy';
 import { ACK_RECONCILE_DELAY_MS } from './message-projector.service';
-import { SessionEngineLifecycle, type ReconnectState } from './session-engine-lifecycle.service';
+import {
+  QR_AUDIT_READERS_PER_CODE,
+  SessionEngineLifecycle,
+  type ReconnectState,
+} from './session-engine-lifecycle.service';
+import { getRequestActor, runWithRequestId, setRequestActor } from '../../common/services/request-context';
 import {
   ACCOUNT_REJECTED_REASON,
   AUTH_FAILURE_REASON,
@@ -8859,6 +8864,144 @@ describe('SessionService', () => {
       mockEngine.getQRCode.mockReturnValue(null);
 
       await expect(service.getQRCode('sess-uuid-1')).rejects.toThrow('already authenticated');
+    });
+
+    describe('SESSION_QR_GENERATED audit rows', () => {
+      let callbacks: EngineEventCallbacks;
+      let controller: SessionController;
+      // The reader each row is written for: the key and address the request context holds when it is written.
+      let rows: Array<{ apiKeyId?: string; ipAddress?: string }>;
+      // QR rows still to fail: AuditService.log answers null when its insert fails.
+      let failingRows: number;
+      const read = () => controller.getQRCode('sess-uuid-1');
+      const readAs = (apiKeyId: string, ipAddress: string) =>
+        runWithRequestId(`req-${apiKeyId}-${ipAddress}`, () => {
+          setRequestActor({ apiKeyId, ipAddress });
+          return read();
+        });
+
+      beforeEach(async () => {
+        rows = [];
+        failingRows = 0;
+        auditService.logInfo.mockImplementation((action: AuditAction) => {
+          if (action !== AuditAction.SESSION_QR_GENERATED) return Promise.resolve(null);
+          if (failingRows > 0) {
+            failingRows--;
+            return Promise.resolve(null);
+          }
+          const { apiKeyId, ipAddress } = getRequestActor() ?? {};
+          rows.push({ apiKeyId, ipAddress });
+          return Promise.resolve({ action, apiKeyId, ipAddress });
+        });
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ status: SessionStatus.QR_READY }));
+        (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+        mockEngine.initialize.mockImplementation((cb: EngineEventCallbacks) => {
+          callbacks = cb;
+          return Promise.resolve();
+        });
+        await service.start('sess-uuid-1');
+        controller = new SessionController(service, auditService as unknown as AuditService, new ChatScopeService());
+      });
+
+      const A = { apiKeyId: 'key-a', ipAddress: '10.0.0.1' };
+      const B = { apiKeyId: 'key-b', ipAddress: '10.0.0.1' };
+      const A_ELSEWHERE = { apiKeyId: 'key-a', ipAddress: '2001:db8::7' };
+      const readBy = (reader: { apiKeyId: string; ipAddress: string }) => readAs(reader.apiKeyId, reader.ipAddress);
+
+      // The dashboard polls GET /qr every few seconds while its pairing dialog is open, so a row per read
+      // filled the audit log with copies of one code. One reader gets a row for each code it is handed.
+      it('are written once per code for a reader polling it', async () => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        await readBy(A);
+        await readBy(A);
+        await readBy(A);
+        mockEngine.getQRCode.mockReturnValue('qr-second');
+        await readBy(A);
+        await readBy(A);
+
+        expect(rows).toEqual([A, A]);
+      });
+
+      // Whoever reads a pairing code can link a phone to the session, so every reader of a code is named.
+      it('are written for a second key reading the same code', async () => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        await readBy(A);
+        await readBy(B);
+        await readBy(A);
+        await readBy(B);
+
+        expect(rows).toEqual([A, B]);
+      });
+
+      it('are written for the same key reading the same code from a second address', async () => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        await readBy(A);
+        await readBy(A_ELSEWHERE);
+        await readBy(A);
+        await readBy(A_ELSEWHERE);
+
+        expect(rows).toEqual([A, A_ELSEWHERE]);
+      });
+
+      it('are written again for every reader of a new code', async () => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        await readBy(A);
+        await readBy(B);
+        mockEngine.getQRCode.mockReturnValue('qr-second');
+        await readBy(B);
+        await readBy(A);
+        await readBy(B);
+
+        expect(rows).toEqual([A, B, B, A]);
+      });
+
+      it('are written on the next read when the row for a reader could not be written', async () => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        failingRows = 1;
+        await readBy(A);
+        await readBy(A);
+        await readBy(A);
+
+        expect(failingRows).toBe(0);
+        expect(rows).toEqual([A]);
+      });
+
+      it('are written on every read by a reader past the ones remembered for a code', async () => {
+        const readers = Array.from({ length: QR_AUDIT_READERS_PER_CODE }, (_unused, i) => ({
+          apiKeyId: `key-${i}`,
+          ipAddress: '10.0.0.1',
+        }));
+        const extra = { apiKeyId: 'key-extra', ipAddress: '10.0.0.1' };
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        for (const reader of readers) await readBy(reader);
+        for (const reader of readers) await readBy(reader);
+        await readBy(extra);
+        await readBy(extra);
+
+        expect(rows).toEqual([...readers, extra, extra]);
+      });
+
+      it.each([
+        ['authenticates', () => callbacks.onReady?.('628123', 'Tester')],
+        ['stops', async () => void (await service.stop('sess-uuid-1'))],
+        ['is deleted', () => service.delete('sess-uuid-1')],
+      ])('forget the code last recorded once the session %s', async (_event, end) => {
+        mockEngine.getQRCode.mockReturnValue('qr-first');
+        await read();
+        await end();
+        if (!lifecycle.isEngineActive('sess-uuid-1')) await service.start('sess-uuid-1');
+
+        await read();
+
+        expect(rows).toHaveLength(2);
+      });
+
+      it('keep nothing for a read that finishes after its engine retired', async () => {
+        await service.stop('sess-uuid-1');
+
+        expect(service.claimQrAudit('sess-uuid-1', 'qr-late', 'reader')).toBe(true);
+        expect(service.claimQrAudit('sess-uuid-1', 'qr-late', 'reader')).toBe(true);
+      });
     });
   });
 

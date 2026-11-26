@@ -100,6 +100,12 @@ const RECONNECT_BASE_DELAY_MIN_MS = 1000;
 const RECONNECT_BASE_DELAY_MAX_MS = 300_000;
 const RECONNECT_MAX_ATTEMPTS_CAP = 20;
 
+/**
+ * Readers remembered per QR code for its audit row. A code lives tens of seconds and is read by one or two
+ * clients, so this is never reached in normal use; a reader past it gets a row on every read instead.
+ */
+export const QR_AUDIT_READERS_PER_CODE = 32;
+
 /** Coerce + clamp the untyped session.config reconnect knobs to finite, bounded values. Defaults are
  *  a 5000ms base delay and UNLIMITED attempts (`Infinity`): a long-lived session must keep retrying
  *  (the backoff parks at the 5-minute cap) instead of dying permanently after ~2.5 minutes. An EXPLICIT
@@ -324,6 +330,10 @@ export class SessionEngineLifecycle {
   // successful); and a COMMITTED delete (after the parent transaction). NOT cleared on a rejected
   // start, executeReconnect, disconnect, QR, auth failure, engine replacement, or a failed/409 delete.
   private readonly stuckAuthRecoveryUsed = new Set<string>();
+  // The QR code last recorded in the audit log per session and the readers it was recorded for, so a client
+  // polling one code writes one row. At most one entry per session, dropped when it authenticates and when
+  // its engine retires (stop, delete, replacement).
+  private readonly auditedQr = new Map<string, { qr: string; readers: Set<string> }>();
   // Moved each time this node records a terminal unlink of a session it owns. A start or an engine holding the
   // binding it read before the move treats it as gone, instead of depending on when the row write lands.
   private readonly bindingEpochs = new Map<string, number>();
@@ -380,6 +390,7 @@ export class SessionEngineLifecycle {
           'Review the API keys whose allowed chats name either id or this number.',
       });
     });
+    this.engineRegistry.onRetire(id => this.auditedQr.delete(id));
     // The fence Maps are handed over BY REFERENCE: they stay lifecycle fields (specs poke them
     // through the lifecycle), while the fence logic operates on the same instances.
     this.fences = new SessionLifecycleFences({
@@ -537,6 +548,29 @@ export class SessionEngineLifecycle {
   /** Delegate: SessionEngineControls.forgetSession. */
   forgetSession(id: string): void {
     this.controls.forgetSession(id);
+  }
+
+  /**
+   * True the first time `reader` is handed `qr` for `id`; false while `qr` is the code last recorded for that
+   * session and `reader` is one it was recorded for.
+   */
+  claimQrAudit(id: string, qr: string, reader: string): boolean {
+    const recorded = this.auditedQr.get(id);
+    const readers = recorded?.qr === qr ? recorded.readers : new Set<string>();
+    if (readers.has(reader)) return false;
+    // Kept only for a live engine, whose retirement drops it: a read that outlived its engine leaves nothing.
+    if (this.engines.has(id)) {
+      // A reader past the cap is not remembered, so each of its reads is recorded rather than none.
+      if (readers.size < QR_AUDIT_READERS_PER_CODE) readers.add(reader);
+      this.auditedQr.set(id, { qr, readers });
+    }
+    return true;
+  }
+
+  /** Undoes claimQrAudit for a row that could not be written, so the reader's next read writes it. */
+  releaseQrAudit(id: string, qr: string, reader: string): void {
+    const recorded = this.auditedQr.get(id);
+    if (recorded?.qr === qr) recorded.readers.delete(reader);
   }
 
   /** Delegate: SessionEngineControls.holdDelete. */
@@ -1084,6 +1118,7 @@ export class SessionEngineLifecycle {
     // READY proves any in-flight stuck-auth recovery succeeded (or none was needed), so the
     // one-shot recovery budget is re-armed for a future episode.
     this.stuckAuthRecoveryUsed.delete(id);
+    this.auditedQr.delete(id);
 
     const emitReadyEffects = (): void => {
       this.logger.log('Session ready', {

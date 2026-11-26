@@ -678,7 +678,13 @@ describe('SessionController: chat actions map the request to the service', () =>
 // config patch is only meaningful next to the state it merged into.
 describe('SessionController: delete, QR and config routes write their record', () => {
   const ID = 'sess-uuid-1';
-  let sessionService: { findOneForDelete: jest.Mock; delete: jest.Mock; getQRCode: jest.Mock; updateConfig: jest.Mock };
+  let sessionService: {
+    findOneForDelete: jest.Mock;
+    delete: jest.Mock;
+    getQRCode: jest.Mock;
+    claimQrAudit: jest.Mock;
+    updateConfig: jest.Mock;
+  };
   let auditService: { logInfo: jest.Mock };
   let controller: SessionController;
 
@@ -687,6 +693,7 @@ describe('SessionController: delete, QR and config routes write their record', (
       findOneForDelete: jest.fn().mockResolvedValue({ id: ID, name: 'my-bot' }),
       delete: jest.fn().mockResolvedValue(undefined),
       getQRCode: jest.fn(),
+      claimQrAudit: jest.fn().mockReturnValue(true),
       updateConfig: jest.fn(),
     };
     auditService = { logInfo: jest.fn().mockResolvedValue(undefined) };
@@ -727,6 +734,17 @@ describe('SessionController: delete, QR and config routes write their record', (
 
     expect(auditService.logInfo).toHaveBeenCalledTimes(1);
     expect(auditService.logInfo).toHaveBeenCalledWith(AuditAction.SESSION_QR_GENERATED, { sessionId: ID });
+    expect(sessionService.claimQrAudit).toHaveBeenCalledWith(ID, qr.qrCode, expect.any(String));
+  });
+
+  it('getQRCode returns a code already recorded without recording it again', async () => {
+    const qr = { qrCode: 'data:image/png;base64,AAAA', status: SessionStatus.QR_READY };
+    sessionService.getQRCode.mockResolvedValue(qr);
+    sessionService.claimQrAudit.mockReturnValue(false);
+
+    await expect(controller.getQRCode(ID)).resolves.toBe(qr);
+
+    expect(auditService.logInfo).not.toHaveBeenCalled();
   });
 
   it('getQRCode forwards the not-ready 400 verbatim and records nothing', async () => {

@@ -65,6 +65,7 @@ import {
   RECIPIENT_LOOKUP_503,
   SESSION_NOT_STARTED_400,
 } from '../../common/openapi/engine-status-responses';
+import { getRequestActor } from '../../common/services/request-context';
 
 /** The 400 the `:sessionId` pipe answers, as the routes that list it word it. */
 const SESSION_ID_400 = `The session id has characters other than letters, digits and hyphens, or is longer than ${MAX_SESSION_ID_LENGTH} characters`;
@@ -562,9 +563,17 @@ export class SessionController {
   @ApiResponse({ status: 404, description: 'Session not found' })
   async getQRCode(@Param('sessionId', SessionIdPipe) id: string): Promise<QRCodeResponseDto> {
     const qrCode = await this.sessionService.getQRCode(id);
-    await this.auditService.logInfo(AuditAction.SESSION_QR_GENERATED, {
-      sessionId: id,
-    });
+    // A pairing client polls this route while its code is on screen: one row per code and reader, not per read.
+    // The reader is the key and address the row is stamped with, read from the same request context.
+    const actor = getRequestActor();
+    const reader = JSON.stringify([actor?.apiKeyId ?? null, actor?.ipAddress ?? null]);
+    if (this.sessionService.claimQrAudit(id, qrCode.qrCode, reader)) {
+      const row = await this.auditService.logInfo(AuditAction.SESSION_QR_GENERATED, {
+        sessionId: id,
+      });
+      // The insert failed (logged, never thrown): the reader is not on record yet, so its next read tries again.
+      if (row === null) this.sessionService.releaseQrAudit(id, qrCode.qrCode, reader);
+    }
     return qrCode;
   }
 

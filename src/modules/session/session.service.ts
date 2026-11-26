@@ -1583,6 +1583,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     };
   }
 
+  /** Whether `qrCode` is not yet recorded in the audit log for this session and reader; see SessionEngineLifecycle. */
+  claimQrAudit(id: string, qrCode: string, reader: string): boolean {
+    return this.engineLifecycle.claimQrAudit(id, qrCode, reader);
+  }
+
+  /** Undoes claimQrAudit when its row could not be written; see SessionEngineLifecycle. */
+  releaseQrAudit(id: string, qrCode: string, reader: string): void {
+    this.engineLifecycle.releaseQrAudit(id, qrCode, reader);
+  }
+
   /**
    * Request an 8-char pairing code (link via phone number) as an alternative to scanning the QR.
    * The session must be started but not yet authenticated.

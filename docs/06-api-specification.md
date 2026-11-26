@@ -464,6 +464,8 @@ Get the QR code (PNG data URL) for session authentication.
 
 `status` is the session's current lowercase status.
 
+Each reader's first read of a code writes a `session_qr_generated` audit row, a reader being the API key and client address the row records; the same reader reading the same code again writes none (a reader after the 32nd of one code gets a row on every read).
+
 **Errors:** `400` session not started / QR not ready yet / already authenticated · `401` · `403` · `404` not found
 
 #### GET /api/sessions/:sessionId/groups
