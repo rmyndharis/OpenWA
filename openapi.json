@@ -63,6 +63,8 @@
                 "api_key_revoked",
                 "api_key_deleted",
                 "api_key_auth_failed",
+                "browser_session_created",
+                "browser_session_ended",
                 "rate_limit_exceeded",
                 "queue_board_mutated",
                 "session_created",

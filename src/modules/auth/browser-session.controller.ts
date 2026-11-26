@@ -15,6 +15,10 @@ import {
 } from './browser-session.util';
 import { EngineFactory } from '../../engine/engine.factory';
 import { presentedApiKey } from '../../common/security/bearer-token';
+import { resolveClientIp } from '../../common/utils/ip';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
+import { AuthService } from './auth.service';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -23,7 +27,35 @@ export class BrowserSessionController {
     private readonly browserSessionService: BrowserSessionService,
     private readonly engineFactory: EngineFactory,
     private readonly configService: ConfigService,
+    private readonly auditService: AuditService,
+    private readonly authService: AuthService,
   ) {}
+
+  // The client is resolved here rather than read from the guard, which skips the public logout route.
+  private auditContext(req: Request, apiKey: ApiKey | undefined) {
+    return {
+      apiKey,
+      ipAddress: resolveClientIp(req, this.configService.get<string[]>('security.trustedProxies') ?? []),
+      userAgent: req.headers?.['user-agent'],
+      method: req.method,
+      path: req.path,
+    };
+  }
+
+  private async revokeAndAudit(req: Request, token: string): Promise<void> {
+    const ended = await this.browserSessionService.revokeByToken(token);
+    if (!ended) return;
+    // Filed under the key the session belonged to, which on a replacing login is not the caller's key. The revoke
+    // has landed: a lookup that fails costs the row its key name, never the logout or the sign-in.
+    const owner = await this.authService.findAuthorizationStates([ended.apiKeyId]).then(
+      ([found]) => found,
+      () => undefined,
+    );
+    await this.auditService.logInfo(AuditAction.BROWSER_SESSION_ENDED, {
+      ...this.auditContext(req, owner ?? ({ id: ended.apiKeyId } as ApiKey)),
+      metadata: { browserSessionId: ended.id },
+    });
+  }
 
   @Post('session')
   @HeaderAuthOnly()
@@ -47,9 +79,13 @@ export class BrowserSessionController {
     }
     const priorToken = extractBrowserSessionCookie(req.headers?.cookie);
     if (priorToken) {
-      await this.browserSessionService.revokeByToken(priorToken);
+      await this.revokeAndAudit(req, priorToken);
     }
-    const { token, ttlMs } = await this.browserSessionService.createSession(apiKey);
+    const { token, session, ttlMs } = await this.browserSessionService.createSession(apiKey);
+    await this.auditService.logInfo(AuditAction.BROWSER_SESSION_CREATED, {
+      ...this.auditContext(req, apiKey),
+      metadata: { browserSessionId: session.id },
+    });
     const trustedProxies = this.configService.get<string[]>('security.trustedProxies') ?? [];
     const secureOverride = this.configService.get<boolean | undefined>('auth.dashboardSessionCookieSecure');
     const secure = isSecureCookieRequest(req, trustedProxies, secureOverride);
@@ -100,7 +136,7 @@ export class BrowserSessionController {
     const token = extractBrowserSessionCookie(req.headers?.cookie);
     if (token) {
       assertBrowserCsrfSafe(req, trustedProxies);
-      await this.browserSessionService.revokeByToken(token);
+      await this.revokeAndAudit(req, token);
     }
     const secureOverride = this.configService.get<boolean | undefined>('auth.dashboardSessionCookieSecure');
     const secure = isSecureCookieRequest(req, trustedProxies, secureOverride);

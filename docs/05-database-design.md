@@ -677,7 +677,8 @@ synchronize pass after the chain replaces them with the TypeORM-derived hash nam
 `api_key_updated`, `api_key_used`, `api_key_revoked`, `api_key_deleted`, `api_key_auth_failed`, capped
 at 10 rows per client IP per minute for a REST, queue-dashboard or MCP rejection that names no stored
 key, where a rejection of a stored key is recorded every time, and at 10 per client IP per minute for
-any rejection on `/api/health`), session
+any rejection on `/api/health`), dashboard browser sessions (`browser_session_created`; `browser_session_ended`,
+written only when a logout or a replacing login revoked a live session, under the key that session belonged to), session
 lifecycle (`session_created`, `session_started`, `session_stopped`, `session_force_killed`,
 `session_logged_out`, `session_deleted`, `session_qr_generated`, `session_connected`,
 `session_disconnected`, `session_config_updated`), WhatsApp-imposed account restrictions (`session_restricted`,

@@ -157,18 +157,24 @@ export class BrowserSessionService implements OnApplicationBootstrap, OnModuleDe
     return this.verifySessionAndApiKey(session, clientIp, sessionId, opts);
   }
 
-  async revokeByToken(rawToken: string): Promise<string | null> {
+  /** Revoke the session behind a cookie token. Returns the session only when this call revoked it. */
+  async revokeByToken(rawToken: string): Promise<BrowserSession | null> {
     const trimmed = rawToken?.trim();
     if (!trimmed) return null;
     const tokenHash = hashBrowserSessionToken(trimmed, process.env.API_KEY_PEPPER);
     const session = await this.sessionRepository.findOne({ where: { tokenHash } });
     if (!session) return null;
+    let revoked = false;
     if (!session.revokedAt) {
-      await this.sessionRepository.update({ id: session.id, revokedAt: IsNull() }, { revokedAt: new Date() });
+      const result = await this.sessionRepository.update(
+        { id: session.id, revokedAt: IsNull() },
+        { revokedAt: new Date() },
+      );
+      revoked = Boolean(result.affected);
       this.keyIndex?.refreshSoon();
     }
     this.evictSessionSockets(session.id, 'logged_out');
-    return session.id;
+    return revoked ? session : null;
   }
 
   async revokeByApiKeyId(apiKeyId: string): Promise<void> {
