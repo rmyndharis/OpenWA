@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Plus,
@@ -88,9 +88,10 @@ function FilterBadge({ filters }: { filters: WebhookFilters }) {
     });
   }, [anchor]);
 
-  // Escape puts the popover away without moving the pointer or focus, whether hover or focus opened it.
+  // Escape puts the popover away without moving the pointer or focus, whether hover or focus opened it. Bound as the
+  // popover is committed: a hover is no discrete event, so a passive effect would bind after it is on screen.
   const isOpen = anchor !== null;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || isComposingKey(event) || event.defaultPrevented) return;
