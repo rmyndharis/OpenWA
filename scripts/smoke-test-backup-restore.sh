@@ -3516,18 +3516,22 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # 3. Same-second collision creates distinct -2/-3 snapshots rather than nesting inside the first snapshot.
-mkdir -p "$BB/dst/snaps"
-BB_TS="$(date +%Y%m%d-%H%M%S)"
-# Pre-populate the current second and next second so even a 1s clock tick across second boundary triggers collision.
-for offset in 0 1 2; do
-  TS_CANDIDATE="$(node -e "const d = new Date(Date.now() + $offset * 1000); const p = n => String(n).padStart(2,'0'); console.log(d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()));")"
-  mkdir -p "$BB/dst/snaps/data.pre-restore-$TS_CANDIDATE"
-done
+# restore.sh names a snapshot after the second it starts in, so a date shim pins that second: the collision
+# happens however long the restore takes to get there.
+BB_TS="20000101-000000"
+mkdir -p "$BB/dst/snaps/data.pre-restore-$BB_TS" "$BB/shim"
+cat >"$BB/shim/date" <<EOF
+#!/bin/sh
+[ "\$1" = "+%Y%m%d-%H%M%S" ] && exec echo $BB_TS
+exec $(command -v date) "\$@"
+EOF
+chmod +x "$BB/shim/date"
 (
   cd "$BB/dst"
-  OPENWA_DATA_DIR="$BB/dst/data" OPENWA_RESTORE_SNAPSHOT_DIR="$BB/dst/snaps" "$RESTORE" "$ARCHIVE_BB" --force >/dev/null
+  PATH="$BB/shim:$PATH" OPENWA_DATA_DIR="$BB/dst/data" OPENWA_RESTORE_SNAPSHOT_DIR="$BB/dst/snaps" \
+    "$RESTORE" "$ARCHIVE_BB" --force >/dev/null
 )
-if [ -z "$(ls -d "$BB/dst/snaps"/data.pre-restore-*-2 2>/dev/null || true)" ]; then
+if [ ! -d "$BB/dst/snaps/data.pre-restore-$BB_TS-2" ]; then
   fail "(bb) same-second restore did not create -2 snapshot directory: $(ls -A "$BB/dst/snaps")"
 fi
 if [ -d "$BB/dst/snaps/data.pre-restore-$BB_TS/data" ]; then
