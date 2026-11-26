@@ -238,8 +238,12 @@ describe('GET /sessions/:sessionId/messages/:chatId/:messageId/media', () => {
   it('answers a JSON 500 without the media headers when the store fails before the first byte', async () => {
     const body = new PassThrough();
     await start('s3');
-    s3Answers(() => Promise.resolve({ Body: body, ContentLength: 1000 }));
-    setTimeout(() => body.destroy(new Error('connection reset by the store')), 50);
+    // Fails once the answer has reached the service, which listens for it from then on. A fixed delay could
+    // pass before the request even asked the store, and destroy the body with nothing listening.
+    s3Answers(() => {
+      setImmediate(() => body.destroy(new Error('connection reset by the store')));
+      return Promise.resolve({ Body: body, ContentLength: 1000 });
+    });
 
     const answer = await get(port, ROUTE);
 
