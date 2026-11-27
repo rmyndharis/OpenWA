@@ -14,6 +14,7 @@ import {
   changedMessagePayload,
   messageDeliveryKeys,
   type MessageCopyChange,
+  type MessageCopyFilter,
   type MessageCopyPredicate,
   type OutboxOpenRow,
   type ReplayableDelivery,
@@ -758,11 +759,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     if (!waMessageId) return;
-    await this.outbox.changeOpenForMessage(sessionId, waMessageId, change, shouldApply);
+    // A rewrite (an edit) can change what a webhook's filters read: a copy they no longer take is closed or dropped.
+    const passes = change.kind === 'rewrite' ? this.webhookStillTakes() : undefined;
+    await this.outbox.changeOpenForMessage(sessionId, waMessageId, change, shouldApply, passes);
     const { pattern, keyFor } = messageDeliveryKeys(sessionId, waMessageId);
     const rows = await this.failureRepository
       .createQueryBuilder('f')
-      .select(['f.id', 'f.webhookId', 'f.idempotencyKey'])
+      .select(['f.id', 'f.webhookId', 'f.idempotencyKey', 'f.event'])
       .addSelect('f.payload')
       .where('f.sessionId = :sessionId', { sessionId })
       .andWhere('f.event IN (:...events)', { events: MESSAGE_DELIVERY_EVENTS })
@@ -776,10 +779,23 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       if (!row.payload) continue;
       const engineRef = engineRefs.get(`${row.webhookId}\u0000${row.idempotencyKey}`);
       if (shouldApply && !(await shouldApply(row.payload, engineRef))) continue;
+      const payload = changedMessagePayload(row.payload, change);
       await this.failureRepository.update({ id: row.id }, {
-        payload: changedMessagePayload(row.payload, change),
+        payload: payload && passes && !(await passes(row, payload)) ? null : payload,
       } as QueryDeepPartialEntity<WebhookDeliveryFailure>);
     }
+  }
+
+  /** Whether a delivery's webhook, read once per change, still takes a rewritten copy: its subscription and filters. */
+  private webhookStillTakes(): MessageCopyFilter {
+    const webhooks = new Map<string, Promise<Webhook | null>>();
+    return async ({ webhookId, event }, payload) => {
+      if (!webhooks.has(webhookId))
+        webhooks.set(webhookId, this.webhookRepository.findOne({ where: { id: webhookId } }));
+      const webhook = await webhooks.get(webhookId)!;
+      // A webhook removed since takes nothing more anyway: its deliveries are skipped when they are tried.
+      return !webhook || (await this.filterMatchingWebhooks([webhook], event, payload)).length > 0;
+    };
   }
 
   /** {@link changeMessageCopies}, best-effort: a failure is logged. */

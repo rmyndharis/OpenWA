@@ -52,6 +52,12 @@ export type OutboxOpenRow = Omit<ReplayableDelivery, 'id' | 'attempts'> & {
   engineRef?: MessageEngineRef | null;
 };
 
+/** Whether the webhook of a delivery still takes a copy of the message once a change rewrote it (its filters). */
+export type MessageCopyFilter = (
+  delivery: { webhookId: string; event: string },
+  payload: Record<string, unknown>,
+) => boolean | Promise<boolean>;
+
 /**
  * Whether a copy of a message (an outbox payload, a kept failure payload) takes a change: judged by its payload, or by
  * `engineRef`, what the engine reported of the message, when a handler filed it elsewhere.
@@ -477,6 +483,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     waMessageId: string,
     change: MessageCopyChange,
     shouldApply?: MessageCopyPredicate,
+    passes?: MessageCopyFilter,
   ): Promise<void> {
     if (!waMessageId) return;
     const rows = await this.findPendingForMessage(sessionId, waMessageId);
@@ -494,9 +501,15 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     for (const row of matching) {
-      await this.outbox.update({ id: row.id, state: In(OPEN_STATES), payload: Not(IsNull()) }, {
-        payload: changedMessagePayload(row.payload!, change),
-      } as QueryDeepPartialEntity<WebhookOutboxEvent>);
+      const payload = changedMessagePayload(row.payload!, change);
+      // A copy its webhook's filters no longer take is closed, as a delivery they refuse is never opened.
+      const closed = payload && passes && !(await passes(row, payload));
+      await this.outbox.update(
+        { id: row.id, state: In(OPEN_STATES), payload: Not(IsNull()) },
+        (closed
+          ? { state: 'dispatched', payload: null, lastAttemptAt: new Date() }
+          : { payload }) as QueryDeepPartialEntity<WebhookOutboxEvent>,
+      );
     }
   }
 

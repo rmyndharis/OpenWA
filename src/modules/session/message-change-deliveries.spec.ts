@@ -376,6 +376,56 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
       expect(postedBodies()).toEqual([expect.objectContaining({ body: 'edited text' })]);
     });
 
+    describe("whose webhook's filters the edited text no longer passes", () => {
+      beforeEach(async () => {
+        await ds.getRepository(Webhook).update(webhook.id, {
+          filters: { conditions: [{ field: 'body', operator: 'contains', value: 'first' }] },
+        });
+      });
+
+      it.each([
+        ['from the engine', (id: string) => (engineEdit(id), until(async () => (await bodyOf(id)) === 'edited text'))],
+        ['through the API', restEdit],
+      ] as const)(
+        'closes its pending delivery and drops the copy a failed delivery keeps, on an edit %s',
+        async (_label, edit) => {
+          await storeRow('M-21');
+          await openDelivery('M-21', 'pending');
+          await keepFailedCopy('M-21');
+
+          await edit('M-21');
+          await until(async () => (await delivered('M-21'))?.state === 'dispatched');
+
+          expect(await delivered('M-21')).toMatchObject({ state: 'dispatched', payload: null });
+          expect(await keptCopy('M-21')).toBeNull();
+          await sweep();
+          await redrive.redrive({ sessionId });
+          expect(postedBodies()).toEqual([]);
+        },
+      );
+
+      it('closes a delivery handed to the queue', async () => {
+        await storeRow('M-22');
+        await openDelivery('M-22', 'queued');
+
+        await restEdit('M-22');
+
+        expect(await delivered('M-22')).toMatchObject({ state: 'dispatched', payload: null });
+      });
+
+      it('still rewrites the copies of a webhook whose filters the edited text passes', async () => {
+        await ds.getRepository(Webhook).update(webhook.id, {
+          filters: { conditions: [{ field: 'body', operator: 'contains', value: 'text' }] },
+        });
+        await storeRow('M-23');
+        await openDelivery('M-23', 'pending');
+
+        await restEdit('M-23');
+
+        expect(await delivered('M-23')).toMatchObject({ state: 'pending', payload: { body: 'edited text' } });
+      });
+    });
+
     it('rewrites the delivery of a message a handler filed under another chat, which carries the filed chat', async () => {
       await storeRow('M-9', OTHER_CHAT);
       await ds

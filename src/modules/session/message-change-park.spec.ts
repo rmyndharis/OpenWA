@@ -593,6 +593,21 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       }
     });
 
+    it("closes the delivery of a kept edit whose text its webhook's filters no longer take", async () => {
+      await ds.getRepository(Webhook).update(webhookId, {
+        filters: { conditions: [{ field: 'body', operator: 'contains', value: 'first' }] },
+      });
+      await storeRow('W-1');
+      outage = 'on';
+      changes['an edit']('W-1');
+      await settle();
+      await recover();
+
+      expect(await rowOf('W-1')).toMatchObject({ body: 'edited text' });
+      expect(await outboxOf('W-1')).toEqual([{ state: 'dispatched', body: undefined }]);
+      expect(await sweptBodies()).toEqual([]);
+    });
+
     describe('changes of one message whose claims disagree', () => {
       const GROUP = '120363000000000001@g.us';
       const AUTHOR = '628111@c.us';
