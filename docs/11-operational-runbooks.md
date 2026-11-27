@@ -404,15 +404,16 @@ curl -H "X-API-Key: $ADMIN_API_KEY" \
 
 ### Runbook: Database Unavailable (what the gateway keeps)
 
-**Trigger:** the database refuses statements (a dropped PostgreSQL connection, a full or read-only SQLite volume) and the log shows `message_change_parked` or `webhook_dispatch_parked`.
+**Trigger:** the database refuses statements (a dropped PostgreSQL connection, a full or read-only SQLite volume) and the log shows `message_change_parked`, `webhook_dispatch_parked` or `sent_write_kept`.
 
-**Impact:** message changes (revokes, edits, reactions, receipts) and webhook events wait in memory, and in the recovery journal, until the database answers; deliveries of a message whose change is waiting are held. Past the bounds below, they are lost, each with a log line.
+**Impact:** message changes (revokes, edits, reactions, receipts), webhook events and the SENT state of sends WhatsApp accepted wait in memory, and in the recovery journal, until the database answers; deliveries of a message whose change is waiting are held, and a change of a message whose send is waiting waits behind it. Past the bounds below, they are lost, each with a log line.
 
 **What is kept, and for how long:**
 
+- Sends WhatsApp accepted whose SENT state was refused: up to 1,000 and 60 minutes, written first once the database answers. A single send keeps only that state, its row holding the media meanwhile (the pending reaper leaves it alone); a bulk item keeps its whole row, media included.
 - Message changes: up to 1,000 messages and 60 minutes. A revoke or a delete is kept until its lane is full, whatever its age, and is never given up for bytes.
 - Webhook events: up to 10,000 and 60 minutes; a kept `message.revoked` has no age limit. `presence.update`, `session.qr` and `message.receipt` are not kept. A session's state events (`session.status`, `session.authenticated`, `session.disconnected`, `session.reconnect_loop`, `session.restriction`) stay in memory only and are dropped when another node owns the session by then.
-- Both share 64 MiB, measured on the data they hold, with inline media shed.
+- All three share 64 MiB, measured on the data they hold, with inline media shed from events.
 - A delivery whose outbox row could not be written keeps a copy in memory for its retries: up to 10,000 copies and 64 MiB with content, then the oldest keep only what names the message (up to 16 MiB more, about 35,000 to 70,000 messages). A copy a revoke or a delete reached keeps that state until its delivery ends.
 - What is kept goes into `RECOVERY_JOURNAL_PATH` (default `./data/recovery-journal.jsonl`), so a restart or a crash finds it again. A stop keeps it there for the next start.
 
@@ -426,6 +427,8 @@ curl -H "X-API-Key: $ADMIN_API_KEY" \
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `message_change_parked`           | A change of a message is kept until the database answers.                                                                                                                          | Restore the database.                                                                                                                      |
 | `message_change_lost`             | A kept change was given up (`reason`: `count`, `age`, `bytes`, `failures`, `conflict`, `ownership`, or `shutdown` when the journal could not take it).                             | The stored message and its pending deliveries miss that change. Apply it again where it matters (a delete through the API, or an edit).    |
+| `sent_write_kept`                 | A send WhatsApp accepted is kept until its row can be stored as sent.                                                                                                              | Restore the database.                                                                                                                      |
+| `sent_write_lost`                 | A kept send was given up (`reason`); its row stays `pending`, and the pending reaper later marks it `failed` and drops its media.                                                  | The message was delivered although its row says otherwise; the media the row held is gone.                                                 |
 | `webhook_dispatch_parked`         | A session's webhook events are kept until the database answers.                                                                                                                    | Restore the database; they go out under their own idempotency keys.                                                                        |
 | `webhook_dispatch_dropped`        | An event was not delivered: not kept, or a kept one given up (`reason`). Counted in `openwa_webhook_delivery_failures_total`.                                                      | Re-send it from its source if a receiver needs it. `reason: ownership` (a warning) loses nothing: the session's owner sends its own state. |
 | `webhook_copy_lost`               | A copy kept for a delivery with no outbox row lost what it held (`reason`: `count`, `bytes`, `rewrite`, `dropped`).                                                                | Past the bounds, under heavy traffic during an outage. With `rewrite`, the receiver gets the text from before the edit.                    |

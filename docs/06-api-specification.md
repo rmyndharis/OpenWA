@@ -1937,16 +1937,24 @@ Send a plain text message.
 **Numbers WhatsApp holds under other digits.** WhatsApp holds some numbers under other digits than
 people write (a Brazilian mobile with or without its ninth digit, for one). A send to such a number,
 on this route or any other send route, is delivered to the number WhatsApp resolved, and its row is
-stored where a send addressed to that number is stored, not under the spelling in the request: under
-`<phone>@c.us`, or under the contact's `<lid>@lid` when the message went to the lid and the engine's
-own record of the send was written first. `message.sent` names the chat the message went to, which is
-that phone id or the contact's lid. Read the history, reply and follow up on the message (react,
-edit, delete) with the id WhatsApp resolved, which `GET .../contacts/check/:number` returns. A row
-stored under the lid is listed under that phone id only once WhatsApp reports the pair; until then
-read it with the lid, the chat `message.sent` names. On Baileys a reply or a follow-up that names the other spelling answers `404`. One send keeps the
-spelling of the request: on whatsapp-web.js, when the number lookup answers the contact's lid and not
-a phone number, the row stays under the id as written. The thread is still one there, because that
-engine reports the lid as paired with the digits written.
+stored under that number's `<phone>@c.us`, not under the spelling in the request. `message.sent`
+names the chat the message went to, which is that phone id or the contact's lid. Read the history,
+reply and follow up on the message (react, edit, delete) with the id WhatsApp resolved, which
+`GET .../contacts/check/:number` returns. On Baileys a reply or a follow-up that names the other
+spelling answers `404`.
+
+**A send that goes out to the contact's lid.** On Baileys a send addressed to a phone id goes out to
+the contact's `<lid>@lid` when the session holds one for the number. Its row is stored under the
+phone id (the number WhatsApp resolved, when it holds the number under other digits), whichever of
+the gateway's own two writes of the send comes first, and keeps the lid it went to: a reaction, an
+edit or a revoke naming the lid reaches the row, and a react, edit, delete, star, pin, unpin or
+forward through the API that names the phone id acts on the message in the lid's chat (a reply
+quoting it is still sent to the phone id). The lid's chat, the one the dashboard opens on Baileys,
+lists the row only once WhatsApp reports the pair; until then it holds the contact's replies without
+the message they answer, and a key scoped to the phone id reads no row of the lid's chat, but sees
+the lid as the reactor id of a reaction to its own send. On whatsapp-web.js, when the number lookup
+answers only the contact's lid, the row is stored under that lid, and listed under the id written
+while the pair the send reports stands; a lid another source reported with another phone keeps it.
 
 **Link previews.** Sending `false` stops the preview on both engines. The two differ on what
 happens otherwise: whatsapp-web.js lets WhatsApp Web build one in-page (free, so it is the default),
@@ -7710,7 +7718,7 @@ A `message.received` payload also carries, each only when the message has it: `a
 
 > **`senderPhone` on `message.received` is opt-in (`RESOLVE_LID_TO_PHONE`).** When a sender is identified by a WhatsApp privacy id (`…@lid`) rather than a phone number, setting `RESOLVE_LID_TO_PHONE=true` attaches a best-effort `senderPhone` — MSISDN digits, or `null` when the engine cannot map the id — before dispatch, so the webhook and the websocket event both carry it in the same pass. Default is **off**, and while it is off the field is absent from every payload: resolving costs a per-sender lookup (cached). Only inbound privacy-id senders are resolved — a sender that already is a phone number needs no lookup, and own-sends are skipped. The on-demand `GET /api/sessions/:sessionId/contacts/:contactId/phone` works regardless of this flag.
 
-Cached answers are checked again on the first message at least five minutes later and are discarded when the session engine stops or is replaced. Both engines can answer from local cache, so rechecking does not guarantee a fresh network identity check. Cache-only mappings remain available for display but cannot authorize phone/LID aliases or expand chat filters. A conflicting cached lookup disables alias matching until an engine mapping report confirms the phone. Baileys learns those reports from message identity fields and contact updates carrying a phone; its signal-key and send-time cache lookups remain display data. After a send addressed to a phone number goes out to the contact's LID, Baileys asks WhatsApp for that phone's LID with the public LID query and reports the pair only when the answer names the LID the send used; a send that went through reports nothing by itself. That query runs after the send and one at a time. On one connection a pair WhatsApp has not confirmed is asked about again at most once in 15 minutes while it is among the 5000 pairs asked about last (a pair dropped from that memory is asked about on its next send), and after a rate-limited answer no pair is asked about for 15 minutes, whether or not the connection drops and comes back meanwhile; a session that is stopped and started again starts without that pause. A refused, rate-limited or unanswered query leaves the pair display data until a later send asks again. A cached Baileys answer can revoke a contradictory reported alias but cannot grant either phone. whatsapp-web.js can also confirm a mapping through its send-time number query. After a failed mapping write, another actual report retries it; a message without a new mapping does not re-report a cached Baileys answer.
+Cached answers are checked again on the first message at least five minutes later and are discarded when the session engine stops or is replaced. Both engines can answer from local cache, so rechecking does not guarantee a fresh network identity check. Cache-only mappings remain available for display but cannot authorize phone/LID aliases or expand chat filters. A conflicting cached lookup disables alias matching until an engine mapping report confirms the phone. Baileys learns those reports from message identity fields and contact updates carrying a phone; its signal-key and send-time cache lookups remain display data. After a send addressed to a phone number goes out to the contact's LID, Baileys asks WhatsApp for that phone's LID with the public LID query and reports the pair only when the answer names the LID the send used; a send that went through reports nothing by itself. That query runs after the send and one at a time. On one connection a pair WhatsApp has not confirmed is asked about again at most once in 15 minutes while it is among the 5000 pairs asked about last (a pair dropped from that memory is asked about on its next send), and after a rate-limited answer no pair is asked about for 15 minutes, whether or not the connection drops and comes back meanwhile; a session that is stopped and started again starts without that pause. A refused, rate-limited or unanswered query leaves the pair display data until a later send asks again. A cached Baileys answer can revoke a contradictory reported alias but cannot grant either phone. whatsapp-web.js can also confirm a mapping through its send-time number query, except over a phone already reported for that LID, which it keeps. After a failed mapping write, another actual report retries it; a message without a new mapping does not re-report a cached Baileys answer.
 
 Baileys preserves raw LIDs in message, contact and chat identities, with phone numbers kept separately for display. Older phone-keyed message rows keep their original ids. Cross-form edits, deletes and reactions require a reported pairing; one without it changes no stored row, is not announced (`message.edited`, `message.revoked`, `message.reaction`) and is logged as a warning. Explicit API actions that need such a pairing can confirm it through the public WhatsApp LID query before acting. A cached phone alone cannot redirect an operation to an older row or attach another chat's preview. A successful shared-table lookup with no mapping does not reuse a resident alias, including after a data import removes that row.
 
