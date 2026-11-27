@@ -34,10 +34,15 @@
 > a healthy peer's sweep, which may replay a delivery of a message the partitioned node is about to
 > withdraw. The recovery journal (`RECOVERY_JOURNAL_PATH`) belongs to one process: never share the file.
 > A delivery queued while its outbox row could not be written has its copy only in the memory of the node that
-> queued it. A worker of another node judges it by the message's stored row: nothing is sent once the row was
-> taken back (a revoke, or a delete through the API, whose placeholder is not sent then), and an edit written to
-> the row is sent. A change that node still keeps, or one that reached only its copy (a message with no stored
-> row), does not reach that worker.
+> queued it, which writes what a worker of another node needs into the job itself: the copy as a change left it
+> (withdrawn, the placeholder of a delete through the API, or the edited text), and, while it keeps a change of
+> the message the database has not taken, a hold it renews every 20 s as a 60 s lease, so a node that stopped
+> holds the job no longer than that. The lease is a key Redis expires itself, so no node's clock is read against
+> another's; a worker that cannot ask Redis for it waits, spending no attempt. With
+> neither, the worker judges the job by the message's stored rows: nothing is sent once any row under the id was
+> taken back, and an edit is sent from a row judged the message's own (lid and phone of one contact only once the
+> pair is reported). Not covered: a change landing during an attempt already under way, and a write Redis has not
+> taken yet (`webhook_job_mark_failed`, tried again every 20 s).
 >
 > Bulk-send batches follow the same rule. A batch is only ever driven by the process
 > holding its session's engine, so a booting replica now reaps only the batches whose

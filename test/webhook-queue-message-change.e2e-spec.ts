@@ -38,7 +38,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
-import { Queue } from 'bullmq';
+import { Job, Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
@@ -51,9 +51,10 @@ import { HookManager } from '../src/core/hooks';
 import { WebhookDeliveryFailure } from '../src/modules/webhook/entities/webhook-delivery-failure.entity';
 import { Session } from '../src/modules/session/entities/session.entity';
 import { Message, MessageDirection } from '../src/modules/message/entities/message.entity';
-import { WebhookService } from '../src/modules/webhook/webhook.service';
+import { WebhookJobData, WebhookService } from '../src/modules/webhook/webhook.service';
 import { WebhookReconcilerService } from '../src/modules/webhook/webhook-reconciler.service';
 import { MessageProjector } from '../src/modules/session/message-projector.service';
+import { SessionOwnershipService } from '../src/modules/session/session-ownership.service';
 import { BetterSqlite3QueryRunner } from 'typeorm/driver/better-sqlite3/BetterSqlite3QueryRunner';
 
 const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 20000): Promise<void> => {
@@ -160,7 +161,11 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
       return realQuery.apply(this, args);
     } as never);
   });
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    // A case that paused the queue and failed before resuming it would leave every later job waiting in Redis.
+    await webhookQueue.resume();
+  });
 
   /** A stored message whose delivery failed once: its job waits for the retry, its outbox row is queued. */
   const failedOnce = async (
@@ -384,8 +389,9 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
       async (change, sent) => {
         const { sessionId, id, webhookId } = await failedOnce('outbox writes');
         await webhookQueue.pause();
-        await changes[change](sessionId, id);
+        // The change reaches a node with no copy of the job (the one that queued it is gone): only the row tells it.
         elsewhere(sessionId, id, webhookId);
+        await changes[change](sessionId, id);
 
         receiverStatus = 200;
         await webhookQueue.resume();
@@ -406,6 +412,70 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
 
       expect(received.slice(1)).toEqual([{ body: 'first text', type: 'text' }]);
     }, 60000);
+  });
+
+  // The node that queued it keeps a change while the database refuses its writes, so the message row says nothing yet;
+  // what that node knows reaches a worker of another node through the job.
+  describe('a queued delivery whose outbox row could not be written, while the node that queued it keeps a change', () => {
+    const jobOf = async (sessionId: string): Promise<Job<WebhookJobData> | undefined> => {
+      const jobs = (await webhookQueue.getJobs([
+        'delayed',
+        'waiting',
+        'prioritized',
+        'active',
+      ])) as Job<WebhookJobData>[];
+      return jobs.find(job => job.data.payload.sessionId === sessionId);
+    };
+    /** The lease the node that queued a session's job keeps for it in Redis, if any. */
+    const leaseOf = async (sessionId: string): Promise<string | null> => {
+      const job = await jobOf(sessionId);
+      return job ? (await webhookQueue.getBackend().client).get(webhookQueue.toKey(`held:${job.id}`)) : null;
+    };
+    /** The worker from here on is another node's: no copy of the job and no hold of its own. */
+    const anotherNode = (): void => {
+      const outboxService = app.get(WebhookOutboxService);
+      jest.spyOn(outboxService, 'currentMessagePayload').mockResolvedValue(undefined);
+      jest.spyOn(outboxService, 'isMessageHeld').mockReturnValue(false);
+    };
+
+    it.each([
+      ['an engine revoke', [], []],
+      ['a delete through the API', [], [{ body: '', type: 'revoked' }]],
+      ['an edit', [], [{ body: 'edited text', type: 'text' }]],
+    ] as const)(
+      'waits while %s is kept, and sends what it left of the copy once it lands',
+      async (change, kept, landed) => {
+        const { sessionId, id } = await failedOnce('outbox writes');
+        // This node runs the session, so a kept edit is written once the database answers, not dropped as another's.
+        jest.spyOn(app.get(SessionOwnershipService), 'owns').mockReturnValue(true);
+        await webhookQueue.pause();
+        outage = 'writes';
+        await changes[change](sessionId, id);
+        await waitFor(async () => (await leaseOf(sessionId)) !== null);
+        // The lease is a key Redis keeps for the job, with the expiry it was given, until the change lands.
+        const held = (await jobOf(sessionId))!;
+        const redis = await webhookQueue.getBackend().client;
+        const leaseKey = webhookQueue.toKey(`held:${held.id}`);
+        const ttl = await (redis as unknown as { pttl(key: string): Promise<number> }).pttl(leaseKey);
+        expect(ttl).toBeGreaterThan(0);
+        expect(ttl).toBeLessThanOrEqual(60_000);
+        anotherNode();
+
+        receiverStatus = 200;
+        await webhookQueue.resume();
+        await waitFor(async () => (await queueIdle()) || ((await jobOf(sessionId))?.attemptsStarted ?? 0) >= 3, 20000);
+        expect(received.slice(1)).toEqual(kept);
+        expect((await messages.findOneByOrFail({ sessionId, waMessageId: id })).type).toBe('text');
+
+        outage = 'off';
+        await projector.retryParkedChanges();
+        await waitFor(queueIdle, 30000);
+
+        expect(received.slice(1)).toEqual([...kept, ...landed]);
+        await waitFor(async () => (await redis.get(leaseKey)) === null);
+      },
+      90000,
+    );
   });
 
   describe('a queued delivery whose outbox row could not be written, across a restart', () => {

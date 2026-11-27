@@ -1,5 +1,5 @@
-import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
-import { DelayedError, Job } from 'bullmq';
+import { InjectQueue, Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
+import { DelayedError, Job, Queue } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -18,6 +18,7 @@ import {
 import { Message } from '../../message/entities/message.entity';
 import { LidMappingStoreService } from '../../../engine/identity/lid-mapping-store.service';
 import { judgeStoredRow } from '../../session/message-row-judgement';
+import { jobHoldKey } from '../../webhook/utils/job-hold';
 import { WebhookDeliveryFailure } from '../../webhook/entities/webhook-delivery-failure.entity';
 import {
   clearDeliveryFailureRows,
@@ -99,6 +100,9 @@ export class WebhookProcessor extends WorkerHost {
     // Tells a contact's lid and phone for the same entity, so an edit stored under either is judged the message's.
     @Optional()
     private readonly lidMappingStore?: LidMappingStoreService,
+    @Optional()
+    @InjectQueue(QUEUE_NAMES.WEBHOOK)
+    private readonly webhookQueue?: Queue<WebhookJobData>,
   ) {
     super();
     // WEBHOOK_DEGRADED_SESSION_CONCURRENCY, else a quarter of the worker pool.
@@ -192,12 +196,18 @@ export class WebhookProcessor extends WorkerHost {
       // through the API or edited since the job was queued.
       let current: Webhook | null;
       let held: Record<string, unknown> | null | undefined;
+      let heldElsewhere = false;
       try {
         current = await this.loadDeliverableWebhook(webhookId, event, sessionId);
         held = current ? await this.outbox.currentMessagePayload(webhookId, payload.idempotencyKey, event) : undefined;
-        // Queued while its outbox row could not be written, and no copy of it here: the message's row says instead.
+        // Queued while its outbox row could not be written, and no copy of it here: what the node that queued it wrote
+        // into the job says instead, as its own copy and hold would there (a withdrawn copy ends the job, a change it
+        // keeps holds it, and the copy as a change left it is sent), else the message's row.
         if (current && held === undefined && job.data.unwritten) {
-          held = await this.storedChange(sessionId, event, job.data.unwritten);
+          if (job.data.unwrittenChange === null) held = null;
+          else if (await this.heldByQueuingNode(payload.deliveryId)) heldElsewhere = true;
+          else if (job.data.unwrittenChange !== undefined) held = job.data.unwrittenChange;
+          else held = await this.storedChange(sessionId, event, job.data.unwritten);
         }
       } catch (readError) {
         // A database that cannot answer now spends no attempt: the job waits as a bounced one does, and an outage
@@ -217,6 +227,7 @@ export class WebhookProcessor extends WorkerHost {
         await this.outbox.close(webhookId, payload.idempotencyKey, 'dispatched');
         return { statusCode: 0, success: false, error: 'webhook removed, disabled or unsubscribed', responseTime: 0 };
       }
+      if (heldElsewhere) return await this.delayWithoutAttempt(job, token);
       if (held === null) {
         this.logger.warn(
           'Skipping queued webhook delivery: its outbox row was closed (message taken back or delivered)',
@@ -438,6 +449,16 @@ export class WebhookProcessor extends WorkerHost {
       if (recorded !== false) incrementWebhookDeliveryFailures();
       if (recorded !== null) await this.outbox.close(webhookId, payload.idempotencyKey, 'dispatched');
     }
+  }
+
+  /**
+   * Whether the node that queued a job keeps a change of its message: its lease, a key Redis expires itself, so no
+   * node's clock is read. Throws when Redis cannot answer: the job waits rather than send on a guess.
+   */
+  private async heldByQueuingNode(deliveryId: string): Promise<boolean> {
+    if (!this.webhookQueue) return false;
+    const redis = await this.webhookQueue.getBackend().client;
+    return (await redis.get(jobHoldKey(this.webhookQueue, deliveryId))) !== null;
   }
 
   /**

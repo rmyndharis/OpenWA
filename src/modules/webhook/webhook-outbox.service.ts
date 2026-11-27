@@ -132,6 +132,8 @@ interface UnwrittenCopy {
   changed?: 'redact' | 'rewrite';
   /** The job its delivery was queued as: the copy is journaled while it is, as the job outlives the process. */
   queued?: string;
+  /** The message it carries, kept from the start: a withdrawn copy names none any more. */
+  messageId?: string;
 }
 
 /** What the journal keeps of a copy of a queued delivery. */
@@ -143,7 +145,14 @@ interface JournaledCopy {
   h?: true;
   c?: 'redact' | 'rewrite';
   q: string;
+  m?: string;
 }
+
+/** The message a delivery's data carries: an edit event names it in `messageId`, a message delivery in `id`. */
+const messageIdOf = (event: string, data: Record<string, unknown> | null | undefined): string | undefined => {
+  const id = MESSAGE_CHANGE_EVENTS.includes(event) ? data?.messageId : data?.id;
+  return typeof id === 'string' && id ? id : undefined;
+};
 
 const splitUnwrittenKey = (key: string): [string, string] => {
   const at = key.indexOf('\u0000');
@@ -228,6 +237,8 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   private contentBytes = 0;
   private readonly unwrittenShed = new Set<string>();
   private shedBytes = 0;
+  // The jobs of the queued copies by session and message, each with whether it is an edit event's.
+  private readonly queuedByMessage = new Map<string, Map<string, boolean>>();
 
   constructor(
     @InjectRepository(WebhookOutboxEvent, 'data')
@@ -256,12 +267,25 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       ...(v.h ? { shed: true as const } : {}),
       ...(v.c === 'redact' || v.c === 'rewrite' ? { changed: v.c } : {}),
       queued: v.q,
+      messageId: typeof v.m === 'string' ? v.m : messageIdOf(v.e, v.d),
     };
     copy.bytes = copyBytes(key, copy);
     this.unwritten.set(key, copy);
     this.unwrittenSet(copy)?.add(key);
     this.countUnwritten(copy, copy.bytes);
+    this.indexQueued(copy, true);
     return true;
+  }
+
+  /** Keep the index of queued copies by message (see queuedCopiesOf) as a copy is queued or let go. */
+  private indexQueued(copy: UnwrittenCopy, add: boolean): void {
+    if (copy.queued === undefined || copy.messageId === undefined) return;
+    const message = `${copy.sessionId}\u0000${copy.messageId}`;
+    const jobs = this.queuedByMessage.get(message) ?? new Map<string, boolean>();
+    if (add) jobs.set(copy.queued, MESSAGE_CHANGE_EVENTS.includes(copy.event));
+    else jobs.delete(copy.queued);
+    if (jobs.size) this.queuedByMessage.set(message, jobs);
+    else this.queuedByMessage.delete(message);
   }
 
   private *journaledCopies(): Iterable<[string, JournaledCopy]> {
@@ -269,8 +293,8 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   private journalEntry(copy: UnwrittenCopy): JournaledCopy {
-    const { sessionId: s, event: e, data: d, engineRef: r, shed: h, changed: c, queued } = copy;
-    return { s, e, d, r, h, c, q: queued! };
+    const { sessionId: s, event: e, data: d, engineRef: r, shed: h, changed: c, queued, messageId: m } = copy;
+    return { s, e, d, r, h, c, q: queued!, m };
   }
 
   /** Keep what a copy of a queued delivery holds now in the journal. */
@@ -766,6 +790,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
         data: row.payload,
         engineRef: row.engineRef ?? null,
         bytes: 0,
+        messageId: messageIdOf(row.event, row.payload),
       };
       copy.bytes = copyBytes(key, copy);
       this.unwritten.set(key, copy);
@@ -791,7 +816,26 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     this.unwrittenSet(copy)?.delete(key);
     this.countUnwritten(copy, -copy.bytes);
     this.unwritten.delete(key);
+    this.indexQueued(copy, false);
     if (copy.queued !== undefined) this.journal?.del('copy', key);
+  }
+
+  // Told of each change a copy of a queued delivery takes (see onQueuedCopyChanged).
+  private queuedCopyChanged?: (deliveryId: string, data: Record<string, unknown> | null) => void;
+
+  /** Be told when a change of its message reaches a copy kept for a queued delivery: withdrawn (null), or its new data. */
+  onQueuedCopyChanged(listener: (deliveryId: string, data: Record<string, unknown> | null) => void): void {
+    this.queuedCopyChanged = listener;
+  }
+
+  /** The jobs of the queued deliveries this node keeps a copy for that carry the message, each with whether it is an edit event's. */
+  queuedCopiesOf(sessionId: string, waMessageId: string): Array<[string, boolean]> {
+    return [...(this.queuedByMessage.get(`${sessionId}\u0000${waMessageId}`) ?? [])];
+  }
+
+  /** What a change kept on this node holds of the message's deliveries (see holdMessage), if any. */
+  messageHold(sessionId: string, waMessageId: string): MessageHold | undefined {
+    return this.heldMessages.get(messageDeliveryKeys(sessionId, waMessageId).keyFor(''));
   }
 
   /** Whether this node keeps a copy for a delivery whose outbox row could not be written. */
@@ -799,22 +843,41 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     return this.unwritten.has(`${webhookId}\u0000${idempotencyKey}`);
   }
 
-  /** The delivery a copy is kept for was queued as `deliveryId`: from now on the copy is journaled with its job. */
-  queuedUnwritten(webhookId: string, idempotencyKey: string, deliveryId: string): void {
+  /**
+   * The delivery a copy is kept for was queued as `deliveryId`: from now on the copy is journaled with its job, and a
+   * change that reached it already is told as one reaching it later would be. Answers the message it carries.
+   */
+  queuedUnwritten(
+    webhookId: string,
+    idempotencyKey: string,
+    deliveryId: string,
+  ): { sessionId: string; messageId?: string } | undefined {
     const key = `${webhookId}\u0000${idempotencyKey}`;
     const copy = this.unwritten.get(key);
-    if (!copy) return;
+    if (!copy) return undefined;
     copy.queued = deliveryId;
+    this.indexQueued(copy, true);
     this.journalCopy(key, copy);
+    if (copy.data === null || copy.changed) this.queuedCopyChanged?.(deliveryId, copy.data);
+    return { sessionId: copy.sessionId, messageId: copy.messageId };
   }
 
-  /** The copies kept for queued deliveries, restored ones included, with the job each was kept for. */
-  queuedCopies(): Array<{ webhookId: string; idempotencyKey: string; deliveryId: string }> {
+  /**
+   * The copies kept for queued deliveries, restored ones included, with the job each was kept for and, for one a change
+   * reached, what it left (null once withdrawn).
+   */
+  queuedCopies(): Array<{
+    webhookId: string;
+    idempotencyKey: string;
+    deliveryId: string;
+    change?: Record<string, unknown> | null;
+  }> {
     return [...this.unwritten]
       .filter(([, copy]) => copy.queued !== undefined)
       .map(([key, copy]) => {
         const [webhookId, idempotencyKey] = splitUnwrittenKey(key);
-        return { webhookId, idempotencyKey, deliveryId: copy.queued! };
+        const changed = copy.data === null || copy.changed !== undefined;
+        return { webhookId, idempotencyKey, deliveryId: copy.queued!, ...(changed ? { change: copy.data } : {}) };
       });
   }
 
@@ -874,6 +937,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
         if (copy.changed === 'redact') {
           this.logLostCopy(key, copy, reason, 'The placeholder of the deleted message is let go: nothing is sent');
           this.setUnwrittenData(key, copy, null);
+          if (copy.queued !== undefined) this.queuedCopyChanged?.(copy.queued, null);
           continue;
         }
         if (copy.changed === 'rewrite') this.logLostCopy(key, copy, 'rewrite');
@@ -952,6 +1016,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       else {
         const changed = change.kind === 'close' ? undefined : change.kind;
         this.setUnwrittenData(key, copy, copy.shed || !taken ? null : data, { changed });
+        if (copy.queued !== undefined) this.queuedCopyChanged?.(copy.queued, copy.data);
       }
       this.boundUnwritten();
     }

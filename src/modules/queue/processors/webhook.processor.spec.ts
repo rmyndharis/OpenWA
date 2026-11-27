@@ -3,6 +3,7 @@ import { DataSource, FindOperator, Repository } from 'typeorm';
 import { WebhookOutboxEvent } from '../../webhook/entities/webhook-outbox-event.entity';
 import { ConfigService } from '@nestjs/config';
 import { WebhookOutboxService } from '../../webhook/webhook-outbox.service';
+import { WebhookDeliveryService } from '../../webhook/webhook-delivery.service';
 import { Message } from '../../message/entities/message.entity';
 import { LidMappingStoreService } from '../../../engine/identity/lid-mapping-store.service';
 import { dataHash } from '../../webhook/utils/deliver-once';
@@ -1087,6 +1088,192 @@ describe('WebhookProcessor', () => {
         await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
 
         expect(mockFetch).not.toHaveBeenCalled();
+      });
+
+      // The hold is a lease the queuing node renews: its age must be told by one clock, never one node's against another's.
+      describe("a hold the node that queued it keeps, read by a worker whose clock is not the writer's", () => {
+        const T = 1_800_000_000_000;
+        // Redis's own clock, and the leases it keeps by key, each until the time it says.
+        let redisNow: number;
+        let leases: Map<string, number>;
+        let job: Job<WebhookJobData>;
+        let queue: Record<string, unknown>;
+        let writer: WebhookDeliveryService;
+        const redis = {
+          set: jest.fn((key: string, _value: string, options: { PX: number }) => {
+            leases.set(key, redisNow + options.PX);
+            return Promise.resolve('OK');
+          }),
+          del: jest.fn((key: string) => Promise.resolve(Number(leases.delete(key)))),
+          get: jest.fn((key: string) => Promise.resolve((leases.get(key) ?? -Infinity) > redisNow ? '1' : null)),
+        };
+        const clock = (ms: number) => jest.spyOn(Date, 'now').mockReturnValue(ms);
+        const settle = async (): Promise<void> => {
+          for (let i = 0; i < 30; i++) await new Promise(resolve => setImmediate(resolve));
+        };
+
+        beforeEach(async () => {
+          redisNow = 5_000_000;
+          leases = new Map();
+          // No row says anything of the message: a worker that does not honour the lease sends what the job holds.
+          messages.find.mockResolvedValue([]);
+          job = marked();
+          (job as unknown as { getState: () => Promise<string> }).getState = () => Promise.resolve('delayed');
+          (job as unknown as { updateData: (data: WebhookJobData) => Promise<void> }).updateData = data => {
+            job.data = data;
+            return Promise.resolve();
+          };
+          queue = {
+            toKey: (type: string) => `bull:webhook:${type}`,
+            getBackend: () => ({ client: Promise.resolve(redis) }),
+            waitUntilReady: () => Promise.resolve(),
+            getJob: () => Promise.resolve(job),
+          };
+          writer = new WebhookDeliveryService(
+            {} as never,
+            {} as never,
+            { get: (key: string, def?: unknown) => (key === 'queue.enabled' ? true : def) } as unknown as ConfigService,
+            new HookManager(),
+            {
+              onQueuedCopyChanged: jest.fn(),
+              queuedCopiesOf: () => [['d', false]],
+              holdMessage: jest.fn(),
+            } as unknown as WebhookOutboxService,
+            undefined,
+            queue as never,
+          );
+          processor = new WebhookProcessor(
+            repo as unknown as Repository<Webhook>,
+            failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+            hookManager as unknown as HookManager,
+            configService as unknown as ConfigService,
+            outbox as unknown as WebhookOutboxService,
+            messages as unknown as Repository<Message>,
+            undefined,
+            queue as never,
+          );
+          clock(T);
+          writer.holdMessage('sess-1', 'M-1', 'revoke');
+          await settle();
+        });
+
+        afterEach(async () => {
+          jest.restoreAllMocks();
+          await writer.onModuleDestroy();
+        });
+
+        it("honours a live lease while the worker's clock runs 120 s ahead of the writer's", async () => {
+          redisNow += 1_000;
+          clock(T + 120_000);
+
+          await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+          expect(mockFetch).not.toHaveBeenCalled();
+        });
+
+        it("does not honour a lease that ran out while the worker's clock runs 120 s behind the writer's", async () => {
+          redisNow += 61_000;
+          clock(T - 120_000);
+          messages.find.mockResolvedValue([stored({ type: 'revoked', body: '' })]);
+
+          await processor.process(job, 'tok');
+
+          expect(messages.find).toHaveBeenCalled();
+          expect(mockFetch).not.toHaveBeenCalled();
+        });
+      });
+
+      describe('with what the node that queued it wrote into the job', () => {
+        const withMark = (mark: Partial<WebhookJobData>): Job<WebhookJobData> => {
+          const job = marked();
+          Object.assign(job.data, mark);
+          return job;
+        };
+
+        it('sends nothing once that node wrote the copy withdrawn, reading no row', async () => {
+          const result = await processor.process(withMark({ unwrittenChange: null }));
+
+          expect(result.success).toBe(false);
+          expect(mockFetch).not.toHaveBeenCalled();
+          expect(messages.find).not.toHaveBeenCalled();
+        });
+
+        it('sends the copy as that node wrote it, the placeholder of a delete through the API included', async () => {
+          await processor.process(withMark({ unwrittenChange: { ...queuedData, type: 'revoked', body: '' } }));
+
+          expect(sentBody().data).toMatchObject({ id: 'M-1', type: 'revoked', body: '' });
+          expect(messages.find).not.toHaveBeenCalled();
+        });
+
+        describe('and the lease it keeps in Redis', () => {
+          let lease: jest.Mock;
+          beforeEach(() => {
+            lease = jest.fn().mockResolvedValue(null);
+            processor = new WebhookProcessor(
+              repo as unknown as Repository<Webhook>,
+              failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+              hookManager as unknown as HookManager,
+              configService as unknown as ConfigService,
+              outbox as unknown as WebhookOutboxService,
+              messages as unknown as Repository<Message>,
+              undefined,
+              {
+                toKey: (type: string) => `bull:webhook:${type}`,
+                getBackend: () => ({ client: Promise.resolve({ get: lease }) }),
+              } as never,
+            );
+          });
+
+          it('waits, spending no attempt, while that node keeps a change of the message', async () => {
+            lease.mockResolvedValue('1');
+
+            await expect(processor.process(marked(), 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+            expect(lease).toHaveBeenCalledWith('bull:webhook:held:d');
+            expect(mockFetch).not.toHaveBeenCalled();
+            expect(messages.find).not.toHaveBeenCalled();
+          });
+
+          it('waits while that node keeps a change, though it wrote what an earlier change left of the copy', async () => {
+            lease.mockResolvedValue('1');
+
+            await expect(
+              processor.process(withMark({ unwrittenChange: { ...queuedData, type: 'revoked', body: '' } }), 'tok'),
+            ).rejects.toBeInstanceOf(DelayedError);
+
+            expect(mockFetch).not.toHaveBeenCalled();
+          });
+
+          it('sends nothing of a withdrawn copy, held or not, reading no lease', async () => {
+            lease.mockResolvedValue('1');
+
+            await processor.process(withMark({ unwrittenChange: null }));
+
+            expect(mockFetch).not.toHaveBeenCalled();
+            expect(lease).not.toHaveBeenCalled();
+          });
+
+          it('reads the message row once no lease is kept (a node that stopped renewing it)', async () => {
+            messages.find.mockResolvedValue([stored({ type: 'revoked', body: '' })]);
+
+            await processor.process(marked());
+
+            expect(messages.find).toHaveBeenCalled();
+            expect(mockFetch).not.toHaveBeenCalled();
+          });
+
+          it('waits, spending no attempt and sending nothing, while Redis cannot tell whether a lease is kept', async () => {
+            lease.mockRejectedValue(new Error('Connection is closed.'));
+            // A row no change reached: a worker that went past the lease would read it and send the job.
+            messages.find.mockResolvedValue([stored({})]);
+
+            await expect(processor.process(marked(), 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+            expect(mockFetch).not.toHaveBeenCalled();
+            expect(messages.find).not.toHaveBeenCalled();
+            expect(failureRepo.insert).not.toHaveBeenCalled();
+          });
+        });
       });
 
       it('reads no message row for a job that carries no mark', async () => {

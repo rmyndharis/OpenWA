@@ -68,18 +68,31 @@ describe('What the database refused, across a restart', () => {
    * One process: its services over the shared database, with the journal it opens at start. `engine` says whether the
    * session's engine runs yet; `plugins` stands in for the plugin restore at start, done once it settles.
    */
-  const boot = ({ engine = true, plugins }: { engine?: boolean; plugins?: Promise<void> } = {}) => {
+  const boot = ({
+    engine = true,
+    plugins,
+    queue,
+  }: { engine?: boolean; plugins?: Promise<void>; queue?: Record<string, unknown> } = {}) => {
     const journal = new RecoveryJournal(join(dir, 'recovery-journal.jsonl'));
     const hookManager = new HookManager();
     const outbox = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent), journal);
+    const queueOn = {
+      get: <T>(key: string, defaultValue?: T): T =>
+        (key === 'queue.enabled'
+          ? true
+          : (configService as unknown as { get: (key: string, defaultValue?: unknown) => unknown }).get(
+              key,
+              defaultValue,
+            )) as T,
+    } as unknown as ConfigService;
     const delivery = new WebhookDeliveryService(
       ds.getRepository(Webhook),
       ds.getRepository(WebhookDeliveryFailure),
-      configService,
+      queue ? queueOn : configService,
       hookManager,
       outbox,
       undefined,
-      undefined,
+      queue as never,
       journal,
       plugins && ({ whenRestored: () => plugins } as unknown as PluginLoaderService),
     );
@@ -437,6 +450,57 @@ describe('What the database refused, across a restart', () => {
     expect(await rowOf()).toMatchObject({ type: 'revoked', body: '' });
     expect(persisted).toEqual([['revoked', '']]);
     expect(posted().map(post => post.event)).toEqual(['group.join']);
+  });
+
+  it('holds, from the start, the queued job of a message whose change the journal restored', async () => {
+    const leases: Array<[string, unknown]> = [];
+    const released: string[] = [];
+    const job = { data: {}, getState: () => Promise.resolve('delayed'), updateData: () => Promise.resolve() };
+    const queue = {
+      toKey: (type: string) => `bull:webhook:${type}`,
+      waitUntilReady: () => Promise.resolve(),
+      getJob: () => Promise.resolve(job),
+      getBackend: () => ({
+        client: Promise.resolve({
+          set: (key: string, _value: string, options: unknown) => (leases.push([key, options]), Promise.resolve('OK')),
+          del: (key: string) => (released.push(key), Promise.resolve(1)),
+        }),
+      }),
+    };
+    await storeRow();
+    // What the last process left: a revoke the database refused, and the copy of a queued delivery of the message.
+    node.journal.close();
+    appendFileSync(
+      join(dir, 'recovery-journal.jsonl'),
+      [
+        {
+          l: 'change',
+          k: `${sessionId}:J-1#1`,
+          v: {
+            s: sessionId,
+            m: 'J-1',
+            t: Date.now(),
+            revoke: { source: { kind: 'revoke', chatId: CHAT, fromMe: false }, announced: true, notify: true },
+          },
+        },
+        {
+          l: 'copy',
+          k: `${webhook.id}\u0000msg_${sessionId}_J-1_${webhook.id}`,
+          v: { s: sessionId, e: 'message.received', d: received(), r: null, q: 'd1' },
+        },
+      ]
+        .map(line => `${JSON.stringify(line)}\n`)
+        .join(''),
+    );
+    outage = 'on';
+
+    node = boot({ queue });
+    await settle();
+
+    expect(leases).toEqual([['bull:webhook:held:d1', { PX: 60_000 }]]);
+    expect(released).toEqual([]);
+    await recover();
+    expect(released).toEqual(['bull:webhook:held:d1']);
   });
 
   it('lets go of what it cannot read back as a record, and of copies whose queued job will never run here', async () => {

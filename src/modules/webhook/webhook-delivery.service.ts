@@ -52,6 +52,7 @@ import { RecoveryJournal } from '../../common/utils/recovery-journal';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { ParkedDispatch, type ParkedDispatchSteps } from './parked-dispatch';
+import { jobHoldKey } from './utils/job-hold';
 
 export interface WebhookPayload {
   event: string;
@@ -94,10 +95,20 @@ export interface WebhookJobData {
   /**
    * The pre-hook event data of a message delivery or an edit event whose outbox row could not be written: what that row
    * would hold. The node that queued it keeps its copy in memory; a worker of another node, with neither, judges the job
-   * by the message's stored row instead (a revoke withholds it, an edit rewrites it).
+   * by what that node wrote below, else by the message's stored row (a revoke withholds it, an edit rewrites it).
    */
   unwritten?: Record<string, unknown>;
+  /** Written by the node that queued it: its copy as a change of the message left it (null once withdrawn). */
+  unwrittenChange?: Record<string, unknown> | null;
 }
+
+/**
+ * How long a job is held for a change the node that queued it keeps (a key Redis expires itself: see jobHoldKey), and
+ * how often that hold is renewed, so a node that stopped holds the job no longer than the lease.
+ */
+const JOB_HOLD_LEASE_MS = 60_000;
+const JOB_HOLD_RENEW_MS = 20_000;
+const WARN_JOB_MARK_EVERY_MS = 60_000;
 
 /**
  * One resolved webhook delivery ready to be persisted into the outbox inside a caller's database
@@ -383,6 +394,10 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       ),
       journal,
     });
+    // A worker of another node reads what this node knows of a job it queued with no outbox row from the job itself.
+    if (this.queueEnabled && this.webhookQueue) {
+      outbox.onQueuedCopyChanged((deliveryId, data) => this.markJob(deliveryId, { change: data }));
+    }
     // A session's state as a dead process saw it would go out as current after a restart: those events stay in memory.
     this.recovery.register('dispatch', {
       encode: record => {
@@ -448,6 +463,11 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     else this.recovery.ready();
     void this.dropOrphanCopies();
     if (this.queueEnabled && this.webhookQueue) {
+      // What a change left of a restored copy is written into its job again: a mark Redis had not taken before the
+      // stop is not lost. A kept change restored holds its jobs again when the projector restores it.
+      for (const { deliveryId, change } of this.outbox.queuedCopies()) {
+        if (change !== undefined) this.markJob(deliveryId, { change });
+      }
       this.orphanCheck = setInterval(() => void this.dropOrphanCopies(), ORPHAN_COPY_CHECK_MS);
       this.orphanCheck.unref?.();
     }
@@ -455,6 +475,119 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
 
   private orphanCheck?: ReturnType<typeof setInterval>;
   private checkingOrphans = false;
+
+  // What this node still has to write into, or keep renewing for, the jobs it queued with no outbox row, by job id: the
+  // message each carries and whether it is an edit event's, by which its hold is let go; whether a change is still to
+  // be written into the job, and a released hold's lease still to be removed.
+  private readonly jobMarks = new Map<
+    string,
+    {
+      held: boolean;
+      edit: boolean;
+      message?: string;
+      change?: Record<string, unknown> | null;
+      changeOwed: boolean;
+      releaseOwed: boolean;
+    }
+  >();
+  private jobMarkRenewal?: ReturnType<typeof setInterval>;
+  private markingJobs?: Promise<void>;
+  private markJobsAgain = false;
+  private readonly jobMarkWarning = { at: -Infinity, held: 0 };
+
+  /** Note what a job this node queued must say: the copy's state after a change, or whether a change of it is kept. */
+  private markJob(
+    deliveryId: string,
+    mark: { change?: Record<string, unknown> | null; held?: boolean; edit?: boolean; message?: string },
+  ): void {
+    const entry = this.jobMarks.get(deliveryId) ?? { held: false, edit: false, changeOwed: false, releaseOwed: false };
+    if (mark.held !== undefined) {
+      if (entry.held && !mark.held) entry.releaseOwed = true;
+      entry.held = mark.held;
+    }
+    if (mark.edit !== undefined) entry.edit = mark.edit;
+    if (mark.message !== undefined) entry.message = mark.message;
+    if ('change' in mark) {
+      entry.change = mark.change;
+      entry.changeOwed = true;
+    }
+    this.jobMarks.set(deliveryId, entry);
+    if (!this.jobMarkRenewal) {
+      this.jobMarkRenewal = setInterval(() => void this.writeJobMarks(), JOB_HOLD_RENEW_MS);
+      this.jobMarkRenewal.unref?.();
+    }
+    void this.writeJobMarks();
+  }
+
+  /**
+   * Write what the jobs must say, one pass at a time: the copy's state into the job, and a held job's lease as a key
+   * Redis expires itself, renewed each time (a released one is removed). A write Redis did not take is tried again at
+   * the next renewal. A job gone or settled needs nothing more. A job already active elsewhere takes the mark from its
+   * next attempt; the one under way goes out as it is.
+   */
+  private writeJobMarks(): Promise<void> {
+    if (this.markingJobs) {
+      this.markJobsAgain = true;
+      return this.markingJobs;
+    }
+    this.markingJobs = (async () => {
+      do {
+        this.markJobsAgain = false;
+        for (const [deliveryId, entry] of [...this.jobMarks]) {
+          if (!entry.held && !entry.changeOwed && !entry.releaseOwed) {
+            this.jobMarks.delete(deliveryId);
+            continue;
+          }
+          try {
+            const queue = this.webhookQueue!;
+            await producerReady(queue);
+            const redis = await queue.getBackend().client;
+            const lease = jobHoldKey(queue, deliveryId);
+            const job = await queue.getJob(deliveryId);
+            const state = job ? await job.getState() : undefined;
+            if (!job || state === 'completed' || state === 'failed') {
+              if (entry.held || entry.releaseOwed) await redis.del(lease);
+              this.jobMarks.delete(deliveryId);
+              continue;
+            }
+            if (entry.changeOwed) {
+              await job.updateData({ ...job.data, unwrittenChange: entry.change });
+              entry.changeOwed = false;
+            }
+            if (entry.held) await redis.set(lease, '1', { PX: JOB_HOLD_LEASE_MS });
+            else if (entry.releaseOwed) {
+              await redis.del(lease);
+              entry.releaseOwed = false;
+            }
+            if (!entry.held && !entry.changeOwed && !entry.releaseOwed) this.jobMarks.delete(deliveryId);
+          } catch (error) {
+            this.warnJobMark(deliveryId, error);
+          }
+        }
+      } while (this.markJobsAgain);
+    })().finally(() => {
+      this.markingJobs = undefined;
+      if (this.jobMarks.size === 0) {
+        clearInterval(this.jobMarkRenewal);
+        this.jobMarkRenewal = undefined;
+      }
+    });
+    return this.markingJobs;
+  }
+
+  private warnJobMark(deliveryId: string, error: unknown): void {
+    const now = Date.now();
+    this.jobMarkWarning.held++;
+    if (now - this.jobMarkWarning.at < WARN_JOB_MARK_EVERY_MS) return;
+    this.logger.warn('Could not write what a queued job with no outbox row must say; trying again', {
+      deliveryId,
+      error: error instanceof Error ? error.message : String(error),
+      failures: this.jobMarkWarning.held,
+      action: 'webhook_job_mark_failed',
+    });
+    this.jobMarkWarning.at = now;
+    this.jobMarkWarning.held = 0;
+  }
 
   private async dropOrphanCopies(): Promise<void> {
     if (this.checkingOrphans) return;
@@ -539,6 +672,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    */
   async onModuleDestroy(): Promise<void> {
     clearInterval(this.orphanCheck);
+    clearInterval(this.jobMarkRenewal);
     const drainBudgetMs = Math.max(
       0,
       this.configService.get<number>('webhook.shutdownDrainMs', DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS),
@@ -1456,8 +1590,12 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
-      // The job outlives the process; a copy kept for it, with no outbox row, goes into the journal with it.
-      this.outbox.queuedUnwritten(webhook.id, idempotencyKey, deliveryId);
+      // The job outlives the process; a copy kept for it, with no outbox row, goes into the journal with it, and the job
+      // is held at once when a change of its message is kept already.
+      const queued = this.outbox.queuedUnwritten(webhook.id, idempotencyKey, deliveryId);
+      if (queued?.messageId) {
+        this.holdJobs(queued.sessionId, queued.messageId, this.outbox.messageHold(queued.sessionId, queued.messageId));
+      }
 
       // Execute hook after successful queue (NOT delivery - that happens in processor)
       await this.hookManager.execute(
@@ -1613,6 +1751,29 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   /** See WebhookOutboxService.holdMessage. */
   holdMessage(sessionId: string, waMessageId: string, held: MessageHold | false): void {
     this.outbox.holdMessage(sessionId, waMessageId, held);
+    // The jobs this node queued with no outbox row are held for a worker of another node too, as a renewed lease.
+    if (this.queueEnabled && this.webhookQueue) this.holdJobs(sessionId, waMessageId, held);
+  }
+
+  /**
+   * Hold the jobs of the message this node queued with no outbox row as its own hold holds their copies: a message
+   * delivery while any change of it is kept, an edit event only while a revoke is. Only a change of what a job must
+   * say is written; a lease is let go by the message, so one whose copy this node dropped since is let go too.
+   */
+  private holdJobs(sessionId: string, waMessageId: string, hold: MessageHold | false | undefined): void {
+    const message = `${sessionId}\u0000${waMessageId}`;
+    const holds = (edit: boolean): boolean => (edit ? hold === 'revoke' : Boolean(hold));
+    const queued = this.outbox.queuedCopiesOf(sessionId, waMessageId);
+    for (const [deliveryId, edit] of queued) {
+      if ((this.jobMarks.get(deliveryId)?.held ?? false) !== holds(edit)) {
+        this.markJob(deliveryId, { held: holds(edit), edit, message });
+      }
+    }
+    for (const [deliveryId, entry] of this.jobMarks) {
+      if (entry.message === message && entry.held && !holds(entry.edit) && !queued.some(([id]) => id === deliveryId)) {
+        this.markJob(deliveryId, { held: false });
+      }
+    }
   }
 
   /** See WebhookOutboxService.isMessageHeld. */

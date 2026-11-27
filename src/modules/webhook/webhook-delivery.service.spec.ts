@@ -89,6 +89,10 @@ describe('WebhookDeliveryService', () => {
     isMessageHeld: jest.Mock;
     queuedUnwritten: jest.Mock;
     hasUnwritten: jest.Mock;
+    onQueuedCopyChanged: jest.Mock;
+    queuedCopiesOf: jest.Mock;
+    holdMessage: jest.Mock;
+    messageHold: jest.Mock;
   };
   let insertedFailures: Array<Partial<WebhookDeliveryFailure>>;
 
@@ -202,6 +206,10 @@ describe('WebhookDeliveryService', () => {
       isMessageHeld: jest.fn().mockReturnValue(false),
       queuedUnwritten: jest.fn(),
       hasUnwritten: jest.fn().mockReturnValue(false),
+      onQueuedCopyChanged: jest.fn(),
+      queuedCopiesOf: jest.fn().mockReturnValue([]),
+      holdMessage: jest.fn(),
+      messageHold: jest.fn().mockReturnValue(undefined),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -2120,6 +2128,214 @@ describe('WebhookDeliveryService', () => {
 
       expect(webhookQueue.getJob).toHaveBeenCalledWith('d');
       expect(forget.mock.calls).toEqual(dropped ? [['wh-1', 'k']] : []);
+    });
+
+    // A worker of another node has no copy of a job this node queued with no outbox row: the job tells it instead.
+    describe('what a job queued with no outbox row is told by the node that queued it', () => {
+      let job: { data: Record<string, unknown>; getState: jest.Mock; updateData: jest.Mock };
+      // The lease keys the node writes in Redis, which Redis expires itself.
+      let redis: { set: jest.Mock; del: jest.Mock };
+      const queueOn = (key: string, def?: unknown) => (key === 'queue.enabled' ? true : def);
+      const leased = (): unknown[] => redis.set.mock.calls.map(([key, , options]) => [key, options] as unknown);
+      const lease = ['bull:webhook:held:d', { PX: 60_000 }];
+      const written = (): Array<Record<string, unknown>> =>
+        job.updateData.mock.calls.map(([data]) => data as Record<string, unknown>);
+      const listener = (): ((id: string, data: unknown) => void) =>
+        (outboxService.onQueuedCopyChanged.mock.calls as Array<[(id: string, data: unknown) => void]>)[0][0];
+
+      beforeEach(() => {
+        job = {
+          data: { webhookId: 'wh-1', unwritten: { id: 'M-1' } },
+          getState: jest.fn().mockResolvedValue('delayed'),
+          updateData: jest.fn().mockImplementation((data: Record<string, unknown>) => {
+            job.data = data;
+            return Promise.resolve();
+          }),
+        };
+        webhookQueue.getJob = jest.fn().mockResolvedValue(job);
+        redis = { set: jest.fn().mockResolvedValue('OK'), del: jest.fn().mockResolvedValue(1) };
+        Object.assign(webhookQueue, {
+          toKey: (type: string) => `bull:webhook:${type}`,
+          getBackend: () => ({ client: Promise.resolve(redis) }),
+        });
+        outboxService.queuedCopiesOf.mockReturnValue([['d', false]]);
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+      });
+
+      afterEach(() => jest.useRealTimers());
+
+      it('writes the copy as a change left it, and again at the next renewal when Redis did not answer', async () => {
+        const service = await buildQueueService(queueOn);
+        const changed = listener();
+        webhookQueue.getJob.mockRejectedValueOnce(new Error('connection is closed'));
+
+        changed('d', null);
+        await jest.advanceTimersByTimeAsync(0);
+        expect(job.updateData).not.toHaveBeenCalled();
+        await jest.advanceTimersByTimeAsync(20_000);
+
+        expect(written()).toEqual([expect.objectContaining({ unwritten: { id: 'M-1' }, unwrittenChange: null })]);
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(job.updateData).toHaveBeenCalledTimes(1);
+        await service.onModuleDestroy();
+      });
+
+      it('holds the job while a change of the message is kept, renewing the lease, and lets it go after', async () => {
+        const service = await buildQueueService(queueOn);
+
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        await jest.advanceTimersByTimeAsync(0);
+        expect(leased()).toEqual([lease]);
+        await jest.advanceTimersByTimeAsync(20_000);
+        expect(leased()).toEqual([lease, lease]);
+        // The job's own data holds no hold: a worker asks Redis for the lease.
+        expect(job.updateData).not.toHaveBeenCalled();
+
+        service.holdMessage('sess-1', 'M-1', false);
+        await jest.advanceTimersByTimeAsync(0);
+        expect(redis.del).toHaveBeenCalledWith('bull:webhook:held:d');
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(leased()).toHaveLength(2);
+        expect(redis.del).toHaveBeenCalledTimes(1);
+        await service.onModuleDestroy();
+      });
+
+      it('writes nothing into a job that is gone or already settled', async () => {
+        const service = await buildQueueService(queueOn);
+        const changed = listener();
+
+        job.getState.mockResolvedValueOnce('completed');
+        changed('d', null);
+        await jest.advanceTimersByTimeAsync(0);
+        webhookQueue.getJob.mockResolvedValueOnce(null);
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        await jest.advanceTimersByTimeAsync(40_000);
+
+        expect(job.updateData).not.toHaveBeenCalled();
+        expect(redis.set).not.toHaveBeenCalled();
+        expect(redis.del).toHaveBeenCalledWith('bull:webhook:held:d');
+        await service.onModuleDestroy();
+      });
+
+      it('lets the hold go by the message, though this node dropped the copy since', async () => {
+        const service = await buildQueueService(queueOn);
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        await jest.advanceTimersByTimeAsync(0);
+        outboxService.queuedCopiesOf.mockReturnValue([]);
+
+        service.holdMessage('sess-1', 'M-1', false);
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(redis.del).toHaveBeenCalledWith('bull:webhook:held:d');
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(leased()).toEqual([lease]);
+        await service.onModuleDestroy();
+      });
+
+      it("holds an edit event's job only while a revoke of the message is kept, as this node's own hold does", async () => {
+        outboxService.queuedCopiesOf.mockReturnValue([['e', true]]);
+        const service = await buildQueueService(queueOn);
+
+        service.holdMessage('sess-1', 'M-1', 'copies');
+        await jest.advanceTimersByTimeAsync(0);
+        expect(redis.set).not.toHaveBeenCalled();
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(leased()).toEqual([['bull:webhook:held:e', { PX: 60_000 }]]);
+        await service.onModuleDestroy();
+      });
+
+      it('writes nothing more for a hold that did not change, until its renewal', async () => {
+        const service = await buildQueueService(queueOn);
+
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        service.holdMessage('sess-1', 'M-1', 'copies');
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(leased()).toEqual([lease]);
+        await service.onModuleDestroy();
+      });
+
+      it('holds a job at once when it is queued while a change of its message is kept', async () => {
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.received'] })]);
+        (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+        outboxService.hasUnwritten.mockReturnValue(true);
+        outboxService.queuedUnwritten.mockReturnValue({ sessionId: 'sess-1', messageId: 'M-1' });
+        outboxService.messageHold.mockReturnValue('copies');
+        const service = await buildQueueService(queueOn);
+
+        await service.dispatch('sess-1', 'message.received', { id: 'M-1', chatId: '628111@c.us', body: 'hi' });
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(outboxService.messageHold).toHaveBeenCalledWith('sess-1', 'M-1');
+        expect(leased()).toEqual([lease]);
+        await service.onModuleDestroy();
+      });
+
+      it('writes again at start what a change left of a copy the journal restored', async () => {
+        Object.assign(outboxService, {
+          queuedCopies: jest.fn().mockReturnValue([
+            { webhookId: 'wh-1', idempotencyKey: 'k', deliveryId: 'd', change: null },
+            { webhookId: 'wh-1', idempotencyKey: 'k2', deliveryId: 'untouched' },
+          ]),
+        });
+        const service = await buildQueueService(queueOn);
+
+        service.onApplicationBootstrap();
+        await jest.advanceTimersByTimeAsync(0);
+
+        // One write, for the copy a change reached; the other job is only checked against the queue.
+        expect(written()).toEqual([expect.objectContaining({ unwrittenChange: null })]);
+        await service.onModuleDestroy();
+      });
+
+      it('lets go of a job that failed for good, or that went between its read and its write', async () => {
+        const service = await buildQueueService(queueOn);
+        const changed = listener();
+        job.getState.mockResolvedValueOnce('failed');
+        changed('d', null);
+        await jest.advanceTimersByTimeAsync(0);
+        job.updateData.mockRejectedValueOnce(new Error('Missing key for job d. updateData'));
+        changed('d', null);
+        await jest.advanceTimersByTimeAsync(0);
+
+        expect(job.updateData).toHaveBeenCalledTimes(1);
+        await service.onModuleDestroy();
+      });
+
+      it('logs the writes Redis keeps refusing at most once a minute, with their count', async () => {
+        const service = await buildQueueService(queueOn);
+        const warn = jest
+          .spyOn((service as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn')
+          .mockImplementation(() => undefined);
+        webhookQueue.getJob.mockRejectedValue(new Error('connection is closed'));
+
+        listener()('d', null);
+        await jest.advanceTimersByTimeAsync(0);
+        await jest.advanceTimersByTimeAsync(20_000);
+        await jest.advanceTimersByTimeAsync(40_000);
+
+        const logged = warn.mock.calls.filter(
+          call => (call[1] as { action?: string } | undefined)?.action === 'webhook_job_mark_failed',
+        );
+        // The first, then the three since, a minute on.
+        expect(logged.map(call => (call[1] as { failures: number }).failures)).toEqual([1, 3]);
+        warn.mockRestore();
+        await service.onModuleDestroy();
+      });
+
+      it('leaves the jobs alone with the queue off', async () => {
+        const service = await buildQueueService(() => undefined);
+
+        service.holdMessage('sess-1', 'M-1', 'revoke');
+        await jest.advanceTimersByTimeAsync(20_000);
+
+        expect(outboxService.onQueuedCopyChanged).not.toHaveBeenCalled();
+        expect(webhookQueue.getJob).not.toHaveBeenCalled();
+        await service.onModuleDestroy();
+      });
     });
 
     it('drops, at a later check, a copy whose queued job Redis lost while the process runs', async () => {

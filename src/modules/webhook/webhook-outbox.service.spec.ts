@@ -693,7 +693,14 @@ describe('WebhookOutboxService copies of queued deliveries, across a restart', (
 
     expect(service.unwrittenCopy('w', 'msg_s_0_w')).toMatchObject({ type: 'revoked', body: '' });
     expect(service.unwrittenCopy('w', 'msg_s_1_w')).toBeUndefined();
-    expect(service.queuedCopies()).toEqual([{ webhookId: 'w', idempotencyKey: 'msg_s_0_w', deliveryId: 'd0' }]);
+    expect(service.queuedCopies()).toEqual([
+      {
+        webhookId: 'w',
+        idempotencyKey: 'msg_s_0_w',
+        deliveryId: 'd0',
+        change: expect.objectContaining({ type: 'revoked', body: '' }) as unknown,
+      },
+    ]);
   });
 
   it.each([
@@ -724,6 +731,16 @@ describe('WebhookOutboxService copies of queued deliveries, across a restart', (
     expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeNull();
   });
 
+  it('finds the jobs of the copies it restored by their message, a withdrawn one included', async () => {
+    queued(row(0), row(1));
+    await service.changeUnwrittenForMessage('s', '0', { kind: 'close' });
+
+    restart();
+
+    expect(service.queuedCopiesOf('s', '0')).toEqual([['d0', false]]);
+    expect(service.queuedCopiesOf('s', '1')).toEqual([['d1', false]]);
+  });
+
   it('forgets a copy with its delivery, and lets go of one it cannot read back', () => {
     queued(row(0), row(1));
     service.forgetUnwritten('w', 'msg_s_1_w');
@@ -735,5 +752,73 @@ describe('WebhookOutboxService copies of queued deliveries, across a restart', (
     expect(service.queuedCopies().map(copy => copy.idempotencyKey)).toEqual(['msg_s_0_w']);
     service.forgetUnwritten('w', 'msg_s_0_w');
     expect(readFileSync(journal.path, 'utf8')).toBe('');
+  });
+});
+
+describe('WebhookOutboxService copies of queued deliveries, by message', () => {
+  let service: WebhookOutboxService;
+  let changed: jest.Mock;
+  const row = (i: number, event = 'message.received') => ({
+    webhookId: 'w',
+    sessionId: 's',
+    event,
+    idempotencyKey: `${event === 'message.edited' ? 'edit' : 'msg'}_s_${i}_w`,
+    deliveryId: `d${i}`,
+    payload:
+      event === 'message.edited'
+        ? { messageId: 'M', chatId: '628111@c.us', fromMe: false, body: `edit ${i}` }
+        : { id: 'M', chatId: '628111@c.us', fromMe: false, type: 'text', body: 'secret' },
+  });
+
+  beforeEach(() => {
+    jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+    service = new WebhookOutboxService({ findOne: () => Promise.resolve(null) } as never);
+    changed = jest.fn();
+    service.onQueuedCopyChanged(changed);
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('finds the jobs of a message, an edit event apart, a withdrawn copy included, and forgets one let go', async () => {
+    service.holdUnwritten([row(0), row(1, 'message.edited'), row(2)]);
+    service.queuedUnwritten('w', 'msg_s_0_w', 'd0');
+    service.queuedUnwritten('w', 'edit_s_1_w', 'd1');
+    await service.changeUnwrittenForMessage('s', 'M', { kind: 'close' });
+
+    expect(service.queuedCopiesOf('s', 'M')).toEqual([
+      ['d0', false],
+      ['d1', true],
+    ]);
+    service.forgetUnwritten('w', 'msg_s_0_w');
+    expect(service.queuedCopiesOf('s', 'M')).toEqual([['d1', true]]);
+    expect(service.queuedCopiesOf('s', 'other')).toEqual([]);
+  });
+
+  it('tells a change that reached a copy before its job was queued, once it is queued, and answers its message', async () => {
+    service.holdUnwritten([row(0), row(2)]);
+    await service.changeUnwrittenForMessage('s', 'M', { kind: 'redact' });
+    expect(changed).not.toHaveBeenCalled();
+
+    expect(service.queuedUnwritten('w', 'msg_s_0_w', 'd0')).toEqual({ sessionId: 's', messageId: 'M' });
+    expect(service.queuedUnwritten('w', 'nothing kept', 'd9')).toBeUndefined();
+
+    expect(changed).toHaveBeenCalledWith('d0', expect.objectContaining({ type: 'revoked', body: '' }));
+    expect(service.queuedCopies()).toEqual([
+      expect.objectContaining({ deliveryId: 'd0', change: expect.objectContaining({ body: '' }) as unknown }),
+    ]);
+  });
+
+  it('tells the change a later change makes, and what a held message holds', async () => {
+    service.holdUnwritten([row(0)]);
+    service.queuedUnwritten('w', 'msg_s_0_w', 'd0');
+    expect(service.queuedCopies()).toEqual([expect.not.objectContaining({ change: expect.anything() as unknown })]);
+
+    await service.changeUnwrittenForMessage('s', 'M', { kind: 'close' });
+    service.holdMessage('s', 'M', 'revoke');
+
+    expect(changed).toHaveBeenCalledWith('d0', null);
+    expect(service.messageHold('s', 'M')).toBe('revoke');
+    expect(service.messageHold('s', 'other')).toBeUndefined();
+    expect(service.queuedCopies()).toEqual([expect.objectContaining({ deliveryId: 'd0', change: null })]);
   });
 });
