@@ -21,6 +21,7 @@ import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.enti
 import { clearDeliveryFailureRows, recordWebhookDeliveryFailure } from './utils/record-delivery-failure';
 import {
   buildDeliveryHeaders,
+  dataHash,
   isDeliverableWebhook,
   postWebhookPayload,
   recordTerminalFailure,
@@ -63,6 +64,13 @@ export interface WebhookJobData {
    * (inline media over WEBHOOK_MEDIA_INLINE_MAX_BYTES was shed before it was captured).
    */
   replayData?: Record<string, unknown>;
+  /**
+   * {@link dataHash} of the pre-hook data the delivery's outbox row held when the job was queued. A message delivery
+   * whose row holds other data by the time the worker runs was changed since (an edit or a delete through the API
+   * rewrote it), and the worker rebuilds the body from the row. Absent on a job queued before it existed, or when
+   * what the row held was not known: such a job posts its own body unless the row was closed.
+   */
+  baseHash?: string;
 }
 
 /**
@@ -77,6 +85,12 @@ export interface PreparedWebhookDelivery {
   deliveryId: string;
   idempotencyKey: string;
   outboxRow: OutboxOpenRow;
+  /**
+   * What the outbox row holds when it is not `baseData`: the {@link dataHash} of the older data a rewrite of the row
+   * failed to replace, or null when this dispatch did not write the row (another dispatch opened it under the same
+   * key). Undefined: the row holds `baseData`.
+   */
+  storedHash?: string | null;
 }
 
 // Decoded-byte cap for inline base64 media and the shed helper live in common/utils/inline-media:
@@ -118,6 +132,8 @@ interface DispatchEventContext {
   sessionId: string;
   event: string;
   baseData: Record<string, unknown>;
+  /** What the delivery's outbox row holds, as on {@link PreparedWebhookDelivery}. */
+  storedHash?: string | null;
   /** Gives the dispatch slot up while `fn` runs (a retry backoff). Absent outside the limiter. */
   yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R>;
   /**
@@ -523,14 +539,17 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     const rows = prepared.map(item => item.outboxRow);
     if (typeof this.outbox.openBatch === 'function') {
       const inserted = await this.outbox.openBatch(rows, manager);
-      if (inserted === null) return null;
-      const insertedKeys = new Set(inserted.map(row => `${row.webhookId}\u0000${row.idempotencyKey}`));
-      return prepared.filter(item => {
+      const insertedKeys = new Set((inserted ?? []).map(row => `${row.webhookId}\u0000${row.idempotencyKey}`));
+      const opened = prepared.filter(item => {
         const key = `${item.webhook.id}\u0000${item.idempotencyKey}`;
         if (!insertedKeys.has(key)) return false;
         insertedKeys.delete(key);
         return true;
       });
+      // A row this dispatch did not write holds whatever its writer put there: a check before a send cannot read a
+      // change from it, only that it was closed.
+      for (const item of prepared) if (!opened.includes(item)) item.storedHash = null;
+      return inserted === null ? null : opened;
     }
     if (manager) {
       throw new Error('WebhookOutboxService.openBatch is required for transactional outbox writes');
@@ -580,11 +599,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         outboxRow: { ...prev.outboxRow, payload: baseData },
       }));
       if (typeof this.outbox.updatePendingPayload === 'function') {
-        await Promise.all(
-          preserved
-            .filter(isOwned)
-            .map(item => this.outbox.updatePendingPayload(item.webhook.id, item.idempotencyKey, item.baseData)),
-        );
+        await Promise.all(preserved.map((item, i) => this.rewriteCommitted(item, committed[i], isOwned(committed[i]))));
       }
       return preserved;
     }
@@ -617,9 +632,10 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     }
     if (updated.length > 0 && typeof this.outbox.updatePendingPayload === 'function') {
       await Promise.all(
-        updated
-          .filter(isOwned)
-          .map(item => this.outbox.updatePendingPayload(item.webhook.id, item.idempotencyKey, item.baseData)),
+        updated.map(item => {
+          const prev = committedByKey.get(keyOf(item))!;
+          return this.rewriteCommitted(item, prev, isOwned(prev));
+        }),
       );
     }
     if (!openNew) return updated;
@@ -627,6 +643,24 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       await this.openPrepared(added);
     }
     return [...updated, ...added];
+  }
+
+  /**
+   * Rewrite a committed row this commit owns to `item`'s data, and record on `item` what the row holds after: its
+   * data, the older data when the rewrite did not land, or nothing known for a row the commit does not own (left as
+   * it was).
+   */
+  private async rewriteCommitted(
+    item: PreparedWebhookDelivery,
+    prev: PreparedWebhookDelivery,
+    owned: boolean,
+  ): Promise<void> {
+    if (!owned) {
+      item.storedHash = null;
+      return;
+    }
+    const rewritten = await this.outbox.updatePendingPayload(item.webhook.id, item.idempotencyKey, item.baseData);
+    item.storedHash = rewritten ? undefined : prev.storedHash === undefined ? dataHash(prev.baseData) : prev.storedHash;
   }
 
   /**
@@ -639,8 +673,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     // allSettled preserves per-webhook isolation: one failing delivery never rejects the others.
     await Promise.allSettled(
       prepared.map(async item => {
-        const { webhook, deliveryId, idempotencyKey, sessionId, event, baseData } = item;
-        const ctx: DispatchEventContext = { sessionId, event, baseData };
+        const { webhook, deliveryId, idempotencyKey, sessionId, event, baseData, storedHash } = item;
+        const ctx: DispatchEventContext = { sessionId, event, baseData, storedHash };
         this.locallyPending.set(idempotencyKey, (this.locallyPending.get(idempotencyKey) ?? 0) + 1);
         try {
           await this.runLimited(webhook, deliveryId, idempotencyKey, ctx);
@@ -959,6 +993,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         attempt: 1,
         maxRetries: webhook.retryCount,
         ...(this.keepsFailurePayload() ? { replayData: ctx.baseData } : {}),
+        ...this.heldHash(ctx),
       };
 
       await producerReady(this.webhookQueue!);
@@ -1065,6 +1100,12 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     }
     // Handed to BullMQ, which owns the retries and the dead-letter row from here.
     return 'enqueued';
+  }
+
+  /** The hash of what the delivery's outbox row holds, for the worker's check; none when it is not known. */
+  private heldHash(ctx: DispatchEventContext): { baseHash?: string } {
+    const baseHash = ctx.storedHash === undefined ? dataHash(ctx.baseData) : ctx.storedHash;
+    return baseHash ? { baseHash } : {};
   }
 
   /** Direct delivery when the queue is disabled. */

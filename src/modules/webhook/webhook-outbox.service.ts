@@ -485,6 +485,32 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     return candidates.filter(row => row.idempotencyKey === keyFor(row.webhookId));
   }
 
+  /**
+   * The event data the outbox row of a message delivery holds now: null once the row was closed (the message was
+   * revoked, or the delivery settled elsewhere), undefined for another event's delivery, a row of another event under
+   * the same key, no row, or a payload that does not parse. Throws when the database cannot be read: a caller that
+   * cannot tell whether the message was taken back must not send it on a guess.
+   */
+  async currentMessagePayload(
+    webhookId: string,
+    idempotencyKey: string,
+    event: string,
+  ): Promise<Record<string, unknown> | null | undefined> {
+    if (!MESSAGE_DELIVERY_EVENTS.includes(event)) return undefined;
+    let row: Pick<WebhookOutboxEvent, 'event' | 'state' | 'payload'> | null;
+    try {
+      row = await this.outbox.findOne({
+        where: { webhookId, idempotencyKey },
+        select: { event: true, state: true, payload: true },
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'SyntaxError') return undefined;
+      throw error;
+    }
+    if (!row || row.event !== event) return undefined;
+    return row.state && OPEN_STATES.includes(row.state) && row.payload ? row.payload : null;
+  }
+
   /** Retire replay data after successful delivery, cancellation or durable failure handoff. */
   async close(
     webhookId: string,

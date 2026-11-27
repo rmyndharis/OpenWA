@@ -2,6 +2,7 @@ import { DelayedError, Job } from 'bullmq';
 import { FindOperator, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { WebhookOutboxService } from '../../webhook/webhook-outbox.service';
+import { dataHash } from '../../webhook/utils/deliver-once';
 import { FAILING_WEBHOOKS_MAX, WebhookProcessor } from './webhook.processor';
 import { MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
 import { Webhook } from '../../webhook/entities/webhook.entity';
@@ -27,7 +28,7 @@ describe('WebhookProcessor', () => {
   let processor: WebhookProcessor;
   let repo: { update: jest.Mock; findOne: jest.Mock };
   let failureRepo: { insert: jest.Mock; count: jest.Mock; delete: jest.Mock; update: jest.Mock };
-  let outbox: { close: jest.Mock };
+  let outbox: { close: jest.Mock; currentMessagePayload: jest.Mock };
   let failureRows: Array<{ webhookId?: string; idempotencyKey?: string | null; attempts?: number }>;
   let hookManager: { execute: jest.Mock };
   let configService: { get: jest.Mock };
@@ -78,7 +79,11 @@ describe('WebhookProcessor', () => {
     // inserts, so a constant would leave that guard unexercised here and let a duplicated row pass.
     failureRows = [];
     const insertedFailures = failureRows;
-    outbox = { close: jest.fn().mockResolvedValue(undefined) };
+    // No outbox row of a message delivery unless a test says otherwise: the job's own payload is posted.
+    outbox = {
+      close: jest.fn().mockResolvedValue(undefined),
+      currentMessagePayload: jest.fn().mockResolvedValue(undefined),
+    };
     failureRepo = {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
       insert: jest.fn().mockImplementation((rowToInsert: { webhookId?: string; idempotencyKey?: string | null }) => {
@@ -455,13 +460,24 @@ describe('WebhookProcessor', () => {
       expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
     });
 
-    it('treats a failed webhook read as a failed attempt: retried, and dead-lettered on the last one', async () => {
+    it('delays a job whose webhook row cannot be read, spending no attempt and filing no dead-letter row', async () => {
       repo.findOne.mockRejectedValue(new Error('db down'));
+      const job = makeJob({ maxRetries: 3 }, 2);
+      const move = jest.fn().mockResolvedValue(undefined);
+      (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = move;
 
-      await expect(processor.process(makeJob({ maxRetries: 3 }, 0))).rejects.toThrow('db down');
+      await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+      expect(move).toHaveBeenCalledWith(expect.any(Number), 'tok');
+      expect(mockFetch).not.toHaveBeenCalled();
       expect(failureRepo.insert).not.toHaveBeenCalled();
+      expect(hookManager.execute).not.toHaveBeenCalled();
+    });
 
-      await expect(processor.process(makeJob({ maxRetries: 3 }, 2))).rejects.toThrow('db down');
+    it('counts a webhook row that does not parse as a failed attempt, as it will not parse later either', async () => {
+      repo.findOne.mockRejectedValue(new SyntaxError('Unexpected token } in JSON'));
+
+      await expect(processor.process(makeJob({ maxRetries: 3 }, 2))).rejects.toThrow('Unexpected token');
       expect(mockFetch).not.toHaveBeenCalled();
       expect(failureRepo.insert).toHaveBeenCalledTimes(1);
     });
@@ -628,7 +644,7 @@ describe('WebhookProcessor', () => {
 
     it('does not dead-letter an ordinary error with the stall message before a successful retry', async () => {
       const error = new Error('job stalled more than allowable limit');
-      repo.findOne.mockRejectedValueOnce(error);
+      mockFetch.mockRejectedValueOnce(error);
       await expect(processor.process(makeJob())).rejects.toBe(error);
       await processor.onWorkerFailed(makeJob({}, 1), error);
       mockFetch.mockResolvedValue({ ok: true, status: 200 });
@@ -838,6 +854,182 @@ describe('WebhookProcessor', () => {
 
     it('waits no longer than the close cap for a long delivery timeout', async () => {
       expect(await settleAfter(25_000)).toBe(MAX_WORKER_CLOSE_WAIT_MS);
+    });
+  });
+
+  describe('the outbox row of a message delivery, read before the POST', () => {
+    const rowData = { id: 'M-1', chatId: '628111@c.us', fromMe: false, body: 'edited text', edited: true };
+    const queuedData = { id: 'M-1', chatId: '628111@c.us', fromMe: false, body: 'first text' };
+    const sentBody = (): { data: Record<string, unknown>; idempotencyKey: string; deliveryId: string } =>
+      JSON.parse((mockFetch.mock.calls[0] as [string, { body: string }])[1].body) as {
+        data: Record<string, unknown>;
+        idempotencyKey: string;
+        deliveryId: string;
+      };
+    const queuedJob = (attemptsMade = 0): Job<WebhookJobData> => {
+      const job = makeJob({ baseHash: dataHash(queuedData), replayData: queuedData }, attemptsMade);
+      job.data.payload.data = { ...queuedData };
+      return job;
+    };
+
+    it('completes a job whose message was taken back without posting or filing a dead-letter row', async () => {
+      outbox.currentMessagePayload.mockResolvedValue(null);
+
+      const result = await processor.process(queuedJob(2));
+
+      expect(outbox.currentMessagePayload).toHaveBeenCalledWith('wh-1', 'k', 'message.received');
+      expect(result.success).toBe(false);
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(failureRepo.insert).not.toHaveBeenCalled();
+      expect(hookManager.execute).not.toHaveBeenCalled();
+    });
+
+    it("rebuilds the body from the row's current data, signed over its own bytes under the job's key", async () => {
+      repo.findOne.mockResolvedValue({
+        id: 'wh-1',
+        active: true,
+        sessionId: 'sess-1',
+        url: 'https://8.8.8.8/hook',
+        events: ['*'],
+        secret: 'current-secret',
+      });
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+      await processor.process(queuedJob());
+
+      const before = (hookManager.execute.mock.calls as Array<[string, { payload: { data: unknown } }]>).find(
+        ([hook]) => hook === 'webhook:before',
+      );
+      expect(before?.[1].payload.data).toEqual(rowData);
+      expect(sentBody()).toMatchObject({ data: rowData, idempotencyKey: 'k', deliveryId: 'd' });
+      const [, init] = mockFetch.mock.calls[0] as [string, { body: string; headers: Record<string, string> }];
+      expect(init.headers['X-OpenWA-Signature']).toBe(
+        `sha256=${createHmac('sha256', 'current-secret').update(init.body).digest('hex')}`,
+      );
+    });
+
+    it('posts the queued body as it is when the row still holds the data it was queued with', async () => {
+      outbox.currentMessagePayload.mockResolvedValue({ ...queuedData });
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+      await processor.process(queuedJob());
+
+      expect(hookManager.execute).not.toHaveBeenCalledWith('webhook:before', expect.anything(), expect.anything());
+      expect(sentBody().data).toEqual(queuedData);
+    });
+
+    it('posts a job queued without a hash as it is, unless its message was taken back', async () => {
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+      const job = makeJob();
+      job.data.payload.data = { ...queuedData };
+
+      await processor.process(job);
+      expect(sentBody().data).toEqual(queuedData);
+
+      mockFetch.mockClear();
+      outbox.currentMessagePayload.mockResolvedValue(null);
+      await processor.process(makeJob());
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('delays a job whose outbox row cannot be read, spending no attempt', async () => {
+      outbox.currentMessagePayload.mockRejectedValue(new Error('connection terminated'));
+      const job = queuedJob(2);
+      const move = jest.fn().mockResolvedValue(undefined);
+      (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = move;
+
+      await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+      expect(move).toHaveBeenCalledWith(expect.any(Number), 'tok');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(failureRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('closes the row and posts nothing when a plugin cancels the rebuilt delivery', async () => {
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+      hookManager.execute.mockResolvedValue({ continue: false, data: {} });
+
+      await processor.process(queuedJob());
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
+    });
+
+    it('records a rebuilt body over the size cap as undelivered and closes the row', async () => {
+      configService.get.mockImplementation((key: string, def?: unknown) =>
+        key === 'webhook.maxPayloadBytes' ? 10 : key === 'webhook.timeout' ? 25000 : def,
+      );
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+
+      await processor.process(queuedJob());
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(failureRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ attempts: 0 }));
+      expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
+    });
+
+    it('delays the job when the rebuilt body is refused and the refusal cannot be recorded', async () => {
+      configService.get.mockImplementation((key: string, def?: unknown) =>
+        key === 'webhook.maxPayloadBytes' ? 10 : key === 'webhook.timeout' ? 25000 : def,
+      );
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+      failureRepo.insert.mockRejectedValue(new Error('disk unavailable'));
+      const job = queuedJob();
+      const move = jest.fn().mockResolvedValue(undefined);
+      (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = move;
+
+      await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+      expect(outbox.close).not.toHaveBeenCalled();
+    });
+
+    describe('the copy a terminal failure keeps for a redrive', () => {
+      beforeEach(() => {
+        configService.get.mockImplementation((key: string, def?: unknown) =>
+          key === 'webhook.failurePayloadRetentionHours' ? 24 : key === 'webhook.timeout' ? 25000 : def,
+        );
+        mockFetch.mockResolvedValue({ ok: false, status: 503, statusText: 'Unavailable' });
+      });
+
+      it('is what the row holds when the attempt fails, not what the job was queued with', async () => {
+        // Unchanged before the POST, edited while it was out.
+        outbox.currentMessagePayload.mockResolvedValueOnce({ ...queuedData }).mockResolvedValueOnce(rowData);
+
+        await expect(processor.process(queuedJob(2))).rejects.toThrow('HTTP 503');
+
+        expect(failureRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ attempts: 3, payload: rowData }));
+      });
+
+      it('is none once the message was taken back while the POST was out', async () => {
+        outbox.currentMessagePayload.mockResolvedValueOnce({ ...queuedData }).mockResolvedValueOnce(null);
+
+        await expect(processor.process(queuedJob(2))).rejects.toThrow('HTTP 503');
+
+        expect((failureRepo.insert.mock.calls as unknown[][])[0][0]).not.toHaveProperty('payload');
+      });
+
+      it("is the job's copy when the row cannot be read then", async () => {
+        outbox.currentMessagePayload
+          .mockResolvedValueOnce({ ...queuedData })
+          .mockRejectedValueOnce(new Error('connection terminated'));
+
+        await expect(processor.process(queuedJob(2))).rejects.toThrow('HTTP 503');
+
+        expect(failureRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ payload: queuedData }));
+      });
+
+      it('is what the row holds for a job that stalled past the limit', async () => {
+        outbox.currentMessagePayload.mockResolvedValue(rowData);
+
+        await processor.onWorkerFailed(
+          Object.assign(queuedJob(1), { deferredFailure: 'job stalled more than allowable limit' }),
+          new Error('job stalled more than allowable limit'),
+        );
+
+        expect(failureRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ payload: rowData }));
+      });
     });
   });
 

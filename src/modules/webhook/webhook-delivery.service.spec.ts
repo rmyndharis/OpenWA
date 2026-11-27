@@ -27,6 +27,7 @@ import * as crypto from 'crypto';
 import { fetch as undiciFetch } from 'undici';
 import { WebhookDeliveryService, WebhookPayload, WebhookJobData } from './webhook-delivery.service';
 import { WebhookOutboxService } from './webhook-outbox.service';
+import { dataHash } from './utils/deliver-once';
 import { Webhook } from './entities/webhook.entity';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
 import { Session } from '../session/entities/session.entity';
@@ -2181,6 +2182,64 @@ describe('WebhookDeliveryService', () => {
       }
       expect(webhookQueue.add).not.toHaveBeenCalled();
       expect(undiciFetch as unknown as jest.Mock).toHaveBeenCalledTimes(2);
+    });
+
+    describe("the hash of what a message delivery's outbox row holds", () => {
+      const message = { id: 'M-1', chatId: '628111@c.us', fromMe: false, type: 'text', body: 'first text' };
+      const edited = { ...message, body: 'edited text', edited: true };
+      const queuedJob = (): WebhookJobData =>
+        ((webhookQueue.add as jest.Mock).mock.calls as Array<[string, WebhookJobData]>)[0][1];
+      const queueService = (): Promise<WebhookDeliveryService> =>
+        buildQueueService((key: string, def?: unknown) => (key === 'queue.enabled' ? true : def));
+      const outbox = (): Record<string, jest.Mock> => outboxService as unknown as Record<string, jest.Mock>;
+
+      beforeEach(() => {
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.received'] })]);
+        (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+      });
+
+      it('goes with the job, taken from the data the dispatch wrote to the row', async () => {
+        await (await queueService()).dispatch('sess-1', 'message.received', message);
+
+        expect(queuedJob().baseHash).toBe(dataHash(message));
+      });
+
+      it('is left out when the row under the key was opened by another dispatch', async () => {
+        outbox().openBatch = jest.fn().mockResolvedValue([]);
+
+        await (await queueService()).dispatch('sess-1', 'message.received', message);
+
+        expect(queuedJob().baseHash).toBeUndefined();
+      });
+
+      it.each([
+        ['the older data when the rewrite of the committed row fails', false, message],
+        ['the new data once the rewrite of the committed row lands', true, edited],
+      ])('names %s', async (_label, rewritten, held) => {
+        outbox().updatePendingPayload = jest.fn().mockResolvedValue(rewritten);
+        const service = await queueService();
+        const committed = await service.prepareDeliveries('sess-1', 'message.received', message);
+
+        await service.dispatchPrepared(
+          await service.reconcilePrepared(committed, 'sess-1', 'message.received', edited),
+        );
+
+        expect(queuedJob().payload.data).toMatchObject({ body: 'edited text' });
+        expect(queuedJob().baseHash).toBe(dataHash(held));
+      });
+
+      it('is left out for a committed row this commit did not open, which the reconcile leaves as it was', async () => {
+        outbox().updatePendingPayload = jest.fn().mockResolvedValue(true);
+        const service = await queueService();
+        const committed = await service.prepareDeliveries('sess-1', 'message.received', message);
+
+        await service.dispatchPrepared(
+          await service.reconcilePrepared(committed, 'sess-1', 'message.received', edited, []),
+        );
+
+        expect(outbox().updatePendingPayload).not.toHaveBeenCalled();
+        expect(queuedJob().baseHash).toBeUndefined();
+      });
     });
 
     it('still enqueues a reconciler replay when the queue is enabled', async () => {

@@ -130,3 +130,16 @@ export async function recordTerminalFailure(
     lastError: errMessage,
   });
 }
+
+/**
+ * A digest of a delivery's pre-hook event data, as JSON serializes it. The outbox payload column stores that same
+ * serialization, so the data read back from a row hashes alike unless something rewrote it. Undefined for data that
+ * does not serialize, which no outbox row can hold either.
+ */
+export function dataHash(data: Record<string, unknown>): string | undefined {
+  try {
+    return crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex');
+  } catch {
+    return undefined;
+  }
+}

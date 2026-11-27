@@ -16,7 +16,13 @@ import {
   recordWebhookDeliveryFailure,
   statusCodeFromError,
 } from '../../webhook/utils/record-delivery-failure';
-import { buildDeliveryHeaders, isDeliverableWebhook, postWebhookPayload } from '../../webhook/utils/deliver-once';
+import {
+  buildDeliveryHeaders,
+  dataHash,
+  isDeliverableWebhook,
+  postWebhookPayload,
+} from '../../webhook/utils/deliver-once';
+import { DeliveryPreflight } from '../../webhook/utils/delivery-preflight';
 import { HookManager } from '../../../core/hooks';
 import { redactSsrfError } from '../../../common/security/ssrf-guard';
 import { incrementWebhookDeliveryFailures } from '../../../common/metrics/webhook-delivery-metrics';
@@ -68,6 +74,7 @@ export class WebhookProcessor extends WorkerHost {
   private readonly failingWebhooks = new Set<string>();
   private readonly degradedInFlight = new Map<string, number>();
   private readonly degradedSessionConcurrency: number;
+  private readonly preflight: DeliveryPreflight;
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -83,6 +90,7 @@ export class WebhookProcessor extends WorkerHost {
     this.degradedSessionConcurrency =
       this.configService.get<number | undefined>('webhook.degradedSessionConcurrency') ??
       Math.max(1, Math.floor(webhookWorkerConcurrency() / 4));
+    this.preflight = new DeliveryPreflight(failureRepository, configService, hookManager, this.logger);
   }
 
   // Stop taking jobs before the plugins are torn down, so a final attempt's webhook:error hook still
@@ -101,22 +109,13 @@ export class WebhookProcessor extends WorkerHost {
       const inFlight = this.degradedInFlight.get(sessionId) ?? 0;
       if (inFlight >= this.degradedSessionConcurrency) {
         // Before the try below on purpose: this is not an attempt, so it must never be logged as a
-        // failure or file a dead-letter row. moveToDelayed does not spend one of the job's attempts.
-        // At least a second: a job delayed to "now" is promoted straight back and would spin.
-        const base = Math.max(1000, this.configService.get<number>('webhook.retryDelay', 5000));
-        // Each bounce doubles the job's wait, up to 64x, so a dead receiver's backlog is not promoted
-        // and bounced again every few seconds, a churn that would grow with the backlog. attemptsStarted
-        // counts every activation and attemptsMade only real attempts, so the gap, less this
-        // activation, is how many times this job was already bounced.
-        const bounces = Math.max(0, job.attemptsStarted - job.attemptsMade - 1);
-        const delay = base * 2 ** Math.min(bounces, 6);
-        await job.moveToDelayed(Date.now() + delay + Math.floor(Math.random() * delay), token);
-        throw new DelayedError();
+        // failure or file a dead-letter row.
+        return this.delayWithoutAttempt(job, token);
       }
       this.degradedInFlight.set(sessionId, inFlight + 1);
     }
     try {
-      return await this.deliver(job);
+      return await this.deliver(job, token);
     } finally {
       if (gated) {
         const left = (this.degradedInFlight.get(sessionId) ?? 1) - 1;
@@ -126,7 +125,22 @@ export class WebhookProcessor extends WorkerHost {
     }
   }
 
-  private async deliver(job: Job<WebhookJobData>): Promise<WebhookJobResult> {
+  /**
+   * Send the job back to the delayed set without spending one of its attempts. At least a second: a job delayed to
+   * "now" is promoted straight back and would spin. Each bounce doubles the job's wait, up to 64x, so a backlog is not
+   * promoted and bounced again every few seconds, a churn that would grow with it. attemptsStarted counts every
+   * activation and attemptsMade only real attempts, so the gap, less this activation, is how many times this job was
+   * already bounced.
+   */
+  private async delayWithoutAttempt(job: Job<WebhookJobData>, token: string | undefined): Promise<never> {
+    const base = Math.max(1000, this.configService.get<number>('webhook.retryDelay', 5000));
+    const bounces = Math.max(0, job.attemptsStarted - job.attemptsMade - 1);
+    const delay = base * 2 ** Math.min(bounces, 6);
+    await job.moveToDelayed(Date.now() + delay + Math.floor(Math.random() * delay), token);
+    throw new DelayedError();
+  }
+
+  private async deliver(job: Job<WebhookJobData>, token: string | undefined): Promise<WebhookJobResult> {
     const { webhookId, event, payload, maxRetries } = job.data;
     const startTime = Date.now();
     const sessionId = payload.sessionId;
@@ -159,8 +173,19 @@ export class WebhookProcessor extends WorkerHost {
       // stops the retries and files no dead-letter row. Otherwise deliver with the CURRENT url,
       // headers and secret, as the reconciler's replay does, so a receiver move or a rotated
       // secret or auth header applies to jobs already waiting in the queue.
-      // A read error lands in the catch below and counts as a failed attempt, like a failed POST.
-      const current = await this.loadDeliverableWebhook(webhookId, event, sessionId);
+      // A message delivery reads its outbox row too: the message may have been revoked, deleted
+      // through the API or edited since the job was queued.
+      let current: Webhook | null;
+      let held: Record<string, unknown> | null | undefined;
+      try {
+        current = await this.loadDeliverableWebhook(webhookId, event, sessionId);
+        held = current ? await this.outbox.currentMessagePayload(webhookId, payload.idempotencyKey, event) : undefined;
+      } catch (readError) {
+        // A database that cannot answer now spends no attempt: the job waits as a bounced one does, and an outage
+        // does not use up its retries. A stored row that does not parse never will, and counts as a failed attempt.
+        if (readError instanceof Error && readError.name === 'SyntaxError') throw readError;
+        return await this.delayWithoutAttempt(job, token);
+      }
       if (!current) {
         this.logger.warn('Skipping queued webhook delivery: webhook removed, disabled or unsubscribed', {
           webhookId,
@@ -173,8 +198,35 @@ export class WebhookProcessor extends WorkerHost {
         await this.outbox.close(webhookId, payload.idempotencyKey, 'dispatched');
         return { statusCode: 0, success: false, error: 'webhook removed, disabled or unsubscribed', responseTime: 0 };
       }
+      if (held === null) {
+        this.logger.warn('Skipping queued webhook delivery: the message was taken back since it was queued', {
+          webhookId,
+          event,
+          deliveryId: payload.deliveryId,
+          idempotencyKey: payload.idempotencyKey,
+          action: 'webhook_skipped_retracted',
+        });
+        return { statusCode: 0, success: false, error: 'message taken back', responseTime: 0 };
+      }
       ctx.url = current.url;
-      const body = JSON.stringify(payload);
+      let body = JSON.stringify(payload);
+      if (held && job.data.baseHash && dataHash(held) !== job.data.baseHash) {
+        // Rewritten since the job was queued (an edit, or a delete through the API): built again from the row,
+        // through the same hooks and checks as a dispatch, under the job's own key and delivery id.
+        const rebuilt = await this.preflight.preflightDelivery(current, payload.deliveryId, payload.idempotencyKey, {
+          sessionId,
+          event,
+          baseData: held,
+        });
+        if (rebuilt === 'unrecorded') return await this.delayWithoutAttempt(job, token);
+        if (!rebuilt || rebuilt === 'cancelled') {
+          // Cancelled by a plugin, or refused and recorded as undelivered: nothing more to send, as on dispatch.
+          await this.outbox.close(webhookId, payload.idempotencyKey, 'dispatched');
+          return { statusCode: 0, success: false, error: 'not dispatched', responseTime: 0 };
+        }
+        ctx.payload = rebuilt.finalPayload;
+        body = rebuilt.body;
+      }
       const requestHeaders = buildDeliveryHeaders(
         current,
         event,
@@ -194,6 +246,7 @@ export class WebhookProcessor extends WorkerHost {
         responseTime,
       };
     } catch (error) {
+      if (error instanceof DelayedError) throw error;
       this.markFailingWebhook(webhookId);
       await this.recordDeliveryFailure(ctx, error);
       // Re-throw to trigger BullMQ retry
@@ -349,11 +402,24 @@ export class WebhookProcessor extends WorkerHost {
         lastStatusCode: statusCodeFromError(errorMessage),
         lastError: clientError,
         // The producer attaches the pre-hook event data only while payload retention is on.
-        ...this.failurePayload(job.data.replayData),
+        ...this.failurePayload(await this.replayCopy(job)),
       });
       if (recorded !== false) incrementWebhookDeliveryFailures();
       if (recorded !== null) await this.outbox.close(webhookId, payload.idempotencyKey, 'dispatched');
     }
+  }
+
+  /**
+   * The pre-hook event data a terminal row keeps for a redrive: a message delivery's as its outbox row holds it now,
+   * none once the message was taken back, and the job's own copy otherwise (or when the row cannot be read).
+   */
+  private async replayCopy(job: Job<WebhookJobData>): Promise<WebhookJobData['replayData']> {
+    const { replayData, webhookId, event, payload } = job.data;
+    if (!replayData) return undefined;
+    const held = await this.outbox
+      .currentMessagePayload(webhookId, payload.idempotencyKey, event)
+      .catch(() => undefined);
+    return held === undefined ? replayData : (held ?? undefined);
   }
 
   /** The event data a terminal failure row keeps for a redrive, with the window it is kept for. */
@@ -437,7 +503,7 @@ export class WebhookProcessor extends WorkerHost {
       attempts: Math.max(1, job.attemptsMade),
       lastStatusCode: null, // no HTTP exchange completed on the stalled attempts
       lastError: error.message,
-      ...this.failurePayload(job.data.replayData),
+      ...this.failurePayload(await this.replayCopy(job)),
     });
     if (recorded !== false) incrementWebhookDeliveryFailures();
     if (recorded !== null) await this.outbox.close(webhookId, payload.idempotencyKey, 'dispatched');

@@ -7,6 +7,7 @@ import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.enti
 import { WebhookOutboxEvent } from './entities/webhook-outbox-event.entity';
 import { OUTBOX_UNREADABLE_RETRY_MS, WebhookOutboxService } from './webhook-outbox.service';
 import { recordWebhookDeliveryFailure } from './utils/record-delivery-failure';
+import { dataHash } from './utils/deliver-once';
 
 // SQLite serves every repository from one connection, so a transaction a write opens is shared with the
 // writes that run while it is open. A re-dispatched key makes open() hit the unique violation it expects.
@@ -429,5 +430,77 @@ describe('WebhookOutboxService.openBatch() conflict-ignoring transactional inser
       queryRunnerSpy.mockRestore();
       await outbox.onModuleDestroy();
     }
+  });
+});
+
+describe('WebhookOutboxService.currentMessagePayload() (SQLite)', () => {
+  let ds: DataSource;
+  let outbox: WebhookOutboxService;
+
+  beforeEach(async () => {
+    ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Session, Webhook, WebhookDeliveryFailure, WebhookOutboxEvent],
+      synchronize: true,
+    }).initialize();
+    outbox = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent));
+  });
+  afterEach(() => ds.destroy());
+
+  // What a dispatch hands a webhook: nested objects, arrays, a field left undefined, a Date and non-ASCII text.
+  const message = {
+    id: 'true_628111@c.us_3EB0',
+    chatId: '628111@c.us',
+    fromMe: false,
+    type: 'image',
+    body: 'caption, café ✓',
+    author: undefined,
+    timestamp: 1_700_000_000,
+    sentAt: new Date('2026-11-27T10:00:00.000Z'),
+    media: { mimetype: 'image/jpeg', omitted: true, sizeBytes: 2048 },
+    quotedMessage: { id: 'Q-1', body: 'earlier', fromMe: true },
+    mentionedIds: ['628222@c.us'],
+    isForwarded: false,
+  } as Record<string, unknown>;
+  const open = (event: string, payload: Record<string, unknown>): Promise<unknown> =>
+    outbox.openBatch([
+      { webhookId: 'w1', sessionId: 's1', event, idempotencyKey: 'msg_s1_M_w1', deliveryId: 'd1', payload },
+    ]);
+
+  it('reads back data that hashes as it did when the row was opened, until something rewrites it', async () => {
+    await open('message.received', message);
+
+    const held = await outbox.currentMessagePayload('w1', 'msg_s1_M_w1', 'message.received');
+    expect(dataHash(held!)).toBe(dataHash(message));
+
+    await outbox.rewritePendingForMessage('s1', 'M', 'edited text');
+    await outbox.markQueued('w1', 'msg_s1_M_w1', 'd2');
+    const rewritten = await outbox.currentMessagePayload('w1', 'msg_s1_M_w1', 'message.received');
+    expect(rewritten).toMatchObject({ body: 'edited text', edited: true });
+    expect(dataHash(rewritten!)).not.toBe(dataHash(message));
+  });
+
+  it('answers null once the row is closed, and nothing for another event or a row of another event', async () => {
+    await open('message.sent', message);
+
+    expect(await outbox.currentMessagePayload('w1', 'msg_s1_M_w1', 'message.received')).toBeUndefined();
+    expect(await outbox.currentMessagePayload('w1', 'msg_s1_M_w1', 'session.status')).toBeUndefined();
+    expect(await outbox.currentMessagePayload('w1', 'missing', 'message.sent')).toBeUndefined();
+
+    await outbox.close('w1', 'msg_s1_M_w1', 'dispatched');
+    expect(await outbox.currentMessagePayload('w1', 'msg_s1_M_w1', 'message.sent')).toBeNull();
+  });
+
+  it('reads a payload that does not parse as no row, and throws when the database cannot answer', async () => {
+    await ds.query(
+      `INSERT INTO webhook_outbox_events (id, webhookId, sessionId, event, idempotencyKey, deliveryId, payload, state, attempts)
+       VALUES ('r1', 'w1', 's1', 'message.received', 'msg_s1_M_w1', 'd1', '{not json', 'pending', 0)`,
+    );
+    expect(await outbox.currentMessagePayload('w1', 'msg_s1_M_w1', 'message.received')).toBeUndefined();
+
+    await ds.destroy();
+    await expect(outbox.currentMessagePayload('w1', 'msg_s1_M_w1', 'message.received')).rejects.toThrow();
+    ds = await new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [] }).initialize();
   });
 });
