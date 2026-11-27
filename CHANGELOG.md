@@ -91,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Backups: leave out the stored messages and chat states an unlinked account left while its kept clear waits; a restore handed them to the next account.
 - Baileys: keep a chat's pin, mute, archive or deletion mark the database refused and write it once it answers unless a newer one landed; it was lost, and a deleted chat came back after a restart.
 - Messages: keep history messages the database refused and store them once it answers; they were lost and never synced again.
+- Chats: keep the removal of a cleared or deleted chat's stored messages the database refused and run it once it answers; they stayed in the API.
 - Statuses: give up a kept status with its media first once the recovery byte budget is spent; a burst of them pushed out kept messages and changes.
 - Baileys: keep the removal of a stored copy a conflicting delivery left, refused by the database, and run it once it answers; the copy judged the real message's changes.
 - Statuses: keep a received status, or its poster's delete, the database refused and apply it once it answers; the status was never stored, or a deleted one stayed listed until it expired.

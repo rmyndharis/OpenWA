@@ -4,8 +4,8 @@ import { dirname } from 'node:path';
 import { createLogger } from '../services/logger.service';
 
 /** What the journal keeps: the recovery queue's lanes, and the copies of queued deliveries with no outbox row. */
-export type JournalLane = 'send' | 'receive' | 'history' | 'change' | 'dispatch' | 'copy';
-const JOURNAL_LANES: readonly JournalLane[] = ['send', 'receive', 'history', 'change', 'dispatch', 'copy'];
+export type JournalLane = 'send' | 'receive' | 'history' | 'change' | 'purge' | 'dispatch' | 'copy';
+const JOURNAL_LANES: readonly JournalLane[] = ['send', 'receive', 'history', 'change', 'purge', 'dispatch', 'copy'];
 
 interface JournalLine {
   l: JournalLane;

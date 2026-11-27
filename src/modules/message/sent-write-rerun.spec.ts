@@ -85,6 +85,7 @@ describe('the SENT write of a send the database refused', () => {
         send: RECOVERY_MAX_AGE_MS,
         receive: RECOVERY_MAX_AGE_MS,
         history: RECOVERY_MAX_AGE_MS,
+        purge: RECOVERY_MAX_AGE_MS,
         change: RECOVERY_MAX_AGE_MS,
         dispatch: RECOVERY_MAX_AGE_MS,
       },

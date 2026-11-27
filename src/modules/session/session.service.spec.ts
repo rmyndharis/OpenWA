@@ -82,6 +82,8 @@ import { MessageProjector } from './message-projector.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
+import { RecoveryQueue, recoveryQueueOptions } from '../../common/utils/recovery-queue';
+import { KeptChatPurge, journalChatPurge, restoredChatPurge, type ChatPurgeSteps } from './chat-purge-record';
 import { HookManager } from '../../core/hooks';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { captureSessionWrites } from '../../common/utils/session-write-scope';
@@ -162,6 +164,7 @@ describe('SessionService', () => {
   let engineFactory: jest.Mocked<Partial<EngineFactory>>;
   let eventsGateway: jest.Mocked<Partial<EventsGateway>>;
   let webhookService: jest.Mocked<Partial<WebhookService>>;
+  let recovery: RecoveryQueue;
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let configService: jest.Mocked<Partial<ConfigService>>;
   let lidMappingStore: jest.Mocked<Partial<LidMappingStoreService>>;
@@ -299,8 +302,11 @@ describe('SessionService', () => {
       emitQRCode: jest.fn(),
     };
 
+    recovery = new RecoveryQueue(recoveryQueueOptions(false, 0));
     webhookService = {
       dispatch: jest.fn().mockResolvedValue(undefined),
+      // The queue a database that cannot answer leaves its work in, shared as the app shares it.
+      recoveryQueue: jest.fn(() => recovery),
     };
 
     auditService = { logWarn: jest.fn().mockResolvedValue(null), logInfo: jest.fn().mockResolvedValue(null) };
@@ -9736,6 +9742,33 @@ describe('SessionService', () => {
 
         expect((await messages.find()).map(row => row.waMessageId)).toEqual(['after']);
       });
+
+      it('runs a removal kept while the database was away up to the clear, sparing a message stored since', async () => {
+        await messages.clear();
+        const seed = async (waMessageId: string, createdAt: string): Promise<void> => {
+          await messages.insert({ sessionId: 'sess-uuid-1', chatId: '123@c.us', from: 'a', to: 'b', waMessageId });
+          await messages.update({ waMessageId }, { createdAt: () => `'${createdAt}'` });
+        };
+        await seed('before', '2026-09-29 13:39:00');
+        Object.assign(service as unknown as Record<string, unknown>, { messageRepository: messages });
+        jest.useFakeTimers({
+          now: Date.parse('2026-09-29T13:39:01.500Z'),
+          doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate', 'clearImmediate', 'setTimeout', 'clearTimeout'],
+        });
+        jest
+          .spyOn(messages, 'find')
+          .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+        await expect(service.clearChatMessages('sess-uuid-1', '123@c.us')).resolves.toBe(true);
+        expect(recovery.get('purge', 'sess-uuid-1:purge:123@c.us')).toBeDefined();
+
+        // The database answers a while later, after another message of the chat was stored.
+        await seed('later', '2026-09-29 13:40:00');
+        jest.setSystemTime(Date.parse('2026-09-29T13:41:00.000Z'));
+        await recovery.flush();
+
+        expect(recovery.get('purge', 'sess-uuid-1:purge:123@c.us')).toBeUndefined();
+        expect((await messages.find()).map(row => row.waMessageId)).toEqual(['later']);
+      });
     });
 
     it('removes in batches until a short one', async () => {
@@ -9789,6 +9822,47 @@ describe('SessionService', () => {
         expect(deletedHooks()).toHaveLength(0);
       },
     );
+
+    it('a removal the database could not take is kept and runs once it answers, the call succeeding', async () => {
+      (messageRepository.find as jest.Mock)
+        .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }))
+        .mockResolvedValue([]);
+
+      await expect(service.clearChatMessages('sess-uuid-1', '123@c.us')).resolves.toBe(true);
+      expect(recovery.get('purge', 'sess-uuid-1:purge:123@c.us')).toBeDefined();
+      await recovery.flush();
+
+      expect(messageRepository.find).toHaveBeenCalledTimes(2);
+      expect(recovery.get('purge', 'sess-uuid-1:purge:123@c.us')).toBeUndefined();
+    });
+
+    it('a kept removal that keeps failing for a reason of its own is given up with a loss logged', async () => {
+      (messageRepository.find as jest.Mock)
+        .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }))
+        .mockRejectedValue(new Error('no such column'));
+      const logError = jest.spyOn((service as unknown as { logger: { error: jest.Mock } }).logger, 'error');
+      await service.clearChatMessages('sess-uuid-1', '123@c.us');
+
+      for (let i = 0; i < 3; i++) await recovery.flush();
+
+      expect(logError).toHaveBeenCalledWith(
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ action: 'chat_purge_lost', reason: 'failures', chatId: '123@c.us' }),
+      );
+    });
+
+    it('a kept removal survives a restart in the journal, its cutoff with it', () => {
+      const record = new KeptChatPurge('k', 'sess-uuid-1', '123@c.us', 1_700_000_000_000, 5, {} as ChatPurgeSteps);
+
+      expect(restoredChatPurge(JSON.parse(JSON.stringify(journalChatPurge(record))))).toEqual({
+        sessionId: 'sess-uuid-1',
+        chatId: '123@c.us',
+        cutoff: 1_700_000_000_000,
+        since: 5,
+      });
+      expect(record.ageCapped()).toBe(false);
+    });
 
     it('a failed removal after the engine succeeded is logged and the call still succeeds', async () => {
       (messageRepository.find as jest.Mock).mockRejectedValueOnce(new Error('db down'));

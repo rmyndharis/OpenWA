@@ -12,6 +12,15 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { RecoveryQueue, isDatabaseUnavailable } from '../../common/utils/recovery-queue';
+import { WebhookService } from '../webhook/webhook.service';
+import {
+  KeptChatPurge,
+  chatPurgeKey,
+  journalChatPurge,
+  restoredChatPurge,
+  type ChatPurgeSteps,
+} from './chat-purge-record';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import {
   Repository,
@@ -243,9 +252,39 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // source the reconnect scheduler and the takeover sweep consult.
     @Optional()
     private readonly shutdownService?: ShutdownService,
+    // The shared recovery queue, reached through the webhook service as the projector reaches it: a purge the database
+    // refused is kept there and runs once it answers.
+    @Optional()
+    private readonly webhookService?: WebhookService,
   ) {
     this.engineRegistry.onRetire(id => this.chatListings.drop(id));
+    this.recovery = this.webhookService?.recoveryQueue?.();
+    this.recovery?.register('purge', {
+      encode: record => (record instanceof KeptChatPurge ? journalChatPurge(record) : undefined),
+      decode: (key, value) => {
+        const p = restoredChatPurge(value);
+        return p ? new KeptChatPurge(key, p.sessionId, p.chatId, p.cutoff, p.since, this.purgeSteps) : undefined;
+      },
+    });
   }
+
+  private readonly recovery?: RecoveryQueue;
+
+  private readonly purgeSteps: ChatPurgeSteps = {
+    purge: async record => {
+      await this.purgeStoredChatOnce(record.sessionId, record.chatId, new Date(record.cutoff));
+      return true;
+    },
+    released: (record, reason) => {
+      if (!reason) return;
+      this.logger.error('The removal of a cleared chat the database refused could not be kept any longer', undefined, {
+        sessionId: record.sessionId,
+        chatId: record.chatId,
+        reason,
+        action: 'chat_purge_lost',
+      });
+    },
+  };
 
   /**
    * True from the start of the shutdown drain. An engine launched during the drain would be torn
@@ -1949,35 +1988,55 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * same second would match. A pre-clear row from that second stays until a repeat call.
    */
   private async purgeStoredChat(sessionId: string, chatId: string, cutoff: Date): Promise<void> {
-    const BATCH = 500;
-    const bound = new Date(Math.floor(cutoff.getTime() / 1000) * 1000 - 1);
     try {
-      const expanded = await resolveJidCandidates(chatId, {
-        resolveLid: lid => this.lidMappingStore.findPhoneForLid(lid),
-        lidsForPhone: phone => this.lidMappingStore.findLidsForPhone(phone),
-      });
-      const chatIds = [...new Set([chatId, ...expanded])];
-      for (;;) {
-        const rows = await this.messageRepository.find({
-          where: { sessionId, chatId: In(chatIds), createdAt: LessThanOrEqual(bound) },
-          select: { id: true, waMessageId: true, chatId: true, sessionId: true },
-          take: BATCH,
-        });
-        if (rows.length === 0) return;
-        await this.messageRepository.delete({ id: In(rows.map(row => row.id)) });
-        for (const message of rows) {
-          void this.hookManager
-            .execute('message:deleted', { sessionId, message }, { sessionId, source: 'SessionService' })
-            .catch(() => undefined);
-        }
-        if (rows.length < BATCH) return;
-      }
+      await this.purgeStoredChatOnce(sessionId, chatId, cutoff);
     } catch (error) {
+      // Kept rather than only logged: bounded by its cutoff, it removes nothing stored since when it runs late.
+      if (this.recovery && isDatabaseUnavailable(error)) {
+        const key = chatPurgeKey(sessionId, chatId);
+        this.logger.warn('Keeping the removal of a cleared chat the database refused, to run it once it answers', {
+          sessionId,
+          chatId,
+          error: error instanceof Error ? error.message : String(error),
+          action: 'chat_purge_kept',
+        });
+        this.recovery.park(
+          key,
+          new KeptChatPurge(key, sessionId, chatId, cutoff.getTime(), Date.now(), this.purgeSteps),
+        );
+        return;
+      }
       this.logger.error(
         'Failed to remove stored messages of a cleared chat',
         error instanceof Error ? error.message : String(error),
         { sessionId, action: 'chat_local_purge_failed' },
       );
+    }
+  }
+
+  /** One run of a chat purge (see purgeStoredChat); throws when the database fails. */
+  private async purgeStoredChatOnce(sessionId: string, chatId: string, cutoff: Date): Promise<void> {
+    const BATCH = 500;
+    const bound = new Date(Math.floor(cutoff.getTime() / 1000) * 1000 - 1);
+    const expanded = await resolveJidCandidates(chatId, {
+      resolveLid: lid => this.lidMappingStore.findPhoneForLid(lid),
+      lidsForPhone: phone => this.lidMappingStore.findLidsForPhone(phone),
+    });
+    const chatIds = [...new Set([chatId, ...expanded])];
+    for (;;) {
+      const rows = await this.messageRepository.find({
+        where: { sessionId, chatId: In(chatIds), createdAt: LessThanOrEqual(bound) },
+        select: { id: true, waMessageId: true, chatId: true, sessionId: true },
+        take: BATCH,
+      });
+      if (rows.length === 0) return;
+      await this.messageRepository.delete({ id: In(rows.map(row => row.id)) });
+      for (const message of rows) {
+        void this.hookManager
+          .execute('message:deleted', { sessionId, message }, { sessionId, source: 'SessionService' })
+          .catch(() => undefined);
+      }
+      if (rows.length < BATCH) return;
     }
   }
 
