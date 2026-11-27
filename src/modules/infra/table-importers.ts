@@ -256,8 +256,8 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
   defineTableImporter({
     key: 'messages',
     label: 'message',
-    sql: `INSERT INTO messages (id, "sessionId", "waMessageId", "chatId", "chatName", author, "from", "to", body, type, direction, "timestamp", metadata, status, "createdAt", "mediaPath", "mediaMimetype", "engineRef")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+    sql: `INSERT INTO messages (id, "sessionId", "waMessageId", "chatId", "chatName", author, "from", "to", body, type, direction, "timestamp", metadata, status, "createdAt", "mediaPath", "mediaMimetype", "engineRef", "echoOf")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
     id: (msg: MessageRow) => msg.id,
     map: (msg: MessageRow) => [
       msg.id,
@@ -286,6 +286,8 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       nulFree(msg.mediaMimetype ?? null),
       // Older archives restore to NULL: the row is judged by its own columns, as before.
       msg.engineRef == null ? null : typeof msg.engineRef === 'string' ? msg.engineRef : JSON.stringify(msg.engineRef),
+      // Older archives restore to NULL: no merge onto an echo row is left to do.
+      nulFree(msg.echoOf ?? null),
     ],
   }),
 

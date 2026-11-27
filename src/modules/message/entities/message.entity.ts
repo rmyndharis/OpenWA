@@ -105,6 +105,16 @@ export class Message {
   @Column({ type: jsonColumnType(), nullable: true, select: false })
   engineRef?: MessageEngineRef | null;
 
+  /**
+   * On the row of an API send whose message id the own-send echo's row took first: that id, while what this row holds
+   * (the media bytes, a quote, a poll) is not yet merged onto the echo row. The pending reaper's sweep merges it and
+   * drops this row, or, with the echo row gone, gives this row the id. Null on every other row. Never selected by
+   * default; the partial index keeps the sweep to the rows that carry it.
+   */
+  @Index('IDX_messages_echoOf', { where: '"echoOf" IS NOT NULL' })
+  @Column({ type: 'varchar', nullable: true, select: false })
+  echoOf?: string | null;
+
   @Column()
   from!: string;
 

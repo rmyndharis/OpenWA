@@ -64,7 +64,7 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
         `"chatId" varchar NOT NULL, "chatName" varchar, "author" varchar, "from" varchar NOT NULL, ` +
         `"to" varchar NOT NULL, "body" text, "type" varchar NOT NULL DEFAULT 'text', ` +
         `"direction" varchar NOT NULL DEFAULT 'outgoing', "timestamp" bigint, "metadata" text, ` +
-        `"mediaPath" varchar, "mediaMimetype" varchar, "engineRef" text, "status" varchar NOT NULL DEFAULT 'sent', ` +
+        `"mediaPath" varchar, "mediaMimetype" varchar, "engineRef" text, "echoOf" varchar, "status" varchar NOT NULL DEFAULT 'sent', ` +
         `"createdAt" timestamp NOT NULL DEFAULT now())`,
     );
     await ds.query(`CREATE INDEX "IDX_sess_created" ON "messages" ("sessionId", "createdAt")`);

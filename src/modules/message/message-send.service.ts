@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { markEngineSendFailure } from '../../common/errors/engine-send-failure';
 import { mergeSentMetadata, updateMessageMetadata } from './message-metadata';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Repository, QueryDeepPartialEntity } from 'typeorm';
+import { In, IsNull, LessThan, Not, Repository, QueryDeepPartialEntity, type FindOptionsSelect } from 'typeorm';
 import { SessionService, linkPreviewDefault } from '../session/session.service';
 import { MessageProjector } from '../session/message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -70,6 +70,12 @@ function addressedRef(filed: string, engineChatId: string | undefined): MessageE
     ? { chatId: engineChatId, direction: MessageDirection.OUTGOING, addressed: true }
     : undefined;
 }
+
+/** The row of an API send kept beside the own-send echo's row that took its message id (see Message.echoOf). */
+type EchoTwin = Pick<Message, 'id' | 'sessionId' | 'chatId' | 'metadata' | 'timestamp'> & {
+  echoOf: string;
+  engineRef?: MessageEngineRef | null;
+};
 
 /**
  * Asking to suppress the preview AND to attach one is a contradiction, and guessing which half
@@ -1028,41 +1034,15 @@ export class MessageSendService {
         .catch(async (err: unknown) => {
           const waMessageId = message.waMessageId;
           if (!waMessageId || !isUniqueViolation(err)) throw err;
-          // No `status` here on purpose. The row this collides with is the own-send echo's, inserted
-          // SENT, and the ack path advances it forward-only (ackStatusTransitionFrom). This write only
-          // ever carries PENDING or SENT, so it can never be an upgrade: it is a no-op, or it drags a
-          // DELIVERED/READ row back to SENT when an ack won the race. Leave the delivery state to the
-          // one writer that owns it.
-          const patch: QueryDeepPartialEntity<Message> = {
-            timestamp: message.timestamp,
-          };
-          // Only when this write actually carries metadata worth merging: a text item must not blank
-          // the echo's, and a URL pointer must not replace bytes the engine already downloaded.
-          const metadata = message.metadata;
-          if (metadata && !isUrlPointerMetadata(metadata)) {
-            try {
-              await updateMessageMetadata(this.messageRepository, { sessionId, waMessageId }, current =>
-                mergeSentMetadata(current, metadata),
-              );
-            } catch (error) {
-              if (message.status !== MessageStatus.SENT) throw error;
-              this.logger.warn(`Merging sent metadata onto the echo row failed (id=${waMessageId})`, {
-                error: error instanceof Error ? error.message : String(error),
-              });
-              // The bulk engine has already sent this item. Keep its media in an id-less SENT row
-              // when the echo cannot accept it, instead of losing the only payload-bearing copy.
-              return scope.write(() =>
-                this.messageRepository.save(this.messageRepository.create({ ...message, waMessageId: undefined }), {
-                  transaction: false,
-                }),
-              );
-            }
-          }
-          if (message.timestamp !== undefined) await this.messageRepository.update({ sessionId, waMessageId }, patch);
-          if (engineRef) await this.moveEchoRow(sessionId, waMessageId, chatId, engineRef);
-          const surviving = await this.messageRepository.findOne({ where: { sessionId, waMessageId } });
-          if (!surviving) throw err;
-          return surviving;
+          // The engine has already sent this item: it is kept as the echo row's twin, with its media, until what it
+          // holds is on that row (see settleEchoTwin), never lost to a merge that fails.
+          const twin = await scope.write(() =>
+            this.messageRepository.save(
+              this.messageRepository.create({ ...message, waMessageId: undefined, echoOf: waMessageId }),
+              { transaction: false },
+            ),
+          );
+          return (await this.settleEchoTwin({ ...twin, echoOf: waMessageId })) ?? twin;
         });
       this.emitPersisted(sessionId, saved);
       return saved;
@@ -1088,9 +1068,10 @@ export class MessageSendService {
   // Hook emissions keep `source: 'MessageService'` — the string is part of the observable hook
   // contract plugins may filter on, so the send seam must not change it.
   private emitPersisted(sessionId: string, message: Message): void {
-    // The chat the engine delivered to stays in the gateway, as for a row a hook moved.
+    // The chat the engine delivered to stays in the gateway, as for a row a hook moved, and so does the echo row's id
+    // a twin is still to be merged onto.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { engineRef, ...row } = message;
+    const { engineRef, echoOf, ...row } = message;
     void this.hookManager
       .execute('message:persisted', { sessionId, message: row }, { sessionId, source: 'MessageService' })
       .catch(() => undefined);
@@ -1165,7 +1146,7 @@ export class MessageSendService {
     // change naming the chat it was delivered to, is judged against both chats from the first moment.
     const engineRef = addressedRef(message.chatId, result.engineChatId);
     // Set when the row was no longer PENDING at the first write: the pending reaper failed it while the engine answered.
-    // The reaper can also fail it later, while the echo merge below is tried; the recovery there covers both.
+    // The reaper can also fail it later, before it is kept as the echo row's twin; keepAsEchoTwin covers both.
     let reaped = false;
     try {
       // No transaction of its own, for the reason given at the first save of this message.
@@ -1196,98 +1177,12 @@ export class MessageSendService {
       this.emitPersisted(message.sessionId, message);
     } catch (persistError) {
       if (result.id && isUniqueViolation(persistError)) {
-        // The engine's own-send echo (onMessageCreate) won the race and already persisted a row with
-        // this waMessageId. That row carries only what the engine reported — for a Baileys API send,
-        // a media-less marker — so merge our SENT state AND our metadata (the actual media payload)
-        // onto it BEFORE dropping this redundant PENDING row, or the payload-bearing row is the one
-        // that gets deleted and the media is gone after a reload.
         // Best-effort throughout: the send itself already succeeded.
-        this.logger.debug(
-          `Send echo already persisted ${result.id}; merging state and dropping the redundant pending row`,
-          {
-            messageId: message.id,
-          },
+        await this.keepAsEchoTwin(message, result, changed, engineRef, reaped).catch(error =>
+          this.logger.warn(`Keeping the sent row beside the echo-persisted row failed (id=${result.id})`, {
+            error: error instanceof Error ? error.message : String(error),
+          }),
         );
-        // `status` is deliberately absent: the echo row is already SENT, and an ack that landed
-        // first has advanced it further. Writing SENT here would undo that. See the sibling merge
-        // in saveOutgoingMessage. The echo names the chat the message went to, the number's LID when the engine knows
-        // one: the row is moved under the chat the caller addressed once it holds what this send stored (moveEchoRow).
-        const patch: QueryDeepPartialEntity<Message> = { timestamp: result.timestamp };
-        const metadata = message.metadata;
-        let metadataMerged = true;
-        if (metadata && !isUrlPointerMetadata(metadata)) {
-          await updateMessageMetadata(
-            this.messageRepository,
-            { sessionId: message.sessionId, waMessageId: result.id },
-            current => mergeSentMetadata(current, metadata),
-          ).catch(err => {
-            metadataMerged = false;
-            this.logger.warn(`Merging media onto the echo-persisted row failed (id=${result.id})`, {
-              error: err instanceof Error ? err.message : String(err),
-            });
-          });
-        }
-        if (!metadataMerged) {
-          // Keep the payload-bearing row when the echo merge fails. Mark it SENT without the
-          // conflicting engine id so the pending reaper cannot strip successfully sent media. This is the
-          // row that survives, so it carries what the send resolved too (a clicked button's label). A row the
-          // reaper failed first, before the first write above or while the merge was tried, is FAILED and
-          // lost its payload: the write guarded on PENDING then matches nothing, and the row is marked SENT
-          // from the copy this send still holds instead.
-          const keep = (status: MessageStatus, payload: QueryDeepPartialEntity<Message>) =>
-            this.messageRepository.update({ id: message.id, status }, payload).catch(err => {
-              this.logger.warn(`Preserving the sent media row failed (id=${message.id})`, {
-                error: err instanceof Error ? err.message : String(err),
-              });
-              return undefined;
-            });
-          const kept = reaped
-            ? undefined
-            : await keep(MessageStatus.PENDING, {
-                status: MessageStatus.SENT,
-                timestamp: result.timestamp,
-                ...changed,
-              });
-          if (reaped || kept?.affected === 0) {
-            await keep(MessageStatus.FAILED, {
-              status: MessageStatus.SENT,
-              timestamp: result.timestamp,
-              ...changed,
-              metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>>,
-            });
-          }
-          const retained = await this.messageRepository.findOne({ where: { id: message.id } }).catch(() => null);
-          if (retained) this.emitPersisted(message.sessionId, retained);
-          return { messageId: result.id, timestamp: result.timestamp };
-        }
-        await this.messageRepository
-          .update({ sessionId: message.sessionId, waMessageId: result.id }, patch)
-          .catch(err =>
-            this.logger.warn(`Merging SENT state onto the echo-persisted row failed (id=${result.id})`, {
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          );
-        if (engineRef) {
-          await this.moveEchoRow(message.sessionId, result.id, message.chatId, engineRef).catch(err =>
-            this.logger.warn(`Moving the echo-persisted row under the addressed chat failed (id=${result.id})`, {
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          );
-        }
-        await this.messageRepository.delete({ id: message.id }).catch(() => undefined);
-        // Reconcile provider indexes (#906): upsert the surviving echo row (now carrying our SENT
-        // state + media) and drop the ghost PENDING document this redundant row produced earlier.
-        const surviving = await this.messageRepository
-          .findOne({ where: { sessionId: message.sessionId, waMessageId: result.id } })
-          .catch(() => null);
-        if (surviving) this.emitPersisted(message.sessionId, surviving);
-        void this.hookManager
-          .execute(
-            'message:deleted',
-            { sessionId: message.sessionId, message: { ...message } },
-            { sessionId: message.sessionId, source: 'MessageService' },
-          )
-          .catch(() => undefined);
       } else {
         this.logger.warn(`Persisting SENT state failed after a successful send (id=${result.id})`, {
           error: persistError instanceof Error ? persistError.message : String(persistError),
@@ -1295,6 +1190,139 @@ export class MessageSendService {
       }
     }
     return { messageId: result.id, timestamp: result.timestamp };
+  }
+
+  /**
+   * The engine's own-send echo (onMessageCreate) won the race and already persisted a row with the message id. That
+   * row carries only what the engine reported (for a Baileys API send, a media-less marker), so this send's row first
+   * becomes its twin: SENT, so the pending reaper never fails it and strips the media, and naming the echo row by
+   * `echoOf`, with the chat the message was delivered to. What it holds is then merged onto the echo row and the twin
+   * dropped (settleEchoTwin); a step that fails leaves the twin for the reaper's sweep. A row the reaper failed first
+   * lost its payload: the write guarded on PENDING matches nothing, and the row is marked from the copy this send still
+   * holds instead.
+   */
+  private async keepAsEchoTwin(
+    message: Message,
+    result: MessageResult,
+    changed: QueryDeepPartialEntity<Message>,
+    engineRef: MessageEngineRef | undefined,
+    reaped: boolean,
+  ): Promise<void> {
+    this.logger.debug(`Send echo already persisted ${result.id}; merging onto it and dropping this row`, {
+      messageId: message.id,
+    });
+    const twin: QueryDeepPartialEntity<Message> = {
+      ...changed,
+      status: MessageStatus.SENT,
+      timestamp: result.timestamp,
+      echoOf: result.id,
+      ...(engineRef ? { engineRef } : {}),
+    };
+    let marked = reaped
+      ? undefined
+      : await this.messageRepository.update({ id: message.id, status: MessageStatus.PENDING }, twin);
+    if (!marked?.affected) {
+      marked = await this.messageRepository.update(
+        { id: message.id, status: MessageStatus.FAILED },
+        { ...twin, metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>> },
+      );
+    }
+    // No row: the session was deleted under this send.
+    if (!marked?.affected) return;
+    const surviving = await this.settleEchoTwin(
+      {
+        id: message.id,
+        sessionId: message.sessionId,
+        chatId: message.chatId,
+        metadata: message.metadata,
+        timestamp: result.timestamp,
+        echoOf: result.id,
+        engineRef,
+      },
+      { ...message },
+    );
+    if (surviving !== undefined) {
+      if (surviving) this.emitPersisted(message.sessionId, surviving);
+      return;
+    }
+    // Reconcile the earlier PENDING emission (#906) with the twin that stays until the reaper's sweep settles it.
+    const retained = await this.messageRepository.findOne({ where: { id: message.id } }).catch(() => null);
+    if (retained) this.emitPersisted(message.sessionId, retained);
+  }
+
+  /**
+   * Finish an API send whose message id the own-send echo's row took first, from its twin (see Message.echoOf): merge
+   * what the twin holds onto the echo row, never onto one revoked since (the twin then goes with what it holds), and
+   * not a URL pointer over bytes the engine downloaded; carry its timestamp; move the echo row under the chat the
+   * caller addressed; drop the twin. With the echo row gone, the twin takes the message id. No status is written: the
+   * echo row is inserted SENT and acks advance it forward only. Every step can run again, so one that fails leaves the
+   * twin for the pending reaper's sweep, which calls this again. `announced` is the twin as `message:persisted` last
+   * saw it, withdrawn with `message:deleted` once the twin is gone. Resolves the row that holds the message now, null
+   * when none does, or undefined when the twin is left.
+   */
+  private async settleEchoTwin(twin: EchoTwin, announced?: Message): Promise<Message | null | undefined> {
+    const { sessionId, echoOf } = twin;
+    const where = { sessionId, waMessageId: echoOf };
+    try {
+      const echo = await this.messageRepository.findOne({ where, select: { id: true, type: true } });
+      if (!echo) {
+        const claimed = await this.messageRepository.update(
+          { id: twin.id, echoOf },
+          { waMessageId: echoOf, echoOf: null },
+        );
+        return claimed?.affected ? this.messageRepository.findOne({ where: { id: twin.id } }) : null;
+      }
+      const metadata = twin.metadata;
+      if (echo.type !== 'revoked' && metadata && !isUrlPointerMetadata(metadata)) {
+        // Null: the echo row was revoked or removed since it was read, which the next sweep tells apart.
+        const merged = await updateMessageMetadata(this.messageRepository, where, current =>
+          mergeSentMetadata(current, metadata),
+        );
+        if (!merged) return undefined;
+      }
+      if (twin.timestamp != null) await this.messageRepository.update(where, { timestamp: twin.timestamp });
+      if (twin.engineRef?.addressed) await this.moveEchoRow(sessionId, echoOf, twin.chatId, twin.engineRef);
+      const deleted = await this.messageRepository.delete({ id: twin.id, echoOf });
+      // Only for a row that is gone (#906): a delete that failed or found nothing leaves the provider's copy right.
+      if (deleted?.affected && announced) {
+        void this.hookManager
+          .execute('message:deleted', { sessionId, message: announced }, { sessionId, source: 'MessageService' })
+          .catch(() => undefined);
+      }
+      return this.messageRepository.findOne({ where });
+    } catch (error) {
+      this.logger.warn(`Merging a sent row onto the echo-persisted row failed (id=${echoOf})`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * The pending reaper's pass over API sends whose merge onto the echo row was left (see settleEchoTwin): the rows
+   * with `echoOf` stored before `before`, oldest first, at most `limit`, until `stopped`. Resolves how many settled.
+   */
+  async reconcileEchoTwins(before: Date, limit: number, stopped: () => boolean = () => false): Promise<number> {
+    const columns = Object.fromEntries(
+      this.messageRepository.metadata.columns.map(column => [column.propertyName, true]),
+    ) as FindOptionsSelect<Message>;
+    const twins = await this.messageRepository.find({
+      where: { echoOf: Not(IsNull()), createdAt: LessThan(before) },
+      select: columns,
+      order: { createdAt: 'ASC' },
+      take: limit,
+    });
+    let settled = 0;
+    for (const twin of twins) {
+      if (stopped()) break;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { engineRef, echoOf, ...announced } = twin;
+      const surviving = await this.settleEchoTwin({ ...twin, echoOf: echoOf! }, announced);
+      if (surviving === undefined) continue;
+      settled++;
+      if (surviving) this.emitPersisted(twin.sessionId, surviving);
+    }
+    return settled;
   }
 
   /**

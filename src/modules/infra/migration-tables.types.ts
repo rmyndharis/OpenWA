@@ -68,6 +68,11 @@ export interface MessageRow {
    */
   engineRef?: string | Record<string, unknown> | null;
   /**
+   * The message id of the own-send echo's row an API send's row is still to be merged onto (nullable; added after
+   * engineRef, keep the import list in sync). Dropping it on import would leave the row in its thread twice for good.
+   */
+  echoOf?: string | null;
+  /**
    * Postgres-only STORED generated tsvector (FTS). Present in `SELECT *` rows read from a Postgres
    * source (and in backups made before it was stripped) but never a real payload column: export drops
    * it, and the import's explicit column list ignores it. Declared so both directions type-check.

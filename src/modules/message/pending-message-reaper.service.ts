@@ -1,10 +1,17 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThan, QueryDeepPartialEntity, Repository } from 'typeorm';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
 import { HookManager } from '../../core/hooks';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
+import { MessageSendService } from './message-send.service';
+
+/**
+ * How old the row of an API send kept beside the echo row that took its id must be before a sweep finishes its merge:
+ * the send merges it itself, and is given that long.
+ */
+export const ECHO_TWIN_GRACE_MS = 60_000;
 
 export interface PendingMessageReaperOptions {
   // Sweep cadence. 0 disables the reaper (mirrors INGRESS_RECONCILE_INTERVAL_MS). A blank value
@@ -60,6 +67,8 @@ export class PendingMessageReaperService implements OnModuleInit, OnModuleDestro
   constructor(
     @InjectRepository(Message, 'data') private readonly messages: Repository<Message>,
     private readonly hookManager: HookManager,
+    // Optional so standalone constructions keep working; absent, a sent row kept beside its echo row stays as it is.
+    @Optional() private readonly sender?: MessageSendService,
   ) {}
 
   onModuleInit(): void {
@@ -132,10 +141,40 @@ export class PendingMessageReaperService implements OnModuleInit, OnModuleDestro
           action: 'pending_messages_reaped',
         });
       }
+      await this.reconcileEchoTwins(now, opts.batchSize);
       return stats;
     } finally {
       this.inFlight = undefined;
       settle();
+    }
+  }
+
+  /**
+   * Finish the API sends whose row the own-send echo's row took the message id from and whose merge onto it was left
+   * (see Message.echoOf), so the message is in its thread once, with its media. A failure is logged; the next sweep
+   * tries again.
+   */
+  private async reconcileEchoTwins(now: Date, batchSize: number): Promise<void> {
+    if (!this.sender || this.stopping) return;
+    try {
+      const settled = await this.sender.reconcileEchoTwins(
+        new Date(now.getTime() - ECHO_TWIN_GRACE_MS),
+        batchSize,
+        () => this.stopping,
+      );
+      if (settled > 0) {
+        this.logger.log(`Merged ${settled} sent message row(s) onto the row their own-send echo stored`, {
+          action: 'echo_twins_reconciled',
+        });
+      }
+    } catch (err) {
+      this.logger.error(
+        'Merging sent message rows onto their echo rows failed',
+        err instanceof Error ? err.message : String(err),
+        {
+          action: 'echo_twins_reconcile_failed',
+        },
+      );
     }
   }
 

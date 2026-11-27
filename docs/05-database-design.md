@@ -288,6 +288,7 @@ erDiagram
         varchar mediaPath
         varchar mediaMimetype
         json engineRef
+        varchar echoOf
     }
 
     API_KEY {
@@ -568,7 +569,8 @@ CREATE TABLE messages (
     "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     "mediaPath" VARCHAR,                  -- nullable; storage key of the archived media copy
     "mediaMimetype" VARCHAR,              -- nullable; mimetype of that archived copy
-    "engineRef" TEXT                      -- nullable JSON; see below
+    "engineRef" TEXT,                     -- nullable JSON; see below
+    "echoOf" VARCHAR                      -- nullable; see below
 );
 
 -- Indexes (declared on the entity). Names TypeORM derives are hashes, not readable slugs —
@@ -587,6 +589,7 @@ CREATE INDEX "IDX_messages_status_createdAt" ON messages(status, "createdAt");  
 CREATE INDEX "IDX_befd307485dbf0559d17e4a4d2" ON messages(status);
 CREATE INDEX "IDX_messages_createdAt" ON messages("createdAt");   -- createdAt-only stats aggregates
 CREATE INDEX "IDX_messages_mediaPath" ON messages("mediaPath") WHERE "mediaPath" IS NOT NULL;   -- partial; chat-media orphan sweep
+CREATE INDEX "IDX_messages_echoOf" ON messages("echoOf") WHERE "echoOf" IS NOT NULL;   -- partial; pending-message reaper's merge of sent rows
 
 -- Inbound dedup (issue #464): one row per ("sessionId", "waMessageId").
 -- NULL "waMessageId" rows are exempt (SQL treats NULLs as distinct).
@@ -595,6 +598,8 @@ CREATE UNIQUE INDEX "UQ_messages_sessionId_waMessageId"
 ```
 
 `engineRef` is set only on a row a `message:received` or `message:sent` handler filed under another chat, direction or author than the engine reported, or whose `from` or `to` it rewrote: it holds the engine's `{ chatId, direction, author }`. A revoke, edit, reaction, receipt or history tombstone for that message is judged by it, never by the columns the handler chose (see [19 - Plugin Architecture](./19-plugin-architecture.md)). Every other row, and every row written before the column existed, keeps `NULL` and is judged by its own columns; a whatsapp-web.js row without one also takes changes naming the chat its id names, where its `from` or `to` names it too. No API read returns it (the entity column is `select: false`); a data export carries it and an import restores it.
+
+`echoOf` is set on the row of an API send whose message id the own-send echo's row took first, while what the send stored (the media bytes, a quote, a poll) is not yet merged onto that row: the row is `sent`, with no message id. The send merges it and drops it at once; when that fails, the pending reaper's sweep does so for rows older than a minute, or gives the row the message id when the echo row is gone. With `MESSAGE_REAPER_INTERVAL_MS=0` such a row stays beside the echo row. No API read returns the column (`select: false`); a data export carries it and an import restores it.
 
 > [!NOTE]
 > There is **no** PostgreSQL RANGE partitioning, `create_messages_partition()` function, or `pg_cron` schedule in OpenWA. `messages` is a single plain table on both backends. The `timestamp` column uses a `bigint→number` value transformer so the REST/SDK/MCP contract returns a JS number on both SQLite and PostgreSQL.
@@ -1034,7 +1039,8 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1791800000000-AddStatusMediaPathIndex.ts   # partial index on status_updates.mediaPath (orphan sweep)
 ├── 1791900000000-AddHighVolumeQueryIndexes.ts   # composite and retention indexes across messages, webhook_delivery_failures, message_batches, and integration_delivery_failures
 ├── 1792000000000-AddMessageEngineRef.ts   # messages.engineRef, the engine's chat of a message a hook filed under another
-└── 1792100000000-AddWebhookOutboxEngineRef.ts   # webhook_outbox_events.engineRef, the same for the message a delivery carries
+├── 1792100000000-AddWebhookOutboxEngineRef.ts   # webhook_outbox_events.engineRef, the same for the message a delivery carries
+└── 1792200000000-AddMessageEchoOf.ts   # messages.echoOf, the echo row an API send's row is still to be merged onto
 ```
 
 > [!NOTE]

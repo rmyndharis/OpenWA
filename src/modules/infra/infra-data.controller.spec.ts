@@ -2182,6 +2182,31 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
     ]);
   });
 
+  // An API send's row still to be merged onto the echo row that took its id names that id in a column no default read
+  // returns: a restore without it would leave the message in its thread twice for good.
+  it('restores the echo row an API send is still to be merged onto on a backup→restore', async () => {
+    await seedSession('s1');
+    const msgRepo = ds.getRepository(Message);
+    await msgRepo.insert([
+      { sessionId: 's1', waMessageId: 'WA-SENT', chatId: '628111@c.us', from: 'me@c.us', to: '628111@c.us' },
+      { sessionId: 's1', chatId: '628111@c.us', from: 'me@c.us', to: '628111@c.us', echoOf: 'WA-SENT' },
+    ]);
+
+    const dump = await controller.exportData().then(readExport);
+    await msgRepo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    const restored = (await msgRepo.find({
+      select: { waMessageId: true, echoOf: true },
+      order: { echoOf: 'ASC' },
+    })) as Array<Pick<Message, 'waMessageId' | 'echoOf'>>;
+    expect(restored).toEqual([
+      { waMessageId: 'WA-SENT', echoOf: null },
+      { waMessageId: null, echoOf: 'WA-SENT' },
+    ]);
+  });
+
   // The outbox row of a send a hook moved, never stored, is how a change of it still reaches its copies.
   it("restores the engine's chat of a delivery whose message a hook moved on a backup→restore", async () => {
     await seedSession('s1');
