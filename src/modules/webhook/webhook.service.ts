@@ -25,6 +25,7 @@ import {
 import { PreparedWebhookDelivery, WebhookDeliveryService, WebhookPayload } from './webhook-delivery.service';
 import type { MessageCopyChange, MessageCopyPredicate } from './webhook-outbox.service';
 import type { MessageEngineRef } from '../message/entities/message.entity';
+import type { RecoveryQueue } from '../../common/utils/recovery-queue';
 
 // Delivery-engine types (payload and queue job shapes) live on WebhookDeliveryService; re-exported
 // here so existing importers (the queue processor) keep a single stable path.
@@ -498,6 +499,16 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     return this.delivery.changeMessageCopies(sessionId, waMessageId, change, shouldApply);
+  }
+
+  /** The queue of what the database refused, which the message projector shares (see the delivery). */
+  recoveryQueue(): RecoveryQueue {
+    return this.delivery.recoveryQueue();
+  }
+
+  /** Whether this node still owns a session, for the kept state events of one it no longer does. */
+  setSessionOwnership(owns: (sessionId: string) => boolean): void {
+    this.delivery.setSessionOwnership(owns);
   }
 
   /** A change of the message is kept on this node until the database answers, or no longer is (see the delivery). */

@@ -184,6 +184,31 @@ describe('RecoveryQueue', () => {
     expect(log).toEqual(['lost shrinking bytes']);
   });
 
+  it('never gives up a record the age cap does not apply to for bytes, and gives up the oldest of the others', () => {
+    const queue = new RecoveryQueue(options({ maxBytes: 1000 }));
+    const revoke = record('revoke', 'change', { bytes: 200, ageCapped: false });
+    queue.park('revoke', revoke);
+    for (const name of ['a', 'b', 'c']) queue.park(name, record(name, 'dispatch', { bytes: 400 }));
+
+    expect(log).toEqual(['lost a bytes']);
+    expect(queue.get('change', 'revoke')).toBe(revoke);
+  });
+
+  it('gives up a record for bytes once the age cap applies to it again, as it was last measured', () => {
+    const queue = new RecoveryQueue(options({ maxBytes: 1000 }));
+    let capped = false;
+    const changing = record('changing', 'change', { bytes: 300 });
+    changing.ageCapped = () => capped;
+    queue.park('changing', changing);
+    queue.park('a', record('a', 'dispatch', { bytes: 400 }));
+    // An edit kept with the revoke: what the record holds is content again.
+    capped = true;
+    queue.remeasure('change', 'changing');
+    queue.park('b', record('b', 'dispatch', { bytes: 400 }));
+
+    expect(log).toEqual(['lost a bytes']);
+  });
+
   it('gives up on a record past its age cap, and keeps one the cap does not apply to', async () => {
     const queue = new RecoveryQueue(options());
     const aged = record('aged', 'change', { retry: () => Promise.resolve(false) });

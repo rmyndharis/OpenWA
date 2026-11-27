@@ -285,6 +285,12 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
     'an edit': { row: { body: 'edited text' }, outbox: { state: 'pending', body: 'edited text' } },
   };
   const each = Object.keys(changes) as Change[];
+  /** What a kept announcement of the message carries once the change reached it: nothing once taken back. */
+  const announcedAs: Record<Change, unknown[]> = {
+    'an engine revoke': [],
+    'a delete through the API': [''],
+    'an edit': ['edited text'],
+  };
 
   describe.each([
     ['an inbound message', false],
@@ -325,8 +331,9 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       await recover();
 
       expect(await rowOf(msg.id)).toMatchObject(changed[change].row);
-      expect(await outboxOf(msg.id)).toEqual([expect.objectContaining(changed[change].outbox)]);
-      expect(await sweptBodies()).not.toContain('first text');
+      // Its announcement, kept while the database was away, went out as the change left it.
+      expect(await outboxOf(msg.id)).toEqual([expect.objectContaining({ state: 'dispatched' })]);
+      expect(await sweptBodies()).toEqual(announcedAs[change]);
     });
 
     it.each(each)('writes %s held for it whose write failed after a commit that reported success', async change => {
@@ -513,7 +520,9 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       expect(heldOnThisNode('RH-2')).toBe(false);
     });
 
-    it('gives up on the oldest kept changes once their byte budget is spent, and logs each as lost', async () => {
+    // The budget is shared with the announcements the database refused: each edit keeps its message.edited event too,
+    // kept once its webhook lookup failed, after every change was kept.
+    it('gives up on the oldest kept records once their shared byte budget is spent, and logs each as lost', async () => {
       const body = 'x'.repeat(1024 * 1024);
       const count = Math.ceil(RECOVERY_MAX_BYTES / body.length) + 1;
       const ids = Array.from({ length: count }, (_, i) => `BB-${i}`);
@@ -525,13 +534,16 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       await settle(count * 4);
       await recover();
 
-      const lostIds = lost()
-        .mock.calls.filter(([, , meta]) => (meta as { reason?: string } | undefined)?.reason === 'bytes')
-        .map(([, , meta]) => (meta as { messageId: string }).messageId);
+      const losses = lost()
+        .mock.calls.map(([, , meta]) => meta as { reason?: string; messageId?: string; event?: string } | undefined)
+        .filter(meta => meta?.reason === 'bytes');
+      const lostIds = losses.filter(meta => meta?.messageId).map(meta => meta!.messageId);
       expect(lostIds.length).toBeGreaterThan(0);
       expect(lostIds).toEqual(ids.slice(0, lostIds.length));
+      expect(losses.slice(lostIds.length).map(meta => meta?.event)).toEqual(
+        losses.slice(lostIds.length).map(() => 'message.edited'),
+      );
       expect(await rowOf(ids[0])).toMatchObject({ body: 'first text' });
-      expect((await rowOf(ids[count - 1]))?.body).toBe(body);
     });
 
     it('gives up after three tries on a change the database refuses, without holding back the others', async () => {

@@ -31,7 +31,13 @@ import {
   type ParkedChangeSteps,
   type RevokeSlot,
 } from './message-change-park';
-import { RECOVERY_MAX_BYTES, RecoveryQueue, type RecoveryLoss } from '../../common/utils/recovery-queue';
+import {
+  RECOVERY_MAX_AGE_MS,
+  RECOVERY_MAX_RECORDS,
+  RecoveryQueue,
+  recoveryQueueOptions,
+  type RecoveryLoss,
+} from '../../common/utils/recovery-queue';
 import { resolveWebhookReconcilerOptions } from '../webhook/webhook-reconciler.service';
 import {
   mutationTargetsForeignRow,
@@ -147,24 +153,13 @@ const sameInFlightSnapshot = (a: InFlightMutationSnapshot, b: InFlightMutationSn
  * `failed` a non-conflict error, `stale` the engine was retired while the retry waited.
  */
 /** Bounds of the changes kept while the database refuses them: per message id, and for how long one with content stays. */
-export const PARKED_CHANGES_MAX = 1000;
-export const PARKED_CHANGE_MAX_AGE_MS = 60 * 60 * 1000;
+export const PARKED_CHANGES_MAX = RECOVERY_MAX_RECORDS.change;
+export const PARKED_CHANGE_MAX_AGE_MS = RECOVERY_MAX_AGE_MS;
 /** Changes of one kind kept for one message whose claims disagree, each judged against the row when it is tried. */
 export const PARKED_VARIANTS_MAX = 4;
 
 /** The one pass the kept changes get at shutdown, once the engines are gone (a stage of shutdown-budget.ts). */
 export const PARKED_CHANGES_SHUTDOWN_PASS_MS = 1_000;
-
-/**
- * How long a kept change waits before its next try while the database keeps failing. SQLite is one node, and every try
- * against a lock can hold the event loop for its busy timeout, so it backs off to 30 s; on PostgreSQL the wait plus a
- * pass must stay under the sweep's grace (WEBHOOK_RECONCILE_GRACE_MS), so a peer's sweep, held for one grace after
- * the database comes back, does not replay what this node is about to withdraw.
- */
-const parkedChangeDelays = (postgres: boolean): { baseDelayMs: number; capDelayMs: number } => {
-  const cap = postgres ? Math.max(1000, Math.min(5000, resolveWebhookReconcilerOptions().graceMs / 4)) : 30_000;
-  return { baseDelayMs: Math.min(1000, cap), capDelayMs: cap };
-};
 
 /** The ref a change claims, as the rule reads a row: so a later change can be told consistent with a kept one. */
 const refOfSource = (source: MutationSource): StoredMessageRef => ({
@@ -512,16 +507,19 @@ export class MessageProjector {
     @Optional() private readonly lidMappingStore?: LidMappingStoreService,
     @Optional() private readonly ownership?: SessionOwnershipService,
   ) {
-    this.recovery = new RecoveryQueue({
-      maxBytes: RECOVERY_MAX_BYTES,
-      maxRecords: { send: PARKED_CHANGES_MAX, change: PARKED_CHANGES_MAX, dispatch: PARKED_CHANGES_MAX },
-      maxAgeMs: {
-        send: PARKED_CHANGE_MAX_AGE_MS,
-        change: PARKED_CHANGE_MAX_AGE_MS,
-        dispatch: PARKED_CHANGE_MAX_AGE_MS,
-      },
-      ...parkedChangeDelays(this.messageRepository.manager?.connection?.options?.type === 'postgres'),
-    });
+    // The queue the delivery service keeps its refused dispatches in, so a pass withdraws or rewrites what a kept change
+    // touches before the events it touches go out; one of its own where none is wired (a projector built standalone).
+    const shared = this.webhookService.recoveryQueue?.();
+    this.recovery =
+      shared instanceof RecoveryQueue
+        ? shared
+        : new RecoveryQueue(
+            recoveryQueueOptions(
+              this.messageRepository.manager?.connection?.options?.type === 'postgres',
+              resolveWebhookReconcilerOptions().graceMs,
+            ),
+          );
+    this.webhookService.setSessionOwnership?.(sessionId => nodeOwnsSession(this.ownership, sessionId));
     this.mutationProjector = new MessageMutationProjector(
       this.messageRepository,
       this.eventsGateway,
@@ -554,7 +552,8 @@ export class MessageProjector {
    * what is left is logged (`message_change_lost`), as nothing outlives the process.
    */
   settleParkedChanges(budgetMs = PARKED_CHANGES_SHUTDOWN_PASS_MS): Promise<void> {
-    return this.recovery.drain(budgetMs);
+    // The kept webhook dispatches get their own pass, in the delivery service's shutdown drain.
+    return this.recovery.drain(budgetMs, ['send', 'change']);
   }
 
   /** Run the kept changes now: a test's clock, and the shutdown pass, do not wait for the timer. */

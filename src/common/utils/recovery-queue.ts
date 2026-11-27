@@ -104,10 +104,9 @@ export class RecoveryQueue {
     change: new Map(),
     dispatch: new Map(),
   };
-  // When each record was first kept, across lanes: the byte budget gives up on the first kept, records kept within
-  // one millisecond included.
-  private readonly order = new Map<RecoveryRecord, number>();
-  private keptCount = 0;
+  // The records the byte budget may give up, with their keys, across lanes in the order they became so (kept, or held
+  // content again): the first is the one it gives up. One the age cap does not apply to (a revoke) is never among them.
+  private readonly evictable = new Map<RecoveryRecord, string>();
   // What each record counted against the byte budget when it was last measured, and their sum.
   private readonly sizes = new Map<RecoveryRecord, number>();
   private bytes = 0;
@@ -143,8 +142,7 @@ export class RecoveryQueue {
     const was = lane.get(key);
     if (was && was !== record) this.forgetSize(was);
     lane.set(key, record);
-    if (!this.order.has(record)) this.order.set(record, ++this.keptCount);
-    this.measure(record);
+    this.measure(key, record);
     this.bound(record.lane);
     this.schedule();
   }
@@ -153,7 +151,7 @@ export class RecoveryQueue {
   remeasure(lane: RecoveryLane, key: string): void {
     const record = this.lanes[lane].get(key);
     if (!record) return;
-    this.measure(record);
+    this.measure(key, record);
     this.bound(lane);
   }
 
@@ -264,7 +262,7 @@ export class RecoveryQueue {
       const settled = await record.retry();
       if (!settled) {
         // A try that wrote part of what the record holds leaves it smaller.
-        if (this.kept(key, record)) this.measure(record);
+        if (this.kept(key, record)) this.measure(key, record);
         return false;
       }
       this.release(key, record);
@@ -286,16 +284,18 @@ export class RecoveryQueue {
     this.delayMs = this.options.baseDelayMs;
   }
 
-  private measure(record: RecoveryRecord): void {
+  private measure(key: string, record: RecoveryRecord): void {
     const size = record.bytes();
     this.bytes += size - (this.sizes.get(record) ?? 0);
     this.sizes.set(record, size);
+    if (!record.ageCapped()) this.evictable.delete(record);
+    else if (!this.evictable.has(record)) this.evictable.set(record, key);
   }
 
   private forgetSize(record: RecoveryRecord): void {
     this.bytes -= this.sizes.get(record) ?? 0;
     this.sizes.delete(record);
-    this.order.delete(record);
+    this.evictable.delete(record);
     this.failures.delete(record);
   }
 
@@ -312,7 +312,10 @@ export class RecoveryQueue {
     record.dropped?.();
   }
 
-  /** Hold the lane's count cap and the shared byte budget, giving up on the oldest first: the first of a lane. */
+  /**
+   * Hold the lane's count cap and the shared byte budget, giving up on the oldest first: the first of a lane, and the
+   * first of the records the budget may give up.
+   */
   private bound(lane: RecoveryLane): void {
     const inLane = this.lanes[lane];
     while (inLane.size > this.options.maxRecords[lane]) {
@@ -320,15 +323,10 @@ export class RecoveryQueue {
       this.drop(key, record);
       record.lost('count');
     }
-    while (this.bytes > this.options.maxBytes) {
-      let oldest: [string, RecoveryRecord] | undefined;
-      for (const each of LANES) {
-        const first = this.lanes[each].entries().next().value;
-        if (first && (!oldest || this.order.get(first[1])! < this.order.get(oldest[1])!)) oldest = first;
-      }
-      if (!oldest) break;
-      this.drop(...oldest);
-      oldest[1].lost('bytes');
+    while (this.bytes > this.options.maxBytes && this.evictable.size > 0) {
+      const [record, key] = this.evictable.entries().next().value!;
+      this.drop(key, record);
+      record.lost('bytes');
     }
   }
 
