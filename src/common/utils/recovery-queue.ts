@@ -2,13 +2,15 @@ import { isTransientDbError } from './db-errors';
 import type { RecoveryJournal } from './recovery-journal';
 
 /**
- * Work the database refused, kept in memory until it answers again, in the order it is retried: a send's own row
- * first, then a received message's row and an engine message whose stored target could not be read, then the rows of
- * history messages (each must exist or be read before changes are judged against it), then message changes, then the
- * purges of cleared chats, then webhook dispatches.
+ * Work the database refused, kept in memory until it answers again, in the order it is retried: a session row's
+ * status, phone binding or stop record first (they decide whether the session may run, which auto-start and a
+ * takeover read, and nothing else waits on them), then a send's own row, then a received message's row and an engine
+ * message whose stored target could not be read, then the rows of history messages (each must exist or be read
+ * before changes are judged against it), then message changes, then the purges of cleared chats, then webhook
+ * dispatches.
  */
-export type RecoveryLane = 'send' | 'receive' | 'history' | 'change' | 'purge' | 'dispatch';
-const LANES: RecoveryLane[] = ['send', 'receive', 'history', 'change', 'purge', 'dispatch'];
+export type RecoveryLane = 'session' | 'send' | 'receive' | 'history' | 'change' | 'purge' | 'dispatch';
+const LANES: RecoveryLane[] = ['session', 'send', 'receive', 'history', 'change', 'purge', 'dispatch'];
 
 /** The key a send's SENT write is kept under in the `send` lane, by the message id it writes. */
 export const sendRerunKey = (sessionId: string, waMessageId: string): string => `${sessionId}:${waMessageId}`;
@@ -73,10 +75,12 @@ export const RECOVERY_MAX_RECORD_FAILURES = 3;
 export const RECOVERY_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
- * Records a lane keeps: a message's changes and a send's rerun one each, a dispatch one per webhook event. A message
- * received on Baileys takes two in its lane, its row and the copy the engine reads its changes with.
+ * Records a lane keeps: a message's changes and a send's rerun one each, a dispatch one per webhook event, a session
+ * one per field it writes (status, phone, stop record). A message received on Baileys takes two in its lane, its row
+ * and the copy the engine reads its changes with.
  */
 export const RECOVERY_MAX_RECORDS: Readonly<Record<RecoveryLane, number>> = {
+  session: 3000,
   send: 1000,
   receive: 2000,
   // Batches of history messages, a lane of their own: one history sync must not push received rows or copies out.
@@ -103,6 +107,7 @@ export function recoveryQueueOptions(postgres: boolean, graceMs: number): Recove
     maxBytes: RECOVERY_MAX_BYTES,
     maxRecords: { ...RECOVERY_MAX_RECORDS },
     maxAgeMs: {
+      session: RECOVERY_MAX_AGE_MS,
       send: RECOVERY_MAX_AGE_MS,
       receive: RECOVERY_MAX_AGE_MS,
       history: RECOVERY_MAX_AGE_MS,
@@ -141,6 +146,7 @@ export class RecoveryQueue {
   // Per lane, in the order the records were first kept: one kept again under its key keeps its place, so the first is
   // always the oldest, and a bound gives it up without sorting.
   private readonly lanes: Record<RecoveryLane, Map<string, RecoveryRecord>> = {
+    session: new Map(),
     send: new Map(),
     receive: new Map(),
     history: new Map(),

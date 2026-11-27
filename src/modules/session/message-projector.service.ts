@@ -985,12 +985,12 @@ export class MessageProjector {
   }
 
   /**
-   * At shutdown, once the engines are gone: one bounded pass over the changes the database refused, then the loss of
-   * what is left is logged (`message_change_lost`), as nothing outlives the process.
+   * At shutdown, once the engines are gone: one bounded pass over the session rows and changes the database refused,
+   * then the loss of what is left is logged (`message_change_lost`), as nothing outlives the process.
    */
   settleParkedChanges(budgetMs = PARKED_CHANGES_SHUTDOWN_PASS_MS): Promise<void> {
     // The kept webhook dispatches get their own pass, in the delivery service's shutdown drain.
-    return this.recovery.drain(budgetMs, ['send', 'receive', 'history', 'change']);
+    return this.recovery.drain(budgetMs, ['session', 'send', 'receive', 'history', 'change']);
   }
 
   /** The queue this process keeps what the database refused in, shared with the send path's SENT writes. */

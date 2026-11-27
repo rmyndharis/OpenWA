@@ -43,6 +43,8 @@ import {
 } from './session-engine-controls';
 import { SessionOwnershipService, nodeOwnsSession } from './session-ownership.service';
 import { PhoneWrites } from './session-phone-writes';
+import { SessionRows } from './session-row-park';
+import { RecoveryQueue } from '../../common/utils/recovery-queue';
 
 /**
  * Eager status-history reads are opt-in. On affected freshly paired whatsapp-web.js accounts,
@@ -341,6 +343,8 @@ export class SessionEngineLifecycle {
   // name, a logout's clear) are issued in order, and a row read that acts on the phone waits for them, so it cannot
   // return the binding they replace.
   private readonly phoneWrites = new PhoneWrites();
+  /** The session row writes the database refused, kept until it answers (see SessionRows). */
+  readonly rows: SessionRows;
 
   constructor(
     @InjectRepository(Session, 'data')
@@ -399,11 +403,20 @@ export class SessionEngineLifecycle {
       pendingInitialStatuses: this.pendingInitialStatuses,
       logger: this.logger,
     });
+    const recovery = this.webhookService.recoveryQueue?.();
+    this.rows = new SessionRows({
+      repository: this.sessionRepository,
+      queue: recovery instanceof RecoveryQueue ? recovery : undefined,
+      ownership: this.ownership,
+      logger: this.logger,
+      announce: (id, status) => this.broadcaster.announce(id, status),
+    });
     this.broadcaster = new SessionStatusBroadcaster({
       sessionRepository: this.sessionRepository,
       eventsGateway: this.eventsGateway,
       webhookService: this.webhookService,
       logger: this.logger,
+      rows: this.rows,
     });
     this.leafEvents = new SessionEngineLeafEvents({
       sessionRepository: this.sessionRepository,
@@ -485,6 +498,7 @@ export class SessionEngineLifecycle {
       dataSource: () => this.dataSource,
       fences: this.fences,
       broadcaster: this.broadcaster,
+      rows: this.rows,
       cancelReconnect: id => this.cancelReconnect(id),
       initializeEngine: (id, session) => this.initializeEngine(id, session),
       isSessionRetired: id => this.isSessionRetired(id),
@@ -986,7 +1000,15 @@ export class SessionEngineLifecycle {
                   { id, nodeId },
                   { id, nodeId: IsNull() },
                 ];
-          const { affected } = await this.sessionRepository.update(ours, { status: SessionStatus.DISCONNECTED });
+          const superseded = this.rows.kept(id, 'status');
+          let affected: number | undefined;
+          try {
+            ({ affected } = await this.sessionRepository.update(ours, { status: SessionStatus.DISCONNECTED }));
+          } catch (error) {
+            this.rows.keepSet(id, 'status', SessionStatus.DISCONNECTED, error, { owners: this.rows.owners(true) });
+            throw error;
+          }
+          if (affected !== 0) this.rows.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
           // A replacement may reach READY while the database response is still pending.
           if (affected !== 0 && isCurrentTimeout()) this.broadcaster.announce(id, SessionStatus.DISCONNECTED);
         }

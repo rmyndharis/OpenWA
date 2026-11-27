@@ -37,7 +37,7 @@ import {
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { setTimeout } from 'node:timers/promises';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
-import { Session, SessionStatus } from './entities/session.entity';
+import { ACTIVE_STATUSES, Session, SessionStatus } from './entities/session.entity';
 import {
   CreateSessionDto,
   SessionConfigResponseDto,
@@ -167,20 +167,6 @@ interface SessionStops {
 }
 
 /**
- * Statuses that assert an engine is running somewhere. The boot reset clears them for every row this
- * node may claim; markLapsedDisconnected clears them for a row whose holder never came back, a
- * QR_READY row only while it has no phone. FAILED and CREATED stay out of both: an operator has to
- * see them.
- */
-const ACTIVE_STATUSES = [
-  SessionStatus.READY,
-  SessionStatus.INITIALIZING,
-  SessionStatus.QR_READY,
-  SessionStatus.AUTHENTICATING,
-  SessionStatus.ACTION_REQUIRED,
-];
-
-/**
  * The session-record API: CRUD over the sessions table, aggregate stats, and the thin engine query
  * proxies (QR/pairing/chats/groups/chat-state) behind the controller routes. Every engine LIFECYCLE
  * verb (start/stop/logout/forceKill/delete/stopOrphanEngines), the reconnect machinery, the engine
@@ -302,8 +288,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * and resetting all of them assumed that somewhere was always here — true of a single process,
    * and wrong beside a live peer, whose sessions would be reported disconnected while they are
    * serving traffic. A row held by another node with an unexpired lease is therefore left alone.
+   *
+   * What the last process kept of these rows, refused by the database before it stopped, lands first:
+   * the reset and auto-start read what it writes.
    */
   async onModuleInit(): Promise<void> {
+    await this.engineLifecycle.rows.landRestored();
     const claimable = this.ownership?.claimableWhere() ?? [{}];
     const result = await this.sessionRepository.update(
       claimable.map(clause => ({ ...clause, status: In(ACTIVE_STATUSES) })),
@@ -1231,12 +1221,26 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // Fenced like the boot reset: a FAILED on a row a peer has since adopted is the peer's.
         if (retryError instanceof ServerShuttingDownException) {
           const claimable = this.ownership?.claimableWhere() ?? [{}];
-          await this.sessionRepository
-            .update(
+          const rows = this.engineLifecycle.rows;
+          const superseded = rows.kept(id, 'status');
+          try {
+            const { affected } = await this.sessionRepository.update(
               claimable.map(clause => ({ ...clause, id, status: SessionStatus.FAILED })),
               { status: SessionStatus.DISCONNECTED },
-            )
-            .catch(() => undefined);
+            );
+            if (affected) rows.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
+          } catch (error) {
+            // Kept for the next boot, which lands it before its reset.
+            rows.keep(
+              id,
+              {
+                field: 'status',
+                moves: [[SessionStatus.FAILED, SessionStatus.DISCONNECTED]],
+                owners: this.ownership ? 'claimable' : undefined,
+              },
+              error,
+            );
+          }
         }
         throw retryError;
       }
@@ -1565,13 +1569,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * release: the start's own outcome is the answer.
    */
   private async disconnectReleasedRow(id: string): Promise<void> {
+    const rows = this.engineLifecycle.rows;
+    const superseded = rows.kept(id, 'status');
     try {
       const { affected } = await this.sessionRepository.update(
         { id, nodeId: IsNull(), status: In(ACTIVE_STATUSES) },
         { status: SessionStatus.DISCONNECTED },
       );
-      if (affected) this.engineLifecycle.announceStatus(id, SessionStatus.DISCONNECTED);
+      if (affected) {
+        rows.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
+        this.engineLifecycle.announceStatus(id, SessionStatus.DISCONNECTED);
+      }
     } catch (error) {
+      const moves = ACTIVE_STATUSES.map((status): [string, string] => [status, SessionStatus.DISCONNECTED]);
+      rows.keep(id, { field: 'status', moves, owners: [null] }, error);
       this.logger.warn(`Could not mark session ${id} disconnected after its start left no engine`, {
         sessionId: id,
         action: 'session_release_status_failed',

@@ -82,6 +82,7 @@ describe('the SENT write of a send the database refused', () => {
       maxBytes: RECOVERY_MAX_BYTES,
       maxRecords: { ...RECOVERY_MAX_RECORDS },
       maxAgeMs: {
+        session: RECOVERY_MAX_AGE_MS,
         send: RECOVERY_MAX_AGE_MS,
         receive: RECOVERY_MAX_AGE_MS,
         history: RECOVERY_MAX_AGE_MS,

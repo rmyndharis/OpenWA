@@ -36,6 +36,7 @@ import { HookManager } from '../../core/hooks';
 import { SessionLifecycleFences } from './session-lifecycle-fences';
 import { SessionStatusBroadcaster } from './session-status-broadcaster';
 import type { MessageProjector } from './message-projector.service';
+import type { SessionRows } from './session-row-park';
 import { sessionNotFound } from './session-id.pipe';
 // The two pure config resolvers stay exported from the lifecycle module (its export surface is
 // unchanged — session.service re-exports them from there), so this unit imports them back. The
@@ -291,6 +292,8 @@ export interface SessionEngineControlsHost {
   dataSource(): DataSource;
   fences: SessionLifecycleFences;
   broadcaster: SessionStatusBroadcaster;
+  /** Where a session row write the database refused is kept until it answers. */
+  rows?: SessionRows;
   cancelReconnect(id: string): void;
   initializeEngine(id: string, session: Session): Promise<void>;
   isSessionRetired(id: string): Promise<boolean>;
@@ -385,10 +388,12 @@ export class SessionEngineControls {
 
   /** findOne-or-404 with the runtime-state projection, mirroring SessionService.findOne. */
   private async requireSession(id: string): Promise<Session> {
+    const mark = this.host.rows?.mark(id) ?? 0;
     const session = await this.sessionRepository.findOne({ where: { id } });
     if (!session) {
       throw sessionNotFound(id);
     }
+    this.host.rows?.saw(id, session, mark);
     return this.sessionRestrictions.attachTo(this.sessionErrors.attachTo(session));
   }
 
@@ -729,10 +734,17 @@ export class SessionEngineControls {
             { id, nodeId },
             { id, nodeId: IsNull() },
           ];
+    const superseded = this.host.rows?.kept(id, 'status');
     try {
       const { affected } = await this.sessionRepository.update(ours, { status: SessionStatus.DISCONNECTED });
-      if (affected) this.broadcaster.announce(id, SessionStatus.DISCONNECTED);
+      if (affected) {
+        this.host.rows?.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
+        this.broadcaster.announce(id, SessionStatus.DISCONNECTED);
+      }
     } catch (error) {
+      this.host.rows?.keepSet(id, 'status', SessionStatus.DISCONNECTED, error, {
+        owners: this.host.rows?.owners(true),
+      });
       this.logger.warn('Failed to persist the disconnected status of a retired launch', {
         sessionId: id,
         error: error instanceof Error ? error.message : String(error),
