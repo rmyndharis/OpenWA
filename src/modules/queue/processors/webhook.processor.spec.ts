@@ -1023,6 +1023,28 @@ describe('WebhookProcessor', () => {
       expect(failureRepo.insert).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ['the message the job carries', { messageId: 'M-1' }, undefined, undefined],
+      ['the message its outbox row names, for a job queued without it', {}, { messageId: 'M-1' }, undefined],
+      ['the message its kept copy names, for a job queued without it', {}, undefined, { messageId: 'M-1' }],
+    ] as const)(
+      'matches the hold of an edit event by %s, never by the body a hook rewrote',
+      async (_label, carried, row, replayData) => {
+        outbox.currentMessagePayload.mockResolvedValue(row);
+        const job = makeJob({ event: 'message.edited', ...carried, ...(replayData ? { replayData } : {}) }, 2);
+        job.data.payload = { ...job.data.payload, event: 'message.edited', data: { messageId: 'renamed' } };
+        (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = jest.fn().mockResolvedValue(undefined);
+        outbox.isMessageHeld.mockImplementation(
+          (_key: string, _webhookId: string, delivery: { data?: { messageId?: string } }) =>
+            delivery.data?.messageId === 'M-1',
+        );
+
+        await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+        expect(mockFetch).not.toHaveBeenCalled();
+      },
+    );
+
     it('closes the row and posts nothing when a plugin cancels the rebuilt delivery', async () => {
       outbox.currentMessagePayload.mockResolvedValue(rowData);
       hookManager.execute.mockResolvedValue({ continue: false, data: {} });

@@ -211,8 +211,11 @@ export class WebhookProcessor extends WorkerHost {
         );
         return { statusCode: 0, success: false, error: 'outbox row closed', responseTime: 0 };
       }
-      // A change of the message kept on this node may still withdraw or rewrite this copy: the job waits for it.
-      if (this.outbox.isMessageHeld(payload.idempotencyKey, webhookId))
+      // A change of the message kept on this node may still withdraw or rewrite this copy: the job waits for it. The
+      // message is the one the server named, never what a hook made of the body.
+      const named =
+        job.data.messageId !== undefined ? { messageId: job.data.messageId } : (held ?? job.data.replayData);
+      if (this.outbox.isMessageHeld(payload.idempotencyKey, webhookId, { sessionId, event, data: named }))
         return await this.delayWithoutAttempt(job, token);
       ctx.url = current.url;
       let body = JSON.stringify(payload);

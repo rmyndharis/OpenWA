@@ -79,7 +79,7 @@ describe('WebhookReconcilerService', () => {
 
     const stats = await service.sweep(OPTS);
 
-    expect(delivery.isMessageHeld).toHaveBeenCalledWith('msg_sess-1_HELD_wh-1', 'wh-1');
+    expect(delivery.isMessageHeld).toHaveBeenCalledWith('msg_sess-1_HELD_wh-1', 'wh-1', expect.anything());
     expect(delivery.redeliver.mock.calls.map(([, , , key]: unknown[]) => key)).toEqual(['msg_sess-1_FREE_wh-1']);
     expect(outbox.countAttempt).toHaveBeenCalledTimes(1);
     expect(stats).toMatchObject({ scanned: 2, skipped: 1, replayed: 1 });

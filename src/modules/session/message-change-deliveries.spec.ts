@@ -338,6 +338,30 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
       expect(await editCopies('o4', 'E_20')).toEqual(['pending', 'kept edit', 'kept edit']);
     });
 
+    it('still go out on a redrive of the failure their retries left, while the message stands', async () => {
+      await storeRow('E-4');
+      await ds.getRepository(Webhook).update(webhook.id, { events: ['message.edited'], retryCount: 1 });
+      mockFetch.mockResolvedValueOnce(new Response('down', { status: 500 }));
+      await webhookService.dispatch(sessionId, 'message.edited', editPayload('E-4', 'kept edit'));
+      const failed = await ds
+        .getRepository(WebhookDeliveryFailure)
+        .createQueryBuilder('f')
+        .addSelect('f.payload')
+        .where('f.event = :event', { event: 'message.edited' })
+        .getOneOrFail();
+      expect(failed.payload).toMatchObject({ messageId: 'E-4', body: 'kept edit' });
+      expect((await ds.getRepository(WebhookOutboxEvent).findOneByOrFail({ event: 'message.edited' })).state).toBe(
+        'dispatched',
+      );
+
+      await redrive.redrive({ sessionId });
+
+      expect(postedBodies()).toEqual([
+        expect.objectContaining({ messageId: 'E-4', body: 'kept edit' }),
+        expect.objectContaining({ messageId: 'E-4', body: 'kept edit' }),
+      ]);
+    });
+
     it('keep the text of their own edit when the message is edited again', async () => {
       await storeRow('E-3');
       await openEdit('E-3', 'o5', 'first fix');

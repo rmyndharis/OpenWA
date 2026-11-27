@@ -94,6 +94,9 @@ export function messageEditKeys(sessionId: string, waMessageId: string): string 
   return `${`edit_${sessionId}_${waMessageId}`.replace(/[\\%_]/g, ch => `\\${ch}`)}%`;
 }
 
+/** What a kept change of a message holds of its deliveries: all of them once a revoke is kept, else its own copies. */
+export type MessageHold = 'revoke' | 'copies';
+
 /** Deliveries whose outbox rows could not be written that this node keeps a copy of; past it the oldest is let go. */
 const UNWRITTEN_COPIES_MAX = 10_000;
 
@@ -167,8 +170,9 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   // Row id to the time it may be read again, for rows whose stored payload could not be read.
   private readonly unreadableUntil = new Map<string, number>();
 
-  // The delivery key, less its webhook, of each message with a change kept on this node that touches its copies.
-  private readonly heldMessages = new Set<string>();
+  // The delivery key, less its webhook, of each message with a change kept on this node that touches its copies, and
+  // whether a revoke is among them.
+  private readonly heldMessages = new Map<string, MessageHold>();
   // By webhook and key, the deliveries whose outbox rows could not be written: their copy, which a change of the
   // message reaches as it reaches a row, read by their later attempts (direct or queued) and their failure record.
   private readonly unwritten = new Map<string, UnwrittenCopy>();
@@ -183,18 +187,30 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
    * or no longer is. Until it is written, none of the message's deliveries goes out from this node with the copy its
    * outbox row holds: the sweep replays none, a direct retry waits, and so does a queued job, spending no attempt.
    */
-  holdMessage(sessionId: string, waMessageId: string, held: boolean): void {
+  holdMessage(sessionId: string, waMessageId: string, held: MessageHold | false): void {
     const key = messageDeliveryKeys(sessionId, waMessageId).keyFor('');
-    if (held) this.heldMessages.add(key);
+    if (held) this.heldMessages.set(key, held);
     else this.heldMessages.delete(key);
   }
 
-  /** True while a change of the message a delivery key of this webhook names is held on this node (holdMessage). */
-  isMessageHeld(idempotencyKey: string, webhookId: string): boolean {
+  /**
+   * True while a change kept on this node may still withdraw or rewrite this delivery (holdMessage): a delivery of the
+   * message its key names, or, while a revoke of it is kept, an edit event of it, named by the payload's messageId. An
+   * edit kept leaves the edit events alone: each is its own occurrence.
+   */
+  isMessageHeld(
+    idempotencyKey: string,
+    webhookId: string,
+    delivery?: { sessionId: string; event: string; data?: Record<string, unknown> | null },
+  ): boolean {
+    if (this.heldMessages.size === 0) return false;
+    if (idempotencyKey.endsWith(`_${webhookId}`) && this.heldMessages.has(idempotencyKey.slice(0, -webhookId.length))) {
+      return true;
+    }
+    const messageId = delivery && MESSAGE_CHANGE_EVENTS.includes(delivery.event) ? delivery.data?.messageId : undefined;
     return (
-      this.heldMessages.size > 0 &&
-      idempotencyKey.endsWith(`_${webhookId}`) &&
-      this.heldMessages.has(idempotencyKey.slice(0, -webhookId.length))
+      typeof messageId === 'string' &&
+      this.heldMessages.get(messageDeliveryKeys(delivery!.sessionId, messageId).keyFor('')) === 'revoke'
     );
   }
 
@@ -709,7 +725,8 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     // A delivery whose row could not be written: its copy, as the changes of the message left it.
     const copy = this.unwritten.get(`${webhookId}\u0000${idempotencyKey}`);
     if (copy && copy.event === event) return copy.data;
-    if (!MESSAGE_DELIVERY_EVENTS.includes(event)) return undefined;
+    // An edit event is checked against its own row as a message's delivery is: closed once the message was taken back.
+    if (!MESSAGE_DELIVERY_EVENTS.includes(event) && !MESSAGE_CHANGE_EVENTS.includes(event)) return undefined;
     let row: Pick<WebhookOutboxEvent, 'event' | 'state' | 'payload'> | null;
     try {
       row = await this.outbox.findOne({

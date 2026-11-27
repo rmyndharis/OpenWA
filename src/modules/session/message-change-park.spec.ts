@@ -633,6 +633,20 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
         expect(swept).not.toContain('edited text');
       });
 
+      it("holds the message's edit events while it is kept after an edit it superseded", async () => {
+        await storeRow('A-6');
+        outage = 'on';
+        changes['an edit']('A-6');
+        await settle();
+        changes['an engine revoke']('A-6');
+        await settle();
+
+        const editEvent = { sessionId, event: 'message.edited', data: { messageId: 'A-6' } };
+        expect(outbox.isMessageHeld(`edit_${sessionId}_A-6_o1_${webhookId}`, webhookId, editEvent)).toBe(true);
+        await recover();
+        expect(outbox.isMessageHeld(`edit_${sessionId}_A-6_o1_${webhookId}`, webhookId, editEvent)).toBe(false);
+      });
+
       it('outlives the content age cap beside an edit of another chat, which alone is lost', async () => {
         await storeRow('A-4');
         await later(PARKED_CHANGE_MAX_AGE_MS + 1, async () => {

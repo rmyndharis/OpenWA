@@ -187,7 +187,13 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
           stats.skipped++;
           continue;
         }
-        if (this.delivery.isMessageHeld(row.idempotencyKey, row.webhookId)) {
+        if (
+          this.delivery.isMessageHeld(row.idempotencyKey, row.webhookId, {
+            sessionId: row.sessionId,
+            event: row.event,
+            data: row.payload,
+          })
+        ) {
           // A change of the message is kept on this node until the database answers, and may still withdraw or
           // rewrite this copy.
           stats.skipped++;

@@ -17,6 +17,7 @@ import {
   messageEditKeys,
   type MessageCopyChange,
   type MessageCopyFilter,
+  type MessageHold,
   type MessageCopyPredicate,
   type OutboxOpenRow,
   type ReplayableDelivery,
@@ -80,6 +81,11 @@ export interface WebhookJobData {
    * what the row held was not known: such a job posts its own body unless the row was closed.
    */
   baseHash?: string;
+  /**
+   * The message an edit event names in its pre-hook data, which a kept revoke's hold on the worker is matched by: a
+   * `webhook:before` hook may have given the body's `messageId` another value. Absent on a job queued before it existed.
+   */
+  messageId?: string;
 }
 
 /**
@@ -1299,6 +1305,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         maxRetries: webhook.retryCount,
         ...(this.keepsFailurePayload() ? { replayData: ctx.baseData } : {}),
         ...this.heldHash(ctx),
+        ...(MESSAGE_CHANGE_EVENTS.includes(event) && typeof ctx.baseData.messageId === 'string'
+          ? { messageId: ctx.baseData.messageId }
+          : {}),
       };
 
       await producerReady(this.webhookQueue!);
@@ -1471,13 +1480,17 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** See WebhookOutboxService.holdMessage. */
-  holdMessage(sessionId: string, waMessageId: string, held: boolean): void {
+  holdMessage(sessionId: string, waMessageId: string, held: MessageHold | false): void {
     this.outbox.holdMessage(sessionId, waMessageId, held);
   }
 
   /** See WebhookOutboxService.isMessageHeld. */
-  isMessageHeld(idempotencyKey: string, webhookId: string): boolean {
-    return this.outbox.isMessageHeld(idempotencyKey, webhookId);
+  isMessageHeld(
+    idempotencyKey: string,
+    webhookId: string,
+    delivery?: { sessionId: string; event: string; data?: Record<string, unknown> | null },
+  ): boolean {
+    return this.outbox.isMessageHeld(idempotencyKey, webhookId, delivery);
   }
 
   /**
@@ -1596,7 +1609,10 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
               if (waited) {
                 let changed = await this.messageChange(webhook.id, idempotencyKey, ctx);
                 // A change of the message kept on this node may withdraw or rewrite it: wait for it, without the slot.
-                while (changed !== null && this.isMessageHeld(idempotencyKey, webhook.id)) {
+                while (
+                  changed !== null &&
+                  this.isMessageHeld(idempotencyKey, webhook.id, { ...ctx, data: ctx.baseData })
+                ) {
                   const delay = this.configService.get<number>('webhook.retryDelay', 5000);
                   await yieldSlot(() => setTimeout(delay, undefined, { signal: this.shutdownAbort.signal }));
                   changed = await this.messageChange(webhook.id, idempotencyKey, ctx);
@@ -1812,13 +1828,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   private async messageChange(
     webhookId: string,
     idempotencyKey: string,
-    held: Pick<DispatchEventContext, 'event' | 'baseData' | 'storedHash'>,
+    held: Pick<DispatchEventContext, 'sessionId' | 'event' | 'baseData' | 'storedHash'>,
   ): Promise<Record<string, unknown> | null | undefined | 'unread'> {
     try {
       const row = await this.outbox.currentMessagePayload(webhookId, idempotencyKey, held.event);
       return changedData(row, held.storedHash === undefined ? dataHash(held.baseData) : held.storedHash);
     } catch (error) {
-      if (this.isMessageHeld(idempotencyKey, webhookId)) return 'unread';
+      if (this.isMessageHeld(idempotencyKey, webhookId, { ...held, data: held.baseData })) return 'unread';
       this.logger.warn('Could not read the outbox row of a message delivery; sending what it holds', {
         webhookId,
         idempotencyKey,
@@ -1867,6 +1883,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       if (attempt > 1 && baseData) {
         // The message may have been revoked, deleted through the API or edited during the backoff.
         const changed = await this.messageChange(webhook.id, payload.idempotencyKey, {
+          sessionId: payload.sessionId,
           event: payload.event,
           baseData,
           storedHash,
@@ -1875,7 +1892,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           this.logSkippedRetracted(webhook.id, payload.event, payload.deliveryId, payload.idempotencyKey);
           return false;
         }
-        if (this.isMessageHeld(payload.idempotencyKey, webhook.id)) {
+        if (
+          this.isMessageHeld(payload.idempotencyKey, webhook.id, {
+            sessionId: payload.sessionId,
+            event: payload.event,
+            data: baseData,
+          })
+        ) {
           // A change of the message kept on this node may still withdraw or rewrite this copy. Not an attempt: the
           // backoff that came before this one again, then the same check.
           await yieldSlot(() => setTimeout(delay * 2 ** (attempt - 2), undefined, { signal: backoffSignal }));
@@ -1983,6 +2006,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         // copy for a redrive is the one a change left on its outbox row, none once it was taken back.
         if (replayData && baseData) {
           const changed = await this.messageChange(webhook.id, payload.idempotencyKey, {
+            sessionId: payload.sessionId,
             event: payload.event,
             baseData,
             storedHash,

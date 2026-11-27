@@ -752,9 +752,13 @@ export class MessageProjector {
    * (a revoke, an edit with its text); a reaction or a receipt leaves them as they are.
    */
   private holdCopies(sessionId: string, waMessageId: string): void {
-    const held = (this.parkedFor.get(`${sessionId}:${waMessageId}`) ?? []).some(
-      ({ slots }) => slots.revoke || slots.edit?.body !== undefined,
-    );
+    const records = this.parkedFor.get(`${sessionId}:${waMessageId}`) ?? [];
+    // A kept revoke holds the message's edit events too, which it withdraws as well.
+    const held = records.some(({ slots }) => slots.revoke)
+      ? 'revoke'
+      : records.some(({ slots }) => slots.edit?.body !== undefined)
+        ? 'copies'
+        : false;
     this.webhookService.holdMessage?.(sessionId, waMessageId, held);
   }
 

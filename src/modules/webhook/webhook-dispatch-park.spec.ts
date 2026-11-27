@@ -21,6 +21,7 @@ import { WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookDeliveryService } from './webhook-delivery.service';
 import { WebhookService } from './webhook.service';
 import { WebhookReconcilerService } from './webhook-reconciler.service';
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { MessageProjector } from '../session/message-projector.service';
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -533,6 +534,124 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
     expect(posted().map(post => post.event)).not.toContain('message.edited');
   });
 
+  describe('a message.edited delivery waiting to retry', () => {
+    const edit = (body: string) => ({ messageId: 'Z-4', chatId: CHAT, from: CHAT, body, fromMe: false, type: 'text' });
+    const waitFor = async (until: () => boolean | Promise<boolean>): Promise<void> => {
+      for (const deadline = Date.now() + 10_000; !(await until());) {
+        if (Date.now() > deadline) throw new Error('Timed out waiting for condition');
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+    };
+    const edits = (): unknown[] =>
+      posted()
+        .filter(post => post.event === 'message.edited')
+        .map(post => post.data.body);
+    const failures = (): Promise<number> => ds.getRepository(WebhookDeliveryFailure).count();
+    /** The edit's first attempt failed and its retry waits; `between` runs before the retry. */
+    const failedOnce = async (between: () => Promise<unknown>, body = 'secret edit'): Promise<void> => {
+      retryDelay = 800;
+      await ds.getRepository(Webhook).update(webhook.id, { retryCount: 2, events: ['message.edited'] });
+      await ds.getRepository(Message).insert({
+        sessionId,
+        waMessageId: 'Z-4',
+        chatId: CHAT,
+        from: CHAT,
+        to: '628222@c.us',
+        body: 'first text',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        timestamp: 1_700_000_000,
+      });
+      mockFetch.mockResolvedValueOnce(new Response('down', { status: 500 }));
+      // Not awaited: a dispatch resolves once every attempt, retries included, has run.
+      const dispatched = webhookService.dispatch(sessionId, 'message.edited', edit(body));
+      await waitFor(() => mockFetch.mock.calls.length === 1);
+      await between();
+      await settle();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      await dispatched;
+    };
+
+    it.each([
+      [
+        'an engine revoke',
+        () => projector.recordRevoke(sessionId, 'Z-4', { kind: 'revoke', chatId: CHAT, fromMe: false }, true),
+      ],
+      ['a delete through the API', () => projector.recordRevoke(sessionId, 'Z-4', { kind: 'revoke', chatId: CHAT })],
+    ] as const)('sends nothing more, and records no failure, once %s closed its row', async (_label, revoke) => {
+      await failedOnce(revoke);
+
+      expect(edits()).toEqual(['secret edit']);
+      expect(await failures()).toBe(0);
+    });
+
+    it('waits while a revoke of the message is kept, and sends nothing once it closed the row', async () => {
+      await failedOnce(async () => {
+        outage = 'on';
+        projector.handleMessageRevoked(
+          sessionId,
+          engine,
+          { id: 'Z-4', revokedId: 'Z-4', chatId: CHAT, timestamp: 1_700_000_002 } as never,
+          { fromMe: false },
+        );
+        await settle();
+        // Past the backoff the retry finds the row unread and the revoke kept: it waits.
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        await recover();
+      });
+
+      expect(edits()).toEqual(['secret edit']);
+      expect((await ds.getRepository(Message).findOneByOrFail({ waMessageId: 'Z-4' })).type).toBe('revoked');
+    });
+
+    it.each([
+      ['its outbox row', 'off'],
+      ['the copy it keeps with no outbox row written', 'outbox writes'],
+    ] as const)(
+      "still sends an earlier edit's retry after a later edit of the message, from %s",
+      async (_label, during) => {
+        outage = during;
+        await failedOnce(async () => {
+          outage = 'off';
+          await projector.recordOutboundMessageEdit(sessionId, 'Z-4', 'second fix', {
+            kind: 'edit',
+            chatId: CHAT,
+            fromMe: false,
+          });
+        }, 'first fix');
+
+        expect(edits()).toEqual(['first fix', 'first fix']);
+      },
+    );
+
+    it('sends an edit event kept while the database was away, after a later edit of the message', async () => {
+      await ds.getRepository(Webhook).update(webhook.id, { events: ['message.edited'] });
+      await ds.getRepository(Message).insert({
+        sessionId,
+        waMessageId: 'Z-4',
+        chatId: CHAT,
+        from: CHAT,
+        to: '628222@c.us',
+        body: 'first text',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        timestamp: 1_700_000_000,
+      });
+      outage = 'on';
+      await webhookService.dispatch(sessionId, 'message.edited', edit('first fix'));
+      await projector.recordOutboundMessageEdit(sessionId, 'Z-4', 'second fix', {
+        kind: 'edit',
+        chatId: CHAT,
+        fromMe: false,
+      });
+
+      await recover();
+
+      expect(edits()).toContain('first fix');
+    });
+  });
+
   describe('a delivery whose outbox row could not be written, while its retry waits', () => {
     const msg = {
       id: 'U-1',
@@ -588,6 +707,42 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
           .where('f.event = :event', { event: 'message.received' })
           .getOne()
       )?.payload;
+
+    it('sends nothing of a delivery that waited for a slot once a revoke took its message back', async () => {
+      (delivery as unknown as { dispatchLimiter: ConcurrencyLimiter }).dispatchLimiter = new ConcurrencyLimiter(
+        1,
+        1000,
+      );
+      await ds.getRepository(Message).insert({
+        sessionId,
+        waMessageId: 'U-1',
+        chatId: CHAT,
+        from: CHAT,
+        to: '628222@c.us',
+        body: 'first text',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        timestamp: 1_700_000_000,
+      });
+      let release: () => void = () => undefined;
+      mockFetch.mockImplementationOnce(
+        () => new Promise(resolve => (release = () => resolve(new Response('ok', { status: 200 })))),
+      );
+      const first = webhookService.dispatch(sessionId, 'group.join', dataFor('group.join'));
+      await waitFor(() => mockFetch.mock.calls.length === 1);
+      outage = 'outbox writes';
+      const second = webhookService.dispatch(sessionId, 'message.received', msg);
+      await waitFor(
+        () => (delivery as unknown as { dispatchLimiter: ConcurrencyLimiter }).dispatchLimiter.queuedCount > 0,
+      );
+      outage = 'off';
+
+      await projector.recordRevoke(sessionId, 'U-1', { kind: 'revoke', chatId: CHAT, fromMe: false }, true);
+      release();
+      await Promise.all([first, second]);
+
+      expect(received()).toEqual([]);
+    });
 
     it('sends nothing more once an engine revoke took the message back', async () => {
       await failedOnce(() =>

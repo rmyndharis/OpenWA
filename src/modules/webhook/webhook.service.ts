@@ -23,7 +23,7 @@ import {
   redactSsrfError,
 } from '../../common/security/ssrf-guard';
 import { PreparedWebhookDelivery, WebhookDeliveryService, WebhookPayload } from './webhook-delivery.service';
-import type { MessageCopyChange, MessageCopyPredicate } from './webhook-outbox.service';
+import type { MessageCopyChange, MessageCopyPredicate, MessageHold } from './webhook-outbox.service';
 import type { MessageEngineRef } from '../message/entities/message.entity';
 import type { RecoveryQueue } from '../../common/utils/recovery-queue';
 
@@ -512,7 +512,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** A change of the message is kept on this node until the database answers, or no longer is (see the delivery). */
-  holdMessage(sessionId: string, waMessageId: string, held: boolean): void {
+  holdMessage(sessionId: string, waMessageId: string, held: MessageHold | false): void {
     this.delivery.holdMessage(sessionId, waMessageId, held);
   }
 

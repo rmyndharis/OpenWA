@@ -2209,6 +2209,22 @@ describe('WebhookDeliveryService', () => {
         expect(queuedJob().baseHash).toBe(dataHash(message));
       });
 
+      it("carries the message an edit event names before a hook rewrites the body's messageId", async () => {
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.edited'] })]);
+        (hookManager.execute as jest.Mock).mockImplementation((name: string, data: { payload: WebhookPayload }) =>
+          Promise.resolve(
+            name === 'webhook:before'
+              ? { continue: true, data: { ...data, payload: { ...data.payload, data: { messageId: 'renamed' } } } }
+              : { continue: true, data: {} },
+          ),
+        );
+
+        await (await queueService()).dispatch('sess-1', 'message.edited', { messageId: 'M-1', body: 'edited text' });
+
+        expect(queuedJob().payload.data).toEqual({ messageId: 'renamed' });
+        expect(queuedJob().messageId).toBe('M-1');
+      });
+
       it('is left out when the row under the key was opened by another dispatch', async () => {
         outbox().openBatch = jest.fn().mockResolvedValue([]);
 

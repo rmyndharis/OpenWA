@@ -46,6 +46,9 @@ import { applyGlobalValidation } from '../src/config/app-validation';
 import { QUEUE_NAMES } from '../src/modules/queue/queue-names';
 import { Webhook } from '../src/modules/webhook/entities/webhook.entity';
 import { WebhookOutboxEvent } from '../src/modules/webhook/entities/webhook-outbox-event.entity';
+import { WebhookOutboxService } from '../src/modules/webhook/webhook-outbox.service';
+import { HookManager } from '../src/core/hooks';
+import { WebhookDeliveryFailure } from '../src/modules/webhook/entities/webhook-delivery-failure.entity';
 import { Session } from '../src/modules/session/entities/session.entity';
 import { Message, MessageDirection } from '../src/modules/message/entities/message.entity';
 import { WebhookService } from '../src/modules/webhook/webhook.service';
@@ -82,6 +85,7 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
   let outbox: Repository<WebhookOutboxEvent>;
   let sessions: Repository<Session>;
   let messages: Repository<Message>;
+  let failures: Repository<WebhookDeliveryFailure>;
   let received: Array<{ body: string | undefined; type: string | undefined }>;
   const prevSsrf = process.env.WEBHOOK_SSRF_PROTECT;
 
@@ -100,6 +104,7 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
     outbox = app.get<Repository<WebhookOutboxEvent>>(getRepositoryToken(WebhookOutboxEvent, 'data'));
     sessions = app.get<Repository<Session>>(getRepositoryToken(Session, 'data'));
     messages = app.get<Repository<Message>>(getRepositoryToken(Message, 'data'));
+    failures = app.get<Repository<WebhookDeliveryFailure>>(getRepositoryToken(WebhookDeliveryFailure, 'data'));
     received = [];
     receiverStatus = 200;
     receiver = http.createServer((req, res) => {
@@ -126,8 +131,8 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
   const queueIdle = async (): Promise<boolean> =>
     Object.values(await webhookQueue.getJobCounts('active', 'waiting', 'delayed', 'prioritized')).every(n => n === 0);
 
-  // 'outbox writes': every write of the outbox table fails; 'on': every statement does.
-  let outage: 'off' | 'outbox writes' | 'on' = 'off';
+  // 'outbox writes': every write of the outbox table fails; 'writes': every write does; 'on': every statement does.
+  let outage: 'off' | 'outbox writes' | 'writes' | 'on' = 'off';
   beforeEach(() => {
     outage = 'off';
     // eslint-disable-next-line @typescript-eslint/unbound-method -- applied below with the runner as `this`
@@ -137,8 +142,9 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
       ...args: Parameters<BetterSqlite3QueryRunner['query']>
     ) {
       const sql = String(args[0]);
-      const outboxWrite = !/^\s*SELECT/i.test(sql) && sql.includes('webhook_outbox_events');
-      if (outage === 'on' || (outage === 'outbox writes' && outboxWrite)) {
+      const write = !/^\s*SELECT/i.test(sql);
+      const outboxWrite = write && sql.includes('webhook_outbox_events');
+      if (outage === 'on' || (outage === 'writes' && write) || (outage === 'outbox writes' && outboxWrite)) {
         return Promise.reject(Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' }));
       }
       return realQuery.apply(this, args);
@@ -232,6 +238,123 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
     },
     60000,
   );
+
+  it.each(['an engine revoke', 'a delete through the API'])(
+    'sends no more of a queued message.edited once %s took the message back while its job waits',
+    async change => {
+      received.length = 0;
+      receiverStatus = 500;
+      const session = await sessions.save(sessions.create({ name: `queue-edit-${Date.now()}-${Math.random()}` }));
+      await webhooks.save(
+        webhooks.create({
+          sessionId: session.id,
+          url: receiverUrl,
+          events: ['message.edited'],
+          active: true,
+          retryCount: 4,
+        }),
+      );
+      const id = `E-${Date.now()}-${Math.random()}`;
+      await messages.insert({
+        sessionId: session.id,
+        waMessageId: id,
+        chatId: CHAT,
+        from: CHAT,
+        to: '628222@c.us',
+        body: 'first text',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        timestamp: 1790000000,
+      });
+      await webhookService.dispatch(session.id, 'message.edited', {
+        messageId: id,
+        chatId: CHAT,
+        from: CHAT,
+        fromMe: false,
+        type: 'text',
+        body: 'secret edit',
+      });
+      await waitFor(() => received.length >= 1);
+
+      // The receiver keeps failing: an attempt the job still made would fail too, and its last leave a dead-letter row.
+      await changes[change](session.id, id);
+      await waitFor(queueIdle);
+      receiverStatus = 200;
+
+      expect(received.map(post => post.body)).toEqual(['secret edit']);
+      // Skipped, not failed: no dead-letter row, and so no copy for a redrive.
+      expect(await failures.countBy({ sessionId: session.id })).toBe(0);
+    },
+    60000,
+  );
+
+  it('holds a queued message.edited while a revoke of the message is kept, whatever a hook made of its messageId', async () => {
+    received.length = 0;
+    receiverStatus = 500;
+    const session = await sessions.save(sessions.create({ name: `queue-hook-${Date.now()}-${Math.random()}` }));
+    await webhooks.save(
+      webhooks.create({
+        sessionId: session.id,
+        url: receiverUrl,
+        events: ['message.edited'],
+        active: true,
+        retryCount: 4,
+      }),
+    );
+    const id = `H-${Date.now()}-${Math.random()}`;
+    await messages.insert({
+      sessionId: session.id,
+      waMessageId: id,
+      chatId: CHAT,
+      from: CHAT,
+      to: '628222@c.us',
+      body: 'first text',
+      type: 'text',
+      direction: MessageDirection.INCOMING,
+      timestamp: 1790000000,
+    });
+    const hooks = app.get(HookManager);
+    const hookId = hooks.register('e2e-rename', 'webhook:before', ctx => {
+      const data = ctx.data as { payload: { data: Record<string, unknown> } };
+      return Promise.resolve({
+        continue: true,
+        data: { ...data, payload: { ...data.payload, data: { ...data.payload.data, messageId: 'another-message' } } },
+      });
+    });
+    const held = jest.spyOn(app.get(WebhookOutboxService), 'isMessageHeld');
+    const heldJob = (): boolean =>
+      held.mock.calls.some(
+        (call, i) =>
+          (call[2] as { event?: string } | undefined)?.event === 'message.edited' && held.mock.results[i].value,
+      );
+    try {
+      await webhookService.dispatch(session.id, 'message.edited', {
+        messageId: id,
+        chatId: CHAT,
+        from: CHAT,
+        fromMe: false,
+        type: 'text',
+        body: 'secret edit',
+      });
+      await waitFor(() => received.length >= 1);
+
+      // The revoke cannot be written, and is kept: the job's next attempt reads its open row, then the hold.
+      outage = 'writes';
+      await changes['an engine revoke'](session.id, id);
+      await waitFor(() => received.length >= 2 || heldJob());
+      expect(received.map(post => post.body)).toEqual(['secret edit']);
+
+      outage = 'off';
+      await projector.retryParkedChanges();
+      await waitFor(queueIdle);
+      receiverStatus = 200;
+
+      expect(received.map(post => post.body)).toEqual(['secret edit']);
+      expect(await failures.countBy({ sessionId: session.id })).toBe(0);
+    } finally {
+      hooks.unregister(hookId);
+    }
+  }, 60000);
 
   it('sends the edit of an event kept while the database was away, once its job waits', async () => {
     received.length = 0;
