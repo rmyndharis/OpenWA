@@ -47,6 +47,47 @@ export interface ReplayableDelivery {
 /** Input shape for opening a pending outbox row before delivery starts. */
 export type OutboxOpenRow = Omit<ReplayableDelivery, 'id' | 'attempts'> & { deliveryId: string };
 
+/** States in which a row still holds a copy that can be delivered: before dispatch, or owned by a queued job. */
+const OPEN_STATES: WebhookOutboxState[] = ['pending', 'queued'];
+
+/** The events whose deliveries carry a message, keyed `msg_<session>_<message id>_<webhook>`. */
+export const MESSAGE_DELIVERY_EVENTS = ['message.received', 'message.sent'];
+
+/**
+ * The delivery keys of one message: a LIKE pattern (escaped, used with `ESCAPE '\'`) and the exact key of each
+ * webhook's delivery, which the pattern alone cannot give, as another message id may start with this one.
+ */
+export function messageDeliveryKeys(
+  sessionId: string,
+  waMessageId: string,
+): { pattern: string; keyFor: (webhookId: string) => string } {
+  const prefix = `msg_${sessionId}_${waMessageId}_`;
+  return { pattern: `${prefix.replace(/[\\%_]/g, ch => `\\${ch}`)}%`, keyFor: webhookId => `${prefix}${webhookId}` };
+}
+
+/** A message's delivery data once it was deleted through the API: the placeholder, without its content. */
+export function redactedMessagePayload(payload: Record<string, unknown>): Record<string, unknown> {
+  /* eslint-disable @typescript-eslint/no-unused-vars */
+  const {
+    media,
+    quotedMessage,
+    call,
+    buttons,
+    button,
+    location,
+    order,
+    product,
+    poll,
+    mentionedIds,
+    isForwarded,
+    forwardingScore,
+    edited,
+    ...kept
+  } = payload;
+  /* eslint-enable @typescript-eslint/no-unused-vars */
+  return { ...kept, body: '', type: 'revoked' };
+}
+
 /**
  * Row lifecycle for the outbound delivery record.
  *
@@ -310,7 +351,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Update the stored payload of an already-committed pending outbox row (for example, when an
+   * Update the stored payload of an already-committed outbox row, pending or queued (for example, when an
    * edit or REST revoke changes a message between DB commit and live dispatch). Best-effort.
    */
   async updatePendingPayload(
@@ -319,9 +360,10 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     payload: Record<string, unknown>,
   ): Promise<boolean> {
     try {
-      const result = await this.outbox.update({ webhookId, idempotencyKey, state: 'pending', payload: Not(IsNull()) }, {
-        payload,
-      } as QueryDeepPartialEntity<WebhookOutboxEvent>);
+      const result = await this.outbox.update(
+        { webhookId, idempotencyKey, state: In(OPEN_STATES), payload: Not(IsNull()) },
+        { payload } as QueryDeepPartialEntity<WebhookOutboxEvent>,
+      );
       return (result.affected ?? 0) > 0;
     } catch (error) {
       this.logger.warn(`Could not update pending outbound delivery payload: ${String(error)}`);
@@ -330,9 +372,10 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Close all still-pending outbox rows for one message (`message.received` / `message.sent`) when
+   * Close all still-open outbox rows for one message (`message.received` / `message.sent`) when
    * an engine revoke arrives, even if the engine retired or crashed before live dispatch, so the
-   * reconciler can never replay unredacted revoked content. Matches exact `msg_<session>_<id>_<wh>`
+   * reconciler can never replay unredacted revoked content. A queued row is closed too: its job reads
+   * the row before posting and finds nothing to send. Matches exact `msg_<session>_<id>_<wh>`
    * keys so LIKE wildcards or prefix-sharing message ids cannot match unrelated rows. When
    * `shouldApply` is supplied, only rows whose stored payload satisfies the predicate are closed.
    */
@@ -354,7 +397,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       }
       if (matchingIds.length === 0) return;
       await this.outbox.update(
-        { id: In(matchingIds), state: 'pending' },
+        { id: In(matchingIds), state: In(OPEN_STATES) },
         { state: 'dispatched', payload: null, lastAttemptAt: new Date() },
       );
     } catch (error) {
@@ -363,9 +406,10 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Redact stored payloads on any still-pending outbox rows for one message when a REST delete
+   * Redact stored payloads on any still-open outbox rows for one message when a REST delete
    * clears the message without suppressing announcement (`announced=false`), so a crash or engine
-   * retire before live dispatch can never replay the deleted content. When `shouldApply` is
+   * retire before live dispatch can never replay the deleted content. A queued row keeps its state: its
+   * job reads the row before posting and sends what the redaction left. When `shouldApply` is
    * supplied, only rows whose stored payload satisfies the predicate are redacted.
    */
   async redactPendingForMessage(
@@ -379,55 +423,37 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       for (const row of rows) {
         if (!row.payload) continue;
         if (shouldApply && !(await shouldApply(row.payload))) continue;
-        /* eslint-disable @typescript-eslint/no-unused-vars */
-        const {
-          media,
-          quotedMessage,
-          call,
-          buttons,
-          button,
-          location,
-          order,
-          product,
-          poll,
-          mentionedIds,
-          isForwarded,
-          forwardingScore,
-          edited,
-          ...kept
-        } = row.payload;
-        /* eslint-enable @typescript-eslint/no-unused-vars */
-        const redacted = { ...kept, body: '', type: 'revoked' };
-        await this.outbox.update({ id: row.id, state: 'pending', payload: Not(IsNull()) }, { payload: redacted });
+        await this.outbox.update({ id: row.id, state: In(OPEN_STATES), payload: Not(IsNull()) }, {
+          payload: redactedMessagePayload(row.payload),
+        } as QueryDeepPartialEntity<WebhookOutboxEvent>);
       }
     } catch (error) {
       this.logger.warn(`Could not redact pending outbound deliveries for message ${waMessageId}: ${String(error)}`);
     }
   }
 
-  /** Find still-pending message outbox rows whose idempotencyKey matches `msg_<session>_<waId>_<webhookId>`. */
+  /** Find still-open message outbox rows whose idempotencyKey matches `msg_<session>_<waId>_<webhookId>`. */
   private async findPendingForMessage(sessionId: string, waMessageId: string): Promise<WebhookOutboxEvent[]> {
-    const prefix = `msg_${sessionId}_${waMessageId}_`;
-    const escapedPrefix = prefix.replace(/[\\%_]/g, ch => `\\${ch}`);
+    const { pattern, keyFor } = messageDeliveryKeys(sessionId, waMessageId);
     const candidates =
       typeof this.outbox.createQueryBuilder === 'function'
         ? await this.outbox
             .createQueryBuilder('o')
             .where('o.sessionId = :sessionId', { sessionId })
-            .andWhere('o.event IN (:...events)', { events: ['message.received', 'message.sent'] })
-            .andWhere('o.state = :state', { state: 'pending' })
+            .andWhere('o.event IN (:...events)', { events: MESSAGE_DELIVERY_EVENTS })
+            .andWhere('o.state IN (:...states)', { states: OPEN_STATES })
             .andWhere('o.payload IS NOT NULL')
-            .andWhere("o.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern: `${escapedPrefix}%` })
+            .andWhere("o.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern })
             .getMany()
         : await this.outbox.find({
             where: {
               sessionId,
-              event: In(['message.received', 'message.sent']),
-              state: 'pending',
+              event: In(MESSAGE_DELIVERY_EVENTS),
+              state: In(OPEN_STATES),
               payload: Not(IsNull()),
             },
           });
-    return candidates.filter(row => row.idempotencyKey === `${prefix}${row.webhookId}`);
+    return candidates.filter(row => row.idempotencyKey === keyFor(row.webhookId));
   }
 
   /** Retire replay data after successful delivery, cancellation or durable failure handoff. */

@@ -8,7 +8,14 @@ import { Queue } from 'bullmq';
 import { setTimeout } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { Webhook } from './entities/webhook.entity';
-import { WebhookOutboxService, type OutboxOpenRow, type ReplayableDelivery } from './webhook-outbox.service';
+import {
+  MESSAGE_DELIVERY_EVENTS,
+  WebhookOutboxService,
+  messageDeliveryKeys,
+  redactedMessagePayload,
+  type OutboxOpenRow,
+  type ReplayableDelivery,
+} from './webhook-outbox.service';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
 import { clearDeliveryFailureRows, recordWebhookDeliveryFailure } from './utils/record-delivery-failure';
 import {
@@ -660,7 +667,10 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     await Promise.all(prepared.map(item => this.outbox.close(item.webhook.id, item.idempotencyKey, 'dispatched')));
   }
 
-  /** Close any still-pending message outbox rows when an engine revoke arrives for a message. */
+  /**
+   * Close any still-open message outbox rows when an engine revoke arrives for a message, and drop the event data
+   * its failed deliveries keep for a redrive.
+   */
   async closePendingForMessage(
     sessionId: string,
     waMessageId: string,
@@ -669,9 +679,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     if (typeof this.outbox.closePendingForMessage === 'function') {
       await this.outbox.closePendingForMessage(sessionId, waMessageId, shouldApply);
     }
+    await this.changeKeptCopies(sessionId, waMessageId, () => null, shouldApply);
   }
 
-  /** Redact payloads on any still-pending message outbox rows when a REST delete clears a message. */
+  /**
+   * Redact payloads on any still-open message outbox rows when a REST delete clears a message, and the event data
+   * its failed deliveries keep for a redrive.
+   */
   async redactPendingForMessage(
     sessionId: string,
     waMessageId: string,
@@ -679,6 +693,41 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     if (typeof this.outbox.redactPendingForMessage === 'function') {
       await this.outbox.redactPendingForMessage(sessionId, waMessageId, shouldApply);
+    }
+    await this.changeKeptCopies(sessionId, waMessageId, redactedMessagePayload, shouldApply);
+  }
+
+  /**
+   * Apply a change of a message to the event data its failed deliveries keep for a redrive (`null` drops it), each
+   * judged by its own payload as the outbox rows are, so a redrive never sends what the sender took back. Best-effort.
+   */
+  private async changeKeptCopies(
+    sessionId: string,
+    waMessageId: string,
+    change: (payload: Record<string, unknown>) => Record<string, unknown> | null,
+    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    if (!waMessageId) return;
+    try {
+      const { pattern, keyFor } = messageDeliveryKeys(sessionId, waMessageId);
+      const rows = await this.failureRepository
+        .createQueryBuilder('f')
+        .select(['f.id', 'f.webhookId', 'f.idempotencyKey'])
+        .addSelect('f.payload')
+        .where('f.sessionId = :sessionId', { sessionId })
+        .andWhere('f.event IN (:...events)', { events: MESSAGE_DELIVERY_EVENTS })
+        .andWhere('f.payload IS NOT NULL')
+        .andWhere("f.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern })
+        .getMany();
+      for (const row of rows) {
+        if (!row.payload || row.idempotencyKey !== keyFor(row.webhookId)) continue;
+        if (shouldApply && !(await shouldApply(row.payload))) continue;
+        await this.failureRepository.update({ id: row.id }, {
+          payload: change(row.payload),
+        } as QueryDeepPartialEntity<WebhookDeliveryFailure>);
+      }
+    } catch (error) {
+      this.logger.warn(`Could not change the kept copies of message ${waMessageId}: ${String(error)}`);
     }
   }
 

@@ -464,7 +464,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     return this.delivery.cancelPrepared(prepared);
   }
 
-  /** Close any still-pending message outbox rows when an engine revoke arrives. */
+  /** Close any still-open message outbox rows and drop kept failure copies when an engine revoke arrives. */
   closePendingDeliveriesForMessage(
     sessionId: string,
     waMessageId: string,
@@ -473,7 +473,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     return this.delivery.closePendingForMessage(sessionId, waMessageId, shouldApply);
   }
 
-  /** Redact payloads on any still-pending message outbox rows when a REST delete clears a message. */
+  /** Redact the open outbox rows and kept failure copies of a message a REST delete clears. */
   redactPendingDeliveriesForMessage(
     sessionId: string,
     waMessageId: string,
