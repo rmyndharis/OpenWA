@@ -7286,7 +7286,9 @@ regenerate-secret responses — and masked (`***`) on every later read. `config`
 Every instance route is session-scope aware: a key restricted to `allowedSessions` only sees
 instances bound to one of its own sessions, and an out-of-scope instance answers `404` (identical
 to a missing one), so the routes cannot probe which instances exist on other sessions. The DLQ
-redrive route is documented with the administration routes in §6.4.11.
+redrive route is documented with the administration routes in §6.4.11. A key with blocked
+capabilities (`deniedPermissions`) is refused with `403` on every instance route and on redrive, as
+on `PUT /api/plugins/:id/config/:sessionId`.
 
 #### POST /api/integration/plugins/:pluginId/instances
 

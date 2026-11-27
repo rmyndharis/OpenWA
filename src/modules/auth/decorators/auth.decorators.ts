@@ -74,6 +74,13 @@ export const RequireUnscopedKey = () => SetMetadata(UNSCOPED_KEY, true);
  */
 export const RequireUnrestrictedKey = () => SetMetadata(UNRESTRICTED_KEY, true);
 
+/**
+ * Refuse a key with any blocked capability, but keep session-scoped keys, on a route that fences
+ * `allowedSessions` itself (integration instances, redrive, a plugin's per-session config). What these
+ * routes provision runs outside the blocklist, so a capability-restricted key could act through it.
+ */
+export const RequireUnblockedKey = () => SetMetadata(UNRESTRICTED_KEY, 'capabilities');
+
 /** How a handler is safe for a chat-restricted key. See {@link ChatScoped}. */
 export type ChatScopeKind = 'fenced' | 'filtered' | 'agnostic';
 

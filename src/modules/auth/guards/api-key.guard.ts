@@ -182,17 +182,21 @@ export class ApiKeyGuard implements CanActivate {
       }
     }
 
-    const requireUnrestricted = this.reflector.getAllAndOverride<boolean>(UNRESTRICTED_KEY, [
+    // true refuses every restricted key; 'capabilities' (RequireUnblockedKey) only a key with blocked capabilities.
+    const requireUnrestricted = this.reflector.getAllAndOverride<boolean | 'capabilities'>(UNRESTRICTED_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
     if (
-      requireUnrestricted &&
+      requireUnrestricted === true &&
       ((apiKey.allowedSessions?.length ?? 0) > 0 ||
         (apiKey.allowedChats?.length ?? 0) > 0 ||
         hasBlockedCapabilities(apiKey))
     ) {
       throw new ForbiddenException('Restricted API keys are not permitted on this route');
+    }
+    if (requireUnrestricted === 'capabilities' && hasBlockedCapabilities(apiKey)) {
+      throw new ForbiddenException('Capability-restricted API keys are not permitted on this route');
     }
 
     // Chat fence — DEFAULT DENY. A key carrying `allowedChats` may reach only a handler marked

@@ -31,6 +31,7 @@ import {
   RequireRole,
   RequireUnscopedKey,
   RequireUnrestrictedKey,
+  RequireUnblockedKey,
 } from '../auth/decorators/auth.decorators';
 import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -51,7 +52,9 @@ const UNINSTALLING_CONFLICT = 'The plugin is being uninstalled; nothing was chan
 @Controller('plugins')
 // Plugin reads are deployment-global, so they reject session-scoped keys route by route. Plugin
 // lifecycle/configuration writes execute code or replace global state and therefore use the stronger
-// @RequireUnrestrictedKey fence, which also rejects session- and chat-scoped keys.
+// @RequireUnrestrictedKey fence, which also rejects session- and chat-scoped keys. The per-session
+// config override stays open to a session-scoped key, which the guard fences through its :sessionId
+// param, and refuses only a key with blocked capabilities (@RequireUnblockedKey).
 export class PluginsController {
   constructor(
     private readonly pluginsService: PluginsService,
@@ -234,7 +237,7 @@ export class PluginsController {
   }
 
   @Capability(ApiKeyCapability.PLUGINS_WRITE)
-  @RequireUnrestrictedKey()
+  @RequireUnblockedKey()
   @Put(':id/config/:sessionId')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Set a plugin config override for a specific session (empty = clear it)' })

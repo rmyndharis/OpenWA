@@ -133,6 +133,15 @@ describe('ApiKeyGuard blocked capabilities', () => {
     ).rejects.toThrow('Restricted API keys are not permitted on this route');
   });
 
+  it('keeps a session-scoped key, and refuses blocked capabilities, on a route that fences sessions itself', async () => {
+    const marks = { [CAPABILITIES_KEY]: [ApiKeyCapability.INTEGRATIONS_MANAGE], [UNRESTRICTED_KEY]: 'capabilities' };
+
+    await expect(authorize(createMockApiKey({ allowedSessions: ['sess-1'] }), marks)).resolves.toBe(true);
+    await expect(
+      authorize(createMockApiKey({ deniedPermissions: [ApiKeyCapability.MESSAGES_READ] }), marks),
+    ).rejects.toThrow('Capability-restricted API keys are not permitted on this route');
+  });
+
   it('still applies the role gate first: a viewer key cannot send whatever it blocks', async () => {
     (authService.hasPermission as jest.Mock).mockReturnValue(false);
     const key = createMockApiKey({ role: ApiKeyRole.VIEWER, deniedPermissions: [] });

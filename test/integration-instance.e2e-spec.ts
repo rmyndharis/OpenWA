@@ -16,6 +16,7 @@ import { PluginLoaderService } from '../src/core/plugins/plugin-loader.service';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { AuditAction, AuditLog } from '../src/modules/audit/entities/audit-log.entity';
 import { ApiKeyRole } from '../src/modules/auth/entities/api-key.entity';
+import { ApiKeyCapability } from '../src/modules/auth/api-key-permissions';
 import { IntegrationDeliveryFailure } from '../src/modules/integration/entities/integration-delivery-failure.entity';
 import { InfraDataService } from '../src/modules/infra/infra-data.service';
 import { ScopeBindingService } from '../src/modules/integration/scope-binding.service';
@@ -252,6 +253,25 @@ describe('IntegrationInstanceController (e2e)', () => {
       if (!row) await new Promise(resolve => setTimeout(resolve, 20));
     }
     expect(row?.metadata).toEqual({ pluginId: 'chatwoot', instanceId: 'acct1' });
+  });
+
+  it('refuses a capability-restricted ADMIN on the instance and redrive routes, whatever it blocks', async () => {
+    const authService = app.get(AuthService);
+    const { rawKey } = await authService.createApiKey({
+      name: 'e2e-blocked-int',
+      role: ApiKeyRole.ADMIN,
+      deniedPermissions: [ApiKeyCapability.MESSAGES_READ],
+    });
+    await request(app.getHttpServer()).get(`${base}/chatwoot/instances`).set('X-API-Key', rawKey).expect(403);
+    await request(app.getHttpServer())
+      .post(`${base}/chatwoot/instances`)
+      .set('X-API-Key', rawKey)
+      .send({ instanceId: 'blocked1', sessionScope: 'sess-1' })
+      .expect(403);
+    await request(app.getHttpServer())
+      .post('/api/integration/instances/chatwoot/blocked1/redrive')
+      .set('X-API-Key', rawKey)
+      .expect(403);
   });
 
   /**

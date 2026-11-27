@@ -1,6 +1,6 @@
 import { ConflictException, Controller, NotFoundException, Param, Post } from '@nestjs/common';
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
-import { Capability, CurrentApiKey, RequireRole, RequireUnrestrictedKey } from '../auth/decorators/auth.decorators';
+import { Capability, CurrentApiKey, RequireRole, RequireUnblockedKey } from '../auth/decorators/auth.decorators';
 import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -16,7 +16,7 @@ import { RedriveResultDto } from './dto/instance.dto';
 @ApiTags('integration')
 @Controller('integration/instances')
 @RequireRole(ApiKeyRole.ADMIN)
-@RequireUnrestrictedKey()
+@RequireUnblockedKey()
 export class RedriveController {
   constructor(
     private readonly redrive: RedriveService,
