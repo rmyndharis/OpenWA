@@ -210,6 +210,15 @@ function planSteps(root, env = process.env) {
       options: { stdio: 'inherit', cwd: root, env: cleanEnv },
     });
   }
+  const loginRoutePatcher = path.join(root, 'scripts', 'patch-wwebjs-login-route.js');
+  if (fs.existsSync(loginRoutePatcher)) {
+    steps.push({
+      name: 'whatsapp-web.js /login/ route handling (scripts/patch-wwebjs-login-route.js --best-effort)',
+      command: process.execPath,
+      args: [loginRoutePatcher, '--best-effort'],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
+  }
   return steps;
 }
 
