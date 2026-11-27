@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useContext, type RefObject } from 'react';
+import { useState, useEffect, useMemo, useRef, useContext, useCallback, type RefObject } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import {
   useTable,
@@ -77,6 +77,11 @@ const emptyKeyForm = {
   expires: '',
 };
 
+const keyFormWithInheritedPermissions = (permissions: readonly ApiKeyCapability[]) => ({
+  ...emptyKeyForm,
+  deniedPermissions: [...permissions],
+});
+
 // What the gateway lists for the key seeded from API_MASTER_KEY: its first characters are secret, so none is shown.
 const MASTER_KEY_PREFIX = '(master key)';
 
@@ -128,6 +133,8 @@ function KeyLimitFields({
   errors,
   onChange,
   disabled,
+  lockedPermissions = [],
+  lockAllCapabilities = false,
   expiresRef,
 }: {
   idPrefix: string;
@@ -139,6 +146,8 @@ function KeyLimitFields({
   errors: LimitErrors;
   onChange: (patch: { ips?: string; chats?: string; deniedPermissions?: ApiKeyCapability[]; expires?: string }) => void;
   disabled?: boolean;
+  lockedPermissions?: readonly ApiKeyCapability[];
+  lockAllCapabilities?: boolean;
   expiresRef: RefObject<HTMLInputElement | null>;
 }) {
   const { t } = useTranslation();
@@ -152,11 +161,15 @@ function KeyLimitFields({
     ? API_KEY_CAPABILITIES.filter(capability => capability.toLocaleLowerCase().includes(normalizedCapabilityQuery))
     : [];
   const renderCapability = (capability: ApiKeyCapability) => (
-    <label key={capability} className="permission-option">
+    <label
+      key={capability}
+      className="permission-option"
+      title={lockedPermissions.includes(capability) ? t('apiKeys.capabilities.inherited') : undefined}
+    >
       <input
         type="checkbox"
         checked={deniedPermissions.includes(capability)}
-        disabled={disabled}
+        disabled={disabled || lockAllCapabilities || lockedPermissions.includes(capability)}
         onChange={() =>
           onChange({
             deniedPermissions: deniedPermissions.includes(capability)
@@ -173,7 +186,7 @@ function KeyLimitFields({
     onChange({
       deniedPermissions: blocked
         ? API_KEY_CAPABILITIES.filter(capability => group.has(capability) || deniedPermissions.includes(capability))
-        : deniedPermissions.filter(capability => !group.has(capability)),
+        : deniedPermissions.filter(capability => !group.has(capability) || lockedPermissions.includes(capability)),
     });
   };
   const lidHintId = normalizeChatScope(chats).some(entry => /@lid$/i.test(entry)) ? `${idPrefix}-chats-lid` : undefined;
@@ -209,6 +222,11 @@ function KeyLimitFields({
                 />
               </label>
             </div>
+            {(lockAllCapabilities || lockedPermissions.length > 0) && (
+              <span className="key-field-hint" role="note">
+                {t(lockAllCapabilities ? 'apiKeys.capabilities.selfLocked' : 'apiKeys.capabilities.inherited')}
+              </span>
+            )}
             {normalizedCapabilityQuery ? (
               <div className="permission-options permission-search-results">
                 {matchingCapabilities.map(renderCapability)}
@@ -227,7 +245,7 @@ function KeyLimitFields({
                         <button
                           type="button"
                           className="permission-group-action"
-                          disabled={disabled}
+                          disabled={disabled || lockAllCapabilities}
                           onClick={() => setCapabilityGroup(capabilities, blockedCount !== capabilities.length)}
                         >
                           {t(
@@ -369,6 +387,11 @@ export function ApiKeys() {
 
   const confirmKey = confirmAction ? apiKeys.find(key => key.id === confirmAction.id) : undefined;
   const roleContext = useContext(RoleContext);
+  const actorDeniedPermissions = roleContext?.deniedPermissions;
+  const inheritedDeniedPermissions = useMemo(
+    () => API_KEY_CAPABILITIES.filter(capability => actorDeniedPermissions?.includes(capability)),
+    [actorDeniedPermissions],
+  );
   const signedInApiKeyId = roleContext?.apiKeyId !== undefined ? roleContext.apiKeyId : getActiveApiKeyId();
   const isSignedInKey = (apiKey: ApiKey): boolean => Boolean(signedInApiKeyId && apiKey.id === signedInApiKeyId);
 
@@ -384,7 +407,7 @@ export function ApiKeys() {
   const closeCreateModal = () => {
     setShowModal(false);
     setCreatedKey(null);
-    setNewKey(emptyKeyForm);
+    setNewKey(keyFormWithInheritedPermissions(inheritedDeniedPermissions));
     // The answer holds the plaintext key too; drop it with the dialog.
     createMutation.reset();
   };
@@ -415,7 +438,7 @@ export function ApiKeys() {
         ...(newKey.expires ? { expiresAt: new Date(newKey.expires).toISOString() } : {}),
       });
       setCreatedKey(created.apiKey || null);
-      setNewKey(emptyKeyForm);
+      setNewKey(keyFormWithInheritedPermissions(inheritedDeniedPermissions));
     } catch (err) {
       console.error('Failed to create:', err);
       toast.error(t('apiKeys.createBtn'), err instanceof Error ? err.message : t('common.unknownError'));
@@ -424,11 +447,18 @@ export function ApiKeys() {
 
   const editVisit = useRef<object | null>(null);
 
-  const openEdit = (apiKey: ApiKey) => {
-    editVisit.current = {};
-    setEditingKey(apiKey);
-    setEditDraft(apiKeyDraft(apiKey));
-  };
+  const openEdit = useCallback(
+    (apiKey: ApiKey) => {
+      editVisit.current = {};
+      setEditingKey(apiKey);
+      const draft = apiKeyDraft(apiKey);
+      setEditDraft({
+        ...draft,
+        deniedPermissions: [...new Set([...draft.deniedPermissions, ...inheritedDeniedPermissions])],
+      });
+    },
+    [inheritedDeniedPermissions],
+  );
 
   const closeEdit = () => {
     editVisit.current = null;
@@ -652,7 +682,7 @@ export function ApiKeys() {
           },
         }),
       ]),
-    [t, sessions],
+    [t, sessions, openEdit],
   );
 
   const table = useTable({
@@ -680,7 +710,13 @@ export function ApiKeys() {
         title={t('apiKeys.title')}
         subtitle={t('apiKeys.subtitle')}
         actions={
-          <button className="btn-primary" onClick={() => setShowModal(true)}>
+          <button
+            className="btn-primary"
+            onClick={() => {
+              setNewKey(keyFormWithInheritedPermissions(inheritedDeniedPermissions));
+              setShowModal(true);
+            }}
+          >
             <Plus size={18} />
             {t('apiKeys.createBtn')}
           </button>
@@ -800,6 +836,7 @@ export function ApiKeys() {
                 errors={newErrors}
                 onChange={patch => setNewKey(prev => ({ ...prev, ...patch }))}
                 disabled={createMutation.isPending}
+                lockedPermissions={inheritedDeniedPermissions}
                 expiresRef={newExpiresRef}
               />
             </>
@@ -864,6 +901,8 @@ export function ApiKeys() {
             errors={editErrors ?? { ip: null, chat: null, chatCount: null }}
             onChange={patch => setEditDraft(prev => (prev ? { ...prev, ...patch } : prev))}
             disabled={updateMutation.isPending}
+            lockedPermissions={inheritedDeniedPermissions}
+            lockAllCapabilities={isSignedInKey(editingKey) && inheritedDeniedPermissions.length > 0}
             expiresRef={editExpiresRef}
           />
         </Modal>

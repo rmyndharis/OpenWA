@@ -103,6 +103,24 @@ describe('BullBoardAuthMiddleware', () => {
     expect((forwarded as ForbiddenException).message).toContain('restricted to selected chats');
   });
 
+  it('rejects an ADMIN key with blocked capabilities', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      id: 'key-capability',
+      name: 'capability-restricted-admin',
+      role: ApiKeyRole.ADMIN,
+      deniedPermissions: ['messages:read'],
+    });
+    authService.hasPermission.mockReturnValue(true);
+
+    const next = jest.fn();
+    await mw.use(reqWith({ 'x-api-key': 'raw-key' }), res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    const forwarded = (next.mock.calls as Array<Array<unknown>>)[0]?.[0];
+    expect(forwarded).toBeInstanceOf(ForbiddenException);
+    expect((forwarded as ForbiddenException).message).toContain('Capability-restricted');
+  });
+
   it('admits an ADMIN key with an empty allowedSessions list', async () => {
     authService.validateApiKey.mockResolvedValue({
       id: 'key-2',

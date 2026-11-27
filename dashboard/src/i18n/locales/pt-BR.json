@@ -52,7 +52,8 @@
     "showApiKey": "Mostrar chave API",
     "hideApiKey": "Ocultar chave API",
     "retry": "Tentar novamente",
-    "copyFailed": "Não foi possível copiar para a área de transferência"
+    "copyFailed": "Não foi possível copiar para a área de transferência",
+    "noDashboardAccess": "Esta chave de API está bloqueada em todas as páginas do painel."
   },
   "theme": {
     "light": "Claro",
@@ -761,7 +762,9 @@
       "label": "Capacidades bloqueadas",
       "hint": "Vazio = nada bloqueado",
       "blockAll": "Bloquear tudo",
-      "clearAll": "Limpar tudo"
+      "clearAll": "Limpar tudo",
+      "inherited": "As restrições herdadas da chave de API atual não podem ser removidas.",
+      "selfLocked": "A chave de API em uso não pode alterar as próprias restrições."
     },
     "title": "Chaves API",
     "subtitle": "Gerencie as chaves API para autenticação e controle de acesso",

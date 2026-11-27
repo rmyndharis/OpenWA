@@ -5,8 +5,9 @@ import type { ApiKey } from './entities/api-key.entity';
  *
  * The model is a blocklist: a key is allowed everything its role and scopes allow — exactly as
  * before this field existed — and each capability listed in `deniedPermissions` turns its routes
- * off. A route with no capability tag can never be blocked this way. An empty/absent list therefore
- * leaves the key untouched, which is why every key minted before the field existed keeps working.
+ * off. Authenticated routes without a capability tag fail closed for a restricted key unless they
+ * are explicitly capability-agnostic. An empty/absent list therefore leaves the key untouched,
+ * which is why every key minted before the field existed keeps working.
  *
  * The role is still checked first: blocking nothing cannot lift a VIEWER key above its role, and
  * blocking `messages:send` on an ADMIN key only removes the send routes.
@@ -153,4 +154,23 @@ export function isCapabilityDenied(
   capability: ApiKeyCapability,
 ): boolean {
   return apiKeyDeniedCapabilities(apiKey).includes(capability);
+}
+
+/** Capabilities exposed by one event payload, in addition to the event-stream capability itself. */
+export function eventCapabilities(event: string): readonly ApiKeyCapability[] {
+  if (event.startsWith('message.') || event === 'poll.vote' || event === 'event.response') {
+    return [ApiKeyCapability.MESSAGES_READ];
+  }
+  if (event === 'session.qr') return [ApiKeyCapability.SESSIONS_PAIR];
+  if (event.startsWith('session.')) return [ApiKeyCapability.SESSIONS_READ];
+  if (event.startsWith('group.')) return [ApiKeyCapability.GROUPS_READ];
+  if (event.startsWith('call.')) return [ApiKeyCapability.CALLS_MANAGE];
+  if (event === 'status.received') return [ApiKeyCapability.STATUS_READ];
+  if (event === 'presence.update') return [ApiKeyCapability.CHATS_READ];
+  return [];
+}
+
+/** Whether an event would expose data/actions blocked on this key. */
+export function isEventDenied(apiKey: Pick<ApiKey, 'deniedPermissions'> | null | undefined, event: string): boolean {
+  return eventCapabilities(event).some(capability => isCapabilityDenied(apiKey, capability));
 }

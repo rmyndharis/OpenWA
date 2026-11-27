@@ -11,7 +11,7 @@ import { AutomationRuleResponseDto, CreateAutomationRuleDto, UpdateAutomationRul
 export class AutomationRuleController {
   constructor(private readonly automationRules: AutomationRulesService) {}
 
-  @Capability(ApiKeyCapability.AUTOMATION_WRITE)
+  @Capability(ApiKeyCapability.AUTOMATION_WRITE, ApiKeyCapability.MESSAGES_SEND)
   @Post()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Create an autoreply rule' })
@@ -60,7 +60,7 @@ export class AutomationRuleController {
     return AutomationRuleResponseDto.fromEntity(await this.automationRules.findOne(sessionId, ruleId));
   }
 
-  @Capability(ApiKeyCapability.AUTOMATION_WRITE)
+  @Capability(ApiKeyCapability.AUTOMATION_WRITE, ApiKeyCapability.MESSAGES_SEND)
   @Put(':ruleId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Update an autoreply rule' })

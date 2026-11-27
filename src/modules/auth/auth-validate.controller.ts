@@ -1,6 +1,6 @@
 import { Controller, Post, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiHeader } from '@nestjs/swagger';
-import { CurrentApiKey } from './decorators/auth.decorators';
+import { CapabilityAgnostic, CurrentApiKey } from './decorators/auth.decorators';
 import { ApiKey } from './entities/api-key.entity';
 import { ValidateApiKeyResponseDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
@@ -12,6 +12,7 @@ export class AuthValidateController {
   constructor(private readonly engineFactory: EngineFactory) {}
 
   @Post('validate')
+  @CapabilityAgnostic()
   // The key's own self-check names no data surface, so any capability-scoped key may use it.
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Validate an API key' })

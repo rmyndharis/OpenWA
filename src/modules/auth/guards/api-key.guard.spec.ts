@@ -8,7 +8,12 @@ import { ChatScopeService } from '../chat-scope.service';
 import { ApiKey, ApiKeyRole } from '../entities/api-key.entity';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/entities/audit-log.entity';
-import { CHAT_QUOTED_ALLOWED_KEY, CHAT_SCOPED_KEY, REQUIRED_ROLE_KEY } from '../decorators/auth.decorators';
+import {
+  CHAT_QUOTED_ALLOWED_KEY,
+  CHAT_SCOPED_KEY,
+  REQUIRED_ROLE_KEY,
+  UNSCOPED_KEY,
+} from '../decorators/auth.decorators';
 
 function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
   return {
@@ -299,12 +304,8 @@ describe('ApiKeyGuard', () => {
   });
 
   it('rejects a session-scoped key on a @RequireUnscopedKey route, whatever its role', async () => {
-    reflector.getAllAndOverride
-      .mockReturnValueOnce(false) // not public
-      .mockReturnValueOnce(ApiKeyRole.ADMIN) // required role = ADMIN
-      .mockReturnValueOnce(undefined) // not @SessionScoped
-      .mockReturnValueOnce(undefined) // no capability tag
-      .mockReturnValueOnce(true); // @RequireUnscopedKey
+    metadata[REQUIRED_ROLE_KEY] = ApiKeyRole.ADMIN;
+    metadata[UNSCOPED_KEY] = true;
 
     const apiKey = createMockApiKey({ role: ApiKeyRole.ADMIN, allowedSessions: ['sess-A'] });
     (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
@@ -353,12 +354,8 @@ describe('ApiKeyGuard', () => {
       (authService.hasPermission as jest.Mock).mockReturnValue(true);
 
       const actor = await actorAfterDenial(() => {
-        reflector.getAllAndOverride
-          .mockReturnValueOnce(false)
-          .mockReturnValueOnce(ApiKeyRole.ADMIN)
-          .mockReturnValueOnce(undefined) // not @SessionScoped
-          .mockReturnValueOnce(undefined) // no capability tag
-          .mockReturnValueOnce(true);
+        metadata[REQUIRED_ROLE_KEY] = ApiKeyRole.ADMIN;
+        metadata[UNSCOPED_KEY] = true;
       }, apiKey);
 
       expect(actor).toMatchObject({ apiKeyId: 'key-uuid-2', apiKeyName: 'Tenant A' });

@@ -4,6 +4,7 @@ import { AuthController } from './auth.controller';
 import { UNSCOPED_KEY } from './decorators/auth.decorators';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import type { ApiKey } from './entities/api-key.entity';
+import { ApiKeyCapability } from './api-key-permissions';
 import type { AuthService } from './auth.service';
 import type { AuditService } from '../audit/audit.service';
 
@@ -126,6 +127,24 @@ describe('AuthController — API-key lifecycle audit logging', () => {
     expect(JSON.stringify(auditService.logInfo.mock.calls)).not.toContain('raw-secret');
   });
 
+  it('inherits every capability blocked on the acting key when creating a key', async () => {
+    const restrictedActor = {
+      ...actor,
+      deniedPermissions: [ApiKeyCapability.MESSAGES_READ],
+    } as ApiKey;
+
+    await controller.create(
+      { name: 'new-key', deniedPermissions: [ApiKeyCapability.SESSIONS_CREATE] },
+      makeReq(),
+      restrictedActor,
+    );
+
+    expect(authService.createApiKey).toHaveBeenCalledWith({
+      name: 'new-key',
+      deniedPermissions: [ApiKeyCapability.SESSIONS_CREATE, ApiKeyCapability.MESSAGES_READ],
+    });
+  });
+
   it("records the created key's full authorization scope on API_KEY_CREATED", async () => {
     const expiresAt = new Date('2027-01-01T00:00:00Z');
     authService.createApiKey.mockResolvedValue({
@@ -165,6 +184,38 @@ describe('AuthController — API-key lifecycle audit logging', () => {
     expect(ctx?.metadata?.targetKeyId).toBe('k1');
     expect(ctx?.metadata?.before?.role).toBe('viewer');
     expect(ctx?.metadata?.after?.role).toBe('admin');
+  });
+
+  it("adds the acting key's blocked capabilities when updating another key", async () => {
+    const restrictedActor = {
+      ...actor,
+      deniedPermissions: [ApiKeyCapability.MESSAGES_READ],
+    } as ApiKey;
+    authService.findOne.mockResolvedValueOnce({
+      id: 'k1',
+      deniedPermissions: [ApiKeyCapability.SESSIONS_CREATE],
+    });
+
+    await controller.update('k1', { name: 'renamed' }, makeReq(), restrictedActor);
+
+    expect(authService.update).toHaveBeenCalledWith('k1', {
+      name: 'renamed',
+      deniedPermissions: [ApiKeyCapability.SESSIONS_CREATE, ApiKeyCapability.MESSAGES_READ],
+    });
+  });
+
+  it('does not let a capability-restricted key change its own blocked capabilities', async () => {
+    const restrictedActor = {
+      ...actor,
+      id: 'k1',
+      deniedPermissions: [ApiKeyCapability.MESSAGES_READ],
+    } as ApiKey;
+    authService.findOne.mockResolvedValueOnce(restrictedActor);
+
+    await expect(controller.update('k1', { deniedPermissions: [] }, makeReq(), restrictedActor)).rejects.toThrow(
+      'cannot change its own blocked capabilities',
+    );
+    expect(authService.update).not.toHaveBeenCalled();
   });
 
   it('logs API_KEY_REVOKED on revoke', async () => {

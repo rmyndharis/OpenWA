@@ -345,7 +345,6 @@ export class InfraStatusController {
     return checkForUpdate();
   }
 
-  @Capability(ApiKeyCapability.INFRA_READ)
   @Get('health')
   @Public()
   @ApiOperation({ summary: 'Health check endpoint' })

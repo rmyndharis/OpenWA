@@ -2,7 +2,7 @@ import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Post,
 import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { InfraExportDataResponseDto, InfraImportDataResponseDto } from './dto/infra-response.dto';
 import { ImportDataDto } from './dto/import-data.dto';
-import { Capability, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole, RequireUnrestrictedKey } from '../auth/decorators/auth.decorators';
 import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { InfraDataService, InfraExportDataResult, InfraImportDataResult } from './infra-data.service';
@@ -19,7 +19,7 @@ import { InfraDataService, InfraExportDataResult, InfraImportDataResult } from '
 // so the guard's route-param session fence can never bite. Reject session-scoped keys outright at
 // class level, which also covers routes added later. @Public routes are unaffected: the guard
 // returns before it reads this metadata.
-@RequireUnscopedKey()
+@RequireUnrestrictedKey()
 export class InfraDataController {
   constructor(private readonly infraData: InfraDataService) {}
 

@@ -12,7 +12,7 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import { Capability, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, CurrentApiKey, RequireRole, RequireUnrestrictedKey } from '../auth/decorators/auth.decorators';
 import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -46,6 +46,7 @@ const contributedConfig = (inst: PluginInstance): Record<string, unknown> | unde
 @ApiTags('integration')
 @Controller('integration/plugins/:pluginId/instances')
 @RequireRole(ApiKeyRole.ADMIN)
+@RequireUnrestrictedKey()
 export class IntegrationInstanceController {
   constructor(
     private readonly instances: PluginInstanceService,

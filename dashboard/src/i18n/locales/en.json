@@ -50,7 +50,8 @@
     "errorGeneric": "An error occurred",
     "unknownError": "Unknown error",
     "retry": "Retry",
-    "copyFailed": "Could not copy to clipboard"
+    "copyFailed": "Could not copy to clipboard",
+    "noDashboardAccess": "This API key is blocked from every dashboard page."
   },
   "theme": {
     "light": "Light",
@@ -805,7 +806,9 @@
       "label": "Blocked capabilities",
       "hint": "Empty = nothing blocked",
       "blockAll": "Block all",
-      "clearAll": "Clear all"
+      "clearAll": "Clear all",
+      "inherited": "Restrictions inherited from your current API key cannot be removed.",
+      "selfLocked": "The API key in use cannot change its own restrictions."
     },
     "title": "API Keys",
     "subtitle": "Manage API keys for authentication and access control",

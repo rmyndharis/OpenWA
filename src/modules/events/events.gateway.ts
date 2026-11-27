@@ -52,7 +52,7 @@ import { DEFAULT_WEBHOOK_MEDIA_INLINE_MAX_BYTES, shedInlineMedia } from '../../c
 import { isSafeSessionName } from '../../common/utils/path-safety';
 import { ApiKeyRole, type ApiKey } from '../auth/entities/api-key.entity';
 import { apiKeyAuthorizationFingerprint, apiKeyExpiryTime } from '../auth/api-key-authorization';
-import { ApiKeyCapability, isCapabilityDenied } from '../auth/api-key-permissions';
+import { ApiKeyCapability, isCapabilityDenied, isEventDenied } from '../auth/api-key-permissions';
 import {
   readWsRateLimitConfig,
   TokenBucketLimiter,
@@ -1021,7 +1021,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     if (apiKeyAuthorizationFingerprint(subscriberKey) !== this.snapshotFingerprint(client)) {
       (client.data as { authorizationDiverged?: boolean }).authorizationDiverged = true;
     }
-    this.syncQrAccess(client, subscriberKey.role);
+    this.syncQrAccess(client, subscriberKey);
 
     // Enforce per-key session scope against the FRESH key: a key restricted to specific
     // sessions must not subscribe to '*' or a session outside its allowlist (#221).
@@ -1048,11 +1048,23 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       );
     }
 
-    const permittedEvents = chatRestricted
-      ? validEvents.filter(event => event === '*' || CHAT_EVENTS.has(event))
+    // A wildcard cannot remain a wildcard room for a capability-restricted key: that room receives
+    // every event, including ones its key blocks. Expand it to the concrete catalog (preserving the
+    // existing message.receipt opt-in rule), then remove every event whose payload reaches a blocked
+    // surface. An explicitly named receipt stays included.
+    const needsEventFiltering =
+      validEvents.includes('*') && SUBSCRIBABLE_EVENTS.some(event => isEventDenied(subscriberKey, event));
+    const expandedEvents = needsEventFiltering
+      ? [
+          ...SUBSCRIBABLE_EVENTS.filter(event => event !== 'message.receipt'),
+          ...(validEvents.includes('message.receipt') ? ['message.receipt'] : []),
+        ]
       : validEvents;
+    const permittedEvents = [...new Set(expandedEvents)].filter(
+      event => (!chatRestricted || event === '*' || CHAT_EVENTS.has(event)) && !isEventDenied(subscriberKey, event),
+    );
     if (permittedEvents.length === 0) {
-      return this.createError('FORBIDDEN_EVENTS', 'API key may subscribe only to chat events', requestId);
+      return this.createError('FORBIDDEN_EVENTS', 'API key permissions do not allow any requested events', requestId);
     }
     const chats = chatRestricted ? [...this.chatScope.scopeFor(subscriberKey)!.allowed] : undefined;
     // A socket holds every room it asks for, so events x chats rooms that exceed the cap can never fit.
@@ -1103,9 +1115,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     };
   }
 
-  /** Put the socket in or out of the QR-denied room for its key's current role. */
-  private syncQrAccess(client: Socket, role: ApiKeyRole | undefined): void {
-    if (role && QR_ALLOWED_ROLES.has(role)) {
+  /** Put the socket in or out of the QR-denied room for its key's current role and capability scope. */
+  private syncQrAccess(client: Socket, apiKey: ApiKey): void {
+    if (apiKey.role && QR_ALLOWED_ROLES.has(apiKey.role) && !isEventDenied(apiKey, 'session.qr')) {
       void client.leave(QR_DENIED_ROOM);
     } else {
       void client.join(QR_DENIED_ROOM);

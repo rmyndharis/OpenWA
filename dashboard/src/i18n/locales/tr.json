@@ -50,7 +50,8 @@
     "errorGeneric": "Bir hata oluştu",
     "unknownError": "Bilinmeyen hata",
     "retry": "Yeniden Dene",
-    "copyFailed": "Panoya kopyalanamadı"
+    "copyFailed": "Panoya kopyalanamadı",
+    "noDashboardAccess": "Bu API anahtarının tüm pano sayfalarına erişimi engellendi."
   },
   "theme": {
     "light": "Açık",
@@ -805,7 +806,9 @@
       "label": "Engellenen yetenekler",
       "hint": "Boş = engellenen yok",
       "blockAll": "Tümünü engelle",
-      "clearAll": "Tümünü temizle"
+      "clearAll": "Tümünü temizle",
+      "inherited": "Geçerli API anahtarınızdan devralınan kısıtlamalar kaldırılamaz.",
+      "selfLocked": "Kullanılan API anahtarı kendi kısıtlamalarını değiştiremez."
     },
     "title": "API Anahtarları",
     "subtitle": "Kimlik doğrulama ve erişim denetimi için API anahtarlarını yönetin",

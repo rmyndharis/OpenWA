@@ -100,9 +100,12 @@ lookups require OPERATOR. These permissions still apply within the key's IP, ses
 | Chats     | `allowedChats`      | Empty/absent = every chat; non-empty = default-deny: only chat-scoped routes, MCP tools and events, only for a listed chat, else `403` (an event outside the list is never delivered); Bull Board refuses it        |
 | Blocked   | `deniedPermissions` | Empty/absent = nothing blocked; each entry turns off the routes tagged with that capability, else `403` (see "Blocked capabilities")                                                                                |
 
-The key-lifecycle routes (`/api/auth/api-keys`) are additionally fenced with `@RequireUnscopedKey()`:
-a session-scoped key is refused there whatever its role, so it cannot mint or widen credentials
-beyond its own confinement. The same fence covers the other routes that act on the whole deployment:
+The key-lifecycle routes (`/api/auth/api-keys`) are fenced with `@RequireUnscopedKey()`: session- and
+chat-scoped keys are refused. A capability-restricted ADMIN may manage keys unless it blocks
+`apikeys:manage`, but every created or updated target automatically inherits all of the caller's
+blocked capabilities; such a caller cannot change its own blocklist. It therefore cannot mint or
+widen credentials beyond its own confinement. The session-scope fence also covers other routes that
+act on the whole deployment:
 every `/api/infra` route, the plugin routes (except the per-session config override), `GET /api/settings`,
 `GET /api/stats/overview` and `/messages`, `POST /api/sessions` and the proxy setter. `SECURITY.md` lists them.
 
@@ -110,8 +113,10 @@ every `/api/infra` route, the plugin routes (except the per-session config overr
 
 `deniedPermissions` on a key removes **surfaces** from what the role and the three scopes already
 allow. It is a blocklist, not an allowlist: a key with an empty list behaves exactly as before this
-field existed, and each entry turns off the routes tagged with that capability. Untagged routes
-(health, metrics, `POST /api/auth/validate`, the dashboard login) can never be blocked this way.
+field existed, and each entry turns off the routes tagged with that capability. An authenticated
+route without capability metadata is refused to a capability-restricted key (fail closed). Only
+public routes and explicitly capability-agnostic self-checks (`POST /api/auth/validate` and the
+dashboard browser-session endpoints) bypass that classification.
 
 | Group        | Capabilities                                                                                                   | Turns off                                                                                                                                                                                                 |
 | ------------ | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -156,15 +161,16 @@ the last-admin invariant, and setting one on the last usable admin is refused wi
 session/chat scope, such a key can authenticate but may be blocked from key management, so counting
 it as a surviving admin would bless a management lockout.
 
-`POST /api/mcp` refuses a key with any blocked capability (`403`): MCP tools are not classified by
-capability, so the blocklist cannot be enforced there. Use REST for such a key, or a separate key
-with nothing blocked for MCP.
+`POST /api/mcp` and the Bull Board queue dashboard refuse a key with any blocked capability (`403`):
+neither surface is split into capability-classified handlers, so the blocklist cannot be enforced
+there. Infrastructure data import/export, plugin writes, and integration-instance management require
+a fully unrestricted key. API-key management instead uses restriction inheritance as described above.
 
 The dashboard receives the active key's blocklist in the browser-session metadata. A page whose
 primary read capability is blocked is absent from the sidebar and its route is not mounted, so a
 direct URL is redirected to the first page the key may use. This is only navigation hardening; the
 API guard remains the authorization boundary for every request and for write actions inside a
-readable page.
+readable page. When `events:read` is blocked, the dashboard does not open its Socket.IO connection.
 
 A session's egress proxy (`proxyUrl` on `POST /api/sessions`, `PATCH /api/sessions/:sessionId/proxy`)
 is set only by an unscoped `admin` key; any other key gets `403`. The proxy is trusted egress chosen by

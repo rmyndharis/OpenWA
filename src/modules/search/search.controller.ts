@@ -24,7 +24,7 @@ export class SearchController {
   ) {}
 
   @ChatScoped('filtered')
-  @Capability(ApiKeyCapability.SEARCH_READ)
+  @Capability(ApiKeyCapability.SEARCH_READ, ApiKeyCapability.MESSAGES_READ)
   @Get()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Search messages across sessions (active search provider)' })

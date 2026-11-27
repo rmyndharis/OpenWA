@@ -6,7 +6,13 @@ import { AuthService } from '../auth.service';
 import { ChatScopeService } from '../chat-scope.service';
 import { ApiKey, ApiKeyRole } from '../entities/api-key.entity';
 import { AuditService } from '../../audit/audit.service';
-import { CAPABILITIES_KEY, PUBLIC_KEY, REQUIRED_ROLE_KEY } from '../decorators/auth.decorators';
+import {
+  CAPABILITIES_KEY,
+  CAPABILITY_AGNOSTIC_KEY,
+  PUBLIC_KEY,
+  REQUIRED_ROLE_KEY,
+  UNRESTRICTED_KEY,
+} from '../decorators/auth.decorators';
 import { ApiKeyCapability } from '../api-key-permissions';
 
 function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
@@ -104,10 +110,27 @@ describe('ApiKeyGuard blocked capabilities', () => {
     ).rejects.toThrow(ForbiddenException);
   });
 
-  it('never blocks a route with no capability tag', async () => {
+  it('refuses an untagged route for a key with any blocked capability', async () => {
     const key = createMockApiKey({ deniedPermissions: Object.values(ApiKeyCapability) });
 
-    await expect(authorize(key, {})).resolves.toBe(true);
+    await expect(authorize(key, {})).rejects.toThrow('Capability-restricted API keys are not permitted on this route');
+  });
+
+  it('allows an explicitly capability-agnostic self-check', async () => {
+    const key = createMockApiKey({ deniedPermissions: [ApiKeyCapability.MESSAGES_READ] });
+
+    await expect(authorize(key, { [CAPABILITY_AGNOSTIC_KEY]: true })).resolves.toBe(true);
+  });
+
+  it('requires a completely unrestricted key on authority-changing routes', async () => {
+    const key = createMockApiKey({ deniedPermissions: [ApiKeyCapability.MESSAGES_READ] });
+
+    await expect(
+      authorize(key, {
+        [CAPABILITIES_KEY]: [ApiKeyCapability.APIKEYS_MANAGE],
+        [UNRESTRICTED_KEY]: true,
+      }),
+    ).rejects.toThrow('Restricted API keys are not permitted on this route');
   });
 
   it('still applies the role gate first: a viewer key cannot send whatever it blocks', async () => {

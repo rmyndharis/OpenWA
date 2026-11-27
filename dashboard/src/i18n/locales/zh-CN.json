@@ -50,7 +50,8 @@
     "errorGeneric": "发生错误",
     "unknownError": "未知错误",
     "retry": "重试",
-    "copyFailed": "无法复制到剪贴板"
+    "copyFailed": "无法复制到剪贴板",
+    "noDashboardAccess": "此 API 密钥已被禁止访问所有仪表板页面。"
   },
   "theme": {
     "light": "浅色",
@@ -805,7 +806,9 @@
       "label": "已封禁权限",
       "hint": "留空 = 不封禁任何权限",
       "blockAll": "全部封禁",
-      "clearAll": "全部清除"
+      "clearAll": "全部清除",
+      "inherited": "无法移除从当前 API 密钥继承的限制。",
+      "selfLocked": "正在使用的 API 密钥无法更改自身限制。"
     },
     "title": "API 密钥",
     "subtitle": "管理用于认证和访问控制的 API 密钥",

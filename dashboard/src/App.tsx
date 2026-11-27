@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { lazyWithRetry as lazy } from './utils/lazyWithRetry';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Layout } from './components/Layout';
 import { ToastProvider } from './components/Toast';
 import { NumberCheckProvider } from './components/NumberCheckProvider';
@@ -48,6 +49,7 @@ const queryClient = new QueryClient({
 });
 
 function AppContent() {
+  const { t } = useTranslation();
   // Clear any legacy plaintext API key left in sessionStorage by older builds, and read the
   // non-secret session actor id once at mount so we know whether to render optimistically while
   // GET /auth/session hydrates live state from the HttpOnly browser session cookie.
@@ -249,7 +251,7 @@ function AppContent() {
     <Navigate to={landingPath} replace />
   ) : (
     <div className="page-container" role="alert">
-      This API key is blocked from every dashboard page.
+      {t('common.noDashboardAccess')}
     </div>
   );
 

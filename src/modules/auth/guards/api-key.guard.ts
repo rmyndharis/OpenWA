@@ -30,9 +30,11 @@ import {
   CHAT_QUOTED_ALLOWED_KEY,
   HEADER_AUTH_ONLY_KEY,
   CAPABILITIES_KEY,
+  CAPABILITY_AGNOSTIC_KEY,
+  UNRESTRICTED_KEY,
   ChatScopeKind,
 } from '../decorators/auth.decorators';
-import { isCapabilityDenied, type ApiKeyCapability } from '../api-key-permissions';
+import { hasBlockedCapabilities, isCapabilityDenied, type ApiKeyCapability } from '../api-key-permissions';
 import { resolveClientIp } from '../../../common/utils/ip';
 import { presentedApiKey } from '../../../common/security/bearer-token';
 import { setRequestActor } from '../../../common/services/request-context';
@@ -158,19 +160,39 @@ export class ApiKeyGuard implements CanActivate {
       throw new ForbiddenException(`Insufficient permissions. Required: ${requiredRole}`);
     }
 
-    // Capability blocklist — DEFAULT ALLOW. A key may list capabilities it is BLOCKED from; a route
-    // tagged with any of them is refused. Untagged routes (health, metrics, the key's own validate
-    // self-check, session-cookie login) are never blocked, and a key with nothing blocked skips this
-    // entirely, so every key minted before the field existed behaves exactly as it did.
+    // Capability blocklist. Existing unrestricted keys remain default-allow, but a key carrying a
+    // blocklist is default-deny on an untagged authenticated route. Only self-check handlers marked
+    // @CapabilityAgnostic may deliberately opt out; this prevents a route added later from silently
+    // bypassing the blocklist.
     const routeCapabilities = this.reflector.getAllAndOverride<ApiKeyCapability[]>(CAPABILITIES_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
+    const capabilityAgnostic = this.reflector.getAllAndOverride<boolean>(CAPABILITY_AGNOSTIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (hasBlockedCapabilities(apiKey) && !routeCapabilities?.length && !capabilityAgnostic) {
+      throw new ForbiddenException('Capability-restricted API keys are not permitted on this route');
+    }
     if (routeCapabilities?.length) {
       const blocked = routeCapabilities.find(capability => isCapabilityDenied(apiKey, capability));
       if (blocked) {
         throw new ForbiddenException(`API key is blocked from this capability (${blocked})`);
       }
+    }
+
+    const requireUnrestricted = this.reflector.getAllAndOverride<boolean>(UNRESTRICTED_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (
+      requireUnrestricted &&
+      ((apiKey.allowedSessions?.length ?? 0) > 0 ||
+        (apiKey.allowedChats?.length ?? 0) > 0 ||
+        hasBlockedCapabilities(apiKey))
+    ) {
+      throw new ForbiddenException('Restricted API keys are not permitted on this route');
     }
 
     // Chat fence — DEFAULT DENY. A key carrying `allowedChats` may reach only a handler marked

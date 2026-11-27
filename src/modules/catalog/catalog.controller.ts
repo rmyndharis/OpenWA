@@ -86,7 +86,7 @@ export class CatalogController {
   }
 
   @ChatScoped('fenced')
-  @Capability(ApiKeyCapability.CATALOG_SEND)
+  @Capability(ApiKeyCapability.CATALOG_SEND, ApiKeyCapability.MESSAGES_SEND)
   @Post('messages/send-product')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Send a product message (Baileys engine only)' })

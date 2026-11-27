@@ -660,7 +660,7 @@ export class SessionController {
   }
 
   @ChatScoped('filtered')
-  @Capability(ApiKeyCapability.CHATS_READ)
+  @Capability(ApiKeyCapability.CHATS_READ, ApiKeyCapability.MESSAGES_READ)
   @Get(':sessionId/chats')
   @ApiOperation({ summary: 'Get active chats for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
