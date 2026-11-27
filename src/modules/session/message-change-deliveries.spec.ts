@@ -574,27 +574,130 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
     });
   });
 
-  // The revoke withdraws its deliveries before it clears the row, so time passes between its judging read and the write.
-  describe("a revoke whose judging read found no row, before another chat's message takes the id", () => {
-    it.each([
-      ['an engine revoke', engineRevoke],
-      ['a delete through the API', apiDelete],
-    ] as const)('leaves that row alone (%s)', async (_label, change) => {
+  // A change reads the row under the id to judge it, then writes. A row stored under the id after the last such read is
+  // another chat's or the message's own: only the second may take the change.
+  describe('a row stored under the id after the read that judged a change found none', () => {
+    const settle = async (): Promise<void> => {
+      for (let turn = 0; turn < 50; turn++) await new Promise(r => setImmediate(r));
+    };
+    const changes = {
+      'an engine revoke': (id: string) => engineRevoke(id),
+      'a delete through the API': (id: string) => apiDelete(id),
+      'an edit from the engine': async (id: string) => {
+        projector.applyMessageEditQueued(sessionId, {
+          messageId: id,
+          chatId: CHAT,
+          body: 'edited text',
+          fromMe: false,
+        } as never);
+        await settle();
+      },
+      'an edit through the API': (id: string) =>
+        projector.recordOutboundMessageEdit(sessionId, id, 'edited text', {
+          kind: 'edit',
+          chatId: CHAT,
+          fromMe: false,
+        }),
+      'a reaction': async (id: string) => {
+        projector.applyReactionQueued(sessionId, {
+          messageId: id,
+          chatId: CHAT,
+          senderId: CHAT,
+          reaction: 'x',
+        });
+        await settle();
+      },
+    } as const;
+    const unchanged = { type: 'text', body: 'first text', metadata: null };
+    const changed = {
+      'an engine revoke': { type: 'revoked', body: '' },
+      'a delete through the API': { type: 'revoked', body: '' },
+      'an edit from the engine': { body: 'edited text', metadata: { edited: true } },
+      'an edit through the API': { body: 'edited text', metadata: { edited: true } },
+      'a reaction': { metadata: { reactions: { [CHAT]: 'x' } } },
+    } as const;
+    /** Store `chatId`'s message under the id right after the last read that judges the change (a revoke reads twice). */
+    const storedAfterTheJudgingRead = (id: string, chatId: string, reads: number): void => {
       const repository = ds.getRepository(Message);
       const findOne = repository.findOne.bind(repository);
-      jest.spyOn(repository, 'findOne').mockImplementationOnce(async options => {
+      let judged = 0;
+      jest.spyOn(repository, 'findOne').mockImplementation(async options => {
         const row = await findOne(options);
-        await storeRow('M-13', OTHER_CHAT);
+        const select = (options as { select?: Record<string, unknown> }).select;
+        if (select?.engineRef && ++judged === reads) await storeRow(id, chatId);
         return row;
       });
+    };
+    const readsOf = (change: string): number => (change.includes('revoke') || change.includes('delete') ? 2 : 1);
+    const rowOf = (id: string): Promise<Message> =>
+      ds.getRepository(Message).findOneByOrFail({ sessionId, waMessageId: id });
 
-      await change('M-13');
+    it.each(Object.keys(changes) as Array<keyof typeof changes>)(
+      "never lands on another chat's message (%s)",
+      async change => {
+        storedAfterTheJudgingRead('M-13', OTHER_CHAT, readsOf(change));
 
-      expect(await repository.findOneByOrFail({ sessionId, waMessageId: 'M-13' })).toMatchObject({
-        chatId: OTHER_CHAT,
-        type: 'text',
-        body: 'first text',
-      });
-    });
+        await changes[change]('M-13');
+
+        expect(await rowOf('M-13')).toMatchObject({ chatId: OTHER_CHAT, ...unchanged });
+      },
+    );
+
+    it.each(Object.keys(changes) as Array<keyof typeof changes>)(
+      "still lands on the message's own row (%s)",
+      async change => {
+        storedAfterTheJudgingRead('M-19', CHAT, readsOf(change));
+
+        await changes[change]('M-19');
+
+        expect(await rowOf('M-19')).toMatchObject({ chatId: CHAT, ...changed[change] });
+      },
+    );
+
+    // An API send stores its row before the engine sends and gives it the message id after: a change of the send that
+    // arrives in between finds no row, and the row it then names is the send's own.
+    it.each([
+      [
+        'a revoke from the phone',
+        () => projector.recordRevoke(sessionId, 'M-20', { kind: 'revoke', chatId: CHAT, fromMe: true }, true),
+        { type: 'revoked', body: '' },
+      ],
+      [
+        'an edit through the API',
+        () =>
+          projector.recordOutboundMessageEdit(sessionId, 'M-20', 'edited text', {
+            kind: 'edit',
+            chatId: CHAT,
+            fromMe: true,
+          }),
+        { body: 'edited text' },
+      ],
+    ] as const)(
+      'lands on an API send whose id the send path stores after the read (%s)',
+      async (_label, change, expected) => {
+        const repository = ds.getRepository(Message);
+        const { identifiers } = await repository.insert({
+          sessionId,
+          waMessageId: null as unknown as string,
+          chatId: CHAT,
+          from: '628222@c.us',
+          to: CHAT,
+          body: 'first text',
+          type: 'text',
+          direction: MessageDirection.OUTGOING,
+          timestamp: 1_700_000_000,
+        });
+        const findOne = repository.findOne.bind(repository);
+        jest.spyOn(repository, 'findOne').mockImplementationOnce(async options => {
+          const row = await findOne(options);
+          await repository.update({ id: identifiers[0].id as string }, { waMessageId: 'M-20' });
+          return row;
+        });
+
+        await change();
+
+        expect(await rowOf('M-20')).toMatchObject({ direction: MessageDirection.OUTGOING, ...expected });
+      },
+    );
   });
 });

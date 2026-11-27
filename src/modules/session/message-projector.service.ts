@@ -4,7 +4,7 @@ import { chatKind } from '../../engine/identity/wa-id';
 import { Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository, In, IsNull, Not, Or } from 'typeorm';
+import { EntityManager, type FindOptionsWhere, Repository, In, IsNull, Not, Or } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm';
 import { Session } from './entities/session.entity';
 import { judgeStoredRow, outboxPayloadPredicate, revokeSourceFor } from './message-row-judgement';
@@ -1240,11 +1240,13 @@ export class MessageProjector {
       this.enqueueMessageMutation(id, message.id, async () => {
         try {
           // A row that could not be read may be another chat's, as in applyChangesMadeInFlight.
-          const { exists, reason } = await this.mutationProjector.storedRowVerdict(id, message.id, claim);
+          const verdict = await this.mutationProjector.storedRowVerdict(id, message.id, claim);
+          const { exists, reason } = verdict;
           const ours = exists && !reason;
           if (ours) await this.advanceParkedAck(id, message.id, entry);
           if (!reason && (entry.revoked || ours)) {
-            await this.writeChangesMadeInFlight(id, message.id, entry, false, written, false, ours);
+            const target = this.mutationProjector.writeTarget(id, message.id, claim, verdict) ?? undefined;
+            await this.writeChangesMadeInFlight(id, message.id, entry, false, written, false, ours, target);
           }
         } finally {
           resolve();
@@ -1617,7 +1619,8 @@ export class MessageProjector {
       return;
     }
     this.enqueueMessageMutation(id, waMessageId, async () => {
-      const { exists, reason } = await this.mutationProjector.storedRowVerdict(id, waMessageId, lostInsert);
+      const verdict = await this.mutationProjector.storedRowVerdict(id, waMessageId, lostInsert);
+      const { exists, reason } = verdict;
       if (reason) {
         this.logger.warn('Not applying the changes of a message to the stored message that holds its id', {
           sessionId: id,
@@ -1633,7 +1636,8 @@ export class MessageProjector {
       const rowKnown = exists || !insertFailed;
       if (!rowKnown && !pending.revoked) return;
       if (rowKnown) advance();
-      await this.writeChangesMadeInFlight(id, waMessageId, pending, insertedCleared, written, true, rowKnown);
+      const target = this.mutationProjector.writeTarget(id, waMessageId, lostInsert, verdict) ?? undefined;
+      await this.writeChangesMadeInFlight(id, waMessageId, pending, insertedCleared, written, true, rowKnown, target);
     });
   }
 
@@ -1672,6 +1676,7 @@ export class MessageProjector {
     written: MutationSource,
     announce = true,
     rowKnown = true,
+    target: FindOptionsWhere<Message> = { sessionId: id, waMessageId },
   ): Promise<void> {
     if (pending.revoked) {
       const announced = pending.revokeAnnounced === true;
@@ -1679,18 +1684,19 @@ export class MessageProjector {
     }
     try {
       // Never onto a revoked row, as the edit paths: a message delivered deleted, or deleted before it, stays cleared.
-      // Compared in the write: a row inserted with the edit already applied is not changed again here.
+      // Compared in the write: a row inserted with the edit already applied is not changed again here. Written to the
+      // row the changes were judged against (`target`), or to the one this commit inserted.
       let textChanged = false;
       if (pending.editedBody !== undefined) {
         const result = await this.messageRepository.update(
-          { sessionId: id, waMessageId, type: Not('revoked'), body: Or(Not(pending.editedBody), IsNull()) },
+          { ...target, type: Not('revoked'), body: Or(Not(pending.editedBody), IsNull()) },
           { body: pending.editedBody },
         );
         textChanged = Boolean(result?.affected);
       }
-      if (pending.reactions) await this.storeReactions(id, waMessageId, pending.reactions);
+      if (pending.reactions) await this.storeReactions(target, pending.reactions);
       // The marker an edit of a stored row leaves, written last so a lost metadata race costs it alone.
-      if (pending.edited) await this.mutationProjector.markMessageEdited(id, waMessageId);
+      if (pending.edited) await this.mutationProjector.markMessageEdited(id, waMessageId, target);
       if (textChanged && announce) await this.announceChangedRow(id, waMessageId);
     } catch (err) {
       this.logger.error(`Failed to apply changes to message ${waMessageId}`, String(err));
@@ -1730,15 +1736,13 @@ export class MessageProjector {
         return;
       }
       // Before the type flips, so a merge that fails leaves the placeholder as it was, not a typed row without its media.
+      // The placeholder read above, by its key, so a row stored under the id since is not the one replaced.
       if (metadata) {
-        await updateMessageMetadata(this.messageRepository, { sessionId: id, waMessageId }, current =>
+        await updateMessageMetadata(this.messageRepository, { id: placeholder.id }, current =>
           mergeSentMetadata(current, metadata),
         );
       }
-      const replaced = await this.messageRepository.update(
-        { sessionId: id, waMessageId, type: 'forward' },
-        { type, body },
-      );
+      const replaced = await this.messageRepository.update({ id: placeholder.id, type: 'forward' }, { type, body });
       if (replaced?.affected) await this.announceChangedRow(id, waMessageId);
     } catch (err) {
       this.logger.error(`Failed to replace the forward placeholder of ${waMessageId}`, String(err));
@@ -1767,8 +1771,8 @@ export class MessageProjector {
   }
 
   /** Merge reactions into the row's metadata, withdrawing a sender's on ''. Must run on the mutation chain. */
-  private async storeReactions(id: string, waMessageId: string, changes: Record<string, string>): Promise<void> {
-    await updateMessageMetadata(this.messageRepository, { sessionId: id, waMessageId }, metadata => {
+  private async storeReactions(target: FindOptionsWhere<Message>, changes: Record<string, string>): Promise<void> {
+    await updateMessageMetadata(this.messageRepository, target, metadata => {
       const reactions = { ...(metadata.reactions as Record<string, string> | undefined) };
       for (const [sender, reaction] of Object.entries(changes)) {
         if (reaction) reactions[sender] = reaction;
@@ -1864,14 +1868,18 @@ export class MessageProjector {
         if (verdict?.reason) return;
       }
       // Where nothing has shown the row under this id to be the message's, one that cannot be read may be
-      // another chat's: it is left alone, and only the pending deliveries, each judged by its payload, go.
+      // another chat's: it is left alone, and only the pending deliveries, each judged by its payload, go. The row
+      // judged is cleared by its key, and with none found only the message's own row can take it (see writeTarget).
+      const target =
+        source && verdict ? this.mutationProjector.writeTarget(sessionId, waMessageId, source, verdict) : undefined;
+      if (target === null) return;
       const result =
         skipUnreadRow && verdict?.unread
           ? undefined
-          : await this.messageRepository.update({ sessionId, waMessageId }, REVOKED_ROW_PATCH);
+          : await this.messageRepository.update(target ?? { sessionId, waMessageId }, REVOKED_ROW_PATCH);
       this.markedEdited.get(sessionId)?.delete(waMessageId);
       if (!result?.affected || !notify) return;
-      const row = await this.messageRepository.findOne({ where: { sessionId, waMessageId } });
+      const row = await this.messageRepository.findOne({ where: target ?? { sessionId, waMessageId } });
       if (!row) return;
       void this.hookManager
         .execute('message:persisted', { sessionId, message: row }, { sessionId, source: 'SessionService' })

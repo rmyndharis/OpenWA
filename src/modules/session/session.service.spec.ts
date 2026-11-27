@@ -10218,10 +10218,14 @@ describe('SessionService', () => {
       onMessageEdited(edited());
       await new Promise(resolve => setImmediate(resolve));
 
+      // No row is read back here, so the edit lands only on the row it claims: its chat and side, no engine ref.
       expect(messageRepository.update).toHaveBeenCalledWith(
         {
           sessionId: 'sess-uuid-1',
           waMessageId: 'WA_MSG_EDIT_1',
+          chatId: In(['123@c.us']),
+          engineRef: IsNull(),
+          direction: 'incoming',
           type: Not('revoked'),
           body: Or(Not('New edited text'), IsNull()),
         },

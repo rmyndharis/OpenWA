@@ -1,5 +1,5 @@
-import { IsNull, Not, Or, Repository } from 'typeorm';
-import { Message } from '../message/entities/message.entity';
+import { Equal, type FindOptionsWhere, In, IsNull, Not, Or, Repository } from 'typeorm';
+import { Message, MessageDirection } from '../message/entities/message.entity';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { LoggerService } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -11,6 +11,44 @@ import { judgeStoredRow, outboxPayloadPredicate, revokeSourceFor } from './messa
 
 /** A judging read that worked and found no row under the id. */
 const isAbsent = (verdict: { exists: boolean; unread?: boolean }): boolean => !verdict.exists && !verdict.unread;
+
+/** What the stored row said of a change (see MessageMutationProjector.storedRowVerdict). */
+export type StoredRowVerdict = {
+  exists: boolean;
+  reason: string | null;
+  unread?: boolean;
+  row?: StoredMessageRef;
+  /** The primary key of the row the judging read found. */
+  rowId?: string;
+  moved?: boolean;
+};
+
+/**
+ * The row of a message the change itself names, for a write made with no row read: its chat as the change names it
+ * (or the chat an API caller named), the side and author the change implies where the rule judges them, and no
+ * engine ref, since a row a hook moved is judged by its engine ref, which only a read applies. A row of another
+ * chat, side or author under the id matches none of it.
+ */
+function claimedRow(sessionId: string, waMessageId: string, source: MutationSource): FindOptionsWhere<Message> {
+  const group = Boolean(source.chatId?.endsWith('@g.us'));
+  const memberRevoke = source.kind === 'revoke' && group && source.fromMe === false && source.admin === false;
+  const authorOnly = source.kind === 'edit' || (source.kind === 'revoke' && !group);
+  const chats = [...new Set([source.chatId, source.callerChatId].filter((c): c is string => Boolean(c)))];
+  // A change that names no chat is judged foreign by no chat, so it claims none.
+  const where: FindOptionsWhere<Message> = {
+    sessionId,
+    waMessageId,
+    ...(chats.length ? { chatId: In(chats) } : {}),
+    engineRef: IsNull(),
+  };
+  if ((authorOnly && source.fromMe !== undefined) || memberRevoke) {
+    where.direction = source.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING;
+  }
+  if (source.author && (memberRevoke || (source.kind === 'edit' && group && source.fromMe === false))) {
+    where.author = Or(IsNull(), Equal(source.author));
+  }
+  return where;
+}
 
 /**
  * Applies stored-message mutations — reactions, inbound edits, REST outbound-edit echoes — behind
@@ -71,23 +109,38 @@ export class MessageMutationProjector {
    * it (null when it may), with the row it read. A row that cannot be read is reported absent with no reason,
    * as before, and marked unread.
    */
-  async storedRowVerdict(
-    sessionId: string,
-    waMessageId: string,
-    source: MutationSource,
-  ): Promise<{ exists: boolean; reason: string | null; unread?: boolean; row?: StoredMessageRef; moved?: boolean }> {
+  async storedRowVerdict(sessionId: string, waMessageId: string, source: MutationSource): Promise<StoredRowVerdict> {
     if (!waMessageId) return { exists: false, reason: null };
     try {
       const row = await this.messageRepository.findOne({
         where: { sessionId, waMessageId },
-        select: { chatId: true, direction: true, author: true, engineRef: true, from: true, to: true },
+        select: { id: true, chatId: true, direction: true, author: true, engineRef: true, from: true, to: true },
       });
       return row
-        ? { exists: true, ...(await judgeStoredRow(row, waMessageId, source, this.resolveLid)), row }
+        ? { exists: true, ...(await judgeStoredRow(row, waMessageId, source, this.resolveLid)), row, rowId: row.id }
         : { exists: false, reason: null };
     } catch {
       return { exists: false, reason: null, unread: true };
     }
+  }
+
+  /**
+   * Where a write made for a change may land, so that it never lands on a row the change would be judged foreign to:
+   * the row its judging read found, by primary key, as a row stored under the id since the read is not the one judged;
+   * with no row found, only a row that carries the change's own identity ({@link claimedRow}), which is how the
+   * message's own row, stored after the read, still takes it. A row that could not be read is matched by the id, as
+   * before. Null when the change is foreign to the row.
+   */
+  writeTarget(
+    sessionId: string,
+    waMessageId: string,
+    source: MutationSource,
+    verdict: StoredRowVerdict,
+  ): FindOptionsWhere<Message> | null {
+    if (verdict.reason) return null;
+    if (verdict.exists && verdict.rowId) return { id: verdict.rowId };
+    if (verdict.unread || verdict.exists) return { sessionId, waMessageId };
+    return claimedRow(sessionId, waMessageId, source);
   }
 
   private async applyReaction(id: string, event: ReactionEvent, needsRow: boolean): Promise<void> {
@@ -115,9 +168,10 @@ export class MessageMutationProjector {
       // went live) — but the notification is not: `message.reaction` is a declared webhook event and
       // the dashboard stream is the point of it, the same contract handleMessageRevoked states.
       // A write that fails is the same case: it is logged, and the reaction goes out without the full list.
+      const source = { kind: 'reaction', chatId: event.chatId } as const;
       const metadata = await updateMessageMetadata(
         this.messageRepository,
-        { sessionId: id, waMessageId: event.messageId },
+        this.writeTarget(id, event.messageId, source, verdict)!,
         current => {
           const reactions = { ...(current.reactions as Record<string, string> | undefined) };
           if (!event.reaction) delete reactions[event.senderId];
@@ -162,12 +216,13 @@ export class MessageMutationProjector {
       // Never onto a revoked row: a late edit must not bring back text the sender deleted. An event that repeats the
       // stored text is no edit, and the marker would label an unedited message. The write compares, not the read
       // above, as the row may be inserted between the two.
+      const target = this.writeTarget(id, message.messageId, source, verdict)!;
       const result = await this.messageRepository.update(
-        { sessionId: id, waMessageId: message.messageId, type: Not('revoked'), body: Or(Not(message.body), IsNull()) },
+        { ...target, type: Not('revoked'), body: Or(Not(message.body), IsNull()) },
         { body: message.body },
       );
       if (result.affected) {
-        await this.markMessageEdited(id, message.messageId);
+        await this.markMessageEdited(id, message.messageId, target);
         await this.rewriteDeliveries(id, message.messageId, message.body, source, verdict);
         await this.onTextChanged(id, message.messageId);
       } else {
@@ -177,10 +232,8 @@ export class MessageMutationProjector {
         // history tombstone or a row stored deleted is written off this chain) makes it read revoked, which is right:
         // the message is deleted by then.
         revoked =
-          (await this.messageRepository.findOne({
-            where: { sessionId: id, waMessageId: message.messageId, type: 'revoked' },
-            select: { id: true },
-          })) !== null;
+          (await this.messageRepository.findOne({ where: { ...target, type: 'revoked' }, select: { id: true } })) !==
+          null;
         if (!revoked && isAbsent(verdict))
           await this.rewriteDeliveries(id, message.messageId, message.body, source, verdict);
       }
@@ -215,8 +268,12 @@ export class MessageMutationProjector {
   }
 
   /** Keep the marker alongside existing reactions, media and quote metadata. */
-  async markMessageEdited(sessionId: string, waMessageId: string): Promise<void> {
-    const marked = await updateMessageMetadata(this.messageRepository, { sessionId, waMessageId }, metadata => ({
+  async markMessageEdited(
+    sessionId: string,
+    waMessageId: string,
+    target: FindOptionsWhere<Message> = { sessionId, waMessageId },
+  ): Promise<void> {
+    const marked = await updateMessageMetadata(this.messageRepository, target, metadata => ({
       ...metadata,
       edited: true,
     }));
@@ -251,11 +308,14 @@ export class MessageMutationProjector {
           }
           // Compared in the write, as applyMessageEdit does: the engine's own echo of this edit reaches the row
           // too, and only the writer that changed the text reports it.
+          const target = verdict
+            ? this.writeTarget(sessionId, messageId, source, verdict)!
+            : { sessionId, waMessageId: messageId };
           const result = await this.messageRepository.update(
-            { sessionId, waMessageId: messageId, type: Not('revoked'), body: Or(Not(body), IsNull()) },
+            { ...target, type: Not('revoked'), body: Or(Not(body), IsNull()) },
             { body },
           );
-          await this.markMessageEdited(sessionId, messageId);
+          await this.markMessageEdited(sessionId, messageId, target);
           if (result?.affected) {
             await this.rewriteDeliveries(sessionId, messageId, body, source, verdict);
             await this.onTextChanged(sessionId, messageId);
