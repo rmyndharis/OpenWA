@@ -7,6 +7,19 @@ jest.mock('undici', () => {
   return { __esModule: true, ...actual, fetch: jest.fn() };
 });
 
+// A retry backoff (the one wait that passes a signal) ends at once unless a test holds it; jest's fake timers do not
+// cover node:timers/promises. Every other wait keeps its real timer.
+jest.mock('node:timers/promises', () => {
+  const actual = jest.requireActual<typeof import('node:timers/promises')>('node:timers/promises');
+  return {
+    ...actual,
+    setTimeout: jest.fn((ms?: number, value?: unknown, options?: { signal?: AbortSignal }) =>
+      options?.signal ? Promise.resolve(value) : actual.setTimeout(ms, value, options),
+    ),
+  };
+});
+
+import { setTimeout as sleep } from 'node:timers/promises';
 import 'reflect-metadata';
 import { DataSource } from 'typeorm';
 import { BetterSqlite3QueryRunner } from 'typeorm/driver/better-sqlite3/BetterSqlite3QueryRunner';
@@ -255,6 +268,20 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
   });
 
   describe('the event data a failed delivery keeps for a redrive', () => {
+    // A redrive starts from the kept copy: the outbox row of its delivery was closed when the failure was recorded,
+    // which says nothing of a change, and the copy, kept current by every change, stays for the next redrive.
+    it('stays on the row when a redrive of it fails again', async () => {
+      await storeRow('M-18');
+      await openDelivery('M-18', 'pending');
+      await outbox.close(webhook.id, keyOf('M-18'), 'dispatched');
+      await keepFailedCopy('M-18');
+      mockFetch.mockResolvedValue(new Response('down', { status: 500 }));
+
+      expect((await redrive.redrive({ sessionId })).failed).toBe(1);
+
+      expect(await keptCopy('M-18')).toMatchObject({ id: 'M-18', body: 'first text' });
+    });
+
     it('is dropped when the engine revokes the message, so a redrive sends nothing', async () => {
       await storeRow('M-3');
       await keepFailedCopy('M-3');
@@ -369,6 +396,50 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
 
       expect((await delivered('M-11'))?.payload).not.toHaveProperty('edited');
     });
+  });
+
+  describe('a change that reaches a message while its delivery waits to retry', () => {
+    const changes = {
+      'an engine revoke': engineRevoke,
+      'a delete through the API': apiDelete,
+      'an edit': (id: string) =>
+        projector.recordOutboundMessageEdit(sessionId, id, 'edited text', {
+          kind: 'edit',
+          chatId: CHAT,
+          fromMe: false,
+        }),
+    } as const;
+    const expectations = {
+      'an engine revoke': { retries: [], failureRows: 0, redriven: [] },
+      'a delete through the API': { retries: ['', ''], failureRows: 1, redriven: [''] },
+      'an edit': { retries: ['edited text', 'edited text'], failureRows: 1, redriven: ['edited text'] },
+    } as const;
+
+    it.each(Object.keys(changes) as Array<keyof typeof changes>)(
+      'sends the later attempts and the redrive as %s left it',
+      async change => {
+        await ds.getRepository(Webhook).update(webhook.id, { retryCount: 3 });
+        await storeRow('M-12');
+        mockFetch.mockResolvedValue(new Response('down', { status: 500 }));
+        let endBackoff: (() => void) | undefined;
+        (sleep as unknown as jest.Mock).mockImplementationOnce(() => new Promise<void>(r => (endBackoff = r)));
+
+        const dispatched = webhookService.dispatch(sessionId, 'message.received', payloadOf('M-12'));
+        for (let turn = 0; turn < 200 && !endBackoff; turn++) await new Promise(r => setImmediate(r));
+        await changes[change]('M-12');
+        endBackoff!();
+        await dispatched;
+
+        const bodies = (): unknown[] => postedBodies().map(data => (data as { body: string }).body);
+        expect(bodies()).toEqual(['first text', ...expectations[change].retries]);
+        expect(await ds.getRepository(WebhookDeliveryFailure).count()).toBe(expectations[change].failureRows);
+
+        mockFetch.mockReset();
+        mockFetch.mockResolvedValue(new Response('ok', { status: 200 }));
+        await redrive.redrive({ sessionId });
+        expect(bodies()).toEqual(expectations[change].redriven);
+      },
+    );
   });
 
   describe('a revoke the database stops answering after, once the row is cleared', () => {

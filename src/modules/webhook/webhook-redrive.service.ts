@@ -233,6 +233,7 @@ export class WebhookRedriveService implements OnModuleDestroy {
       }
       const outcome = await this.delivery.redeliver(webhook, row.sessionId, row.event, row.idempotencyKey, payload, {
         singleAttempt: true,
+        fromKeptCopy: true,
       });
       if (outcome === 'delivered') result.delivered++;
       else if (outcome === 'enqueued') result.enqueued++;

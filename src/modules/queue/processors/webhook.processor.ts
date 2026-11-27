@@ -18,7 +18,7 @@ import {
 } from '../../webhook/utils/record-delivery-failure';
 import {
   buildDeliveryHeaders,
-  dataHash,
+  changedData,
   isDeliverableWebhook,
   postWebhookPayload,
 } from '../../webhook/utils/deliver-once';
@@ -210,13 +210,14 @@ export class WebhookProcessor extends WorkerHost {
       }
       ctx.url = current.url;
       let body = JSON.stringify(payload);
-      if (held && job.data.baseHash && dataHash(held) !== job.data.baseHash) {
+      const changed = changedData(held, job.data.baseHash);
+      if (changed) {
         // Rewritten since the job was queued (an edit, or a delete through the API): built again from the row,
         // through the same hooks and checks as a dispatch, under the job's own key and delivery id.
         const rebuilt = await this.preflight.preflightDelivery(current, payload.deliveryId, payload.idempotencyKey, {
           sessionId,
           event,
-          baseData: held,
+          baseData: changed,
         });
         if (rebuilt === 'unrecorded') return await this.delayWithoutAttempt(job, token);
         if (!rebuilt || rebuilt === 'cancelled') {
@@ -410,16 +411,17 @@ export class WebhookProcessor extends WorkerHost {
   }
 
   /**
-   * The pre-hook event data a terminal row keeps for a redrive: a message delivery's as its outbox row holds it now,
+   * The pre-hook event data a terminal row keeps for a redrive: a message delivery's as a change rewrote its outbox row,
    * none once the message was taken back, and the job's own copy otherwise (or when the row cannot be read).
    */
   private async replayCopy(job: Job<WebhookJobData>): Promise<WebhookJobData['replayData']> {
-    const { replayData, webhookId, event, payload } = job.data;
+    const { replayData, webhookId, event, payload, baseHash } = job.data;
     if (!replayData) return undefined;
     const held = await this.outbox
       .currentMessagePayload(webhookId, payload.idempotencyKey, event)
       .catch(() => undefined);
-    return held === undefined ? replayData : (held ?? undefined);
+    const changed = changedData(held, baseHash);
+    return changed === undefined ? replayData : (changed ?? undefined);
   }
 
   /** The event data a terminal failure row keeps for a redrive, with the window it is kept for. */
