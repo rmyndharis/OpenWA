@@ -69,3 +69,86 @@ describe('Chat state after a failed write', () => {
     expect((await cold()).get(SID, PHONE)).toMatchObject({ muteEndTime: -1, pinned: true, archived: true });
   });
 });
+
+describe('Chat states cleared up to an unlink, on a real table', () => {
+  it('deletes the rows written up to that time and leaves those written after it', async () => {
+    const db = new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [ChatState],
+      synchronize: true,
+    });
+    await db.initialize();
+    try {
+      const repo = db.getRepository(ChatState);
+      await repo.upsert({ sessionId: SID, chatId: 'old', pinned: true, updatedAt: new Date(1_786_000_000_000) }, [
+        'sessionId',
+        'chatId',
+      ]);
+      await repo.upsert({ sessionId: SID, chatId: 'new', archived: true, updatedAt: new Date(1_786_000_002_000) }, [
+        'sessionId',
+        'chatId',
+      ]);
+
+      await new ChatStateStoreService(repo).clearSession(SID, new Date(1_786_000_001_000));
+
+      expect((await repo.find({ where: { sessionId: SID } })).map(row => row.chatId)).toEqual(['new']);
+    } finally {
+      await db.destroy();
+    }
+  });
+});
+
+describe('Chat states of the next account while an unlink clear is kept', () => {
+  let db: DataSource;
+  let repo: Repository<ChatState>;
+  beforeEach(async () => {
+    db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [ChatState], synchronize: true });
+    await db.initialize();
+    repo = db.getRepository(ChatState);
+  });
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await db.destroy();
+  });
+  const turns = async (): Promise<void> => {
+    for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
+  };
+  const unavailable = (): Error => Object.assign(new Error('Connection terminated'), { code: 'ECONNREFUSED' });
+
+  it("reads the next account's pin once the kept clear lands, the session's cache no longer taken as whole", async () => {
+    await repo.upsert({ sessionId: SID, chatId: 'old', pinned: true, updatedAt: new Date(1_000) }, [
+      'sessionId',
+      'chatId',
+    ]);
+    const store = new ChatStateStoreService(repo);
+    await store.reload();
+    jest.spyOn(repo, 'delete').mockRejectedValueOnce(unavailable());
+    await expect(store.clearSession(SID)).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+    const cutoff = new Date(2_000);
+    store.hideUpTo(SID, cutoff);
+    await store.remember(SID, 'new', { pinned: true });
+
+    await store.clearSession(SID, new Date(cutoff.getTime()));
+    store.get(SID, 'new');
+    await turns();
+
+    expect(store.get(SID, 'new')).toMatchObject({ pinned: true });
+    expect(store.get(SID, 'old')).toBeUndefined();
+  });
+
+  it('lifts the fence once the kept clear lands, whatever Date it is handed', async () => {
+    const store = new ChatStateStoreService(repo);
+    store.hideUpTo(SID, new Date(2_000));
+    await store.clearSession(SID, new Date(2_000));
+    // A restore brings an older row of the session back afterwards: it is not hidden any more.
+    await repo.upsert({ sessionId: SID, chatId: 'restored', archived: true, updatedAt: new Date(1_000) }, [
+      'sessionId',
+      'chatId',
+    ]);
+
+    await store.refreshSession(SID);
+
+    expect(store.get(SID, 'restored')).toMatchObject({ archived: true });
+  });
+});

@@ -273,6 +273,7 @@ const fakeStore = {
   getMessage: jest.fn(),
   getMessages: jest.fn().mockResolvedValue([]),
   clearSession: jest.fn().mockResolvedValue(undefined),
+  hideUpTo: jest.fn(),
   update: jest.fn().mockResolvedValue(undefined),
   remove: jest.fn().mockResolvedValue(undefined),
 };
@@ -582,6 +583,38 @@ describe('BaileysAdapter lifecycle & status', () => {
       });
       await new Promise(r => setImmediate(r));
       expect(order).toEqual(['dropped', 'cleared']);
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it('on a logged-out close: keeps a clear of the stored messages the database refused, up to the unlink', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    try {
+      const onStoredAccountWipeRefused = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize(noopCallbacks({ onStoredAccountWipeRefused }));
+      fakeStore.clearSession.mockRejectedValueOnce(
+        Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
+      );
+      fakeSock.fire('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 401 } } },
+      });
+      await new Promise(r => setImmediate(r));
+      await new Promise(r => setImmediate(r));
+
+      // The first try clears everything, as an unlink always did; what it could not clear is hidden up to now.
+      expect(fakeStore.clearSession.mock.calls).toEqual([['db-uuid-1']]);
+      expect(onStoredAccountWipeRefused).toHaveBeenCalledTimes(1);
+      const [[{ raw }]] = onStoredAccountWipeRefused.mock.calls as Array<[{ raw: string }]>;
+      const cutoff = new Date((JSON.parse(raw) as { before: string }).before);
+      expect(fakeStore.hideUpTo).toHaveBeenCalledWith('db-uuid-1', cutoff);
+      fakeStore.clearSession.mockClear();
+
+      await expect(adapter.restoreStoredWipe(raw)).resolves.toBe(true);
+
+      expect(fakeStore.clearSession).toHaveBeenCalledWith('db-uuid-1', cutoff);
     } finally {
       rmSpy.mockRestore();
     }

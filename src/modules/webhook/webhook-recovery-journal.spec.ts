@@ -584,6 +584,21 @@ describe('What the database refused, across a restart', () => {
     expect(calls).toEqual(['copy copy', 'change blank']);
   });
 
+  it('clears an unlinked account the stores could not clear before a crash, once an engine runs', async () => {
+    outage = 'on';
+    node.projector.keepStoredWipe(sessionId, { raw: '{"before":"2026-11-28T00:00:00.000Z"}' });
+    await settle();
+
+    await crash();
+    node = boot({ engine: false });
+    await recover();
+    const restoreStoredWipe = jest.fn().mockResolvedValue(true);
+    node.engines.set(sessionId, { redeliverInbound: jest.fn(), restoreStoredWipe } as unknown as IWhatsAppEngine);
+    await recover();
+
+    expect(restoreStoredWipe.mock.calls).toEqual([['{"before":"2026-11-28T00:00:00.000Z"}']]);
+  });
+
   it('lets go of what it cannot read back as a record, and of copies whose queued job will never run here', async () => {
     node.journal.close();
     appendFileSync(

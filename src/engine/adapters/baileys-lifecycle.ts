@@ -46,6 +46,7 @@ import { SESSION_STORE_MAP_CAP_DEFAULT, type BaileysSessionStore } from './baile
 import { ownAccountIds } from './baileys-stored-chat-previews.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { chatKind, userPart } from '../identity/wa-id';
+import { isDatabaseUnavailable } from '../../common/utils/recovery-queue';
 
 /**
  * How long a start waits for the stored chats. They serve the listing only, so a read that is slower than
@@ -267,6 +268,8 @@ export interface BaileysLifecycleHost {
   isStoredCopyKept?(messageId: string): boolean;
   /** The stored messages of the unlinked account are about to be cleared (see EngineEventCallbacks). */
   onStoredAccountCleared?(): void;
+  /** The database refused that clear: it runs again up to `before` once it answers (see EngineEventCallbacks). */
+  onStoredAccountWipeRefused?(before: Date): void;
   /** `628999:12@s.whatsapp.net` / `628999@s.whatsapp.net` -> `628999`. */
   extractPhone(id: string | undefined): string | null;
   toNeutralJid(jid: string): string;
@@ -1707,21 +1710,47 @@ export class BaileysLifecycle {
    * account's pin, mute and archive flags), and nothing else says why.
    */
   private async clearStoredAccountState(): Promise<void> {
+    // First, so nothing kept for that account is written into the store, or handed to the next account, after it.
+    this.host.onStoredAccountCleared?.();
+    const refused = await this.wipeStoredAccountState(undefined).catch((err: unknown) => err);
+    if (!refused || !isDatabaseUnavailable(refused)) return;
+    // Taken once the clear waited out the writes in flight: what it left is the account's, what comes later the next
+    // one's. Those rows read as absent until the clear, kept, runs again up to here once the database answers.
+    const before = new Date();
+    this.host.config.messageStore?.hideUpTo?.(this.host.config.dbSessionId, before);
+    this.host.config.chatStateStore?.hideUpTo?.(this.host.config.sessionId, before);
+    this.host.onStoredAccountWipeRefused?.(before);
+  }
+
+  /**
+   * Delete the stored messages and chat states of the unlinked account, all of them or (a clear the database refused,
+   * run again once it answers) those written up to `before`, each logged; rejects with a failure once both were tried.
+   */
+  async wipeStoredAccountState(before: Date | undefined): Promise<void> {
     const { messageStore, chatStateStore, dbSessionId, sessionId } = this.host.config;
+    let failure: unknown;
     const warn =
       (what: string) =>
-      (err: unknown): void =>
+      (err: unknown): void => {
+        failure ??= err;
         this.host.logger.warn(`Failed to clear the stored ${what} of an unlinked account`, {
           sessionId,
           error: err instanceof Error ? err.message : String(err),
+          ...(before ? { action: 'baileys_clear_retry_failed' } : {}),
         });
+      };
     // Logged when it completes too: nothing else dates the moment earlier messages stopped answering a reply.
     const cleared = (what: string) => (): void =>
       this.host.logger.log(`Cleared the stored ${what} of an unlinked account`, { sessionId });
-    // First, so nothing kept for that account is written into the store, or handed to the next account, after it.
-    this.host.onStoredAccountCleared?.();
-    await messageStore?.clearSession(dbSessionId).then(cleared('messages'), warn('messages'));
-    await chatStateStore?.clearSession(sessionId).then(cleared('chat states'), warn('chat states'));
+    const clearMessages = before
+      ? messageStore?.clearSession(dbSessionId, before)
+      : messageStore?.clearSession(dbSessionId);
+    await clearMessages?.then(cleared('messages'), warn('messages'));
+    const clearStates = before
+      ? chatStateStore?.clearSession(sessionId, before)
+      : chatStateStore?.clearSession(sessionId);
+    await clearStates?.then(cleared('chat states'), warn('chat states'));
+    if (failure !== undefined) throw failure instanceof Error ? failure : new Error('The stores could not be cleared');
   }
 
   /**

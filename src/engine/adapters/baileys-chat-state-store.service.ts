@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { LessThanOrEqual, Repository } from 'typeorm';
 import { ChatState } from './baileys-chat-state.entity';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
@@ -59,7 +59,8 @@ export interface ChatStateStore {
   /** (Re)load the in-memory mirror from the table (boot, and after a full-replace restore). */
   reload(): Promise<void>;
   /** Forget every chat state of one session (an unlink: the next account to link it starts clean). */
-  clearSession(sessionId: string): Promise<void>;
+  clearSession(sessionId: string, before?: Date): Promise<void>;
+  hideUpTo?(sessionId: string, upTo: Date): void;
   /** Forget the named chats of one session (a deleted chat a later message re-creates: it starts clean). */
   forget(sessionId: string, chatIds: string[]): Promise<void>;
   /** Re-read one session's rows from the table (a start: another node may have written them since). */
@@ -217,6 +218,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
       let skipped = false;
       for (const row of [...rows].reverse()) {
         const k = this.key(row.sessionId, row.chatId);
+        if (!this.visible(row)) continue;
         if (this.changedSince(k, since)) skipped = true;
         else this.index(k, fromRow(row));
       }
@@ -429,7 +431,8 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   private async peek(k: string, sessionId: string, chatId: string): Promise<ChatStateValue | undefined> {
     const cached = this.states.get(k);
     if (cached || this.completeSessions.has(sessionId) || this.absent.has(k)) return cached;
-    const row = await this.repo.findOne({ where: { sessionId, chatId } });
+    const found = await this.repo.findOne({ where: { sessionId, chatId } });
+    const row = found && this.visible(found) ? found : null;
     if (!row && !this.states.has(k)) this.markAbsent(k);
     return row ? fromRow(row) : undefined;
   }
@@ -462,6 +465,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
       let row: ChatState | null;
       try {
         row = await this.repo.findOne({ where: { sessionId, chatId } });
+        if (row && !this.visible(row)) row = null;
       } catch {
         if (this.cleared(sessionId, generation)) return false;
         // Persisted but not indexed, so the session's cache no longer holds all of its rows.
@@ -560,21 +564,51 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
    * waits for any already writing, so none can land after it and hand the old account's chat to the
    * next one.
    */
-  async clearSession(sessionId: string): Promise<void> {
+  async clearSession(sessionId: string, before?: Date): Promise<void> {
+    // An unlink (`before`) hides the rows it deletes until the delete lands, which a database that refused it runs
+    // again later: rows the next account writes meanwhile stay, and it is handed none of the old ones.
+    if (before) this.hideUpTo(sessionId, before);
     const writes = this.writesOf(sessionId);
     writes.generation++;
     await Promise.allSettled([...writes.pending]);
-    await this.repo.delete({ sessionId });
-    if (this.sessionWrites.get(sessionId) === writes && writes.pending.size === 0) {
-      this.sessionWrites.delete(sessionId);
+    // Whole once every row went: then the empty cache still holds all of them, and a miss needs no query.
+    let whole = false;
+    try {
+      await this.repo.delete(before ? { sessionId, updatedAt: LessThanOrEqual(before) } : { sessionId });
+      whole = !before;
+      // Compared by time: the clear kept for later hands over a Date of its own.
+      if (!before || this.clearedUpTo.get(sessionId)?.getTime() === before.getTime()) {
+        this.clearedUpTo.delete(sessionId);
+      }
+      if (this.sessionWrites.get(sessionId) === writes && writes.pending.size === 0) {
+        this.sessionWrites.delete(sessionId);
+      }
+    } finally {
+      // Evicted after the delete, so a read-through that raced it cannot leave a deleted row cached; and when the
+      // delete fails, so the old account's states are not served from the cache either.
+      const prefix = `${sessionId}${SEP}`;
+      for (const k of [...this.states.keys()]) {
+        if (k.startsWith(prefix)) this.states.delete(k);
+      }
+      // Else the rows the next account wrote since are left, or every row when the delete failed: read from the table.
+      if (!whole) this.completeSessions.delete(sessionId);
+      // And noted, for a load whose read ran before the delete and is answered after these entries go.
+      this.touch(prefix);
     }
-    // Evicted after the delete, so a read-through that raced it cannot leave a deleted row cached.
-    const prefix = `${sessionId}${SEP}`;
-    for (const k of [...this.states.keys()]) {
-      if (k.startsWith(prefix)) this.states.delete(k);
-    }
-    // And noted, for a load whose read ran before the delete and is answered after these entries go.
-    this.touch(prefix);
+  }
+
+  /** Read a session's rows written up to `upTo` as absent, until clearSession deletes them (an unlink kept for later). */
+  hideUpTo(sessionId: string, upTo: Date): void {
+    const hidden = this.clearedUpTo.get(sessionId);
+    if (!hidden || hidden < upTo) this.clearedUpTo.set(sessionId, upTo);
+  }
+
+  // Up to when an unlinked account's rows read as absent, by session, until clearSession deletes them.
+  private readonly clearedUpTo = new Map<string, Date>();
+
+  private visible(row: ChatState): boolean {
+    const hidden = this.clearedUpTo.get(row.sessionId);
+    return !hidden || !row.updatedAt || new Date(row.updatedAt).getTime() > hidden.getTime();
   }
 
   /**
@@ -648,6 +682,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     for (const row of [...rows].reverse()) {
       // Oldest first, as in reload.
       const k = this.key(sessionId, row.chatId);
+      if (!this.visible(row)) continue;
       if (this.changedSince(k, since)) skipped = true;
       else this.index(k, fromRow(row));
     }
@@ -689,7 +724,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
         // An answer older than a change to the chat is dropped, not cached and not read as "no row": the
         // next read asks again.
         if (this.states.has(k) || this.changedSince(k, since)) return;
-        if (row) this.index(k, fromRow(row));
+        if (row && this.visible(row)) this.index(k, fromRow(row));
         else this.markAbsent(k);
       })
       .catch(() => undefined)

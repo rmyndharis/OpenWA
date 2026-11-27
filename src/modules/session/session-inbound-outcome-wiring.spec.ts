@@ -42,6 +42,7 @@ describe('onInboundUnreadable wiring', () => {
     const keepStoredCopy = jest.fn();
     const forgetKeptInbound = jest.fn();
     const keepStoredChange = jest.fn();
+    const keepStoredWipe = jest.fn();
     const isStoredCopyKept = jest.fn((_sessionId: string, messageId: string) => messageId === 'M1');
     const host = {
       isLiveEngine: () => live,
@@ -52,6 +53,7 @@ describe('onInboundUnreadable wiring', () => {
         isStoredCopyKept,
         forgetKeptInbound,
         keepStoredChange,
+        keepStoredWipe,
       },
     } as unknown as SessionEngineWiringHost;
     const callbacks = new SessionEngineEventWiring({ logger: createLogger('test') }).buildCallbacks(
@@ -60,7 +62,15 @@ describe('onInboundUnreadable wiring', () => {
       'sess-1-name',
       host,
     );
-    return { callbacks, keepUnreadInbound, isChangeKept, keepStoredCopy, forgetKeptInbound, keepStoredChange };
+    return {
+      callbacks,
+      keepUnreadInbound,
+      isChangeKept,
+      keepStoredCopy,
+      forgetKeptInbound,
+      keepStoredChange,
+      keepStoredWipe,
+    };
   };
 
   it('keeps the message with the projector, to hand back once the database answers', () => {
@@ -94,6 +104,14 @@ describe('onInboundUnreadable wiring', () => {
     callbacks.onStoredAccountCleared?.();
 
     expect(forgetKeptInbound).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('keeps a clear of the stores the database refused, from an engine no longer live too', () => {
+    const { callbacks, keepStoredWipe } = setup(false);
+
+    callbacks.onStoredAccountWipeRefused?.({ raw: '{}' });
+
+    expect(keepStoredWipe).toHaveBeenCalledWith('sess-1', { raw: '{}' });
   });
 
   it('keeps a change of a stored copy the store refused with the projector, from a live engine only', () => {

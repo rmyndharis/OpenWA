@@ -111,7 +111,8 @@ export class KeptInbound implements RecoveryRecord {
   }
 
   ageCapped(): boolean {
-    return true;
+    // A clear of an unlinked account is kept until the lane is full: the next account would see what it leaves.
+    return this.kind !== 'wipe';
   }
 
   retry(): Promise<boolean> {
@@ -128,10 +129,10 @@ export class KeptInbound implements RecoveryRecord {
 }
 
 /**
- * What a kept inbound record holds: a message to read again, the engine's copy of a message to write, or a change of
- * that copy to apply, a delete (`blank`) or an edit (`text`).
+ * What a kept inbound record holds: a message to read again, the engine's copy of a message to write, a change of that
+ * copy to apply, a delete (`blank`) or an edit (`text`), or the clear of what an unlinked account left (`wipe`).
  */
-export type KeptInboundKind = 'message' | 'copy' | 'blank' | 'text';
+export type KeptInboundKind = 'message' | 'copy' | 'blank' | 'text' | 'wipe';
 
 /** A record's key: a message by its own id, a copy by its message's, a change of a copy by both. */
 export const keptInboundKey = (sessionId: string, id: string, kind: KeptInboundKind, changeId?: string): string =>
@@ -139,7 +140,9 @@ export const keptInboundKey = (sessionId: string, id: string, kind: KeptInboundK
     ? `${sessionId}:inbound:${id}`
     : kind === 'copy'
       ? `${sessionId}:copy:${id}`
-      : `${sessionId}:copy-change:${id}:${changeId ?? ''}`;
+      : kind === 'wipe'
+        ? `${sessionId}:wipe`
+        : `${sessionId}:copy-change:${id}:${changeId ?? ''}`;
 
 /** A kept inbound message as the journal keeps it. */
 interface JournaledInbound {
@@ -171,6 +174,6 @@ export function restoredKeptInbound(
     return undefined;
   }
   const targetId = typeof v.g === 'string' ? v.g : undefined;
-  const kind = v.c === 'copy' || v.c === 'blank' || v.c === 'text' ? v.c : 'message';
+  const kind = v.c === 'copy' || v.c === 'blank' || v.c === 'text' || v.c === 'wipe' ? v.c : 'message';
   return { sessionId: v.s, messageId: v.i, raw: v.m, kind, targetId, since: v.t };
 }

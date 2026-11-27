@@ -236,6 +236,8 @@ export class BaileysAdapter implements IWhatsAppEngine {
       isChangeKept: targetId => this.callbacks.isChangeKept?.(targetId) === true,
       isStoredCopyKept: messageId => this.callbacks.isStoredCopyKept?.(messageId) === true,
       onStoredAccountCleared: () => this.callbacks.onStoredAccountCleared?.(),
+      onStoredAccountWipeRefused: before =>
+        this.callbacks.onStoredAccountWipeRefused?.({ raw: JSON.stringify({ before: before.toISOString() }) }),
       keepStoredChange: (messageId, changeId, change) =>
         this.callbacks.onStoredChangeRefused?.({
           messageId,
@@ -379,6 +381,13 @@ export class BaileysAdapter implements IWhatsAppEngine {
     if (this.getStatus() !== EngineStatus.READY) return false;
     const lib = await this.lifecycle.loadLib();
     await this.events.redeliverInbound(revivedInbound(lib, raw));
+    return true;
+  }
+
+  /** A clear of an unlinked account's stores the database refused, run once it answers (see InboundRedelivery). */
+  async restoreStoredWipe(raw: string): Promise<boolean> {
+    const { before } = JSON.parse(raw) as { before: string };
+    await this.lifecycle.wipeStoredAccountState(new Date(before));
     return true;
   }
 

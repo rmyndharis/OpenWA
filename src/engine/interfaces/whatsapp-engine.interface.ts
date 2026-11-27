@@ -1129,6 +1129,12 @@ export interface EngineEventCallbacks {
    */
   onStoredAccountCleared?: () => void;
   /**
+   * Fired when the database refused that clear: `raw` holds the time of the unlink, for the session to keep and hand
+   * back once it answers (InboundRedelivery.restoreStoredWipe), which clears what the account wrote up to then and
+   * leaves what the next account wrote since. Baileys only.
+   */
+  onStoredAccountWipeRefused?: (kept: { raw: string }) => void;
+  /**
    * Fired for each RSVP to a WhatsApp event (consumers emit `event.response`). Baileys only: it
    * decrypts the RSVP itself from the stored event creation message. whatsapp-web.js never fires it.
    */

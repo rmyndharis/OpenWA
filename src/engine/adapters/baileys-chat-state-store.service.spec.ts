@@ -53,11 +53,19 @@ function makeRepo(initial: Partial<ChatState>[] = []) {
       };
       return qb;
     }),
-    delete: jest.fn(({ sessionId, chatId }: { sessionId: string; chatId?: string }) => {
-      for (const [k, r] of rows)
-        if (r.sessionId === sessionId && (chatId === undefined || r.chatId === chatId)) rows.delete(k);
-      return Promise.resolve(undefined);
-    }),
+    delete: jest.fn(
+      ({ sessionId, chatId, updatedAt }: { sessionId: string; chatId?: string; updatedAt?: { value: Date } }) => {
+        for (const [k, r] of rows)
+          if (
+            r.sessionId === sessionId &&
+            (chatId === undefined || r.chatId === chatId) &&
+            // Only the LessThanOrEqual an unlink cleared later passes: rows written since stay.
+            (updatedAt === undefined || r.updatedAt.getTime() <= updatedAt.value.getTime())
+          )
+            rows.delete(k);
+        return Promise.resolve(undefined);
+      },
+    ),
   };
   return repo;
 }
@@ -92,6 +100,33 @@ describe('ChatStateStoreService', () => {
     expect([...repo.rows.values()].map(r => r.sessionId)).toEqual(['t']);
     expect(svc.get('s', 'c')).toBeUndefined();
     expect(svc.get('t', 'c')).toMatchObject({ muteEndTime: null, archived: false, pinned: true });
+  });
+
+  it('clearSession up to a time leaves the rows written after it, for an unlink cleared once the database answers', async () => {
+    const repo = makeRepo([
+      { sessionId: 's', chatId: 'old', pinned: true, updatedAt: new Date(1000) },
+      { sessionId: 's', chatId: 'new', archived: true, updatedAt: new Date(3000) },
+    ]);
+    const svc = svcWith(repo);
+
+    await svc.clearSession('s', new Date(2000));
+
+    expect([...repo.rows.values()].map(r => r.chatId)).toEqual(['new']);
+  });
+
+  it('clearSession drops the cached states of the session even when the table refuses the delete', async () => {
+    const repo = makeRepo([{ sessionId: 's', chatId: 'c', pinned: true }]);
+    const svc = svcWith(repo);
+    await svc.reload();
+    repo.delete.mockRejectedValueOnce(Object.assign(new Error('Connection terminated'), { code: 'ECONNREFUSED' }));
+
+    await expect(svc.clearSession('s', new Date())).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+
+    expect(svc.get('s', 'c')).toBeUndefined();
+    // Nor read back from the row the delete left, until the delete runs again.
+    for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
+    await svc.reload();
+    expect(svc.get('s', 'c')).toBeUndefined();
   });
 
   describe('reports when each state last changed', () => {

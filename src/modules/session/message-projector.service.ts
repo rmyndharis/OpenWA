@@ -188,6 +188,10 @@ const KEPT_INBOUND_LOSS: Readonly<Record<KeptInboundKind, [string, string]>> = {
     'message_copy_blank_lost',
   ],
   text: ['An edit of the stored copy of a message could not be kept any longer', 'message_copy_edit_lost'],
+  wipe: [
+    'What an unlinked account left in the stored messages and chat states could not be cleared: the next account may see it',
+    'message_store_wipe_lost',
+  ],
 };
 
 /** The one pass the kept changes get at shutdown, once the engines are gone (a stage of shutdown-budget.ts). */
@@ -638,6 +642,7 @@ export class MessageProjector {
       // the same message still kept (one that failed for a reason of its own), so they land in the order they came in.
       if (!engine || !handsBackInbound(engine) || this.keptBefore(kept)) return false;
       if (kept.kind === 'message') return engine.redeliverInbound(kept.raw);
+      if (kept.kind === 'wipe') return engine.restoreStoredWipe(kept.raw);
       // A change of a copy comes after the copy and the older changes kept of it (keptBefore), so a delete wins over an
       // edit in either order: an edit finds nothing to set in a blank copy.
       if (kept.kind !== 'copy') return engine.restoreStoredChange(kept.raw);
@@ -678,6 +683,11 @@ export class MessageProjector {
     this.keepInbound(key, sessionId, kept.messageId, kept.raw, 'copy', kept.messageId);
   }
 
+  /** Keep the clear of what an unlinked account left in the engine's stores, refused by the database (see KeptInbound). */
+  keepStoredWipe(sessionId: string, kept: { raw: string }): void {
+    this.keepInbound(keptInboundKey(sessionId, '', 'wipe'), sessionId, '', kept.raw, 'wipe', undefined);
+  }
+
   /** Keep an edit or delete of the engine's copy of a message the database refused, to apply it once it answers. */
   keepStoredChange(
     sessionId: string,
@@ -708,7 +718,10 @@ export class MessageProjector {
    */
   forgetKeptInbound(sessionId: string): void {
     for (const record of [...this.recovery.records('receive')]) {
-      if (record instanceof KeptInbound && record.sessionId === sessionId) this.recovery.settle('receive', record.key);
+      // A pending clear of an account unlinked before stays: it is what keeps that account from the next one.
+      if (record instanceof KeptInbound && record.sessionId === sessionId && record.kind !== 'wipe') {
+        this.recovery.settle('receive', record.key);
+      }
     }
   }
 

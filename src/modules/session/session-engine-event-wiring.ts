@@ -390,6 +390,8 @@ export class SessionEngineEventWiring {
       },
       isStoredCopyKept: (messageId): boolean => host.messages.isStoredCopyKept(id, messageId),
       onStoredAccountCleared: (): void => host.messages.forgetKeptInbound(id),
+      // Not guarded either: the clear it keeps is of the session's own stores.
+      onStoredAccountWipeRefused: (kept): void => host.messages.keepStoredWipe(id, kept),
       onStoredChangeRefused: (kept): void => {
         if (!host.isLiveEngine(id, engine) || !owns()) return;
         host.messages.keepStoredChange(id, kept);

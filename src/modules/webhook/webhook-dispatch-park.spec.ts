@@ -1202,6 +1202,19 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
         expect(lost).toEqual([expect.objectContaining({ messageId: 'E-1', reason: 'failures' })]);
       });
 
+      it('clears what an unlinked account left in the stores once the database answers, a later unlink kept apart', async () => {
+        const restoreStoredWipe = jest.fn().mockResolvedValue(true);
+        Object.assign(engine, { restoreStoredWipe });
+        projector.keepStoredWipe(sessionId, { raw: 'wipe' });
+        projector.forgetKeptInbound(sessionId);
+        const record = projector.recoveryQueue().get('receive', `${sessionId}:wipe`);
+        expect(record?.ageCapped()).toBe(false);
+
+        await recover();
+
+        expect(restoreStoredWipe.mock.calls).toEqual([['wipe']]);
+      });
+
       it('hands nothing back to the next account once the session unlinked the one it was kept for', async () => {
         projector.keepStoredCopy(sessionId, { messageId: 'E-1', raw: copyOf('E-1') });
         projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: 'A', targetId: 'E-1' });
