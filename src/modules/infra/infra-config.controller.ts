@@ -14,7 +14,12 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { InfraConfigResponseDto, InfraConfigSaveResponseDto, InfraRestartResponseDto } from './dto/infra-response.dto';
 import { RestartDto } from './dto/restart.dto';
-import { Capability, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import {
+  Capability,
+  RequireRole,
+  RequireUnrestrictedKey,
+  RequireUnscopedKey,
+} from '../auth/decorators/auth.decorators';
 import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { writeSecretFile } from '../../common/utils/secret-file';
@@ -201,7 +206,9 @@ export class InfraConfigController {
     };
   }
 
+  // These settings decide where messages, queued webhook jobs and media are stored, so no restricted key may change them.
   @Capability(ApiKeyCapability.INFRA_WRITE)
+  @RequireUnrestrictedKey()
   @Put('config')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Save infrastructure configuration to .env file' })
@@ -534,6 +541,7 @@ export class InfraConfigController {
   }
 
   @Capability(ApiKeyCapability.INFRA_WRITE)
+  @RequireUnrestrictedKey()
   @Post('restart')
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.ADMIN)

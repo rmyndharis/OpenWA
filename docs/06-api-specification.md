@@ -6018,7 +6018,7 @@ When nothing supplies a key — no pinned environment value and the file absent 
 
 Merge-save infrastructure config to `data/.env.generated` (a `0600` secret file). A partial payload preserves untouched keys; empty/omitted secret fields keep the existing stored secret.
 
-**Auth:** API key (ADMIN)
+**Auth:** API key (ADMIN) with no `allowedSessions`, `allowedChats` or `deniedPermissions`
 
 **Request body** — `SaveConfigDto` (recursively class-validated; unknown or mistyped fields are rejected)
 
@@ -6107,7 +6107,7 @@ env file, a config the production boot secret guard or the boot environment vali
 
 Request a graceful server restart, optionally orchestrating Docker profiles (add/remove services). Schedules process shutdown as a side-effect.
 
-**Auth:** API key (ADMIN)
+**Auth:** API key (ADMIN) with no `allowedSessions`, `allowedChats` or `deniedPermissions`
 
 **Request body** — optional `RestartDto` (class-validated; unknown fields and non-string array members reject)
 

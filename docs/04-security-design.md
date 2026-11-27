@@ -163,8 +163,9 @@ it as a surviving admin would bless a management lockout.
 
 `POST /api/mcp` and the Bull Board queue dashboard refuse a key with any blocked capability (`403`):
 neither surface is split into capability-classified handlers, so the blocklist cannot be enforced
-there. Infrastructure data and storage export and import, and the plugin lifecycle writes, require a
-fully unrestricted key. Integration instances, redrive and the per-session plugin config refuse a key
+there. Infrastructure data and storage export and import, `PUT /api/infra/config`,
+`POST /api/infra/restart` and the plugin lifecycle writes require a fully unrestricted key.
+Integration instances, redrive and the per-session plugin config refuse a key
 with any blocked capability, and keep their session fence for a session-scoped key. API-key management
 instead uses restriction inheritance as described above.
 

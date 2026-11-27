@@ -34,6 +34,8 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import request from 'supertest';
 import { InfraConfigController } from './infra-config.controller';
+import { Reflector } from '@nestjs/core';
+import { UNRESTRICTED_KEY } from '../auth/decorators/auth.decorators';
 import { applyGlobalValidation } from '../../config/app-validation';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { EngineFactory } from '../../engine/engine.factory';
@@ -3674,5 +3676,14 @@ describe('InfraConfigController.saveConfig PUPPETEER_ARGS allowlist and data-dir
       fs.rmSync(work, { recursive: true, force: true });
       fs.rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe('InfraConfigController access', () => {
+  it.each(['saveConfig', 'requestRestart'] as const)('%s requires an unrestricted key', method => {
+    // Metadata lookup key, never invoked.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const handler = InfraConfigController.prototype[method];
+    expect(new Reflector().get<boolean>(UNRESTRICTED_KEY, handler)).toBe(true);
   });
 });
