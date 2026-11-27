@@ -370,6 +370,26 @@ test('a backup the gateway has no memory to restore gets its own message, since 
   ]);
 });
 
+test('a restore the gateway rolled back when it stopped says the data is unchanged', async () => {
+  window.sessionStorage.setItem('openwa_api_key_id', 'key-a');
+  importAnswers = [
+    json(
+      { statusCode: 503, message: 'The gateway stopped', error: 'Service Unavailable', code: 'IMPORT_STOPPED' },
+      503,
+    ),
+  ];
+  answerConfirms(true);
+  const { result } = renderBackup();
+  await rtl.act(() => result.current.importBackup(backupFile({ tables: { sessions: [{ id: 'a' }] } })));
+  assert.deepEqual(toastLog, [
+    {
+      kind: 'error',
+      title: i18nT('infrastructure.migration.importFailed'),
+      detail: i18nT('infrastructure.migration.importStopped'),
+    },
+  ]);
+});
+
 function heldValue<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;

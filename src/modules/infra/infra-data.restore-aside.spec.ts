@@ -252,21 +252,42 @@ describe.each<SqliteJournalMode>(['WAL', 'DELETE'])('a SQLite file restore (%s j
     await expectReleased();
   });
 
-  it('keeps a stop waiting until the restore has ended and let the callers it held go on', async () => {
-    const svc = service();
+  it.each([
+    ['the module is destroyed', 'destroy'],
+    ['shutdown teardown has begun', 'teardown'],
+  ] as const)('rolls back at its next chunk when %s, answering 503 IMPORT_STOPPED', async (_case, how) => {
+    let tearingDown = false;
+    const svc = new InfraDataService(
+      config as never,
+      ds,
+      undefined,
+      sessionsService as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { isTearingDown: () => tearingDown } as never,
+    );
     let restoreClosedAtStop: boolean | undefined;
     let stopped: Promise<void> | undefined;
     const held = atRestoreStatement(ds, /^INSERT INTO "?messages/i, () => {
-      stopped = svc.onModuleDestroy().then(() => {
-        restoreClosedAtStop = held()?.connection.isInitialized === false;
-      });
+      if (how === 'teardown') tearingDown = true;
+      else {
+        stopped = svc.onModuleDestroy().then(() => {
+          restoreClosedAtStop = held()?.connection.isInitialized === false;
+        });
+      }
     });
 
-    const result = await svc.importData({ tables: archive });
+    await expect(svc.importData({ tables: archive })).rejects.toMatchObject({
+      status: 503,
+      response: { code: 'IMPORT_STOPPED' },
+    });
     await stopped;
 
-    expect(result).toMatchObject({ imported: true });
-    expect(restoreClosedAtStop).toBe(true);
+    if (how === 'destroy') expect(restoreClosedAtStop).toBe(true);
+    expect(await names()).toEqual(['before']);
+    expect(await ds.getRepository(Message).count()).toBe(1);
     await expectReleased();
   });
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { shouldOfferStopOrphansRetry } from '../utils/importRefusal';
+import { importRefusalMessageKey, shouldOfferStopOrphansRetry } from '../utils/importRefusal';
 import { getActiveApiKeyId, keepsSameKey } from '../utils/authLifecycle';
 import { useTranslation } from 'react-i18next';
 import { infraApi } from '../services/api';
@@ -138,12 +138,15 @@ export function useDataBackup(): DataBackup {
       // instead of a bare "Payload Too Large". The status is carried on the Error by the api client.
       // IMPORT_TOO_LARGE is a different refusal: the gateway has no memory to restore the backup, and
       // its message says how much it can, which raising the cap would not change.
+      const explained = importRefusalMessageKey(status, code);
       const detail =
         status === 413 && code !== 'IMPORT_TOO_LARGE'
           ? t('infrastructure.migration.importTooLarge')
-          : err instanceof Error
-            ? err.message
-            : t('common.unknownError');
+          : explained
+            ? t(explained)
+            : err instanceof Error
+              ? err.message
+              : t('common.unknownError');
       toast.error(t('infrastructure.migration.importFailed'), detail);
     }
   };

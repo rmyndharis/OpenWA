@@ -1493,6 +1493,7 @@ export const infraApi = {
   // message lists them) is the only one the caller retries with stopOrphans=true to stop those
   // engines inside the request. IMPORT_ALREADY_RUNNING (another restore is in flight) and
   // IMPORT_NESTED_TRANSACTION (another transaction holds the connection) leave nothing to retry.
+  // 503 IMPORT_STOPPED: the gateway stopped during a SQLite restore and rolled it back.
   // force is deliberately NOT exposed: it leaves the engines writing into the restored tables until
   // a restart — the window stopOrphans exists to close.
   importData: (tables: Record<string, unknown[]>, options?: { stopOrphans?: boolean }) =>

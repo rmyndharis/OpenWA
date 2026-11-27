@@ -195,6 +195,11 @@ export class InfraDataController {
     description:
       'Body refused before it was parsed. Above `BODY_SIZE_LIMIT` or half the in-flight body budget: raise the limit. With code IMPORT_TOO_LARGE: the body is within the limit, but this process has no memory to restore it. The body is decoded to one string and parsed whole, which takes about 2.2 bytes of heap per byte of a backup all in ASCII, so before the body is read one above the free heap divided by 2.5, or above 536870888 bytes, is refused. A body with any character outside ASCII decodes to two bytes a character, so once read it is refused above the free heap divided by 4. The message names both figures; nothing was written. A caller without an admin key that no session or chat restriction limits (the only kind the route accepts) is refused above 26214400 bytes whatever the memory, and is not told the figures. A body without Content-Length counts as BODY_SIZE_LIMIT long; when that is above the limit, the message says the length is needed.',
   })
+  @ApiResponse({
+    status: 503,
+    description:
+      'Refused with code IMPORT_STOPPED: the gateway stopped while a SQLite restore ran, and the restore was rolled back, so the data is as it was. Restore again once the gateway is back.',
+  })
   async importData(@Body() data: ImportDataDto): Promise<InfraImportDataResult> {
     return this.infraData.importData(data);
   }

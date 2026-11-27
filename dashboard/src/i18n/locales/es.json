@@ -1305,7 +1305,8 @@
       "importOk": "Datos importados",
       "importConfirm": "La importación REEMPLAZARÁ todos los datos actuales con la copia de seguridad ({{rows}} filas). Esto no se puede deshacer. ¿Continuar?",
       "invalidFile": "Ese archivo no es una copia de seguridad de datos válida de OpenWA.",
-      "importTooLarge": "La copia de seguridad supera el límite de la solicitud. Aumenta BODY_SIZE_LIMIT en el servidor e inténtalo de nuevo."
+      "importTooLarge": "La copia de seguridad supera el límite de la solicitud. Aumenta BODY_SIZE_LIMIT en el servidor e inténtalo de nuevo.",
+      "importStopped": "El servidor se detuvo durante la importación y la revirtió, así que tus datos no han cambiado. Vuelve a importar el mismo archivo cuando el servidor esté de nuevo disponible."
     },
     "statusLoadError": "No se pudo cargar el estado actual de la infraestructura. Actualiza para reintentar.",
     "configLoadError": "No se pudo cargar la configuración guardada, así que no se puede editar aquí. Actualiza para reintentar."

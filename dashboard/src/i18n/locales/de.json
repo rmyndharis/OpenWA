@@ -1275,7 +1275,8 @@
       "importOk": "Daten wurden importiert",
       "importConfirm": "Beim Import werden alle aktuellen Daten durch die Sicherung ERSETZT ({{rows}} Zeilen). Dies kann nicht rückgängig gemacht werden. Fortfahren?",
       "invalidFile": "Diese Datei ist keine gültige OpenWA-Datensicherung.",
-      "importTooLarge": "Die Sicherung ist für das Anfragelimit zu groß. Erhöhe BODY_SIZE_LIMIT auf dem Server und versuche es erneut."
+      "importTooLarge": "Die Sicherung ist für das Anfragelimit zu groß. Erhöhe BODY_SIZE_LIMIT auf dem Server und versuche es erneut.",
+      "importStopped": "Der Server wurde während des Imports beendet und hat ihn zurückgesetzt, deine Daten sind unverändert. Importiere dieselbe Datei erneut, sobald der Server wieder läuft."
     },
     "restart": {
       "idleTitle": "Konfiguration gespeichert",

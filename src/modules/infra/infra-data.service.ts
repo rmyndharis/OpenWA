@@ -13,6 +13,7 @@ import { setImmediate } from 'timers/promises';
 import { DataSource, QueryRunner } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { createLogger } from '../../common/services/logger.service';
+import { ShutdownService } from '../../common/services/shutdown.service';
 import { isMissingTableError } from '../../common/utils/db-errors';
 import { closeSessionWrites } from '../../common/utils/session-write-scope';
 import {
@@ -467,6 +468,9 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
     // the module graph and reorder its lifecycle hooks relative to the rest of the app.
     @Optional()
     private readonly moduleRef?: ModuleRef,
+    // Stops a restore between chunks once teardown has begun.
+    @Optional()
+    private readonly shutdown?: ShutdownService,
   ) {}
 
   /** An export that died with its process may have left a copy of the database beside it. */
@@ -477,6 +481,7 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
   /**
    * Nest runs this before any beforeApplicationShutdown, so the shutdown checkpoint finds no reader
    * left. The download fails at its next read and is reset, as any failure after the first byte is.
+   * A restore on a connection of its own stops at its next chunk and rolls back.
    */
   async onModuleDestroy(): Promise<void> {
     this.stopping.abort(
@@ -1253,7 +1258,23 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
           // `.catch(() => {})` here could otherwise silently commit a MERGED (not replaced) restore on
           // SQLite, violating the endpoint's "replaces existing data" contract.
           // A restore on its own connection gives the event loop a turn every RESTORE_CHUNK_ROWS rows.
-          const turn = restoresAside ? (): Promise<void> => setImmediate() : undefined;
+          // A stop is checked on each turn, so it rolls the restore back within a chunk. A short restore can still
+          // finish inside the shutdown grace, before teardown begins.
+          const turn = restoresAside
+            ? async (): Promise<void> => {
+                await setImmediate();
+                if (this.stopping.signal.aborted || this.shutdown?.isTearingDown()) {
+                  throw new ServiceUnavailableException({
+                    statusCode: 503,
+                    error: 'Service Unavailable',
+                    message:
+                      'The gateway stopped during the restore, which was rolled back: the data is as it was. ' +
+                      'Restore again once the gateway is back.',
+                    code: 'IMPORT_STOPPED',
+                  });
+                }
+              }
+            : undefined;
           // There it deletes in chunks too (no table is WITHOUT ROWID), and `affected` counts the rows a chunk took.
           const deleteRows = async (table: string, where = ''): Promise<void> => {
             if (!turn) {

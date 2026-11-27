@@ -1275,7 +1275,8 @@
       "importOk": "Data imported",
       "importConfirm": "Importing will REPLACE all current data with the backup ({{rows}} rows). This cannot be undone. Continue?",
       "invalidFile": "That file isn't a valid OpenWA data backup.",
-      "importTooLarge": "Backup is too large for the request limit. Increase BODY_SIZE_LIMIT on the server and try again."
+      "importTooLarge": "Backup is too large for the request limit. Increase BODY_SIZE_LIMIT on the server and try again.",
+      "importStopped": "The server stopped during the import and rolled it back, so your data is unchanged. Import the same file again once the server is back."
     },
     "restart": {
       "idleTitle": "Configuration saved",

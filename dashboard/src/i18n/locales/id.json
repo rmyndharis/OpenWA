@@ -1275,7 +1275,8 @@
       "importOk": "Data diimpor",
       "importConfirm": "Mengimpor akan MENGGANTI semua data saat ini dengan cadangan ({{rows}} baris). Ini tidak dapat dibatalkan. Lanjutkan?",
       "invalidFile": "Berkas tersebut bukan cadangan data OpenWA yang valid.",
-      "importTooLarge": "Cadangan terlalu besar untuk batas permintaan. Tingkatkan BODY_SIZE_LIMIT di server dan coba lagi."
+      "importTooLarge": "Cadangan terlalu besar untuk batas permintaan. Tingkatkan BODY_SIZE_LIMIT di server dan coba lagi.",
+      "importStopped": "Server berhenti saat impor berjalan dan membatalkannya, jadi data Anda tidak berubah. Impor berkas yang sama lagi setelah server kembali aktif."
     },
     "restart": {
       "idleTitle": "Konfigurasi disimpan",

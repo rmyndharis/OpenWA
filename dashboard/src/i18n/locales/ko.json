@@ -1275,7 +1275,8 @@
       "importOk": "데이터를 가져왔습니다",
       "importConfirm": "가져오기를 실행하면 현재 데이터가 백업본({{rows}}행)으로 완전히 대체됩니다. 되돌릴 수 없습니다. 계속할까요?",
       "invalidFile": "올바른 OpenWA 데이터 백업 파일이 아닙니다.",
-      "importTooLarge": "백업 파일이 요청 크기 제한을 초과합니다. 서버의 BODY_SIZE_LIMIT을 늘린 후 다시 시도하세요."
+      "importTooLarge": "백업 파일이 요청 크기 제한을 초과합니다. 서버의 BODY_SIZE_LIMIT을 늘린 후 다시 시도하세요.",
+      "importStopped": "가져오기 중에 서버가 중지되어 가져오기가 취소되었으므로 데이터는 변경되지 않았습니다. 서버가 다시 실행되면 같은 파일을 다시 가져오세요."
     },
     "restart": {
       "idleTitle": "설정이 저장되었습니다",
