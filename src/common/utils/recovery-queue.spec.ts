@@ -155,6 +155,39 @@ describe('RecoveryQueue', () => {
     expect(queue.get('change', 'new')).toBeDefined();
   });
 
+  it('gives up at once a record larger than the whole byte budget, in any lane, and keeps every older record', () => {
+    for (const lane of ['send', 'change', 'dispatch'] as const) {
+      log = [];
+      const queue = new RecoveryQueue(options({ maxBytes: 1000 }));
+      for (const name of ['a', 'b']) queue.park(name, record(name, 'dispatch', { bytes: 400 }));
+      queue.park('huge', record('huge', lane, { bytes: 1001 }));
+
+      expect(log).toEqual(['lost huge bytes']);
+      expect(queue.size).toBe(2);
+      expect(queue.get(lane, 'huge')).toBeUndefined();
+      // What it would have counted is not counted: a record that fits still fits.
+      queue.park('c', record('c', 'send', { bytes: 200 }));
+      expect(log).toEqual(['lost huge bytes']);
+    }
+  });
+
+  it('gives up at once a record kept again under its key that grew past the whole byte budget', () => {
+    const queue = new RecoveryQueue(options({ maxBytes: 1000 }));
+    let size = 300;
+    queue.park('b', record('b', 'dispatch', { bytes: 400 }));
+    const growing = record('growing', 'change');
+    growing.bytes = () => size;
+    queue.park('growing', growing);
+    size = 1200;
+    queue.park('growing', growing);
+
+    expect(log).toEqual(['lost growing bytes']);
+    expect(queue.get('change', 'growing')).toBeUndefined();
+    expect(queue.size).toBe(1);
+    queue.park('c', record('c', 'send', { bytes: 600 }));
+    expect(log).toEqual(['lost growing bytes']);
+  });
+
   it('keeps the place of a record kept again under its key, and gives up on the first kept when its lane is full', () => {
     const queue = new RecoveryQueue(options());
     const [a, b, c] = ['a', 'b', 'c'].map(name => record(name));
@@ -406,6 +439,20 @@ describe('RecoveryQueue with a journal', () => {
     a.held = 'a written in part';
     await queue.flush();
     expect(restart().take('change')).toEqual([['a', { name: 'a', held: 'a written in part', since: 1_000_000 }]]);
+  });
+
+  it('journals no record larger than the whole byte budget, and forgets one that grew past it', () => {
+    const queue = new RecoveryQueue(options({ maxBytes: 1000 }));
+    queue.register('change', codec('change'));
+    let size = 1;
+    const growing = kept('growing', 'change', { bytes: () => size });
+    queue.park('growing', growing);
+    queue.park('huge', kept('huge', 'change', { bytes: () => 1001 }));
+    size = 1001;
+    queue.park('growing', growing);
+
+    expect(log).toEqual(['lost huge bytes', 'lost growing bytes']);
+    expect(restart().take('change')).toEqual([]);
   });
 
   it('restores what the last process kept, as it was, under every bound, before any pass', async () => {

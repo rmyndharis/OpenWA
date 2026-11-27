@@ -195,8 +195,16 @@ export class RecoveryQueue {
     return this.lanes[lane].get(key);
   }
 
-  /** Keep a record (one already kept under the key keeps its place), then hold every bound. */
+  /**
+   * Keep a record (one already kept under the key keeps its place), then hold every bound. One larger than the whole
+   * byte budget is given up at once, and nothing older is given up for it: no eviction would make it fit.
+   */
   park(key: string, record: RecoveryRecord): void {
+    if (record.ageCapped() && record.bytes() > this.options.maxBytes) {
+      this.drop(key, record);
+      record.lost('bytes');
+      return;
+    }
     if (this.stopped.has(record.lane)) {
       // After the shutdown pass: kept for the next start when the journal takes it, else lost.
       if (this.journal(key, record)) this.options.journal!.noteKept(1);
