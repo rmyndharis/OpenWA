@@ -113,6 +113,26 @@ describe('a status the database refused', () => {
     expect(dispatch).toHaveBeenCalledWith('s1', 'status.received', expect.objectContaining({ statusId: 'st1' }));
   });
 
+  it.each([
+    ['its row was already stored by then', false, 60_000],
+    ['it expired meanwhile', true, -1],
+  ] as const)(
+    'announces nothing of a kept status stored once the database answers when %s',
+    async (_l, created, ttl) => {
+      const { projector, engine, dispatch, ingest, stored } = setup();
+      ingest
+        .mockRejectedValueOnce(unavailable())
+        .mockResolvedValue({ row: { ...stored.row, expiresAt: Date.now() + ttl }, created });
+      await projector.handleInboundMessage('s1', engine, status)?.settled;
+      await turns();
+
+      await projector.retryParkedChanges();
+
+      expect(ingest).toHaveBeenCalledTimes(2);
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
+
   it('keeps nothing of a status, or of its delete, refused for a reason of its own', async () => {
     const { projector, engine, ingest, removeRevoked, remove } = setup();
     const constraint = Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' });

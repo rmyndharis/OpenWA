@@ -236,3 +236,83 @@ describe('A chat state write the database refused', () => {
     expect(kept).toEqual([]);
   });
 });
+
+describe('Chat states an unlinked account left, hidden while its clear is kept', () => {
+  let db: DataSource;
+  let repo: Repository<ChatState>;
+  const hiddenUpTo = new Date(2_000);
+  beforeEach(async () => {
+    db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [ChatState], synchronize: true });
+    await db.initialize();
+    repo = db.getRepository(ChatState);
+    // The old account's rows, written before the unlink.
+    await repo.upsert(
+      {
+        sessionId: SID,
+        chatId: LID,
+        pinned: true,
+        muteEndTime: -1,
+        observed: 'muteEndTime,pinned',
+        updatedAt: new Date(1_000),
+      },
+      ['sessionId', 'chatId'],
+    );
+    await repo.upsert(
+      {
+        sessionId: SID,
+        chatId: PHONE,
+        pinned: true,
+        muteEndTime: -1,
+        observed: 'muteEndTime,pinned',
+        updatedAt: new Date(1_000),
+      },
+      ['sessionId', 'chatId'],
+    );
+  });
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await db.destroy();
+  });
+  const fresh = (): ChatStateStoreService => {
+    const store = new ChatStateStoreService(repo);
+    store.hideUpTo(SID, hiddenUpTo);
+    return store;
+  };
+  const turns = async (): Promise<void> => {
+    for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
+  };
+
+  it('are not warmed into the cache by a miss', async () => {
+    const store = fresh();
+    store.get(SID, PHONE);
+    await turns();
+
+    expect(store.get(SID, PHONE)).toBeUndefined();
+  });
+
+  it('are not loaded by a refresh of the session', async () => {
+    const store = fresh();
+    await store.refreshSession(SID);
+
+    expect(store.get(SID, PHONE)).toBeUndefined();
+  });
+
+  it('are not the base a write of the next account merges onto', async () => {
+    const store = fresh();
+    await store.remember(SID, PHONE, { archived: true });
+
+    expect(await repo.findOneBy({ sessionId: SID, chatId: PHONE })).toMatchObject({
+      archived: true,
+      pinned: false,
+      muteEndTime: null,
+    });
+  });
+
+  it('are not folded from a twin into the chat of the next account', async () => {
+    await repo.delete({ sessionId: SID, chatId: PHONE });
+    const store = fresh();
+    await store.fold(SID, PHONE, [LID], { archived: true });
+
+    expect(await repo.findOneBy({ sessionId: SID, chatId: PHONE })).toMatchObject({ archived: true, pinned: false });
+  });
+});

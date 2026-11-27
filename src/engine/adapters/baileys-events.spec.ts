@@ -1810,6 +1810,13 @@ describe('BaileysEvents removal of a conflicting copy the store refused', () => 
     await events.restoreStoredChange('C1', JSON.parse(JSON.stringify(kept[0].change)) as StoredChange);
 
     expect(removed).toEqual(['C1']);
+
+    // The real message of the id stored meanwhile, from another sender: a kept removal leaves its copy alone.
+    removed.length = 0;
+    copy.key = { id: 'C1', remoteJid: '6282222222222@s.whatsapp.net', fromMe: true };
+    await events.restoreStoredChange('C1', kept[0].change);
+
+    expect(removed).toEqual([]);
   });
 });
 
