@@ -493,6 +493,11 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     return this.delivery.changeMessageCopies(sessionId, waMessageId, change, shouldApply);
   }
 
+  /** A change of the message is kept on this node until the database answers, or no longer is (see the delivery). */
+  holdMessage(sessionId: string, waMessageId: string, held: boolean): void {
+    this.delivery.holdMessage(sessionId, waMessageId, held);
+  }
+
   /** Write an edit of a stored message into its open outbox rows and kept failure copies. */
   rewritePendingDeliveriesForMessage(
     sessionId: string,

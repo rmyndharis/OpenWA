@@ -42,6 +42,7 @@ describe('WebhookReconcilerService: the walk over the stale rows', () => {
     } as unknown as Repository<Webhook>;
     const delivery = {
       isLocallyPending: () => false,
+      isMessageHeld: () => false,
       isQueueJobPending: (deliveryId: string) => Promise.resolve(live.has(deliveryId)),
       hasQueueJobCompleted: () => Promise.resolve(false),
       recordReplayExhaustion: () => Promise.resolve(true),

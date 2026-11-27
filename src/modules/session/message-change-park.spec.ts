@@ -191,6 +191,8 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
     );
   };
 
+  const heldOnThisNode = (id: string): boolean =>
+    delivery.isMessageHeld(`msg_${sessionId}_${id}_${webhookId}`, webhookId);
   const storeRow = async (id: string, chatId = CHAT, fromMe = false): Promise<void> => {
     await ds.getRepository(Message).insert({
       sessionId,
@@ -427,15 +429,34 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       expect(persisted).toEqual([]);
     });
 
+    it('keeps the sweep off the deliveries of a message whose change is kept, and lets it replay the others', async () => {
+      await storeRow('H-1');
+      await storeRow('H-2');
+      outage = 'on';
+      changes['an edit']('H-1');
+      await settle();
+      // The database answers again before the kept change's next try.
+      outage = 'off';
+
+      expect(await sweptBodies()).toEqual(['first text']);
+      expect(await outboxOf('H-1')).toEqual([expect.objectContaining({ state: 'pending', body: 'first text' })]);
+      await recover();
+      mockFetch.mockClear();
+
+      expect(await sweptBodies()).toEqual(['edited text']);
+    });
+
     it('drops what a removed session kept', async () => {
       await storeRow('F-1');
       outage = 'on';
       changes['an edit']('F-1');
       await settle();
+      expect(heldOnThisNode('F-1')).toBe(true);
       projector.forgetSession(sessionId);
       await recover();
 
       expect(await rowOf('F-1')).toMatchObject({ body: 'first text' });
+      expect(heldOnThisNode('F-1')).toBe(false);
     });
 
     it('makes one pass at shutdown, and logs as lost what the database still refuses', async () => {
@@ -457,6 +478,7 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
         undefined,
         expect.objectContaining({ messageId: 'S-2', reason: 'shutdown', action: 'message_change_lost' }),
       );
+      expect(heldOnThisNode('S-2')).toBe(false);
     });
   });
 

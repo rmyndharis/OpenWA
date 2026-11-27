@@ -618,6 +618,7 @@ export class MessageProjector {
       error: error instanceof Error ? error.message : String(error),
       action: 'message_change_parked',
     });
+    this.webhookService.holdMessage?.(sessionId, waMessageId, true);
     this.recovery.park(key, change);
   }
 
@@ -645,8 +646,9 @@ export class MessageProjector {
     else change.measure();
   }
 
-  /** A kept change left the queue: a loss is logged, the only trace of it. */
+  /** A kept change left the queue: its deliveries are let go, and a loss is logged, the only trace of it. */
   private releaseParked(change: ParkedChange, reason?: RecoveryLoss): void {
+    this.webhookService.holdMessage?.(change.sessionId, change.waMessageId, false);
     if (!reason) return;
     this.logger.error('A change the database refused could not be kept any longer and is lost', undefined, {
       sessionId: change.sessionId,

@@ -72,6 +72,11 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
   // A row already past its last check, or a retry POST already started, still sends that one POST.
   private readonly stop = new AbortController();
   private cursor?: string;
+  // A pass failed (the database went away, for every node sharing it): the first pass that reads again starts a hold.
+  private failedPass = false;
+  // Until then the sweep replays nothing: a node that kept changes while the database was away withdraws or rewrites
+  // the deliveries they touch first, its tries coming at most a quarter of the grace apart.
+  private holdUntil = 0;
 
   constructor(
     @InjectRepository(Webhook, 'data') private readonly webhooks: Repository<Webhook>,
@@ -132,7 +137,7 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
   /** One bounded pass over the stranded backlog. Overlap-guarded. */
   async sweep(opts: WebhookReconcilerOptions, now: Date = new Date()): Promise<WebhookReconcileStats> {
     const stats: WebhookReconcileStats = { scanned: 0, replayed: 0, failed: 0, skipped: 0 };
-    if (this.inFlight || this.stop.signal.aborted) return stats;
+    if (this.inFlight || this.stop.signal.aborted || now.getTime() < this.holdUntil) return stats;
     let settle!: () => void;
     this.inFlight = new Promise(resolve => (settle = resolve));
     try {
@@ -146,6 +151,17 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
         covered = count;
       };
       let rows = await this.outbox.findStale(cutoff, opts.batchSize, this.cursor, onScanned);
+      if (this.failedPass) {
+        this.failedPass = false;
+        if (opts.graceMs > 0) {
+          this.holdUntil = now.getTime() + opts.graceMs;
+          this.logger.warn('Webhook replays held for one grace period: the database answers again', {
+            graceMs: opts.graceMs,
+            action: 'webhook_reconcile_recovery_hold',
+          });
+          return stats;
+        }
+      }
       if (rows.length === 0 && !scannedThrough && this.cursor) {
         this.cursor = undefined;
         rows = await this.outbox.findStale(cutoff, opts.batchSize, undefined, onScanned);
@@ -168,6 +184,12 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
           // Still owned by a dispatch on this node (parked in the limiter or mid retry loop), so it
           // is slow rather than stranded. Replaying it would POST alongside the original and outside
           // the dispatch concurrency bound, and would spend its budget while it is still running.
+          stats.skipped++;
+          continue;
+        }
+        if (this.delivery.isMessageHeld(row.idempotencyKey, row.webhookId)) {
+          // A change of the message is kept on this node until the database answers, and may still withdraw or
+          // rewrite this copy.
           stats.skipped++;
           continue;
         }
@@ -256,6 +278,9 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
           stats.failed++;
         }
       }
+    } catch (error) {
+      this.failedPass = true;
+      throw error;
     } finally {
       this.inFlight = undefined;
       settle();
