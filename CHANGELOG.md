@@ -13,12 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On SQLite with `SQLITE_JOURNAL_MODE=DELETE`, `GET /api/infra/export-data` reads from a copy of the database written beside it and needs as much free space as the database plus a tenth of it, at least 256 MiB (`507` `EXPORT_NO_ROOM_FOR_SNAPSHOT` otherwise); a stop while the copy is written removes it and answers `503` `EXPORT_STOPPED`.
 - `POST /api/infra/import-data` refuses a backup above `25mb` that is larger than the free heap divided by 2.5 (about 411 MB on a 1 GiB heap), or by 4 when it holds any character outside Latin-1, such as an emoji (about 259 MB), with `413` `IMPORT_TOO_LARGE`; use `scripts/backup.sh` and `scripts/restore.sh` for a larger database.
 - A message a `message:received` or `message:sent` handler filed under another chat before the upgrade no longer takes a revoke, edit or reaction held for a repeated or failed delivery of it, or by an engine retiring as it commits; such a row keeps no record of the chat the engine reported, except a whatsapp-web.js message whose id and `from` or `to` still name it.
+- Webhooks: a delivery not yet sent when its message is revoked is withdrawn, with no POST and no delivery-failure row, and one whose message is deleted through the API carries the placeholder (`type: "revoked"`, empty `body`).
 - A send to a number WhatsApp holds under other digits (a Brazilian, Mexican or Argentine mobile written in its other spelling) is stored under the number WhatsApp resolved, or under the contact's `@lid` when the message went to the lid and the engine recorded the send first, no longer under the `chatId` of the request. Read its history and follow up with the id `GET /api/sessions/{sessionId}/contacts/check/{number}` returns; a row under the lid is listed under that id only once WhatsApp reports the pair, and until then under the lid `message.sent` names. Name that id in `allowedChats`: a key scoped to the other spelling no longer reads the rows of its own sends. Rows stored before the upgrade keep their chat id.
 
 ### Added
 
 - SDKs: `npm run check:sdk-coverage` compares the query keys each SDK call sends with the parameters the contract declares, so a renamed or dropped query parameter fails CI instead of leaving a client on the old key.
 - Audit: `browser_session_created` and `browser_session_ended` rows record which key opened or ended a dashboard browser session, with the client IP and user agent.
+- Recovery: what the database refused is kept in a journal (`RECOVERY_JOURNAL_PATH`, default `./data/recovery-journal.jsonl`), so a restart or a crash while it is away no longer loses it.
 
 ### Changed
 
@@ -53,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Messages: store a message revoked or edited while its insert is tried again as that change left it; `message:persisted` and the media archive were handed the earlier text once.
 - Messages: clear the stored row of a message revoked just before its commit when the engine retires in the same moment; the row kept the taken-back text and media.
 - Messages: write an edit, a reaction or a delivery receipt that reached a message in flight to its row when the engine retires as the commit lands; the row kept the text from before the edit, and the sweep delivered it.
-- Messages: write a revoke or an edit that reached a message in flight to the row a commit stored before reporting an error, when the row could not then be stored alone; the row kept the earlier text, and the sweep delivered it.
+- Messages: write a revoke or an edit that reached a message in flight to the row a commit stored before reporting an error, once the database answers; the row kept the earlier text, and the sweep delivered it.
 - Messages: take back a message in flight when a delete through the API names the list id of a broadcast-list message received on Baileys; it was stored and delivered with the deleted text.
 - Messages: clear the stored row of a message revoked just before its commit when a `message:received` or `message:sent` handler filed it under another chat; the row kept the taken-back text and media.
 - Messages: a delete or edit through the API reaches the stored row when the engine keeps the message under another form of the named chat, such as the sender of a Baileys broadcast-list message deleted by its list id, or the lid of a contact named by phone number; the row kept the text.
@@ -63,6 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plugins: a deleted message a handler filed under another chat reaches `message:received` with no content when it is delivered again; it carried the deleted text.
 - Webhooks: a delete or revoke of a message a handler filed under another chat redacts or closes its pending outbox row; the sweep could deliver the deleted text.
 - Webhooks: close the pending outbox row of a message revoked just before its commit when the engine retires before the commit's failure is handled; the sweep delivered the taken-back text afterwards.
+- Messages: keep a revoke, edit, reaction or receipt the database refused and write it once it answers; it was dropped, or written to a row it was not judged against.
+- Webhooks: keep an event whose webhooks could not be read or whose outbox rows could not be written, and dispatch it once the database answers under the same idempotency key; it was lost.
+- Webhooks: a revoke withdraws the queued, retrying and kept deliveries of the message and its `message.edited` deliveries, and clears the copy a failure row keeps for a redrive; they delivered the taken-back text.
+- Webhooks: a delete through the API, or an edit, reaches the queued, retrying and kept deliveries of the message; they delivered the original text.
+- Webhooks: hold a message's deliveries while a change of it is kept, so the sweep, a retry or a queued job does not send the copy that change withdraws or rewrites.
+- Webhooks: a retry or a queued job that cannot read its outbox row waits without spending an attempt.
 - Plugins: keep the gateway's `from`, `to`, `fromMe`, `timestamp`, `type`, `author`, `isLidSender` and `ephemeralDuration`, and the chat's `isGroup` and `kind`, when a `message:received` or `message:sent` handler leaves them out, returns them as `null` or in another type, or removes them from the message it was handed; such a message was not stored.
 - Plugins: keep one handler's redaction when a later `message:received` or `message:sent` handler removes the `id` or `chatId` of the message it was handed; the original text and media were stored and delivered.
 - Infrastructure: `GET /api/infra/export-data` streams the backup from one snapshot of the database, a batch of rows at a time, instead of building it in memory, so a large table no longer fails with `Invalid string length` or exhausts the heap.

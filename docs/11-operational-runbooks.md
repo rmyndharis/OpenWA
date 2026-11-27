@@ -402,6 +402,45 @@ curl -H "X-API-Key: $ADMIN_API_KEY" \
   "http://localhost:2785/api/webhooks/delivery-failures?sessionId={sessionId}&limit=5"
 ```
 
+### Runbook: Database Unavailable (what the gateway keeps)
+
+**Trigger:** the database refuses statements (a dropped PostgreSQL connection, a full or read-only SQLite volume) and the log shows `message_change_parked` or `webhook_dispatch_parked`.
+
+**Impact:** message changes (revokes, edits, reactions, receipts) and webhook events wait in memory, and in the recovery journal, until the database answers; deliveries of a message whose change is waiting are held. Past the bounds below, they are lost, each with a log line.
+
+**What is kept, and for how long:**
+
+- Message changes: up to 1,000 messages and 60 minutes. A revoke or a delete is kept until its lane is full, whatever its age, and is never given up for bytes.
+- Webhook events: up to 10,000 and 60 minutes; a kept `message.revoked` has no age limit. `presence.update`, `session.qr` and `message.receipt` are not kept. A session's state events (`session.status`, `session.authenticated`, `session.disconnected`, `session.reconnect_loop`, `session.restriction`) stay in memory only and are dropped when another node owns the session by then.
+- Both share 64 MiB, measured on the data they hold, with inline media shed.
+- A delivery whose outbox row could not be written keeps a copy in memory for its retries: up to 10,000 copies and 64 MiB with content, then the oldest keep only what names the message (up to 16 MiB more, about 35,000 to 70,000 messages). A copy a revoke or a delete reached keeps that state until its delivery ends.
+- What is kept goes into `RECOVERY_JOURNAL_PATH` (default `./data/recovery-journal.jsonl`), so a restart or a crash finds it again. A stop keeps it there for the next start.
+
+**Steps:**
+
+1. Restore the database; nothing else is needed. Kept work is retried on its own, every 1 s at first and up to every 30 s on SQLite (5 s on PostgreSQL) while the database keeps failing.
+2. Keep the data volume: the journal is on it. When `recovery_journal_write_failed` is logged (the volume is full or read-only, often the same fault as the database), what is kept is in memory only: do not restart the gateway until the database answers and the kept work is written.
+3. Read the log actions:
+
+| Action                            | Meaning                                                                                                                                                 | What to do                                                                                                                                 |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `message_change_parked`           | A change of a message is kept until the database answers.                                                                                               | Restore the database.                                                                                                                      |
+| `message_change_lost`             | A kept change was given up (`reason`: `count`, `age`, `bytes`, `failures`, `conflict`, `ownership`, or `shutdown` when the journal could not take it).  | The stored message and its pending deliveries miss that change. Apply it again where it matters (a delete through the API, or an edit).    |
+| `webhook_dispatch_parked`         | A session's webhook events are kept until the database answers.                                                                                         | Restore the database; they go out under their own idempotency keys.                                                                        |
+| `webhook_dispatch_dropped`        | An event was not delivered: not kept, or a kept one given up (`reason`). Counted in `openwa_webhook_delivery_failures_total`.                           | Re-send it from its source if a receiver needs it. `reason: ownership` (a warning) loses nothing: the session's owner sends its own state. |
+| `webhook_copy_lost`               | A copy kept for a delivery with no outbox row lost what it held (`reason`: `count`, `bytes`, `rewrite`, `dropped`).                                     | Past the bounds, under heavy traffic during an outage. With `rewrite`, the receiver gets the text from before the edit.                    |
+| `webhook_skipped_retracted`       | A delivery was not sent: its message was taken back, or its outbox row was settled elsewhere.                                                           | Nothing; it is expected after a revoke or a delete.                                                                                        |
+| `webhook_outbox_check_failed`     | A delivery could not read its outbox row and sent what it holds.                                                                                        | Restore the database. A change of the message made meanwhile may not have reached that delivery.                                           |
+| `webhook_reconcile_recovery_hold` | Once the database answers, the sweep waits one grace period, so a node's kept changes withdraw their deliveries before a replay.                        | Nothing.                                                                                                                                   |
+| `recovery_journal_restored`       | At start, what the last process kept was restored from the journal.                                                                                     | Nothing; it is retried once the plugins are back and the database answers.                                                                 |
+| `recovery_journal_kept`           | At a stop, what the database had not taken stays in the journal for the next start.                                                                     | Start the gateway again on the same data volume.                                                                                           |
+| `recovery_journal_line_skipped`   | A journal line could not be read (a crash in the middle of a write); what it held is lost.                                                              | Nothing; the rest is restored.                                                                                                             |
+| `recovery_journal_write_failed`   | The journal could not be written; what is kept is in memory only. Logged at most once a minute.                                                         | Free the volume or make it writable; do not restart until the kept work is written.                                                        |
+| `recovery_journal_unclaimed`      | Records of a kind this version does not keep (written by a newer one) are lost.                                                                         | Nothing to recover from the file.                                                                                                          |
+| `recovery_journal_orphan`         | A copy kept for a queued delivery whose job is gone (it finished on another node, or Redis lost it) was dropped; checked at start and every 10 minutes. | Nothing.                                                                                                                                   |
+
+**Verification:** `message_change_parked` and `webhook_dispatch_parked` stop appearing, and the journal file is empty once everything kept was written.
+
 ---
 
 ## 11.3 Maintenance Procedures
@@ -804,6 +843,9 @@ User-managed files outside that list (for example the project-level `.env`) must
 #                        (default: <OPENWA_DATA_DIR>/plugins)
 #   - .env.generated / .api-key — generated configuration and bootstrap secret
 #                                  (.api-key from BOOTSTRAP_KEY_FILE when that is set)
+#   Not in the archive: recovery-journal.jsonl (RECOVERY_JOURNAL_PATH), what a stopped gateway
+#   kept to retry against its own database; replayed against a restored one it would send stale
+#   changes, so a restore starts without it.
 #
 # The database paths resolve exactly like the app: MAIN_DATABASE_NAME / DATABASE_NAME from the
 # environment, then ./.env, then <data dir>/.env.generated, otherwise the app's ./data defaults,

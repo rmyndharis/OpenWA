@@ -28,6 +28,12 @@
 > lease lapses, and both engines run until the holder's first successful renewal after it
 > reconnects, so the overlap lasts as long as the outage plus up to one heartbeat.
 >
+> Changes a node keeps while the database is away follow the same limit. They hold that node's
+> deliveries of their messages, and once the database answers again every sweep waits one grace period
+> (`WEBHOOK_RECONCILE_GRACE_MS`) so they land first. A node partitioned from the database cannot hold
+> a healthy peer's sweep, which may replay a delivery of a message the partitioned node is about to
+> withdraw. The recovery journal (`RECOVERY_JOURNAL_PATH`) belongs to one process: never share the file.
+>
 > Bulk-send batches follow the same rule. A batch is only ever driven by the process
 > holding its session's engine, so a booting replica now reaps only the batches whose
 > sessions it may claim, instead of declaring a peer's in-flight batches FAILED while they

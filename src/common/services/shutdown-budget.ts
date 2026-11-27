@@ -9,7 +9,7 @@
  *   SHUTDOWN_DELAY_MS drain                  3 s     always (default; the grace before teardown)
  *   ingress reconciler wait                  5 s     a pass in flight (worst case)
  *   engine teardown                         10 s     always
- *   kept message changes pass                1 s     a change the database refused while it was away
+ *   kept message changes pass                1 s     a change the database refused (what it leaves stays journaled)
  *   auto-start wait                          5 s     shutdown during the boot window
  *   bulk batch drain                         5 s     an in-flight batch at shutdown
  *   maintenance prune/index waits (4 x 1s)   4 s     active archive/status/fts/outbox pass
