@@ -208,6 +208,16 @@ export class SessionRows {
     return held !== undefined && this.keep(sessionId, { field, moves: [[held, value]], blind: true, ...rest }, error);
   }
 
+  /** The push name was written since a binding was kept: the binding no longer writes the older one it carries. */
+  pushNameWritten(sessionId: string): void {
+    const kept = this.kept(sessionId, 'phone');
+    if (kept?.write.with?.pushName === undefined) return;
+    this.deps.queue?.park(
+      kept.key,
+      new KeptRowWrite(kept.key, sessionId, { ...kept.write, with: undefined }, kept.since, this),
+    );
+  }
+
   /** Drop what this process knew of a deleted session's row. */
   forget(sessionId: string): void {
     this.known.delete(sessionId);

@@ -193,8 +193,8 @@ describe('Session row writes the database refused, kept until it answers (SQLite
   const crash = (node: ReturnType<typeof boot>): void => node.journal.close();
 
   /** The next process starts as the gateway boots one: module init, the queue let go, then the bootstrap hooks. */
-  async function restart() {
-    const node = boot();
+  async function restart(options: { nodeId?: string } = {}) {
+    const node = boot(options);
     await node.service.onModuleInit();
     node.queue.ready();
     node.service.onApplicationBootstrap();
@@ -203,6 +203,9 @@ describe('Session row writes the database refused, kept until it answers (SQLite
   }
 
   const rowOf = (): Promise<Session> => sessions.findOneByOrFail({ id });
+  const settle = async (): Promise<void> => {
+    for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+  };
   describe('a status write', () => {
     /** The status is written once, then the database refuses the next one: a reconnect that ran out lands FAILED. */
     async function keptFailed() {
@@ -363,6 +366,103 @@ describe('Session row writes the database refused, kept until it answers (SQLite
       await node.queue.flush();
 
       expect((await rowOf()).status).toBe(SessionStatus.DISCONNECTED);
+    });
+  });
+
+  describe('the READY row', () => {
+    /** A fresh link: the session has no number yet, its engine starts, and the database refuses the row its READY writes. */
+    async function keptReady(pushName = 'Alice', options: { nodeId?: string } = {}) {
+      await sessions.update(id, { phone: null });
+      const node = boot(options);
+      await node.service.start(id, { explicit: true });
+      refuse = patch => ('status' in patch || 'phone' in patch ? unavailable() : undefined);
+      node.callbacks().onReady!('628111', pushName);
+      await settle();
+      refuse = undefined;
+      return node;
+    }
+
+    it('is written once the database answers', async () => {
+      const node = await keptReady();
+
+      await node.queue.flush();
+
+      expect(await rowOf()).toMatchObject({ status: SessionStatus.READY, phone: '628111', pushName: 'Alice' });
+      expect((await rowOf()).connectedAt).toBeInstanceOf(Date);
+    });
+
+    it('survives a restart before the database answers, and the session auto-starts', async () => {
+      crash(await keptReady());
+
+      const next = await restart();
+
+      expect(next.factory.create).toHaveBeenCalledTimes(1);
+      expect((await rowOf()).phone).toBe('628111');
+    });
+
+    it('gives way to a later status and binding this process wrote', async () => {
+      const node = await keptReady();
+      await node.lifecycle.updateStatus(id, SessionStatus.DISCONNECTED);
+      node.callbacks().onReady!('628222', 'Bob');
+      await settle();
+      await node.lifecycle.updateStatus(id, SessionStatus.DISCONNECTED);
+
+      await node.queue.flush();
+
+      expect(await rowOf()).toMatchObject({ status: SessionStatus.DISCONNECTED, phone: '628222', pushName: 'Bob' });
+    });
+
+    it('gives way to a binding another node wrote since', async () => {
+      const node = await keptReady();
+      await sessions.update(id, { phone: '628333', status: SessionStatus.READY, nodeId: 'node-b' });
+
+      await node.queue.flush();
+
+      expect((await rowOf()).phone).toBe('628333');
+    });
+
+    it('lands after this node released its claim, as a stop does', async () => {
+      const node = await keptReady('Alice', { nodeId: 'node-a' });
+      await node.service.stop(id);
+      expect((await rowOf()).nodeId).toBeNull();
+
+      await node.queue.flush();
+
+      expect((await rowOf()).phone).toBe('628111');
+    });
+
+    it('survives a restart of the same node of a cluster, and the session auto-starts', async () => {
+      crash(await keptReady('Alice', { nodeId: 'node-a' }));
+
+      const next = await restart({ nodeId: 'node-a' });
+      next.ownership?.stopHeartbeat();
+
+      expect(next.factory.create).toHaveBeenCalledTimes(1);
+      expect(await rowOf()).toMatchObject({ phone: '628111', nodeId: 'node-a' });
+    });
+
+    it('keeps the push name the engine synced after it', async () => {
+      const node = await keptReady('');
+      node.callbacks().onPushNameChanged!('Alice');
+      await settle();
+
+      await node.queue.flush();
+
+      expect(await rowOf()).toMatchObject({ phone: '628111', pushName: 'Alice' });
+    });
+
+    it('is given up with its own loss action for the binding', async () => {
+      const node = await keptReady();
+      refuse = patch => ('phone' in patch ? rejected() : undefined);
+
+      for (let pass = 0; pass < 3; pass++) await node.queue.flush();
+
+      expect((await rowOf()).phone).toBeNull();
+      expect(logged()).toHaveBeenCalledWith(
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ sessionId: id, reason: 'failures', action: 'session_phone_write_lost' }),
+      );
     });
   });
 });

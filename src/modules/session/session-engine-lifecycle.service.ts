@@ -1200,17 +1200,47 @@ export class SessionEngineLifecycle {
     // The status and times of a READY are written at once, fenced on this node's ownership when
     // SessionOwnershipService is wired. Only the number it links waits behind the phone writes of the
     // session: held with it, the status could land after a stop or a failure that followed this READY
-    // and put the session back to READY with no engine.
+    // and put the session back to READY with no engine. Each part the database refuses is kept to be
+    // written once it answers, so a restart before then does not lose the number auto-start needs.
     const where = this.ownedRowWhere(id);
-    const { status, connectedAt, lastActiveAt, ...binding } = readyRowUpdate(phone, pushName, new Date());
+    const at = new Date();
+    const { status, connectedAt, lastActiveAt, ...binding } = readyRowUpdate(phone, pushName, at);
+    const owners = this.rows.owners();
     const persistFailed = (err: unknown): void =>
       this.logger.warn('Failed to persist session ready state', {
         sessionId: id,
         error: err instanceof Error ? err.message : String(err),
       });
-    const statusWrite = this.sessionRepository.update(where, { status, connectedAt, lastActiveAt });
+    const statusKept = this.rows.kept(id, 'status');
+    const statusWrite = this.sessionRepository.update(where, { status, connectedAt, lastActiveAt }).then(
+      result => {
+        const landed = (result as { affected?: number } | undefined)?.affected !== 0;
+        if (landed) this.rows.landed(id, 'status', status, statusKept);
+        return result;
+      },
+      (error: unknown) => {
+        const times = { connectedAt: at.toISOString(), lastActiveAt: at.toISOString() };
+        this.rows.keepSet(id, 'status', status, error, { owners, with: times });
+        throw error;
+      },
+    );
     if (binding.phone) {
-      void this.phoneWrites.run(id, () => this.sessionRepository.update(where, binding)).catch(persistFailed);
+      const linked = binding.phone;
+      void this.phoneWrites
+        .run(id, () => {
+          const bindingKept = this.rows.kept(id, 'phone');
+          return this.sessionRepository.update(where, binding).then(
+            result => {
+              const landed = (result as { affected?: number } | undefined)?.affected !== 0;
+              if (landed) this.rows.landed(id, 'phone', linked, bindingKept);
+            },
+            (error: unknown) => {
+              this.rows.keepSet(id, 'phone', linked, error, { owners, with: { pushName: binding.pushName } });
+              throw error;
+            },
+          );
+        })
+        .catch(persistFailed);
     }
 
     if (this.ownership) {
@@ -1253,6 +1283,7 @@ export class SessionEngineLifecycle {
     const where = this.ownedRowWhere(id);
     void this.phoneWrites
       .run(id, () => this.sessionRepository.update(where, { pushName }))
+      .then(() => this.rows.pushNameWritten(id))
       .catch(err =>
         this.logger.warn('Failed to store the synced push name', {
           sessionId: id,
