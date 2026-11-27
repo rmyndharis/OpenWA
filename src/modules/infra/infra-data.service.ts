@@ -1307,6 +1307,20 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
               await turn();
             }
           };
+          // There too it rewrites the restored messages by ranges of rowid, a turn after each as between the inserts: an
+          // archive from before one of those rewrites can match every row.
+          const eachMessageRange = async (rewrite: (range?: string) => Promise<void>): Promise<void> => {
+            if (!turn || !(await queryRunner.hasTable('messages'))) return rewrite();
+            for (let after = 0; ;) {
+              const [last] = (await queryRunner.query(
+                `SELECT rowid AS id FROM messages WHERE rowid > ${after} ORDER BY rowid LIMIT 1 OFFSET ${RESTORE_CHUNK_ROWS - 1}`,
+              )) as Array<{ id: number }>;
+              await rewrite(last ? `rowid > ${after} AND rowid <= ${last.id}` : `rowid > ${after}`);
+              if (!last) return;
+              after = last.id;
+              await turn();
+            }
+          };
           const clearTable = async (table: string, where = ''): Promise<void> => {
             // Asked first on PostgreSQL: a statement that names a missing relation aborts the whole transaction even
             // when its error is caught, and every later statement then fails with 25P02.
@@ -1501,11 +1515,13 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
           // with their media, quote and reactions, and lid mappings with a broadcast id as the phone.
           if (warnings.length === 0) {
             try {
-              await ScrubRevokedMessageContent1786900000000.scrub(queryRunner);
+              await eachMessageRange(async range => {
+                await ScrubRevokedMessageContent1786900000000.scrub(queryRunner, range);
+                // An archive taken before the neutral message vocabulary restores the raw wwebjs tokens, which
+                // the boot-time backfill no longer converts on a migration-managed database.
+                await BackfillLegacyMessageTypes1791300000000.backfill(queryRunner, range);
+              });
               await ScrubNonPhoneLidMappings1786950000000.scrub(queryRunner);
-              // An archive taken before the neutral message vocabulary restores the raw wwebjs tokens, which
-              // the boot-time backfill no longer converts on a migration-managed database.
-              await BackfillLegacyMessageTypes1791300000000.backfill(queryRunner);
             } catch (error) {
               warnings.push(`Failed to clean restored rows: ${error instanceof Error ? error.message : String(error)}`);
             }

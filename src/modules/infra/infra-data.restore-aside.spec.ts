@@ -225,6 +225,43 @@ describe.each<SqliteJournalMode>(['WAL', 'DELETE'])('a SQLite file restore (%s j
     expect(Math.min(...boundaries)).toBeGreaterThanOrEqual(16);
   });
 
+  it('rewrites the restored rows it must clean by ranges, with turns between them', async () => {
+    // Every row needs a rewrite: raw wwebjs types, and revoked rows still holding their content.
+    const messages = archive.messages?.map((row, i) =>
+      i % 2 === 0 ? { ...row, type: 'chat' } : { ...row, type: 'revoked', body: 'kept', metadata: { media: {} } },
+    );
+    const counter = countTurns();
+    const turnsAtRewrite: number[] = [];
+    const query = Reflect.get(BetterSqlite3QueryRunner.prototype, 'query') as (
+      this: unknown,
+      ...args: unknown[]
+    ) => Promise<unknown>;
+    jest.spyOn(BetterSqlite3QueryRunner.prototype, 'query').mockImplementation(function (
+      this: BetterSqlite3QueryRunner,
+      text: string,
+      ...rest: unknown[]
+    ) {
+      if (this.connection !== ds && /^UPDATE "messages" SET "type" = CASE/.test(text)) {
+        turnsAtRewrite.push(counter.turns());
+      }
+      return query.call(this, text, ...rest) as never;
+    });
+
+    const result = await service().importData({ tables: { ...archive, messages } });
+    counter.stop();
+
+    expect(result).toMatchObject({ imported: true, warnings: [] });
+    const steps = turnsAtRewrite.slice(1).map((turns, i) => turns - turnsAtRewrite[i]);
+    expect(turnsAtRewrite).toHaveLength(Math.ceil(ROWS / 500));
+    expect(Math.min(...steps)).toBeGreaterThanOrEqual(16);
+    const rows = await ds.getRepository(Message).find();
+    expect(rows).toHaveLength(ROWS);
+    expect(rows.filter(row => row.type === 'text')).toHaveLength(Math.ceil(ROWS / 2));
+    expect(rows.filter(row => row.type === 'revoked' && row.body === '' && !row.metadata)).toHaveLength(
+      Math.floor(ROWS / 2),
+    );
+  });
+
   if (journal === 'WAL') {
     it('leaves its WAL to a checkpoint off the main thread, done before the callers it held go on', async () => {
       // Bodies large enough that the restore's WAL passes SQLite's automatic checkpoint threshold of 1000 pages.
