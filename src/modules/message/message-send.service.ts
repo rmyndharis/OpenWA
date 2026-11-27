@@ -34,6 +34,7 @@ import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 import { MEDIA_MESSAGE_TYPES, OMITTED_MEDIA } from '../session/message-row.mapper';
 import { provablyDifferent } from '../session/message-mutation-guard';
+import { engineChatOf } from './engine-chat-of';
 
 /**
  * Outbound statuses whose media is eligible for archiving. An echo row merged after a fast ack can
@@ -764,14 +765,21 @@ export class MessageSendService {
       },
     );
 
+    // The reply goes where a send to the caller's chat goes; only the check that the quoted message is in that chat
+    // takes the chat an API send it quotes was delivered to.
+    const quotedChatId = await this.engineChatOf(sessionId, finalDto.chatId, finalDto.quotedMessageId);
     let result: MessageResult;
     try {
       // Widened only as far as the caller asked, exactly like the send path: a reply with no tags
       // keeps its three-argument shape.
       result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
-        finalDto.mentions?.length
-          ? engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text, finalDto.mentions)
-          : engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text),
+        quotedChatId !== finalDto.chatId
+          ? engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text, finalDto.mentions, {
+              quotedChatId,
+            })
+          : finalDto.mentions?.length
+            ? engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text, finalDto.mentions)
+            : engine.replyToMessage(finalDto.chatId, finalDto.quotedMessageId, finalDto.text),
       );
     } catch (error) {
       return this.failSend(sessionId, 'reply', message, finalDto, error);
@@ -846,10 +854,12 @@ export class MessageSendService {
       }),
     );
 
+    // Only the engine's check of the forwarded message takes the chat an API send was delivered to.
+    const fromChatId = await this.engineChatOf(sessionId, finalDto.fromChatId, finalDto.messageId);
     let result: MessageResult;
     try {
       result = await this.runEngineSend(sessionId, initiatedDuringMessageSent, () =>
-        engine.forwardMessage(finalDto.fromChatId, finalDto.toChatId, finalDto.messageId),
+        engine.forwardMessage(fromChatId, finalDto.toChatId, finalDto.messageId),
       );
     } catch (error) {
       return this.failSend(sessionId, 'forward', message, finalDto, error);
@@ -857,6 +867,20 @@ export class MessageSendService {
     // persistSentState preserves the empty-id rule: a forward whose engine couldn't recover the sent
     // copy's id leaves waMessageId NULL so no ack mis-matches it.
     return this.persistSentState(message, result);
+  }
+
+  /** The chat the engine acts on the message in (see engineChatOf). */
+  private engineChatOf(sessionId: string, chatId: string, messageId: string): Promise<string> {
+    const store = this.lidMappingStore;
+    return engineChatOf(this.messageRepository, sessionId, chatId, messageId, id =>
+      resolveJidCandidates(
+        id,
+        store && {
+          resolveLid: lid => store.findPhoneForLid(lid),
+          lidsForPhone: phone => store.findLidsForPhone(phone),
+        },
+      ),
+    );
   }
 
   /**

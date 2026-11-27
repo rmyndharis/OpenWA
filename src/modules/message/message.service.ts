@@ -30,6 +30,7 @@ import { SessionWriteScope } from '../../common/utils/session-write-scope';
 // TypeScript does not check, so `implements` is what keeps the two in step.
 import type { PluginMessagePort } from '../../core/plugins/plugin-host-ports';
 import { MessageWindow, messageTimeBoundarySeconds, validateMessageWindow } from './message-window';
+import { engineChatOf } from './engine-chat-of';
 
 // Re-exported for existing importers (bulk send shares the rendered-template cap with the send path).
 export { DEFAULT_TEMPLATE_RENDER_MAX_CHARS } from './message-send.service';
@@ -618,7 +619,14 @@ export class MessageService implements PluginMessagePort {
 
   async reactToMessage(sessionId: string, dto: { chatId: string; messageId: string; emoji: string }): Promise<void> {
     const engine = this.getEngine(sessionId);
-    await engine.reactToMessage(dto.chatId, dto.messageId, dto.emoji);
+    await engine.reactToMessage(await this.engineChatOf(sessionId, dto), dto.messageId, dto.emoji);
+  }
+
+  /** The chat the engine acts on the message in (see engineChatOf). */
+  private engineChatOf(sessionId: string, dto: { chatId: string; messageId: string }): Promise<string> {
+    return engineChatOf(this.messageRepository, sessionId, dto.chatId, dto.messageId, id =>
+      this.resolveJidCandidates(id),
+    );
   }
 
   async getMessageReactions(sessionId: string, chatId: string, messageId: string) {
@@ -822,13 +830,17 @@ export class MessageService implements PluginMessagePort {
    */
   async pinMessage(sessionId: string, dto: { chatId: string; messageId: string; durationSeconds?: number }) {
     const engine = this.getEngine(sessionId);
-    await engine.pinMessage(dto.chatId, dto.messageId, dto.durationSeconds ?? DEFAULT_PIN_DURATION_SECONDS);
+    await engine.pinMessage(
+      await this.engineChatOf(sessionId, dto),
+      dto.messageId,
+      dto.durationSeconds ?? DEFAULT_PIN_DURATION_SECONDS,
+    );
     return { success: true };
   }
 
   async unpinMessage(sessionId: string, dto: { chatId: string; messageId: string }) {
     const engine = this.getEngine(sessionId);
-    await engine.unpinMessage(dto.chatId, dto.messageId);
+    await engine.unpinMessage(await this.engineChatOf(sessionId, dto), dto.messageId);
     return { success: true };
   }
 
@@ -842,7 +854,7 @@ export class MessageService implements PluginMessagePort {
    */
   async starMessage(sessionId: string, dto: { chatId: string; messageId: string; star: boolean }) {
     const engine = this.getEngine(sessionId);
-    await engine.starMessage(dto.chatId, dto.messageId, dto.star);
+    await engine.starMessage(await this.engineChatOf(sessionId, dto), dto.messageId, dto.star);
     return { success: true };
   }
 
@@ -861,7 +873,11 @@ export class MessageService implements PluginMessagePort {
     dto: { chatId: string; messageId: string; forEveryone?: boolean },
   ): Promise<void> {
     const engine = this.getEngine(sessionId);
-    const result = await engine.deleteMessage(dto.chatId, dto.messageId, dto.forEveryone ?? true);
+    const result = await engine.deleteMessage(
+      await this.engineChatOf(sessionId, dto),
+      dto.messageId,
+      dto.forEveryone ?? true,
+    );
     // An engine plugin written before the chat was reported resolves the id alone.
     const { id: deleted, engineChatId } = typeof result === 'string' ? { id: result } : (result ?? {});
 
@@ -890,9 +906,10 @@ export class MessageService implements PluginMessagePort {
     // through the same moderation chokepoint as every other sender. A plugin can rewrite `body`
     // here exactly as it can for a first send.
     const finalDto = await this.applySendingGate(sessionId, 'edit', dto);
+    const chatId = await this.engineChatOf(sessionId, finalDto);
     const result = finalDto.mentions?.length
-      ? await engine.editMessage(finalDto.chatId, finalDto.messageId, finalDto.body, finalDto.mentions)
-      : await engine.editMessage(finalDto.chatId, finalDto.messageId, finalDto.body);
+      ? await engine.editMessage(chatId, finalDto.messageId, finalDto.body, finalDto.mentions)
+      : await engine.editMessage(chatId, finalDto.messageId, finalDto.body);
 
     // Best-effort: reflect the new body in the stored copy (mirrors deleteMessage's revoked flag),
     // serialized with the inbound edit/reaction writers through the session's per-message mutation

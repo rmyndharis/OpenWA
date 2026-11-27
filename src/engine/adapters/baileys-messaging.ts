@@ -951,7 +951,13 @@ export class BaileysMessaging {
     );
   }
 
-  async replyToMessage(chatId: string, quotedMsgId: string, text: string, mentions?: string[]): Promise<MessageResult> {
+  async replyToMessage(
+    chatId: string,
+    quotedMsgId: string,
+    text: string,
+    mentions?: string[],
+    options?: { quotedChatId?: string },
+  ): Promise<MessageResult> {
     this.ensureReadyToSend();
     const socket = this.sock();
     const quoted = await this.requireStored(quotedMsgId);
@@ -961,7 +967,7 @@ export class BaileysMessaging {
     // contextInfo rather than rejecting it (Utils/messages.js), so the adapter is the only guard.
     // NOT applied to quoteOption: cross-chat quoting on the send-* routes is deliberate and
     // published in docs/06.
-    await this.assertStoredInChat(quoted, chatId, quotedMsgId, socket);
+    await this.assertStoredInChat(quoted, options?.quotedChatId ?? chatId, quotedMsgId, socket);
     return this.sendContent(chatId, { text, ...this.withMentions(mentions) }, { quoted }, socket);
   }
 

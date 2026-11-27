@@ -75,7 +75,10 @@ const lib = {
   extractMessageContent: (content: unknown) => content,
   getContentType: (content: Record<string, unknown> | undefined) => Object.keys(content ?? {})[0],
   isRealMessage: () => true,
-  proto: { Message: { ProtocolMessage: { Type: { REVOKE: 0, MESSAGE_EDIT: 14 } } } },
+  proto: {
+    Message: { ProtocolMessage: { Type: { REVOKE: 0, MESSAGE_EDIT: 14 } } },
+    PinInChat: { Type: { PIN_FOR_ALL: 1, UNPIN_FOR_ALL: 2 } },
+  },
   BufferJSON: { replacer: (_k: string, v: unknown) => v, reviver: (_k: string, v: unknown) => v },
   USyncQuery: Query,
   USyncUser: User,
@@ -102,6 +105,7 @@ interface World {
     onWhatsApp: jest.Mock;
     sendMessage: jest.Mock;
     executeUSyncQuery: jest.Mock;
+    chatModify: jest.Mock;
     signalRepository: { lidMapping: { getLIDForPN: jest.Mock } };
   };
   events: BaileysEvents;
@@ -278,6 +282,13 @@ const build = async ({ lidKnown, named = lidKnown }: { lidKnown: boolean; named?
       answered(messaging.sendTextMessage(...args)),
     sendLocationMessage: (...args: Parameters<BaileysMessaging['sendLocationMessage']>) =>
       answered(messaging.sendLocationMessage(...args)),
+    replyToMessage: (...args: Parameters<BaileysMessaging['replyToMessage']>) =>
+      answered(messaging.replyToMessage(...args)),
+    forwardMessage: (...args: Parameters<BaileysMessaging['forwardMessage']>) =>
+      answered(messaging.forwardMessage(...args)),
+    starMessage: (...args: Parameters<BaileysMessaging['starMessage']>) => messaging.starMessage(...args),
+    pinMessage: (...args: Parameters<BaileysMessaging['pinMessage']>) => messaging.pinMessage(...args),
+    unpinMessage: (...args: Parameters<BaileysMessaging['unpinMessage']>) => messaging.unpinMessage(...args),
     sendChatState: (...args: Parameters<BaileysMessaging['sendChatState']>) => messaging.sendChatState(...args),
     reactToMessage: (...args: Parameters<BaileysMessaging['reactToMessage']>) => messaging.reactToMessage(...args),
     editMessage: (...args: Parameters<BaileysMessaging['editMessage']>) => messaging.editMessage(...args),
@@ -428,6 +439,17 @@ describe('a send to a number WhatsApp holds under other digits than the caller w
   /** The phone jids WhatsApp was asked to name a lid for, in order. */
   const asked = (w: World): string[] =>
     w.sock.executeUSyncQuery.mock.calls.flatMap((call: unknown[]) => (call[0] as Query).users.map(user => user.id));
+  /** A send to the other spelling that went to a lid WhatsApp does not name for the number: the pair stays display data. */
+  const unnamedSend = async (echoFirst: boolean): Promise<World> => {
+    const w = await build({ lidKnown: true, named: false });
+    w.echoFirst = echoFirst;
+    await w.sender.sendText(w.S, { chatId: typed, text: 'hello' });
+    await waitUntil(() => asked(w).length === 1, 3000);
+    await w.settle();
+    return w;
+  };
+  /** The jids the socket was handed after the first send, in order. */
+  const sentSince = (w: World): unknown[] => w.sock.sendMessage.mock.calls.slice(1).map((call: unknown[]) => call[0]);
   const replied = async (w: World, key: Partial<WAMessageKey>): Promise<void> => {
     w.events.handleMessagesUpsert({ type: 'notify', messages: [inbound('IN-1', key)] });
     await waitUntil(async () => (await w.messages.countBy({ waMessageId: 'IN-1' })) > 0, 3000);
@@ -559,15 +581,7 @@ describe('a send to a number WhatsApp holds under other digits than the caller w
   ])(
     'a send that went to a lid WhatsApp does not name for the number, when %s takes the message id first',
     (_first, echoFirst) => {
-      /** The send, with the pair left display data: nothing bridges the two ids. */
-      const sendUnnamed = async (): Promise<World> => {
-        const w = await build({ lidKnown: true, named: false });
-        w.echoFirst = echoFirst;
-        await w.sender.sendText(w.S, { chatId: typed, text: 'hello' });
-        await waitUntil(() => asked(w).length === 1, 3000);
-        await w.settle();
-        return w;
-      };
+      const sendUnnamed = (): Promise<World> => unnamedSend(echoFirst);
 
       it('files the row under the number, where the changes that name the lid still find it', async () => {
         const w = await sendUnnamed();
@@ -713,6 +727,70 @@ describe('a send to a number WhatsApp holds under other digits than the caller w
     expect(await scope.allows(key, canon)).toBe(false);
     expect(await scope.allows(key, lid)).toBe(false);
   });
+
+  describe.each([
+    ['the row', false],
+    ['the echo', true],
+  ])(
+    'a follow-up through the API to a send that went to a lid, when %s takes the message id first',
+    (_first, echoFirst) => {
+      it.each([
+        ['the number the row is filed under', canon],
+        ['the lid it went to', lid],
+      ])('reacts, edits and deletes naming %s, and the row takes the edit and the delete', async (_chat, chatId) => {
+        const w = await unnamedSend(echoFirst);
+        const act = { chatId, messageId: 'OUT-1' };
+
+        expect(await outcome(() => w.service.reactToMessage(w.S, { ...act, emoji: '+' }))).toBe('ok');
+        expect(await outcome(() => w.service.editMessage(w.S, { ...act, body: 'edited by the API' }))).toBe('ok');
+        await w.settle();
+        expect(await sentRow(w)).toEqual(row(canon, { body: 'edited by the API' }));
+        expect(await outcome(() => w.service.deleteMessage(w.S, act))).toBe('ok');
+        await w.settle();
+
+        expect(await sentRow(w)).toEqual(row(canon, { type: 'revoked', body: '' }));
+        expect(sentSince(w)).toEqual([lid, lid, lid]);
+      });
+
+      it('stars, pins and unpins it naming the number, in the chat it is stored in', async () => {
+        const w = await unnamedSend(echoFirst);
+        const act = { chatId: canon, messageId: 'OUT-1' };
+
+        expect(await outcome(() => w.service.starMessage(w.S, { ...act, star: true }))).toBe('ok');
+        expect(await outcome(() => w.service.pinMessage(w.S, act))).toBe('ok');
+        expect(await outcome(() => w.service.unpinMessage(w.S, act))).toBe('ok');
+
+        expect(w.sock.chatModify).toHaveBeenCalledTimes(1);
+        expect(sentSince(w)).toEqual([lid, lid]);
+      });
+
+      it('forwards it and quotes it naming the number; the reply goes where a send to the number goes', async () => {
+        const w = await unnamedSend(echoFirst);
+
+        expect(
+          await outcome(() => w.sender.forward(w.S, { fromChatId: canon, toChatId: GROUP, messageId: 'OUT-1' })),
+        ).toBe('ok');
+        expect(
+          await outcome(() => w.sender.reply(w.S, { chatId: canon, quotedMessageId: 'OUT-1', text: 'again' })),
+        ).toBe('ok');
+        await w.settle();
+
+        expect(sentSince(w)).toEqual([GROUP, lid]);
+        expect((await w.rows()).filter(stored => stored.waMessageId === 'OUT-3')).toEqual([
+          expect.objectContaining({ chatId: canon, to: canon, body: 'again' }),
+        ]);
+      });
+
+      it('answers 404 for a follow-up naming the spelling the caller wrote, as before', async () => {
+        const w = await unnamedSend(echoFirst);
+
+        expect(
+          await outcome(() => w.service.reactToMessage(w.S, { chatId: typed, messageId: 'OUT-1', emoji: '+' })),
+        ).toBe(`refused MessageNotFoundError 404: Message OUT-1 not found in chat ${typed}`);
+        expect(sentSince(w)).toEqual([]);
+      });
+    },
+  );
 
   describe('a row written once the send has answered, as a bulk send writes it', () => {
     const data = {

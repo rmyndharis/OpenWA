@@ -404,8 +404,14 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return this.messaging.sendPollMessage(chatId, poll);
   }
 
-  async replyToMessage(chatId: string, quotedMsgId: string, text: string, mentions?: string[]): Promise<MessageResult> {
-    return this.messaging.replyToMessage(chatId, quotedMsgId, text, mentions);
+  async replyToMessage(
+    chatId: string,
+    quotedMsgId: string,
+    text: string,
+    mentions?: string[],
+    options?: { quotedChatId?: string },
+  ): Promise<MessageResult> {
+    return this.messaging.replyToMessage(chatId, quotedMsgId, text, mentions, options);
   }
 
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {

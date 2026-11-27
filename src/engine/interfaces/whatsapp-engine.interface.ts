@@ -1327,9 +1327,17 @@ export interface MessagingCapability {
 
   /**
    * Reply to a message, quoting it. `mentions` tags participants exactly as on the send routes: the
-   * text must also carry the matching `@<number>` token for WhatsApp to render the tag.
+   * text must also carry the matching `@<number>` token for WhatsApp to render the tag. `quotedChatId`, when given,
+   * is the chat the quoted message is checked to be in, where it is not `chatId`: the chat an API send the reply quotes
+   * was delivered to. The reply still goes to `chatId`.
    */
-  replyToMessage(chatId: string, quotedMsgId: string, text: string, mentions?: string[]): Promise<MessageResult>;
+  replyToMessage(
+    chatId: string,
+    quotedMsgId: string,
+    text: string,
+    mentions?: string[],
+    options?: { quotedChatId?: string },
+  ): Promise<MessageResult>;
 
   forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult>;
 }
