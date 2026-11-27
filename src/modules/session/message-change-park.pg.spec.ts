@@ -15,6 +15,8 @@ import { ConfigService } from '@nestjs/config';
 import { fetch as undiciFetch } from 'undici';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection } from '../message/entities/message.entity';
+import { LidMapping } from '../../engine/identity/lid-mapping.entity';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.entity';
 import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
@@ -60,6 +62,7 @@ describePostgres('Changes the database refused, kept until it answers (PostgreSQ
   let engines: EngineRegistry;
   let engine: IWhatsAppEngine;
   let projector: MessageProjector;
+  let lidStore: LidMappingStoreService;
   let sessionId: string;
   // 'on': every statement fails; 'reads': only the reads that judge a change against the row fail.
   let outage: 'off' | 'on' | 'reads';
@@ -85,7 +88,7 @@ describePostgres('Changes the database refused, kept until it answers (PostgreSQ
       ...options,
       schema,
       extra: { ...postgresUtcExtra(), options: `-c search_path=${schema},public`, max: 3 },
-      entities: [Session, Message, Webhook, WebhookOutboxEvent, WebhookDeliveryFailure],
+      entities: [Session, Message, Webhook, WebhookOutboxEvent, WebhookDeliveryFailure, LidMapping],
       synchronize: true,
     }).initialize();
     sessionId = (
@@ -154,6 +157,9 @@ describePostgres('Changes the database refused, kept until it answers (PostgreSQ
       {} as unknown as StatusStoreService,
       { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
       configService,
+      undefined,
+      undefined,
+      (lidStore = new LidMappingStoreService(ds.getRepository(LidMapping))),
     );
     await ds.getRepository(Webhook).save(
       ds.getRepository(Webhook).create({
@@ -364,4 +370,92 @@ describePostgres('Changes the database refused, kept until it answers (PostgreSQ
       expect(await rowOf(msg.id)).toMatchObject(changed[change]);
     },
   );
+
+  // A member revoke naming a phone is foreign only to an author it proves another: a lid with no reported phone is not.
+  describe('a member revoke naming a phone, over a row stored after the read that found none', () => {
+    /** The revoke, with the row of `author` stored once its judging read found none. */
+    const revokeStoredAfterRead = async (author: string): Promise<void> => {
+      const repository = ds.getRepository(Message);
+      const findOne = repository.findOne.bind(repository);
+      let judged = 0;
+      jest.spyOn(repository, 'findOne').mockImplementation(async options => {
+        const found = await findOne(options);
+        if ((options as { select?: Record<string, unknown> }).select?.engineRef && ++judged === 2) {
+          await repository.insert({
+            sessionId,
+            waMessageId: 'G-1',
+            chatId: '120363000000000001@g.us',
+            author,
+            from: '120363000000000001@g.us',
+            to: '628222@c.us',
+            body: 'first text',
+            type: 'text',
+            direction: MessageDirection.INCOMING,
+            timestamp: 1_700_000_000,
+          });
+        }
+        return found;
+      });
+
+      await projector.recordRevoke(
+        sessionId,
+        'G-1',
+        { kind: 'revoke', chatId: '120363000000000001@g.us', fromMe: false, author: '628444@c.us', admin: false },
+        true,
+      );
+    };
+
+    beforeEach(() => ds.getRepository(LidMapping).insert({ lid: '999666', phone: '628333', isReported: true }));
+
+    it.each([
+      ['a lid with no reported phone', '111999@lid', 'revoked'],
+      ['a lid reported for another phone', '999666@lid', 'text'],
+    ])('judges the row whose author is %s', async (_label, author, type) => {
+      await revokeStoredAfterRead(author);
+
+      expect(await rowOf('G-1')).toMatchObject({ author, type });
+    });
+
+    it.each([
+      [
+        'marked unreported with a write of its own not stored',
+        { unreported: ['999666'], revoking: [], held: [] },
+        'revoked',
+      ],
+      ['revoked by a display lookup being written', { unreported: [], revoking: ['999666'], held: [] }, 'revoked'],
+      [
+        'held against another phone not stored',
+        { unreported: [], revoking: [], held: [['999666', '628444']] },
+        'revoked',
+      ],
+      ['held against no phone', { unreported: [], revoking: [], held: [['999666', null]] }, 'revoked'],
+      [
+        'held against the phone it is reported for',
+        { unreported: [], revoking: [], held: [['999666', '628333']] },
+        'text',
+      ],
+    ] as const)(
+      'judges the row whose author is a lid reported for another phone, %s, as the lid store does',
+      async (_label, refused, type) => {
+        jest.spyOn(lidStore, 'rowVetoes').mockReturnValue({
+          unreported: [...refused.unreported],
+          revoking: [...refused.revoking],
+          held: refused.held.map(([lid, phone]) => [lid, phone]),
+        });
+
+        await revokeStoredAfterRead('999666@lid');
+
+        expect(await rowOf('G-1')).toMatchObject({ author: '999666@lid', type });
+      },
+    );
+
+    it("takes the row whose author's lid this node failed to store for the revoke's phone", async () => {
+      jest.spyOn(ds.getRepository(LidMapping), 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+      await expect(lidStore.remember('999666', '628444')).resolves.toBe(false);
+
+      await revokeStoredAfterRead('999666@lid');
+
+      expect(await rowOf('G-1')).toMatchObject({ author: '999666@lid', type: 'revoked' });
+    });
+  });
 });

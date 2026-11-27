@@ -37,7 +37,8 @@ import { WebhookReconcilerService } from '../webhook/webhook-reconciler.service'
 import { WebhookRedriveService } from '../webhook/webhook-redrive.service';
 import { MessageProjector } from './message-projector.service';
 import type { MutationSource } from './message-mutation-guard';
-import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { type LidRowVetoes, LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { LidMapping } from '../../engine/identity/lid-mapping.entity';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { HookManager } from '../../core/hooks';
 import { EventsGateway } from '../events/events.gateway';
@@ -71,8 +72,11 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
   let retentionHours: number;
   let engine: IWhatsAppEngine;
   let hookManager: HookManager;
+  // The reported rows the lid store refuses.
+  let vetoes: LidRowVetoes;
 
   beforeEach(async () => {
+    vetoes = { unreported: [], revoking: [], held: [] };
     jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
     jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
     mockFetch.mockReset();
@@ -82,7 +86,7 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
     ds = await new DataSource({
       type: 'better-sqlite3',
       database: ':memory:',
-      entities: [Session, Message, Webhook, WebhookOutboxEvent, WebhookDeliveryFailure],
+      entities: [Session, Message, Webhook, WebhookOutboxEvent, WebhookDeliveryFailure, LidMapping],
       synchronize: true,
     }).initialize();
     sessionId = (
@@ -158,6 +162,7 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
           Promise.resolve(jid === LID ? '628111' : jid === MEMBER_LID ? '628333' : null),
         findLidsForPhone: (phone: string) =>
           Promise.resolve(phone === '628111' ? ['999555'] : phone === '628333' ? ['999666'] : []),
+        rowVetoes: () => vetoes,
       } as unknown as LidMappingStoreService,
     );
     webhook = await ds.getRepository(Webhook).save(
@@ -937,6 +942,63 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
           else expect(stored.metadata).toMatchObject({ reactions: { [label.includes('phone') ? CHAT : LID]: 'x' } });
         },
       );
+
+      describe('whose author the row stores as a lid while a member revoke names a phone', () => {
+        beforeEach(async () => {
+          // As the lid store holds them: the pairings the stub reports, and a lid looked up with no answer.
+          await ds.getRepository(LidMapping).insert([
+            { lid: '999555', phone: '628111', isReported: true },
+            { lid: '999666', phone: '628333', isReported: true },
+            { lid: '999888', phone: null, isReported: false },
+          ]);
+        });
+
+        it.each(['111999@lid', '999888@lid', '111999@hosted.lid'])(
+          'lands on the row whose author %s has no reported phone',
+          async author => {
+            storedAs('S-13', { ...member, author }, 2);
+
+            await revoke('S-13', { chatId: GROUP, fromMe: false, author: MEMBER, admin: false });
+
+            expect(await rowOf('S-13')).toMatchObject({ type: 'revoked', body: '' });
+          },
+        );
+
+        it.each([
+          ['marked unreported with a write of its own not stored', { unreported: ['999666'], revoking: [], held: [] }],
+          ['revoked by a display lookup being written', { unreported: [], revoking: ['999666'], held: [] }],
+          ['held against another phone not stored', { unreported: [], revoking: [], held: [['999666', '628444']] }],
+          ['held against no phone', { unreported: [], revoking: [], held: [['999666', null]] }],
+        ] as const)("lands on the row whose author's lid the lid store refuses, %s", async (_label, refused) => {
+          vetoes = {
+            unreported: [...refused.unreported],
+            revoking: [...refused.revoking],
+            held: refused.held.map(([lid, phone]) => [lid, phone]),
+          };
+          storedAs('S-15', { ...member, author: MEMBER_LID }, 2);
+
+          await revoke('S-15', { chatId: GROUP, fromMe: false, author: '628444@c.us', admin: false });
+
+          expect(await rowOf('S-15')).toMatchObject({ type: 'revoked', body: '' });
+        });
+
+        it("leaves the row whose author's lid the lid store holds against the phone it is reported for", async () => {
+          vetoes = { unreported: ['999888'], revoking: ['999888'], held: [['999666', '628333']] };
+          storedAs('S-16', { ...member, author: MEMBER_LID }, 2);
+
+          await revoke('S-16', { chatId: GROUP, fromMe: false, author: '628444@c.us', admin: false });
+
+          expect(await rowOf('S-16')).toMatchObject({ author: MEMBER_LID, ...unchanged });
+        });
+
+        it("leaves the row whose author's lid is reported for another phone", async () => {
+          storedAs('S-14', { ...member, author: MEMBER_LID }, 2);
+
+          await revoke('S-14', { chatId: GROUP, fromMe: false, author: '628444@c.us', admin: false });
+
+          expect(await rowOf('S-14')).toMatchObject({ author: MEMBER_LID, ...unchanged });
+        });
+      });
 
       it('lands a member revoke naming its author by a lid with no reported phone on the row that stores a phone', async () => {
         storedAs('S-12', member, 2);

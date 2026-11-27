@@ -1,4 +1,4 @@
-import { type FindOptionsWhere, In, IsNull, Like, Not, Or, Repository } from 'typeorm';
+import { type FindOptionsWhere, In, IsNull, Like, Not, Or, Raw, Repository } from 'typeorm';
 import { Message, MessageDirection } from '../message/entities/message.entity';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { LoggerService } from '../../common/services/logger.service';
@@ -8,6 +8,7 @@ import { ReactionEvent, EditedMessage } from '../../engine/interfaces/whatsapp-e
 import { updateMessageMetadata } from '../message/message-metadata';
 import { type MutationSource, type StoredMessageRef, storedSpellings } from './message-mutation-guard';
 import type { ContactDirectory } from '../../engine/identity/jid-candidates';
+import type { LidRowVetoes } from '../../engine/identity/lid-mapping-store.service';
 import { parseWaId } from '../../engine/identity/wa-id';
 import { judgeStoredRow, outboxPayloadPredicate, revokeSourceFor } from './message-row-judgement';
 import type { ChangeSlots, EditSlot, OwnRow } from './message-change-park';
@@ -36,6 +37,31 @@ export const unreadRowError = (verdict: StoredRowVerdict): unknown =>
   verdict.error ?? new Error('The stored row could not be read');
 
 /**
+ * A stored author that is a lid with no phone reported for it, as lid_mappings holds them and the lid store judges them:
+ * no reported row, or only rows the store refuses ({@link LidRowVetoes}, bound as `:vetoUnreported`, `:vetoRevoking`
+ * and `:vetoHeld`, one JSON list each). Its user part is what precedes `@` or a `:device` suffix.
+ */
+const unpairedLid = (author: string, postgres: boolean): string => {
+  const lid = postgres
+    ? `split_part(replace(${author}, ':', '@'), '@', 1)`
+    : `substr(${author}, 1, instr(replace(${author}, ':', '@'), '@') - 1)`;
+  const reported = postgres ? '"paired"."isReported" = true' : '"paired"."isReported" = 1';
+  const lids = (list: string) =>
+    postgres ? `SELECT jsonb_array_elements_text(CAST(${list} AS jsonb))` : `SELECT "value" FROM json_each(${list})`;
+  const held = postgres
+    ? 'jsonb_array_elements(CAST(:vetoHeld AS jsonb)) AS "held"("value")'
+    : 'json_each(:vetoHeld) "held"';
+  const heldAt = (at: number) => (postgres ? `("held"."value" ->> ${at})` : `json_extract("held"."value", '$[${at}]')`);
+  return (
+    `((${author} LIKE '%@lid' OR ${author} LIKE '%@hosted.lid') AND NOT EXISTS (SELECT 1 FROM "lid_mappings" "paired" ` +
+    `WHERE "paired"."lid" = ${lid} AND "paired"."phone" IS NOT NULL AND ${reported} ` +
+    `AND "paired"."lid" NOT IN (${lids(':vetoUnreported')}) AND "paired"."lid" NOT IN (${lids(':vetoRevoking')}) ` +
+    `AND NOT EXISTS (SELECT 1 FROM ${held} WHERE ${heldAt(0)} = "paired"."lid" ` +
+    `AND (${heldAt(1)} IS NULL OR ${heldAt(1)} <> "paired"."phone"))))`
+  );
+};
+
+/**
  * The row of a message the change itself names, for a write made with no row read: its chat as the change names it
  * (or the chat an API caller named), the side and author the change implies where the rule judges them, each chat and
  * author in every spelling the rule takes as the same entity ({@link storedSpellings}: dialects, spellings of one
@@ -47,6 +73,8 @@ async function claimedRow(
   waMessageId: string,
   source: MutationSource,
   directory?: ContactDirectory,
+  postgres = false,
+  lidRowVetoes?: () => LidRowVetoes,
 ): Promise<FindOptionsWhere<Message>> {
   const group = Boolean(source.chatId?.endsWith('@g.us'));
   const memberRevoke = source.kind === 'revoke' && group && source.fromMe === false && source.admin === false;
@@ -67,13 +95,21 @@ async function claimedRow(
   }
   if (source.author && (memberRevoke || (source.kind === 'edit' && group && source.fromMe === false))) {
     const authors = [IsNull(), In(await storedSpellings(source.author, directory))];
-    // A member revoke is foreign only to an author it proves another: a lid with no reported phone proves no phone so.
-    if (
-      memberRevoke &&
-      parseWaId(source.author).kind === 'lid' &&
-      !(await directory?.resolveLid(parseWaId(source.author).userPart))
-    ) {
+    // A member revoke is foreign only to an author it proves another, and a lid with no reported phone proves no
+    // phone so: a revoke naming such a lid takes a phone author, and one naming a phone takes such a lid.
+    const named = parseWaId(source.author);
+    if (memberRevoke && named.kind === 'lid' && !(await directory?.resolveLid(named.userPart))) {
       authors.push(...['c.us', 's.whatsapp.net', 'hosted'].map(domain => Like(`%@${domain}`)));
+    }
+    if (memberRevoke && named.kind === 'user') {
+      const vetoes = lidRowVetoes?.() ?? { unreported: [], revoking: [], held: [] };
+      authors.push(
+        Raw(author => unpairedLid(author, postgres), {
+          vetoUnreported: JSON.stringify(vetoes.unreported),
+          vetoRevoking: JSON.stringify(vetoes.revoking),
+          vetoHeld: JSON.stringify(vetoes.held),
+        }),
+      );
     }
     where.author = Or(...authors);
   }
@@ -116,6 +152,8 @@ export class MessageMutationProjector {
     ) => void | Promise<void> = () => undefined,
     // The lids reported for a phone, so a write with no row read takes the message stored under either.
     private readonly lidsForPhone?: (phone: string) => Promise<string[]>,
+    // The reported rows the lid store refuses, which such a write takes as no pairing, as a read of the row would.
+    private readonly lidRowVetoes?: () => LidRowVetoes,
   ) {}
 
   /**
@@ -195,6 +233,8 @@ export class MessageMutationProjector {
         resolveLid: lid => resolveLid(`${lid}@lid`).catch(() => null),
         lidsForPhone: phone => this.lidsForPhone?.(phone).catch(() => []) ?? [],
       },
+      this.messageRepository.manager?.connection?.options?.type === 'postgres',
+      this.lidRowVetoes,
     );
   }
 

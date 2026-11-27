@@ -534,6 +534,7 @@ export class MessageProjector {
       (sessionId, waMessageId, slots, error) => this.parkChange(sessionId, waMessageId, slots, error),
       (sessionId, waMessageId, slots) => this.settleParked(sessionId, waMessageId, slots),
       this.lidMappingStore ? phone => this.lidMappingStore!.findLidsForPhone(phone) : undefined,
+      this.lidMappingStore ? () => this.lidMappingStore!.rowVetoes() : undefined,
     );
     this.engines.onRetire((id, engine) => {
       for (const t of this.tickets.get(id) ?? []) if (t.engine === engine) t.drop();
