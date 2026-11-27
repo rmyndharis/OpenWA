@@ -24,6 +24,8 @@ import {
 } from './message-mutation-projector';
 import {
   ParkedChange,
+  journalChange,
+  restoredChange,
   slotNames,
   type AckSlot,
   type ChangeSlots,
@@ -479,7 +481,10 @@ export class MessageProjector {
     apply: change =>
       this.onChain(change.sessionId, change.waMessageId, () =>
         this.runSlots(change.sessionId, change.waMessageId, change.slots, {
-          announce: change.engine !== undefined && this.engines.isLive(change.sessionId, change.engine),
+          // One the journal restored announces its row whether or not the engine runs yet: the one it came from is
+          // gone, and the plugins it reaches are back before it is tried.
+          announce:
+            change.restored || (change.engine !== undefined && this.engines.isLive(change.sessionId, change.engine)),
           owned: nodeOwnsSession(this.ownership, change.sessionId),
         }),
       ).finally(() => this.holdCopies(change.sessionId, change.waMessageId)),
@@ -536,6 +541,11 @@ export class MessageProjector {
       this.lidMappingStore ? phone => this.lidMappingStore!.findLidsForPhone(phone) : undefined,
       this.lidMappingStore ? () => this.lidMappingStore!.rowVetoes() : undefined,
     );
+    // What the last process kept of these changes comes back before anything is tried, its deliveries held again.
+    this.recovery.register('change', {
+      encode: record => journalChange(record as ParkedChange),
+      decode: (key, value) => this.restoreChange(key, value),
+    });
     this.engines.onRetire((id, engine) => {
       for (const t of this.tickets.get(id) ?? []) if (t.engine === engine) t.drop();
       this.deleteRoomIfIdle(id);
@@ -694,6 +704,23 @@ export class MessageProjector {
     // A record let go while the claims were judged may have taken the list out of the map.
     if (records.length) this.parkedFor.set(key, records);
     for (const record of touched) this.recovery.park(record.key, record);
+  }
+
+  /** A change the journal kept across a restart, back among the message's records and holding its deliveries. */
+  private restoreChange(key: string, value: unknown): ParkedChange | undefined {
+    const restored = restoredChange(value);
+    if (!restored) return undefined;
+    const { sessionId, waMessageId, since, slots } = restored;
+    const record = new ParkedChange(sessionId, waMessageId, undefined, since, this.parkSteps, key);
+    Object.assign(record.slots, slots);
+    record.restored = true;
+    record.measure();
+    const message = `${sessionId}:${waMessageId}`;
+    this.parkedFor.set(message, [...(this.parkedFor.get(message) ?? []), record]);
+    const seq = Number(key.slice(key.lastIndexOf('#') + 1));
+    if (Number.isInteger(seq)) this.parkSeq = Math.max(this.parkSeq, seq);
+    this.holdCopies(sessionId, waMessageId);
+    return record;
   }
 
   /** Whether a change claimed by `by` agrees with one kept under `kept`: no claim, or one the rule does not prove foreign. */

@@ -1,4 +1,8 @@
+import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DataSource, In } from 'typeorm';
+import { RecoveryJournal } from '../../common/utils/recovery-journal';
 import { type MessageCopyChange, WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookOutboxEvent } from './entities/webhook-outbox-event.entity';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
@@ -638,5 +642,98 @@ describe('WebhookOutboxService copies of deliveries with no outbox row written',
       expect(losses(warn).at(-1)).toMatchObject({ reason: 'rewrite', idempotencyKey: 'msg_s_0_w' });
       await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBeUndefined();
     });
+  });
+});
+
+describe('WebhookOutboxService copies of queued deliveries, across a restart', () => {
+  const MiB = 1024 * 1024;
+  let dir: string;
+  let journal: RecoveryJournal;
+  let service: WebhookOutboxService;
+  const repo = { findOne: () => Promise.resolve(null) } as never;
+  const row = (i: number, payload: Record<string, unknown> = {}) => ({
+    webhookId: 'w',
+    sessionId: 's',
+    event: 'message.received',
+    idempotencyKey: `msg_s_${i}_w`,
+    deliveryId: `d${i}`,
+    payload: { id: String(i), chatId: '628111@c.us', fromMe: false, type: 'text', body: 'secret', ...payload },
+  });
+  const queued = (...rows: Array<ReturnType<typeof row>>): void => {
+    service.holdUnwritten(rows);
+    for (const r of rows) service.queuedUnwritten(r.webhookId, r.idempotencyKey, r.deliveryId);
+  };
+  const restart = (): void => {
+    journal.close();
+    journal = new RecoveryJournal(journal.path);
+    service = new WebhookOutboxService(repo, journal);
+  };
+
+  beforeEach(() => {
+    jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+    dir = mkdtempSync(join(tmpdir(), 'outbox-journal-'));
+    journal = new RecoveryJournal(join(dir, 'journal.jsonl'));
+    service = new WebhookOutboxService(repo, journal);
+  });
+
+  afterEach(() => {
+    journal.close();
+    jest.restoreAllMocks();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('journals a copy only once its delivery is queued, with what a change left of it by then', async () => {
+    service.holdUnwritten([row(0), row(1)]);
+    await service.changeUnwrittenForMessage('s', '0', { kind: 'redact' });
+    service.queuedUnwritten('w', 'msg_s_0_w', 'd0');
+    service.queuedUnwritten('w', 'never held', 'd9');
+
+    restart();
+
+    expect(service.unwrittenCopy('w', 'msg_s_0_w')).toMatchObject({ type: 'revoked', body: '' });
+    expect(service.unwrittenCopy('w', 'msg_s_1_w')).toBeUndefined();
+    expect(service.queuedCopies()).toEqual([{ webhookId: 'w', idempotencyKey: 'msg_s_0_w', deliveryId: 'd0' }]);
+  });
+
+  it.each([
+    ['withdrawn by a revoke', { kind: 'close' }, null],
+    [
+      'rewritten by an edit',
+      { kind: 'rewrite', body: 'edited text' },
+      expect.objectContaining({ body: 'edited text' }),
+    ],
+  ] as const)('restores a copy %s as the change left it', async (_label, change, kept) => {
+    queued(row(0));
+    await service.changeUnwrittenForMessage('s', '0', change);
+
+    restart();
+
+    expect(service.unwrittenCopy('w', 'msg_s_0_w')).toEqual(kept);
+  });
+
+  it('restores a copy whose content was let go as such, which a revoke still withdraws', async () => {
+    queued(row(0));
+    queued(...Array.from({ length: 65 }, (_, i) => row(i + 1, { media: { data: 'x'.repeat(MiB) } })));
+    expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeUndefined();
+
+    restart();
+
+    expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeUndefined();
+    await service.changeUnwrittenForMessage('s', '0', { kind: 'close' });
+    expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeNull();
+  });
+
+  it('forgets a copy with its delivery, and lets go of one it cannot read back', () => {
+    queued(row(0), row(1));
+    service.forgetUnwritten('w', 'msg_s_1_w');
+    journal.close();
+    appendFileSync(journal.path, `${JSON.stringify({ l: 'copy', k: 'w\u0000bad', v: { s: 's' } })}\n`);
+
+    restart();
+
+    expect(service.queuedCopies().map(copy => copy.idempotencyKey)).toEqual(['msg_s_0_w']);
+    service.forgetUnwritten('w', 'msg_s_0_w');
+    expect(readFileSync(journal.path, 'utf8')).toBe('');
   });
 });

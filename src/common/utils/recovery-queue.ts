@@ -133,12 +133,16 @@ export class RecoveryQueue {
   // Lanes the journal restores records to whose owner has not registered yet: no pass runs until none is left, so the
   // outbox steps of restored changes come before any restored dispatch goes out.
   private readonly waiting = new Set<RecoveryLane>();
+  // Set while records the journal restored wait for the application to be up (ready): the hooks they reach are
+  // registered by then.
+  private held = false;
 
   constructor(private readonly options: RecoveryQueueOptions) {
     this.now = options.now ?? (() => Date.now());
     this.delayMs = options.baseDelayMs;
     for (const lane of options.journal?.waiting() ?? [])
       if (LANES.includes(lane as RecoveryLane)) this.waiting.add(lane as RecoveryLane);
+    this.held = this.waiting.size > 0;
   }
 
   /**
@@ -164,8 +168,12 @@ export class RecoveryQueue {
     this.schedule();
   }
 
-  /** Once the application started: a lane no owner registered for gives up what the journal restored to it. */
+  /**
+   * Once the application is up, its plugins included: what the journal restored is tried from now on, and a lane no
+   * owner registered for gives up what the journal restored to it.
+   */
   ready(): void {
+    this.held = false;
     const journal = this.options.journal;
     for (const lane of this.waiting) {
       const entries = journal?.take(lane) ?? [];
@@ -256,7 +264,7 @@ export class RecoveryQueue {
 
   /** Run a pass now (tests, and the recovery of a database that answers again). */
   async flush(): Promise<void> {
-    if (this.waiting.size) return;
+    if (this.held || this.waiting.size) return;
     clearTimeout(this.timer);
     this.timer = undefined;
     // A pass already under way may have started before the database answered: this one runs after it.
@@ -284,7 +292,7 @@ export class RecoveryQueue {
   }
 
   private schedule(): void {
-    if (this.waiting.size || this.timer || this.running || this.entries(this.live()).length === 0) return;
+    if (this.held || this.waiting.size || this.timer || this.running || this.entries(this.live()).length === 0) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
       void this.flush();

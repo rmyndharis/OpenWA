@@ -89,9 +89,8 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
   let received: Array<{ body: string | undefined; type: string | undefined }>;
   const prevSsrf = process.env.WEBHOOK_SSRF_PROTECT;
 
-  beforeAll(async () => {
-    // The 127.0.0.1 receiver would trip the SSRF guard at delivery time; disabled for this suite as in the others.
-    process.env.WEBHOOK_SSRF_PROTECT = 'false';
+  /** Boot the application: on the same database file, Redis prefix and recovery journal as any before it. */
+  const start = async (): Promise<void> => {
     const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleFixture.createNestApplication();
     applyGlobalValidation(app);
@@ -105,6 +104,17 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
     sessions = app.get<Repository<Session>>(getRepositoryToken(Session, 'data'));
     messages = app.get<Repository<Message>>(getRepositoryToken(Message, 'data'));
     failures = app.get<Repository<WebhookDeliveryFailure>>(getRepositoryToken(WebhookDeliveryFailure, 'data'));
+  };
+  /** The process stops and starts again, its queued jobs waiting in Redis. */
+  const restart = async (): Promise<void> => {
+    await app.close();
+    await start();
+  };
+
+  beforeAll(async () => {
+    // The 127.0.0.1 receiver would trip the SSRF guard at delivery time; disabled for this suite as in the others.
+    process.env.WEBHOOK_SSRF_PROTECT = 'false';
+    await start();
     received = [];
     receiverStatus = 200;
     receiver = http.createServer((req, res) => {
@@ -359,6 +369,44 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
       hooks.unregister(hookId);
     }
   }, 60000);
+
+  describe('a queued delivery whose outbox row could not be written, across a restart', () => {
+    // Paused across the restart, so the job's next attempt comes only once the change below was made.
+    const restarted = async (): Promise<void> => {
+      await webhookQueue.pause();
+      await restart();
+    };
+    const resumed = async (): Promise<void> => {
+      receiverStatus = 200;
+      await webhookQueue.resume();
+      await waitFor(queueIdle);
+    };
+
+    it('posts nothing more once an engine revoke after the restart took the message back', async () => {
+      const { sessionId, id } = await failedOnce('outbox writes');
+      await restarted();
+
+      await changes['an engine revoke'](sessionId, id);
+      await resumed();
+
+      expect(received.slice(1)).toEqual([]);
+      expect(await failures.countBy({ sessionId })).toBe(0);
+    }, 60000);
+
+    it.each(['an engine revoke', 'a delete through the API'])(
+      'keeps what %s left of its copy before the restart',
+      async change => {
+        const { sessionId, id } = await failedOnce('outbox writes');
+        await changes[change](sessionId, id);
+        await restarted();
+
+        await resumed();
+
+        expect(received.slice(1)).toEqual(expected[change]);
+      },
+      60000,
+    );
+  });
 
   it('sends the edit of an event kept while the database was away, once its job waits', async () => {
     received.length = 0;

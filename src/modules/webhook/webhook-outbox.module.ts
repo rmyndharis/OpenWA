@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { WebhookOutboxEvent } from './entities/webhook-outbox-event.entity';
 import { WebhookOutboxService } from './webhook-outbox.service';
+import { RecoveryJournal } from '../../common/utils/recovery-journal';
 
 /**
  * The one owner of WebhookOutboxService, which both WebhookModule and QueueModule need. QueueModule
@@ -10,7 +11,8 @@ import { WebhookOutboxService } from './webhook-outbox.service';
  */
 @Module({
   imports: [TypeOrmModule.forFeature([WebhookOutboxEvent], 'data')],
-  providers: [WebhookOutboxService],
-  exports: [WebhookOutboxService],
+  // The journal of what the database refused: one per process, shared by the outbox and the delivery service.
+  providers: [WebhookOutboxService, { provide: RecoveryJournal, useFactory: () => new RecoveryJournal() }],
+  exports: [WebhookOutboxService, RecoveryJournal],
 })
 export class WebhookOutboxModule {}

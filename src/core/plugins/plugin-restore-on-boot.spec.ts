@@ -175,9 +175,10 @@ describe('PluginLoaderService — restoring the operator enable decision across 
       .spyOn(loader2, 'enablePlugin')
       .mockImplementation((id: string) => (id === manifest.id ? Promise.reject(new Error('boom')) : Promise.resolve()));
 
-    // A plugin that cannot come back must never hold up the gateway.
+    // A plugin that cannot come back must never hold up the gateway, nor what waits for the restore to be over.
     await expect(loader2.onApplicationBootstrap()).resolves.toBeUndefined();
     expect(enable).toHaveBeenCalledWith(second.id);
+    await expect(loader2.whenRestored()).resolves.toBeUndefined();
   });
 
   it('stops restoring plugins once shutdown teardown begins', async () => {
@@ -302,6 +303,21 @@ describe('PluginLoaderService — restoring the operator enable decision across 
       await jest.advanceTimersByTimeAsync(0);
 
       expect(enable).toHaveBeenCalledWith(second.id);
+    });
+
+    it('settles whenRestored once the restore that outlasted the boot wait is over, not before', async () => {
+      const done = jest.fn();
+      void loader2.whenRestored().then(done);
+      const booted = loader2.onApplicationBootstrap();
+      await jest.advanceTimersByTimeAsync(PLUGIN_RESTORE_BOOT_BUDGET_MS);
+      await booted;
+      expect(done).not.toHaveBeenCalled();
+
+      releaseFirst();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(enable).toHaveBeenCalledWith(second.id);
+      expect(done).toHaveBeenCalled();
     });
 
     it('returns as soon as every plugin is back, without waiting out the budget', async () => {

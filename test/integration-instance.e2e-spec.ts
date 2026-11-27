@@ -76,6 +76,8 @@ describe('IntegrationInstanceController (e2e)', () => {
         // no-op keeps the test log free of that expected-but-noisy error).
         registerBuiltInPlugin: jest.fn(),
         enablePlugin: jest.fn().mockResolvedValue(undefined),
+        // Nothing to restore at boot: what waits for the restore (the recovery queue) goes on at once.
+        whenRestored: () => Promise.resolve(),
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
       })

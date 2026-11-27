@@ -87,6 +87,7 @@ describe('WebhookDeliveryService', () => {
     markPending: jest.Mock;
     currentMessagePayload: jest.Mock;
     isMessageHeld: jest.Mock;
+    queuedUnwritten: jest.Mock;
   };
   let insertedFailures: Array<Partial<WebhookDeliveryFailure>>;
 
@@ -198,6 +199,7 @@ describe('WebhookDeliveryService', () => {
       // No outbox row of a message delivery unless a test says otherwise: a delivery sends what it holds.
       currentMessagePayload: jest.fn().mockResolvedValue(undefined),
       isMessageHeld: jest.fn().mockReturnValue(false),
+      queuedUnwritten: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -2093,6 +2095,55 @@ describe('WebhookDeliveryService', () => {
       }).compile();
       return queueModule.get<WebhookDeliveryService>(WebhookDeliveryService);
     };
+
+    // A copy the journal restored for a queued delivery is read by that job only: once the job is gone, nothing will.
+    it.each([
+      ['no longer in Redis', () => Promise.resolve(null), true],
+      ['finished', () => Promise.resolve({ getState: () => Promise.resolve('completed') }), true],
+      ['given up on', () => Promise.resolve({ getState: () => Promise.resolve('failed') }), true],
+      ['still waiting', () => Promise.resolve({ getState: () => Promise.resolve('delayed') }), false],
+      ['unknown while Redis cannot answer', () => Promise.reject(new Error('connection is closed')), false],
+    ] as const)('drops at start a restored copy whose job is %s: %s', async (_label, getJob, dropped) => {
+      const restored = jest.fn().mockReturnValue([{ webhookId: 'wh-1', idempotencyKey: 'k', deliveryId: 'd' }]);
+      const forget = jest.fn();
+      Object.assign(outboxService, { queuedCopies: restored, forgetUnwritten: forget });
+      webhookQueue.getJob = jest.fn(getJob as () => Promise<unknown>);
+      const queueService = await buildQueueService((key: string, def?: unknown) =>
+        key === 'queue.enabled' ? true : def,
+      );
+
+      queueService.onApplicationBootstrap();
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(webhookQueue.getJob).toHaveBeenCalledWith('d');
+      expect(forget.mock.calls).toEqual(dropped ? [['wh-1', 'k']] : []);
+    });
+
+    it('drops, at a later check, a copy whose queued job Redis lost while the process runs', async () => {
+      const queued = jest.fn().mockReturnValue([]);
+      const forget = jest.fn();
+      Object.assign(outboxService, { queuedCopies: queued, forgetUnwritten: forget });
+      webhookQueue.getJob = jest.fn(() => Promise.resolve(null));
+      const queueService = await buildQueueService((key: string, def?: unknown) =>
+        key === 'queue.enabled' ? true : def,
+      );
+      jest.useFakeTimers();
+      try {
+        queueService.onApplicationBootstrap();
+        await jest.advanceTimersByTimeAsync(0);
+        expect(forget).not.toHaveBeenCalled();
+        queued.mockReturnValue([{ webhookId: 'wh-1', idempotencyKey: 'k', deliveryId: 'd' }]);
+
+        await jest.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+        expect(forget).toHaveBeenCalledWith('wh-1', 'k');
+        await queueService.onModuleDestroy();
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
 
     it('enqueues a small, media-shed job when the event carries over-threshold media', async () => {
       const queueService = await buildQueueService((key: string, def?: unknown) => {

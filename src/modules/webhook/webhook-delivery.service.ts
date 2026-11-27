@@ -48,6 +48,8 @@ import { HookManager } from '../../core/hooks';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { WILDCARD_EXCLUDED_EVENTS, subscriptionCoversEvent } from '../../common/utils/wildcard-events';
 import { RecoveryQueue, recoveryQueueOptions, type RecoveryLoss } from '../../common/utils/recovery-queue';
+import { RecoveryJournal } from '../../common/utils/recovery-journal';
+import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { ParkedDispatch, type ParkedDispatchSteps } from './parked-dispatch';
 
@@ -59,6 +61,9 @@ export interface WebhookPayload {
   deliveryId: string;
   data: Record<string, unknown>;
 }
+
+/** How often the copies kept for queued deliveries are checked against their jobs (see onApplicationBootstrap). */
+const ORPHAN_COPY_CHECK_MS = 10 * 60 * 1000;
 
 export interface WebhookJobData {
   webhookId: string;
@@ -347,6 +352,10 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     @Optional()
     @InjectQueue(QUEUE_NAMES.WEBHOOK)
     private readonly webhookQueue?: Queue<WebhookJobData>,
+    @Optional()
+    private readonly journal?: RecoveryJournal,
+    @Optional()
+    private readonly pluginLoader?: PluginLoaderService,
   ) {
     this.queueEnabled = configService.get<boolean>('queue.enabled', false);
     this.preflight = new DeliveryPreflight(failureRepository, configService, hookManager, this.logger);
@@ -360,13 +369,121 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     this.degradedSessionConcurrency =
       this.configService.get<number | undefined>('webhook.degradedSessionConcurrency') ??
       Math.max(1, Math.floor(dispatchConcurrency / 4));
-    this.recovery = new RecoveryQueue(
-      recoveryQueueOptions(
+    this.recovery = new RecoveryQueue({
+      ...recoveryQueueOptions(
         webhookRepository.manager?.connection?.options?.type === 'postgres',
         // The sweep's grace (WebhookReconcilerService), which the waits on PostgreSQL stay under.
         resolveNonNegativeIntEnv(process.env.WEBHOOK_RECONCILE_GRACE_MS, 60_000),
       ),
+      journal,
+    });
+    // A session's state as a dead process saw it would go out as current after a restart: those events stay in memory.
+    this.recovery.register('dispatch', {
+      encode: record => {
+        const parked = record as ParkedDispatch;
+        if (SESSION_STATE_EVENTS.includes(parked.event)) return undefined;
+        const { sessionId: s, event: e, data: d, occurrenceId: o, engineRef: r, only: w, since: t } = parked;
+        return { s, e, d, o, r, w, t };
+      },
+      decode: (key, value) => this.restoreDispatch(key, value),
+    });
+  }
+
+  /** A kept event the journal kept across a restart, back in its session's order under its own key and occurrence. */
+  private restoreDispatch(key: string, value: unknown): ParkedDispatch | undefined {
+    const v = value as {
+      s?: unknown;
+      e?: unknown;
+      d?: unknown;
+      o?: unknown;
+      r?: MessageEngineRef | null;
+      w?: unknown;
+      t?: unknown;
+    } | null;
+    if (
+      typeof v?.s !== 'string' ||
+      typeof v.e !== 'string' ||
+      typeof v.d !== 'object' ||
+      v.d === null ||
+      typeof v.o !== 'string' ||
+      typeof v.t !== 'number' ||
+      SESSION_STATE_EVENTS.includes(v.e)
+    ) {
+      return undefined;
+    }
+    const parked = new ParkedDispatch(
+      key,
+      v.s,
+      v.e,
+      v.d as Record<string, unknown>,
+      v.o,
+      v.r ?? null,
+      typeof v.w === 'string' ? v.w : null,
+      v.t,
+      this.parkSteps,
     );
+    let session = this.parkedDispatches.get(v.s);
+    if (!session) this.parkedDispatches.set(v.s, (session = new Set()));
+    session.add(parked);
+    const seq = Number(key.slice(key.lastIndexOf('#') + 1));
+    if (Number.isInteger(seq)) this.parkSeq = Math.max(this.parkSeq, seq);
+    return parked;
+  }
+
+  /**
+   * Once every module is up: what the journal restored is tried once the plugins are back too, so their hooks see the
+   * changes and events it holds (a lane of it no owner took back is let go then). The copies kept for queued deliveries
+   * whose job is gone (it finished elsewhere, or Redis lost it) are dropped now and every ORPHAN_COPY_CHECK_MS, as
+   * nothing will read them: a withdrawn copy is kept until its delivery ends, so one whose job vanished would stay.
+   */
+  onApplicationBootstrap(): void {
+    const plugins = this.pluginLoader?.whenRestored();
+    if (plugins) void plugins.then(() => this.recovery.ready());
+    else this.recovery.ready();
+    void this.dropOrphanCopies();
+    if (this.queueEnabled && this.webhookQueue) {
+      this.orphanCheck = setInterval(() => void this.dropOrphanCopies(), ORPHAN_COPY_CHECK_MS);
+      this.orphanCheck.unref?.();
+    }
+  }
+
+  private orphanCheck?: ReturnType<typeof setInterval>;
+  private checkingOrphans = false;
+
+  private async dropOrphanCopies(): Promise<void> {
+    if (this.checkingOrphans) return;
+    this.checkingOrphans = true;
+    try {
+      await this.dropOrphanCopiesNow();
+    } finally {
+      this.checkingOrphans = false;
+    }
+  }
+
+  private async dropOrphanCopiesNow(): Promise<void> {
+    for (const { webhookId, idempotencyKey, deliveryId } of this.outbox.queuedCopies()) {
+      if (!(await this.jobGone(deliveryId))) continue;
+      this.outbox.forgetUnwritten(webhookId, idempotencyKey);
+      this.logger.warn('Dropping a kept copy of a delivery whose queued job is gone', {
+        webhookId,
+        idempotencyKey,
+        deliveryId,
+        action: 'recovery_journal_orphan',
+      });
+    }
+  }
+
+  /** Whether a queued job is gone for good; false when the queue cannot tell now. */
+  private async jobGone(deliveryId: string): Promise<boolean> {
+    if (!this.queueEnabled || !this.webhookQueue) return true;
+    try {
+      const job = await this.webhookQueue.getJob(deliveryId);
+      if (!job) return true;
+      const state = await job.getState();
+      return state === 'completed' || state === 'failed';
+    } catch {
+      return false;
+    }
   }
 
   /** The queue of what the database refused, shared with the message projector (see `recovery`). */
@@ -415,6 +532,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * so the bound limits this hook only; the whole teardown is the sum in shutdown-budget.ts.
    */
   async onModuleDestroy(): Promise<void> {
+    clearInterval(this.orphanCheck);
     const drainBudgetMs = Math.max(
       0,
       this.configService.get<number>('webhook.shutdownDrainMs', DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS),
@@ -1327,6 +1445,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           delay: this.configService.get<number>('webhook.retryDelay', 5000),
         },
       });
+
+      // The job outlives the process; a copy kept for it, with no outbox row, goes into the journal with it.
+      this.outbox.queuedUnwritten(webhook.id, idempotencyKey, deliveryId);
 
       // Execute hook after successful queue (NOT delivery - that happens in processor)
       await this.hookManager.execute(

@@ -428,6 +428,11 @@ describe('RecoveryQueue with a journal', () => {
     // The lane's count cap gives up the oldest; the entry its owner refused is let go.
     expect(log).toEqual(['lost a count']);
     expect((queue.get('change', 'b') as Kept).since).toBe(1_000_001);
+    // Nothing restored is tried before the application is up.
+    await queue.flush();
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(log).toEqual(['lost a count']);
+    queue.ready();
     await queue.flush();
 
     expect(log).toEqual(['lost a count', 'retry b', 'retry d']);

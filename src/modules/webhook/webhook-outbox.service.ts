@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { And, EntityManager, In, IsNull, LessThan, Not, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
@@ -8,6 +8,7 @@ import { createLogger } from '../../common/services/logger.service';
 import { SHUTDOWN_MAINTENANCE_WAIT_MS } from '../../common/services/shutdown-budget';
 import { pruneInBatches } from '../../common/utils/batched-prune';
 import { RECOVERY_MAX_BYTES } from '../../common/utils/recovery-queue';
+import { RecoveryJournal } from '../../common/utils/recovery-journal';
 import { startGuardedInterval } from '../../common/utils/guarded-interval';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
 
@@ -129,6 +130,19 @@ interface UnwrittenCopy {
   shed?: true;
   /** The change that landed on the content: a delete through the API (kept once it landed), else an edit. */
   changed?: 'redact' | 'rewrite';
+  /** The job its delivery was queued as: the copy is journaled while it is, as the job outlives the process. */
+  queued?: string;
+}
+
+/** What the journal keeps of a copy of a queued delivery. */
+interface JournaledCopy {
+  s: string;
+  e: string;
+  d: Record<string, unknown> | null;
+  r: MessageEngineRef | null;
+  h?: true;
+  c?: 'redact' | 'rewrite';
+  q: string;
 }
 
 const splitUnwrittenKey = (key: string): [string, string] => {
@@ -218,7 +232,51 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @InjectRepository(WebhookOutboxEvent, 'data')
     private readonly outbox: Repository<WebhookOutboxEvent>,
-  ) {}
+    @Optional()
+    private readonly journal?: RecoveryJournal,
+  ) {
+    // The copies of queued deliveries the last process kept come back before any worker reads one.
+    if (!journal) return;
+    journal.snapshot('copy', () => this.journaledCopies());
+    for (const [key, value] of journal.take('copy')) if (!this.restoreCopy(key, value)) journal.del('copy', key);
+    this.boundUnwritten();
+  }
+
+  private restoreCopy(key: string, value: unknown): boolean {
+    const v = value as Partial<JournaledCopy> | null;
+    if (typeof v?.s !== 'string' || typeof v.e !== 'string' || typeof v.q !== 'string' || typeof v.d !== 'object') {
+      return false;
+    }
+    const copy: UnwrittenCopy = {
+      sessionId: v.s,
+      event: v.e,
+      data: v.d,
+      engineRef: v.r ?? null,
+      bytes: 0,
+      ...(v.h ? { shed: true as const } : {}),
+      ...(v.c === 'redact' || v.c === 'rewrite' ? { changed: v.c } : {}),
+      queued: v.q,
+    };
+    copy.bytes = copyBytes(key, copy);
+    this.unwritten.set(key, copy);
+    this.unwrittenSet(copy)?.add(key);
+    this.countUnwritten(copy, copy.bytes);
+    return true;
+  }
+
+  private *journaledCopies(): Iterable<[string, JournaledCopy]> {
+    for (const [key, copy] of this.unwritten) if (copy.queued !== undefined) yield [key, this.journalEntry(copy)];
+  }
+
+  private journalEntry(copy: UnwrittenCopy): JournaledCopy {
+    const { sessionId: s, event: e, data: d, engineRef: r, shed: h, changed: c, queued } = copy;
+    return { s, e, d, r, h, c, q: queued! };
+  }
+
+  /** Keep what a copy of a queued delivery holds now in the journal. */
+  private journalCopy(key: string, copy: UnwrittenCopy): void {
+    if (this.journal && copy.queued !== undefined) this.journal.put('copy', key, this.journalEntry(copy));
+  }
 
   /**
    * A change that withdraws or rewrites the message's copies is kept on this node until the database answers (`held`),
@@ -733,6 +791,26 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     this.unwrittenSet(copy)?.delete(key);
     this.countUnwritten(copy, -copy.bytes);
     this.unwritten.delete(key);
+    if (copy.queued !== undefined) this.journal?.del('copy', key);
+  }
+
+  /** The delivery a copy is kept for was queued as `deliveryId`: from now on the copy is journaled with its job. */
+  queuedUnwritten(webhookId: string, idempotencyKey: string, deliveryId: string): void {
+    const key = `${webhookId}\u0000${idempotencyKey}`;
+    const copy = this.unwritten.get(key);
+    if (!copy) return;
+    copy.queued = deliveryId;
+    this.journalCopy(key, copy);
+  }
+
+  /** The copies kept for queued deliveries, restored ones included, with the job each was kept for. */
+  queuedCopies(): Array<{ webhookId: string; idempotencyKey: string; deliveryId: string }> {
+    return [...this.unwritten]
+      .filter(([, copy]) => copy.queued !== undefined)
+      .map(([key, copy]) => {
+        const [webhookId, idempotencyKey] = splitUnwrittenKey(key);
+        return { webhookId, idempotencyKey, deliveryId: copy.queued! };
+      });
   }
 
   /** The bound a copy is under, by what it holds: none once withdrawn. */
@@ -767,6 +845,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       after?.add(key);
     }
     this.countUnwritten(copy, copy.bytes);
+    this.journalCopy(key, copy);
   }
 
   /**

@@ -6,6 +6,7 @@ import { QueueModule, WEBHOOK_QUEUE_JOB_OPTIONS } from './queue.module';
 import { ShutdownSafeQueue } from './shutdown-safe-queue';
 import { WebhookModule } from '../webhook/webhook.module';
 import { WebhookOutboxModule } from '../webhook/webhook-outbox.module';
+import { RecoveryJournal } from '../../common/utils/recovery-journal';
 import { WebhookOutboxService } from '../webhook/webhook-outbox.service';
 
 // A stub base keeps the factory from opening a Redis connection; ShutdownSafeQueue still extends it.
@@ -61,7 +62,19 @@ describe('WebhookOutboxService wiring', () => {
       expect(Reflect.getMetadata('providers', owner)).not.toContain(WebhookOutboxService);
       expect(Reflect.getMetadata('imports', owner)).toContain(WebhookOutboxModule);
     }
-    expect(Reflect.getMetadata('providers', WebhookOutboxModule)).toEqual([WebhookOutboxService]);
-    expect(Reflect.getMetadata('exports', WebhookOutboxModule)).toEqual([WebhookOutboxService]);
+    expect(Reflect.getMetadata('providers', WebhookOutboxModule)).toEqual([
+      WebhookOutboxService,
+      { provide: RecoveryJournal, useFactory: expect.any(Function) as unknown },
+    ]);
+    expect(Reflect.getMetadata('exports', WebhookOutboxModule)).toEqual([WebhookOutboxService, RecoveryJournal]);
+  });
+
+  // The queued copies the outbox journals and the records the delivery service does share one file.
+  it('provides one recovery journal, beside the outbox', () => {
+    for (const owner of [QueueModule, WebhookModule]) {
+      expect(Reflect.getMetadata('providers', owner)).not.toContainEqual(
+        expect.objectContaining({ provide: RecoveryJournal }),
+      );
+    }
   });
 });

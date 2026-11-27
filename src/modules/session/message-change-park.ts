@@ -94,6 +94,8 @@ export class ParkedChange implements RecoveryRecord {
   readonly lane = 'change' as const;
   readonly slots: ChangeSlots = {};
   private size = 0;
+  /** Taken back from the journal after a restart: announced whether or not the session's engine runs yet. */
+  restored = false;
 
   constructor(
     readonly sessionId: string,
@@ -143,4 +145,46 @@ export class ParkedChange implements RecoveryRecord {
   dropped(): void {
     this.steps.released(this);
   }
+}
+
+/** A parked change as the journal keeps it: its claims and refs as the commit computed them, with no outbox step done. */
+interface JournaledChange {
+  s: string;
+  m: string;
+  t: number;
+  revoke?: RevokeSlot;
+  edit?: EditSlot;
+  reactions?: Array<[string, ReactionSlot]>;
+  acks?: Omit<AckSlot, 'acks'> & { acks: Array<[string, MessageStatus]> };
+}
+
+/**
+ * What the journal keeps of a parked change. Its outbox steps are owed again after a restart: running them twice
+ * changes nothing, and a restored announcement of the message needs them.
+ */
+export function journalChange(record: ParkedChange): JournaledChange {
+  const { revoke, edit, reactions, acks } = record.slots;
+  return {
+    s: record.sessionId,
+    m: record.waMessageId,
+    t: record.since,
+    revoke: revoke && { ...revoke, outboxSettled: undefined },
+    edit: edit && { ...edit, outboxSettled: undefined },
+    reactions: reactions?.size ? [...reactions] : undefined,
+    acks: acks && { ...acks, acks: [...acks.acks] },
+  };
+}
+
+/** The change a journal entry holds, or undefined for one that holds none. */
+export function restoredChange(
+  value: unknown,
+): { sessionId: string; waMessageId: string; since: number; slots: ChangeSlots } | undefined {
+  const v = value as Partial<JournaledChange> | null;
+  if (!v || typeof v.s !== 'string' || typeof v.m !== 'string' || typeof v.t !== 'number') return undefined;
+  const slots: ChangeSlots = {};
+  if (v.revoke) slots.revoke = v.revoke;
+  if (v.edit) slots.edit = v.edit;
+  if (Array.isArray(v.reactions) && v.reactions.length) slots.reactions = new Map(v.reactions);
+  if (v.acks && Array.isArray(v.acks.acks)) slots.acks = { ...v.acks, acks: new Map(v.acks.acks) };
+  return slotNames(slots).length ? { sessionId: v.s, waMessageId: v.m, since: v.t, slots } : undefined;
 }
