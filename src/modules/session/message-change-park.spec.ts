@@ -843,6 +843,17 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       expect(heldOnThisNode('F-1')).toBe(false);
     });
 
+    it('stores in its pass at shutdown a received message whose row was kept', async () => {
+      outage = 'on';
+      hand(message('S-3'));
+      await settle(200);
+      outage = 'off';
+
+      await projector.settleParkedChanges(1000);
+
+      expect(await rowOf('S-3')).toMatchObject({ body: 'first text' });
+    });
+
     it('makes one pass at shutdown, and logs as lost what the database still refuses', async () => {
       await storeRow('S-1');
       await storeRow('S-2');

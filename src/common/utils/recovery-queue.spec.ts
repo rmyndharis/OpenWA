@@ -21,8 +21,8 @@ describe('RecoveryQueue', () => {
   let log: string[];
   const options = (over: Partial<RecoveryQueueOptions> = {}): RecoveryQueueOptions => ({
     maxBytes: 1000,
-    maxRecords: { send: 10, change: 3, dispatch: 10 },
-    maxAgeMs: { send: 60_000, change: 60_000, dispatch: 60_000 },
+    maxRecords: { send: 10, receive: 10, change: 3, dispatch: 10 },
+    maxAgeMs: { send: 60_000, receive: 60_000, change: 60_000, dispatch: 60_000 },
     baseDelayMs: 1000,
     capDelayMs: 8000,
     now: () => now,
@@ -357,8 +357,8 @@ describe('RecoveryQueue with a journal', () => {
   let now: number;
   const options = (over: Partial<RecoveryQueueOptions> = {}): RecoveryQueueOptions => ({
     maxBytes: 1000,
-    maxRecords: { send: 10, change: 3, dispatch: 10 },
-    maxAgeMs: { send: 60_000, change: 60_000, dispatch: 60_000 },
+    maxRecords: { send: 10, receive: 10, change: 3, dispatch: 10 },
+    maxAgeMs: { send: 60_000, receive: 60_000, change: 60_000, dispatch: 60_000 },
     baseDelayMs: 1000,
     capDelayMs: 8000,
     now: () => now,
@@ -465,7 +465,7 @@ describe('RecoveryQueue with a journal', () => {
     first.park('d', kept('d', 'dispatch', away));
     restart();
 
-    const queue = new RecoveryQueue(options({ maxRecords: { send: 10, change: 1, dispatch: 10 } }));
+    const queue = new RecoveryQueue(options({ maxRecords: { send: 10, receive: 10, change: 1, dispatch: 10 } }));
     queue.register('dispatch', codec('dispatch'));
     await queue.flush();
     await jest.advanceTimersByTimeAsync(5000);

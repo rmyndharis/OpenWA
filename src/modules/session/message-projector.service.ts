@@ -37,10 +37,12 @@ import {
   RECOVERY_MAX_AGE_MS,
   RECOVERY_MAX_RECORDS,
   RecoveryQueue,
+  receivedRowKey,
   recoveryQueueOptions,
   sendRerunKey,
   type RecoveryLoss,
 } from '../../common/utils/recovery-queue';
+import { ReceivedRow, journalReceivedRow, restoredReceivedRow, type ReceivedRowSteps } from './received-row';
 import { resolveWebhookReconcilerOptions } from '../webhook/webhook-reconciler.service';
 import {
   mutationTargetsForeignRow,
@@ -174,7 +176,8 @@ const refOfSource = (source: MutationSource): StoredMessageRef => ({
 
 type InsertOutcome =
   | { landed: 'yes'; openedDeliveries?: PreparedWebhookDelivery[]; rowOnly?: true }
-  | { landed: 'failed' | 'stale' }
+  | { landed: 'failed'; error?: unknown }
+  | { landed: 'stale' }
   | { landed: 'dup'; retried: boolean };
 
 /** Persist-stage outcome threaded into the inbound dispatch stage (was closure state in the hook continuation). */
@@ -541,8 +544,18 @@ export class MessageProjector {
       (sessionId, waMessageId, slots) => this.settleParked(sessionId, waMessageId, slots),
       this.lidMappingStore ? phone => this.lidMappingStore!.findLidsForPhone(phone) : undefined,
       this.lidMappingStore ? () => this.lidMappingStore!.rowVetoes() : undefined,
-      (sessionId, waMessageId) => this.recovery.get('send', sendRerunKey(sessionId, waMessageId)) !== undefined,
+      (sessionId, waMessageId) => this.rowPending(sessionId, waMessageId),
     );
+    // A received row the database refused comes back before anything is tried, and holds the changes of its message.
+    this.recovery.register('receive', {
+      encode: record => (record instanceof ReceivedRow ? journalReceivedRow(record) : undefined),
+      decode: (key, value) => {
+        const restored = restoredReceivedRow(value);
+        return restored
+          ? new ReceivedRow(key, restored.sessionId, restored.row, restored.direction, restored.since, this.rowSteps)
+          : undefined;
+      },
+    });
     // What the last process kept of these changes comes back before anything is tried, its deliveries held again.
     this.recovery.register('change', {
       encode: record => journalChange(record as ParkedChange),
@@ -553,6 +566,80 @@ export class MessageProjector {
       this.deleteRoomIfIdle(id);
       if (!this.engines.has(id)) this.markedEdited.delete(id);
     });
+  }
+
+  /** Whether the row of a message is kept to be written (a send's SENT write, a received row), so a change waits for it. */
+  private rowPending(sessionId: string, waMessageId: string): boolean {
+    return (
+      this.recovery.get('send', sendRerunKey(sessionId, waMessageId)) !== undefined ||
+      this.recovery.get('receive', receivedRowKey(sessionId, waMessageId)) !== undefined
+    );
+  }
+
+  private readonly rowSteps: ReceivedRowSteps = {
+    store: row => this.storeReceivedRow(row),
+    released: (row, reason) => {
+      if (!reason) return;
+      this.logger.error(
+        'A received message the database refused could not be kept any longer and is not stored',
+        undefined,
+        {
+          sessionId: row.sessionId,
+          messageId: row.row.waMessageId as string | undefined,
+          reason,
+          action: 'message_row_lost',
+        },
+      );
+    },
+  };
+
+  /** Keep a message's row the database refused, to store it once it answers (see ReceivedRow). */
+  private keepReceivedRow(sessionId: string, row: Message, direction: 'incoming' | 'outgoing', error: unknown): void {
+    const data = Object.fromEntries(Object.entries(row).filter(([, value]) => value !== undefined));
+    const key = receivedRowKey(sessionId, row.waMessageId ?? row.id);
+    this.logger.warn('Keeping a received message the database refused, to store it once it answers', {
+      sessionId,
+      messageId: row.waMessageId,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'message_row_kept',
+    });
+    this.recovery.park(key, new ReceivedRow(key, sessionId, data, direction, Date.now(), this.rowSteps));
+  }
+
+  /**
+   * One more try of a kept received row: inserted under the same dedup oracle as a live insert, so a row another
+   * writer stored meanwhile (a re-delivery, a commit that landed before its error) ends it with nothing written, and
+   * `message:persisted` runs once for the row that lands. Throws while the database refuses it.
+   */
+  private async storeReceivedRow(record: ReceivedRow): Promise<boolean> {
+    const { sessionId, row, direction } = record;
+    const connection = this.messageRepository.manager?.connection;
+    const writes = captureSessionWrites(connection ?? this.messageRepository, sessionId);
+    let stored: Message;
+    try {
+      const result = await writes
+        .write(() => this.messageRepository.insert(row as QueryDeepPartialEntity<Message>))
+        .finally(() => writes.close());
+      stored = Object.assign(
+        this.messageRepository.create(row as Partial<Message>),
+        result.identifiers[0] ?? {},
+        result.generatedMaps?.[0] ?? {},
+      );
+    } catch (error) {
+      if (isUniqueViolation(error)) return true;
+      throw error;
+    }
+    void this.hookManager
+      .execute(
+        'message:persisted',
+        { sessionId, message: persistedRow(stored) },
+        { sessionId, source: 'SessionService' },
+      )
+      .catch(() => undefined);
+    if (direction === 'incoming' || this.configService?.get<boolean>('chatMedia.archiveOutbound', false) === true) {
+      void this.chatMediaArchive?.archive(stored).catch(() => undefined);
+    }
+    return true;
   }
 
   /** Drop per-session in-memory state held by collaborators when a session row is removed. */
@@ -567,7 +654,7 @@ export class MessageProjector {
    */
   settleParkedChanges(budgetMs = PARKED_CHANGES_SHUTDOWN_PASS_MS): Promise<void> {
     // The kept webhook dispatches get their own pass, in the delivery service's shutdown drain.
-    return this.recovery.drain(budgetMs, ['send', 'change']);
+    return this.recovery.drain(budgetMs, ['send', 'receive', 'change']);
   }
 
   /** The queue this process keeps what the database refused in, shared with the send path's SENT writes. */
@@ -1654,6 +1741,8 @@ export class MessageProjector {
     // may have committed before its error, in which case nothing dispatched yet, so dispatch fail-open (without
     // the row-bound hook), and that row still has to take a revoke or edit that arrived in flight. So does the row
     // of an insert that failed, when its commit landed before the error and the row stored alone after it failed too.
+    // A row the database refused is kept to be stored once it answers, before the changes held for it are tried.
+    if (outcome.landed === 'failed') this.keepReceivedRow(id, dbMessage, 'incoming', outcome.error);
     if (outcome.landed === 'dup' || outcome.landed === 'failed') {
       const firstAttemptDup = outcome.landed === 'dup' && !outcome.retried;
       this.applyChangesMadeInFlight(id, engineMessage, entry, false, claim, firstAttemptDup);
@@ -2041,7 +2130,7 @@ export class MessageProjector {
     const failed = async (err: unknown): Promise<InsertOutcome> => {
       if (!transacted) {
         this.logger.error(label, String(err));
-        return { landed: 'failed' };
+        return { landed: 'failed', error: err };
       }
       await takeHeldChanges?.();
       // As before the retry: an engine retired meanwhile gets no row, which nothing would announce.
@@ -2055,7 +2144,7 @@ export class MessageProjector {
         return alone.landed === 'yes' ? { landed: 'yes', rowOnly: true } : alone;
       } catch (aloneErr) {
         this.logger.error(label, String(aloneErr));
-        return { landed: 'failed' };
+        return { landed: 'failed', error: aloneErr };
       }
     };
     try {
@@ -2778,7 +2867,10 @@ export class MessageProjector {
       }
       // A commit can land before its error and the row stored alone after it fail: that row, if it is the
       // message's, still takes the changes that arrived in flight.
-      if (outcome.landed === 'failed') this.applyChangesMadeInFlight(id, engineMessage, entry, false, claim);
+      if (outcome.landed === 'failed') {
+        this.keepReceivedRow(id, dbMessage, 'outgoing', outcome.error);
+        this.applyChangesMadeInFlight(id, engineMessage, entry, false, claim);
+      }
     }
 
     if (!this.engines.isLive(id, engine)) {
@@ -2915,7 +3007,7 @@ export class MessageProjector {
     // The send's row takes the id only once its SENT write, which the database refused, runs again: the ack is kept
     // with the message's changes, which run after that write, on its first try or on its retry.
     const keepForSend = (): Promise<void> | undefined => {
-      if (!messageStatus || !this.recovery.get('send', sendRerunKey(id, messageId))) return undefined;
+      if (!messageStatus || !this.rowPending(id, messageId)) return undefined;
       const chat = receiptChat ?? '';
       // The row is read naming no chat, and the receipt judged against it as receiptVerdict judges one (advanceKeptAcks).
       const acks: AckSlot = { judge: { kind: 'reaction', chatId: '' }, acks: new Map([[chat, messageStatus]]) };

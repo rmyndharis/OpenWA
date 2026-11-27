@@ -81,7 +81,12 @@ describe('the SENT write of a send the database refused', () => {
     const queue = new RecoveryQueue({
       maxBytes: RECOVERY_MAX_BYTES,
       maxRecords: { ...RECOVERY_MAX_RECORDS },
-      maxAgeMs: { send: RECOVERY_MAX_AGE_MS, change: RECOVERY_MAX_AGE_MS, dispatch: RECOVERY_MAX_AGE_MS },
+      maxAgeMs: {
+        send: RECOVERY_MAX_AGE_MS,
+        receive: RECOVERY_MAX_AGE_MS,
+        change: RECOVERY_MAX_AGE_MS,
+        dispatch: RECOVERY_MAX_AGE_MS,
+      },
       // Only the test's own flush runs a pass.
       baseDelayMs: 600_000,
       capDelayMs: 600_000,

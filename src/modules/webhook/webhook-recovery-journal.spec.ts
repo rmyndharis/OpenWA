@@ -118,7 +118,7 @@ describe('What the database refused, across a restart', () => {
       configService,
     );
     delivery.onApplicationBootstrap();
-    return { journal, hookManager, outbox, delivery, webhookService, reconciler, projector };
+    return { journal, hookManager, outbox, delivery, webhookService, reconciler, projector, engines };
   };
   /** What `message:persisted` handlers of a process are handed, as type and body. */
   const persistedOn = (hookManager: HookManager): Array<[string, string]> => {
@@ -501,6 +501,24 @@ describe('What the database refused, across a restart', () => {
     expect(released).toEqual([]);
     await recover();
     expect(released).toEqual(['bull:webhook:held:d1']);
+  });
+
+  it('stores a message received before a crash, its row refused, once, with its announcement sent once', async () => {
+    outage = 'on';
+    void node.projector.handleInboundMessage(sessionId, node.engines.get(sessionId)!, received() as never);
+    await settle(200);
+    expect(readFileSync(join(dir, 'recovery-journal.jsonl'), 'utf8')).toContain('"l":"receive"');
+
+    await crash();
+    node = boot();
+    const persisted = persistedOn(node.hookManager);
+    await recover();
+    await recover();
+
+    const rows = await ds.getRepository(Message).find({ where: { sessionId } });
+    expect(rows.map(row => [row.waMessageId, row.body])).toEqual([['J-1', 'first text']]);
+    expect(posted().filter(post => post.event === 'message.received')).toHaveLength(1);
+    expect(persisted).toEqual([['text', 'first text']]);
   });
 
   it('lets go of what it cannot read back as a record, and of copies whose queued job will never run here', async () => {

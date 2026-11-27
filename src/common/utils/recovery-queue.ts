@@ -3,13 +3,17 @@ import type { RecoveryJournal } from './recovery-journal';
 
 /**
  * Work the database refused, kept in memory until it answers again, in the order it is retried: a send's own row
- * first (it must exist before changes are judged against it), then message changes, then webhook dispatches.
+ * first, then a received message's row and an engine message whose stored target could not be read (each must exist
+ * or be read before changes are judged against it), then message changes, then webhook dispatches.
  */
-export type RecoveryLane = 'send' | 'change' | 'dispatch';
-const LANES: RecoveryLane[] = ['send', 'change', 'dispatch'];
+export type RecoveryLane = 'send' | 'receive' | 'change' | 'dispatch';
+const LANES: RecoveryLane[] = ['send', 'receive', 'change', 'dispatch'];
 
 /** The key a send's SENT write is kept under in the `send` lane, by the message id it writes. */
 export const sendRerunKey = (sessionId: string, waMessageId: string): string => `${sessionId}:${waMessageId}`;
+
+/** The key a received message's row is kept under in the `receive` lane, by its message id. */
+export const receivedRowKey = (sessionId: string, waMessageId: string): string => `${sessionId}:${waMessageId}`;
 
 /** Why a record was given up on: its lane is full, it is too old, the byte budget is spent, it kept failing, or the process stopped. */
 export type RecoveryLoss = 'count' | 'age' | 'bytes' | 'failures' | 'shutdown';
@@ -63,6 +67,7 @@ export const RECOVERY_MAX_BYTES = 64 * 1024 * 1024;
 /** Records a lane keeps: a message's changes and a send's rerun one each, a dispatch one per webhook event. */
 export const RECOVERY_MAX_RECORDS: Readonly<Record<RecoveryLane, number>> = {
   send: 1000,
+  receive: 1000,
   change: 1000,
   dispatch: 10_000,
 };
@@ -82,7 +87,12 @@ export function recoveryQueueOptions(postgres: boolean, graceMs: number): Recove
   return {
     maxBytes: RECOVERY_MAX_BYTES,
     maxRecords: { ...RECOVERY_MAX_RECORDS },
-    maxAgeMs: { send: RECOVERY_MAX_AGE_MS, change: RECOVERY_MAX_AGE_MS, dispatch: RECOVERY_MAX_AGE_MS },
+    maxAgeMs: {
+      send: RECOVERY_MAX_AGE_MS,
+      receive: RECOVERY_MAX_AGE_MS,
+      change: RECOVERY_MAX_AGE_MS,
+      dispatch: RECOVERY_MAX_AGE_MS,
+    },
     baseDelayMs: Math.min(1000, cap),
     capDelayMs: cap,
   };
@@ -115,6 +125,7 @@ export class RecoveryQueue {
   // always the oldest, and a bound gives it up without sorting.
   private readonly lanes: Record<RecoveryLane, Map<string, RecoveryRecord>> = {
     send: new Map(),
+    receive: new Map(),
     change: new Map(),
     dispatch: new Map(),
   };

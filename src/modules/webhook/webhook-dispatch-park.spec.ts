@@ -953,5 +953,124 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
 
       expect(received()).toEqual(expected);
     });
+
+    describe('is stored once the database answers', () => {
+      const rows = async () =>
+        (await ds.getRepository(Message).find({ where: { sessionId } })).map(row => [
+          row.waMessageId,
+          row.type,
+          row.body,
+        ]);
+      let persisted: string[];
+      beforeEach(() => {
+        persisted = [];
+        hookManager.register('spec', 'message:persisted', ctx => {
+          const { message } = ctx.data as { message: Message };
+          persisted.push(`${message.waMessageId} ${message.type} ${message.body}`);
+          return Promise.resolve({ continue: true });
+        });
+      });
+
+      it.each(['on', 'writes'] as const)(
+        'with its announcement sent once and message:persisted run once (database %s)',
+        async refused => {
+          outage = refused;
+          void projector.handleInboundMessage(sessionId, engine, msg);
+          await settle(200);
+
+          await recover();
+          await recover();
+
+          expect(await rows()).toEqual([['R-1', 'text', 'first text']]);
+          expect(received().map(data => data.body)).toEqual(['first text']);
+          expect(persisted).toEqual(['R-1 text first text']);
+        },
+      );
+
+      it('with a revoke that came while its row was kept written to it, not read as absent', async () => {
+        outage = 'writes';
+        void projector.handleInboundMessage(sessionId, engine, msg);
+        await settle(200);
+        // The database answers, the row is not written yet: the revoke waits for it.
+        outage = 'off';
+        await projector.recordRevoke(sessionId, 'R-1', { kind: 'revoke', chatId: CHAT, fromMe: false }, true);
+        await settle();
+
+        await recover();
+
+        expect(await rows()).toEqual([['R-1', 'revoked', '']]);
+      });
+
+      it('or let go on the first retry once another writer stored it meanwhile, a change waiting for it applied then', async () => {
+        outage = 'writes';
+        void projector.handleInboundMessage(sessionId, engine, msg);
+        await settle(200);
+        outage = 'off';
+        projector.applyMessageEditQueued(sessionId, {
+          messageId: 'R-1',
+          chatId: CHAT,
+          body: 'edited text',
+          fromMe: false,
+        } as never);
+        await settle();
+        // A re-delivery stored the row while it was kept.
+        await ds.getRepository(Message).insert({
+          sessionId,
+          waMessageId: 'R-1',
+          chatId: CHAT,
+          from: CHAT,
+          to: '628222@c.us',
+          body: 'first text',
+          type: 'text',
+          direction: MessageDirection.INCOMING,
+          timestamp: 1_700_000_000,
+        });
+
+        await recover();
+
+        // Let go on that retry, not counted as a failure towards being given up.
+        expect(projector.recoveryQueue().get('receive', `${sessionId}:R-1`)).toBeUndefined();
+        expect(await rows()).toEqual([['R-1', 'text', 'edited text']]);
+        for (let i = 0; i < 2; i++) await recover();
+        // Only the edit hands the row on again; the kept row the other writer stored runs nothing.
+        expect(persisted).toEqual(['R-1 text edited text']);
+        const lost = ((LoggerService.prototype.error as jest.Mock).mock.calls as unknown[][]).filter(
+          call => (call.at(-1) as { action?: string } | undefined)?.action === 'message_row_lost',
+        );
+        expect(lost).toEqual([]);
+      });
+
+      it('or given up with a loss logged once its insert keeps failing for a reason of its own', async () => {
+        outage = 'writes';
+        void projector.handleInboundMessage(sessionId, engine, msg);
+        await settle(200);
+        outage = 'off';
+        jest
+          .spyOn(ds.getRepository(Message), 'insert')
+          .mockRejectedValue(Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' }));
+
+        for (let i = 0; i < 3; i++) await recover();
+
+        const lost = ((LoggerService.prototype.error as jest.Mock).mock.calls as unknown[][])
+          .map(call => call.at(-1) as { action?: string; reason?: string } | undefined)
+          .filter(meta => meta?.action === 'message_row_lost');
+        expect(lost).toEqual([expect.objectContaining({ reason: 'failures' })]);
+        expect(await rows()).toEqual([]);
+      });
+
+      it('as an own send composed on the phone, its announcement sent once', async () => {
+        const echo = { ...msg, id: 'S-1', from: '628222@c.us', to: CHAT, fromMe: true } as IncomingMessage;
+        outage = 'writes';
+        projector.handleOwnSendEcho(sessionId, engine, echo);
+        await settle(200);
+
+        await recover();
+        await recover();
+
+        expect(await rows()).toEqual([['S-1', 'text', 'first text']]);
+        expect(posted().filter(post => post.event === 'message.sent')).toHaveLength(1);
+        expect(persisted).toEqual(['S-1 text first text']);
+      });
+    });
   });
 });
