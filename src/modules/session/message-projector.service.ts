@@ -632,6 +632,8 @@ export class MessageProjector {
         const inbound = restoredKeptInbound(value);
         if (inbound) {
           const { sessionId, messageId, raw, kind, targetId, since } = inbound;
+          // Before any read of the stores: what the last process hid of an unlinked account stays hidden here.
+          if (kind === 'wipe') this.hideUnlinked(sessionId, raw);
           return new KeptInbound(key, sessionId, messageId, raw, kind, targetId, since, this.inboundSteps);
         }
         const restored = restoredReceivedRow(value);

@@ -616,7 +616,7 @@ describe('What the database refused, across a restart', () => {
     expect(calls).toEqual(['copy copy', 'change blank']);
   });
 
-  it('clears an unlinked account kept before a crash once the database answers, no engine run', async () => {
+  it('hides an unlinked account from the start after a crash, and clears it once the database answers, no engine run', async () => {
     const unlinkedAt = new Date('2026-11-28T00:00:00.000Z');
     await ds.getRepository(BaileysStoredMessage).insert({
       sessionId,
@@ -635,7 +635,12 @@ describe('What the database refused, across a restart', () => {
     await settle();
 
     await crash();
+    // The database reads again but refuses writes: the clear cannot land, the old rows must not be read meanwhile.
+    outage = 'writes';
     node = boot({ engine: false });
+    await node.chatStates.refreshSession(sessionId);
+    expect(await node.messageStore.getMessage(sessionId, 'OLD-1')).toBeNull();
+    expect(node.chatStates.get(sessionId, CHAT)).toBeUndefined();
 
     await recover();
 
