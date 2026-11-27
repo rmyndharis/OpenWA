@@ -8,7 +8,7 @@ jest.mock('undici', () => {
 });
 
 import 'reflect-metadata';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, QueryDeepPartialEntity, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { fetch as undiciFetch } from 'undici';
 import { Session, SessionStatus } from './entities/session.entity';
@@ -449,6 +449,204 @@ describe('changes to a message a hook filed under another chat', () => {
       projector.handleMessageRevoked(sessionId, engine, revoked({ chatId: LID, from: LID }), { fromMe: false });
       await settle();
       expect(await row()).toMatchObject({ chatId: ENGINE_CHAT, type: 'revoked' });
+    });
+  });
+
+  describe('a whatsapp-web.js row a hook moved before engine refs were kept', () => {
+    // whatsapp-web.js names a message `<fromMe>_<chat>_<key>`, the chat the engine keeps it in.
+    const WWJS_ID = `false_${ENGINE_CHAT}_3EB0AA`;
+    const LIST_ID = 'false_628777@c.us_3EB0AA';
+    const storeMoved = (over: QueryDeepPartialEntity<Message> = {}): Promise<unknown> =>
+      messages.insert({
+        sessionId,
+        waMessageId: WWJS_ID,
+        chatId: FILED_CHAT,
+        from: ENGINE_CHAT,
+        to: SELF,
+        body: 'hello world',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        timestamp: 1_700_000_000,
+        ...over,
+      });
+    const apply = async (change: () => void): Promise<void> => {
+      change();
+      await settle();
+    };
+
+    it('takes an edit, a reaction and a delete naming the chat its id names', async () => {
+      await storeMoved();
+
+      await apply(() => projector.applyMessageEditQueued(sessionId, edited({ messageId: WWJS_ID })));
+      await apply(() =>
+        projector.applyReactionQueued(sessionId, {
+          messageId: WWJS_ID,
+          chatId: ENGINE_CHAT,
+          reaction: '+',
+          senderId: ENGINE_CHAT,
+        }),
+      );
+
+      expect(await row(WWJS_ID)).toMatchObject({
+        body: 'edited text',
+        metadata: { edited: true, reactions: { [ENGINE_CHAT]: '+' } },
+      });
+
+      await projector.recordRevoke(sessionId, WWJS_ID, { kind: 'revoke', chatId: ENGINE_CHAT });
+      await settle();
+
+      expect(await row(WWJS_ID)).toMatchObject({ type: 'revoked', body: '' });
+    });
+
+    it('matches an own message by the chat in its `to`', async () => {
+      const own = `true_${ENGINE_CHAT}_3EB0BB`;
+      await storeMoved({ waMessageId: own, from: SELF, to: ENGINE_CHAT, direction: MessageDirection.OUTGOING });
+
+      await apply(() =>
+        projector.applyMessageEditQueued(
+          sessionId,
+          edited({ messageId: own, from: SELF, to: ENGINE_CHAT, fromMe: true }),
+        ),
+      );
+
+      expect(await row(own)).toMatchObject({ body: 'edited text' });
+    });
+
+    it('redacts the pending delivery that carries the chat the hook filed it under', async () => {
+      await storeMoved();
+      const webhook = await seedWebhook();
+      const events = ds.getRepository(WebhookOutboxEvent);
+      await events.save(
+        events.create({
+          sessionId,
+          webhookId: webhook.id,
+          event: 'message.received',
+          idempotencyKey: `msg_${sessionId}_${WWJS_ID}_${webhook.id}`,
+          deliveryId: 'delivery-1',
+          state: 'pending',
+          payload: { id: WWJS_ID, chatId: FILED_CHAT, from: ENGINE_CHAT, fromMe: false, body: 'hello world' },
+        }),
+      );
+
+      await projector.recordRevoke(sessionId, WWJS_ID, { kind: 'revoke', chatId: ENGINE_CHAT });
+      await settle();
+
+      expect(await pendingOutbox()).toEqual([expect.objectContaining({ body: '' })]);
+    });
+
+    it('hands a hook no content when it is delivered again after a delete', async () => {
+      await storeMoved({ type: 'revoked', body: '' });
+      move('message:received');
+
+      await receive({ id: WWJS_ID });
+
+      expect(hookSaw).toEqual(['']);
+    });
+
+    it('is cleared by a history tombstone naming the chat its id names', async () => {
+      await storeMoved();
+
+      await projector.persistHistoryMessages(sessionId, engine, [incoming({ id: WWJS_ID, type: 'revoked', body: '' })]);
+      await settle();
+
+      expect(await row(WWJS_ID)).toMatchObject({ type: 'revoked', body: '' });
+    });
+
+    // Unlike a Baileys id, this one names its chat, so no other chat's message can hold it.
+    it('is cleared when its message is delivered again deleted through the hook that moved it', async () => {
+      await storeMoved();
+      move('message:received');
+
+      await receive({ id: WWJS_ID, type: 'revoked', body: '' });
+
+      expect(await row(WWJS_ID)).toMatchObject({ type: 'revoked', body: '' });
+    });
+
+    it.each([
+      ['a chat its id does not name', '628777@c.us'],
+      ['a lid its id does not name and no pairing reports', '99887766@lid'],
+    ])('takes nothing naming %s', async (_label, chatId) => {
+      await storeMoved();
+
+      await apply(() =>
+        projector.applyMessageEditQueued(sessionId, edited({ messageId: WWJS_ID, chatId, from: chatId })),
+      );
+
+      expect(await row(WWJS_ID)).toMatchObject({ body: 'hello world' });
+    });
+
+    it("adds no chat the engine's own columns do not name, as when a hook rewrote the id", async () => {
+      await storeMoved({ waMessageId: LIST_ID, chatId: ENGINE_CHAT });
+
+      await apply(() =>
+        projector.applyMessageEditQueued(
+          sessionId,
+          edited({ messageId: LIST_ID, chatId: '628777@c.us', from: '628777@c.us' }),
+        ),
+      );
+
+      expect(await row(LIST_ID)).toMatchObject({ body: 'hello world' });
+    });
+
+    const naming = (id: string, chatId: string, over: Partial<EditedMessage> = {}): Promise<void> =>
+      apply(() =>
+        projector.applyMessageEditQueued(sessionId, edited({ messageId: id, chatId, from: chatId, ...over })),
+      );
+
+    // A hook may rewrite the fields the engine set: such a row keeps an engine ref, so its id adds no chat.
+    it('adds no chat when a hook rewrote both the id and `from` of a delivery', async () => {
+      move('message:received', { chatId: ENGINE_CHAT, id: LIST_ID, from: '628777@c.us' });
+      await receive();
+
+      await naming(LIST_ID, '628777@c.us');
+
+      expect(await row(LIST_ID)).toMatchObject({ body: 'hello world' });
+    });
+
+    it('adds no chat when a hook rewrote both the id and `to` of an own message', async () => {
+      const own = 'true_628777@c.us_3EB0CC';
+      move('message:sent', { chatId: ENGINE_CHAT, id: own, to: '628777@c.us' });
+      await echo();
+
+      await naming(own, '628777@c.us', { from: SELF, to: '628777@c.us', fromMe: true });
+
+      expect(await row(own)).toMatchObject({ body: 'my text' });
+    });
+
+    it('adds no one-to-one chat to a message with an author, whatever its id and `from` name', async () => {
+      const group = '120363000000000001@g.us';
+      await storeMoved({ waMessageId: LIST_ID, chatId: group, from: '628777@c.us', author: '628777@c.us' });
+
+      await naming(LIST_ID, '628777@c.us');
+
+      expect(await row(LIST_ID)).toMatchObject({ body: 'hello world' });
+    });
+
+    it("takes a change naming the group an older moved group message's id names", async () => {
+      const group = '120363000000000001@g.us';
+      const id = `false_${group}_3EB0DD_628777@c.us`;
+      await storeMoved({ waMessageId: id, from: group, author: '628777@c.us' });
+
+      await naming(id, group, { author: '628777@c.us' });
+
+      expect(await row(id)).toMatchObject({ body: 'edited text' });
+    });
+
+    it('adds no chat to a row that keeps an engine ref', async () => {
+      await storeMoved({
+        waMessageId: LIST_ID,
+        from: '628777@c.us',
+        engineRef: { chatId: ENGINE_CHAT, direction: MessageDirection.INCOMING, author: null },
+      });
+
+      await apply(() =>
+        projector.applyMessageEditQueued(
+          sessionId,
+          edited({ messageId: LIST_ID, chatId: '628777@c.us', from: '628777@c.us' }),
+        ),
+      );
+
+      expect(await row(LIST_ID)).toMatchObject({ body: 'hello world' });
     });
   });
 

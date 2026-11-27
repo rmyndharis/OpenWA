@@ -3,7 +3,7 @@ import { Repository, In, IsNull, Not, Raw } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { buildMessageMetadata, REVOKED_ROW_PATCH } from './message-row.mapper';
-import { mutationTargetsForeignRowPersisted } from './message-mutation-guard';
+import { judgeStoredRow } from './message-row-judgement';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { LoggerService } from '../../common/services/logger.service';
@@ -54,7 +54,16 @@ export async function persistHistoryMessages(
     const chunkIds = ids.slice(i, i + CHUNK);
     const existing = await messageRepository.find({
       where: { sessionId: id, waMessageId: In(chunkIds) },
-      select: { waMessageId: true, type: true, chatId: true, direction: true, author: true, engineRef: true },
+      select: {
+        waMessageId: true,
+        type: true,
+        chatId: true,
+        direction: true,
+        author: true,
+        engineRef: true,
+        from: true,
+        to: true,
+      },
     });
     // A delete() can retire the engine while a large batch works through its chunks; its transaction
     // has then already cleared this session's messages, and a row inserted after it (no FK) would
@@ -133,11 +142,8 @@ export async function persistHistoryMessages(
       if (
         stored &&
         ((stored.engineRef ?? stored).direction !== direction ||
-          (await mutationTargetsForeignRowPersisted(
-            stored,
-            { kind: 'revoke', chatId: m.chatId, fromMe: m.fromMe },
-            resolveLid,
-          )))
+          (await judgeStoredRow(stored, messageId, { kind: 'revoke', chatId: m.chatId, fromMe: m.fromMe }, resolveLid))
+            .reason)
       )
         continue;
       if (!isLive()) break;
@@ -168,11 +174,14 @@ export async function persistHistoryMessages(
         const direction = m.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING;
         const engineRef = engineRefs.get(row.waMessageId);
         if (
-          (await mutationTargetsForeignRowPersisted(
-            { ...row, engineRef },
-            { kind: 'revoke', chatId: m.chatId, fromMe: m.fromMe },
-            resolveLid,
-          )) ||
+          (
+            await judgeStoredRow(
+              { ...row, engineRef },
+              row.waMessageId,
+              { kind: 'revoke', chatId: m.chatId, fromMe: m.fromMe },
+              resolveLid,
+            )
+          ).reason ||
           (engineRef ?? row).direction !== direction ||
           !Number.isFinite(m.timestamp)
         ) {

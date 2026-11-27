@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository, In, IsNull, Not, Or } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm';
 import { Session } from './entities/session.entity';
+import { judgeStoredRow } from './message-row-judgement';
 import { Message, MessageDirection, MessageStatus, type MessageEngineRef } from '../message/entities/message.entity';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
@@ -214,11 +215,17 @@ const refOf = (m: Pick<IncomingMessage, 'chatId' | 'fromMe' | 'author'>): Stored
 
 /** A message's chat, side and author as the engine reported them, copied before a hook can change the message. */
 type EngineIdentity = Pick<IncomingMessage, 'chatId' | 'fromMe' | 'author'>;
-const engineIdentityOf = (m: EngineIdentity): EngineIdentity => ({
+/** {@link EngineIdentity} with the engine's `from` and `to`, which a hook may rewrite too. */
+type EngineEnvelope = EngineIdentity & Pick<IncomingMessage, 'from' | 'to'>;
+const engineIdentityOf = (m: EngineEnvelope): EngineEnvelope => ({
   chatId: m.chatId,
   fromMe: m.fromMe,
   author: m.author,
+  from: m.from,
+  to: m.to,
 });
+const endsRewritten = (engine: EngineEnvelope, filed: Pick<IncomingMessage, 'from' | 'to'>): boolean =>
+  engine.from !== filed.from || engine.to !== filed.to;
 
 /**
  * A delivery's claim as the engine reported it, with how a hook `filed` it when that differs (MutationSource.filedAs).
@@ -230,8 +237,9 @@ const asFiled = (claim: MutationSource, filed: EngineIdentity): MutationSource =
     ? claim
     : { ...claim, filedAs: { chatId: filed.chatId, fromMe: filed.fromMe, author: filed.author } };
 
-/** The engine ref a row filed as `filed` keeps (see Message.engineRef): null when it is filed as the engine reported. */
-const engineRefFor = (engine: StoredMessageRef, filed: StoredMessageRef): MessageEngineRef | null =>
+/** The engine ref a row filed as `filed` keeps (see Message.engineRef): null when the hooks kept what the engine said. */
+const engineRefFor = (engine: StoredMessageRef, filed: StoredMessageRef, ends: boolean): MessageEngineRef | null =>
+  !ends &&
   engine.chatId === filed.chatId &&
   engine.direction === filed.direction &&
   (engine.author ?? null) === (filed.author ?? null)
@@ -749,15 +757,18 @@ export class MessageProjector {
           // The unique message key bounds this read. A tombstone outlives this projector and any engine copy.
           const row = await this.messageRepository.findOne({
             where: { sessionId: id, waMessageId: data.id, type: 'revoked' },
-            select: { type: true, chatId: true, direction: true, author: true, engineRef: true },
+            select: { type: true, chatId: true, direction: true, author: true, engineRef: true, from: true, to: true },
           });
           if (
             row?.type === 'revoked' &&
-            !(await mutationTargetsForeignRowPersisted(
-              row,
-              claimOf(data),
-              this.lidMappingStore ? jid => this.lidMappingStore!.findPhoneForLid(jid) : undefined,
-            ))
+            !(
+              await judgeStoredRow(
+                row,
+                data.id,
+                claimOf(data),
+                this.lidMappingStore ? jid => this.lidMappingStore!.findPhoneForLid(jid) : undefined,
+              )
+            ).reason
           ) {
             data = deletedPlaceholder(data);
           }
@@ -1046,7 +1057,7 @@ export class MessageProjector {
     engine: IWhatsAppEngine,
     finalMessage: InboundMessageData,
     entry: InFlightEntry,
-    identity: EngineIdentity,
+    identity: EngineEnvelope,
   ): Promise<InboundOutcome | undefined> {
     const outcome = await this.persistInboundMessage(id, engine, finalMessage, entry, identity);
     if (outcome === 'repeat') return this.judgeRepeat(id, finalMessage, identity);
@@ -1094,7 +1105,7 @@ export class MessageProjector {
     engine: IWhatsAppEngine,
     incoming: IncomingMessage,
     entry: InFlightEntry,
-    identity: EngineIdentity,
+    identity: EngineEnvelope,
   ): Promise<InboundPersistOutcome | 'repeat' | null> {
     const metadata = buildMessageMetadata(incoming);
 
@@ -1116,7 +1127,7 @@ export class MessageProjector {
       timestamp: incoming.timestamp,
       status: MessageStatus.SENT,
       metadata,
-      engineRef: engineRefFor(refOf(identity), refOf(incoming)),
+      engineRef: engineRefFor(refOf(identity), refOf(incoming), endsRewritten(identity, incoming)),
     });
 
     // The hook chain above is async; a delete()/teardown can retire this engine while it
@@ -1870,7 +1881,7 @@ export class MessageProjector {
       // When `source` is provided, verify each candidate pending outbox row against its own payload
       // using the same foreign-row rule so a spoofed cross-chat revoke (especially when no stored
       // `messages` row existed to check) cannot close or redact another chat's pending outbox row.
-      const filed = verdict && verdict.row?.engineRef ? revokeSourceFor(verdict.row) : undefined;
+      const filed = verdict?.moved && verdict.row ? revokeSourceFor(verdict.row) : undefined;
       const outboxPredicate = source ? this.outboxPredicateFor(source, Boolean(result?.affected), filed) : undefined;
       if (announced) {
         await this.webhookService.closePendingDeliveriesForMessage?.(sessionId, waMessageId, outboxPredicate);
@@ -2098,7 +2109,7 @@ export class MessageProjector {
     engine: IWhatsAppEngine,
     finalMessage: InboundMessageData,
     entry: InFlightEntry,
-    identity: EngineIdentity,
+    identity: EngineEnvelope,
   ): Promise<void> {
     // `continue: false` is not read here, for the same reason as the message:received path
     // above: the send has already happened, so a plugin can stop the handler chain but cannot
@@ -2143,10 +2154,11 @@ export class MessageProjector {
         timestamp: outgoing.timestamp,
         status: MessageStatus.SENT,
         metadata,
-        // An echo row is outgoing and keeps no author whatever a hook says: only its chat can differ.
+        // An echo row is outgoing and keeps no author whatever a hook says: only its chat, `from` and `to` can differ.
         engineRef: engineRefFor(
           { chatId: identity.chatId, direction: MessageDirection.OUTGOING },
           { chatId: outgoing.chatId, direction: MessageDirection.OUTGOING },
+          endsRewritten(identity, outgoing),
         ),
       });
       // The hook chain above is async; a delete()/teardown can retire this engine while it

@@ -6,11 +6,8 @@ import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { ReactionEvent, EditedMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { updateMessageMetadata } from '../message/message-metadata';
-import {
-  mutationTargetsForeignRowPersisted,
-  type MutationSource,
-  type StoredMessageRef,
-} from './message-mutation-guard';
+import { type MutationSource, type StoredMessageRef } from './message-mutation-guard';
+import { judgeStoredRow } from './message-row-judgement';
 
 /**
  * Applies stored-message mutations — reactions, inbound edits, REST outbound-edit echoes — behind
@@ -75,15 +72,15 @@ export class MessageMutationProjector {
     sessionId: string,
     waMessageId: string,
     source: MutationSource,
-  ): Promise<{ exists: boolean; reason: string | null; unread?: boolean; row?: StoredMessageRef }> {
+  ): Promise<{ exists: boolean; reason: string | null; unread?: boolean; row?: StoredMessageRef; moved?: boolean }> {
     if (!waMessageId) return { exists: false, reason: null };
     try {
       const row = await this.messageRepository.findOne({
         where: { sessionId, waMessageId },
-        select: { chatId: true, direction: true, author: true, engineRef: true },
+        select: { chatId: true, direction: true, author: true, engineRef: true, from: true, to: true },
       });
       return row
-        ? { exists: true, reason: await mutationTargetsForeignRowPersisted(row, source, this.resolveLid), row }
+        ? { exists: true, ...(await judgeStoredRow(row, waMessageId, source, this.resolveLid)), row }
         : { exists: false, reason: null };
     } catch {
       return { exists: false, reason: null, unread: true };

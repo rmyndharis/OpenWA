@@ -481,8 +481,9 @@ reported reaches its row, and one that names the chat the handler chose never do
 widen who may change a message. A delete or edit through the API is judged by the chat the engine reports
 it found the message in: to change a message filed under another contact's chat, name the chat the
 engine reported (the one `message:received` or `message:sent` was handed), since the engine looks the
-message up there. Rows a handler moved before the gateway kept the engine's chat keep the earlier
-behaviour (see [14 - Migration Guide](./14-migration-guide.md#known-upgrade-hazards)).
+message up there. A row a handler moved before the gateway kept the engine's chat is judged by the chat
+it is filed under; a whatsapp-web.js one whose id and `from` or `to` name the engine's chat takes
+changes naming that chat too (see [14 - Migration Guide](./14-migration-guide.md#known-upgrade-hazards)).
 
 On a **pre-action** event it is a veto, because the action has not been taken yet: `false` on
 `message:sending` blocks the send (the caller gets a `400`), and on `webhook:before` it cancels that one
