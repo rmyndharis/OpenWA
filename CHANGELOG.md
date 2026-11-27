@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The release workflow refuses a tag whose commit `main` does not hold, so unmerged code cannot publish `latest`.
 - The release workflow fails before promotion when the exact `X.Y.Z` image tag already serves another digest, so a second full run of a published version cannot re-point it.
+- Engines: `deleteMessage` resolves `{ id?, engineChatId? }` and `editMessage` results carry `engineChatId`, the chat the engine found the message in; an engine plugin that resolves the id alone keeps working.
 
 ### Fixed
 
@@ -52,7 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Messages: clear the stored row of a message revoked just before its commit when the engine retires in the same moment; the row kept the taken-back text and media.
 - Messages: write an edit, a reaction or a delivery receipt that reached a message in flight to its row when the engine retires as the commit lands; the row kept the text from before the edit, and the sweep delivered it.
 - Messages: write a revoke or an edit that reached a message in flight to the row a commit stored before reporting an error, when the row could not then be stored alone; the row kept the earlier text, and the sweep delivered it.
+- Messages: take back a message in flight when a delete through the API names the list id of a broadcast-list message received on Baileys; it was stored and delivered with the deleted text.
 - Messages: clear the stored row of a message revoked just before its commit when a `message:received` or `message:sent` handler filed it under another chat; the row kept the taken-back text and media.
+- Messages: a delete or edit through the API reaches the stored row when the engine keeps the message under another form of the named chat, such as the sender of a Baileys broadcast-list message deleted by its list id, or the lid of a contact named by phone number; the row kept the text.
 - Webhooks: close the pending outbox row of a message revoked just before its commit when the engine retires before the commit's failure is handled; the sweep delivered the taken-back text afterwards.
 - Plugins: keep the gateway's `from`, `to`, `fromMe`, `timestamp`, `type`, `author`, `isLidSender` and `ephemeralDuration`, and the chat's `isGroup` and `kind`, when a `message:received` or `message:sent` handler leaves them out, returns them as `null` or in another type, or removes them from the message it was handed; such a message was not stored.
 - Plugins: keep one handler's redaction when a later `message:received` or `message:sent` handler removes the `id` or `chatId` of the message it was handed; the original text and media were stored and delivered.

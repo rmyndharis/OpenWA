@@ -34,6 +34,15 @@ import { MessageWindow, messageTimeBoundarySeconds, validateMessageWindow } from
 // Re-exported for existing importers (bulk send shares the rendered-template cap with the send path).
 export { DEFAULT_TEMPLATE_RENDER_MAX_CHARS } from './message-send.service';
 
+/**
+ * What a delete or edit through the API says of the message it changed, for its stored row: the chat the engine
+ * found it in and, when the engine reports one, the chat its caller named, which the engine accepted for the
+ * message too. The engine may keep the message under another form of the caller's chat: Baileys keeps a received
+ * broadcast-list message, deleted by its list id, with its sender, and a contact named by phone number under its lid.
+ */
+const apiChangeSource = <K extends 'revoke' | 'edit'>(kind: K, callerChatId: string, engineChatId?: string) =>
+  engineChatId ? { kind, chatId: engineChatId, callerChatId } : { kind, chatId: callerChatId };
+
 export interface GetMessagesOptions extends MessageWindow {
   chatId?: string;
   /** Filter by sender. A phone matches stored `@c.us`/`@s.whatsapp.net` ids AND any lid resolving to it. Group messages match on `author` (the real sender) as well as `from` (which holds the group JID). */
@@ -852,7 +861,9 @@ export class MessageService implements PluginMessagePort {
     dto: { chatId: string; messageId: string; forEveryone?: boolean },
   ): Promise<void> {
     const engine = this.getEngine(sessionId);
-    const deleted = await engine.deleteMessage(dto.chatId, dto.messageId, dto.forEveryone ?? true);
+    const result = await engine.deleteMessage(dto.chatId, dto.messageId, dto.forEveryone ?? true);
+    // An engine plugin written before the chat was reported resolves the id alone.
+    const { id: deleted, engineChatId } = typeof result === 'string' ? { id: result } : (result ?? {});
 
     // Clear the stored message the same way an engine revoke does (body, media and metadata), on
     // its mutation chain. Best-effort: never rejects. No localized display string is persisted
@@ -861,7 +872,7 @@ export class MessageService implements PluginMessagePort {
     // Under the id the caller named (Baileys keys its rows by it, and so does a row an earlier engine stored) and,
     // when the engine found the message under another form of that id, under the one it keys it by: whatsapp-web.js
     // also takes the bare key id of a message it stores under the serialized id.
-    const source = { kind: 'revoke', chatId: dto.chatId } as const;
+    const source = apiChangeSource('revoke', dto.chatId, engineChatId);
     await this.messageProjector.recordRevoke(sessionId, dto.messageId, source);
     if (typeof deleted === 'string' && deleted && deleted !== dto.messageId) {
       await this.messageProjector.recordRevoke(sessionId, deleted, source);
@@ -887,8 +898,7 @@ export class MessageService implements PluginMessagePort {
     // serialized with the inbound edit/reaction writers through the session's per-message mutation
     // queue. A missing row must not fail the request — the engine edit already succeeded.
     await this.messageProjector.recordOutboundMessageEdit(sessionId, finalDto.messageId, finalDto.body, {
-      kind: 'edit',
-      chatId: finalDto.chatId,
+      ...apiChangeSource('edit', finalDto.chatId, result.engineChatId),
       fromMe: true,
     });
     return { messageId: result.id, timestamp: result.timestamp };

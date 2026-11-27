@@ -6244,6 +6244,13 @@ describe('editMessage', () => {
     expect(res).toEqual({ id: 'M1', timestamp: 1700000002 });
   });
 
+  it('reports the chat the edited message is stored under, as the inbound mapper derives it', async () => {
+    const edit = jest.fn().mockResolvedValue({ id: { _serialized: 'M1' }, timestamp: 1700000002 });
+    const own = { id: { _serialized: 'M1', id: 'RAW1' }, fromMe: true, from: '628000@c.us', to: '99887766@lid', edit };
+    const res = await ready(chatWith([own])).editMessage('628@c.us', 'M1', 'new body');
+    expect(res).toEqual({ id: 'M1', timestamp: 1700000002, engineChatId: '99887766@lid' });
+  });
+
   it('edit re-applies participant tags, and sends no options bag when none were asked for', async () => {
     const edit = jest.fn().mockResolvedValue({ id: { _serialized: 'M1' }, timestamp: 1700000002 });
     const adapter = ready(chatWith([{ id: { _serialized: 'M1', id: 'RAW1' }, edit }]));

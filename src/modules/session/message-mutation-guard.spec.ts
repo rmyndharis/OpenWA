@@ -119,6 +119,21 @@ describe('mutationTargetsForeignRow', () => {
     }
   });
 
+  // A delete or edit through the API names the chat the engine found the message in and the one its caller named.
+  it('takes a change through the API when the chat its caller named is the row chat', async () => {
+    const row = { chatId: direct, direction: OUT };
+    const source = { kind: 'revoke' as const, chatId: '111@lid', callerChatId: direct };
+    expect(mutationTargetsForeignRow(row, source)).toBeNull();
+    expect(mutationTargetsForeignRow({ chatId: '111@lid', direction: OUT }, source)).toBeNull();
+    // Foreign only when both chats say so, and the reason is the first one's.
+    expect(mutationTargetsForeignRow({ chatId: '628777@c.us', direction: OUT }, source)).toBe('chat');
+    expect(mutationTargetsForeignRow(row, { ...source, kind: 'edit', fromMe: false })).toBe('chat');
+    // A lid named by the caller is resolved like the engine's.
+    const lidCaller = { kind: 'revoke' as const, chatId: '628777@c.us', callerChatId: '222@lid' };
+    expect(await mutationTargetsForeignRowPersisted(row, lidCaller, () => Promise.resolve('628111'))).toBeNull();
+    expect(await mutationTargetsForeignRowPersisted(row, lidCaller, () => Promise.resolve(null))).toBe('chat');
+  });
+
   // The send routes store the chat id as the caller wrote it, in either dialect the docs give, while the
   // engines report the neutral one.
   it('reads the id a REST send stored in any dialect of the chat as the same chat', () => {

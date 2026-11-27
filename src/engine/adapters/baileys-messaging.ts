@@ -1023,7 +1023,7 @@ export class BaileysMessaging {
     );
   }
 
-  async deleteMessage(chatId: string, messageId: string, forEveryone = true): Promise<void> {
+  async deleteMessage(chatId: string, messageId: string, forEveryone = true): Promise<{ engineChatId: string }> {
     this.host.ensureReady();
     const socket = this.sock();
     // A message already deleted for everyone can still be deleted for me: that clears its placeholder.
@@ -1035,7 +1035,7 @@ export class BaileysMessaging {
     // list shows no row for the account proves nothing either way, so the revoke still goes out there.
     // Whichever branch runs, the text leaves this account's view, so clear the preview immediately.
     const chatJid = target.key.remoteJid ?? chatId;
-    // The preview of a received broadcast-list message is kept in its sender's chat.
+    // The preview of a received broadcast-list message is kept in its sender's chat, and its events report it there.
     const previewJid = baileysChatJid(chatJid, target.key.participant, target.key.fromMe === true);
     if (
       forEveryone &&
@@ -1047,7 +1047,7 @@ export class BaileysMessaging {
       // survives a failed store write or a repeat delivery of the original.
       this.host.markDeletedForEveryone(messageId);
       await this.changeStored(messageId, stored => ({ ...stored, message: null }));
-      return;
+      return { engineChatId: this.host.toNeutralJid(previewJid) };
     }
     // Delete-for-me (revoke on this device only): Baileys exposes it as a chat modification, not a
     // sendMessage. The stored message timestamp (epoch seconds) is part of the payload.
@@ -1067,6 +1067,7 @@ export class BaileysMessaging {
       'the delete-for-me',
     );
     this.host.recordMessageEdit(previewJid, messageId, '', 'revoked');
+    return { engineChatId: this.host.toNeutralJid(previewJid) };
   }
 
   /**
@@ -1136,7 +1137,11 @@ export class BaileysMessaging {
     // no route can address and no stored row is keyed by, and would disagree with the
     // whatsapp-web.js engine, which re-reads the message and reports the original of both. An edit
     // does not move a message in the chat, so its timestamp is still the one it was sent at.
-    return { id: messageId, timestamp: this.host.toUnixSeconds(target.messageTimestamp) };
+    return {
+      id: messageId,
+      timestamp: this.host.toUnixSeconds(target.messageTimestamp),
+      engineChatId: this.host.toNeutralJid(target.key.remoteJid ?? chatId),
+    };
   }
 
   /**

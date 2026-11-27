@@ -1448,6 +1448,126 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
     });
   });
 
+  // Baileys reports a message received through a contact's broadcast list in the chat with its sender, and its delete
+  // also accepts the list id the message's key names. A handler may file the message under that list, and a delete
+  // through the API then names the chat the caller sees, while the engine reports the sender's chat it found it in.
+  describe('a received broadcast-list message a handler filed under the list', () => {
+    const sender = '628111@c.us';
+    const list = '1234567890@broadcast';
+    const text = 'taken back before the commit';
+    const listMessage = (id: string): IncomingMessage =>
+      incomingMsg({
+        id,
+        chatId: sender,
+        from: sender,
+        author: sender,
+        type: 'image',
+        body: text,
+        media: { mimetype: 'image/png', data: 'aGVsbG8=' },
+      });
+    const fileUnderTheList = (): void => {
+      hookManager.register(
+        'lister',
+        'message:received',
+        ctx => Promise.resolve({ continue: true, data: { ...(ctx.data as IncomingMessage), chatId: list } }),
+        10,
+      );
+    };
+    /** What the delete route records for a caller naming `chatId`, once the engine deleted the message in `found`. */
+    const deleteThroughTheApi = (msg: IncomingMessage, chatId: string, found?: string): Promise<void> =>
+      projector.recordRevoke(
+        sessionId,
+        msg.id,
+        found ? { kind: 'revoke', chatId: found, callerChatId: chatId } : { kind: 'revoke', chatId },
+      );
+    /** `change` reaches the message once its deliveries are prepared, and is done with before the commit begins. */
+    const justBeforeTheCommit = (change: () => void): void => {
+      const realWait = sharedConnection.awaitNoOpenTransaction;
+      let waits = 0;
+      jest.spyOn(sharedConnection, 'awaitNoOpenTransaction').mockImplementation(async dataSource => {
+        waits += 1;
+        // The second wait is the insert's.
+        if (waits === 2) {
+          change();
+          for (let turn = 0; turn < 5; turn++) await flush();
+        }
+        return realWait(dataSource);
+      });
+    };
+    const storedRow = (id: string): Promise<Message | null> =>
+      ds.getRepository(Message).findOne({ where: { sessionId, waMessageId: id } });
+    const delivered = (): string => {
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      return (mockFetch.mock.calls[0] as [string, { body: string }])[1].body;
+    };
+
+    it('stores the row cleared and delivers it as deleted when the delete names the list after the handlers ran', async () => {
+      await seedWebhook(['message.received']);
+      fileUnderTheList();
+      const msg = listMessage('WA-LIST-DELETED-1');
+      justBeforeTheCommit(() => void deleteThroughTheApi(msg, list, sender));
+
+      await projector.handleInboundMessage(sessionId, engine, msg)?.settled;
+      await waitFor(() => mockFetch.mock.calls.length === 1);
+
+      expect(await storedRow(msg.id)).toMatchObject({ chatId: list, type: 'revoked', body: '', metadata: null });
+      expect(JSON.parse(delivered())).toMatchObject({ data: { id: msg.id, chatId: list, type: 'revoked', body: '' } });
+      expect(delivered()).not.toContain(text);
+      expect(delivered()).not.toContain('aGVsbG8=');
+    });
+
+    it('stores the row cleared when a later handler deletes the message in the list it was filed under', async () => {
+      await seedWebhook(['message.received']);
+      fileUnderTheList();
+      const msg = listMessage('WA-LIST-DELETED-2');
+      hookManager.register(
+        'moderator',
+        'message:received',
+        async ctx => {
+          await deleteThroughTheApi(msg, (ctx.data as IncomingMessage).chatId, sender);
+          return { continue: true };
+        },
+        20,
+      );
+
+      await projector.handleInboundMessage(sessionId, engine, msg)?.settled;
+      await waitFor(() => mockFetch.mock.calls.length === 1);
+
+      expect(await storedRow(msg.id)).toMatchObject({ chatId: list, type: 'revoked', body: '', metadata: null });
+      expect(JSON.parse(delivered())).toMatchObject({ data: { id: msg.id, type: 'revoked', body: '' } });
+      expect(delivered()).not.toContain(text);
+    });
+
+    it.each([
+      ['after the handlers ran', false],
+      ['while they ran', true],
+    ])('keeps the message when a delete %s names a chat it is in neither way', async (_when, duringTheHandlers) => {
+      await seedWebhook(['message.received']);
+      fileUnderTheList();
+      const msg = listMessage('WA-LIST-DELETED-ELSEWHERE-1');
+      const elsewhere = (): Promise<void> => deleteThroughTheApi(msg, '9876543210@broadcast');
+      if (duringTheHandlers) {
+        hookManager.register(
+          'moderator',
+          'message:received',
+          async () => {
+            await elsewhere();
+            return { continue: true };
+          },
+          20,
+        );
+      } else {
+        justBeforeTheCommit(() => void elsewhere());
+      }
+
+      await projector.handleInboundMessage(sessionId, engine, msg)?.settled;
+      await waitFor(() => mockFetch.mock.calls.length === 1);
+
+      expect(await storedRow(msg.id)).toMatchObject({ chatId: list, type: 'image', body: text });
+      expect(JSON.parse(delivered())).toMatchObject({ data: { id: msg.id, chatId: list, body: text } });
+    });
+  });
+
   it('stores no row on its own for an engine retired while the commit of row and outbox rows failed', async () => {
     await seedWebhook(['message.received']);
     const persisted = collectPersisted();

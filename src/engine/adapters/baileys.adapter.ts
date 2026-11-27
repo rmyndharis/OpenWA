@@ -416,7 +416,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return this.messaging.reactToMessage(chatId, messageId, emoji);
   }
 
-  async deleteMessage(chatId: string, messageId: string, forEveryone = true): Promise<void> {
+  async deleteMessage(chatId: string, messageId: string, forEveryone = true): Promise<{ engineChatId: string }> {
     return this.messaging.deleteMessage(chatId, messageId, forEveryone);
   }
 

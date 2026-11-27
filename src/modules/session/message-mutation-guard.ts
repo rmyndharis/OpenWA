@@ -18,6 +18,11 @@ export interface MutationSource {
   author?: string;
   /** For a group revoke a member sent, whether the group's roster shows them an admin; undefined when unknown. */
   admin?: boolean;
+  /**
+   * For a delete or edit through the API, the chat its caller named when `chatId` is the one the engine reported:
+   * the engine found the message there too, so a row stored under either chat may take the change.
+   */
+  callerChatId?: string;
 }
 
 /**
@@ -132,8 +137,20 @@ export function provablyDifferent(
  *  - `author`: a group edit comes from the participant who wrote the message, and so does a group revoke
  *    by a member the group's roster shows is no admin: it cannot name a message the account sent, nor one
  *    another member wrote. A lid and a phone number with no reported pairing prove nothing here.
+ *
+ * A change through the API that names a `callerChatId` is foreign only when that chat proves it so as well.
  */
 export function mutationTargetsForeignRow(
+  row: StoredMessageRef,
+  source: MutationSource,
+  resolveLid?: (jid: string) => string | null,
+): 'chat' | 'direction' | 'author' | null {
+  const reason = foreignReason(row, source, resolveLid);
+  if (!reason || !source.callerChatId) return reason;
+  return foreignReason(row, { ...source, chatId: source.callerChatId }, resolveLid) && reason;
+}
+
+function foreignReason(
   row: StoredMessageRef,
   source: MutationSource,
   resolveLid?: (jid: string) => string | null,
@@ -176,7 +193,7 @@ export async function mutationTargetsForeignRowPersisted(
   if (!resolveLid) return mutationTargetsForeignRow(row, source);
   const phones = new Map<string, string | null>();
   await Promise.all(
-    [...new Set([row.chatId, row.author, source.chatId, source.author])].map(async jid => {
+    [...new Set([row.chatId, row.author, source.chatId, source.callerChatId, source.author])].map(async jid => {
       if (jid && parseWaId(jid).kind === 'lid') phones.set(jid, await resolveLid(jid).catch(() => null));
     }),
   );

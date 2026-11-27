@@ -4596,6 +4596,14 @@ describe('BaileysAdapter inbound fan-out', () => {
       await adapter.deleteMessage('628222@c.us', 'L1', false);
       expect(await preview(adapter)).toBe('');
     });
+
+    it.each([
+      ['its sender', '628222@c.us'],
+      ['its list', LIST],
+    ])('reports the chat of its sender for a delete naming %s', async (_name, chatId) => {
+      const adapter = await receive();
+      await expect(adapter.deleteMessage(chatId, 'L1', false)).resolves.toEqual({ engineChatId: '628222@c.us' });
+    });
   });
 
   describe('contentless protocol traffic on the live path (#1568)', () => {
@@ -5171,6 +5179,16 @@ describe('BaileysAdapter store-backed ops', () => {
     );
   });
 
+  it('reports the LID a message is stored under when a delete or edit names its phone number', async () => {
+    const adapter = await ready();
+    fakeStore.getMessage.mockResolvedValue({ ...ownStored, key: { ...ownStored.key, remoteJid: '111@lid' } });
+    fakeSock.executeUSyncQuery.mockResolvedValue({ list: [{ id: '628111@s.whatsapp.net', lid: '111@lid' }] });
+    await expect(adapter.editMessage('628111@c.us', 'TARGET', 'edited')).resolves.toMatchObject({
+      engineChatId: '111@lid',
+    });
+    await expect(adapter.deleteMessage('628111@c.us', 'TARGET', true)).resolves.toEqual({ engineChatId: '111@lid' });
+  });
+
   it('confirms a LID request against an older phone-keyed message through the same fresh query', async () => {
     const adapter = await ready();
     fakeStore.getMessage.mockResolvedValue({
@@ -5712,7 +5730,7 @@ describe('BaileysAdapter store-backed ops', () => {
       },
       expect.objectContaining({ getUrlInfo: expect.any(Function) as unknown }) as unknown,
     );
-    expect(res).toEqual({ id: 'TARGET', timestamp: 1700000000 });
+    expect(res).toEqual({ id: 'TARGET', timestamp: 1700000000, engineChatId: '628111@c.us' });
   });
 
   it('editMessage answers from the stored message even when the send echoes nothing back', async () => {
@@ -5720,7 +5738,7 @@ describe('BaileysAdapter store-backed ops', () => {
     fakeSock.sendMessage.mockResolvedValue(undefined);
     const adapter = await ready();
     const res = await adapter.editMessage('628111@s.whatsapp.net', 'TARGET', 'edited body');
-    expect(res).toEqual({ id: 'TARGET', timestamp: 1700000000 });
+    expect(res).toEqual({ id: 'TARGET', timestamp: 1700000000, engineChatId: '628111@c.us' });
   });
 
   it('editMessage throws MessageNotFoundError when the message is not in the store', async () => {
@@ -5779,6 +5797,7 @@ describe('BaileysAdapter store-backed ops', () => {
     await expect(adapter.editMessage('628111@s.whatsapp.net', 'TARGET', 'new')).resolves.toEqual({
       id: 'TARGET',
       timestamp: 1700000000,
+      engineChatId: '628111@c.us',
     });
     expect(fakeSock.sendMessage).toHaveBeenCalledTimes(1);
   });
@@ -12412,7 +12431,7 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
     fakeStore.update.mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'));
     const adapter = await started();
     const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
-    await expect(adapter.deleteMessage(PEER, 'TARGET', true)).resolves.toBeUndefined();
+    await expect(adapter.deleteMessage(PEER, 'TARGET', true)).resolves.toEqual({ engineChatId: '628111@c.us' });
     expect(warn).toHaveBeenCalledWith(
       'Failed to apply an edit or delete to the message store',
       expect.objectContaining({ msgId: 'TARGET', error: 'SQLITE_BUSY: database is locked' }),

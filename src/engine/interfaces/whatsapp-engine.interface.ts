@@ -42,6 +42,13 @@ export interface MessageResult {
    * is filed there. Neutral dialect (`<phone>@c.us`), also when the engine sent to that number's LID.
    */
   resolvedChatId?: string;
+  /**
+   * The chat the engine acted in, neutral dialect: for an edit, the chat the edited message is stored under, which
+   * can be another form of the caller's chat id (the LID of a contact the caller named by phone number). The stored
+   * row is judged by it, so a row a `message:received` or `message:sent` handler filed under another chat still
+   * takes the edit. Absent when the engine does not report it.
+   */
+  engineChatId?: string;
 }
 
 /**
@@ -1345,9 +1352,15 @@ export interface MessageOperationsCapability {
    * Delete a message. Resolves the id the engine keys the deleted message by, when it reports one, so the caller can
    * clear the stored copy under that id too: whatsapp-web.js resolves the serialized id of the message it found, which
    * differs from the id it was given when that was the bare key id of a message it keys by the serialized id. An engine
-   * that keys the message by the id it was given (Baileys) resolves nothing.
+   * that keys the message by the id it was given (Baileys) reports no `id`. `engineChatId` is the chat the deleted
+   * message is stored under, as {@link MessageResult.engineChatId} says for an edit. An engine plugin written before
+   * these fields may still resolve the id alone, as a string.
    */
-  deleteMessage(chatId: string, messageId: string, forEveryone?: boolean): Promise<string | void>;
+  deleteMessage(
+    chatId: string,
+    messageId: string,
+    forEveryone?: boolean,
+  ): Promise<{ id?: string; engineChatId?: string } | string | void>;
 
   /**
    * Edit the body of a text message. Only the account's OWN messages can be edited; engines reject

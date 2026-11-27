@@ -1399,13 +1399,18 @@ export class WwebjsMessaging {
     return results;
   }
 
-  async deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<string | void> {
+  async deleteMessage(
+    chatId: string,
+    messageId: string,
+    forEveryone: boolean = true,
+  ): Promise<{ id?: string; engineChatId: string }> {
     this.host.ensureReady();
     // NOTE: do NOT resolve chatId to @lid here — delete operates on the found message's own key, not
     // this chatId, so LID-resolving the lookup gives no benefit and would miss a message stored under
     // the pre-migration @c.us chat (#583).
     // The message is found by its serialized id or by the bare key id, but its row is keyed by the serialized one,
-    // which is what the caller needs to clear the stored copy.
+    // which is what the caller needs to clear the stored copy, with the chat it is stored under (as the inbound
+    // mapper derives it).
     const deleted = await withPageWrite(this.host, 'deleteMessage', async () => {
       const chat = await this.client()
         .getChatById(chatId)
@@ -1420,7 +1425,7 @@ export class WwebjsMessaging {
       }
       this.host.ensureReady();
       await message.delete(forEveryone);
-      return readWid(message.id);
+      return { id: readWid(message.id), engineChatId: message.fromMe ? message.to : message.from };
     });
     this.host.logger.debug('Deleted message', { chatId, messageId, forEveryone });
     return deleted;
@@ -1447,9 +1452,12 @@ export class WwebjsMessaging {
       this.host.ensureReady();
       // An edit REPLACES the content, so tags are re-applied rather than preserved: omitting mentions
       // drops whatever the original carried. Options omitted entirely when none were asked for.
-      return mentions?.length ? message.edit(body, { mentions: neutralMentions(mentions) }) : message.edit(body);
+      const result = await (mentions?.length
+        ? message.edit(body, { mentions: neutralMentions(mentions) })
+        : message.edit(body));
+      return { result, engineChatId: message.fromMe ? message.to : message.from };
     });
-    if (!edited) {
+    if (!edited.result) {
       // wwebjs RESOLVES null (instead of throwing) when the page-side edit is refused — only the
       // account's own text messages are editable; surface the refusal, not a phantom success.
       throw new EngineRefusedError(
@@ -1457,7 +1465,7 @@ export class WwebjsMessaging {
       );
     }
     this.host.logger.debug('Edited message', { chatId, messageId });
-    return toMessageResult(edited);
+    return { ...toMessageResult(edited.result), engineChatId: edited.engineChatId };
   }
 
   /**
