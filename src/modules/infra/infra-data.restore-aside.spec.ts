@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { AsyncResource } from 'async_hooks';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { DataSource, type QueryRunner } from 'typeorm';
@@ -8,6 +8,7 @@ import { BetterSqlite3QueryRunner } from 'typeorm/driver/better-sqlite3/BetterSq
 import { InfraDataService, type InfraExportDataResult } from './infra-data.service';
 import { readExport } from '../../../test/helpers/read-export';
 import { createSqlitePrepareDatabase, type SqliteJournalMode } from '../../database/sqlite-pragmas';
+import * as sqliteCheckpoint from '../../database/sqlite-checkpoint';
 import { LoggerService } from '../../common/services/logger.service';
 import { ScrubRevokedMessageContent1786900000000 } from '../../database/migrations/1786900000000-ScrubRevokedMessageContent';
 import { Session, SessionStatus } from '../session/entities/session.entity';
@@ -223,6 +224,66 @@ describe.each<SqliteJournalMode>(['WAL', 'DELETE'])('a SQLite file restore (%s j
     expect(boundaries).toHaveLength(Math.floor((ROWS + 1) / 500));
     expect(Math.min(...boundaries)).toBeGreaterThanOrEqual(16);
   });
+
+  if (journal === 'WAL') {
+    it('leaves its WAL to a checkpoint off the main thread, done before the callers it held go on', async () => {
+      // Bodies large enough that the restore's WAL passes SQLite's automatic checkpoint threshold of 1000 pages.
+      const tables = { ...archive, messages: archive.messages?.map(row => ({ ...row, body: 'x'.repeat(8_000) })) };
+      await ds.query('PRAGMA wal_checkpoint(TRUNCATE)');
+      const sizeBefore = statSync(file).size;
+      let openGate!: () => void;
+      const gate = new Promise<void>(resolve => (openGate = resolve));
+      const checkpoint = sqliteCheckpoint.checkpointOffThread;
+      const spy = jest.spyOn(sqliteCheckpoint, 'checkpointOffThread').mockImplementation(async path => {
+        await gate;
+        await checkpoint(path);
+      });
+      let sizeAtHeldRead: number | undefined;
+      let held: Promise<unknown> | undefined;
+      atRestoreStatement(ds, /^INSERT INTO "?messages/i, () => {
+        held = ds
+          .getRepository(Session)
+          .count()
+          .then(() => (sizeAtHeldRead = statSync(file).size));
+      });
+
+      const svc = service();
+      const restore = svc.importData({ tables });
+      for (let i = 0; i < 100_000 && spy.mock.calls.length === 0; i++) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      expect(spy).toHaveBeenCalledWith(file);
+      let stopped = false;
+      const destroy = svc.onModuleDestroy().then(() => (stopped = true));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      // The shutdown waits for the copy, so its own checkpoint does not run beside it.
+      expect(stopped).toBe(false);
+
+      // Committed and not yet copied back: the commit left the database file alone, and the read is still held.
+      expect(statSync(file).size).toBe(sizeBefore);
+      expect(sizeAtHeldRead).toBeUndefined();
+      openGate();
+      await expect(restore).resolves.toMatchObject({ imported: true });
+      await held;
+      await destroy;
+      // Copied back before the held read ran.
+      expect(sizeAtHeldRead).toBeGreaterThan(sizeBefore + ROWS * 8_000);
+      await expectReleased();
+    });
+
+    it('keeps a committed restore whose checkpoint failed', async () => {
+      jest.spyOn(sqliteCheckpoint, 'checkpointOffThread').mockRejectedValue(new Error('no worker'));
+      const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+
+      await expect(service().importData({ tables: archive })).resolves.toMatchObject({ imported: true });
+
+      expect(await names()).toEqual(['restored']);
+      expect(warn).toHaveBeenCalledWith('Could not checkpoint the restored data off the main thread', {
+        error: 'Error: no worker',
+      });
+      await expectReleased();
+    });
+  }
 
   it.each([
     ['commits', false],

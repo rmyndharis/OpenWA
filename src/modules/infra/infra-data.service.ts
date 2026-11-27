@@ -39,6 +39,8 @@ import { ScrubNonPhoneLidMappings1786950000000 } from '../../database/migrations
 import { BackfillLegacyMessageTypes1791300000000 } from '../../database/migrations/1791300000000-BackfillLegacyMessageTypes';
 import { Session as SessionEntity, SessionStatus } from '../session/entities/session.entity';
 import { In } from 'typeorm';
+import type { BetterSqlite3DataSourceOptions } from 'typeorm/driver/better-sqlite3/BetterSqlite3DataSourceOptions';
+import { checkpointOffThread } from '../../database/sqlite-checkpoint';
 import { DateUtils } from 'typeorm/util/DateUtils';
 import type { MigrationTables, PluginInstanceRow, TableCounts } from './migration-tables.types';
 import { EXPORT_TABLES, EXPORT_TABLE_EXCLUSIONS, type AnyExportTable, type ExportReadContext } from './export-tables';
@@ -942,13 +944,25 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
 
   /** The restore's connection to the data file: the shared connection's options, with nothing that writes at open. */
   private openRestoreSource(): Promise<DataSource> {
+    const options = this.dataDataSource.options as BetterSqlite3DataSourceOptions;
     return new DataSource({
-      ...this.dataDataSource.options,
+      ...options,
+      // Its COMMIT leaves the WAL to checkpointOffThread: copying a whole restore back there would hold the loop.
+      prepareDatabase: async (database: { pragma(source: string): unknown }): Promise<void> => {
+        await options.prepareDatabase?.(database);
+        database.pragma('wal_autocheckpoint = 0');
+      },
       synchronize: false,
       migrationsRun: false,
       dropSchema: false,
       subscribers: [],
     }).initialize();
+  }
+
+  private async checkpointRestore(): Promise<void> {
+    await checkpointOffThread(String(this.dataDataSource.options.database)).catch((error: unknown) =>
+      this.logger.warn('Could not checkpoint the restored data off the main thread', { error: String(error) }),
+    );
   }
 
   /** The replace-all restore itself. Only ever entered through importData's single-flight guard. */
@@ -1601,6 +1615,9 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
       let rolledBack: InfraImportDataResult | undefined;
       try {
         rolledBack = await (hold ? hold.asRestore(replace) : replace());
+        // Copied back while the callers are still held: the next commit on the shared connection would otherwise
+        // copy the whole restore on the loop.
+        if (committed && restoresAside) await this.checkpointRestore();
       } finally {
         await endRestore();
       }

@@ -196,16 +196,18 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
 >
 > **On a SQLite target the restore holds the data, not the gateway.** It writes on a connection of
 > its own, 500 rows at a time with turns of the event loop between them, so the gateway goes on
-> answering `GET /api/health/live`, its websocket clients and its WhatsApp sessions. Every other read
-> or write of the data database waits until the restore has committed or rolled back, and then sees
-> the data from before it or after it, never a half state; a message that arrives meanwhile is stored
-> once the restore has ended. That wait lasts as long as the restore: one to two minutes for 500,000
-> messages on the hosts measured. A PostgreSQL target does not hold the gateway. A request that
-> carries a body waits with its body unread, ahead of the in-flight body budget, and goes on once the
-> restore ends; one whose client left meanwhile is dropped. At most 256 such requests wait at once;
-> beyond that a request is refused with `503` and `Retry-After`, its body unread. Node still ends a
-> request that is not complete within `REQUEST_TIMEOUT_MS` (300 s by default) with `408`, so on a
-> restore that runs longer a client should send its write again.
+> answering `GET /api/health/live`, its websocket clients and its WhatsApp sessions. It still pauses
+> briefly while it parses the posted backup, before the restore starts, and while the restore
+> commits, both for longer on a larger backup. Every other read or write of the data database waits
+> until the restore has committed or rolled back, and then sees the data from before it or after it,
+> never a half state; a message that arrives meanwhile is stored once the restore has ended. That
+> wait lasts as long as the restore: one to two minutes for 500,000 messages on the hosts measured.
+> A PostgreSQL target does not hold the gateway. A request that carries a body waits with its body
+> unread, ahead of the in-flight body budget, and goes on once the restore ends; one whose client
+> left meanwhile is dropped. At most 256 such requests wait at once; beyond that a request is
+> refused with `503` and `Retry-After`, its body unread. Node still ends a request that is not
+> complete within `REQUEST_TIMEOUT_MS` (300 s by default) with `408`, so on a restore that runs
+> longer a client should send its write again.
 >
 > `GET /api/health/ready` keeps answering `200` while a SQLite restore runs: its database check reads
 > no table, so the restore's lock does not make it wait, and a single-node gateway is neither taken
