@@ -233,6 +233,55 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
     60000,
   );
 
+  it('sends the edit of an event kept while the database was away, once its job waits', async () => {
+    received.length = 0;
+    const session = await sessions.save(sessions.create({ name: `queue-kept-${Date.now()}-${Math.random()}` }));
+    await webhooks.save(
+      webhooks.create({
+        sessionId: session.id,
+        url: receiverUrl,
+        events: ['message.received'],
+        active: true,
+        retryCount: 4,
+      }),
+    );
+    const id = `K-${Date.now()}-${Math.random()}`;
+    await messages.insert({
+      sessionId: session.id,
+      waMessageId: id,
+      chatId: CHAT,
+      from: CHAT,
+      to: '628222@c.us',
+      body: 'first text',
+      type: 'text',
+      direction: MessageDirection.INCOMING,
+      timestamp: 1790000000,
+    });
+    outage = 'on';
+    await webhookService.dispatch(session.id, 'message.received', {
+      id,
+      chatId: CHAT,
+      from: CHAT,
+      to: '628222@c.us',
+      fromMe: false,
+      type: 'text',
+      body: 'first text',
+      timestamp: 1790000000,
+    });
+    expect(received).toEqual([]);
+    // The database answers: the kept event is dispatched, handed to the queue, and its first attempt fails.
+    outage = 'off';
+    receiverStatus = 500;
+    await projector.retryParkedChanges();
+    await waitFor(() => received.length >= 1);
+
+    await changes['an edit'](session.id, id);
+    receiverStatus = 200;
+    await waitFor(queueIdle);
+
+    expect(received.map(post => post.body)).toEqual(['first text', 'edited text']);
+  }, 60000);
+
   it.each(Object.keys(changes))(
     'replays as %s left the message, once Redis lost its job',
     async change => {
