@@ -1,4 +1,5 @@
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, chmodSync, writeSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname } from 'node:path';
 import { createLogger } from '../services/logger.service';
 
@@ -41,6 +42,9 @@ export class RecoveryJournal {
   private fd?: number;
   // The length of the line of each record kept now (by lane and key), their sum, and what the file holds.
   private readonly live = new Map<string, number>();
+  // A digest of the line last written for each of them, so a record kept again unchanged (a retry that could not run
+  // yet) writes and fsyncs nothing.
+  private readonly digests = new Map<string, string>();
   private liveBytes = 0;
   private fileBytes = 0;
   // What the last process left, by lane, until the lane's owner takes it.
@@ -80,10 +84,13 @@ export class RecoveryJournal {
   put(lane: JournalLane, key: string, value: unknown): boolean {
     if (this.stale && !this.empty()) return false;
     const line = `${JSON.stringify({ l: lane, k: key, v: value })}\n`;
-    if (!this.write(line)) return false;
     const id = `${lane}\u0000${key}`;
+    const digest = createHash('sha256').update(line).digest('base64');
+    if (this.live.has(id) && this.digests.get(id) === digest) return true;
+    if (!this.write(line)) return false;
     this.liveBytes += line.length - (this.live.get(id) ?? 0);
     this.live.set(id, line.length);
+    this.digests.set(id, digest);
     if (this.fileBytes > 2 * this.liveBytes + COMPACT_SLACK) this.compact();
     return true;
   }
@@ -94,6 +101,7 @@ export class RecoveryJournal {
     const size = this.live.get(id);
     if (size === undefined) return;
     this.live.delete(id);
+    this.digests.delete(id);
     this.liveBytes -= size;
     if (this.live.size === 0) this.empty();
     else this.write(`${JSON.stringify({ l: lane, k: key })}\n`);
@@ -213,6 +221,7 @@ export class RecoveryJournal {
       return;
     }
     this.live.clear();
+    this.digests.clear();
     this.liveBytes = 0;
     for (const line of lines) {
       const size = JSON.stringify(line).length + 1;
@@ -257,6 +266,7 @@ export class RecoveryJournal {
   private fail(error: unknown): void {
     this.warn('Could not write the recovery journal: what is kept now is in memory only', error);
     this.live.clear();
+    this.digests.clear();
     this.liveBytes = 0;
     this.stale = !this.empty();
   }

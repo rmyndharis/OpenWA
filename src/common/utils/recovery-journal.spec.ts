@@ -134,6 +134,26 @@ describe('RecoveryJournal', () => {
     journal.close();
   });
 
+  it('writes nothing for a record kept again unchanged, and the change once it changed', () => {
+    const journal = new RecoveryJournal(path);
+    journal.put('receive', 'a', { n: 1 });
+    writeSync.mockClear();
+
+    expect(journal.put('receive', 'a', { n: 1 })).toBe(true);
+    expect(writeSync).not.toHaveBeenCalled();
+    journal.put('receive', 'a', { n: 2 });
+    journal.del('receive', 'b never kept');
+    journal.del('receive', 'a');
+    journal.put('receive', 'c', { n: 1 });
+    journal.put('receive', 'a', { n: 2 });
+
+    expect(lines()).toEqual([
+      { l: 'receive', k: 'c', v: { n: 1 } },
+      { l: 'receive', k: 'a', v: { n: 2 } },
+    ]);
+    journal.close();
+  });
+
   it('empties the file once nothing is kept', () => {
     const journal = new RecoveryJournal(path);
     journal.put('change', 'a', { n: 1 });
