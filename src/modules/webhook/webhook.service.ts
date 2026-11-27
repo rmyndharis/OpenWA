@@ -481,4 +481,14 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     return this.delivery.redactPendingForMessage(sessionId, waMessageId, shouldApply);
   }
+
+  /** Write an edit of a stored message into its open outbox rows and kept failure copies. */
+  rewritePendingDeliveriesForMessage(
+    sessionId: string,
+    waMessageId: string,
+    body: string,
+    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    return this.delivery.rewritePendingForMessage(sessionId, waMessageId, body, shouldApply);
+  }
 }

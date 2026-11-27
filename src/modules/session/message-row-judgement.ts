@@ -45,3 +45,48 @@ export async function judgeStoredRow(
   }
   return { reason, moved: false };
 }
+
+/** Build a self-consistent revoke MutationSource from a message's StoredMessageRef. */
+export const revokeSourceFor = (ref: StoredMessageRef): MutationSource => ({
+  kind: 'revoke',
+  chatId: ref.chatId,
+  fromMe: ref.direction === MessageDirection.OUTGOING,
+  author: ref.author ?? undefined,
+});
+
+/** Extract a StoredMessageRef from a webhook delivery payload, or null when fields are missing. */
+const outboxPayloadToRef = (payload: Record<string, unknown>): StoredMessageRef | null => {
+  const chatId = typeof payload.chatId === 'string' && payload.chatId.length > 0 ? payload.chatId : null;
+  if (!chatId || typeof payload.fromMe !== 'boolean') return null;
+  const author =
+    typeof payload.author === 'string' && payload.author.length > 0
+      ? payload.author
+      : typeof payload.sender === 'string' && payload.sender.length > 0
+        ? payload.sender
+        : undefined;
+  return {
+    chatId,
+    direction: payload.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
+    author,
+  };
+};
+
+/**
+ * Whether a copy a delivery holds (an outbox row, a kept failure payload) is the message a change names, by the same
+ * foreign-row rule a stored row is judged by. A payload carries the message as a handler filed it: `filed`, the
+ * row's own ref once its engine ref accepted the change, also matches. A payload that names no chat matches only
+ * with `allowUnverifiedFallback`.
+ */
+export function outboxPayloadPredicate(
+  source: MutationSource,
+  resolveLid?: (jid: string) => Promise<string | null>,
+  allowUnverifiedFallback = false,
+  filed?: MutationSource,
+): (payload: Record<string, unknown>) => Promise<boolean> {
+  return async (payload: Record<string, unknown>): Promise<boolean> => {
+    const ref = outboxPayloadToRef(payload);
+    if (!ref) return allowUnverifiedFallback;
+    if ((await mutationTargetsForeignRowPersisted(ref, source, resolveLid)) === null) return true;
+    return filed !== undefined && (await mutationTargetsForeignRowPersisted(ref, filed, resolveLid)) === null;
+  };
+}

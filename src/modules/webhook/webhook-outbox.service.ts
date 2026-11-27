@@ -88,6 +88,11 @@ export function redactedMessagePayload(payload: Record<string, unknown>): Record
   return { ...kept, body: '', type: 'revoked' };
 }
 
+/** A message's delivery data once its sender edited it; a deleted message's placeholder takes no edit. */
+export function editedMessagePayload(payload: Record<string, unknown>, body: string): Record<string, unknown> {
+  return payload.type === 'revoked' ? payload : { ...payload, body, edited: true };
+}
+
 /**
  * Row lifecycle for the outbound delivery record.
  *
@@ -412,10 +417,34 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
    * job reads the row before posting and sends what the redaction left. When `shouldApply` is
    * supplied, only rows whose stored payload satisfies the predicate are redacted.
    */
-  async redactPendingForMessage(
+  redactPendingForMessage(
     sessionId: string,
     waMessageId: string,
     shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    return this.rewritePayloadsForMessage(sessionId, waMessageId, redactedMessagePayload, shouldApply, 'redact');
+  }
+
+  /**
+   * Write an edit of a stored message into the payloads of its still-open outbox rows, so the sweep, or the queued job
+   * that reads its row before posting, delivers the edited text. Judged per payload like the redaction above.
+   */
+  rewritePendingForMessage(
+    sessionId: string,
+    waMessageId: string,
+    body: string,
+    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    const edit = (payload: Record<string, unknown>): Record<string, unknown> => editedMessagePayload(payload, body);
+    return this.rewritePayloadsForMessage(sessionId, waMessageId, edit, shouldApply, 'rewrite');
+  }
+
+  private async rewritePayloadsForMessage(
+    sessionId: string,
+    waMessageId: string,
+    change: (payload: Record<string, unknown>) => Record<string, unknown>,
+    shouldApply: ((payload: Record<string, unknown>) => boolean | Promise<boolean>) | undefined,
+    verb: string,
   ): Promise<void> {
     if (!waMessageId) return;
     try {
@@ -424,11 +453,11 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
         if (!row.payload) continue;
         if (shouldApply && !(await shouldApply(row.payload))) continue;
         await this.outbox.update({ id: row.id, state: In(OPEN_STATES), payload: Not(IsNull()) }, {
-          payload: redactedMessagePayload(row.payload),
+          payload: change(row.payload),
         } as QueryDeepPartialEntity<WebhookOutboxEvent>);
       }
     } catch (error) {
-      this.logger.warn(`Could not redact pending outbound deliveries for message ${waMessageId}: ${String(error)}`);
+      this.logger.warn(`Could not ${verb} pending outbound deliveries for message ${waMessageId}: ${String(error)}`);
     }
   }
 

@@ -7,7 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository, In, IsNull, Not, Or } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm';
 import { Session } from './entities/session.entity';
-import { judgeStoredRow } from './message-row-judgement';
+import { judgeStoredRow, outboxPayloadPredicate, revokeSourceFor } from './message-row-judgement';
 import { Message, MessageDirection, MessageStatus, type MessageEngineRef } from '../message/entities/message.entity';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
@@ -252,31 +252,6 @@ const persistedRow = (row: Message): Message => {
   const { engineRef, ...rest } = row;
   return rest;
 };
-
-/** Extract a StoredMessageRef from a pending webhook outbox payload, or null when fields are missing. */
-const outboxPayloadToRef = (payload: Record<string, unknown>): StoredMessageRef | null => {
-  const chatId = typeof payload.chatId === 'string' && payload.chatId.length > 0 ? payload.chatId : null;
-  if (!chatId || typeof payload.fromMe !== 'boolean') return null;
-  const author =
-    typeof payload.author === 'string' && payload.author.length > 0
-      ? payload.author
-      : typeof payload.sender === 'string' && payload.sender.length > 0
-        ? payload.sender
-        : undefined;
-  return {
-    chatId,
-    direction: payload.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
-    author,
-  };
-};
-
-/** Build a self-consistent revoke MutationSource from a message's StoredMessageRef. */
-const revokeSourceFor = (ref: StoredMessageRef): MutationSource => ({
-  kind: 'revoke',
-  chatId: ref.chatId,
-  fromMe: ref.direction === MessageDirection.OUTGOING,
-  author: ref.author ?? undefined,
-});
 
 /** What a delivery claims to be, as the rule that refuses a change aimed at a stored row reads it. */
 const claimOf = (m: Pick<IncomingMessage, 'chatId' | 'fromMe' | 'author'>): MutationSource => ({
@@ -1289,12 +1264,7 @@ export class MessageProjector {
     filed?: MutationSource,
   ): (payload: Record<string, unknown>) => Promise<boolean> {
     const resolveLid = this.lidMappingStore ? (jid: string) => this.lidMappingStore!.findPhoneForLid(jid) : undefined;
-    return async (payload: Record<string, unknown>): Promise<boolean> => {
-      const ref = outboxPayloadToRef(payload);
-      if (!ref) return allowUnverifiedFallback;
-      if ((await mutationTargetsForeignRowPersisted(ref, source, resolveLid)) === null) return true;
-      return filed !== undefined && (await mutationTargetsForeignRowPersisted(ref, filed, resolveLid)) === null;
-    };
+    return outboxPayloadPredicate(source, resolveLid, allowUnverifiedFallback, filed);
   }
 
   /**

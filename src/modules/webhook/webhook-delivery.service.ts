@@ -11,6 +11,7 @@ import { Webhook } from './entities/webhook.entity';
 import {
   MESSAGE_DELIVERY_EVENTS,
   WebhookOutboxService,
+  editedMessagePayload,
   messageDeliveryKeys,
   redactedMessagePayload,
   type OutboxOpenRow,
@@ -695,6 +696,17 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       await this.outbox.redactPendingForMessage(sessionId, waMessageId, shouldApply);
     }
     await this.changeKeptCopies(sessionId, waMessageId, redactedMessagePayload, shouldApply);
+  }
+
+  /** Write an edit of a stored message into its open outbox rows and the event data its failed deliveries keep. */
+  async rewritePendingForMessage(
+    sessionId: string,
+    waMessageId: string,
+    body: string,
+    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    await this.outbox.rewritePendingForMessage(sessionId, waMessageId, body, shouldApply);
+    await this.changeKeptCopies(sessionId, waMessageId, payload => editedMessagePayload(payload, body), shouldApply);
   }
 
   /**

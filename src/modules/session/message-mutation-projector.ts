@@ -7,7 +7,7 @@ import { WebhookService } from '../webhook/webhook.service';
 import { ReactionEvent, EditedMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { updateMessageMetadata } from '../message/message-metadata';
 import { type MutationSource, type StoredMessageRef } from './message-mutation-guard';
-import { judgeStoredRow } from './message-row-judgement';
+import { judgeStoredRow, outboxPayloadPredicate, revokeSourceFor } from './message-row-judgement';
 
 /**
  * Applies stored-message mutations — reactions, inbound edits, REST outbound-edit echoes — behind
@@ -143,12 +143,8 @@ export class MessageMutationProjector {
 
   /** Persist an edit before notifying consumers, while still surfacing the occurrence if storage fails. */
   private async applyMessageEdit(id: string, message: EditedMessage, needsRow: boolean): Promise<void> {
-    const verdict = await this.storedRowVerdict(id, message.messageId, {
-      kind: 'edit',
-      chatId: message.chatId,
-      fromMe: message.fromMe,
-      author: message.author,
-    });
+    const source = { kind: 'edit', chatId: message.chatId, fromMe: message.fromMe, author: message.author } as const;
+    const verdict = await this.storedRowVerdict(id, message.messageId, source);
     if (needsRow && !verdict.exists) return;
     if (verdict.reason) {
       this.logger.warn('Dropping an edit aimed at a message of another chat or sender', {
@@ -169,6 +165,7 @@ export class MessageMutationProjector {
       );
       if (result.affected) {
         await this.markMessageEdited(id, message.messageId);
+        await this.rewriteDeliveries(id, message.messageId, message.body, source, verdict);
         await this.onTextChanged(id, message.messageId);
       } else {
         // Nor announced onto one: the payload carries the new text of a message that was deleted, for everyone or,
@@ -190,6 +187,24 @@ export class MessageMutationProjector {
     const editedPayload = message as unknown as Record<string, unknown>;
     this.eventsGateway.emitMessageEdited(id, editedPayload);
     void this.webhookService.dispatch(id, 'message.edited', editedPayload);
+  }
+
+  /**
+   * Carry the text an edit wrote to the stored row into the copies its deliveries still hold (open outbox rows, the
+   * event data a failed delivery keeps), each judged by its payload as a revoke judges them, so a replay, a queued
+   * job or a redrive sends the edited text.
+   */
+  private async rewriteDeliveries(
+    sessionId: string,
+    waMessageId: string,
+    body: string,
+    source: MutationSource | undefined,
+    verdict: Awaited<ReturnType<MessageMutationProjector['storedRowVerdict']>> | undefined,
+  ): Promise<void> {
+    const filed = verdict?.moved && verdict.row ? revokeSourceFor(verdict.row) : undefined;
+    const ours = Boolean(verdict?.exists && !verdict.reason);
+    const predicate = source ? outboxPayloadPredicate(source, this.resolveLid, ours, filed) : undefined;
+    await this.webhookService.rewritePendingDeliveriesForMessage?.(sessionId, waMessageId, body, predicate);
   }
 
   /** Keep the marker alongside existing reactions, media and quote metadata. */
@@ -218,12 +233,12 @@ export class MessageMutationProjector {
     await new Promise<void>(resolve => {
       this.enqueueMessageMutation(sessionId, messageId, async () => {
         try {
-          const reason = source && (await this.foreignRowReason(sessionId, messageId, source));
-          if (reason) {
+          const verdict = source && (await this.storedRowVerdict(sessionId, messageId, source));
+          if (verdict?.reason) {
             this.logger.warn('Not storing an edit aimed at a message of another chat or sender', {
               sessionId,
               messageId,
-              reason,
+              reason: verdict.reason,
             });
             return;
           }
@@ -234,7 +249,10 @@ export class MessageMutationProjector {
             { body },
           );
           await this.markMessageEdited(sessionId, messageId);
-          if (result?.affected) await this.onTextChanged(sessionId, messageId);
+          if (result?.affected) {
+            await this.rewriteDeliveries(sessionId, messageId, body, source, verdict);
+            await this.onTextChanged(sessionId, messageId);
+          }
         } catch (err) {
           this.logger.warn(`Failed to update stored body of edited message ${messageId}`, { error: String(err) });
         } finally {

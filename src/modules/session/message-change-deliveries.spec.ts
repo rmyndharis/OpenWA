@@ -289,6 +289,88 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
     expect(await keptCopy('M-5')).toMatchObject({ body: 'first text' });
   });
 
+  describe('an edit of a stored message', () => {
+    const engineEdit = (id: string, chatId = CHAT): void =>
+      projector.applyMessageEditQueued(sessionId, {
+        messageId: id,
+        chatId,
+        body: 'edited text',
+        fromMe: false,
+      } as never);
+    const restEdit = (id: string): Promise<void> =>
+      projector.recordOutboundMessageEdit(sessionId, id, 'edited text', { kind: 'edit', chatId: CHAT, fromMe: false });
+    const bodyOf = async (id: string): Promise<string | null | undefined> =>
+      (await ds.getRepository(Message).findOneBy({ sessionId, waMessageId: id }))?.body;
+    const until = async (done: () => Promise<boolean>): Promise<void> => {
+      for (let turn = 0; turn < 200 && !(await done()); turn++) await new Promise(resolve => setImmediate(resolve));
+    };
+
+    it('rewrites its pending delivery, which the sweep then delivers edited', async () => {
+      await storeRow('M-7');
+      await openDelivery('M-7', 'pending');
+
+      engineEdit('M-7');
+      await until(async () => (await delivered('M-7'))?.payload?.body === 'edited text');
+
+      expect(await bodyOf('M-7')).toBe('edited text');
+      expect((await delivered('M-7'))?.payload).toMatchObject({ body: 'edited text', edited: true });
+      await sweep();
+      expect(postedBodies()).toEqual([expect.objectContaining({ body: 'edited text', edited: true })]);
+    });
+
+    it('rewrites a delivery handed to the queue and the copy a failed delivery keeps, on an edit through the API', async () => {
+      await storeRow('M-8');
+      await openDelivery('M-8', 'queued');
+      await keepFailedCopy('M-8');
+
+      await restEdit('M-8');
+
+      expect(await delivered('M-8')).toMatchObject({ state: 'queued', payload: { body: 'edited text', edited: true } });
+      expect(await keptCopy('M-8')).toMatchObject({ body: 'edited text', edited: true });
+      await redrive.redrive({ sessionId });
+      expect(postedBodies()).toEqual([expect.objectContaining({ body: 'edited text' })]);
+    });
+
+    it('rewrites the delivery of a message a handler filed under another chat, which carries the filed chat', async () => {
+      await storeRow('M-9', OTHER_CHAT);
+      await ds
+        .getRepository(Message)
+        .update(
+          { sessionId, waMessageId: 'M-9' },
+          { engineRef: { chatId: CHAT, direction: MessageDirection.INCOMING, author: null } },
+        );
+      await openDelivery('M-9', 'pending', OTHER_CHAT);
+
+      await restEdit('M-9');
+
+      expect(await bodyOf('M-9')).toBe('edited text');
+      expect((await delivered('M-9'))?.payload).toMatchObject({ chatId: OTHER_CHAT, body: 'edited text' });
+    });
+
+    it("leaves a delivery carrying another chat's message under the same id as it was", async () => {
+      await storeRow('M-10');
+      await openDelivery('M-10', 'pending', OTHER_CHAT);
+
+      await restEdit('M-10');
+
+      expect(await bodyOf('M-10')).toBe('edited text');
+      expect((await delivered('M-10'))?.payload).toMatchObject({ body: 'first text' });
+    });
+
+    it('leaves the delivery alone when the edit repeats the stored text', async () => {
+      await storeRow('M-11');
+      await openDelivery('M-11', 'pending');
+
+      await projector.recordOutboundMessageEdit(sessionId, 'M-11', 'first text', {
+        kind: 'edit',
+        chatId: CHAT,
+        fromMe: false,
+      });
+
+      expect((await delivered('M-11'))?.payload).not.toHaveProperty('edited');
+    });
+  });
+
   describe('a revoke the database stops answering after, once the row is cleared', () => {
     // Every statement fails from the moment the revoke's UPDATE of the message lands until the test lifts it.
     let down = false;
