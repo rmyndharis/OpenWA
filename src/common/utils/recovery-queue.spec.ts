@@ -1,7 +1,13 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { RecoveryJournal } from './recovery-journal';
+import { LoggerService } from '../services/logger.service';
 import {
   RECOVERY_MAX_RECORD_FAILURES,
   RecoveryQueue,
   isDatabaseUnavailable,
+  type RecoveryCodec,
   type RecoveryLane,
   type RecoveryLoss,
   type RecoveryRecord,
@@ -308,5 +314,197 @@ describe('RecoveryQueue', () => {
     ['nothing', null, false],
   ])('reads %s as the database being away: %s', (_label, error, expected) => {
     expect(isDatabaseUnavailable(error)).toBe(expected);
+  });
+});
+
+describe('RecoveryQueue with a journal', () => {
+  let dir: string;
+  let journal: RecoveryJournal;
+  let log: string[];
+  let now: number;
+  const options = (over: Partial<RecoveryQueueOptions> = {}): RecoveryQueueOptions => ({
+    maxBytes: 1000,
+    maxRecords: { send: 10, change: 3, dispatch: 10 },
+    maxAgeMs: { send: 60_000, change: 60_000, dispatch: 60_000 },
+    baseDelayMs: 1000,
+    capDelayMs: 8000,
+    now: () => now,
+    journal,
+    ...over,
+  });
+  type Kept = RecoveryRecord & { name: string; held: string; lostAs?: RecoveryLoss };
+  const kept = (name: string, lane: RecoveryLane = 'change', over: Partial<Kept> = {}): Kept => {
+    const r: Kept = {
+      name,
+      held: name,
+      lane,
+      sessionId: 's1',
+      since: now++,
+      bytes: () => 1,
+      ageCapped: () => true,
+      retry: () => (log.push(`retry ${name}`), Promise.resolve(true)),
+      lost: reason => {
+        r.lostAs = reason;
+        log.push(`lost ${name} ${reason}`);
+      },
+      ...over,
+    };
+    return r;
+  };
+  // Records held as `name` plus what they hold; one named `local…` is never journaled.
+  const codec = (lane: RecoveryLane): RecoveryCodec => ({
+    encode: record => {
+      const r = record as Kept;
+      return r.name.startsWith('local') ? undefined : { name: r.name, held: r.held, since: r.since };
+    },
+    decode: (_key, value) => {
+      const v = value as { name: string; held: string; since: number };
+      return v.name === 'refused' ? undefined : kept(v.name, lane, { held: v.held, since: v.since });
+    },
+  });
+  const journaled = (): unknown[] =>
+    readFileSync(journal.path, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as unknown);
+  /** The process stops without its shutdown pass: what the file holds is all the next one finds. */
+  const restart = (): RecoveryJournal => {
+    journal.close();
+    return (journal = new RecoveryJournal(journal.path));
+  };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    dir = mkdtempSync(join(tmpdir(), 'recovery-queue-journal-'));
+    journal = new RecoveryJournal(join(dir, 'journal.jsonl'));
+    log = [];
+    now = 1_000_000;
+    jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    journal.close();
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('journals each record kept and what it holds as it changes, and forgets it once it settles', async () => {
+    const queue = new RecoveryQueue(options());
+    queue.register('change', codec('change'));
+    const a = kept('a', 'change', { retry: () => Promise.resolve(false) });
+    queue.park('a', a);
+    a.held = 'a edited';
+    queue.remeasure('change', 'a');
+    queue.park('local', kept('local'));
+
+    expect(journaled()).toEqual([
+      { l: 'change', k: 'a', v: { name: 'a', held: 'a', since: 1_000_000 } },
+      { l: 'change', k: 'a', v: { name: 'a', held: 'a edited', since: 1_000_000 } },
+    ]);
+    a.held = 'a written in part';
+    await queue.flush();
+    expect(restart().take('change')).toEqual([['a', { name: 'a', held: 'a written in part', since: 1_000_000 }]]);
+  });
+
+  it('restores what the last process kept, as it was, under every bound, before any pass', async () => {
+    // Kept while the database was away, which it still is when the process stops.
+    const first = new RecoveryQueue(options());
+    first.register('change', codec('change'));
+    first.register('dispatch', codec('dispatch'));
+    const away = { retry: () => Promise.reject(down()) };
+    for (const name of ['a', 'b', 'refused']) first.park(name, kept(name, 'change', away));
+    first.park('d', kept('d', 'dispatch', away));
+    restart();
+
+    const queue = new RecoveryQueue(options({ maxRecords: { send: 10, change: 1, dispatch: 10 } }));
+    queue.register('dispatch', codec('dispatch'));
+    await queue.flush();
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(log).toEqual([]);
+
+    queue.register('change', codec('change'));
+    // The lane's count cap gives up the oldest; the entry its owner refused is let go.
+    expect(log).toEqual(['lost a count']);
+    expect((queue.get('change', 'b') as Kept).since).toBe(1_000_001);
+    await queue.flush();
+
+    expect(log).toEqual(['lost a count', 'retry b', 'retry d']);
+    expect(existsSync(journal.path) && readFileSync(journal.path, 'utf8')).toBe('');
+  });
+
+  it('gives up, once the application started, what the journal kept in a lane no owner took', async () => {
+    const first = new RecoveryQueue(options());
+    first.register('send', codec('send'));
+    first.register('change', codec('change'));
+    first.park('s', kept('s', 'send', { retry: () => Promise.reject(down()) }));
+    first.park('c', kept('c', 'change', { retry: () => Promise.reject(down()) }));
+    restart();
+
+    const queue = new RecoveryQueue(options());
+    queue.register('change', codec('change'));
+    queue.ready();
+    await queue.flush();
+
+    expect(log).toEqual(['retry c']);
+    expect(readFileSync(journal.path, 'utf8')).toBe('');
+  });
+
+  it.each([
+    ['its lane is full', (queue: RecoveryQueue) => ['x', 'y', 'z'].forEach(name => queue.park(name, kept(name)))],
+    [
+      'it kept failing',
+      async (queue: RecoveryQueue) => {
+        for (let i = 0; i < RECOVERY_MAX_RECORD_FAILURES; i++) await queue.flush();
+      },
+    ],
+    ['its session was removed', (queue: RecoveryQueue) => queue.forget('s1')],
+    [
+      'it is past its age',
+      async (queue: RecoveryQueue) => {
+        now += 120_000;
+        await queue.flush();
+      },
+    ],
+  ] as const)('forgets a record once %s', async (_label, cause) => {
+    const queue = new RecoveryQueue(options());
+    queue.register('change', codec('change'));
+    queue.park('a', kept('a', 'change', { retry: () => Promise.reject(new Error('refused')) }));
+
+    await cause(queue);
+
+    expect(
+      restart()
+        .take('change')
+        .map(([key]) => key),
+    ).not.toContain('a');
+  });
+
+  it('keeps for the next start what the shutdown pass leaves, and what is kept after it', async () => {
+    const queue = new RecoveryQueue(options());
+    queue.register('change', codec('change'));
+    queue.park('a', kept('a', 'change', { retry: () => Promise.reject(down()) }));
+    queue.park('local', kept('local', 'change', { retry: () => Promise.reject(down()) }));
+
+    await queue.drain(1000);
+    queue.park('late', kept('late'));
+
+    expect(log).toEqual(['lost local shutdown']);
+    expect(
+      restart()
+        .take('change')
+        .map(([key]) => key),
+    ).toEqual(['a', 'late']);
+  });
+
+  it('loses what is kept after the shutdown pass when the journal cannot take it', async () => {
+    const queue = new RecoveryQueue(options());
+    queue.register('change', codec('change'));
+    await queue.drain(1000);
+
+    queue.park('local', kept('local'));
+
+    expect(log).toEqual(['lost local shutdown']);
   });
 });

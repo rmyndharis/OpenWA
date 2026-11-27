@@ -1,4 +1,5 @@
 import { isTransientDbError } from './db-errors';
+import type { RecoveryJournal } from './recovery-journal';
 
 /**
  * Work the database refused, kept in memory until it answers again, in the order it is retried: a send's own row
@@ -29,6 +30,14 @@ export interface RecoveryRecord {
   dropped?(): void;
 }
 
+/** How a lane's records are kept in the journal across a restart, by the lane's owner. */
+export interface RecoveryCodec {
+  /** What the journal keeps of a record; undefined for one that must not outlive the process. */
+  encode(record: RecoveryRecord): unknown;
+  /** The record a journaled entry restores, with its owner's own bookkeeping; undefined to let it go. */
+  decode(key: string, value: unknown): RecoveryRecord | undefined;
+}
+
 export interface RecoveryQueueOptions {
   /** Shared by every lane, on the serialized data the records hold. */
   maxBytes: number;
@@ -38,6 +47,8 @@ export interface RecoveryQueueOptions {
   baseDelayMs: number;
   capDelayMs: number;
   now?: () => number;
+  /** Where what is kept outlives the process (see RecoveryJournal); without it, a restart loses it. */
+  journal?: RecoveryJournal;
 }
 
 /** A record that failed this many times for a reason of its own (not the database being away) is given up on. */
@@ -118,10 +129,51 @@ export class RecoveryQueue {
   private delayMs: number;
   // Lanes whose shutdown pass ran: what is kept in them after it is lost.
   private readonly stopped = new Set<RecoveryLane>();
+  private readonly codecs: Partial<Record<RecoveryLane, RecoveryCodec>> = {};
+  // Lanes the journal restores records to whose owner has not registered yet: no pass runs until none is left, so the
+  // outbox steps of restored changes come before any restored dispatch goes out.
+  private readonly waiting = new Set<RecoveryLane>();
 
   constructor(private readonly options: RecoveryQueueOptions) {
     this.now = options.now ?? (() => Date.now());
     this.delayMs = options.baseDelayMs;
+    for (const lane of options.journal?.waiting() ?? [])
+      if (LANES.includes(lane as RecoveryLane)) this.waiting.add(lane as RecoveryLane);
+  }
+
+  /**
+   * The owner of a lane registers how its records are journaled, and takes back what the last process left in it.
+   * Restored records are kept as they were (their age included), under every bound, before the first pass.
+   */
+  register(lane: RecoveryLane, codec: RecoveryCodec): void {
+    this.codecs[lane] = codec;
+    const journal = this.options.journal;
+    if (!journal) return;
+    journal.snapshot(lane, () => this.journaled(lane));
+    for (const [key, value] of journal.take(lane)) {
+      const record = codec.decode(key, value);
+      if (!record) {
+        journal.del(lane, key);
+        continue;
+      }
+      this.lanes[lane].set(key, record);
+      this.measure(key, record);
+    }
+    this.bound(lane);
+    this.waiting.delete(lane);
+    this.schedule();
+  }
+
+  /** Once the application started: a lane no owner registered for gives up what the journal restored to it. */
+  ready(): void {
+    const journal = this.options.journal;
+    for (const lane of this.waiting) {
+      const entries = journal?.take(lane) ?? [];
+      for (const [key] of entries) journal?.del(lane, key);
+      if (entries.length) journal?.noteUnclaimed(lane, entries.length);
+    }
+    this.waiting.clear();
+    this.schedule();
   }
 
   get size(): number {
@@ -135,7 +187,9 @@ export class RecoveryQueue {
   /** Keep a record (one already kept under the key keeps its place), then hold every bound. */
   park(key: string, record: RecoveryRecord): void {
     if (this.stopped.has(record.lane)) {
-      record.lost('shutdown');
+      // After the shutdown pass: kept for the next start when the journal takes it, else lost.
+      if (this.journal(key, record)) this.options.journal!.noteKept(1);
+      else record.lost('shutdown');
       return;
     }
     const lane = this.lanes[record.lane];
@@ -143,6 +197,7 @@ export class RecoveryQueue {
     if (was && was !== record) this.forgetSize(was);
     lane.set(key, record);
     this.measure(key, record);
+    this.journal(key, record);
     this.bound(record.lane);
     this.schedule();
   }
@@ -152,6 +207,7 @@ export class RecoveryQueue {
     const record = this.lanes[lane].get(key);
     if (!record) return;
     this.measure(key, record);
+    this.journal(key, record);
     this.bound(lane);
   }
 
@@ -186,15 +242,21 @@ export class RecoveryQueue {
       ]);
       clearTimeout(timer);
     }
+    // What the journal holds stays there for the next start; the rest is lost.
+    let kept = 0;
     for (const [key, record] of this.entries(lanes)) {
-      this.drop(key, record);
-      record.lost('shutdown');
+      const journaled = this.options.journal?.has(record.lane, key) === true;
+      this.drop(key, record, !journaled);
+      if (journaled) kept++;
+      else record.lost('shutdown');
     }
+    this.options.journal?.noteKept(kept);
     this.schedule();
   }
 
   /** Run a pass now (tests, and the recovery of a database that answers again). */
   async flush(): Promise<void> {
+    if (this.waiting.size) return;
     clearTimeout(this.timer);
     this.timer = undefined;
     // A pass already under way may have started before the database answered: this one runs after it.
@@ -222,7 +284,7 @@ export class RecoveryQueue {
   }
 
   private schedule(): void {
-    if (this.timer || this.running || this.entries(this.live()).length === 0) return;
+    if (this.waiting.size || this.timer || this.running || this.entries(this.live()).length === 0) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
       void this.flush();
@@ -262,7 +324,10 @@ export class RecoveryQueue {
       const settled = await record.retry();
       if (!settled) {
         // A try that wrote part of what the record holds leaves it smaller.
-        if (this.kept(key, record)) this.measure(key, record);
+        if (this.kept(key, record)) {
+          this.measure(key, record);
+          this.journal(key, record);
+        }
         return false;
       }
       this.release(key, record);
@@ -299,10 +364,32 @@ export class RecoveryQueue {
     this.failures.delete(record);
   }
 
-  private drop(key: string, record: RecoveryRecord): void {
+  /** Keep what a record holds now in the journal; true once the journal holds it. */
+  private journal(key: string, record: RecoveryRecord): boolean {
+    const journal = this.options.journal;
+    const codec = this.codecs[record.lane];
+    if (!journal || !codec) return false;
+    const value = codec.encode(record);
+    if (value !== undefined) return journal.put(record.lane, key, value);
+    journal.del(record.lane, key);
+    return false;
+  }
+
+  /** The journal entries of a lane's records, for the journal to be written again with only them. */
+  private *journaled(lane: RecoveryLane): Iterable<[string, unknown]> {
+    const codec = this.codecs[lane];
+    for (const [key, record] of this.lanes[lane]) {
+      const value = codec?.encode(record);
+      if (value !== undefined) yield [key, value];
+    }
+  }
+
+  /** Take a record out of the queue, and out of the journal unless it must outlive the process (`unjournal`). */
+  private drop(key: string, record: RecoveryRecord, unjournal = true): void {
     if (!this.kept(key, record)) return;
     this.lanes[record.lane].delete(key);
     this.forgetSize(record);
+    if (unjournal) this.options.journal?.del(record.lane, key);
   }
 
   /** Remove a record with nothing lost. */
