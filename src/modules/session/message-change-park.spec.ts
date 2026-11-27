@@ -877,6 +877,85 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
     });
   });
 
+  describe('an ack the database refused', () => {
+    // The change records the queue keeps for a message, under its key and the index of its claim.
+    const keptChangesOf = (id: string) =>
+      [...projector.recoveryQueue().records('change')].filter(record =>
+        ((record as { key?: string }).key ?? '').startsWith(`${sessionId}:${id}#`),
+      );
+    const statusOf = async (id: string): Promise<string | undefined> => (await rowOf(id))?.status;
+
+    it.each([
+      ['naming no chat', undefined],
+      ['naming its chat', CHAT],
+    ] as const)('is kept and advances the row once the database answers (%s)', async (_l, chatId) => {
+      await storeRow('K-1', CHAT, true);
+      outage = 'on';
+      projector.handleMessageAck(sessionId, engine, 'K-1', 'read', chatId);
+      await settle();
+      outage = 'off';
+
+      await recover();
+
+      expect(await statusOf('K-1')).toBe('read');
+    });
+
+    it('lets go on the first pass once the database answers of an ack whose message has no row, holding nothing', async () => {
+      outage = 'on';
+      projector.handleMessageAck(sessionId, engine, 'K-3', 'read', CHAT);
+      await settle();
+      expect(keptChangesOf('K-3')).toHaveLength(1);
+      outage = 'off';
+
+      await recover();
+
+      expect(keptChangesOf('K-3')).toEqual([]);
+    });
+
+    it('sends its receipt once, at once, though its status is kept', async () => {
+      await storeRow('K-4', CHAT, true);
+      const dispatch = jest.spyOn(WebhookService.prototype, 'dispatch');
+      const acks = (): number => dispatch.mock.calls.filter(([, event]) => event === 'message.ack').length;
+      outage = 'on';
+      projector.handleMessageAck(sessionId, engine, 'K-4', 'read', CHAT);
+      await settle();
+      expect(acks()).toBe(1);
+      outage = 'off';
+
+      await recover();
+      await recover();
+
+      expect(acks()).toBe(1);
+    });
+
+    it('is kept, as a change of its message whose lane it never fills ahead of a revoke, an ack alone', async () => {
+      outage = 'on';
+      projector.handleMessageAck(sessionId, engine, 'K-5', 'read');
+      await settle();
+
+      expect(keptChangesOf('K-5').map(record => record.expendable?.())).toEqual([true]);
+    });
+
+    it('is kept when its retry, a moment after a first try that found no row, meets the database away', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+      try {
+        projector.handleMessageAck(sessionId, engine, 'K-2', 'read');
+        await settle();
+        await storeRow('K-2', CHAT, true);
+        outage = 'on';
+        await jest.advanceTimersByTimeAsync(1000);
+        await settle();
+        outage = 'off';
+
+        await recover();
+
+        expect(await statusOf('K-2')).toBe('read');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
   it('retries a kept change on its own timer, backing off while the database stays away', async () => {
     jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
     try {

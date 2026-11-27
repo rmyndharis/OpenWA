@@ -27,6 +27,8 @@ export interface RecoveryRecord {
   bytes(): number;
   /** Whether the lane's age cap applies; a record holding only a revoke is kept until the count cap. */
   ageCapped(): boolean;
+  /** Whether it goes first once its lane is full (a status ack), ahead of older records that matter more. */
+  expendable?(): boolean;
   /** A step that must run for every record before any record's retry (the outbox steps of message changes). */
   prepare?(): Promise<void>;
   /** One more try: resolves true once nothing is left of the record, and throws when the database fails. */
@@ -444,7 +446,8 @@ export class RecoveryQueue {
   private bound(lane: RecoveryLane): void {
     const inLane = this.lanes[lane];
     while (inLane.size > this.options.maxRecords[lane]) {
-      const [key, record] = inLane.entries().next().value!;
+      const [key, record] =
+        [...inLane.entries()].find(([, kept]) => kept.expendable?.() === true) ?? inLane.entries().next().value!;
       this.drop(key, record);
       record.lost('count');
     }

@@ -124,6 +124,12 @@ export class ParkedChange implements RecoveryRecord {
     return slotNames(this.slots).some(name => name !== 'revoke');
   }
 
+  /** A record holding acks alone goes first once the lane is full: a status behind is worth less than a lost revoke. */
+  expendable(): boolean {
+    const names = slotNames(this.slots);
+    return names.length > 0 && names.every(name => name === 'acks');
+  }
+
   empty(): boolean {
     return slotNames(this.slots).length === 0;
   }

@@ -37,6 +37,7 @@ import {
   RECOVERY_MAX_AGE_MS,
   RECOVERY_MAX_RECORDS,
   RecoveryQueue,
+  isDatabaseUnavailable,
   receivedRowKey,
   recoveryQueueOptions,
   sendRerunKey,
@@ -3145,17 +3146,23 @@ export class MessageProjector {
         action: 'message_ack_noop',
       });
 
-    const onAckError = (err: unknown): void => this.logger.error(`Failed to advance ack for ${messageId}`, String(err));
+    // Kept with the message's changes, which advance it once the database answers: the row is read naming no chat, and
+    // the receipt judged against it as receiptVerdict judges one (advanceKeptAcks).
+    const keepAck = (error: unknown): Promise<void> | undefined => {
+      if (!messageStatus) return undefined;
+      const chat = receiptChat ?? '';
+      const acks: AckSlot = { judge: { kind: 'reaction', chatId: '' }, acks: new Map([[chat, messageStatus]]) };
+      return this.parkChange(id, messageId, { acks }, error);
+    };
+    const onAckError = (err: unknown): Promise<void> | void =>
+      isDatabaseUnavailable(err)
+        ? keepAck(err)
+        : this.logger.error(`Failed to advance ack for ${messageId}`, String(err));
 
     // The send's row takes the id only once its SENT write, which the database refused, runs again: the ack is kept
     // with the message's changes, which run after that write, on its first try or on its retry.
-    const keepForSend = (): Promise<void> | undefined => {
-      if (!messageStatus || !this.rowPending(id, messageId)) return undefined;
-      const chat = receiptChat ?? '';
-      // The row is read naming no chat, and the receipt judged against it as receiptVerdict judges one (advanceKeptAcks).
-      const acks: AckSlot = { judge: { kind: 'reaction', chatId: '' }, acks: new Map([[chat, messageStatus]]) };
-      return this.parkChange(id, messageId, { acks }, new Error('The row of the send is not written yet'));
-    };
+    const keepForSend = (): Promise<void> | undefined =>
+      this.rowPending(id, messageId) ? keepAck(new Error('The row of the send is not written yet')) : undefined;
     const advance = (first: () => Promise<number>, retry: () => Promise<number> = first): Promise<void> =>
       first()
         .then(affected => {
@@ -3223,7 +3230,15 @@ export class MessageProjector {
       return;
     }
     this.enqueueMessageMutation(id, messageId, async () => {
-      const verdict = await this.receiptVerdict(id, messageId, receiptChat, inFlight);
+      let verdict: Awaited<ReturnType<MessageProjector['receiptVerdict']>>;
+      try {
+        verdict = await this.receiptVerdict(id, messageId, receiptChat, inFlight);
+      } catch (error) {
+        // The row could not be read: the receipt goes out, and its status is kept to be judged once the database answers.
+        if (!this.engines.isLive(id, engine)) return;
+        announce();
+        return keepAck(error);
+      }
       if (verdict === 'foreign' || !this.engines.isLive(id, engine)) return;
       announce();
       if (!messageStatus) return;
@@ -3245,7 +3260,8 @@ export class MessageProjector {
    * What the stored row says of a receipt naming `chatId`: absent, the row it may advance, or a row of another chat.
    * Without a row, a message still in flight (`inFlight`, or the entry held now) is judged by the chat it will be
    * written under, and is absent unless that proves the receipt foreign.
-   * Never rejects: a row that cannot be read reads as absent, so the receipt goes out and its retry judges again.
+   * A row that cannot be read for a reason of its own reads as absent, so the receipt goes out and its retry judges
+   * again; one the database could not answer for rejects, so the caller keeps the receipt's status for when it does.
    */
   private async receiptVerdict(
     id: string,
@@ -3268,7 +3284,8 @@ export class MessageProjector {
       if (!foreign) return row ? 'stored' : 'absent';
       this.logForeignReceipt(id, messageId, chatId);
       return 'foreign';
-    } catch {
+    } catch (error) {
+      if (isDatabaseUnavailable(error)) throw error;
       return 'absent';
     }
   }

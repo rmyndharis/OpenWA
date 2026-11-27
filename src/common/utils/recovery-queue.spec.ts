@@ -36,6 +36,7 @@ describe('RecoveryQueue', () => {
       ageCapped: boolean;
       retry: () => Promise<boolean>;
       prepare: () => Promise<void>;
+      expendable: boolean;
     }> = {},
   ): RecoveryRecord & { lostAs?: RecoveryLoss } => {
     const r: RecoveryRecord & { lostAs?: RecoveryLoss } = {
@@ -46,6 +47,7 @@ describe('RecoveryQueue', () => {
       ageCapped: () => over.ageCapped ?? true,
       retry: over.retry ?? (() => (log.push(`retry ${name}`), Promise.resolve(true))),
       ...(over.prepare ? { prepare: over.prepare } : {}),
+      ...(over.expendable !== undefined ? { expendable: () => over.expendable! } : {}),
       lost: reason => {
         r.lostAs = reason;
         log.push(`lost ${name} ${reason}`);
@@ -200,6 +202,18 @@ describe('RecoveryQueue', () => {
 
     expect(log).toEqual(['lost a count', 'lost b count']);
     expect(queue.get('change', 'c')).toBe(c);
+  });
+
+  it('gives up the oldest expendable record first once a lane is full, keeping an older one that is not', () => {
+    const queue = new RecoveryQueue(options());
+    queue.park('revoke', record('revoke', 'change', { ageCapped: false }));
+    queue.park('ack-1', record('ack-1', 'change', { expendable: true }));
+    queue.park('ack-2', record('ack-2', 'change', { expendable: true }));
+    queue.park('ack-3', record('ack-3', 'change', { expendable: true }));
+    queue.park('edit', record('edit', 'change'));
+
+    expect(log).toEqual(['lost ack-1 count', 'lost ack-2 count']);
+    expect(queue.get('change', 'revoke')).toBeDefined();
   });
 
   it('counts a record against the byte budget as it was last measured', async () => {
