@@ -195,7 +195,7 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
 > an export above the limit cannot be moved with it.
 >
 > **On a SQLite target the restore holds the data, not the gateway.** It writes on a connection of
-> its own, 500 rows at a time with a turn of the event loop between them, so the gateway goes on
+> its own, 500 rows at a time with turns of the event loop between them, so the gateway goes on
 > answering `GET /api/health/live`, its websocket clients and its WhatsApp sessions. Every other read
 > or write of the data database waits until the restore has committed or rolled back, and then sees
 > the data from before it or after it, never a half state; a message that arrives meanwhile is stored

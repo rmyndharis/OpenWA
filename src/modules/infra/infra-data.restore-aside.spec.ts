@@ -195,15 +195,33 @@ describe.each<SqliteJournalMode>(['WAL', 'DELETE'])('a SQLite file restore (%s j
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('gives the event loop turns while it runs', async () => {
+  it('gives the event loop several turns between two chunks of rows', async () => {
     const counter = countTurns();
+    const turnsAtInsert: number[] = [];
+    const query = Reflect.get(BetterSqlite3QueryRunner.prototype, 'query') as (
+      this: unknown,
+      ...args: unknown[]
+    ) => Promise<unknown>;
+    jest.spyOn(BetterSqlite3QueryRunner.prototype, 'query').mockImplementation(function (
+      this: BetterSqlite3QueryRunner,
+      text: string,
+      ...rest: unknown[]
+    ) {
+      if (this.connection !== ds && /^INSERT INTO "?messages/i.test(text)) turnsAtInsert.push(counter.turns());
+      return query.call(this, text, ...rest) as never;
+    });
+
     const result = await service().importData({ tables: archive });
     counter.stop();
 
     expect(result).toMatchObject({ imported: true, warnings: [] });
     expect(result.counts.messages).toBe(ROWS);
-    // One turn per chunk of rows at least: three chunks of the old rows' clears are not counted.
-    expect(counter.turns()).toBeGreaterThanOrEqual(Math.floor(ROWS / 500));
+    // The rows of a chunk are inserted on one turn, so a step between two inserts is a chunk boundary. libuv takes
+    // one new connection per turn, so a single turn there would let health probes queue for the whole restore.
+    const steps = turnsAtInsert.slice(1).map((turns, i) => turns - turnsAtInsert[i]);
+    const boundaries = steps.filter(step => step > 0);
+    expect(boundaries).toHaveLength(Math.floor((ROWS + 1) / 500));
+    expect(Math.min(...boundaries)).toBeGreaterThanOrEqual(16);
   });
 
   it.each([

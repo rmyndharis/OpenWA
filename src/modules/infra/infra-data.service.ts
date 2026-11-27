@@ -373,6 +373,12 @@ function parsePluginInstanceConfig(raw: unknown): Record<string, unknown> | null
  */
 const RESTORE_CHUNK_ROWS = 500;
 
+/**
+ * Turns of the event loop a SQLite restore gives between two chunks. libuv accepts one new connection per turn, so
+ * with one turn a health probe would queue behind every connection opened before it, for as long as the restore runs.
+ */
+const RESTORE_TURNS_PER_CHUNK = 32;
+
 const EMPTY_ARCHIVE_WARNING = 'Backup contained no rows to restore; refused to replace existing data. Check the file.';
 
 /** Result of POST /infra/import-data; InfraImportDataResponseDto is the published contract. */
@@ -1262,7 +1268,7 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
           // finish inside the shutdown grace, before teardown begins.
           const turn = restoresAside
             ? async (): Promise<void> => {
-                await setImmediate();
+                for (let i = 0; i < RESTORE_TURNS_PER_CHUNK; i++) await setImmediate();
                 if (this.stopping.signal.aborted || this.shutdown?.isTearingDown()) {
                   throw new ServiceUnavailableException({
                     statusCode: 503,
