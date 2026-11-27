@@ -123,10 +123,33 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   // Row id to the time it may be read again, for rows whose stored payload could not be read.
   private readonly unreadableUntil = new Map<string, number>();
 
+  // The delivery key, less its webhook, of each message with a change kept on this node that touches its copies.
+  private readonly heldMessages = new Set<string>();
+
   constructor(
     @InjectRepository(WebhookOutboxEvent, 'data')
     private readonly outbox: Repository<WebhookOutboxEvent>,
   ) {}
+
+  /**
+   * A change that withdraws or rewrites the message's copies is kept on this node until the database answers (`held`),
+   * or no longer is. Until it is written, none of the message's deliveries goes out from this node with the copy its
+   * outbox row holds: the sweep replays none, a direct retry waits, and so does a queued job, spending no attempt.
+   */
+  holdMessage(sessionId: string, waMessageId: string, held: boolean): void {
+    const key = messageDeliveryKeys(sessionId, waMessageId).keyFor('');
+    if (held) this.heldMessages.add(key);
+    else this.heldMessages.delete(key);
+  }
+
+  /** True while a change of the message a delivery key of this webhook names is held on this node (holdMessage). */
+  isMessageHeld(idempotencyKey: string, webhookId: string): boolean {
+    return (
+      this.heldMessages.size > 0 &&
+      idempotencyKey.endsWith(`_${webhookId}`) &&
+      this.heldMessages.has(idempotencyKey.slice(0, -webhookId.length))
+    );
+  }
 
   /**
    * Prune settled rows daily, so the record of every delivery this gateway ever made does not

@@ -197,6 +197,12 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
     );
   };
 
+  const keptFor = (id: string): boolean =>
+    (LoggerService.prototype.warn as jest.Mock).mock.calls.some(
+      ([, meta]) =>
+        (meta as { action?: string; messageId?: string } | undefined)?.action === 'message_change_parked' &&
+        (meta as { messageId?: string }).messageId === id,
+    );
   const heldOnThisNode = (id: string): boolean =>
     delivery.isMessageHeld(`msg_${sessionId}_${id}_${webhookId}`, webhookId);
   const storeRow = async (id: string, chatId = CHAT, fromMe = false): Promise<void> => {
@@ -450,6 +456,43 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       mockFetch.mockClear();
 
       expect(await sweptBodies()).toEqual(['edited text']);
+    });
+
+    it('holds no delivery of a message whose kept change leaves its copies as they are (a reaction)', async () => {
+      await storeRow('RH-1');
+      outage = 'on';
+      projector.applyReactionQueued(sessionId, { messageId: 'RH-1', chatId: CHAT, senderId: CHAT, reaction: 'x' });
+      await settle();
+      expect(keptFor('RH-1')).toBe(true);
+      outage = 'off';
+
+      expect(heldOnThisNode('RH-1')).toBe(false);
+      expect(await sweptBodies()).toEqual(['first text']);
+    });
+
+    it('lets the deliveries go once the kept change that touches them is written, though a reaction stays kept', async () => {
+      await storeRow('RH-2');
+      outage = 'on';
+      changes['an edit']('RH-2');
+      projector.applyReactionQueued(sessionId, { messageId: 'RH-2', chatId: CHAT, senderId: CHAT, reaction: 'x' });
+      await settle();
+      expect(heldOnThisNode('RH-2')).toBe(true);
+      outage = 'off';
+      // The reaction's write is refused once more: the record stays, with the reaction alone.
+      const repository = ds.getRepository(Message);
+      const update = repository.update.bind(repository);
+      jest
+        .spyOn(repository, 'update')
+        .mockImplementation((where, patch) =>
+          (patch as { metadata?: { reactions?: unknown } }).metadata?.reactions
+            ? Promise.reject(ioerr())
+            : update(where, patch),
+        );
+      await projector.retryParkedChanges();
+      await settle();
+
+      expect(await rowOf('RH-2')).toMatchObject({ body: 'edited text' });
+      expect(heldOnThisNode('RH-2')).toBe(false);
     });
 
     it('gives up on the oldest kept changes once their byte budget is spent, and logs each as lost', async () => {

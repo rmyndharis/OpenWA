@@ -253,8 +253,6 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * not replayed alongside itself.
    */
   private readonly locallyPending = new Map<string, number>();
-  /** The delivery key of each message with a change kept on this node until the database answers (holdMessage). */
-  private readonly heldMessages = new Set<string>();
   /**
    * Per session, the opt-in events (WILDCARD_EXCLUDED_EVENTS) that active webhooks name, with the ids of the
    * webhooks that name each. The promise is cached, not its result, so a burst of receipts on a cold entry
@@ -1184,24 +1182,14 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     return this.locallyPending.has(idempotencyKey);
   }
 
-  /**
-   * A change of the message is kept on this node until the database answers (`held`), or no longer is. Until it is
-   * written, the change may still withdraw or rewrite the message's deliveries: the sweep replays none of them, and a
-   * retry that cannot read its outbox row waits instead of sending what it holds.
-   */
+  /** See WebhookOutboxService.holdMessage. */
   holdMessage(sessionId: string, waMessageId: string, held: boolean): void {
-    const key = messageDeliveryKeys(sessionId, waMessageId).keyFor('');
-    if (held) this.heldMessages.add(key);
-    else this.heldMessages.delete(key);
+    this.outbox.holdMessage(sessionId, waMessageId, held);
   }
 
-  /** True while a change of the message a delivery key of this webhook names is kept on this node. */
+  /** See WebhookOutboxService.isMessageHeld. */
   isMessageHeld(idempotencyKey: string, webhookId: string): boolean {
-    return (
-      this.heldMessages.size > 0 &&
-      idempotencyKey.endsWith(`_${webhookId}`) &&
-      this.heldMessages.has(idempotencyKey.slice(0, -webhookId.length))
-    );
+    return this.outbox.isMessageHeld(idempotencyKey, webhookId);
   }
 
   /**
@@ -1320,7 +1308,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
               if (waited) {
                 let changed = await this.messageChange(webhook.id, idempotencyKey, ctx);
                 // A change of the message kept on this node may withdraw or rewrite it: wait for it, without the slot.
-                while (changed === 'wait') {
+                while (changed !== null && this.isMessageHeld(idempotencyKey, webhook.id)) {
                   const delay = this.configService.get<number>('webhook.retryDelay', 5000);
                   await yieldSlot(() => setTimeout(delay, undefined, { signal: this.shutdownAbort.signal }));
                   changed = await this.messageChange(webhook.id, idempotencyKey, ctx);
@@ -1329,7 +1317,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
                   this.logSkippedRetracted(webhook.id, event, deliveryId, idempotencyKey);
                   return;
                 }
-                if (changed) occurrence = { ...ctx, baseData: changed, storedHash: undefined };
+                if (changed && changed !== 'unread') occurrence = { ...ctx, baseData: changed, storedHash: undefined };
               }
               const outcome = await this.deliverOne(target, deliveryId, idempotencyKey, { ...occurrence, yieldSlot });
               // Retire only after queue ownership, success, cancellation or a durable terminal row.
@@ -1529,27 +1517,26 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * What a message delivery takes from its outbox row before it is sent again (see changedData): null once the message
-   * was taken back, the data a change rewrote the row with, else undefined. A row that cannot be read gives undefined,
-   * and the delivery goes on with what it holds, unless a change of the message is kept on this node: 'wait', as that
-   * change may withdraw or rewrite it once the database answers.
+   * was taken back, the data a change rewrote the row with, else undefined. 'unread' for a row that cannot be read: the
+   * delivery goes on with what it holds, unless a change of the message is held on this node (isMessageHeld).
    */
   private async messageChange(
     webhookId: string,
     idempotencyKey: string,
     held: Pick<DispatchEventContext, 'event' | 'baseData' | 'storedHash'>,
-  ): Promise<Record<string, unknown> | null | undefined | 'wait'> {
+  ): Promise<Record<string, unknown> | null | undefined | 'unread'> {
     try {
       const row = await this.outbox.currentMessagePayload(webhookId, idempotencyKey, held.event);
       return changedData(row, held.storedHash === undefined ? dataHash(held.baseData) : held.storedHash);
     } catch (error) {
-      if (this.isMessageHeld(idempotencyKey, webhookId)) return 'wait';
+      if (this.isMessageHeld(idempotencyKey, webhookId)) return 'unread';
       this.logger.warn('Could not read the outbox row of a message delivery; sending what it holds', {
         webhookId,
         idempotencyKey,
         error: error instanceof Error ? error.message : String(error),
         action: 'webhook_outbox_check_failed',
       });
-      return undefined;
+      return 'unread';
     }
   }
 
@@ -1599,13 +1586,14 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           this.logSkippedRetracted(webhook.id, payload.event, payload.deliveryId, payload.idempotencyKey);
           return false;
         }
-        if (changed === 'wait') {
-          // Not an attempt: the backoff that came before this one again, then the same check.
+        if (this.isMessageHeld(payload.idempotencyKey, webhook.id)) {
+          // A change of the message kept on this node may still withdraw or rewrite this copy. Not an attempt: the
+          // backoff that came before this one again, then the same check.
           await yieldSlot(() => setTimeout(delay * 2 ** (attempt - 2), undefined, { signal: backoffSignal }));
           attempt--;
           continue;
         }
-        if (changed) {
+        if (changed && changed !== 'unread') {
           const rebuilt = await this.preflight.preflightDelivery(current, payload.deliveryId, payload.idempotencyKey, {
             sessionId: payload.sessionId,
             event: payload.event,
@@ -1710,7 +1698,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
             baseData,
             storedHash,
           });
-          if (changed !== undefined && changed !== 'wait') replayData = changed ?? undefined;
+          if (changed !== undefined && changed !== 'unread') replayData = changed ?? undefined;
         }
         const recorded = await recordTerminalFailure(this.failureRepository, this.logger, {
           webhookId: webhook.id,

@@ -86,6 +86,7 @@ describe('WebhookDeliveryService', () => {
     markQueued: jest.Mock;
     markPending: jest.Mock;
     currentMessagePayload: jest.Mock;
+    isMessageHeld: jest.Mock;
   };
   let insertedFailures: Array<Partial<WebhookDeliveryFailure>>;
 
@@ -196,6 +197,7 @@ describe('WebhookDeliveryService', () => {
       markPending: jest.fn().mockResolvedValue(undefined),
       // No outbox row of a message delivery unless a test says otherwise: a delivery sends what it holds.
       currentMessagePayload: jest.fn().mockResolvedValue(undefined),
+      isMessageHeld: jest.fn().mockReturnValue(false),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -2870,39 +2872,76 @@ describe('WebhookDeliveryService', () => {
         expect(sentData()).toEqual([message, message]);
       });
 
-      it('waits, spending no attempt, while a change of the message is kept on this node and its row cannot be read', async () => {
+      describe('while a change of the message is kept on this node', () => {
         const key = 'msg_sess-1_M-1_wh-uuid-1';
-        let holding = true;
-        service.holdMessage('sess-1', 'M-1', true);
+        let holding: boolean;
+        let waits: number;
+        let realSleep: ((...args: unknown[]) => unknown) | undefined;
         const postedWhileHeld: boolean[] = [];
-        mockFetch.mockImplementation(() => {
-          postedWhileHeld.push(holding);
-          return postedWhileHeld.length === 1
-            ? Promise.reject(new Error('receiver down'))
-            : Promise.resolve({ ok: true, status: 200 });
+        beforeEach(() => {
+          holding = true;
+          waits = 0;
+          postedWhileHeld.length = 0;
+          outboxService.isMessageHeld.mockImplementation((k: string, webhookId: string) =>
+            Boolean(holding && k === key && webhookId === 'wh-uuid-1'),
+          );
+          mockFetch.mockImplementation(() => {
+            postedWhileHeld.push(holding);
+            return postedWhileHeld.length === 1
+              ? Promise.reject(new Error('receiver down'))
+              : Promise.resolve({ ok: true, status: 200 });
+          });
+          realSleep = (sleep as unknown as jest.Mock).getMockImplementation();
+          (sleep as unknown as jest.Mock).mockImplementation(() => {
+            // The kept change settles after the third wait.
+            if (++waits === 3) holding = false;
+            return Promise.resolve();
+          });
         });
-        held().mockRejectedValue(new Error('connection terminated'));
-        let waits = 0;
-        const realSleep = (sleep as unknown as jest.Mock).getMockImplementation();
-        (sleep as unknown as jest.Mock).mockImplementation(() => {
-          // The kept change settles after the third wait: the row read still fails, and the delivery goes on.
-          if (++waits === 3) {
-            holding = false;
-            service.holdMessage('sess-1', 'M-1', false);
-          }
-          return Promise.resolve();
+        afterEach(() => (sleep as unknown as jest.Mock).mockImplementation(realSleep));
+        const retried = (): Promise<string> =>
+          service.redeliver(createMockWebhook({ retryCount: 2 }), 'sess-1', 'message.received', key, message);
+
+        it('waits, spending no attempt, when its row cannot be read', async () => {
+          held().mockRejectedValue(new Error('connection terminated'));
+
+          await expect(retried()).resolves.toBe('delivered');
+
+          expect(postedWhileHeld).toEqual([true, false]);
+          expect(sentData()).toEqual([message, message]);
+          expect(waits).toBe(3);
         });
 
-        try {
-          await expect(
-            service.redeliver(createMockWebhook({ retryCount: 2 }), 'sess-1', 'message.received', key, message),
-          ).resolves.toBe('delivered');
-        } finally {
-          (sleep as unknown as jest.Mock).mockImplementation(realSleep);
-        }
+        it('waits for it even when its row reads the copy from before the change, then sends what the row holds', async () => {
+          held().mockImplementation(() => Promise.resolve(holding ? undefined : rewritten));
 
-        expect(postedWhileHeld).toEqual([true, false]);
-        expect(waits).toBe(3);
+          await expect(retried()).resolves.toBe('delivered');
+
+          expect(postedWhileHeld).toEqual([true, false]);
+          expect(sentData()).toEqual([message, rewritten]);
+        });
+
+        it('stops without waiting once the row is closed', async () => {
+          held().mockResolvedValue(null);
+
+          await expect(retried()).resolves.toBe('cancelled');
+
+          expect(postedWhileHeld).toEqual([true]);
+          expect(waits).toBe(1);
+        });
+
+        it('keeps the copy the row holds on the terminal failure row', async () => {
+          (configService.get as jest.Mock).mockImplementation(<T>(k: string, def?: T) =>
+            k === 'webhook.failurePayloadRetentionHours' ? 24 : k === 'webhook.retryDelay' ? 100 : def,
+          );
+          mockFetch.mockRejectedValue(new Error('receiver down'));
+          held().mockResolvedValue(rewritten);
+
+          await service.redeliver(createMockWebhook({ retryCount: 1 }), 'sess-1', 'message.received', key, message);
+
+          expect(insertedFailures).toHaveLength(1);
+          expect(insertedFailures[0].payload).toEqual(rewritten);
+        });
       });
 
       it.each([
@@ -3117,43 +3156,46 @@ describe('WebhookDeliveryService', () => {
         expect(bodies).toEqual(['first text', ...laterBodies]);
       });
 
-      it('waits without its slot while a change of its message is kept on this node and its row cannot be read', async () => {
-        internals().dispatchLimiter = new ConcurrencyLimiter(1, 1000);
-        hooksBySession['sess-a'] = [createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', retryCount: 1 })];
-        let release: () => void = () => undefined;
-        let holding = true;
-        const postedWhileHeld: boolean[] = [];
-        mockFetch
-          .mockImplementationOnce(() => new Promise(resolve => (release = () => resolve({ ok: true, status: 200 }))))
-          .mockImplementation(() => (postedWhileHeld.push(holding), Promise.resolve({ ok: true, status: 200 })));
-        held().mockRejectedValue(new Error('connection terminated'));
-        service.holdMessage('sess-a', 'M-2', true);
-        const backoff = sleep as unknown as jest.Mock;
-        const realSleep = backoff.getMockImplementation();
-        const slotsInUse: number[] = [];
-        backoff.mockImplementation(() => {
-          slotsInUse.push(internals().dispatchLimiter.activeCount);
-          if (slotsInUse.length === 2) {
-            holding = false;
-            service.holdMessage('sess-a', 'M-2', false);
+      it.each([
+        ['cannot be read', () => Promise.reject(new Error('connection terminated'))],
+        ['reads the copy from before the change', () => Promise.resolve(undefined)],
+      ])(
+        'waits without its slot while a change of its message is kept on this node and its row %s',
+        async (_label, read) => {
+          internals().dispatchLimiter = new ConcurrencyLimiter(1, 1000);
+          hooksBySession['sess-a'] = [createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', retryCount: 1 })];
+          let release: () => void = () => undefined;
+          let holding = true;
+          const postedWhileHeld: boolean[] = [];
+          mockFetch
+            .mockImplementationOnce(() => new Promise(resolve => (release = () => resolve({ ok: true, status: 200 }))))
+            .mockImplementation(() => (postedWhileHeld.push(holding), Promise.resolve({ ok: true, status: 200 })));
+          held().mockImplementation(read);
+          outboxService.isMessageHeld.mockImplementation((k: string) => holding && k.includes('_M-2_'));
+          const backoff = sleep as unknown as jest.Mock;
+          const realSleep = backoff.getMockImplementation();
+          const slotsInUse: number[] = [];
+          backoff.mockImplementation(() => {
+            slotsInUse.push(internals().dispatchLimiter.activeCount);
+            if (slotsInUse.length === 2) holding = false;
+            return Promise.resolve();
+          });
+
+          try {
+            const first = service.dispatch('sess-a', 'message.received', message('M-1'));
+            await settle(() => mockFetch.mock.calls.length > 0);
+            const second = service.dispatch('sess-a', 'message.received', message('M-2'));
+            await settle(() => internals().dispatchLimiter.queuedCount > 0);
+            release();
+            await Promise.all([first, second]);
+          } finally {
+            backoff.mockImplementation(realSleep);
           }
-          return Promise.resolve();
-        });
 
-        try {
-          const first = service.dispatch('sess-a', 'message.received', message('M-1'));
-          await settle(() => mockFetch.mock.calls.length > 0);
-          const second = service.dispatch('sess-a', 'message.received', message('M-2'));
-          await settle(() => internals().dispatchLimiter.queuedCount > 0);
-          release();
-          await Promise.all([first, second]);
-        } finally {
-          backoff.mockImplementation(realSleep);
-        }
-
-        expect(postedWhileHeld).toEqual([false]);
-        expect(slotsInUse).toEqual([0, 0]);
-      });
+          expect(postedWhileHeld).toEqual([false]);
+          expect(slotsInUse).toEqual([0, 0]);
+        },
+      );
     });
 
     it('records a delivery woken from its backoff by shutdown as unsent and keeps its outbox row', async () => {

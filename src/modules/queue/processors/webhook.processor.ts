@@ -211,6 +211,9 @@ export class WebhookProcessor extends WorkerHost {
         );
         return { statusCode: 0, success: false, error: 'outbox row closed', responseTime: 0 };
       }
+      // A change of the message kept on this node may still withdraw or rewrite this copy: the job waits for it.
+      if (this.outbox.isMessageHeld(payload.idempotencyKey, webhookId))
+        return await this.delayWithoutAttempt(job, token);
       ctx.url = current.url;
       let body = JSON.stringify(payload);
       const changed = changedData(held, job.data.baseHash);

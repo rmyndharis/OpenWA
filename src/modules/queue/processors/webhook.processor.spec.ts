@@ -29,7 +29,7 @@ describe('WebhookProcessor', () => {
   let processor: WebhookProcessor;
   let repo: { update: jest.Mock; findOne: jest.Mock };
   let failureRepo: { insert: jest.Mock; count: jest.Mock; delete: jest.Mock; update: jest.Mock };
-  let outbox: { close: jest.Mock; currentMessagePayload: jest.Mock };
+  let outbox: { close: jest.Mock; currentMessagePayload: jest.Mock; isMessageHeld: jest.Mock };
   let failureRows: Array<{ webhookId?: string; idempotencyKey?: string | null; attempts?: number }>;
   let hookManager: { execute: jest.Mock };
   let configService: { get: jest.Mock };
@@ -84,6 +84,7 @@ describe('WebhookProcessor', () => {
     outbox = {
       close: jest.fn().mockResolvedValue(undefined),
       currentMessagePayload: jest.fn().mockResolvedValue(undefined),
+      isMessageHeld: jest.fn().mockReturnValue(false),
     };
     failureRepo = {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
@@ -997,6 +998,20 @@ describe('WebhookProcessor', () => {
 
     it('delays a job whose outbox row cannot be read, spending no attempt', async () => {
       outbox.currentMessagePayload.mockRejectedValue(new Error('connection terminated'));
+      const job = queuedJob(2);
+      const move = jest.fn().mockResolvedValue(undefined);
+      (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = move;
+
+      await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+      expect(move).toHaveBeenCalledWith(expect.any(Number), 'tok');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(failureRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('delays a job, spending no attempt, while a change of its message is kept on this node', async () => {
+      outbox.currentMessagePayload.mockResolvedValue(rowData);
+      outbox.isMessageHeld.mockImplementation((key: string, webhookId: string) => key === 'k' && webhookId === 'wh-1');
       const job = queuedJob(2);
       const move = jest.fn().mockResolvedValue(undefined);
       (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = move;

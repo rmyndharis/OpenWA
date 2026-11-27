@@ -480,7 +480,7 @@ export class MessageProjector {
           announce: change.engine !== undefined && this.engines.isLive(change.sessionId, change.engine),
           owned: nodeOwnsSession(this.ownership, change.sessionId),
         }),
-      ),
+      ).finally(() => this.holdCopies(change)),
     released: (change, reason) => this.releaseParked(change, reason),
   };
 
@@ -618,7 +618,7 @@ export class MessageProjector {
       error: error instanceof Error ? error.message : String(error),
       action: 'message_change_parked',
     });
-    this.webhookService.holdMessage?.(sessionId, waMessageId, true);
+    this.holdCopies(change);
     this.recovery.park(key, change);
   }
 
@@ -643,7 +643,23 @@ export class MessageProjector {
       }
     }
     if (change.empty()) this.recovery.settle('change', key);
-    else change.measure();
+    else {
+      change.measure();
+      this.holdCopies(change);
+    }
+  }
+
+  /**
+   * Hold the message's deliveries on this node while what is kept for it may still withdraw or rewrite their copies (a
+   * revoke, an edit with its text); a reaction or a receipt leaves them as they are.
+   */
+  private holdCopies(change: ParkedChange): void {
+    const { revoke, edit } = change.slots;
+    this.webhookService.holdMessage?.(
+      change.sessionId,
+      change.waMessageId,
+      Boolean(revoke || edit?.body !== undefined),
+    );
   }
 
   /** A kept change left the queue: its deliveries are let go, and a loss is logged, the only trace of it. */
