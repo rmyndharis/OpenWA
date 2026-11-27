@@ -1,22 +1,20 @@
 /**
- * Support WhatsApp Web's /login/ route in whatsapp-web.js 1.34.8.
+ * Let whatsapp-web.js 1.34.8 link a device on WhatsApp Web's signed-out /login/ page.
  *
- * WhatsApp Web redirects unauthenticated sessions from `/` to `/login/`, where
- * `WAWebSocketModel` is not yet loaded (its dependencies are unresolved in the
- * login bundle). Polling `window.require('WAWebSocketModel')` on every animation
- * frame inside `Client.inject()` stalls the page until `authTimeoutMs` expires
- * (`auth timeout`), even though the QR code (`WAWebConnModel.Conn.ref`) is already
- * available on `/login/`.
+ * WhatsApp Web sends a signed-out browser to /login/, where the socket model is not loaded:
+ * require('WAWebSocketModel') answers null, and a require made while the page boots can throw, which
+ * ends a puppeteer wait without failing it. There the socket state and its events live on
+ * WAWebBackendEventBus.BackendEventBus (`socketState`, `set_socket_state`, `open_socket_stream`,
+ * `triggerLogout`, `triggerReconnectSocket`), which whatsapp-web.js reads since
+ * wwebjs/whatsapp-web.js#201990.
  *
- * This patch:
- *   1. Checks `window.location?.pathname?.startsWith('/login')` with `polling: 500`
- *      before touching `WAWebSocketModel`, resolving once `WAWebConnModel.Conn.ref`
- *      is ready.
- *   2. Guards `WAWebSocketModel?.Socket` and `WAWebCmd?.Cmd` accesses during
- *      listener registration and the `hasSynced` check on `/login/`.
+ * Every transform covers a call the library can make before the app is loaded, and chooses by path:
+ * the event bus on /login/, the unchanged upstream calls on every other page, so a linked session runs
+ * as before. The boot wait also survives a require that throws.
  *
- * The transform is exact and idempotent. An unknown shape fails the production
- * image build unless `--best-effort` is passed.
+ * The transform is exact and idempotent, and the file is written once, after every edit resolves. An
+ * unknown shape fails the production image build unless `--best-effort` is passed. Retire it with the
+ * whatsapp-web.js release that carries the upstream repair.
  */
 'use strict';
 
@@ -27,53 +25,27 @@ const { writeFileAtomic } = require('./atomic-write');
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const CLIENT_PATH = path.join('src', 'Client.js');
 
+/** [upstream lines, replacement, name] */
 const REPLACEMENTS = [
+  // boot state
   [
-    `            const needAuthHandle = await this.pupPage.waitForFunction(
-                () => {
-                    const state =
+    `                    const state =
                         window.require?.('WAWebSocketModel')?.Socket?.state;
-                    if (
-                        !state ||
-                        state === 'OPENING' ||
-                        state === 'UNLAUNCHED' ||
-                        state === 'PAIRING'
-                    ) {
-                        return false;
+`,
+    `                    // A predicate that throws is never run again, so a require that throws while the page boots must not
+                    // escape it. On /login/ the socket model must not be required at all: the event bus holds the state.
+                    let state;
+                    try {
+                        state = window.location.pathname.startsWith('/login')
+                            ? window.require?.('WAWebBackendEventBus')?.BackendEventBus?.socketState
+                            : window.require?.('WAWebSocketModel')?.Socket?.state;
+                    } catch {
+                        // Not loadable yet: the next poll asks again.
                     }
-                    return {
-                        need: state === 'UNPAIRED' || state === 'UNPAIRED_IDLE',
-                        state,
-                    };
-                },
-                { timeout: authTimeout },
-            );`,
-    `            const needAuthHandle = await this.pupPage.waitForFunction(
-                () => {
-                    if (window.location?.pathname?.startsWith('/login')) {
-                        if (window.require?.('WAWebConnModel')?.Conn?.ref) {
-                            return { need: true, state: 'UNPAIRED' };
-                        }
-                        return false;
-                    }
-                    const state =
-                        window.require?.('WAWebSocketModel')?.Socket?.state;
-                    if (
-                        !state ||
-                        state === 'OPENING' ||
-                        state === 'UNLAUNCHED' ||
-                        state === 'PAIRING'
-                    ) {
-                        return false;
-                    }
-                    return {
-                        need: state === 'UNPAIRED' || state === 'UNPAIRED_IDLE',
-                        state,
-                    };
-                },
-                { timeout: authTimeout, polling: 500 },
-            );`,
+`,
+    'boot state',
   ],
+  // qr listener cleanup
   [
     `                        // Remove QR listener once authentication succeeds
                         window
@@ -82,23 +54,36 @@ const REPLACEMENTS = [
                                 window
                                     .require('WAWebConnModel')
                                     .Conn.off('change:ref', onRefChange);
-                            });`,
+                            });
+`,
     `                        // Remove QR listener once authentication succeeds
-                        window
-                            .require('WAWebSocketModel')
-                            ?.Socket?.on('change:hasSynced', () => {
-                                window
-                                    .require('WAWebConnModel')
-                                    .Conn.off('change:ref', onRefChange);
-                            });`,
+                        const loginPage = window.location.pathname.startsWith('/login');
+                        const stream = loginPage
+                            ? window.require('WAWebBackendEventBus').BackendEventBus
+                            : window.require('WAWebSocketModel').Socket;
+                        stream.on(loginPage ? 'open_socket_stream' : 'change:hasSynced', () => {
+                            window
+                                .require('WAWebConnModel')
+                                .Conn.off('change:ref', onRefChange);
+                        });
+`,
+    'qr listener cleanup',
   ],
+  // sync listeners head
   [
-    `            await this.pupPage.evaluate(() => {
-                const Socket = window.require('WAWebSocketModel').Socket;
-                const Cmd = window.require('WAWebCmd').Cmd;
-
-                const listeners = [
-                    [
+    `                const Socket = window.require('WAWebSocketModel').Socket;
+`,
+    `                // On /login/ the event bus reports the same two changes, and the socket model is not required.
+                const bus = window.location.pathname.startsWith('/login')
+                    ? window.require('WAWebBackendEventBus').BackendEventBus
+                    : null;
+                const Socket = bus ?? window.require('WAWebSocketModel').Socket;
+`,
+    'sync listeners head',
+  ],
+  // sync listeners
+  [
+    `                    [
                         Socket,
                         'change:state',
                         (_AppState, state) => {
@@ -112,95 +97,76 @@ const REPLACEMENTS = [
                             window.onAppStateHasSyncedEvent();
                         },
                     ],
+`,
+    `                    [
+                        Socket,
+                        bus ? 'set_socket_state' : 'change:state',
+                        (first, state) => {
+                            window.onAuthAppStateChangedEvent(bus ? first : state);
+                        },
+                    ],
                     [
-                        Cmd,
-                        'offline_progress_update_from_bridge',
+                        Socket,
+                        bus ? 'open_socket_stream' : 'change:hasSynced',
                         () => {
-                            window.onOfflineProgressUpdateEvent(
-                                window
-                                    .require('WAWebOfflineHandler')
-                                    .OfflineMessageHandler.getOfflineDeliveryProgress(),
-                            );
+                            window.onAppStateHasSyncedEvent();
                         },
                     ],
-                    [
-                        Cmd,
-                        'logout',
-                        async () => {
-                            await window.onLogoutEvent();
-                        },
-                    ],
-                    [
-                        Cmd,
-                        'logout_from_bridge',
-                        async () => {
-                            await window.onLogoutEvent();
-                        },
-                    ],
-                ];`,
-    `            await this.pupPage.evaluate(() => {
-                const Socket = window.require('WAWebSocketModel')?.Socket;
-                const Cmd = window.require('WAWebCmd')?.Cmd;
-
-                const listeners = [
-                    ...(Socket
-                        ? [
-                              [
-                                  Socket,
-                                  'change:state',
-                                  (_AppState, state) => {
-                                      window.onAuthAppStateChangedEvent(state);
-                                  },
-                              ],
-                              [
-                                  Socket,
-                                  'change:hasSynced',
-                                  () => {
-                                      window.onAppStateHasSyncedEvent();
-                                  },
-                              ],
-                          ]
-                        : []),
-                    ...(Cmd
-                        ? [
-                              [
-                                  Cmd,
-                                  'offline_progress_update_from_bridge',
-                                  () => {
-                                      window.onOfflineProgressUpdateEvent(
-                                          window
-                                              .require('WAWebOfflineHandler')
-                                              .OfflineMessageHandler.getOfflineDeliveryProgress(),
-                                      );
-                                  },
-                              ],
-                              [
-                                  Cmd,
-                                  'logout',
-                                  async () => {
-                                      await window.onLogoutEvent();
-                                  },
-                              ],
-                              [
-                                  Cmd,
-                                  'logout_from_bridge',
-                                  async () => {
-                                      await window.onLogoutEvent();
-                                  },
-                              ],
-                          ]
-                        : []),
-                ];`,
+`,
+    'sync listeners',
   ],
+  // synced already
   [
-    `                const storeInjected = typeof window.WWebJS !== 'undefined';
-                if (Socket.hasSynced === true && !storeInjected) {
-                    window.onAppStateHasSyncedEvent();
-                }`,
-    `                const storeInjected = typeof window.WWebJS !== 'undefined';
-                if (Socket?.hasSynced === true && !storeInjected) {
-                    window.onAppStateHasSyncedEvent();
-                }`,
+    `                if (Socket.hasSynced === true && !storeInjected) {
+`,
+    `                if ((bus ? bus.isMainStreamReadyMd : Socket.hasSynced) === true && !storeInjected) {
+`,
+    'synced already',
+  ],
+  // pairing code state
+  [
+    `                    const state =
+                        window.require('WAWebSocketModel').Socket.state;
+`,
+    `                    const state = window.location.pathname.startsWith('/login')
+                        ? window.require('WAWebBackendEventBus').BackendEventBus.socketState
+                        : window.require('WAWebSocketModel').Socket.state;
+`,
+    'pairing code state',
+  ],
+  // logout
+  [
+    `            return window.require('WAWebSocketModel').Socket.logout();
+`,
+    `            if (window.location.pathname.startsWith('/login')) {
+                return window.require('WAWebBackendEventBus').BackendEventBus.triggerLogout();
+            }
+            return window.require('WAWebSocketModel').Socket.logout();
+`,
+    'logout',
+  ],
+  // get state
+  [
+    `            return window.require('WAWebSocketModel').Socket.state ?? null;
+`,
+    `            if (window.location.pathname.startsWith('/login')) {
+                return window.require('WAWebBackendEventBus').BackendEventBus.socketState ?? null;
+            }
+            return window.require('WAWebSocketModel').Socket.state ?? null;
+`,
+    'get state',
+  ],
+  // reset state
+  [
+    `            window.require('WAWebSocketModel').Socket.reconnect();
+`,
+    `            if (window.location.pathname.startsWith('/login')) {
+                window.require('WAWebBackendEventBus').BackendEventBus.triggerReconnectSocket();
+            } else {
+                window.require('WAWebSocketModel').Socket.reconnect();
+            }
+`,
+    'reset state',
   ],
 ];
 
@@ -208,8 +174,29 @@ function occurrences(source, needle) {
   return source.split(needle).length - 1;
 }
 
+/** Upstream lines are counted with the replacements removed: some replacements keep their upstream line. */
+function counts(source) {
+  return {
+    unpatched: REPLACEMENTS.map(([before, after]) => occurrences(source.split(after).join(''), before)),
+    patched: REPLACEMENTS.map(([, after]) => occurrences(source, after)),
+  };
+}
+
 function isPatched(source) {
-  return REPLACEMENTS.every(([before, after]) => occurrences(source, before) === 0 && occurrences(source, after) === 1);
+  const { unpatched, patched } = counts(source);
+  return unpatched.every(count => count === 0) && patched.every(count => count === 1);
+}
+
+/**
+ * The stand-down branch as a predicate, for the startup guard (engine-patch-status.ts). An unreadable
+ * tree reads as applied, since a tree we cannot inspect is not evidence of a broken one.
+ */
+function isApplied(wwjsDir = DEFAULT_WWJS) {
+  try {
+    return isPatched(fs.readFileSync(path.join(wwjsDir, CLIENT_PATH), 'utf8'));
+  } catch {
+    return true;
+  }
 }
 
 function applyPatch(wwjsDir = DEFAULT_WWJS) {
@@ -222,35 +209,29 @@ function applyPatch(wwjsDir = DEFAULT_WWJS) {
   if (isPatched(source)) {
     return { skipped: true, reason: 'installed whatsapp-web.js already handles /login/ route' };
   }
-  if (!REPLACEMENTS.every(([before, after]) => occurrences(source, before) === 1 && occurrences(source, after) === 0)) {
-    throw new Error('unsupported Client.js shape; recheck /login/ route compatibility in whatsapp-web.js');
+  const { unpatched, patched } = counts(source);
+  // Applied from nothing: anything else is a shape this patcher was not written for.
+  if (!unpatched.every(count => count === 1) || !patched.every(count => count === 0)) {
+    throw new Error(
+      `unsupported Client.js shape (unpatched: ${unpatched.join(',')}, patched: ${patched.join(',')}); ` +
+        'recheck /login/ route compatibility in whatsapp-web.js',
+    );
   }
-
   for (const [before, after] of REPLACEMENTS) {
     source = source.replace(before, after);
   }
   writeFileAtomic(clientFile, source);
-  return { skipped: false, note: 'added /login/ route handling to Client.inject()' };
-}
-
-function isApplied(wwjsDir = DEFAULT_WWJS) {
-  try {
-    return isPatched(fs.readFileSync(path.join(wwjsDir, CLIENT_PATH), 'utf8'));
-  } catch {
-    return true;
-  }
+  return { skipped: false, note: 'added /login/ route handling to Client.js' };
 }
 
 function run() {
   const bestEffort = process.argv.includes('--best-effort');
   try {
     const result = applyPatch();
-    console.log(
-      `patch-wwebjs-login-route: ${result.skipped ? `skipped — ${result.reason}` : result.note}`,
-    );
+    console.log(`patch-wwebjs-login-route: ${result.skipped ? `skipped: ${result.reason}` : result.note}`);
   } catch (error) {
     if (bestEffort) {
-      console.warn(`patch-wwebjs-login-route: skipped — ${error.message}`);
+      console.warn(`patch-wwebjs-login-route: skipped: ${error.message}`);
       return;
     }
     console.error(`patch-wwebjs-login-route: ${error.message}`);

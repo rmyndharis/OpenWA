@@ -79,6 +79,11 @@ const PATCHERS = [
     '@whiskeysockets/baileys/lib/Utils/event-buffer.js',
     m => m.SITES.map(([, find]) => find).join('\n'),
   ],
+  [
+    'patch-wwebjs-login-route.js',
+    'whatsapp-web.js/src/Client.js',
+    m => m.REPLACEMENTS.map(([find]) => find).join('\n'),
+  ],
   ['patch-wwebjs-media-id.js', 'whatsapp-web.js/src/util/Injected/Utils.js', m => m.ANCHOR],
   ['patch-wwebjs-newsletter-preview.js', 'whatsapp-web.js/src/util/Injected/Utils.js', m => m.LEGACY_CALL],
   [
