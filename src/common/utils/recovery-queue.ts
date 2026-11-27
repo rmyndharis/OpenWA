@@ -79,7 +79,7 @@ export class RecoveryQueue {
   private stopped = false;
 
   constructor(private readonly options: RecoveryQueueOptions) {
-    this.now = options.now ?? Date.now;
+    this.now = options.now ?? (() => Date.now());
     this.delayMs = options.baseDelayMs;
   }
 

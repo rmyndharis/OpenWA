@@ -21,7 +21,8 @@ import { WebhookOutboxService } from '../webhook/webhook-outbox.service';
 import { WebhookDeliveryService } from '../webhook/webhook-delivery.service';
 import { WebhookService } from '../webhook/webhook.service';
 import { WebhookReconcilerService } from '../webhook/webhook-reconciler.service';
-import { MessageProjector } from './message-projector.service';
+import { MessageProjector, PARKED_CHANGE_MAX_AGE_MS } from './message-projector.service';
+import { RECOVERY_MAX_BYTES } from '../../common/utils/recovery-queue';
 import { SessionOwnershipService } from './session-ownership.service';
 import * as sharedConnection from '../../common/utils/shared-connection';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -33,6 +34,7 @@ import { LoggerService } from '../../common/services/logger.service';
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
 const CHAT = '628111@c.us';
+const REFUSED = 'REFUSED text';
 const OTHER_CHAT = '628999@c.us';
 
 /**
@@ -53,7 +55,8 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
   let webhookId: string;
   let owns: boolean;
   // 'on': every statement fails; 'reads': only the reads that judge a change against the row fail.
-  let outage: 'off' | 'on' | 'reads';
+  // 'refuse': the database answers, but refuses a write of a message row that carries REFUSED, as for a bad value.
+  let outage: 'off' | 'on' | 'reads' | 'refuse';
   const ioerr = (): Error => Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' });
   // eslint-disable-next-line @typescript-eslint/unbound-method -- a jest spy, read for its calls
   const lost = (): jest.Mock => LoggerService.prototype.error as jest.Mock;
@@ -86,6 +89,9 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       const sql = String(args[0]);
       const judging = /^\s*SELECT/i.test(sql) && sql.includes('"messages"') && sql.includes('"engineRef"');
       if (outage === 'on' || (outage === 'reads' && judging)) return Promise.reject(ioerr());
+      if (outage === 'refuse' && /^\s*UPDATE "messages"/i.test(sql) && JSON.stringify(args[1]).includes(REFUSED)) {
+        return Promise.reject(Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' }));
+      }
       return realQuery.apply(this, args);
     } as never);
 
@@ -444,6 +450,86 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       mockFetch.mockClear();
 
       expect(await sweptBodies()).toEqual(['edited text']);
+    });
+
+    it('gives up on the oldest kept changes once their byte budget is spent, and logs each as lost', async () => {
+      const body = 'x'.repeat(1024 * 1024);
+      const count = Math.ceil(RECOVERY_MAX_BYTES / body.length) + 1;
+      const ids = Array.from({ length: count }, (_, i) => `BB-${i}`);
+      for (const id of ids) await storeRow(id);
+      outage = 'on';
+      for (const id of ids) {
+        projector.applyMessageEditQueued(sessionId, { messageId: id, chatId: CHAT, body, fromMe: false } as never);
+      }
+      await settle(count * 4);
+      await recover();
+
+      const lostIds = lost()
+        .mock.calls.filter(([, , meta]) => (meta as { reason?: string } | undefined)?.reason === 'bytes')
+        .map(([, , meta]) => (meta as { messageId: string }).messageId);
+      expect(lostIds.length).toBeGreaterThan(0);
+      expect(lostIds).toEqual(ids.slice(0, lostIds.length));
+      expect(await rowOf(ids[0])).toMatchObject({ body: 'first text' });
+      expect((await rowOf(ids[count - 1]))?.body).toBe(body);
+    });
+
+    it('gives up after three tries on a change the database refuses, without holding back the others', async () => {
+      await storeRow('N-1');
+      await storeRow('N-2');
+      outage = 'on';
+      changes['an edit']('N-2');
+      await settle();
+      outage = 'refuse';
+      projector.applyMessageEditQueued(sessionId, {
+        messageId: 'N-1',
+        chatId: CHAT,
+        body: REFUSED,
+        fromMe: false,
+      } as never);
+      await settle();
+      const pass = async (): Promise<void> => {
+        await projector.retryParkedChanges();
+        await settle();
+      };
+      const lostN1 = (): boolean =>
+        lost().mock.calls.some(([, , meta]) => (meta as { messageId?: string } | undefined)?.messageId === 'N-1');
+
+      await pass();
+      expect(await rowOf('N-2')).toMatchObject({ body: 'edited text' });
+      await pass();
+      expect(lostN1()).toBe(false);
+      await pass();
+
+      expect(lost()).toHaveBeenCalledWith(
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ messageId: 'N-1', reason: 'failures', action: 'message_change_lost' }),
+      );
+      expect(await rowOf('N-1')).toMatchObject({ body: 'first text' });
+    });
+
+    it('keeps a revoke past the age cap of kept content, and gives up on an edit kept as long', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'], now: Date.now() });
+      try {
+        await storeRow('A-1');
+        await storeRow('A-2');
+        outage = 'on';
+        changes['an engine revoke']('A-1');
+        changes['an edit']('A-2');
+        await settle();
+        jest.setSystemTime(Date.now() + PARKED_CHANGE_MAX_AGE_MS + 1);
+        await recover();
+
+        expect(await rowOf('A-1')).toMatchObject({ type: 'revoked', body: '' });
+        expect(await rowOf('A-2')).toMatchObject({ body: 'first text' });
+        expect(lost()).toHaveBeenCalledWith(
+          expect.any(String),
+          undefined,
+          expect.objectContaining({ messageId: 'A-2', reason: 'age', action: 'message_change_lost' }),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('drops what a removed session kept', async () => {
