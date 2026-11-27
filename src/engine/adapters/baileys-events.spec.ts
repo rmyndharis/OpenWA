@@ -5,7 +5,8 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { compileFunction } from 'node:vm';
 import * as ts from 'typescript';
-import { BaileysEvents, type BaileysEventsHost } from './baileys-events';
+import { BufferJSON } from '@whiskeysockets/baileys';
+import { BaileysEvents, keptInboundRaw, revivedInbound, type BaileysEventsHost } from './baileys-events';
 import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { inboundMediaConcurrency } from './inbound-media-cap';
@@ -3215,6 +3216,39 @@ describe('BaileysEvents poll votes', () => {
     });
     expect(onMessage).not.toHaveBeenCalled();
     expect(onMessageCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps a vote whose poll the store fails to read, and reads it once handed back', async () => {
+    const poll = makePoll(['Pizza', 'Sushi', 'Tacos']);
+    let failing = true;
+    const kept: WAMessage[] = [];
+    const { events, onPollVote } = setup({
+      getStoredMessage: (id: string) =>
+        failing
+          ? Promise.reject(Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }))
+          : Promise.resolve(id === poll.key.id ? poll : null),
+      keepUnreadInbound: (msg: WAMessage) => kept.push(msg),
+    });
+    const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['Sushi'], {
+      key: { participant: voterPhone },
+      senderTimestampMs: 1_786_000_000_123,
+    });
+    // As the library delivers it: its content in the protocol's own classes.
+    vote.message = proto.Message.fromObject(vote.message!);
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+    await flush();
+    expect(kept).toEqual([vote]);
+    expect(onPollVote).not.toHaveBeenCalled();
+
+    failing = false;
+    // Handed back as the session keeps it: through JSON, which holds its 64-bit time as a string, and revived.
+    const form = { BufferJSON, proto } as unknown as typeof lib;
+    await events.redeliverInbound(revivedInbound(form, keptInboundRaw(form, kept[0])));
+
+    expect(onPollVote).toHaveBeenCalledWith(
+      expect.objectContaining({ pollMessageId: 'POLL1', selectedOptions: ['Sushi'], timestampMs: 1_786_000_000_123 }),
+    );
   });
 
   it('emits poll.vote with multiple selected options', async () => {

@@ -6,7 +6,7 @@ import type { GroupMetadata, WASocket } from '@whiskeysockets/baileys';
 import { BaileysChannels } from './baileys-channels';
 import { BaileysCatalog } from './baileys-catalog';
 import { BaileysContacts } from './baileys-contacts';
-import { BaileysEvents, type GroupMember } from './baileys-events';
+import { BaileysEvents, keptInboundRaw, revivedInbound, type GroupMember } from './baileys-events';
 import { BaileysGroups } from './baileys-groups';
 import { BaileysHistory, toUnixSeconds } from './baileys-history';
 import { type BaileysEngineHost } from './baileys-host';
@@ -216,6 +216,14 @@ export class BaileysAdapter implements IWhatsAppEngine {
       forgetGroupMetadata: groupId => this.lifecycle.groupMetadata.invalidate(groupId),
       getEphemeralExpiration: chatId => this.sessionStore.getEphemeralExpiration(chatId),
       getStoredMessage: messageId => this.config.messageStore?.getMessage(this.config.dbSessionId, messageId),
+      keepUnreadInbound: (msg, targetId) => {
+        const lib = this.lifecycle.loadedLib;
+        const callback = this.callbacks.onInboundUnreadable;
+        if (!lib || !callback || !msg.key.id) return;
+        callback({ messageId: msg.key.id, raw: keptInboundRaw(lib, msg), ...(targetId ? { targetId } : {}) });
+      },
+      isChangeKept: targetId => this.callbacks.isChangeKept?.(targetId) === true,
+      noteUnreadStoredMessage: key => delegates.events?.noteUnreadStoredMessage(key),
       getStoredMessages: messageIds => this.config.messageStore?.getMessages(this.config.dbSessionId, messageIds),
       recordLidMapping: (lid, pn, isReported = true) =>
         this.sessionStore.addLidMappings([{ lid: `${lid.split('@')[0].split(':')[0]}@lid`, pn }], isReported),
@@ -343,6 +351,15 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   getPushName(): string | null {
     return this.lifecycle.getPushName();
+  }
+
+  /** A message kept because a stored message it needs could not be read, handed back (see InboundRedelivery). */
+  async redeliverInbound(raw: string): Promise<boolean> {
+    // Read as on arrival, which needs the session connected (an RSVP is read with the account's own id).
+    if (this.getStatus() !== EngineStatus.READY) return false;
+    const lib = await this.lifecycle.loadLib();
+    await this.events.redeliverInbound(revivedInbound(lib, raw));
+    return true;
   }
 
   // ----- Messaging -----

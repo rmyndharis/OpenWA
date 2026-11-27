@@ -139,7 +139,7 @@ describe('What the database refused, across a restart', () => {
       timer?: ReturnType<typeof setTimeout>;
     };
     clearTimeout(queue.timer);
-    for (const lane of ['send', 'change', 'dispatch']) queue.stopped.add(lane);
+    for (const lane of ['send', 'receive', 'change', 'dispatch']) queue.stopped.add(lane);
     node.journal.close();
     // Nothing of the dead process reaches the file the next one opens.
     node.journal.put = () => false;
@@ -519,6 +519,27 @@ describe('What the database refused, across a restart', () => {
     expect(rows.map(row => [row.waMessageId, row.body])).toEqual([['J-1', 'first text']]);
     expect(posted().filter(post => post.event === 'message.received')).toHaveLength(1);
     expect(persisted).toEqual([['text', 'first text']]);
+  });
+
+  it('hands a message kept for an unreadable target before a crash back to its engine, once, when the engine runs', async () => {
+    outage = 'on';
+    node.projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: '{"key":{"id":"ENV-A"}}', targetId: 'J-1' });
+    await settle();
+    expect(readFileSync(join(dir, 'recovery-journal.jsonl'), 'utf8')).toContain('ENV-A');
+
+    await crash();
+    node = boot({ engine: false });
+    // A later change of the message is kept behind it from the start, before anything is handed back.
+    expect(node.projector.isChangeKept(sessionId, 'J-1')).toBe(true);
+    await recover();
+    const redeliverInbound = jest.fn().mockResolvedValue(true);
+    node.engines.set(sessionId, { redeliverInbound } as unknown as IWhatsAppEngine);
+    await recover();
+    await recover();
+
+    expect(redeliverInbound.mock.calls).toEqual([['{"key":{"id":"ENV-A"}}']]);
+    expect(node.projector.isChangeKept(sessionId, 'J-1')).toBe(false);
+    expect(readFileSync(join(dir, 'recovery-journal.jsonl'), 'utf8')).not.toContain('ENV-A');
   });
 
   it('lets go of what it cannot read back as a record, and of copies whose queued job will never run here', async () => {

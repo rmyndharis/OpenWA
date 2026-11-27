@@ -1073,4 +1073,92 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
       });
     });
   });
+
+  describe('a message the engine could not read for a stored target the database could not read', () => {
+    const unavailable = () => Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' });
+    const losses = () =>
+      ((LoggerService.prototype.error as jest.Mock).mock.calls as unknown[][])
+        .map(call => call.at(-1) as { action?: string; reason?: string } | undefined)
+        .filter(meta => meta?.action === 'message_inbound_lost');
+
+    it('is handed back to its engine once, after the database answers, and kept while the target read fails', async () => {
+      const redeliverInbound = jest.fn().mockRejectedValueOnce(unavailable()).mockResolvedValue(true);
+      Object.assign(engine, { redeliverInbound });
+      projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: '{"key":{"id":"ENV-A"}}' });
+
+      await recover();
+      await recover();
+      await recover();
+
+      expect(redeliverInbound.mock.calls).toEqual([['{"key":{"id":"ENV-A"}}'], ['{"key":{"id":"ENV-A"}}']]);
+      expect(losses()).toEqual([]);
+    });
+
+    it('lands as the edit it carries once handed back: its text on the row, announced once', async () => {
+      await ds.getRepository(Message).insert({
+        sessionId,
+        waMessageId: 'E-1',
+        chatId: CHAT,
+        from: CHAT,
+        to: '628222@c.us',
+        body: 'first text',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        timestamp: 1_700_000_000,
+      });
+      // The engine reads the kept edit as on arrival, and reports it as it reports a live one.
+      const redeliverInbound = jest.fn(() => {
+        projector.applyMessageEditQueued(sessionId, {
+          messageId: 'E-1',
+          chatId: CHAT,
+          body: 'edited text',
+          fromMe: false,
+        } as never);
+        return Promise.resolve(true);
+      });
+      Object.assign(engine, { redeliverInbound });
+      projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: '{}', targetId: 'E-1' });
+
+      await recover();
+      await recover();
+
+      const row = await ds.getRepository(Message).findOneByOrFail({ sessionId, waMessageId: 'E-1' });
+      expect(row.body).toBe('edited text');
+      expect(posted().filter(post => post.event === 'message.edited')).toHaveLength(1);
+      expect(projector.isChangeKept(sessionId, 'E-1')).toBe(false);
+    });
+
+    it('hands back the later of two kept changes of one message only once the earlier one landed', async () => {
+      const redeliverInbound = jest.fn().mockRejectedValueOnce(new Error('Unexpected token')).mockResolvedValue(true);
+      Object.assign(engine, { redeliverInbound });
+      projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: 'A', targetId: 'E-1' });
+      projector.keepUnreadInbound(sessionId, { messageId: 'ENV-B', raw: 'B', targetId: 'E-1' });
+      expect(projector.isChangeKept(sessionId, 'E-1')).toBe(true);
+
+      await recover();
+      await recover();
+
+      expect(redeliverInbound.mock.calls).toEqual([['A'], ['A'], ['B']]);
+    });
+
+    it('waits for an engine that can take it back', async () => {
+      projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: '{}' });
+      await recover();
+      const redeliverInbound = jest.fn().mockResolvedValue(true);
+      Object.assign(engine, { redeliverInbound });
+
+      await recover();
+
+      expect(redeliverInbound).toHaveBeenCalledTimes(1);
+    });
+
+    it('is given up with a loss logged once its hand-back keeps failing for a reason of its own', async () => {
+      Object.assign(engine, { redeliverInbound: jest.fn().mockRejectedValue(new Error('Unexpected token')) });
+      projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: '{' });
+
+      for (let i = 0; i < 3; i++) await recover();
+
+      expect(losses()).toEqual([expect.objectContaining({ messageId: 'ENV-A', reason: 'failures' })]);
+    });
+  });
 });

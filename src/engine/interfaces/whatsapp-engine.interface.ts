@@ -1096,6 +1096,18 @@ export interface EngineEventCallbacks {
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   /**
+   * Fired for a message the engine could not read because the stored message it needs (the secret an encrypted edit,
+   * reaction, poll vote or RSVP is read with) could not be read: the store failed, not answered that it holds none.
+   * `raw` is the message as the engine keeps it, for the session to keep and hand back once the store answers, through
+   * the engine's InboundRedelivery (inbound-redelivery.ts). Baileys only.
+   */
+  onInboundUnreadable?: (kept: { messageId: string; raw: string; targetId?: string }) => void;
+  /**
+   * Whether the session keeps a message that changes `targetId` (see onInboundUnreadable): a later edit or reaction of
+   * that message is kept behind it, so the older one, handed back later, does not undo it. Baileys only.
+   */
+  isChangeKept?: (targetId: string) => boolean;
+  /**
    * Fired for each RSVP to a WhatsApp event (consumers emit `event.response`). Baileys only: it
    * decrypts the RSVP itself from the stored event creation message. whatsapp-web.js never fires it.
    */

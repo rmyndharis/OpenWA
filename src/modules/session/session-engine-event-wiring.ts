@@ -379,6 +379,11 @@ export class SessionEngineEventWiring {
 
         host.messages.applyMessageEditQueued(id, message);
       },
+      onInboundUnreadable: (kept): void => {
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
+        host.messages.keepUnreadInbound(id, kept);
+      },
+      isChangeKept: (targetId): boolean => host.messages.isChangeKept(id, targetId),
       onEventResponse: (event): void => {
         if (!host.isLiveEngine(id, engine) || !owns()) return;
         this.logger.debug(`Event response: ${event.response} to ${event.eventMessageId}`, {

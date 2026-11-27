@@ -261,6 +261,8 @@ export interface BaileysLifecycleHost {
   /** Live-call cache handle — the map is owned by the events delegate (call events + rejectCall);
    *  lifecycle teardown clears it so a late rejectCall() reports not-found on a dead socket. */
   readonly liveCalls: Map<string, { callFrom: string; expiresAt: number }>;
+  /** The library failed to read a stored message (see BaileysEvents.noteUnreadStoredMessage). */
+  noteUnreadStoredMessage?(key: BaileysLib.WAMessageKey): void;
   /** `628999:12@s.whatsapp.net` / `628999@s.whatsapp.net` -> `628999`. */
   extractPhone(id: string | undefined): string | null;
   toNeutralJid(jid: string): string;
@@ -640,7 +642,13 @@ export class BaileysLifecycle {
           if (!key.id) {
             return undefined;
           }
-          const stored = await this.host.config.messageStore?.getMessage(this.host.config.dbSessionId, key.id);
+          // A read that fails is noted, so an RSVP the library cannot decrypt for it is kept instead of lost.
+          const stored = await this.host.config.messageStore
+            ?.getMessage(this.host.config.dbSessionId, key.id)
+            .catch((error: unknown) => {
+              this.host.noteUnreadStoredMessage?.(key);
+              throw error;
+            });
           if (!stored) {
             return undefined;
           }

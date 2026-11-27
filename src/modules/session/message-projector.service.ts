@@ -42,7 +42,17 @@ import {
   sendRerunKey,
   type RecoveryLoss,
 } from '../../common/utils/recovery-queue';
-import { ReceivedRow, journalReceivedRow, restoredReceivedRow, type ReceivedRowSteps } from './received-row';
+import {
+  KeptInbound,
+  ReceivedRow,
+  journalKeptInbound,
+  journalReceivedRow,
+  keptInboundKey,
+  restoredKeptInbound,
+  restoredReceivedRow,
+  type KeptInboundSteps,
+  type ReceivedRowSteps,
+} from './received-row';
 import { resolveWebhookReconcilerOptions } from '../webhook/webhook-reconciler.service';
 import {
   mutationTargetsForeignRow,
@@ -73,6 +83,7 @@ import {
   EditedMessage,
   RevokedMessage,
 } from '../../engine/interfaces/whatsapp-engine.interface';
+import { handsBackInbound } from '../../engine/interfaces/inbound-redelivery';
 import { deferred, InboundRoom, roomState, type RoomState } from './inbound-room';
 import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -546,10 +557,21 @@ export class MessageProjector {
       this.lidMappingStore ? () => this.lidMappingStore!.rowVetoes() : undefined,
       (sessionId, waMessageId) => this.rowPending(sessionId, waMessageId),
     );
-    // A received row the database refused comes back before anything is tried, and holds the changes of its message.
+    // A received row the database refused comes back before anything is tried, and holds the changes of its message;
+    // so does a message the engine could not read for a stored message it could not read, to be handed back to it.
     this.recovery.register('receive', {
-      encode: record => (record instanceof ReceivedRow ? journalReceivedRow(record) : undefined),
+      encode: record =>
+        record instanceof ReceivedRow
+          ? journalReceivedRow(record)
+          : record instanceof KeptInbound
+            ? journalKeptInbound(record)
+            : undefined,
       decode: (key, value) => {
+        const inbound = restoredKeptInbound(value);
+        if (inbound) {
+          const { sessionId, messageId, raw, targetId, since } = inbound;
+          return new KeptInbound(key, sessionId, messageId, raw, targetId, since, this.inboundSteps);
+        }
         const restored = restoredReceivedRow(value);
         return restored
           ? new ReceivedRow(key, restored.sessionId, restored.row, restored.direction, restored.since, this.rowSteps)
@@ -592,6 +614,59 @@ export class MessageProjector {
       );
     },
   };
+
+  private readonly inboundSteps: KeptInboundSteps = {
+    redeliver: kept => {
+      const engine = this.engines.get(kept.sessionId);
+      // Kept until the session's engine runs here again (after a restart, or a reconnect), and behind an older change of
+      // the same message still kept (one that failed for a reason of its own), so they land in the order they came in.
+      if (!engine || !handsBackInbound(engine) || this.keptBefore(kept)) return Promise.resolve(false);
+      return engine.redeliverInbound(kept.raw);
+    },
+    released: (kept, reason) => {
+      if (!reason) return;
+      this.logger.error(
+        'A message kept until its stored target could be read could not be kept any longer',
+        undefined,
+        {
+          sessionId: kept.sessionId,
+          messageId: kept.messageId,
+          reason,
+          action: 'message_inbound_lost',
+        },
+      );
+    },
+  };
+
+  /**
+   * Keep a message the engine could not read because a stored message it needs could not be read (the database
+   * failing), to hand it back to the engine once the database answers (see KeptInbound).
+   */
+  keepUnreadInbound(sessionId: string, kept: { messageId: string; raw: string; targetId?: string }): void {
+    const key = keptInboundKey(sessionId, kept.messageId);
+    const { messageId, raw, targetId } = kept;
+    this.recovery.park(key, new KeptInbound(key, sessionId, messageId, raw, targetId, Date.now(), this.inboundSteps));
+  }
+
+  /** Whether a message that changes `targetId` is kept to be handed back (see keepUnreadInbound). */
+  isChangeKept(sessionId: string, targetId: string): boolean {
+    for (const record of this.recovery.records('receive')) {
+      if (record instanceof KeptInbound && record.sessionId === sessionId && record.targetId === targetId) return true;
+    }
+    return false;
+  }
+
+  /** Whether a change of the same message as `kept` was kept before it, and is still kept. */
+  private keptBefore(kept: KeptInbound): boolean {
+    if (!kept.targetId) return false;
+    for (const record of this.recovery.records('receive')) {
+      if (record === kept) return false;
+      if (record instanceof KeptInbound && record.sessionId === kept.sessionId && record.targetId === kept.targetId) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   /** Keep a message's row the database refused, to store it once it answers (see ReceivedRow). */
   private keepReceivedRow(sessionId: string, row: Message, direction: 'incoming' | 'outgoing', error: unknown): void {

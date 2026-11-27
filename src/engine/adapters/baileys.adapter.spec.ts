@@ -184,6 +184,8 @@ jest.mock('@whiskeysockets/baileys', () => ({
     }
   },
   getContentType: jest.fn(() => 'conversation'),
+  // Plain JSON stands in for the library's Buffer-aware replacer and reviver.
+  BufferJSON: { replacer: (_key: string, value: unknown) => value, reviver: (_key: string, value: unknown) => value },
   // What Baileys counts as unread: every message of these tests is real content, so this is identity-true.
   isRealMessage: jest.fn(() => true),
   // The chat a message is filed under: its own, or the sender's for a broadcast list; without a device suffix.
@@ -216,6 +218,9 @@ jest.mock('@whiskeysockets/baileys', () => ({
       ProtocolMessage: {
         Type: { REVOKE: 0, MESSAGE_EDIT: 14 },
       },
+      SecretEncryptedMessage: { SecretEncType: { UNKNOWN: 0, EVENT_EDIT: 1, MESSAGE_EDIT: 2 } },
+      // A kept message's content is revived into the protocol's classes; plain objects stand in for them here.
+      fromObject: (content: unknown) => content,
     },
     // namespace proto.PinInChat { enum Type } — WAProto/index.d.ts
     PinInChat: { Type: { UNKNOWN_TYPE: 0, PIN_FOR_ALL: 1, UNPIN_FOR_ALL: 2 } },
@@ -14249,5 +14254,78 @@ describe('BaileysAdapter group metadata cache', () => {
       });
       expect(fakeSock.groupMetadata).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('a message whose stored target the store fails to read', () => {
+  const baileys = jest.requireMock<Record<string, jest.Mock>>('@whiskeysockets/baileys');
+  const chat = '628111@s.whatsapp.net';
+  const turns = async (): Promise<void> => {
+    for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r));
+  };
+
+  beforeEach(() => {
+    fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+    baileys.getContentType.mockImplementation(realGetContentType);
+    baileys.normalizeMessageContent.mockImplementation((c: unknown) => c);
+    fakeStore.getMessage.mockRejectedValue(
+      Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
+    );
+  });
+
+  it('is handed to the session as the engine keeps it, and read again only once the session is connected', async () => {
+    const onInboundUnreadable = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onInboundUnreadable });
+    const edit = {
+      key: { remoteJid: chat, fromMe: false, id: 'ENV-A' },
+      message: {
+        secretEncryptedMessage: {
+          targetMessageKey: { id: 'M1', remoteJid: chat, fromMe: false },
+          encPayload: 'eA==',
+          encIv: 'eA==',
+          secretEncType: 2,
+        },
+      },
+      messageTimestamp: 1700000060,
+    };
+
+    fakeSock.fire('messages.upsert', { type: 'notify', messages: [edit] });
+    await turns();
+
+    expect(onInboundUnreadable).toHaveBeenCalledWith({ messageId: 'ENV-A', raw: JSON.stringify(edit), targetId: 'M1' });
+    await expect(adapter.redeliverInbound(JSON.stringify(edit))).resolves.toBe(false);
+    fakeSock.fire('connection.update', { connection: 'open' });
+    await expect(adapter.redeliverInbound(JSON.stringify(edit))).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+    expect(onInboundUnreadable).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an RSVP the library could not decrypt because its read of the event failed', async () => {
+    const onInboundUnreadable = jest.fn();
+    await newAdapter().initialize({ onInboundUnreadable });
+    const [[{ getMessage }]] = baileys.default.mock.calls as Array<
+      [{ getMessage: (key: { remoteJid?: string; id?: string }) => Promise<unknown> }]
+    >;
+    const eventKey = { remoteJid: chat, fromMe: false, id: 'EV1' };
+
+    // The library reads the event with the key the RSVP carries, before the RSVP reaches the adapter.
+    await expect(getMessage(eventKey)).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: chat, fromMe: false, id: 'RSVP-A' },
+          message: {
+            encEventResponseMessage: { eventCreationMessageKey: eventKey, encPayload: 'eA==', encIv: 'eA==' },
+          },
+          messageTimestamp: 1700000061,
+        },
+      ],
+    });
+    await turns();
+
+    expect(onInboundUnreadable).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'RSVP-A' }));
   });
 });

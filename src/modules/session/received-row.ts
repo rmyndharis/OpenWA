@@ -76,3 +76,80 @@ export function restoredReceivedRow(
   }
   return { sessionId: v.s, row: v.r, direction: v.d === 'outgoing' ? 'outgoing' : 'incoming', since: v.t };
 }
+
+/** What a kept inbound message runs, through the projector: its hand-back to the engine, and the log of a loss. */
+export interface KeptInboundSteps {
+  /** Hand the message back to its session's engine; true once it was read, false while the engine cannot take it. */
+  redeliver(kept: KeptInbound): Promise<boolean>;
+  released(kept: KeptInbound, reason?: RecoveryLoss): void;
+}
+
+/**
+ * A message the engine could not read because a stored message it needs (the secret an encrypted edit, reaction, poll
+ * vote or RSVP is read with) could not be read, kept as the engine handed it over to be handed back once the database
+ * answers, and read then as it would have been on arrival (see InboundRedelivery).
+ */
+export class KeptInbound implements RecoveryRecord {
+  readonly lane = 'receive' as const;
+
+  constructor(
+    readonly key: string,
+    readonly sessionId: string,
+    readonly messageId: string,
+    readonly raw: string,
+    /** The message it changes (an edit's, a reaction's, a vote's poll, an RSVP's event), when it names one. */
+    readonly targetId: string | undefined,
+    readonly since: number,
+    private readonly steps: KeptInboundSteps,
+  ) {}
+
+  bytes(): number {
+    return this.raw.length;
+  }
+
+  ageCapped(): boolean {
+    return true;
+  }
+
+  retry(): Promise<boolean> {
+    return this.steps.redeliver(this);
+  }
+
+  lost(reason: RecoveryLoss): void {
+    this.steps.released(this, reason);
+  }
+
+  dropped(): void {
+    this.steps.released(this);
+  }
+}
+
+export const keptInboundKey = (sessionId: string, messageId: string): string => `${sessionId}:inbound:${messageId}`;
+
+/** A kept inbound message as the journal keeps it. */
+interface JournaledInbound {
+  s: string;
+  i: string;
+  m: string;
+  g?: string;
+  t: number;
+}
+
+export const journalKeptInbound = (record: KeptInbound): JournaledInbound => ({
+  s: record.sessionId,
+  i: record.messageId,
+  m: record.raw,
+  ...(record.targetId ? { g: record.targetId } : {}),
+  t: record.since,
+});
+
+/** The message a journal entry holds, or undefined for one that holds none. */
+export function restoredKeptInbound(
+  value: unknown,
+): { sessionId: string; messageId: string; raw: string; targetId?: string; since: number } | undefined {
+  const v = value as Partial<JournaledInbound> | null;
+  if (!v || typeof v.s !== 'string' || typeof v.i !== 'string' || typeof v.m !== 'string' || typeof v.t !== 'number') {
+    return undefined;
+  }
+  return { sessionId: v.s, messageId: v.i, raw: v.m, targetId: typeof v.g === 'string' ? v.g : undefined, since: v.t };
+}

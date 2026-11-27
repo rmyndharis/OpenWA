@@ -202,6 +202,11 @@ export class RecoveryQueue {
     return LANES.reduce((size, lane) => size + this.lanes[lane].size, 0);
   }
 
+  /** The records of a lane, the oldest first. */
+  records(lane: RecoveryLane): IterableIterator<RecoveryRecord> {
+    return this.lanes[lane].values();
+  }
+
   get(lane: RecoveryLane, key: string): RecoveryRecord | undefined {
     return this.lanes[lane].get(key);
   }

@@ -252,6 +252,27 @@ export interface GroupMember {
   admin: boolean;
 }
 
+/** A message as the session keeps it to hand back (see keepUnreadInbound): JSON, its content in the protocol's JSON form. */
+export const keptInboundRaw = (b: typeof BaileysLib, msg: WAMessage): string =>
+  JSON.stringify(msg, b.BufferJSON.replacer);
+
+/**
+ * A kept message read back as it arrived: its content revived into the protocol's own classes, so its bytes, enums and
+ * 64-bit numbers read as they did live rather than as the strings the JSON form holds.
+ */
+export function revivedInbound(b: typeof BaileysLib, raw: string): WAMessage {
+  const msg = JSON.parse(raw, b.BufferJSON.reviver) as WAMessage;
+  if (msg.message) msg.message = b.proto.Message.fromObject(msg.message);
+  return msg;
+}
+
+/** A read of the store that failed, handed on by a reader that cannot go on without what it would have read. */
+class StoreUnreadable extends Error {
+  constructor(readonly cause: unknown) {
+    super('The message store could not be read');
+  }
+}
+
 export interface BaileysEventsHost {
   /** Live socket handle for media re-upload requests (inbound media download). */
   getSocket(): WASocket;
@@ -299,6 +320,13 @@ export interface BaileysEventsHost {
   removeStoredMessage(messageId: string, shouldRemove: (stored: WAMessage) => boolean): Promise<void> | undefined;
   /** A message this session already delivered or sent, from the persistent store; undefined without a store. */
   getStoredMessage(messageId: string): Promise<WAMessage | null> | undefined;
+  /**
+   * Keep a message whose stored target could not be read (the store failed, not answered that it holds none), for the
+   * session to hand back once the store answers (see BaileysEvents.redeliverInbound); undefined without a session.
+   */
+  keepUnreadInbound?(msg: WAMessage, targetId?: string): void;
+  /** Whether the session keeps a message that changes `targetId` (see keepUnreadInbound); undefined without a session. */
+  isChangeKept?(targetId: string): boolean;
   /** The currently-registered admitInbound callback, if any (assigned at initialize()). */
   getAdmitInbound?(): EngineEventCallbacks['admitInbound'];
   /** The Baileys module once loaded (it is, before any socket exists), without waiting for it. */
@@ -634,6 +662,73 @@ export class BaileysEvents {
     return { ...msg, key: { ...msg.key, fromMe: true } };
   }
 
+  /**
+   * A message kept because the stored message it needs could not be read (see keepUnreadInbound), handed back once the
+   * store answers: processed as it would have been on arrival. Throws the store's failure when it still cannot read the
+   * target, so the caller keeps it, rather than keeping it again here.
+   */
+  async redeliverInbound(msg: WAMessage): Promise<void> {
+    const redelivery: { unread?: unknown } = {};
+    await this.processInboundMessage(msg, { generation: this.storeGeneration, redelivery });
+    if (redelivery.unread !== undefined) {
+      throw redelivery.unread instanceof Error ? redelivery.unread : new Error('The message store could not be read');
+    }
+  }
+
+  /**
+   * The library read a stored message through the store, and the read failed. For an RSVP, it reads the event with the
+   * key the RSVP itself carries before the RSVP reaches this delegate, so that very key marks the RSVP it could not
+   * decrypt, which is kept then (see processInboundMessage) and no other.
+   */
+  noteUnreadStoredMessage(key: WAMessageKey): void {
+    this.unreadKeys.add(key);
+  }
+
+  // The keys of stored messages the library failed to read (see noteUnreadStoredMessage).
+  private readonly unreadKeys = new WeakSet<WAMessageKey>();
+
+  /**
+   * A message whose stored target could not be read: kept for the session to hand back once the store answers, or, when
+   * it is such a message handed back, the failure noted for redeliverInbound to throw.
+   */
+  private keepUnread(
+    msg: WAMessage,
+    opts: { redelivery?: { unread?: unknown } },
+    error: unknown,
+    targetId: string | undefined,
+  ): void {
+    if (opts.redelivery) {
+      opts.redelivery.unread = error;
+      return;
+    }
+    this.host.logger.warn(
+      'Keeping a message whose stored target could not be read, to read it once the store answers',
+      {
+        msgId: msg.key.id ?? 'unknown',
+        targetId: targetId ?? 'unknown',
+        error: error instanceof Error ? error.message : String(error),
+        action: 'baileys_inbound_kept',
+      },
+    );
+    this.host.keepUnreadInbound?.(msg, targetId);
+  }
+
+  /**
+   * Whether an edit or reaction is kept behind a change of the same message the session keeps (see
+   * keepUnreadInbound): applied now, it would be undone by the older one handed back after it. Handed back itself, it
+   * comes after that one, in the order both arrived in.
+   */
+  private keptBehind(msg: WAMessage, targetId: string | null | undefined, opts: { redelivery?: unknown }): boolean {
+    if (opts.redelivery || !targetId || this.host.isChangeKept?.(targetId) !== true) return false;
+    this.host.logger.warn('Keeping a change of a message behind one of it that is kept, to land after it', {
+      msgId: msg.key.id ?? 'unknown',
+      targetId,
+      action: 'baileys_inbound_kept_behind',
+    });
+    this.host.keepUnreadInbound?.(msg, targetId);
+    return true;
+  }
+
   handleMessagesUpsert(event: { messages: WAMessage[]; type: string }): void {
     for (const rawMsg of event.messages) {
       if (!rawMsg.message || !rawMsg.key?.remoteJid) {
@@ -967,6 +1062,8 @@ export class BaileysEvents {
       skipMedia?: boolean;
       ticket?: InboundTicket;
       yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R>;
+      // Set for a message kept because its stored target could not be read, handed back (see redeliverInbound).
+      redelivery?: { unread?: unknown };
     },
   ): Promise<void> {
     try {
@@ -1003,6 +1100,10 @@ export class BaileysEvents {
           encrypted?.targetMessageKey?.id,
           opts,
           async (releasePreparation, yieldSlot) => {
+            if (this.keptBehind(msg, encrypted?.targetMessageKey?.id, opts)) {
+              handled = true;
+              return;
+            }
             const revealed = await this.revealEncryptedModification(
               b,
               msg,
@@ -1012,6 +1113,10 @@ export class BaileysEvents {
             );
             if (!revealed || opts.generation !== this.storeGeneration) return;
             handled = true;
+            // The target could not be read: kept to be read once the store answers, not dropped for good.
+            if ('unread' in revealed) {
+              return this.keepUnread(msg, opts, revealed.unread, encrypted?.targetMessageKey?.id ?? undefined);
+            }
             await this.processMessageChange(b, msg, revealed.content, revealed.contentType, {
               ...opts,
               yieldSlot,
@@ -1024,13 +1129,18 @@ export class BaileysEvents {
 
       if (contentType === 'protocolMessage' || contentType === 'reactionMessage') {
         const targetId = normalizedRoot?.protocolMessage?.key?.id ?? normalizedRoot?.reactionMessage?.key?.id;
-        await this.prepareMessageChange(targetId, opts, (releasePreparation, yieldSlot) =>
-          this.processMessageChange(b, msg, normalizedRoot, contentType, {
+        // A delete is never held: it lands now, and whatever is handed back of the message after it is refused.
+        const overwrites =
+          contentType === 'reactionMessage' ||
+          normalizedRoot?.protocolMessage?.type === b.proto.Message.ProtocolMessage.Type.MESSAGE_EDIT;
+        await this.prepareMessageChange(targetId, opts, async (releasePreparation, yieldSlot) => {
+          if (overwrites && this.keptBehind(msg, targetId, opts)) return;
+          await this.processMessageChange(b, msg, normalizedRoot, contentType, {
             ...opts,
             yieldSlot,
             releasePreparation,
-          }),
-        );
+          });
+        });
         return;
       }
 
@@ -1041,8 +1151,22 @@ export class BaileysEvents {
         if (contentType === 'pollUpdateMessage') {
           const pollId = normalizedRoot?.pollUpdateMessage?.pollCreationMessageKey?.id;
           await this.prepareMessageChange(pollId, opts, () =>
-            this.processPollVote(b, msg, remoteJid, chatJid, normalizedRoot, opts.generation),
+            this.processPollVote(b, msg, remoteJid, chatJid, normalizedRoot, opts.generation, opts),
           );
+        }
+        // An RSVP the library decrypts itself, reading the event through the store: one it could not read for a failed
+        // read is kept, and read here once handed back.
+        if (contentType === 'encEventResponseMessage') {
+          const eventKey = normalizedRoot?.encEventResponseMessage?.eventCreationMessageKey;
+          if (opts.redelivery) await this.readKeptEventResponse(b, msg, normalizedRoot, opts);
+          else if (eventKey && this.unreadKeys.has(eventKey)) {
+            this.keepUnread(
+              msg,
+              opts,
+              new Error('The event an RSVP answers could not be read from the store'),
+              eventKey.id ?? undefined,
+            );
+          }
         }
         this.host.logger.debug('Dropping a message that carries no content of its own', {
           action: 'baileys_drop_non_content',
@@ -1685,9 +1809,17 @@ export class BaileysEvents {
   private async readTarget(
     messageId: string,
     purpose: string,
+    strict = false,
   ): Promise<{ key: WAMessageKey; message: WAMessage['message']; processing?: Promise<void> } | null> {
     const processing = this.inboundInFlight.get(messageId);
-    const stored = await this.readStoredMessage(messageId, purpose);
+    let stored: WAMessage | null;
+    try {
+      stored = await this.readStoredMessage(messageId, purpose, strict);
+    } catch (error) {
+      // A store that failed still leaves the copy of a message being processed now, which reads as well.
+      if (!(processing ?? this.inboundInFlight.get(messageId))) throw error;
+      stored = null;
+    }
     if (stored) return { key: stored.key, message: stored.message };
     const inFlight = processing ?? this.inboundInFlight.get(messageId);
     return inFlight ? { key: inFlight.key, message: inFlight.message, processing: inFlight.done } : null;
@@ -1704,10 +1836,13 @@ export class BaileysEvents {
    * which is the price paid here deliberately, because a message nobody ever hears about cannot be
    * recovered at all. The persist side of the same store is already written this way.
    */
-  private async readStoredMessage(messageId: string, purpose: string): Promise<WAMessage | null> {
+  private async readStoredMessage(messageId: string, purpose: string, strict = false): Promise<WAMessage | null> {
     try {
       return (await this.host.getStoredMessage(messageId)) ?? null;
     } catch (err) {
+      // A reader that decrypts with the stored message's secret cannot go on without it: the failure is handed on, so
+      // the message is kept to be read once the store answers rather than dropped as if its target were not stored.
+      if (strict) throw new StoreUnreadable(err);
       this.host.logger.warn(`Could not read the message store while ${purpose}`, {
         msgId: messageId,
         error: err instanceof Error ? err.message : String(err),
@@ -1733,7 +1868,9 @@ export class BaileysEvents {
     contentType: string,
     generation?: number,
   ): Promise<
-    { content: NonNullable<WAMessage['message']>; contentType: 'protocolMessage' | 'reactionMessage' } | undefined
+    | { content: NonNullable<WAMessage['message']>; contentType: 'protocolMessage' | 'reactionMessage' }
+    | { unread: unknown }
+    | undefined
   > {
     try {
       const isEdit = contentType === 'secretEncryptedMessage';
@@ -1750,7 +1887,13 @@ export class BaileysEvents {
         const editType = b.proto.Message.SecretEncryptedMessage.SecretEncType.MESSAGE_EDIT;
         if (type !== editType && type !== 'MESSAGE_EDIT') return undefined;
       }
-      const original = await this.readTarget(targetId, 'reading the message an encrypted edit or reaction targets');
+      let original: Awaited<ReturnType<BaileysEvents['readTarget']>>;
+      try {
+        original = await this.readTarget(targetId, 'reading the message an encrypted edit or reaction targets', true);
+      } catch (error) {
+        if (error instanceof StoreUnreadable) return { unread: error.cause };
+        throw error;
+      }
       if (generation !== undefined && generation !== this.storeGeneration) return undefined;
       const secret = messageSecretOf(original?.message);
       if (!original || !secret) {
@@ -2258,6 +2401,71 @@ export class BaileysEvents {
       if (kind === 'user') return user === phone;
       return kind === 'lid' && user === lidUser;
     };
+  }
+
+  /**
+   * An RSVP kept because the library could not read the event it answers (see noteUnreadStoredMessage), handed back:
+   * decrypted here with the event's stored secret as the library would have (the creator by phone number, the
+   * responder by the key's author), then reported as an RSVP the library decrypted is (emitEventResponse). A store
+   * that still fails hands its failure back; an event it does not hold, or a response that does not read, is dropped
+   * as the library drops it.
+   */
+  private async readKeptEventResponse(
+    b: typeof BaileysLib,
+    msg: WAMessage,
+    content: WAMessage['message'],
+    opts: { redelivery?: { unread?: unknown } },
+  ): Promise<void> {
+    const encrypted = content?.encEventResponseMessage;
+    const eventKey = encrypted?.eventCreationMessageKey;
+    const encPayload = bytesOf(encrypted?.encPayload);
+    const encIv = bytesOf(encrypted?.encIv);
+    if (!eventKey?.id || !encPayload || !encIv) return;
+    let stored: WAMessage | null;
+    try {
+      stored = await this.readStoredMessage(eventKey.id, 'reading the event an RSVP answers', true);
+    } catch (error) {
+      if (error instanceof StoreUnreadable) return this.keepUnread(msg, opts, error.cause, eventKey.id);
+      throw error;
+    }
+    const eventEncKey = messageSecretOf(stored?.message);
+    const socket = this.host.getSocketOrNull();
+    const meId = socket?.user?.id;
+    if (!stored || !eventEncKey || !meId) {
+      this.host.logger.debug('Cannot read a kept RSVP: its event is not stored, or has no secret', {
+        action: 'baileys_event_response_unreadable',
+        msgId: msg.key.id ?? 'unknown',
+        eventId: eventKey.id,
+      });
+      return;
+    }
+    try {
+      const me = b.jidNormalizedUser(meId);
+      const creator = eventKey.participant || eventKey.remoteJid || '';
+      const creatorPn = b.isLidUser(creator)
+        ? ((await socket?.signalRepository?.lidMapping?.getPNForLID(creator)) ?? creator)
+        : creator;
+      const eventCreatorJid = b.getKeyAuthor(
+        { remoteJid: b.jidNormalizedUser(creatorPn), fromMe: me === creatorPn },
+        me,
+      );
+      const responderJid = b.getKeyAuthor(msg.key, me);
+      const response = b.decryptEventResponse(
+        { encPayload, encIv },
+        { eventEncKey, eventCreatorJid, eventMsgId: eventKey.id, responderJid },
+      );
+      await this.emitEventResponse(eventKey, {
+        eventResponseMessageKey: msg.key,
+        senderTimestampMs: response.timestampMs,
+        response,
+      });
+    } catch (error) {
+      this.host.logger.debug('Could not read a kept RSVP', {
+        action: 'baileys_event_response_failed',
+        msgId: msg.key.id ?? 'unknown',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -3156,6 +3364,7 @@ export class BaileysEvents {
     chatJid: string,
     content: WAMessage['message'],
     generation: number,
+    opts: { redelivery?: { unread?: unknown } } = {},
   ): Promise<void> {
     try {
       const pollUpdate = content?.pollUpdateMessage;
@@ -3176,7 +3385,15 @@ export class BaileysEvents {
         return;
       }
 
-      const original = await this.readTarget(targetId, 'reading the poll a vote targets');
+      let original: Awaited<ReturnType<BaileysEvents['readTarget']>>;
+      try {
+        original = await this.readTarget(targetId, 'reading the poll a vote targets', true);
+      } catch (error) {
+        if (!(error instanceof StoreUnreadable)) throw error;
+        // The poll could not be read: the vote is kept to be read once the store answers, not dropped for good.
+        if (generation === this.storeGeneration) this.keepUnread(msg, opts, error.cause, targetId);
+        return;
+      }
       if (generation !== this.storeGeneration) return;
       const secret = messageSecretOf(original?.message);
       const normalizedPoll = original?.message
