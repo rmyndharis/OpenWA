@@ -447,18 +447,11 @@ export function ApiKeys() {
 
   const editVisit = useRef<object | null>(null);
 
-  const openEdit = useCallback(
-    (apiKey: ApiKey) => {
-      editVisit.current = {};
-      setEditingKey(apiKey);
-      const draft = apiKeyDraft(apiKey);
-      setEditDraft({
-        ...draft,
-        deniedPermissions: [...new Set([...draft.deniedPermissions, ...inheritedDeniedPermissions])],
-      });
-    },
-    [inheritedDeniedPermissions],
-  );
+  const openEdit = useCallback((apiKey: ApiKey) => {
+    editVisit.current = {};
+    setEditingKey(apiKey);
+    setEditDraft(apiKeyDraft(apiKey));
+  }, []);
 
   const closeEdit = () => {
     editVisit.current = null;
@@ -656,11 +649,13 @@ export function ApiKeys() {
               <span className="actions-cell">
                 {/* No per-row copy: the full key only exists once (post-creation modal); the row
                     only has the prefix, so a copy button here could only copy a useless fragment. */}
-                {apiKey.isActive && (
-                  <button className="icon-btn" onClick={() => openEdit(apiKey)} title={t('apiKeys.actions.edit')}>
-                    <Pencil size={16} />
-                  </button>
-                )}
+                {/* A restricted key may change only keys that block everything it blocks; the API refuses the rest. */}
+                {apiKey.isActive &&
+                  inheritedDeniedPermissions.every(capability => apiKey.deniedPermissions?.includes(capability)) && (
+                    <button className="icon-btn" onClick={() => openEdit(apiKey)} title={t('apiKeys.actions.edit')}>
+                      <Pencil size={16} />
+                    </button>
+                  )}
                 {apiKey.isActive && (
                   <button
                     className="icon-btn"
@@ -682,7 +677,7 @@ export function ApiKeys() {
           },
         }),
       ]),
-    [t, sessions, openEdit],
+    [t, sessions, openEdit, inheritedDeniedPermissions],
   );
 
   const table = useTable({

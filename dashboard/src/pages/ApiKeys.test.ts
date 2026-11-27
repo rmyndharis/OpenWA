@@ -497,6 +497,18 @@ test('an active admin key can be edited; a revoked key cannot', async () => {
   rtl.screen.getByLabelText('Allowed IP addresses (optional)');
 });
 
+test('a restricted signed-in key offers Edit only on keys that block everything it blocks', async () => {
+  keyList = [
+    { ...billingBot, deniedPermissions: ['messages:read', 'messages:send'] },
+    { ...billingBot, id: 'key-2', name: 'ops', keyPrefix: 'owa_k1cd', deniedPermissions: [] },
+  ];
+  renderApiKeys(['messages:read']);
+  await rtl.screen.findByText('owa_k1cd****');
+  const rows = Array.from(document.querySelectorAll('tbody tr'));
+  assert.equal(rows[0].querySelectorAll('[title="Edit access"]').length, 1);
+  assert.equal(rows[1].querySelectorAll('[title="Edit access"]').length, 0);
+});
+
 async function openEdit(key: Record<string, unknown>): Promise<HTMLButtonElement> {
   keyList = [key];
   renderApiKeys();

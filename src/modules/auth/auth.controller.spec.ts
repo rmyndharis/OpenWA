@@ -186,22 +186,36 @@ describe('AuthController — API-key lifecycle audit logging', () => {
     expect(ctx?.metadata?.after?.role).toBe('admin');
   });
 
-  it("adds the acting key's blocked capabilities when updating another key", async () => {
-    const restrictedActor = {
-      ...actor,
-      deniedPermissions: [ApiKeyCapability.MESSAGES_READ],
-    } as ApiKey;
+  it('refuses a restricted update of a key that lacks one of its blocks, rather than adding it', async () => {
+    const restrictedActor = { ...actor, deniedPermissions: [ApiKeyCapability.MESSAGES_READ] } as ApiKey;
+    authService.findOne.mockResolvedValueOnce({ id: 'k1', deniedPermissions: [ApiKeyCapability.SESSIONS_CREATE] });
+
+    await expect(controller.update('k1', { name: 'renamed' }, makeReq(), restrictedActor)).rejects.toThrow(
+      'may change only keys that block everything it blocks',
+    );
+    expect(authService.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a restricted update that drops one of its blocks from the target', async () => {
+    const restrictedActor = { ...actor, deniedPermissions: [ApiKeyCapability.MESSAGES_READ] } as ApiKey;
+    authService.findOne.mockResolvedValueOnce({ id: 'k1', deniedPermissions: [ApiKeyCapability.MESSAGES_READ] });
+
+    await expect(controller.update('k1', { deniedPermissions: [] }, makeReq(), restrictedActor)).rejects.toThrow(
+      'must keep those blocks',
+    );
+    expect(authService.update).not.toHaveBeenCalled();
+  });
+
+  it('passes a restricted update of a key that carries every block through unchanged', async () => {
+    const restrictedActor = { ...actor, deniedPermissions: [ApiKeyCapability.MESSAGES_READ] } as ApiKey;
     authService.findOne.mockResolvedValueOnce({
       id: 'k1',
-      deniedPermissions: [ApiKeyCapability.SESSIONS_CREATE],
+      deniedPermissions: [ApiKeyCapability.MESSAGES_READ, ApiKeyCapability.SESSIONS_CREATE],
     });
 
     await controller.update('k1', { name: 'renamed' }, makeReq(), restrictedActor);
 
-    expect(authService.update).toHaveBeenCalledWith('k1', {
-      name: 'renamed',
-      deniedPermissions: [ApiKeyCapability.SESSIONS_CREATE, ApiKeyCapability.MESSAGES_READ],
-    });
+    expect(authService.update).toHaveBeenCalledWith('k1', { name: 'renamed' });
   });
 
   it('does not let a capability-restricted key change its own blocked capabilities', async () => {

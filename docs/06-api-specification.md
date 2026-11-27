@@ -5242,7 +5242,7 @@ No content (empty body; explicit `@HttpCode(204)`).
 
 ### 6.4.9 API Keys
 
-API keys are managed under `/api/auth/api-keys`. All management routes require an **ADMIN** key without a session or chat scope and with `apikeys:manage` available. A capability-restricted ADMIN may still list and manage keys. On create, the server unions the caller's `deniedPermissions` into the new key. On update, the target's resulting list is likewise unioned with the caller's list; if the target is the caller itself, changing that list is refused with `403`. Thus a delegated admin may add restrictions but cannot grant a capability it lacks. The dashboard shows inherited restrictions selected and locked. The plaintext key string is returned **only once**, at creation. Validation of the caller's own key lives at `POST /api/auth/validate` and remains an explicit capability-agnostic self-check; normal IP validation still applies.
+API keys are managed under `/api/auth/api-keys`. All management routes require an **ADMIN** key without a session or chat scope and with `apikeys:manage` available. A capability-restricted ADMIN may still list and manage keys. On create, the server unions the caller's `deniedPermissions` into the new key. On update, the target must already block everything the caller blocks and the resulting list must keep those blocks; otherwise the update is refused with `403`, as is a change to the caller's own list. Thus a delegated admin cannot grant a capability it lacks. The dashboard shows inherited restrictions selected and locked, and offers Edit only on keys that carry all of them. The plaintext key string is returned **only once**, at creation. Validation of the caller's own key lives at `POST /api/auth/validate` and remains an explicit capability-agnostic self-check; normal IP validation still applies.
 
 There is no rotate route: rotate a key by creating a new one, moving its clients to it, then revoking the old one with `POST /api/auth/api-keys/:id/revoke`.
 
@@ -5409,7 +5409,7 @@ Returns the updated key (no plaintext).
 }
 ```
 
-**Errors:** `400` validation (incl. `forbidNonWhitelisted` for unknown fields such as `isActive`, and more than 2000 `allowedChats` entries), or an `expiresAt` that does not parse as a date · `401` missing/invalid key · `403` key role below ADMIN, or the key is session-scoped or restricted with `allowedChats` · `404` not found · `409` change would remove the last usable admin key, or no other usable admin key lasts at least as long
+**Errors:** `400` validation (incl. `forbidNonWhitelisted` for unknown fields such as `isActive`, and more than 2000 `allowedChats` entries), or an `expiresAt` that does not parse as a date · `401` missing/invalid key · `403` key role below ADMIN, or the key is session-scoped or restricted with `allowedChats`, or the key has blocked capabilities and the target lacks one of them, the change would drop one, or it changes the caller's own list · `404` not found · `409` change would remove the last usable admin key, or no other usable admin key lasts at least as long
 
 #### POST /api/auth/api-keys/:id/revoke
 

@@ -85,7 +85,7 @@ export class AuthController {
   }
 
   /** A restricted admin may delegate key management, but never grant a capability it cannot use. */
-  private inheritDeniedPermissions<T extends CreateApiKeyDto | UpdateApiKeyDto>(dto: T, actor?: ApiKey): T {
+  private inheritDeniedPermissions(dto: CreateApiKeyDto, actor?: ApiKey): CreateApiKeyDto {
     const inherited = apiKeyDeniedCapabilities(actor);
     if (inherited.length === 0) return dto;
     const requested = normalizeDeniedCapabilities(dto.deniedPermissions) ?? [];
@@ -93,6 +93,26 @@ export class AuthController {
       ...dto,
       deniedPermissions: [...new Set([...requested, ...inherited])],
     };
+  }
+
+  /**
+   * A capability-restricted admin changes only keys that already block everything it blocks, keeps those blocks, and
+   * cannot change its own list. An update is never rewritten to add them: it is refused instead.
+   */
+  private assertWithinOwnBlocks(target: ApiKey, dto: UpdateApiKeyDto, actor?: ApiKey): void {
+    const own = apiKeyDeniedCapabilities(actor);
+    if (own.length === 0) return;
+    const stored = apiKeyDeniedCapabilities(target);
+    const next =
+      dto.deniedPermissions === undefined ? stored : (normalizeDeniedCapabilities(dto.deniedPermissions) ?? []);
+    if (actor?.id === target.id && (next.length !== stored.length || stored.some(c => !next.includes(c)))) {
+      throw new ForbiddenException('A capability-restricted API key cannot change its own blocked capabilities');
+    }
+    if (!own.every(c => stored.includes(c) && next.includes(c))) {
+      throw new ForbiddenException(
+        'A capability-restricted API key may change only keys that block everything it blocks, and must keep those blocks',
+      );
+    }
   }
 
   @Capability(ApiKeyCapability.APIKEYS_MANAGE)
@@ -170,29 +190,8 @@ export class AuthController {
     @CurrentApiKey() actor?: ApiKey,
   ): Promise<ApiKeyResponseDto> {
     const before = await this.authService.findOne(id);
-    const actorDenied = apiKeyDeniedCapabilities(actor);
-    if (actorDenied.length > 0 && actor?.id === id && dto.deniedPermissions !== undefined) {
-      const beforeDenied = apiKeyDeniedCapabilities(before);
-      const requested = normalizeDeniedCapabilities(dto.deniedPermissions) ?? [];
-      if (
-        beforeDenied.length !== requested.length ||
-        beforeDenied.some(capability => !requested.includes(capability))
-      ) {
-        throw new ForbiddenException('A capability-restricted API key cannot change its own blocked capabilities');
-      }
-    }
-    const effectiveDto =
-      actorDenied.length === 0
-        ? dto
-        : this.inheritDeniedPermissions(
-            {
-              ...dto,
-              deniedPermissions:
-                dto.deniedPermissions === undefined ? apiKeyDeniedCapabilities(before) : dto.deniedPermissions,
-            },
-            actor,
-          );
-    const k = await this.authService.update(id, effectiveDto);
+    this.assertWithinOwnBlocks(before, dto, actor);
+    const k = await this.authService.update(id, dto);
     await this.auditService.logInfo(AuditAction.API_KEY_UPDATED, {
       ...this.auditContext(req, actor),
       metadata: {

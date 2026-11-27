@@ -102,10 +102,11 @@ lookups require OPERATOR. These permissions still apply within the key's IP, ses
 
 The key-lifecycle routes (`/api/auth/api-keys`) are fenced with `@RequireUnscopedKey()`: session- and
 chat-scoped keys are refused. A capability-restricted ADMIN may manage keys unless it blocks
-`apikeys:manage`, but every created or updated target automatically inherits all of the caller's
-blocked capabilities; such a caller cannot change its own blocklist. It therefore cannot mint or
-widen credentials beyond its own confinement. The session-scope fence also covers other routes that
-act on the whole deployment:
+`apikeys:manage`. A key it creates inherits all of its blocked capabilities. It may update only a key
+that already blocks everything it blocks, and the update must keep those blocks; any other update is
+refused with `403`, as is a change to its own blocklist. It therefore cannot mint or widen
+credentials beyond its own confinement. The session-scope fence also covers other routes that act on
+the whole deployment:
 every `/api/infra` route, the plugin routes (except the per-session config override), `GET /api/settings`,
 `GET /api/stats/overview` and `/messages`, `POST /api/sessions` and the proxy setter. `SECURITY.md` lists them.
 
@@ -168,7 +169,7 @@ there. Infrastructure data and storage export and import, `PUT /api/infra/config
 `POST /api/infra/restart` and the plugin lifecycle writes require a fully unrestricted key.
 Integration instances, redrive and the per-session plugin config refuse a key
 with any blocked capability, and keep their session fence for a session-scoped key. API-key management
-instead uses restriction inheritance as described above.
+instead follows the rules above.
 
 The dashboard receives the active key's blocklist in the browser-session metadata. A page whose
 primary read capability is blocked is absent from the sidebar and its route is not mounted, so a
