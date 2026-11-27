@@ -9,6 +9,9 @@ import { updateMessageMetadata } from '../message/message-metadata';
 import { type MutationSource, type StoredMessageRef } from './message-mutation-guard';
 import { judgeStoredRow, outboxPayloadPredicate, revokeSourceFor } from './message-row-judgement';
 
+/** A judging read that worked and found no row under the id. */
+const isAbsent = (verdict: { exists: boolean; unread?: boolean }): boolean => !verdict.exists && !verdict.unread;
+
 /**
  * Applies stored-message mutations — reactions, inbound edits, REST outbound-edit echoes — behind
  * the per-message KeyedMutationQueue handed in by MessageProjector, so every writer of one
@@ -178,6 +181,8 @@ export class MessageMutationProjector {
             where: { sessionId: id, waMessageId: message.messageId, type: 'revoked' },
             select: { id: true },
           })) !== null;
+        if (!revoked && isAbsent(verdict))
+          await this.rewriteDeliveries(id, message.messageId, message.body, source, verdict);
       }
     } catch (err) {
       this.logger.error(`Failed to update edited message: ${message.messageId}`, String(err));
@@ -190,9 +195,11 @@ export class MessageMutationProjector {
   }
 
   /**
-   * Carry the text an edit wrote to the stored row into the copies its deliveries still hold (open outbox rows, the
-   * event data a failed delivery keeps), each judged by its payload as a revoke judges them, so a replay, a queued
-   * job or a redrive sends the edited text.
+   * Carry the text of an edit into the copies its deliveries still hold (open outbox rows, the event data a failed
+   * delivery keeps), each judged by its payload as a revoke judges them, so a replay, a queued job or a redrive sends
+   * the edited text: after the edit changed the stored row, or with no row to write (a message that is not stored,
+   * such as an own send to a chat with disappearing messages while STORE_EPHEMERAL_MESSAGES=false), where only a
+   * payload that names the edit's chat takes it.
    */
   private async rewriteDeliveries(
     sessionId: string,
@@ -252,6 +259,8 @@ export class MessageMutationProjector {
           if (result?.affected) {
             await this.rewriteDeliveries(sessionId, messageId, body, source, verdict);
             await this.onTextChanged(sessionId, messageId);
+          } else if (verdict && isAbsent(verdict)) {
+            await this.rewriteDeliveries(sessionId, messageId, body, source, verdict);
           }
         } catch (err) {
           this.logger.warn(`Failed to update stored body of edited message ${messageId}`, { error: String(err) });

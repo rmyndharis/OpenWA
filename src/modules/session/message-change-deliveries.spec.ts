@@ -63,6 +63,7 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
   let sessionId: string;
   let webhook: Webhook;
   let retentionHours: number;
+  let engine: IWhatsAppEngine;
 
   beforeEach(async () => {
     jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
@@ -123,7 +124,8 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
       configService,
     );
     const engines = new EngineRegistry();
-    engines.set(sessionId, {} as IWhatsAppEngine);
+    engine = {} as IWhatsAppEngine;
+    engines.set(sessionId, engine);
     projector = new MessageProjector(
       ds.getRepository(Message),
       ds.getRepository(Session),
@@ -440,6 +442,99 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
         expect(bodies()).toEqual(expectations[change].redriven);
       },
     );
+  });
+
+  // An own send in a chat with disappearing messages is not stored while STORE_EPHEMERAL_MESSAGES=false, and its
+  // message.sent delivery is still made: the edit has no row to write, and only the copies to carry.
+  describe('an edit of an own send the gateway does not store', () => {
+    const ephemeralSend = {
+      id: 'M-16',
+      chatId: CHAT,
+      from: '628222@c.us',
+      to: CHAT,
+      fromMe: true,
+      type: 'text',
+      body: 'first text',
+      timestamp: 1_700_000_000,
+      ephemeralDuration: 86_400,
+    };
+    const edits = {
+      'from the engine': () =>
+        projector.applyMessageEditQueued(sessionId, {
+          messageId: 'M-16',
+          chatId: CHAT,
+          body: 'edited text',
+          fromMe: true,
+        } as never),
+      'through the API': () =>
+        projector.recordOutboundMessageEdit(sessionId, 'M-16', 'edited text', {
+          kind: 'edit',
+          chatId: CHAT,
+          fromMe: true,
+        }),
+    } as const;
+    const bodies = (): unknown[] => postedBodies().map(data => (data as { body: string }).body);
+    const settle = async (until: () => boolean): Promise<void> => {
+      for (let turn = 0; turn < 200 && !until(); turn++) await new Promise(r => setImmediate(r));
+    };
+    let previous: string | undefined;
+
+    beforeEach(async () => {
+      previous = process.env.STORE_EPHEMERAL_MESSAGES;
+      process.env.STORE_EPHEMERAL_MESSAGES = 'false';
+      await ds.getRepository(Webhook).update(webhook.id, { events: ['message.sent'], retryCount: 2 });
+      mockFetch.mockResolvedValue(new Response('down', { status: 500 }));
+    });
+    afterEach(() => {
+      if (previous === undefined) delete process.env.STORE_EPHEMERAL_MESSAGES;
+      else process.env.STORE_EPHEMERAL_MESSAGES = previous;
+    });
+
+    it.each(Object.keys(edits) as Array<keyof typeof edits>)(
+      'reaches the retry of its delivery when it comes %s',
+      async edit => {
+        let endBackoff: (() => void) | undefined;
+        (sleep as unknown as jest.Mock).mockImplementationOnce(() => new Promise<void>(r => (endBackoff = r)));
+
+        projector.handleOwnSendEcho(sessionId, engine, ephemeralSend as never);
+        await settle(() => endBackoff !== undefined);
+        await edits[edit]();
+        await settle(() => false);
+        endBackoff!();
+        await settle(() => mockFetch.mock.calls.length >= 2);
+        await settle(() => false);
+
+        expect(await ds.getRepository(Message).count()).toBe(0);
+        expect(bodies()).toEqual(['first text', 'edited text']);
+      },
+    );
+
+    it('reaches the copy its failed delivery keeps, which a redrive then sends', async () => {
+      await ds.getRepository(Webhook).update(webhook.id, { retryCount: 1 });
+
+      projector.handleOwnSendEcho(sessionId, engine, ephemeralSend as never);
+      await settle(() => false);
+      await settle(() => false);
+      expect(await ds.getRepository(WebhookDeliveryFailure).count()).toBe(1);
+      await edits['through the API']();
+
+      mockFetch.mockReset();
+      mockFetch.mockResolvedValue(new Response('ok', { status: 200 }));
+      await redrive.redrive({ sessionId });
+      expect(bodies()).toEqual(['edited text']);
+    });
+
+    it("leaves the copies of another chat's message under the id alone", async () => {
+      await openDelivery('M-17', 'pending', OTHER_CHAT);
+
+      await projector.recordOutboundMessageEdit(sessionId, 'M-17', 'edited text', {
+        kind: 'edit',
+        chatId: CHAT,
+        fromMe: false,
+      });
+
+      expect((await delivered('M-17'))?.payload).toMatchObject({ body: 'first text' });
+    });
   });
 
   describe('a revoke the database stops answering after, once the row is cleared', () => {
