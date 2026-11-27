@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RecoveryJournal } from './recovery-journal';
 import { LoggerService } from '../services/logger.service';
+import { KeptHistory } from '../../modules/session/received-row';
+import type { IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import {
   RECOVERY_MAX_RECORD_FAILURES,
   RecoveryQueue,
@@ -21,8 +23,8 @@ describe('RecoveryQueue', () => {
   let log: string[];
   const options = (over: Partial<RecoveryQueueOptions> = {}): RecoveryQueueOptions => ({
     maxBytes: 1000,
-    maxRecords: { send: 10, receive: 10, change: 3, dispatch: 10 },
-    maxAgeMs: { send: 60_000, receive: 60_000, change: 60_000, dispatch: 60_000 },
+    maxRecords: { send: 10, receive: 10, history: 10, change: 3, dispatch: 10 },
+    maxAgeMs: { send: 60_000, receive: 60_000, history: 60_000, change: 60_000, dispatch: 60_000 },
     baseDelayMs: 1000,
     capDelayMs: 8000,
     now: () => now,
@@ -246,6 +248,25 @@ describe('RecoveryQueue', () => {
     expect(queue.get('receive', 'clear')).toBeDefined();
   });
 
+  it('gives up a history batch before the older records of other lanes once the byte budget is spent', () => {
+    const queue = new RecoveryQueue(options());
+    const released: Array<[string, RecoveryLoss | undefined]> = [];
+    const batch = new KeptHistory(
+      'history',
+      's1',
+      [{ id: 'H-1', chatId: '628111@c.us', body: 'x'.repeat(500) } as unknown as IncomingMessage],
+      now++,
+      { store: () => Promise.resolve(true), released: (kept, reason) => released.push([kept.key, reason]) },
+    );
+    queue.park('row', record('row', 'receive', { bytes: 300 }));
+    queue.park('history', batch);
+    queue.park('dispatch', record('dispatch', 'dispatch', { bytes: 300 }));
+
+    expect(released).toEqual([['history', 'bytes']]);
+    expect(log).toEqual([]);
+    expect(queue.get('receive', 'row')).toBeDefined();
+  });
+
   it('counts a record against the byte budget as it was last measured', async () => {
     const queue = new RecoveryQueue(options());
     let size = 600;
@@ -401,8 +422,8 @@ describe('RecoveryQueue with a journal', () => {
   let now: number;
   const options = (over: Partial<RecoveryQueueOptions> = {}): RecoveryQueueOptions => ({
     maxBytes: 1000,
-    maxRecords: { send: 10, receive: 10, change: 3, dispatch: 10 },
-    maxAgeMs: { send: 60_000, receive: 60_000, change: 60_000, dispatch: 60_000 },
+    maxRecords: { send: 10, receive: 10, history: 10, change: 3, dispatch: 10 },
+    maxAgeMs: { send: 60_000, receive: 60_000, history: 60_000, change: 60_000, dispatch: 60_000 },
     baseDelayMs: 1000,
     capDelayMs: 8000,
     now: () => now,
@@ -509,7 +530,9 @@ describe('RecoveryQueue with a journal', () => {
     first.park('d', kept('d', 'dispatch', away));
     restart();
 
-    const queue = new RecoveryQueue(options({ maxRecords: { send: 10, receive: 10, change: 1, dispatch: 10 } }));
+    const queue = new RecoveryQueue(
+      options({ maxRecords: { send: 10, receive: 10, history: 10, change: 1, dispatch: 10 } }),
+    );
     queue.register('dispatch', codec('dispatch'));
     await queue.flush();
     await jest.advanceTimersByTimeAsync(5000);

@@ -3,11 +3,12 @@ import type { RecoveryJournal } from './recovery-journal';
 
 /**
  * Work the database refused, kept in memory until it answers again, in the order it is retried: a send's own row
- * first, then a received message's row and an engine message whose stored target could not be read (each must exist
- * or be read before changes are judged against it), then message changes, then webhook dispatches.
+ * first, then a received message's row and an engine message whose stored target could not be read, then the rows of
+ * history messages (each must exist or be read before changes are judged against it), then message changes, then
+ * webhook dispatches.
  */
-export type RecoveryLane = 'send' | 'receive' | 'change' | 'dispatch';
-const LANES: RecoveryLane[] = ['send', 'receive', 'change', 'dispatch'];
+export type RecoveryLane = 'send' | 'receive' | 'history' | 'change' | 'dispatch';
+const LANES: RecoveryLane[] = ['send', 'receive', 'history', 'change', 'dispatch'];
 
 /** The key a send's SENT write is kept under in the `send` lane, by the message id it writes. */
 export const sendRerunKey = (sessionId: string, waMessageId: string): string => `${sessionId}:${waMessageId}`;
@@ -78,6 +79,8 @@ export const RECOVERY_MAX_BYTES = 64 * 1024 * 1024;
 export const RECOVERY_MAX_RECORDS: Readonly<Record<RecoveryLane, number>> = {
   send: 1000,
   receive: 2000,
+  // Batches of history messages, a lane of their own: one history sync must not push received rows or copies out.
+  history: 100,
   change: 1000,
   dispatch: 10_000,
 };
@@ -100,6 +103,7 @@ export function recoveryQueueOptions(postgres: boolean, graceMs: number): Recove
     maxAgeMs: {
       send: RECOVERY_MAX_AGE_MS,
       receive: RECOVERY_MAX_AGE_MS,
+      history: RECOVERY_MAX_AGE_MS,
       change: RECOVERY_MAX_AGE_MS,
       dispatch: RECOVERY_MAX_AGE_MS,
     },
@@ -136,6 +140,7 @@ export class RecoveryQueue {
   private readonly lanes: Record<RecoveryLane, Map<string, RecoveryRecord>> = {
     send: new Map(),
     receive: new Map(),
+    history: new Map(),
     change: new Map(),
     dispatch: new Map(),
   };

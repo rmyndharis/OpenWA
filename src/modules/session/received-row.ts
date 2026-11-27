@@ -1,4 +1,5 @@
 import type { RecoveryLoss, RecoveryRecord } from '../../common/utils/recovery-queue';
+import type { IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 
 /** What a kept received row runs, through the projector: its insert, and the log of a loss. */
 export interface ReceivedRowSteps {
@@ -205,4 +206,71 @@ export function restoredKeptInbound(
   ];
   const kind = kinds.includes(v.c) ? (v.c as KeptInboundKind) : 'message';
   return { sessionId: v.s, messageId: v.i, raw: v.m, kind, targetId, since: v.t };
+}
+
+/** What a kept batch of history messages runs, through the projector: its insert, and the log of a loss. */
+export interface KeptHistorySteps {
+  /** Store the batch as a history sync stores it, idempotent; throws while the database refuses it. */
+  store(kept: KeptHistory): Promise<boolean>;
+  released(kept: KeptHistory, reason?: RecoveryLoss): void;
+}
+
+/**
+ * A batch of history messages the database refused, kept to be stored once it answers, as the history sync would have
+ * stored it: what is in the table by then stands. Its lane has a bound of its own, and the batch goes first for bytes,
+ * so one sync in an outage pushes nothing else out. A change of one of its messages waits for its row.
+ */
+export class KeptHistory implements RecoveryRecord {
+  readonly lane = 'history' as const;
+  private readonly size: number;
+
+  constructor(
+    readonly key: string,
+    readonly sessionId: string,
+    readonly messages: IncomingMessage[],
+    readonly since: number,
+    private readonly steps: KeptHistorySteps,
+  ) {
+    this.size = JSON.stringify(messages).length;
+  }
+
+  bytes(): number {
+    return this.size;
+  }
+
+  ageCapped(): boolean {
+    return true;
+  }
+
+  expendable(): boolean {
+    return true;
+  }
+
+  retry(): Promise<boolean> {
+    return this.steps.store(this);
+  }
+
+  lost(reason: RecoveryLoss): void {
+    this.steps.released(this, reason);
+  }
+
+  dropped(): void {
+    this.steps.released(this);
+  }
+}
+
+/** A kept batch of history messages as the journal keeps it. */
+export const journalKeptHistory = (record: KeptHistory): { s: string; m: IncomingMessage[]; t: number } => ({
+  s: record.sessionId,
+  m: record.messages,
+  t: record.since,
+});
+
+/** The batch a journal entry holds, or undefined for one that holds none. */
+export function restoredKeptHistory(
+  value: unknown,
+): { sessionId: string; messages: IncomingMessage[]; since: number } | undefined {
+  const v = value as { s?: unknown; m?: unknown; t?: unknown } | null;
+  if (!v || typeof v.s !== 'string' || !Array.isArray(v.m) || typeof v.t !== 'number') return undefined;
+  return { sessionId: v.s, messages: v.m as IncomingMessage[], since: v.t };
 }

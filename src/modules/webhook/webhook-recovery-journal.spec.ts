@@ -31,6 +31,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { SessionLidResolver } from '../session/session-lid-resolver.service';
 import { LoggerService } from '../../common/services/logger.service';
+import { waitUntil } from '../../../test/helpers/wait-until';
 import { RecoveryJournal } from '../../common/utils/recovery-journal';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -658,6 +659,46 @@ describe('What the database refused, across a restart', () => {
     await recover();
 
     expect(await ds.getRepository(ChatState).findOneBy({ sessionId, chatId: CHAT })).toMatchObject({ pinned: true });
+  });
+
+  it('stores history messages refused before a crash once the database answers', async () => {
+    outage = 'on';
+    await node.projector.persistHistoryMessages(sessionId, node.engines.get(sessionId)!, [
+      { ...received('H-1'), body: 'old text' } as never,
+    ]);
+    await settle();
+
+    await crash();
+    node = boot({ engine: false });
+    await recover();
+
+    expect((await ds.getRepository(Message).find({ where: { sessionId } })).map(row => row.waMessageId)).toEqual([
+      'H-1',
+    ]);
+  });
+
+  it('holds an edit of a history message refused before a crash until its row is stored', async () => {
+    outage = 'on';
+    await node.projector.persistHistoryMessages(sessionId, node.engines.get(sessionId)!, [
+      { ...received('H-1'), body: 'old text' } as never,
+    ]);
+    await settle();
+    await crash();
+    node = boot({ engine: false });
+    // No pass of its own stores the batch before the edit is judged: the database answers, and only recover() runs one.
+    clearTimeout((node.delivery.recoveryQueue() as unknown as { timer?: ReturnType<typeof setTimeout> }).timer);
+    outage = 'off';
+
+    node.projector.applyMessageEditQueued(sessionId, {
+      messageId: 'H-1',
+      chatId: CHAT,
+      body: 'edited text',
+      fromMe: false,
+    } as never);
+    await waitUntil(() => posted().some(post => post.event === 'message.edited'));
+    await recover();
+
+    expect(await rowOf('H-1')).toMatchObject({ body: 'edited text' });
   });
 
   it('lets go of what it cannot read back as a record, and of copies whose queued job will never run here', async () => {

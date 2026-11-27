@@ -922,6 +922,82 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
     });
   });
 
+  describe('history messages the database refused', () => {
+    const history = (id: string, body = 'old text'): IncomingMessage =>
+      ({
+        id,
+        chatId: CHAT,
+        from: CHAT,
+        to: '628222@c.us',
+        fromMe: false,
+        type: 'text',
+        body,
+        timestamp: 1_700_000_000,
+      }) as unknown as IncomingMessage;
+    const rows = async () =>
+      (await ds.getRepository(Message).find({ where: { sessionId }, order: { waMessageId: 'ASC' } })).map(row => [
+        row.waMessageId,
+        row.body,
+      ]);
+    const lostAs = (action: string) =>
+      ((LoggerService.prototype.error as jest.Mock).mock.calls as unknown[][])
+        .map(call => call.at(-1) as { action?: string; count?: number } | undefined)
+        .filter(meta => meta?.action === action);
+
+    it('are kept and stored once the database answers', async () => {
+      outage = 'writes';
+      await projector.persistHistoryMessages(sessionId, engine, [history('H-1'), history('H-2')]);
+      expect(await rows()).toEqual([]);
+
+      await recover();
+
+      expect(await rows()).toEqual([
+        ['H-1', 'old text'],
+        ['H-2', 'old text'],
+      ]);
+    });
+
+    it('hold an edit of one of them until its row is stored, rather than reading it absent', async () => {
+      outage = 'writes';
+      await projector.persistHistoryMessages(sessionId, engine, [history('H-1')]);
+      outage = 'off';
+      projector.applyMessageEditQueued(sessionId, {
+        messageId: 'H-1',
+        chatId: CHAT,
+        body: 'edited text',
+        fromMe: false,
+      } as never);
+      await settle();
+
+      await recover();
+      await recover();
+
+      expect(await rows()).toEqual([['H-1', 'edited text']]);
+    });
+
+    it('have a bound of their own, the oldest batch given up with a loss logged, the received messages untouched', async () => {
+      outage = 'writes';
+      void projector.handleInboundMessage(sessionId, engine, history('R-9', 'live text'));
+      await settle(200);
+      for (let i = 0; i <= RECOVERY_MAX_RECORDS.history; i++) {
+        await projector.persistHistoryMessages(sessionId, engine, [history(`B-${i}`)]);
+      }
+
+      expect(lostAs('history_messages_lost')).toEqual([expect.objectContaining({ reason: 'count', count: 1 })]);
+      expect(projector.recoveryQueue().get('receive', `${sessionId}:R-9`)).toBeDefined();
+    });
+
+    it('are dropped at an unlink of the account', async () => {
+      outage = 'writes';
+      await projector.persistHistoryMessages(sessionId, engine, [history('H-1')]);
+
+      projector.forgetKeptInbound(sessionId);
+      await recover();
+
+      expect(await rows()).toEqual([]);
+    });
+  });
+
   describe('a received message whose row the database refused', () => {
     const msg = {
       id: 'R-1',

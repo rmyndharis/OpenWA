@@ -51,6 +51,10 @@ import {
   keptInboundKey,
   restoredKeptInbound,
   restoredReceivedRow,
+  KeptHistory,
+  journalKeptHistory,
+  restoredKeptHistory,
+  type KeptHistorySteps,
   type KeptInboundKind,
   type KeptInboundSteps,
   type ReceivedRowSteps,
@@ -658,6 +662,19 @@ export class MessageProjector {
           : undefined;
       },
     });
+    // History batches the database refused come back too, each holding the changes of its messages.
+    this.recovery.register('history', {
+      encode: record => (record instanceof KeptHistory ? journalKeptHistory(record) : undefined),
+      decode: (key, value) => {
+        const restored = restoredKeptHistory(value);
+        if (!restored) return undefined;
+        for (const message of restored.messages) {
+          const id = `${restored.sessionId}:${message.id}`;
+          this.historyRows.set(id, (this.historyRows.get(id) ?? 0) + 1);
+        }
+        return new KeptHistory(key, restored.sessionId, restored.messages, restored.since, this.historySteps);
+      },
+    });
     // What the last process kept of these changes comes back before anything is tried, its deliveries held again.
     this.recovery.register('change', {
       encode: record => journalChange(record as ParkedChange),
@@ -674,7 +691,8 @@ export class MessageProjector {
   private rowPending(sessionId: string, waMessageId: string): boolean {
     return (
       this.recovery.get('send', sendRerunKey(sessionId, waMessageId)) !== undefined ||
-      this.recovery.get('receive', receivedRowKey(sessionId, waMessageId)) !== undefined
+      this.recovery.get('receive', receivedRowKey(sessionId, waMessageId)) !== undefined ||
+      this.historyRows.has(`${sessionId}:${waMessageId}`)
     );
   }
 
@@ -758,6 +776,54 @@ export class MessageProjector {
     this.keepInbound(key, sessionId, kept.messageId, kept.raw, 'message', kept.targetId);
   }
 
+  // How many kept history batches hold each message, by session and message id: a change of one waits for its row.
+  private readonly historyRows = new Map<string, number>();
+  private historySeq = 0;
+
+  private readonly historySteps: KeptHistorySteps = {
+    store: async kept => {
+      // Stored as the sync stores it: insert-or-ignore, so a row written meanwhile stands. Nothing goes back to the
+      // engine: the chat previews the sync clears are its own, and the next message of the chat refreshes them.
+      await this.storeHistory(kept.sessionId, kept.messages, () => true);
+      return true;
+    },
+    released: (kept, reason) => {
+      for (const message of kept.messages) {
+        const key = `${kept.sessionId}:${message.id}`;
+        const held = (this.historyRows.get(key) ?? 1) - 1;
+        if (held > 0) this.historyRows.set(key, held);
+        else this.historyRows.delete(key);
+      }
+      if (!reason) return;
+      this.logger.error(
+        'History messages the database refused could not be kept any longer and are not stored',
+        undefined,
+        {
+          sessionId: kept.sessionId,
+          count: kept.messages.length,
+          reason,
+          action: 'history_messages_lost',
+        },
+      );
+    },
+  };
+
+  /** Keep a batch of history messages the database refused, to store it once it answers (see KeptHistory). */
+  private keepHistory(sessionId: string, messages: IncomingMessage[], error: unknown): void {
+    this.logger.warn('Keeping history messages the database refused, to store them once it answers', {
+      sessionId,
+      count: messages.length,
+      error: error instanceof Error ? error.message : 'the database could not answer',
+      action: 'history_messages_kept',
+    });
+    for (const message of messages) {
+      const id = `${sessionId}:${message.id}`;
+      this.historyRows.set(id, (this.historyRows.get(id) ?? 0) + 1);
+    }
+    const key = `${sessionId}:history:${Date.now()}:${this.historySeq++}`;
+    this.recovery.park(key, new KeptHistory(key, sessionId, messages, Date.now(), this.historySteps));
+  }
+
   /** Keep the engine's copy of a message the database refused, to write it once it answers (see KeptInbound). */
   keepStoredCopy(sessionId: string, kept: { messageId: string; raw: string }): void {
     const key = keptInboundKey(sessionId, kept.messageId, 'copy');
@@ -825,6 +891,10 @@ export class MessageProjector {
    * keepStoredCopy): its store was cleared, and the next account to link the session must get none of it.
    */
   forgetKeptInbound(sessionId: string): void {
+    // The history of that account goes with it.
+    for (const record of [...this.recovery.records('history')]) {
+      if (record.sessionId === sessionId) this.recovery.settle('history', (record as KeptHistory).key);
+    }
     for (const record of [...this.recovery.records('receive')]) {
       // A pending clear of an account unlinked before stays: it is what keeps that account from the next one. So do the
       // session's statuses, which are not the engine's.
@@ -920,7 +990,7 @@ export class MessageProjector {
    */
   settleParkedChanges(budgetMs = PARKED_CHANGES_SHUTDOWN_PASS_MS): Promise<void> {
     // The kept webhook dispatches get their own pass, in the delivery service's shutdown drain.
-    return this.recovery.drain(budgetMs, ['send', 'receive', 'change']);
+    return this.recovery.drain(budgetMs, ['send', 'receive', 'history', 'change']);
   }
 
   /** The queue this process keeps what the database refused in, shared with the send path's SENT writes. */
@@ -3572,16 +3642,31 @@ export class MessageProjector {
   }
 
   /** History backfill persist, extracted to message-history-projector.ts (stateless function). */
-  persistHistoryMessages(id: string, engine: IWhatsAppEngine, messages: IncomingMessage[]): Promise<IncomingMessage[]> {
+  async persistHistoryMessages(
+    id: string,
+    engine: IWhatsAppEngine,
+    messages: IncomingMessage[],
+  ): Promise<IncomingMessage[]> {
+    try {
+      return await this.storeHistory(id, messages, () => this.engines.isLive(id, engine));
+    } catch (error) {
+      // Kept rather than lost: no later sync sends these messages again.
+      if (!isDatabaseUnavailable(error)) throw error;
+      this.keepHistory(id, messages, error);
+      return [];
+    }
+  }
+
+  private storeHistory(id: string, messages: IncomingMessage[], isLive: () => boolean): Promise<IncomingMessage[]> {
     return persistHistoryMessages(
       this.messageRepository,
       this.configService,
       id,
       messages,
       this.logger,
-      () => this.engines.isLive(id, engine),
+      isLive,
       row => {
-        if (!this.engines.isLive(id, engine)) return;
+        if (!isLive()) return;
         void this.hookManager
           .execute('message:persisted', { sessionId: id, message: row }, { sessionId: id, source: 'SessionService' })
           .catch(() => undefined);
