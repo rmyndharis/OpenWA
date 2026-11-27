@@ -3,6 +3,8 @@ import {
   mutationTargetsForeignRow,
   mutationTargetsForeignRowPersisted,
   phoneKey,
+  receiptTargetsForeignRow,
+  receiptTargetsForeignRowPersisted,
   phoneSpellings,
   storedSpellings,
 } from './message-mutation-guard';
@@ -156,6 +158,57 @@ describe('mutationTargetsForeignRow', () => {
         jid => Promise.resolve(jid === '222@lid' ? '628111' : null),
       ),
     ).toBeNull();
+  });
+
+  // An API send addressed to a phone id that the engine delivered to the contact's lid is filed under the phone id, and
+  // keeps the lid it went to: both are the message's chat, and no other chat is.
+  it('judges the row of a send delivered to another chat than its caller addressed by both chats', async () => {
+    const lid = '111@lid';
+    const sent = {
+      chatId: direct,
+      direction: OUT,
+      engineRef: { chatId: lid, direction: OUT, addressed: true as const },
+    };
+    for (const kind of ['edit', 'revoke', 'reaction'] as const) {
+      expect(mutationTargetsForeignRow(sent, { kind, chatId: lid, fromMe: true })).toBeNull();
+      expect(mutationTargetsForeignRow(sent, { kind, chatId: direct, fromMe: true })).toBeNull();
+      expect(mutationTargetsForeignRow(sent, { kind, chatId: '222@lid', fromMe: true })).toBe('chat');
+      expect(mutationTargetsForeignRow(sent, { kind, chatId: '628999@c.us', fromMe: true })).toBe('chat');
+    }
+    // Each chat still holds its side: the contact cannot edit or take back the account's message from either.
+    expect(mutationTargetsForeignRow(sent, { kind: 'edit', chatId: lid, fromMe: false })).toBe('direction');
+    // Foreign to both, the reason is the engine ref's.
+    expect(mutationTargetsForeignRow(sent, { kind: 'revoke', chatId: direct, fromMe: false })).toBe('chat');
+    // A change through the API whose caller named the phone id, which the engine found under a third chat.
+    expect(mutationTargetsForeignRow(sent, { kind: 'revoke', chatId: '333@lid', callerChatId: direct })).toBeNull();
+    // A third lid takes it only through a reported pairing with the phone id, as for any row filed under it.
+    const paired = (jid: string) => Promise.resolve(jid === '222@lid' ? '628111' : null);
+    expect(await mutationTargetsForeignRowPersisted(sent, { kind: 'reaction', chatId: '222@lid' }, paired)).toBeNull();
+    expect(
+      await mutationTargetsForeignRowPersisted(sent, { kind: 'reaction', chatId: '222@lid' }, () =>
+        Promise.resolve(null),
+      ),
+    ).toBe('chat');
+    // A ref a hook wrote is not addressed: the columns it chose take nothing.
+    const moved = { ...sent, engineRef: { chatId: lid, direction: OUT } };
+    expect(mutationTargetsForeignRow(moved, { kind: 'reaction', chatId: direct })).toBe('chat');
+  });
+
+  it('takes a receipt from either chat of a send delivered to another chat than its caller addressed', async () => {
+    const lid = '111@lid';
+    const sent = {
+      chatId: direct,
+      direction: OUT,
+      engineRef: { chatId: lid, direction: OUT, addressed: true as const },
+    };
+    expect(receiptTargetsForeignRow(sent, lid)).toBe(false);
+    expect(receiptTargetsForeignRow(sent, direct)).toBe(false);
+    expect(receiptTargetsForeignRow(sent, group)).toBe(true);
+    // A third lid the directory pairs with another phone is foreign to both chats; with the row's phone, to neither.
+    const elsewhere = (jid: string) => Promise.resolve(jid === '222@lid' ? '628999' : null);
+    expect(await receiptTargetsForeignRowPersisted(sent, '222@lid', elsewhere)).toBe(true);
+    const here = (jid: string) => Promise.resolve(jid === '222@lid' ? '628111' : null);
+    expect(await receiptTargetsForeignRowPersisted(sent, '222@lid', here)).toBe(false);
   });
 
   // The send routes store the chat id as the caller wrote it, in either dialect the docs give, while the

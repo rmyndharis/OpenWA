@@ -1289,9 +1289,14 @@ describe('MessageProjector (inbound projection)', () => {
       await flush();
 
       const guarded = { ...where, type: Not('revoked') };
-      // The inbound edit names no chat, so with no row read it claims none: only a row no hook moved.
+      // The inbound edit names no chat, so with no row read it claims none: only a row no hook moved, or the row of
+      // an API send delivered to another chat than its caller addressed.
       expect(messageRepository.update).toHaveBeenCalledWith(
-        { ...guarded, engineRef: IsNull(), body: Or(Not('late'), IsNull()) },
+        {
+          ...guarded,
+          engineRef: expect.objectContaining({ _type: 'raw' }) as unknown,
+          body: Or(Not('late'), IsNull()),
+        },
         { body: 'late' },
       );
       expect(messageRepository.update).toHaveBeenCalledWith(

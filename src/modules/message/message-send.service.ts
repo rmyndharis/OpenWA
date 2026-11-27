@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { markEngineSendFailure } from '../../common/errors/engine-send-failure';
 import { mergeSentMetadata, updateMessageMetadata } from './message-metadata';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository, QueryDeepPartialEntity } from 'typeorm';
+import { In, IsNull, Repository, QueryDeepPartialEntity } from 'typeorm';
 import { SessionService, linkPreviewDefault } from '../session/session.service';
 import { MessageProjector } from '../session/message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -19,7 +19,7 @@ import {
   IWhatsAppEngine,
   MessageResult,
 } from '../../engine/interfaces/whatsapp-engine.interface';
-import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
+import { Message, MessageDirection, MessageEngineRef, MessageStatus } from './entities/message.entity';
 import { HookManager, applySendingGate } from '../../core/hooks';
 import { SendPacingService, SettleAdmission, countsTowardSendBreaker } from './send-pacing.service';
 import { TemplateService } from '../template/template.service';
@@ -33,6 +33,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 import { MEDIA_MESSAGE_TYPES, OMITTED_MEDIA } from '../session/message-row.mapper';
+import { provablyDifferent } from '../session/message-mutation-guard';
 
 /**
  * Outbound statuses whose media is eligible for archiving. An echo row merged after a fast ack can
@@ -56,6 +57,17 @@ export const DEFAULT_TEMPLATE_RENDER_MAX_CHARS = 64 * 1024;
 function isUrlPointerMetadata(metadata: Record<string, unknown> | undefined): boolean {
   const data = (metadata as { media?: { data?: unknown } } | undefined)?.media?.data;
   return typeof data === 'string' && /^https?:\/\//i.test(data);
+}
+
+/**
+ * The engine ref of a send's row filed under `filed` that the engine delivered to `engineChatId`, when that is another
+ * chat (the contact's LID, for a send addressed by phone number): the row keeps the chat its caller addressed, and a
+ * change naming the delivered one is judged by that ref.
+ */
+function addressedRef(filed: string, engineChatId: string | undefined): MessageEngineRef | undefined {
+  return engineChatId && provablyDifferent(filed, engineChatId)
+    ? { chatId: engineChatId, direction: MessageDirection.OUTGOING, addressed: true }
+    : undefined;
 }
 
 /**
@@ -89,9 +101,11 @@ export interface SaveOutgoingMessageData {
   /**
    * The id the engine addressed, when its number lookup answered another id than `chatId` names: the number
    * WhatsApp holds, or the contact's lid (see MessageResult.resolvedChatId). The row is filed under it. When the own-send echo wrote its row first, that
-   * row stays in the chat the echo names, as it does for a send to the number WhatsApp holds.
+   * row is moved under it.
    */
   resolvedChatId?: string;
+  /** The chat the engine delivered the message to (see MessageResult.engineChatId). */
+  engineChatId?: string;
 }
 
 /**
@@ -959,6 +973,7 @@ export class MessageSendService {
         : undefined;
       const chatId = data.resolvedChatId ?? data.chatId;
       if (data.resolvedChatId) this.pacing.rememberResolvedNumber(sessionId, data.chatId, data.resolvedChatId);
+      const engineRef = data.waMessageId ? addressedRef(chatId, data.engineChatId) : undefined;
       const message = this.messageRepository.create({
         sessionId,
         // An engine that sent a message but could not read its id back reports an empty id (see the
@@ -979,6 +994,7 @@ export class MessageSendService {
         timestamp: data.timestamp,
         status: data.status ?? MessageStatus.PENDING,
         metadata: quotedMessage ? { ...data.metadata, quotedMessage } : data.metadata,
+        engineRef,
       });
       // No transaction of its own: the unique violation handled below is routine (the own-send echo wins the
       // race), and on SQLite's single shared connection its rollback would discard what other callers wrote
@@ -1019,6 +1035,7 @@ export class MessageSendService {
             }
           }
           if (message.timestamp !== undefined) await this.messageRepository.update({ sessionId, waMessageId }, patch);
+          if (engineRef) await this.moveEchoRow(sessionId, waMessageId, chatId, engineRef);
           const surviving = await this.messageRepository.findOne({ where: { sessionId, waMessageId } });
           if (!surviving) throw err;
           return surviving;
@@ -1047,8 +1064,11 @@ export class MessageSendService {
   // Hook emissions keep `source: 'MessageService'` — the string is part of the observable hook
   // contract plugins may filter on, so the send seam must not change it.
   private emitPersisted(sessionId: string, message: Message): void {
+    // The chat the engine delivered to stays in the gateway, as for a row a hook moved.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { engineRef, ...row } = message;
     void this.hookManager
-      .execute('message:persisted', { sessionId, message: { ...message } }, { sessionId, source: 'MessageService' })
+      .execute('message:persisted', { sessionId, message: row }, { sessionId, source: 'MessageService' })
       .catch(() => undefined);
     if (ARCHIVABLE_OUTBOUND_STATUSES.has(message.status) && this.archiveOutboundEnabled) {
       void this.chatMediaArchive?.archive(message).catch(() => undefined);
@@ -1117,6 +1137,9 @@ export class MessageSendService {
     }
     Object.assign(message, resolved);
     changed = { ...changed, ...resolved };
+    // Kept off `message`, which goes to `message:persisted`: written with the id, so the echo of the send, and any
+    // change naming the chat it was delivered to, is judged against both chats from the first moment.
+    const engineRef = addressedRef(message.chatId, result.engineChatId);
     // Set when the row was no longer PENDING at the first write: the pending reaper failed it while the engine answered.
     // The reaper can also fail it later, while the echo merge below is tried; the recovery there covers both.
     let reaped = false;
@@ -1127,6 +1150,7 @@ export class MessageSendService {
         waMessageId: message.waMessageId,
         status: message.status,
         timestamp: message.timestamp,
+        ...(engineRef ? { engineRef } : {}),
       };
       // Guarded on the row still being PENDING, so the common write carries no metadata. A row the pending
       // reaper failed while the engine was still answering has lost its media payload and gained a marker:
@@ -1162,9 +1186,8 @@ export class MessageSendService {
         );
         // `status` is deliberately absent: the echo row is already SENT, and an ack that landed
         // first has advanced it further. Writing SENT here would undo that. See the sibling merge
-        // in saveOutgoingMessage. `chatId` is absent too: the echo names the chat the message went to, the
-        // number's LID when the engine knows one, and the reactions, edits and revokes that follow name that chat.
-        // Moved under the resolved number, the row would be out of their reach until the pair is reported.
+        // in saveOutgoingMessage. The echo names the chat the message went to, the number's LID when the engine knows
+        // one: the row is moved under the chat the caller addressed once it holds what this send stored (moveEchoRow).
         const patch: QueryDeepPartialEntity<Message> = { timestamp: result.timestamp };
         const metadata = message.metadata;
         let metadataMerged = true;
@@ -1220,6 +1243,13 @@ export class MessageSendService {
               error: err instanceof Error ? err.message : String(err),
             }),
           );
+        if (engineRef) {
+          await this.moveEchoRow(message.sessionId, result.id, message.chatId, engineRef).catch(err =>
+            this.logger.warn(`Moving the echo-persisted row under the addressed chat failed (id=${result.id})`, {
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
+        }
         await this.messageRepository.delete({ id: message.id }).catch(() => undefined);
         // Reconcile provider indexes (#906): upsert the surviving echo row (now carrying our SENT
         // state + media) and drop the ghost PENDING document this redundant row produced earlier.
@@ -1241,6 +1271,29 @@ export class MessageSendService {
       }
     }
     return { messageId: result.id, timestamp: result.timestamp };
+  }
+
+  /**
+   * File the own-send echo's row, which names the chat the engine delivered the message to, under the chat the caller
+   * addressed (`filed`), with that delivered chat in its engine ref, so both orders of the two writers store one row.
+   * Only a row still where the echo put it moves: one a `message:sent` handler filed elsewhere keeps its engine ref.
+   */
+  private async moveEchoRow(
+    sessionId: string,
+    waMessageId: string,
+    filed: string,
+    engineRef: MessageEngineRef,
+  ): Promise<void> {
+    await this.messageRepository.update(
+      {
+        sessionId,
+        waMessageId,
+        chatId: engineRef.chatId,
+        direction: MessageDirection.OUTGOING,
+        engineRef: IsNull(),
+      },
+      { chatId: filed, to: filed, engineRef },
+    );
   }
 
   private getEngine(sessionId: string) {

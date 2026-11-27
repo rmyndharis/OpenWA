@@ -29,6 +29,12 @@ export interface MessageEngineRef {
   chatId: string;
   direction: MessageDirection;
   author?: string | null;
+  /**
+   * Set on the row of an API send the engine delivered to another chat than the one it is filed under (the contact's
+   * LID, for a send addressed by phone number): the row's own chat is the one the caller addressed, so a change is
+   * judged by both. Never set where a hook chose the row's columns.
+   */
+  addressed?: true;
 }
 
 export enum MessageStatus {
@@ -90,8 +96,10 @@ export class Message {
   /**
    * The chat, direction and author the engine reported, kept only when a `message:received` or `message:sent`
    * handler filed the row under others or rewrote its `from` or `to`: a revoke, edit, reaction or receipt is judged
-   * by them, never by what the handler chose. Null on every other row and on rows of earlier releases, which are
-   * judged by their own columns (a whatsapp-web.js one also by the chat its id names).
+   * by them, never by what the handler chose. Kept as well, `addressed`, when an API send was delivered to another
+   * chat than the one its caller addressed, which the row is filed under: a change is then judged by both. Null on
+   * every other row and on rows of earlier releases, which are judged by their own columns (a whatsapp-web.js one
+   * also by the chat its id names).
    * Never selected by default, so no API read returns the chat a handler moved the message away from.
    */
   @Column({ type: jsonColumnType(), nullable: true, select: false })

@@ -14,6 +14,13 @@ export interface StoredMessageRef {
 /** The ref a change is judged by: the engine's, never what a hook filed the row under. */
 const judged = (row: StoredMessageRef): StoredMessageRef => row.engineRef ?? row;
 
+/**
+ * Every ref a change is judged by, foreign only when each says so: the row's own columns, or the engine's ref of a row
+ * a hook moved, and both on the row of an API send delivered to another chat than the one its caller addressed.
+ */
+const judgedRefs = (row: StoredMessageRef): StoredMessageRef[] =>
+  row.engineRef ? (row.engineRef.addressed ? [row.engineRef, row] : [row.engineRef]) : [row];
+
 /** What an inbound edit, revoke or reaction says about who made it and where. */
 export interface MutationSource {
   kind: 'edit' | 'revoke' | 'reaction';
@@ -176,7 +183,8 @@ export function provablyDifferent(
  * A row a message hook filed under another chat, direction or author is judged by its `engineRef`, so the hook
  * neither keeps a change from reaching it nor lets one naming the chat it chose through. On a row without an
  * `engineRef` a change that names a `callerChatId` or a `filedAs` is foreign only when that proves it so as well;
- * on a row with one, the chat a hook filed the row under is never accepted.
+ * on a row with one, the chat a hook filed the row under is never accepted. The row of an API send delivered to
+ * another chat than its caller addressed (`engineRef.addressed`) is judged by both: its columns are the caller's.
  */
 export function mutationTargetsForeignRow(
   row: StoredMessageRef,
@@ -184,9 +192,12 @@ export function mutationTargetsForeignRow(
   resolveLid?: (jid: string) => string | null,
 ): 'chat' | 'direction' | 'author' | null {
   const reason = foreignReason(judged(row), source, resolveLid);
-  if (!reason || row.engineRef) return reason;
+  if (!reason || (row.engineRef && !row.engineRef.addressed)) return reason;
+  if (row.engineRef && !foreignReason(row, source, resolveLid)) return null;
   if (source.callerChatId && !foreignReason(row, { ...source, chatId: source.callerChatId }, resolveLid)) return null;
-  if (source.filedAs && !foreignReason(row, { ...source, ...source.filedAs }, resolveLid)) return null;
+  if (!row.engineRef && source.filedAs && !foreignReason(row, { ...source, ...source.filedAs }, resolveLid)) {
+    return null;
+  }
   return reason;
 }
 
@@ -231,13 +242,11 @@ export async function mutationTargetsForeignRowPersisted(
   resolveLid?: (jid: string) => Promise<string | null>,
 ): Promise<'chat' | 'direction' | 'author' | null> {
   if (!resolveLid) return mutationTargetsForeignRow(row, source);
-  const ref = judged(row);
   const phones = new Map<string, string | null>();
   await Promise.all(
     [
       ...new Set([
-        ref.chatId,
-        ref.author,
+        ...judgedRefs(row).flatMap(ref => [ref.chatId, ref.author]),
         source.chatId,
         source.callerChatId,
         source.author,
@@ -260,16 +269,19 @@ export async function mutationTargetsForeignRowPersisted(
  * list message an earlier version filed under the list from its sender's chat: neither is foreign. A lid and a
  * phone with no reported pairing prove nothing either. A receipt only ever moves delivery state forward, and
  * refusing it would leave the account's messages to a lid-addressed contact at sent. A row a message hook moved is
- * judged by its `engineRef`.
+ * judged by its `engineRef`, and the row of an API send delivered to another chat by that and its own columns.
  */
 export function receiptTargetsForeignRow(
   row: StoredMessageRef,
   chatId: string,
   resolveLid?: (jid: string) => string | null,
 ): boolean {
-  row = judged(row);
-  if (isOwnBroadcast(row) || receivedThroughList(row, chatId, resolveLid)) return false;
-  return differentWhenPaired(row.chatId, chatId, resolveLid);
+  return judgedRefs(row).every(
+    ref =>
+      !isOwnBroadcast(ref) &&
+      !receivedThroughList(ref, chatId, resolveLid) &&
+      differentWhenPaired(ref.chatId, chatId, resolveLid),
+  );
 }
 
 /** {@link provablyDifferent}, except that a lid and a phone number with no reported pairing prove nothing. */
@@ -293,10 +305,9 @@ export async function receiptTargetsForeignRowPersisted(
   resolveLid?: (jid: string) => Promise<string | null>,
 ): Promise<boolean> {
   if (!resolveLid) return receiptTargetsForeignRow(row, chatId);
-  const ref = judged(row);
   const phones = new Map<string, string | null>();
   await Promise.all(
-    [...new Set([ref.chatId, ref.author, chatId])].map(async jid => {
+    [...new Set([...judgedRefs(row).flatMap(ref => [ref.chatId, ref.author]), chatId])].map(async jid => {
       if (jid && parseWaId(jid).kind === 'lid') phones.set(jid, await resolveLid(jid).catch(() => null));
     }),
   );

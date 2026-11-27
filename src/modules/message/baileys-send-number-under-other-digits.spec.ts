@@ -526,13 +526,14 @@ describe('a send to a number WhatsApp holds under other digits than the caller w
   });
 
   it.each([
-    ['the row', false, false, canon],
-    ['the row', false, true, canon],
-    ['the echo', true, false, canon],
-    ['the echo', true, true, lid],
+    ['the row', false, false],
+    ['the row', false, true],
+    ['the echo', true, false],
+    ['the echo', true, true],
   ])(
     'leaves one row, where a send to the held number has it, when %s takes the message id first (echo first: %s, to a lid: %s)',
-    async (_first, echoFirst, lidKnown, chat) => {
+    async (_first, echoFirst, lidKnown) => {
+      const chat = canon;
       const w = await build({ lidKnown });
       w.echoFirst = echoFirst;
       const held = await build({ lidKnown });
@@ -552,27 +553,87 @@ describe('a send to a number WhatsApp holds under other digits than the caller w
     },
   );
 
-  it('keeps the row of an echo written first in the lid chat, where the changes that name that chat find it', async () => {
-    // WhatsApp does not name the lid for the number, so the pair stays display data and nothing bridges the two ids.
-    const w = await build({ lidKnown: true, named: false });
-    w.echoFirst = true;
+  describe.each([
+    ['the row', false],
+    ['the echo', true],
+  ])(
+    'a send that went to a lid WhatsApp does not name for the number, when %s takes the message id first',
+    (_first, echoFirst) => {
+      /** The send, with the pair left display data: nothing bridges the two ids. */
+      const sendUnnamed = async (): Promise<World> => {
+        const w = await build({ lidKnown: true, named: false });
+        w.echoFirst = echoFirst;
+        await w.sender.sendText(w.S, { chatId: typed, text: 'hello' });
+        await waitUntil(() => asked(w).length === 1, 3000);
+        await w.settle();
+        return w;
+      };
 
-    await w.sender.sendText(w.S, { chatId: typed, text: 'hello' });
-    await waitUntil(() => asked(w).length === 1, 3000);
-    await w.settle();
-    expect(await pairs(w)).toEqual([[LID, CANON, false]]);
-    expect(await w.rows()).toEqual([row(lid, { status: 'sent', body: 'hello' })]);
+      it('files the row under the number, where the changes that name the lid still find it', async () => {
+        const w = await sendUnnamed();
+        expect(await pairs(w)).toEqual([[LID, CANON, false]]);
+        expect(await w.rows()).toEqual([row(canon, { status: 'sent', body: 'hello' })]);
+        expect(await w.thread(canon)).toEqual(['OUT-1']);
 
-    w.react(lid);
-    await w.settle();
-    expect((await sentRow(w))?.reactions).toEqual({ [lid]: '+' });
-    w.edit(lid, 'edited on the phone');
-    await w.settle();
-    expect(await sentRow(w)).toEqual(row(lid, { body: 'edited on the phone' }));
-    w.revoke(lid);
-    await w.settle();
-    expect(await sentRow(w)).toEqual(row(lid, { type: 'revoked', body: '' }));
-  });
+        w.react(lid);
+        await w.settle();
+        expect((await sentRow(w))?.reactions).toEqual({ [lid]: '+' });
+        w.edit(lid, 'edited on the phone');
+        await w.settle();
+        expect(await sentRow(w)).toEqual(row(canon, { body: 'edited on the phone' }));
+        w.ack('read', lid);
+        await w.settle();
+        expect(await sentRow(w)).toEqual(row(canon, { status: 'read' }));
+        w.revoke(lid);
+        await w.settle();
+        expect(await sentRow(w)).toEqual(row(canon, { type: 'revoked', body: '' }));
+      });
+
+      it('takes the changes that name the number too, and none from a third chat', async () => {
+        const w = await sendUnnamed();
+
+        w.react('999999999999@lid');
+        w.edit('999999999999@lid', 'from elsewhere');
+        w.revoke('628777000000@c.us');
+        await w.settle();
+        expect(await sentRow(w)).toEqual(row(canon, { body: 'hello', type: 'text', reactions: undefined }));
+
+        w.edit(canon, 'edited on the phone');
+        await w.settle();
+        expect(await sentRow(w)).toEqual(row(canon, { body: 'edited on the phone' }));
+      });
+
+      it('bridges the number and the lid for no reader: the pair stays display data and the thread of each is its own', async () => {
+        const w = await sendUnnamed();
+        await replied(w, { remoteJid: lid });
+
+        expect(await pairs(w)).toEqual([[LID, CANON, false]]);
+        expect(await w.store.findLidsForPhone(CANON)).toEqual([]);
+        expect(await new ChatScopeService(w.store).allows({ allowedChats: [canon] }, lid)).toBe(false);
+        expect(await w.thread(canon)).toEqual(['OUT-1']);
+        expect(await w.thread(lid)).toEqual(['IN-1']);
+      });
+
+      it('keeps the chat it was delivered to off every read and announcement of the row', async () => {
+        const w = await sendUnnamed();
+
+        const listed = (await w.service.getMessages(w.S, { chatId: canon })).messages;
+        expect(listed).toHaveLength(1);
+        expect(listed[0].engineRef).toBeUndefined();
+        expect((await w.messages.findOneBy({ waMessageId: 'OUT-1' }))?.engineRef).toBeUndefined();
+        const announced = (w.sender as unknown as { hookManager: HookManager }).hookManager;
+        const persisted = (announced.execute as jest.Mock).mock.calls
+          .filter(([event]) => event === 'message:persisted')
+          .map(([, data]) => (data as { message: { engineRef?: unknown } }).message);
+        expect(persisted.length).toBeGreaterThan(0);
+        for (const message of persisted) expect(message.engineRef).toBeUndefined();
+        // Kept where the guard reads it, beside the chat the caller addressed.
+        expect(
+          await w.messages.findOne({ where: { waMessageId: 'OUT-1' }, select: { chatId: true, engineRef: true } }),
+        ).toEqual({ chatId: canon, engineRef: { chatId: lid, direction: 'outgoing', addressed: true } });
+      });
+    },
+  );
 
   it('files a send of another kind the same way', async () => {
     const w = await build({ lidKnown: true });
@@ -681,13 +742,52 @@ describe('a send to a number WhatsApp holds under other digits than the caller w
       expect(w.pacing.rememberResolvedNumber.mock.calls).toEqual([[w.S, typed, canon]]);
     });
 
-    it('leaves the row of an echo written first in the chat the message went to', async () => {
+    it('leaves the row of an echo written first in the chat the message went to when the engine does not name it', async () => {
       const w = await build({ lidKnown: false });
       await echoRow(w);
 
       await w.sender.saveOutgoingMessage(w.S, { ...data, chatId: typed, resolvedChatId: canon });
 
       expect(await w.rows()).toEqual([row(lid, { status: 'sent' })]);
+    });
+
+    it.each([
+      ['the row', false],
+      ['the echo', true],
+    ])('is filed under the number, beside the lid it went to, when %s is written first', async (_first, echoFirst) => {
+      const w = await build({ lidKnown: false });
+      if (echoFirst) await echoRow(w);
+
+      await w.sender.saveOutgoingMessage(w.S, {
+        ...data,
+        chatId: typed,
+        resolvedChatId: canon,
+        engineChatId: lid,
+      });
+      w.react(lid);
+      w.edit(lid, 'edited on the phone');
+      await w.settle();
+
+      expect(await w.rows()).toEqual([
+        row(canon, { status: 'sent', body: 'edited on the phone', reactions: { [lid]: '+' } }),
+      ]);
+    });
+
+    it('leaves an echo row a message:sent handler filed elsewhere where the handler put it', async () => {
+      const w = await build({ lidKnown: false });
+      await w.messages.insert({
+        ...data,
+        sessionId: w.S,
+        chatId: '628777000000@c.us',
+        from: `${SELF}@c.us`,
+        to: '628777000000@c.us',
+        direction: MessageDirection.OUTGOING,
+        engineRef: { chatId: lid, direction: MessageDirection.OUTGOING },
+      });
+
+      await w.sender.saveOutgoingMessage(w.S, { ...data, chatId: typed, resolvedChatId: canon, engineChatId: lid });
+
+      expect(await w.rows()).toEqual([row('628777000000@c.us', { status: 'sent' })]);
     });
 
     it('leaves the row of an echo written first where it is when the number check renamed nothing', async () => {

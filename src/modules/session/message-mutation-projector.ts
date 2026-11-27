@@ -62,11 +62,24 @@ const unpairedLid = (author: string, postgres: boolean): string => {
 };
 
 /**
+ * The SQL that reads an `addressed` engine ref (see MessageEngineRef.addressed) and the chat it names, from the JSON
+ * text the column holds: a JSON true is 1 to SQLite and 'true' to PostgreSQL's `->>`.
+ */
+const addressedRefSql = (postgres: boolean): { addressed: string; chat: string } =>
+  postgres
+    ? {
+        addressed: `(CAST("engineRef" AS jsonb) ->> 'addressed') = 'true'`,
+        chat: `(CAST("engineRef" AS jsonb) ->> 'chatId')`,
+      }
+    : { addressed: `json_extract("engineRef", '$.addressed') = 1`, chat: `json_extract("engineRef", '$.chatId')` };
+
+/**
  * The row of a message the change itself names, for a write made with no row read: its chat as the change names it
  * (or the chat an API caller named), the side and author the change implies where the rule judges them, each chat and
  * author in every spelling the rule takes as the same entity ({@link storedSpellings}: dialects, spellings of one
  * number, and the lid and phone reported as a pair), and no engine ref, since a row a hook moved is judged by its
- * engine ref, which only a read applies. A row of another chat, side or author under the id matches none of it.
+ * engine ref, which only a read applies. The row of an API send delivered to another chat than its caller addressed
+ * matches by either chat, as a read judges it. A row of another chat, side or author under the id matches none of it.
  */
 async function claimedRow(
   sessionId: string,
@@ -84,12 +97,19 @@ async function claimedRow(
     for (const id of chat ? await storedSpellings(chat, directory) : []) chats.add(id);
   }
   // A change that names no chat is judged foreign by no chat, so it claims none.
-  const where: FindOptionsWhere<Message> = {
-    sessionId,
-    waMessageId,
-    ...(chats.size ? { chatId: In([...chats]) } : {}),
-    engineRef: IsNull(),
-  };
+  const { addressed, chat } = addressedRefSql(postgres);
+  const where: FindOptionsWhere<Message> = chats.size
+    ? {
+        sessionId,
+        waMessageId,
+        chatId: Raw(
+          alias =>
+            `((${alias} IN (:...claimedChats) AND ("engineRef" IS NULL OR ${addressed})) ` +
+            `OR (${addressed} AND ${chat} IN (:...claimedChats)))`,
+          { claimedChats: [...chats] },
+        ),
+      }
+    : { sessionId, waMessageId, engineRef: Raw(alias => `(${alias} IS NULL OR ${addressed})`) };
   if ((authorOnly && source.fromMe !== undefined) || memberRevoke) {
     where.direction = source.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING;
   }

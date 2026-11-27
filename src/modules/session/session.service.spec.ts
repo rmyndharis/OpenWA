@@ -10227,13 +10227,15 @@ describe('SessionService', () => {
       await new Promise(resolve => setImmediate(resolve));
 
       // No row is read back here, so the edit lands only on the row it claims: its chat (in each dialect) and side,
-      // no engine ref.
+      // with no engine ref, or with the ref of an API send delivered to another chat than its caller addressed.
       expect(messageRepository.update).toHaveBeenCalledWith(
         {
           sessionId: 'sess-uuid-1',
           waMessageId: 'WA_MSG_EDIT_1',
-          chatId: In(['123@c.us', '123@s.whatsapp.net', '123@hosted']),
-          engineRef: IsNull(),
+          chatId: expect.objectContaining({
+            _type: 'raw',
+            _objectLiteralParameters: { claimedChats: ['123@c.us', '123@s.whatsapp.net', '123@hosted'] },
+          }) as unknown,
           direction: 'incoming',
           type: Not('revoked'),
           body: Or(Not('New edited text'), IsNull()),
