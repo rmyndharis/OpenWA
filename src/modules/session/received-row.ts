@@ -130,9 +130,10 @@ export class KeptInbound implements RecoveryRecord {
 
 /**
  * What a kept inbound record holds: a message to read again, the engine's copy of a message to write, a change of that
- * copy to apply, a delete (`blank`) or an edit (`text`), or the clear of what an unlinked account left (`wipe`).
+ * copy to apply (a delete, `blank`, an edit, `text`, or the removal of a conflicting copy, `remove`), the clear of what
+ * an unlinked account left (`wipe`), or a received status to store (`story`) or remove once its poster deleted it.
  */
-export type KeptInboundKind = 'message' | 'copy' | 'blank' | 'text' | 'remove' | 'wipe';
+export type KeptInboundKind = 'message' | 'copy' | 'blank' | 'text' | 'remove' | 'wipe' | 'story' | 'story-removal';
 
 /** A record's key: a message by its own id, a copy by its message's, a change of a copy by both. */
 export const keptInboundKey = (sessionId: string, id: string, kind: KeptInboundKind, changeId?: string): string =>
@@ -142,7 +143,9 @@ export const keptInboundKey = (sessionId: string, id: string, kind: KeptInboundK
       ? `${sessionId}:copy:${id}`
       : kind === 'wipe'
         ? `${sessionId}:wipe`
-        : `${sessionId}:copy-change:${id}:${changeId ?? ''}`;
+        : kind === 'story' || kind === 'story-removal'
+          ? `${sessionId}:${kind}:${id}`
+          : `${sessionId}:copy-change:${id}:${changeId ?? ''}`;
 
 /** A kept inbound message as the journal keeps it. */
 interface JournaledInbound {
@@ -174,7 +177,7 @@ export function restoredKeptInbound(
     return undefined;
   }
   const targetId = typeof v.g === 'string' ? v.g : undefined;
-  const kinds: readonly unknown[] = ['copy', 'blank', 'text', 'remove', 'wipe'];
+  const kinds: readonly unknown[] = ['copy', 'blank', 'text', 'remove', 'wipe', 'story', 'story-removal'];
   const kind = kinds.includes(v.c) ? (v.c as KeptInboundKind) : 'message';
   return { sessionId: v.s, messageId: v.i, raw: v.m, kind, targetId, since: v.t };
 }

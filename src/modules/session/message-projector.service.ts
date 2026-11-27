@@ -71,7 +71,7 @@ import { resolveFeatureFlags } from '../../config/feature-flags';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import { AutomationRulesService } from '../automation/automation-rules.service';
-import { buildIncomingStatus } from '../status-store/incoming-status';
+import { buildIncomingStatus, type IncomingStatus } from '../status-store/incoming-status';
 import type { StatusUpdate } from '../status-store/entities/status-update.entity';
 import {
   IWhatsAppEngine,
@@ -176,6 +176,9 @@ export const PARKED_CHANGE_MAX_AGE_MS = RECOVERY_MAX_AGE_MS;
 /** Changes of one kind kept for one message whose claims disagree, each judged against the row when it is tried. */
 export const PARKED_VARIANTS_MAX = 4;
 
+/** What an unlink drops of what is kept for the engine of the account it unlinked (see forgetKeptInbound). */
+const FORGOTTEN_AT_UNLINK: ReadonlySet<KeptInboundKind> = new Set(['message', 'copy', 'blank', 'text', 'remove']);
+
 /** The log line and action of each kind of kept inbound record given up. */
 const KEPT_INBOUND_LOSS: Readonly<Record<KeptInboundKind, [string, string]>> = {
   message: [
@@ -191,6 +194,14 @@ const KEPT_INBOUND_LOSS: Readonly<Record<KeptInboundKind, [string, string]>> = {
   remove: [
     'The removal of a stored copy a conflicting message left could not be kept any longer: the copy stays',
     'message_copy_remove_lost',
+  ],
+  story: [
+    'A received status the database refused could not be kept any longer: it is not stored or announced',
+    'status_ingest_lost',
+  ],
+  'story-removal': [
+    'A status its poster deleted could not be removed: it stays listed until it expires',
+    'status_removal_lost',
   ],
   wipe: [
     'What an unlinked account left in the stored messages and chat states could not be cleared: the next account may see it',
@@ -641,6 +652,10 @@ export class MessageProjector {
 
   private readonly inboundSteps: KeptInboundSteps = {
     redeliver: async kept => {
+      // A status is the session's own: stored or removed whatever engine runs, behind an older record of the same story.
+      if (kept.kind === 'story' || kept.kind === 'story-removal') {
+        return this.keptBefore(kept) ? false : this.applyKeptStory(kept);
+      }
       const engine = this.engines.get(kept.sessionId);
       // Kept until the session's engine runs here again (after a restart, or a reconnect), and behind an older change of
       // the same message still kept (one that failed for a reason of its own), so they land in the order they came in.
@@ -722,8 +737,9 @@ export class MessageProjector {
    */
   forgetKeptInbound(sessionId: string): void {
     for (const record of [...this.recovery.records('receive')]) {
-      // A pending clear of an account unlinked before stays: it is what keeps that account from the next one.
-      if (record instanceof KeptInbound && record.sessionId === sessionId && record.kind !== 'wipe') {
+      // A pending clear of an account unlinked before stays: it is what keeps that account from the next one. So do the
+      // session's statuses, which are not the engine's.
+      if (record instanceof KeptInbound && record.sessionId === sessionId && FORGOTTEN_AT_UNLINK.has(record.kind)) {
         this.recovery.settle('receive', record.key);
       }
     }
@@ -1675,13 +1691,40 @@ export class MessageProjector {
           // would point a consumer at a status the API no longer serves.
           if (created && row.expiresAt > Date.now()) this.dispatchStatusReceived(id, row);
         })
-        .catch(err =>
+        .catch(err => {
+          // Kept rather than lost: no backfill brings a status back on every engine, and it is announced only once stored.
+          if (isDatabaseUnavailable(err)) return this.keepStory(id, status, err);
           this.logger.warn('Status ingest failed', {
             sessionId: id,
             error: err instanceof Error ? err.message : String(err),
-          }),
-        )
+          });
+        })
     );
+  }
+
+  /** Keep a received status the database refused, to store and announce it once it answers. */
+  private keepStory(id: string, status: IncomingStatus, error: unknown): void {
+    this.logger.warn('Keeping a received status the database refused, to store it once it answers', {
+      sessionId: id,
+      statusId: status.waStatusId,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'status_ingest_kept',
+    });
+    const key = keptInboundKey(id, status.waStatusId, 'story');
+    this.keepInbound(key, id, status.waStatusId, JSON.stringify(status), 'story', status.waStatusId);
+  }
+
+  /** One more try of a kept status: stored and announced as a live one is, or its poster's delete applied. */
+  private async applyKeptStory(kept: KeptInbound): Promise<boolean> {
+    const statusId = kept.targetId ?? kept.messageId;
+    if (kept.kind === 'story-removal') {
+      const { by } = JSON.parse(kept.raw) as { by?: { poster?: string } };
+      await this.statusStore.removeRevoked(kept.sessionId, statusId, by);
+      return true;
+    }
+    const { row, created } = await this.statusStore.ingest(kept.sessionId, JSON.parse(kept.raw) as IncomingStatus);
+    if (created && row.expiresAt > Date.now()) this.dispatchStatusReceived(kept.sessionId, row);
+    return true;
   }
 
   /**
@@ -1691,13 +1734,22 @@ export class MessageProjector {
    * Web accepted it.
    */
   private removeDeletedStory(id: string, statusId: string, actor?: { participant?: string }): void {
-    void this.statusStore.removeRevoked(id, statusId, actor && { poster: actor.participant }).catch((err: unknown) =>
+    const by = actor && { poster: actor.participant };
+    const keep = (): void => {
+      const key = keptInboundKey(id, statusId, 'story-removal');
+      this.keepInbound(key, id, statusId, JSON.stringify({ by }), 'story-removal', statusId);
+    };
+    // A copy of the story kept to be stored would land after the delete: the delete waits behind it, judged by the
+    // store as any delete is once the story is there.
+    if (this.recovery.get('receive', keptInboundKey(id, statusId, 'story'))) return keep();
+    void this.statusStore.removeRevoked(id, statusId, by).catch((err: unknown) => {
+      if (isDatabaseUnavailable(err)) return keep();
       this.logger.warn('Failed to remove a status its poster deleted', {
         sessionId: id,
         statusId,
         error: err instanceof Error ? err.message : String(err),
-      }),
-    );
+      });
+    });
   }
 
   /** Operator opt-out gate for disappearing messages: true when the message must be skipped entirely. */
