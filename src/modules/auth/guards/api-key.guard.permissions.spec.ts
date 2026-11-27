@@ -133,6 +133,16 @@ describe('ApiKeyGuard blocked capabilities', () => {
     ).rejects.toThrow('Restricted API keys are not permitted on this route');
   });
 
+  it('refuses every route but a self-check for a stored capability name it does not know', async () => {
+    const key = createMockApiKey({ deniedPermissions: ['Messages:Read' as ApiKeyCapability] });
+
+    await expect(authorize(key, { [CAPABILITIES_KEY]: [ApiKeyCapability.APIKEYS_MANAGE] })).rejects.toThrow(
+      'name this release does not know',
+    );
+    await expect(authorize(key, {})).rejects.toThrow('name this release does not know');
+    await expect(authorize(key, { [CAPABILITY_AGNOSTIC_KEY]: true })).resolves.toBe(true);
+  });
+
   it('keeps a session-scoped key, and refuses blocked capabilities, on a route that fences sessions itself', async () => {
     const marks = { [CAPABILITIES_KEY]: [ApiKeyCapability.INTEGRATIONS_MANAGE], [UNRESTRICTED_KEY]: 'capabilities' };
 

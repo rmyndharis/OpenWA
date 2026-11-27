@@ -115,14 +115,12 @@ export const API_KEY_CAPABILITIES: readonly ApiKeyCapability[] = Object.values(A
 const KNOWN = new Set<string>(API_KEY_CAPABILITIES);
 
 /**
- * The blocked-capability list a key can be stored with: known capabilities only, trimmed,
- * deduplicated, or NULL.
+ * The blocked-capability list a key can be stored with: known capabilities only, trimmed, deduplicated, or NULL.
  *
- * Unknown entries are dropped: they block nothing (enforcement is a membership test), and a value
- * written by a later release that names a capability this build does not know would otherwise
- * reappear in the API response as if it meant something. NULL, not `[]`, for the same reason as the
- * scope columns: `simple-array` reads `''` back as `[]`, and every site treats a zero-length list
- * as "nothing blocked", so an empty list must be stored as the absent field.
+ * Unknown entries are dropped on write, which the API refuses before this; a read that finds one stored blocks every
+ * capability (see hasUnrecognizedDeniedEntry). NULL, not `[]`, for the same reason as the scope columns: `simple-array`
+ * reads `''` back as `[]`, and every site treats a zero-length list as "nothing blocked", so an empty list must be
+ * stored as the absent field.
  */
 export function normalizeDeniedCapabilities(list: readonly string[] | null | undefined): ApiKeyCapability[] | null {
   if (list == null) return null;
@@ -143,9 +141,20 @@ export function apiKeyDeniedCapabilities(
   return normalizeDeniedCapabilities(apiKey?.deniedPermissions) ?? [];
 }
 
+/**
+ * True when a stored list holds a name this build does not know (a hand edit, or a value another release wrote). What
+ * it meant cannot be enforced, so the key is blocked from every capability, as an unreadable expiry reads as expired.
+ */
+export function hasUnrecognizedDeniedEntry(apiKey: Pick<ApiKey, 'deniedPermissions'> | null | undefined): boolean {
+  return (apiKey?.deniedPermissions ?? []).some(entry => {
+    const value = typeof entry === 'string' ? entry.trim() : entry;
+    return value !== '' && !KNOWN.has(value);
+  });
+}
+
 /** True when the key blocks at least one capability. */
 export function hasBlockedCapabilities(apiKey: Pick<ApiKey, 'deniedPermissions'> | null | undefined): boolean {
-  return apiKeyDeniedCapabilities(apiKey).length > 0;
+  return hasUnrecognizedDeniedEntry(apiKey) || apiKeyDeniedCapabilities(apiKey).length > 0;
 }
 
 /** Whether the key is blocked from this capability. Nothing blocked means nothing denied. */
@@ -153,7 +162,7 @@ export function isCapabilityDenied(
   apiKey: Pick<ApiKey, 'deniedPermissions'> | null | undefined,
   capability: ApiKeyCapability,
 ): boolean {
-  return apiKeyDeniedCapabilities(apiKey).includes(capability);
+  return hasUnrecognizedDeniedEntry(apiKey) || apiKeyDeniedCapabilities(apiKey).includes(capability);
 }
 
 /** Capabilities exposed by one event payload, in addition to the event-stream capability itself. */

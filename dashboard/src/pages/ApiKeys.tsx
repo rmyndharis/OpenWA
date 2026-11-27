@@ -450,7 +450,12 @@ export function ApiKeys() {
   const openEdit = useCallback((apiKey: ApiKey) => {
     editVisit.current = {};
     setEditingKey(apiKey);
-    setEditDraft(apiKeyDraft(apiKey));
+    const draft = apiKeyDraft(apiKey);
+    // A stored name this picker does not list cannot be saved back, so the save sends the checked ones.
+    setEditDraft({
+      ...draft,
+      deniedPermissions: draft.deniedPermissions.filter(capability => API_KEY_CAPABILITIES.includes(capability)),
+    });
   }, []);
 
   const closeEdit = () => {

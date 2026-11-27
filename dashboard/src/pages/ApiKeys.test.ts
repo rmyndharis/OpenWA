@@ -530,6 +530,14 @@ test('saving an untouched key sends nothing, even with an expiry and lists set',
   assert.deepEqual(updateBodies, []);
 });
 
+test('saving a key with a stored capability name the picker does not list sends the listed ones', async () => {
+  const { fireEvent, waitFor } = rtl;
+  const save = await openEdit({ ...billingBot, deniedPermissions: ['messages:read', 'messages:future'] });
+  fireEvent.click(save);
+  await waitFor(() => assert.equal(updateBodies.length, 1));
+  assert.deepEqual(updateBodies[0], { deniedPermissions: ['messages:read'] });
+});
+
 test('an edit sends only what changed', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   let save = await openEdit({ ...billingBot, expiresAt: '2027-03-04T05:06:59.000Z' });

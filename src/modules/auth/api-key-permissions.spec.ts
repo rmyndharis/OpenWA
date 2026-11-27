@@ -38,13 +38,24 @@ describe('normalizeDeniedCapabilities', () => {
 });
 
 describe('blocklist predicates', () => {
-  it('treats NULL, empty and unknown-only lists as nothing blocked', () => {
-    for (const deniedPermissions of [null, [], ['bogus']] as Array<ApiKeyCapability[] | null>) {
+  it('treats NULL, empty and blank lists as nothing blocked', () => {
+    for (const deniedPermissions of [null, [], [' ']] as Array<ApiKeyCapability[] | null>) {
       expect(hasBlockedCapabilities({ deniedPermissions })).toBe(false);
       expect(apiKeyDeniedCapabilities({ deniedPermissions })).toEqual([]);
       expect(isCapabilityDenied({ deniedPermissions }, ApiKeyCapability.MESSAGES_READ)).toBe(false);
     }
   });
+
+  it.each([[['bogus']], [['Messages:Read']], [['messages:future', ApiKeyCapability.CONTACTS_READ]]])(
+    'blocks every capability when a stored list holds a name it does not know: %p',
+    stored => {
+      const key = { deniedPermissions: stored as ApiKeyCapability[] };
+      expect(hasBlockedCapabilities(key)).toBe(true);
+      for (const capability of [ApiKeyCapability.APIKEYS_MANAGE, ApiKeyCapability.EVENTS_READ]) {
+        expect(isCapabilityDenied(key, capability)).toBe(true);
+      }
+    },
+  );
 
   it('denies only the listed capability', () => {
     const key = { deniedPermissions: [ApiKeyCapability.MESSAGES_READ] };

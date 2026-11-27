@@ -150,7 +150,9 @@ A route that touches more than one surface lists every capability (forwarding ne
 and `messages:read`, since it hands a stored message to another chat), and blocking **any** of them
 refuses it — the safe direction, since the operator blocked a capability for the data it reaches.
 The role is still checked first: blocking nothing cannot lift a `viewer` key above its role, and
-blocking `messages:send` on an `admin` key only removes the send routes.
+blocking `messages:send` on an `admin` key only removes the send routes. A stored list holding a name
+this release does not know (a hand edit, or a value another release wrote) blocks every capability,
+so only the self-checks answer until an unrestricted admin sets the list again.
 
 The practical shapes this enables: an `operator` key that keeps everything except `messages:read`
 (so integration code can push messages but never read history or subscribe to events), a key that

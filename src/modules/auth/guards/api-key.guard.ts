@@ -34,7 +34,12 @@ import {
   UNRESTRICTED_KEY,
   ChatScopeKind,
 } from '../decorators/auth.decorators';
-import { hasBlockedCapabilities, isCapabilityDenied, type ApiKeyCapability } from '../api-key-permissions';
+import {
+  hasBlockedCapabilities,
+  hasUnrecognizedDeniedEntry,
+  isCapabilityDenied,
+  type ApiKeyCapability,
+} from '../api-key-permissions';
 import { resolveClientIp } from '../../../common/utils/ip';
 import { presentedApiKey } from '../../../common/security/bearer-token';
 import { setRequestActor } from '../../../common/services/request-context';
@@ -172,6 +177,12 @@ export class ApiKeyGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
+    // Such a list blocks everything; name the cause rather than a capability the key does not list.
+    if (!capabilityAgnostic && hasUnrecognizedDeniedEntry(apiKey)) {
+      throw new ForbiddenException(
+        "The API key's blocked capabilities hold a name this release does not know; an unrestricted admin must set them again",
+      );
+    }
     if (hasBlockedCapabilities(apiKey) && !routeCapabilities?.length && !capabilityAgnostic) {
       throw new ForbiddenException('Capability-restricted API keys are not permitted on this route');
     }
