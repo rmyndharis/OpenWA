@@ -242,6 +242,8 @@ describe('edited marker for a message whose row is not written yet', () => {
   });
 
   afterEach(async () => {
+    // A change kept while a write was refused is let go before the database it would be written to closes.
+    projector.forgetSession('s1');
     await db.destroy();
   });
 

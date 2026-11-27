@@ -93,6 +93,18 @@ export function editedMessagePayload(payload: Record<string, unknown>, body: str
   return payload.type === 'revoked' ? payload : { ...payload, body, edited: true };
 }
 
+/** What a change of a message does to a copy of it: an engine revoke drops it, a delete redacts it, an edit rewrites it. */
+export type MessageCopyChange = { kind: 'close' } | { kind: 'redact' } | { kind: 'rewrite'; body: string };
+
+/** A copy of a message's delivery data as `change` leaves it; null once it is dropped. */
+export function changedMessagePayload(
+  payload: Record<string, unknown>,
+  change: MessageCopyChange,
+): Record<string, unknown> | null {
+  if (change.kind === 'close') return null;
+  return change.kind === 'redact' ? redactedMessagePayload(payload) : editedMessagePayload(payload, change.body);
+}
+
 /**
  * Row lifecycle for the outbound delivery record.
  *
@@ -389,24 +401,41 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     waMessageId: string,
     shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
   ): Promise<void> {
+    await this.changeOpenForMessage(sessionId, waMessageId, { kind: 'close' }, shouldApply).catch((error: unknown) =>
+      this.logger.warn(`Could not close pending outbound deliveries for message ${waMessageId}: ${String(error)}`),
+    );
+  }
+
+  /**
+   * Apply a change of a message to its still-open outbox rows (see closePendingForMessage, redactPendingForMessage,
+   * rewritePendingForMessage), each judged by `shouldApply` on its payload. Throws when the database fails, for a
+   * caller that keeps the change to try again.
+   */
+  async changeOpenForMessage(
+    sessionId: string,
+    waMessageId: string,
+    change: MessageCopyChange,
+    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
     if (!waMessageId) return;
-    try {
-      const rows = await this.findPendingForMessage(sessionId, waMessageId);
-      if (rows.length === 0) return;
-      const matchingIds: string[] = [];
-      for (const row of rows) {
-        if (shouldApply) {
-          if (!row.payload || !(await shouldApply(row.payload))) continue;
-        }
-        matchingIds.push(row.id);
-      }
-      if (matchingIds.length === 0) return;
+    const rows = await this.findPendingForMessage(sessionId, waMessageId);
+    const matching: WebhookOutboxEvent[] = [];
+    for (const row of rows) {
+      if (!row.payload || (shouldApply && !(await shouldApply(row.payload)))) continue;
+      matching.push(row);
+    }
+    if (matching.length === 0) return;
+    if (change.kind === 'close') {
       await this.outbox.update(
-        { id: In(matchingIds), state: In(OPEN_STATES) },
+        { id: In(matching.map(row => row.id)), state: In(OPEN_STATES) },
         { state: 'dispatched', payload: null, lastAttemptAt: new Date() },
       );
-    } catch (error) {
-      this.logger.warn(`Could not close pending outbound deliveries for message ${waMessageId}: ${String(error)}`);
+      return;
+    }
+    for (const row of matching) {
+      await this.outbox.update({ id: row.id, state: In(OPEN_STATES), payload: Not(IsNull()) }, {
+        payload: changedMessagePayload(row.payload!, change),
+      } as QueryDeepPartialEntity<WebhookOutboxEvent>);
     }
   }
 
@@ -422,7 +451,9 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     waMessageId: string,
     shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
   ): Promise<void> {
-    return this.rewritePayloadsForMessage(sessionId, waMessageId, redactedMessagePayload, shouldApply, 'redact');
+    return this.changeOpenForMessage(sessionId, waMessageId, { kind: 'redact' }, shouldApply).catch((error: unknown) =>
+      this.logger.warn(`Could not redact pending outbound deliveries for message ${waMessageId}: ${String(error)}`),
+    );
   }
 
   /**
@@ -435,30 +466,10 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     body: string,
     shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
   ): Promise<void> {
-    const edit = (payload: Record<string, unknown>): Record<string, unknown> => editedMessagePayload(payload, body);
-    return this.rewritePayloadsForMessage(sessionId, waMessageId, edit, shouldApply, 'rewrite');
-  }
-
-  private async rewritePayloadsForMessage(
-    sessionId: string,
-    waMessageId: string,
-    change: (payload: Record<string, unknown>) => Record<string, unknown>,
-    shouldApply: ((payload: Record<string, unknown>) => boolean | Promise<boolean>) | undefined,
-    verb: string,
-  ): Promise<void> {
-    if (!waMessageId) return;
-    try {
-      const rows = await this.findPendingForMessage(sessionId, waMessageId);
-      for (const row of rows) {
-        if (!row.payload) continue;
-        if (shouldApply && !(await shouldApply(row.payload))) continue;
-        await this.outbox.update({ id: row.id, state: In(OPEN_STATES), payload: Not(IsNull()) }, {
-          payload: change(row.payload),
-        } as QueryDeepPartialEntity<WebhookOutboxEvent>);
-      }
-    } catch (error) {
-      this.logger.warn(`Could not ${verb} pending outbound deliveries for message ${waMessageId}: ${String(error)}`);
-    }
+    return this.changeOpenForMessage(sessionId, waMessageId, { kind: 'rewrite', body }, shouldApply).catch(
+      (error: unknown) =>
+        this.logger.warn(`Could not rewrite pending outbound deliveries for message ${waMessageId}: ${String(error)}`),
+    );
   }
 
   /** Find still-open message outbox rows whose idempotencyKey matches `msg_<session>_<waId>_<webhookId>`. */

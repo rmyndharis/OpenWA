@@ -93,7 +93,8 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
       create: jest.fn((x: Row) => ({ ...x })),
       insert: jest.fn(async (row: Row) => {
         await insertGate(row);
-        rows.push({ ...row });
+        // Stored with its key, as the table gives it one.
+        rows.push({ id: `pk-${String(row.waMessageId)}`, ...row });
         return { identifiers: [{ id: `pk-${String(row.waMessageId)}` }], generatedMaps: [] };
       }),
       update: jest.fn((where: Record<string, unknown>, patch: Row) => {
@@ -448,6 +449,8 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
   });
 
   afterEach(() => {
+    // A change kept while a write was refused is let go with the test, not retried after it.
+    projector.forgetSession('s1');
     process.env = { ...env };
   });
 

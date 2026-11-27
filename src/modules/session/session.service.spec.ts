@@ -7390,7 +7390,9 @@ describe('SessionService', () => {
       type Row = { metadata?: Record<string, unknown> };
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: {} };
-      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.findOne as jest.Mock).mockImplementation(() =>
+        Promise.resolve({ chatId: 'c', ...clone(stored) }),
+      );
       (messageRepository.update as jest.Mock).mockImplementation((_c: unknown, patch: Row) => {
         stored = clone({ ...stored, ...patch });
         return Promise.resolve({ affected: 1 });
@@ -7424,7 +7426,7 @@ describe('SessionService', () => {
       // The row was already advanced to DELIVERED by a concurrent ack. A full-row save(msg) would
       // re-persist the stale status read at findOne time and clobber it; the write must be scoped to
       // the metadata column only, keyed by (sessionId, waMessageId).
-      (messageRepository.findOne as jest.Mock).mockResolvedValue({ status: 'delivered', metadata: {} });
+      (messageRepository.findOne as jest.Mock).mockResolvedValue({ chatId: 'c', status: 'delivered', metadata: {} });
       (messageRepository.save as jest.Mock).mockClear();
       (messageRepository.update as jest.Mock).mockClear().mockResolvedValue({ affected: 1 });
 
@@ -7443,7 +7445,9 @@ describe('SessionService', () => {
       type Row = { metadata?: Record<string, unknown> };
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: { reactions: { alice: '👍', bob: '🎉' } } };
-      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.findOne as jest.Mock).mockImplementation(() =>
+        Promise.resolve({ chatId: 'c', ...clone(stored) }),
+      );
       (messageRepository.update as jest.Mock).mockImplementation((_c: unknown, patch: Row) => {
         stored = clone({ ...stored, ...patch });
         return Promise.resolve({ affected: 1 });
@@ -7461,7 +7465,9 @@ describe('SessionService', () => {
       type Row = { metadata?: Record<string, unknown> };
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: {} };
-      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.findOne as jest.Mock).mockImplementation(() =>
+        Promise.resolve({ chatId: 'c', ...clone(stored) }),
+      );
       (messageRepository.update as jest.Mock)
         .mockRejectedValueOnce(new Error('write blip')) // alice's write fails
         .mockImplementation((_c: unknown, patch: Row) => {
@@ -7479,7 +7485,7 @@ describe('SessionService', () => {
 
     it('cleans up the per-message serialization entry after the chain drains (no leak)', async () => {
       const callbacks = await startAndCaptureCallbacks();
-      (messageRepository.findOne as jest.Mock).mockResolvedValue({ metadata: {} });
+      (messageRepository.findOne as jest.Mock).mockResolvedValue({ chatId: 'c', metadata: {} });
       (messageRepository.update as jest.Mock).mockResolvedValue({ affected: 1 });
 
       callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '👍' });
@@ -7498,7 +7504,9 @@ describe('SessionService', () => {
       type Row = { metadata?: Record<string, unknown> };
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: {} };
-      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.findOne as jest.Mock).mockImplementation(() =>
+        Promise.resolve({ chatId: 'c', ...clone(stored) }),
+      );
       (messageRepository.update as jest.Mock).mockImplementation((_c: unknown, patch: Row) => {
         stored = clone({ ...stored, ...patch });
         return Promise.resolve({ affected: 1 });

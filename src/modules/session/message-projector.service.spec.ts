@@ -3,7 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { LAST_ACTIVE_WRITE_WINDOW_MS, MessageProjector, PERSIST_RETRY_DELAY_MS } from './message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
-import { In, IsNull, Not, Or, type Repository } from 'typeorm';
+import { IsNull, Not, Or, type Repository } from 'typeorm';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { Session } from './entities/session.entity';
 import { EventsGateway } from '../events/events.gateway';
@@ -15,15 +15,11 @@ import { AutomationRulesService } from '../automation/automation-rules.service';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
-/**
- * Where a held change lands on a row these mocks never read back: the row its message claims (its chat and side, and
- * no engine ref). Against a real table the judging read finds the inserted row and the write goes by its key.
- */
-const claimedRow = (
-  where: { sessionId: string; waMessageId: string },
-  chatId: string,
-  direction: MessageDirection,
-): Record<string, unknown> => ({ ...where, chatId: In([chatId]), engineRef: IsNull(), direction });
+/** The row the mocked insert reports (`identifiers: [{ id: 1 }]`): changes held for a message go to it by its key. */
+const insertedRow = { id: 1 };
+
+/** The row a retried insert lost to, as its judging read finds it, and the key its changes go to. */
+const lostTo = { id: 'row-1' };
 
 // Lets a queued mutation settle: the projector's chains are fire-and-forget, so the assertions need
 // the microtask queue drained rather than a promise the caller could await.
@@ -66,6 +62,8 @@ describe('MessageProjector', () => {
   let engines: EngineRegistry;
   let engine: IWhatsAppEngine;
   let projector: MessageProjector;
+  // Changes a mocked write refused are kept by the projector: none outlives its test.
+  afterEach(() => projector?.settleParkedChanges(0));
 
   beforeEach(() => {
     messageRepository = {
@@ -282,7 +280,7 @@ describe('MessageProjector', () => {
     it('still carries the full snapshot, and still writes it, when the row IS there', async () => {
       // The other half of the branch above: making the snapshot conditional must not make it optional
       // in the case that has always produced it. A prior sender's reaction survives in the map.
-      messageRepository.findOne.mockResolvedValue({ metadata: { reactions: { '627@c.us': '❤️' } } });
+      messageRepository.findOne.mockResolvedValue({ chatId: 'c1@c.us', metadata: { reactions: { '627@c.us': '❤️' } } });
 
       projector.applyReactionQueued('s1', {
         messageId: 'WA1',
@@ -565,6 +563,8 @@ describe('MessageProjector', () => {
 // SessionLidResolver) is wired the same way production does.
 describe('MessageProjector (inbound projection)', () => {
   let projector: MessageProjector;
+  // Changes a mocked write refused are kept by the projector: none outlives its test.
+  afterEach(() => projector?.settleParkedChanges(0));
   let engines: EngineRegistry;
   let messageRepository: { create: jest.Mock; insert: jest.Mock; findOne: jest.Mock; update: jest.Mock };
   let sessionRepository: { update: jest.Mock; findOne: jest.Mock };
@@ -895,9 +895,7 @@ describe('MessageProjector (inbound projection)', () => {
         await drain();
 
         expect(messageRepository.insert).toHaveBeenCalledTimes(1);
-        expect(updatesAfterInsert()).toEqual([
-          [claimedRow(where, '15550001111@c.us', MessageDirection.INCOMING), revokedPatch],
-        ]);
+        expect(updatesAfterInsert()).toEqual([[insertedRow, revokedPatch]]);
       });
 
       it('writes the latest edit onto the row once it is written', async () => {
@@ -912,7 +910,7 @@ describe('MessageProjector (inbound projection)', () => {
         await drain();
 
         expect(updatesAfterInsert()).toEqual([
-          [{ ...where, type: Not('revoked'), body: Or(Not('second fix'), IsNull()) }, { body: 'second fix' }],
+          [{ ...insertedRow, type: Not('revoked'), body: Or(Not('second fix'), IsNull()) }, { body: 'second fix' }],
         ]);
         expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.edited', expect.anything());
       });
@@ -1040,7 +1038,7 @@ describe('MessageProjector (inbound projection)', () => {
         await drain();
 
         expect(updatesAfterInsert()).toEqual([
-          [{ ...where, type: Not('revoked'), body: Or(Not('genuine edit'), IsNull()) }, { body: 'genuine edit' }],
+          [{ ...insertedRow, type: Not('revoked'), body: Or(Not('genuine edit'), IsNull()) }, { body: 'genuine edit' }],
         ]);
       });
 
@@ -1077,9 +1075,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseHook();
         await drain();
 
-        expect(updatesAfterInsert()).toEqual([
-          [claimedRow(where, '15550001111@c.us', MessageDirection.INCOMING), revokedPatch],
-        ]);
+        expect(updatesAfterInsert()).toEqual([[insertedRow, revokedPatch]]);
       });
 
       // The REST delete names the chat its caller addressed: a message still arriving under another chat
@@ -1106,9 +1102,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseHook();
         await drain();
 
-        expect(updatesAfterInsert()).toEqual([
-          [claimedRow(where, '15550001111@c.us', MessageDirection.INCOMING), revokedPatch],
-        ]);
+        expect(updatesAfterInsert()).toEqual([[insertedRow, revokedPatch]]);
       });
 
       it('does not give a message arriving under another chat the body of a REST edit that names a chat', async () => {
@@ -1500,12 +1494,7 @@ describe('MessageProjector (inbound projection)', () => {
       const afterB = messageRepository.update.mock.calls.filter(
         (_call, i) => messageRepository.update.mock.invocationCallOrder[i] > insertedB,
       );
-      expect(afterB).toEqual([
-        [
-          claimedRow({ sessionId: SESSION_ID, waMessageId: 'B' }, chatA, MessageDirection.INCOMING),
-          expect.objectContaining({ type: 'revoked' }),
-        ],
-      ]);
+      expect(afterB).toEqual([[insertedRow, expect.objectContaining({ type: 'revoked' })]]);
       // message.revoked already went out: B is not announced with the content its sender deleted.
       expect(dispatched()).toEqual(['message.revoked:B', 'message.received:A']);
       expect(eventsGateway.emitMessage.mock.calls.map(([, m]) => (m as { id: string }).id)).toEqual(['A']);
@@ -1613,7 +1602,6 @@ describe('MessageProjector (inbound projection)', () => {
           (_call, i) => messageRepository.update.mock.invocationCallOrder[i] > insertedS,
         );
       };
-      const whereS = { sessionId: SESSION_ID, waMessageId: 'S' };
 
       beforeEach(() => {
         Object.assign(eventsGateway, { emitMessageEdited: jest.fn() });
@@ -1627,12 +1615,7 @@ describe('MessageProjector (inbound projection)', () => {
         await flush();
 
         expect(inserted()).toEqual(['A', 'S']);
-        expect(updatesAfterS()).toEqual([
-          [
-            claimedRow(whereS, '15550001111@c.us', MessageDirection.OUTGOING),
-            expect.objectContaining({ body: '', type: 'revoked' }),
-          ],
-        ]);
+        expect(updatesAfterS()).toEqual([[insertedRow, expect.objectContaining({ body: '', type: 'revoked' })]]);
         expect(dispatched()).toEqual(['message.revoked:S', 'message.received:A']);
         expect(eventsGateway.emitMessageSent).not.toHaveBeenCalled();
       });
@@ -1644,7 +1627,7 @@ describe('MessageProjector (inbound projection)', () => {
         await flush();
 
         expect(updatesAfterS()).toEqual([
-          [{ ...whereS, type: Not('revoked'), body: Or(Not('fixed'), IsNull()) }, { body: 'fixed' }],
+          [{ ...insertedRow, type: Not('revoked'), body: Or(Not('fixed'), IsNull()) }, { body: 'fixed' }],
         ]);
         expect(webhookService.dispatch).toHaveBeenCalledWith(
           SESSION_ID,
@@ -1660,7 +1643,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseA();
         await flush();
 
-        expect(updatesAfterS()).toEqual([[expect.objectContaining(whereS), { status: MessageStatus.READ }]]);
+        expect(updatesAfterS()).toEqual([[expect.objectContaining(insertedRow), { status: MessageStatus.READ }]]);
       });
 
       it('empties the echo row when the REST delete lands before it is written', async () => {
@@ -1669,12 +1652,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseA();
         await flush();
 
-        expect(updatesAfterS()).toEqual([
-          [
-            claimedRow(whereS, '15550001111@c.us', MessageDirection.OUTGOING),
-            expect.objectContaining({ body: '', type: 'revoked' }),
-          ],
-        ]);
+        expect(updatesAfterS()).toEqual([[insertedRow, expect.objectContaining({ body: '', type: 'revoked' })]]);
         expect(webhookService.dispatch).toHaveBeenCalledWith(
           SESSION_ID,
           'message.sent',
@@ -1689,7 +1667,7 @@ describe('MessageProjector (inbound projection)', () => {
         await flush();
 
         expect(updatesAfterS()).toEqual([
-          [{ ...whereS, type: Not('revoked'), body: Or(Not('fixed'), IsNull()) }, { body: 'fixed' }],
+          [{ ...insertedRow, type: Not('revoked'), body: Or(Not('fixed'), IsNull()) }, { body: 'fixed' }],
         ]);
       });
 
@@ -1709,7 +1687,7 @@ describe('MessageProjector (inbound projection)', () => {
 
         expect(updatesAfterS()).toEqual([
           [
-            expect.objectContaining({ ...whereS, type: Not('revoked'), metadata: expect.anything() as unknown }),
+            expect.objectContaining({ ...insertedRow, type: Not('revoked'), metadata: expect.anything() as unknown }),
             { metadata: { keep: 1, reactions: { 'x@c.us': 'ok' } } },
           ],
         ]);
@@ -1819,6 +1797,8 @@ describe('MessageProjector (inbound projection)', () => {
       const engine = makeEngine();
       engines.set(SESSION_ID, engine);
       messageRepository.insert.mockRejectedValueOnce(busy()).mockRejectedValueOnce(dup());
+      // The row the retry lost to, as the judging read finds it: the first attempt's own.
+      messageRepository.findOne.mockResolvedValue({ ...lostTo, chatId: '15550001111@c.us', direction: 'incoming' });
       let releaseHook!: () => void;
       hookManager.execute.mockImplementationOnce(async (_event: string, data: unknown) => {
         await new Promise<void>(resolve => (releaseHook = resolve));
@@ -1836,18 +1816,15 @@ describe('MessageProjector (inbound projection)', () => {
       const afterRetry = messageRepository.update.mock.calls.filter(
         (_call, i) => messageRepository.update.mock.invocationCallOrder[i] > retriedAt,
       );
-      expect(afterRetry).toEqual([
-        [
-          claimedRow({ sessionId: SESSION_ID, waMessageId: 'wamid.1' }, '15550001111@c.us', MessageDirection.INCOMING),
-          expect.objectContaining({ body: '', type: 'revoked' }),
-        ],
-      ]);
+      expect(afterRetry).toEqual([[lostTo, expect.objectContaining({ body: '', type: 'revoked' })]]);
     });
 
     it('clears an own-send echo row the same way', async () => {
       const engine = makeEngine();
       engines.set(SESSION_ID, engine);
       messageRepository.insert.mockRejectedValueOnce(busy()).mockRejectedValueOnce(dup());
+      // The row the retry lost to, as the judging read finds it: the first attempt's own.
+      messageRepository.findOne.mockResolvedValue({ ...lostTo, chatId: '15550001111@c.us', direction: 'outgoing' });
       let releaseHook!: () => void;
       hookManager.execute.mockImplementationOnce(async (_event: string, data: unknown) => {
         await new Promise<void>(resolve => (releaseHook = resolve));
@@ -1866,12 +1843,7 @@ describe('MessageProjector (inbound projection)', () => {
       const afterRetry = messageRepository.update.mock.calls.filter(
         (_call, i) => messageRepository.update.mock.invocationCallOrder[i] > retriedAt,
       );
-      expect(afterRetry).toEqual([
-        [
-          claimedRow({ sessionId: SESSION_ID, waMessageId: 'wamid.1' }, '15550001111@c.us', MessageDirection.OUTGOING),
-          expect.objectContaining({ body: '', type: 'revoked' }),
-        ],
-      ]);
+      expect(afterRetry).toEqual([[lostTo, expect.objectContaining({ body: '', type: 'revoked' })]]);
     });
 
     // The retry's duplicate may be the message's own row (its first attempt committed before the error) or

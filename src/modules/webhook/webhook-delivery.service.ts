@@ -11,9 +11,9 @@ import { Webhook } from './entities/webhook.entity';
 import {
   MESSAGE_DELIVERY_EVENTS,
   WebhookOutboxService,
-  editedMessagePayload,
+  changedMessagePayload,
   messageDeliveryKeys,
-  redactedMessagePayload,
+  type MessageCopyChange,
   type OutboxOpenRow,
   type ReplayableDelivery,
 } from './webhook-outbox.service';
@@ -713,75 +713,79 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * Close any still-open message outbox rows when an engine revoke arrives for a message, and drop the event data
    * its failed deliveries keep for a redrive.
    */
-  async closePendingForMessage(
+  closePendingForMessage(
     sessionId: string,
     waMessageId: string,
     shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
   ): Promise<void> {
-    if (typeof this.outbox.closePendingForMessage === 'function') {
-      await this.outbox.closePendingForMessage(sessionId, waMessageId, shouldApply);
-    }
-    await this.changeKeptCopies(sessionId, waMessageId, () => null, shouldApply);
+    return this.changeCopiesQuietly(sessionId, waMessageId, { kind: 'close' }, shouldApply);
   }
 
   /**
    * Redact payloads on any still-open message outbox rows when a REST delete clears a message, and the event data
    * its failed deliveries keep for a redrive.
    */
-  async redactPendingForMessage(
+  redactPendingForMessage(
     sessionId: string,
     waMessageId: string,
     shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
   ): Promise<void> {
-    if (typeof this.outbox.redactPendingForMessage === 'function') {
-      await this.outbox.redactPendingForMessage(sessionId, waMessageId, shouldApply);
-    }
-    await this.changeKeptCopies(sessionId, waMessageId, redactedMessagePayload, shouldApply);
+    return this.changeCopiesQuietly(sessionId, waMessageId, { kind: 'redact' }, shouldApply);
   }
 
   /** Write an edit of a stored message into its open outbox rows and the event data its failed deliveries keep. */
-  async rewritePendingForMessage(
+  rewritePendingForMessage(
     sessionId: string,
     waMessageId: string,
     body: string,
     shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
   ): Promise<void> {
-    await this.outbox.rewritePendingForMessage(sessionId, waMessageId, body, shouldApply);
-    await this.changeKeptCopies(sessionId, waMessageId, payload => editedMessagePayload(payload, body), shouldApply);
+    return this.changeCopiesQuietly(sessionId, waMessageId, { kind: 'rewrite', body }, shouldApply);
   }
 
   /**
-   * Apply a change of a message to the event data its failed deliveries keep for a redrive (`null` drops it), each
-   * judged by its own payload as the outbox rows are, so a redrive never sends what the sender took back. Best-effort.
+   * Apply a change of a message to every copy its deliveries hold: its open outbox rows, and the event data its failed
+   * deliveries keep for a redrive (dropped on a close), each judged by `shouldApply` on its payload, so neither the
+   * sweep, a queued job nor a redrive sends what the sender took back. Throws when the database fails, for a caller that
+   * keeps the change to try again.
    */
-  private async changeKeptCopies(
+  async changeMessageCopies(
     sessionId: string,
     waMessageId: string,
-    change: (payload: Record<string, unknown>) => Record<string, unknown> | null,
+    change: MessageCopyChange,
     shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
   ): Promise<void> {
     if (!waMessageId) return;
-    try {
-      const { pattern, keyFor } = messageDeliveryKeys(sessionId, waMessageId);
-      const rows = await this.failureRepository
-        .createQueryBuilder('f')
-        .select(['f.id', 'f.webhookId', 'f.idempotencyKey'])
-        .addSelect('f.payload')
-        .where('f.sessionId = :sessionId', { sessionId })
-        .andWhere('f.event IN (:...events)', { events: MESSAGE_DELIVERY_EVENTS })
-        .andWhere('f.payload IS NOT NULL')
-        .andWhere("f.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern })
-        .getMany();
-      for (const row of rows) {
-        if (!row.payload || row.idempotencyKey !== keyFor(row.webhookId)) continue;
-        if (shouldApply && !(await shouldApply(row.payload))) continue;
-        await this.failureRepository.update({ id: row.id }, {
-          payload: change(row.payload),
-        } as QueryDeepPartialEntity<WebhookDeliveryFailure>);
-      }
-    } catch (error) {
-      this.logger.warn(`Could not change the kept copies of message ${waMessageId}: ${String(error)}`);
+    await this.outbox.changeOpenForMessage(sessionId, waMessageId, change, shouldApply);
+    const { pattern, keyFor } = messageDeliveryKeys(sessionId, waMessageId);
+    const rows = await this.failureRepository
+      .createQueryBuilder('f')
+      .select(['f.id', 'f.webhookId', 'f.idempotencyKey'])
+      .addSelect('f.payload')
+      .where('f.sessionId = :sessionId', { sessionId })
+      .andWhere('f.event IN (:...events)', { events: MESSAGE_DELIVERY_EVENTS })
+      .andWhere('f.payload IS NOT NULL')
+      .andWhere("f.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern })
+      .getMany();
+    for (const row of rows) {
+      if (!row.payload || row.idempotencyKey !== keyFor(row.webhookId)) continue;
+      if (shouldApply && !(await shouldApply(row.payload))) continue;
+      await this.failureRepository.update({ id: row.id }, {
+        payload: changedMessagePayload(row.payload, change),
+      } as QueryDeepPartialEntity<WebhookDeliveryFailure>);
     }
+  }
+
+  /** {@link changeMessageCopies}, best-effort: a failure is logged. */
+  private changeCopiesQuietly(
+    sessionId: string,
+    waMessageId: string,
+    change: MessageCopyChange,
+    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    return this.changeMessageCopies(sessionId, waMessageId, change, shouldApply).catch((error: unknown) =>
+      this.logger.warn(`Could not change the delivery copies of message ${waMessageId}: ${String(error)}`),
+    );
   }
 
   /**

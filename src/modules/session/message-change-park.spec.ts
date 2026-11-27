@@ -1,0 +1,481 @@
+jest.mock('dns/promises', () => ({
+  lookup: jest.fn().mockResolvedValue([{ address: '93.184.216.34', family: 4 }]),
+}));
+
+jest.mock('undici', () => {
+  const actual = jest.requireActual<typeof import('undici')>('undici');
+  return { __esModule: true, ...actual, fetch: jest.fn() };
+});
+
+import 'reflect-metadata';
+import { DataSource } from 'typeorm';
+import { BetterSqlite3QueryRunner } from 'typeorm/driver/better-sqlite3/BetterSqlite3QueryRunner';
+import { ConfigService } from '@nestjs/config';
+import { fetch as undiciFetch } from 'undici';
+import { Session, SessionStatus } from './entities/session.entity';
+import { Message, MessageDirection } from '../message/entities/message.entity';
+import { Webhook } from '../webhook/entities/webhook.entity';
+import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.entity';
+import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
+import { WebhookOutboxService } from '../webhook/webhook-outbox.service';
+import { WebhookDeliveryService } from '../webhook/webhook-delivery.service';
+import { WebhookService } from '../webhook/webhook.service';
+import { WebhookReconcilerService } from '../webhook/webhook-reconciler.service';
+import { MessageProjector } from './message-projector.service';
+import { SessionOwnershipService } from './session-ownership.service';
+import * as sharedConnection from '../../common/utils/shared-connection';
+import { EngineRegistry } from '../../engine/engine-registry.service';
+import { HookManager } from '../../core/hooks';
+import { EventsGateway } from '../events/events.gateway';
+import { StatusStoreService } from '../status-store/status-store.service';
+import { SessionLidResolver } from './session-lid-resolver.service';
+import { LoggerService } from '../../common/services/logger.service';
+import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+
+const CHAT = '628111@c.us';
+const OTHER_CHAT = '628999@c.us';
+
+/**
+ * A change the database refuses (its write fails, or the read that judges it does) is kept and written once the database
+ * answers, judged then as it would have been: never written to a row nobody could read, never dropped for that.
+ */
+describe('Changes the database refused, kept until it answers (SQLite)', () => {
+  const mockFetch = undiciFetch as jest.Mock;
+  let ds: DataSource;
+  let outbox: WebhookOutboxService;
+  let delivery: WebhookDeliveryService;
+  let reconciler: WebhookReconcilerService;
+  let hookManager: HookManager;
+  let engines: EngineRegistry;
+  let engine: IWhatsAppEngine;
+  let projector: MessageProjector;
+  let sessionId: string;
+  let webhookId: string;
+  let owns: boolean;
+  // 'on': every statement fails; 'reads': only the reads that judge a change against the row fail.
+  let outage: 'off' | 'on' | 'reads';
+  const ioerr = (): Error => Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' });
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- a jest spy, read for its calls
+  const lost = (): jest.Mock => LoggerService.prototype.error as jest.Mock;
+
+  beforeEach(async () => {
+    jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue(new Response('ok', { status: 200 }));
+    outage = 'off';
+    owns = true;
+
+    ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Session, Message, Webhook, WebhookOutboxEvent, WebhookDeliveryFailure],
+      synchronize: true,
+    }).initialize();
+    sessionId = (
+      await ds
+        .getRepository(Session)
+        .save(ds.getRepository(Session).create({ name: 'parked', status: SessionStatus.READY, config: {} }))
+    ).id;
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- applied below with the runner as `this`
+    const realQuery = BetterSqlite3QueryRunner.prototype.query;
+    jest.spyOn(BetterSqlite3QueryRunner.prototype, 'query').mockImplementation(function (
+      this: BetterSqlite3QueryRunner,
+      ...args: Parameters<BetterSqlite3QueryRunner['query']>
+    ) {
+      const sql = String(args[0]);
+      const judging = /^\s*SELECT/i.test(sql) && sql.includes('"messages"') && sql.includes('"engineRef"');
+      if (outage === 'on' || (outage === 'reads' && judging)) return Promise.reject(ioerr());
+      return realQuery.apply(this, args);
+    } as never);
+
+    const configService = {
+      get: <T>(key: string, defaultValue?: T): T => {
+        const values: Record<string, unknown> = {
+          'queue.enabled': false,
+          'webhook.dispatchConcurrency': 8,
+          'webhook.dispatchMaxQueued': 100,
+          'webhook.timeout': 5000,
+          'webhook.retryDelay': 50,
+          'webhook.shutdownDrainMs': 1000,
+          'webhook.failurePayloadRetentionHours': 0,
+          'webhook.maxPayloadBytes': 1024 * 1024,
+          'webhook.mediaInlineMaxBytes': 1024 * 1024,
+        };
+        return (key in values ? values[key] : defaultValue) as T;
+      },
+    } as unknown as ConfigService;
+    hookManager = new HookManager();
+    outbox = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent));
+    delivery = new WebhookDeliveryService(
+      ds.getRepository(Webhook),
+      ds.getRepository(WebhookDeliveryFailure),
+      configService,
+      hookManager,
+      outbox,
+    );
+    const webhookService = new WebhookService(
+      ds.getRepository(Webhook),
+      ds.getRepository(WebhookDeliveryFailure),
+      ds.getRepository(Session),
+      configService,
+      delivery,
+    );
+    reconciler = new WebhookReconcilerService(ds.getRepository(Webhook), outbox, delivery, configService);
+    engines = new EngineRegistry();
+    engine = {} as IWhatsAppEngine;
+    engines.set(sessionId, engine);
+    projector = new MessageProjector(
+      ds.getRepository(Message),
+      ds.getRepository(Session),
+      engines,
+      new Proxy({}, { get: () => jest.fn() }) as unknown as EventsGateway,
+      webhookService,
+      hookManager,
+      {} as unknown as StatusStoreService,
+      { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
+      configService,
+      undefined,
+      undefined,
+      undefined,
+      { owns: () => owns } as unknown as SessionOwnershipService,
+    );
+    webhookId = (
+      await ds.getRepository(Webhook).save(
+        ds.getRepository(Webhook).create({
+          sessionId,
+          url: 'https://receiver.example/hook',
+          events: ['message.received', 'message.sent'],
+          secret: null,
+          headers: {},
+          filters: null,
+          active: true,
+          retryCount: 1,
+        }),
+      )
+    ).id;
+  });
+
+  afterEach(async () => {
+    outage = 'off';
+    await delivery.onModuleDestroy();
+    await reconciler.onModuleDestroy();
+    await outbox.onModuleDestroy();
+    await ds.destroy();
+    jest.restoreAllMocks();
+  });
+
+  const settle = async (turns = 60): Promise<void> => {
+    for (let turn = 0; turn < turns; turn++) await new Promise(resolve => setImmediate(resolve));
+  };
+  /** The database is back: the kept changes run now rather than on their timer. */
+  const recover = async (): Promise<void> => {
+    outage = 'off';
+    await projector.retryParkedChanges();
+    await settle();
+  };
+  const rowOf = (id: string): Promise<Message | null> =>
+    ds.getRepository(Message).findOneBy({ sessionId, waMessageId: id });
+  const outboxOf = async (id: string): Promise<Array<{ state: string | null; body?: unknown }>> =>
+    (await ds.getRepository(WebhookOutboxEvent).find({ where: { sessionId } }))
+      .filter(r => r.idempotencyKey.includes(`_${id}_`))
+      .map(r => ({ state: r.state, body: (r.payload as { body?: unknown } | null)?.body }));
+  const sweptBodies = async (): Promise<unknown[]> => {
+    await reconciler.sweep(
+      { intervalMs: 60_000, graceMs: 0, batchSize: 50, maxAttempts: 5 },
+      new Date(Date.now() + 1000),
+    );
+    await settle();
+    return mockFetch.mock.calls.map(
+      ([, init]) => (JSON.parse((init as { body: string }).body) as { data: { body?: string } }).data.body,
+    );
+  };
+
+  const storeRow = async (id: string, chatId = CHAT, fromMe = false): Promise<void> => {
+    await ds.getRepository(Message).insert({
+      sessionId,
+      waMessageId: id,
+      chatId,
+      from: fromMe ? '628222@c.us' : chatId,
+      to: fromMe ? chatId : '628222@c.us',
+      body: 'first text',
+      type: 'text',
+      direction: fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
+      timestamp: 1_700_000_000,
+    });
+    await outbox.open({
+      webhookId,
+      sessionId,
+      event: fromMe ? 'message.sent' : 'message.received',
+      idempotencyKey: `msg_${sessionId}_${id}_${webhookId}`,
+      deliveryId: `delivery-${id}`,
+      payload: { id, chatId, fromMe, type: 'text', body: 'first text' },
+    });
+  };
+  const message = (id: string, fromMe = false): IncomingMessage =>
+    ({
+      id,
+      chatId: CHAT,
+      from: fromMe ? '628222@c.us' : CHAT,
+      to: fromMe ? CHAT : '628222@c.us',
+      body: 'first text',
+      type: 'text',
+      timestamp: 1_700_000_000,
+      fromMe,
+    }) as IncomingMessage;
+  const hand = (msg: IncomingMessage): void => {
+    if (msg.fromMe) projector.handleOwnSendEcho(sessionId, engine, msg);
+    else void projector.handleInboundMessage(sessionId, engine, msg);
+  };
+
+  const changes = {
+    'an engine revoke': (id: string, fromMe = false) =>
+      projector.handleMessageRevoked(
+        sessionId,
+        engine,
+        { id, revokedId: id, chatId: CHAT, timestamp: 1_700_000_001 } as never,
+        { fromMe },
+      ),
+    'a delete through the API': (id: string) =>
+      void projector.recordRevoke(sessionId, id, { kind: 'revoke', chatId: CHAT }),
+    'an edit': (id: string, fromMe = false) =>
+      projector.applyMessageEditQueued(sessionId, {
+        messageId: id,
+        chatId: CHAT,
+        body: 'edited text',
+        fromMe,
+      } as never),
+  } as const;
+  type Change = keyof typeof changes;
+  const changed: Record<Change, { row: Record<string, unknown>; outbox: Record<string, unknown> }> = {
+    'an engine revoke': { row: { type: 'revoked', body: '' }, outbox: { state: 'dispatched', body: undefined } },
+    'a delete through the API': { row: { type: 'revoked', body: '' }, outbox: { state: 'pending', body: '' } },
+    'an edit': { row: { body: 'edited text' }, outbox: { state: 'pending', body: 'edited text' } },
+  };
+  const each = Object.keys(changes) as Change[];
+
+  describe.each([
+    ['an inbound message', false],
+    ['an own-send echo', true],
+  ] as const)('%s', (_label, fromMe) => {
+    // The change reaches the message as its insert waits for the shared connection, before the commit.
+    const justBeforeTheCommit = (change: () => void): void => {
+      const realWait = sharedConnection.awaitNoOpenTransaction;
+      let waits = 0;
+      jest.spyOn(sharedConnection, 'awaitNoOpenTransaction').mockImplementation(async dataSource => {
+        // Only this test's database: work an earlier test left running waits on its own.
+        if (dataSource === ds && ++waits === 2) {
+          change();
+          await settle(5);
+        }
+        return realWait(dataSource);
+      });
+    };
+    /** The commit lands, then the database goes away and the transaction reports `failure`. */
+    const outageAfterTheCommit = (failure: () => Error): void => {
+      const realTransaction = ds.transaction.bind(ds);
+      jest.spyOn(ds, 'transaction').mockImplementationOnce(async (...args: Parameters<typeof ds.transaction>) => {
+        await realTransaction(...args);
+        outage = 'on';
+        throw failure();
+      });
+    };
+
+    it.each(each)('writes %s held for it once the database answers again after its commit landed', async change => {
+      const msg = message(`L-${fromMe}`, fromMe);
+      justBeforeTheCommit(() => changes[change](msg.id, fromMe));
+      outageAfterTheCommit(ioerr);
+
+      hand(msg);
+      await settle();
+      outage = 'off';
+      expect(await rowOf(msg.id)).toMatchObject({ body: 'first text' });
+      await recover();
+
+      expect(await rowOf(msg.id)).toMatchObject(changed[change].row);
+      expect(await outboxOf(msg.id)).toEqual([expect.objectContaining(changed[change].outbox)]);
+      expect(await sweptBodies()).not.toContain('first text');
+    });
+
+    it.each(each)('writes %s held for it whose write failed after a commit that reported success', async change => {
+      const msg = message(`Y-${fromMe}`, fromMe);
+      justBeforeTheCommit(() => changes[change](msg.id, fromMe));
+      const realTransaction = ds.transaction.bind(ds);
+      jest.spyOn(ds, 'transaction').mockImplementationOnce(async (...args: Parameters<typeof ds.transaction>) => {
+        const result = await realTransaction(...args);
+        outage = 'on';
+        return result;
+      });
+
+      hand(msg);
+      await settle();
+      await recover();
+
+      expect(await rowOf(msg.id)).toMatchObject(changed[change].row);
+    });
+  });
+
+  describe('a change of a stored message', () => {
+    it.each(each)('writes %s that reached it while the database was away, once it answers', async change => {
+      await storeRow('P-1');
+      outage = 'on';
+
+      changes[change]('P-1');
+      await settle();
+      await recover();
+
+      expect(await rowOf('P-1')).toMatchObject(changed[change].row);
+      expect(await outboxOf('P-1')).toEqual([expect.objectContaining(changed[change].outbox)]);
+      expect(await sweptBodies()).not.toContain('first text');
+    });
+
+    it.each(each)("never writes %s to another chat's row it could not read, then or once it can", async change => {
+      await storeRow('DF-1', OTHER_CHAT);
+      outage = 'reads';
+
+      changes[change]('DF-1');
+      await settle();
+      expect(await rowOf('DF-1')).toMatchObject({ chatId: OTHER_CHAT, type: 'text', body: 'first text' });
+      await recover();
+
+      expect(await rowOf('DF-1')).toMatchObject({ chatId: OTHER_CHAT, type: 'text', body: 'first text' });
+    });
+
+    it('lets a newer edit that lands replace a kept one, and keeps a later revoke over a kept edit', async () => {
+      await storeRow('O-1');
+      await storeRow('O-2');
+      outage = 'on';
+      projector.applyMessageEditQueued(sessionId, {
+        messageId: 'O-1',
+        chatId: CHAT,
+        body: 'first fix',
+        fromMe: false,
+      } as never);
+      projector.applyMessageEditQueued(sessionId, {
+        messageId: 'O-2',
+        chatId: CHAT,
+        body: 'first fix',
+        fromMe: false,
+      } as never);
+      await settle();
+      outage = 'off';
+      projector.applyMessageEditQueued(sessionId, {
+        messageId: 'O-1',
+        chatId: CHAT,
+        body: 'second fix',
+        fromMe: false,
+      } as never);
+      changes['an engine revoke']('O-2');
+      await settle();
+      await recover();
+
+      expect(await rowOf('O-1')).toMatchObject({ body: 'second fix' });
+      expect(await rowOf('O-2')).toMatchObject({ type: 'revoked', body: '' });
+    });
+
+    it('keeps a revoke over an edit that comes after it, and a change of another chat neither applies nor cancels it', async () => {
+      await storeRow('O-3');
+      outage = 'on';
+      changes['an engine revoke']('O-3');
+      await settle();
+      changes['an edit']('O-3');
+      projector.applyMessageEditQueued(sessionId, {
+        messageId: 'O-3',
+        chatId: OTHER_CHAT,
+        body: 'forged',
+        fromMe: false,
+      } as never);
+      await settle();
+      await recover();
+
+      expect(await rowOf('O-3')).toMatchObject({ type: 'revoked', body: '' });
+    });
+
+    it('writes a kept revoke and drops a kept edit once this node no longer owns the session', async () => {
+      await storeRow('T-1');
+      await storeRow('T-2');
+      outage = 'on';
+      changes['an engine revoke']('T-1');
+      changes['an edit']('T-2');
+      await settle();
+      owns = false;
+      await recover();
+
+      expect(await rowOf('T-1')).toMatchObject({ type: 'revoked' });
+      expect(await rowOf('T-2')).toMatchObject({ body: 'first text' });
+      expect(lost()).toHaveBeenCalledWith(
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ messageId: 'T-2', reason: 'ownership', action: 'message_change_lost' }),
+      );
+    });
+
+    it('writes a kept change after its engine retired, and hands nothing to message:persisted', async () => {
+      const persisted: unknown[] = [];
+      hookManager.register('test', 'message:persisted', ctx => {
+        persisted.push(ctx.data);
+        return Promise.resolve({ continue: true });
+      });
+      await storeRow('R-1');
+      outage = 'on';
+      changes['a delete through the API']('R-1');
+      await settle();
+      engines.delete(sessionId);
+      await recover();
+
+      expect(await rowOf('R-1')).toMatchObject({ type: 'revoked' });
+      expect(persisted).toEqual([]);
+    });
+
+    it('drops what a removed session kept', async () => {
+      await storeRow('F-1');
+      outage = 'on';
+      changes['an edit']('F-1');
+      await settle();
+      projector.forgetSession(sessionId);
+      await recover();
+
+      expect(await rowOf('F-1')).toMatchObject({ body: 'first text' });
+    });
+
+    it('makes one pass at shutdown, and logs as lost what the database still refuses', async () => {
+      await storeRow('S-1');
+      await storeRow('S-2');
+      outage = 'on';
+      changes['an edit']('S-1');
+      await settle();
+      outage = 'off';
+      await projector.settleParkedChanges(1000);
+      expect(await rowOf('S-1')).toMatchObject({ body: 'edited text' });
+
+      outage = 'on';
+      changes['an edit']('S-2');
+      await settle();
+      await projector.settleParkedChanges(1000);
+      expect(lost()).toHaveBeenCalledWith(
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ messageId: 'S-2', reason: 'shutdown', action: 'message_change_lost' }),
+      );
+    });
+  });
+
+  it('retries a kept change on its own timer, backing off while the database stays away', async () => {
+    jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+    try {
+      await storeRow('B-1');
+      outage = 'on';
+      changes['an edit']('B-1');
+      await settle();
+      await jest.advanceTimersByTimeAsync(1000);
+      await settle();
+      outage = 'off';
+      await jest.advanceTimersByTimeAsync(2000);
+      await settle();
+
+      expect(await rowOf('B-1')).toMatchObject({ body: 'edited text' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});

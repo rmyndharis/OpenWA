@@ -1002,7 +1002,12 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
     const announced = (): jest.Mock => (fromMe ? eventsGateway.emitMessageSent : eventsGateway.emitMessage);
     const cleared = { type: 'revoked', body: '', metadata: null, mediaPath: null, mediaMimetype: null };
 
-    it('applies a held edit and receipt to the row its retried insert lost to, though no judgement can read it', async () => {
+    // A row no judgement can read may be another chat's: nothing is written to it until a read tells, and then it is.
+    const parked = (): boolean =>
+      (LoggerService.prototype.warn as jest.Mock).mock.calls.some(
+        ([, meta]) => (meta as { action?: string } | undefined)?.action === 'message_change_parked',
+      );
+    it('keeps a held edit and receipt for the row its retried insert lost to until a judgement can read it', async () => {
       await seedWebhook([event]);
       const msg = incomingMsg({ ...direction, id: 'WA-RETRIED-DUP-EDITED-UNREAD-1', body: 'first text' });
       justBeforeTheCommit(() => {
@@ -1021,13 +1026,17 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
       });
 
       hand(msg);
+      await waitFor(() => parked());
+      expect(await storedRow(msg.id)).toMatchObject({ body: 'first text' });
+      expect((await storedRow(msg.id))?.status).not.toBe(MessageStatus.READ);
 
-      await waitFor(async () => (await storedRow(msg.id))?.body === 'edited text');
+      (ds.getRepository(Message).findOne as jest.Mock).mockRestore();
+      await projector.retryParkedChanges();
       await turns(10);
       expect(await storedRow(msg.id)).toMatchObject({ body: 'edited text', status: MessageStatus.READ });
     });
 
-    it('clears the row its retried insert lost to after a delete through the API, though no judgement can read it', async () => {
+    it('keeps a delete through the API for the row its retried insert lost to until a judgement can read it', async () => {
       await seedWebhook([event]);
       const msg = incomingMsg({ ...direction, id: 'WA-RETRIED-DUP-DELETED-UNREAD-1', body: text });
       justBeforeTheCommit(() => void projector.recordRevoke(sessionId, msg.id, { kind: 'revoke', chatId: msg.chatId }));
@@ -1038,8 +1047,12 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
       });
 
       hand(msg);
+      await waitFor(() => parked());
+      expect(await storedRow(msg.id)).toMatchObject({ type: 'text', body: text });
 
-      await waitFor(async () => (await storedRow(msg.id))?.type === 'revoked');
+      (ds.getRepository(Message).findOne as jest.Mock).mockRestore();
+      await projector.retryParkedChanges();
+      await turns(10);
       expect(await storedRow(msg.id)).toMatchObject(cleared);
     });
 

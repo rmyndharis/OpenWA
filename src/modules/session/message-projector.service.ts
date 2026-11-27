@@ -4,7 +4,7 @@ import { chatKind } from '../../engine/identity/wa-id';
 import { Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, type FindOptionsWhere, Repository, In, IsNull, Not, Or } from 'typeorm';
+import { EntityManager, type FindOptionsWhere, Repository, In, Not } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm';
 import { Session } from './entities/session.entity';
 import { judgeStoredRow, outboxPayloadPredicate, revokeSourceFor } from './message-row-judgement';
@@ -14,9 +14,25 @@ import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { awaitNoOpenTransaction } from '../../common/utils/shared-connection';
 import { captureSessionWrites } from '../../common/utils/session-write-scope';
 import { SessionLidResolver } from './session-lid-resolver.service';
-import { SessionOwnershipService } from './session-ownership.service';
+import { SessionOwnershipService, nodeOwnsSession } from './session-ownership.service';
 import { buildMessageMetadata, REVOKED_ROW_PATCH, storableWaMessageId } from './message-row.mapper';
-import { MessageMutationProjector } from './message-mutation-projector';
+import {
+  MessageMutationProjector,
+  ownRowVerdict,
+  type StoredRowVerdict,
+  unreadRowError,
+} from './message-mutation-projector';
+import {
+  ParkedChange,
+  slotNames,
+  type AckSlot,
+  type ChangeSlots,
+  type OwnRow,
+  type ParkedChangeSteps,
+  type RevokeSlot,
+} from './message-change-park';
+import { RECOVERY_MAX_BYTES, RecoveryQueue, type RecoveryLoss } from '../../common/utils/recovery-queue';
+import { resolveWebhookReconcilerOptions } from '../webhook/webhook-reconciler.service';
 import {
   mutationTargetsForeignRow,
   mutationTargetsForeignRowPersisted,
@@ -130,6 +146,32 @@ const sameInFlightSnapshot = (a: InFlightMutationSnapshot, b: InFlightMutationSn
  * whether it came from a later attempt, when an earlier one may have committed before its error),
  * `failed` a non-conflict error, `stale` the engine was retired while the retry waited.
  */
+/** Bounds of the changes kept while the database refuses them: per message id, and for how long one with content stays. */
+export const PARKED_CHANGES_MAX = 1000;
+export const PARKED_CHANGE_MAX_AGE_MS = 60 * 60 * 1000;
+
+/** The one pass the kept changes get at shutdown, once the engines are gone (a stage of shutdown-budget.ts). */
+export const PARKED_CHANGES_SHUTDOWN_PASS_MS = 1_000;
+
+/**
+ * How long a kept change waits before its next try while the database keeps failing. SQLite is one node, and every try
+ * against a lock can hold the event loop for its busy timeout, so it backs off to 30 s; on PostgreSQL the wait plus a
+ * pass must stay under the sweep's grace (WEBHOOK_RECONCILE_GRACE_MS), so a peer's sweep, held for one grace after
+ * the database comes back, does not replay what this node is about to withdraw.
+ */
+const parkedChangeDelays = (postgres: boolean): { baseDelayMs: number; capDelayMs: number } => {
+  const cap = postgres ? Math.max(1000, Math.min(5000, resolveWebhookReconcilerOptions().graceMs / 4)) : 30_000;
+  return { baseDelayMs: Math.min(1000, cap), capDelayMs: cap };
+};
+
+/** The ref a change claims, as the rule reads a row: so a later change can be told consistent with a kept one. */
+const refOfSource = (source: MutationSource): StoredMessageRef => ({
+  chatId: source.chatId,
+  direction:
+    source.fromMe === undefined ? undefined! : source.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
+  author: source.author,
+});
+
 type InsertOutcome =
   | { landed: 'yes'; openedDeliveries?: PreparedWebhookDelivery[]; rowOnly?: true }
   | { landed: 'failed' | 'stale' }
@@ -427,6 +469,21 @@ export class MessageProjector {
   // messageMutations queue, so the public enqueue path and the queued applies serialize on one chain.
   private readonly mutationProjector: MessageMutationProjector;
 
+  // Changes the database refused (a write that failed, or a row it could not read to judge them), kept to try again
+  // once it answers, one record per message id: see ParkedChange and RecoveryQueue.
+  private readonly recovery: RecoveryQueue;
+  private readonly parkSteps: ParkedChangeSteps = {
+    outbox: change => this.parkedOutboxSteps(change),
+    apply: change =>
+      this.onChain(change.sessionId, change.waMessageId, () =>
+        this.runSlots(change.sessionId, change.waMessageId, change.slots, {
+          announce: change.engine !== undefined && this.engines.isLive(change.sessionId, change.engine),
+          owned: nodeOwnsSession(this.ownership, change.sessionId),
+        }),
+      ),
+    released: (change, reason) => this.releaseParked(change, reason),
+  };
+
   constructor(
     @InjectRepository(Message, 'data')
     private readonly messageRepository: Repository<Message>,
@@ -450,6 +507,16 @@ export class MessageProjector {
     @Optional() private readonly lidMappingStore?: LidMappingStoreService,
     @Optional() private readonly ownership?: SessionOwnershipService,
   ) {
+    this.recovery = new RecoveryQueue({
+      maxBytes: RECOVERY_MAX_BYTES,
+      maxRecords: { send: PARKED_CHANGES_MAX, change: PARKED_CHANGES_MAX, dispatch: PARKED_CHANGES_MAX },
+      maxAgeMs: {
+        send: PARKED_CHANGE_MAX_AGE_MS,
+        change: PARKED_CHANGE_MAX_AGE_MS,
+        dispatch: PARKED_CHANGE_MAX_AGE_MS,
+      },
+      ...parkedChangeDelays(this.messageRepository.manager?.connection?.options?.type === 'postgres'),
+    });
     this.mutationProjector = new MessageMutationProjector(
       this.messageRepository,
       this.eventsGateway,
@@ -459,6 +526,8 @@ export class MessageProjector {
       (sessionId, waMessageId) => this.noteMarkedEdited(sessionId, waMessageId),
       this.lidMappingStore ? jid => this.lidMappingStore!.findPhoneForLid(jid) : undefined,
       (sessionId, waMessageId) => this.announceChangedRow(sessionId, waMessageId),
+      (sessionId, waMessageId, slots, error) => this.parkChange(sessionId, waMessageId, slots, error),
+      (sessionId, waMessageId, slots) => this.settleParked(sessionId, waMessageId, slots),
     );
     this.engines.onRetire((id, engine) => {
       for (const t of this.tickets.get(id) ?? []) if (t.engine === engine) t.drop();
@@ -470,6 +539,233 @@ export class MessageProjector {
   /** Drop per-session in-memory state held by collaborators when a session row is removed. */
   forgetSession(sessionId: string): void {
     this.automationRules?.forgetSession(sessionId);
+    this.recovery.forget(sessionId);
+  }
+
+  /**
+   * At shutdown, once the engines are gone: one bounded pass over the changes the database refused, then the loss of
+   * what is left is logged (`message_change_lost`), as nothing outlives the process.
+   */
+  settleParkedChanges(budgetMs = PARKED_CHANGES_SHUTDOWN_PASS_MS): Promise<void> {
+    return this.recovery.drain(budgetMs);
+  }
+
+  /** Run the kept changes now: a test's clock, and the shutdown pass, do not wait for the timer. */
+  retryParkedChanges(): Promise<void> {
+    return this.recovery.flush();
+  }
+
+  /**
+   * Keep changes of a message the database refused (see ParkedChange), merged into what is kept for it already: a newer
+   * edit or reaction of a sender replaces the kept one, a revoke stays once kept (an engine revoke replaces a delete
+   * through the API, as it withdraws more).
+   */
+  private parkChange(
+    sessionId: string,
+    waMessageId: string,
+    slots: ChangeSlots,
+    error: unknown,
+    engine = this.engines.get(sessionId),
+  ): void {
+    if (!waMessageId || !slotNames(slots).length) return;
+    const key = `${sessionId}:${waMessageId}`;
+    const change =
+      (this.recovery.get('change', key) as ParkedChange | undefined) ??
+      new ParkedChange(sessionId, waMessageId, engine, Date.now(), this.parkSteps);
+    if (engine) change.engine = engine;
+    const kept = change.slots;
+    // A later change replaces a kept one only where it is consistent with it: one of another chat can neither cancel
+    // a kept change nor be kept beside it (a record keeps one of each), and is lost.
+    const conflicting: string[] = [];
+    const replaces = (was: MutationSource | undefined, by: MutationSource | undefined): boolean =>
+      !was || !by || mutationTargetsForeignRow(refOfSource(was), by) === null;
+    if (slots.revoke) {
+      if (!kept.revoke) kept.revoke = slots.revoke;
+      else if (!replaces(kept.revoke.judge ?? kept.revoke.source, slots.revoke.judge ?? slots.revoke.source)) {
+        conflicting.push('revoke');
+      } else if (slots.revoke.announced && !kept.revoke.announced) kept.revoke = slots.revoke;
+    }
+    if (slots.edit) {
+      if (replaces(kept.edit?.judge, slots.edit.judge)) kept.edit = slots.edit;
+      else conflicting.push('edit');
+    }
+    for (const [sender, reaction] of slots.reactions ?? []) {
+      if (replaces(kept.reactions?.get(sender)?.judge, reaction.judge)) {
+        (kept.reactions ??= new Map()).set(sender, reaction);
+      } else conflicting.push('reactions');
+    }
+    if (conflicting.length) {
+      this.logger.error('A change of another chat than one kept for the message is lost', undefined, {
+        sessionId,
+        messageId: waMessageId,
+        slots: [...new Set(conflicting)],
+        reason: 'conflict',
+        action: 'message_change_lost',
+      });
+    }
+    if (slots.acks) {
+      const acks = (kept.acks ??= { ...slots.acks, acks: new Map<string, MessageStatus>() }).acks;
+      for (const [chat, status] of slots.acks.acks) {
+        const parked = acks.get(chat);
+        if (!parked || ackStatusTransitionFrom(status).includes(parked)) acks.set(chat, status);
+      }
+    }
+    change.measure();
+    this.logger.warn('Keeping changes the database refused, to write them once it answers', {
+      sessionId,
+      messageId: waMessageId,
+      slots: slotNames(slots),
+      error: error instanceof Error ? error.message : String(error),
+      action: 'message_change_parked',
+    });
+    this.recovery.park(key, change);
+  }
+
+  /**
+   * A change of the message landed: what is kept for it that the change supersedes is let go. An edit supersedes a kept
+   * edit, a reaction the same sender's, and a revoke the kept edit and reactions, each only where the kept one is
+   * consistent with it, so a change of another chat neither applies nor cancels a kept one. A kept revoke stays.
+   */
+  private settleParked(sessionId: string, waMessageId: string, landed: ChangeSlots): void {
+    const key = `${sessionId}:${waMessageId}`;
+    const change = this.recovery.get('change', key) as ParkedChange | undefined;
+    if (!change) return;
+    const consistent = (kept: MutationSource | undefined, by: MutationSource | undefined): boolean =>
+      !kept || !by || mutationTargetsForeignRow(refOfSource(kept), by) === null;
+    const kept = change.slots;
+    const by = landed.revoke?.judge ?? landed.revoke?.source ?? landed.edit?.judge;
+    if ((landed.edit || landed.revoke) && kept.edit && consistent(kept.edit.judge, by)) delete kept.edit;
+    for (const [sender, reaction] of kept.reactions ?? []) {
+      const landedReaction = landed.reactions?.get(sender);
+      if ((landedReaction || landed.revoke) && consistent(reaction.judge, landedReaction?.judge ?? by)) {
+        kept.reactions!.delete(sender);
+      }
+    }
+    if (change.empty()) this.recovery.settle('change', key);
+    else change.measure();
+  }
+
+  /** A kept change left the queue: a loss is logged, the only trace of it. */
+  private releaseParked(change: ParkedChange, reason?: RecoveryLoss): void {
+    if (!reason) return;
+    this.logger.error('A change the database refused could not be kept any longer and is lost', undefined, {
+      sessionId: change.sessionId,
+      messageId: change.waMessageId,
+      slots: slotNames(change.slots),
+      reason,
+      action: 'message_change_lost',
+    });
+  }
+
+  /** Run `work` on the message's mutation chain, after what is queued there, and hand back its outcome or error. */
+  private onChain<T>(sessionId: string, waMessageId: string, work: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) =>
+      this.enqueueMessageMutation(sessionId, waMessageId, () => work().then(resolve, reject)),
+    );
+  }
+
+  /**
+   * The outbox steps of a kept change, before any kept change writes a row: the delivery copies of a revoked message
+   * are withdrawn and those of an edited one rewritten, judged by their payloads alone (no row is read). The row step
+   * repeats them with what the row says (the chat a handler filed a moved message under).
+   */
+  private async parkedOutboxSteps(change: ParkedChange): Promise<void> {
+    const { sessionId, waMessageId, slots } = change;
+    if (slots.revoke && !slots.revoke.outboxSettled) {
+      await this.revokeCopies(sessionId, waMessageId, slots.revoke);
+      slots.revoke.outboxSettled = true;
+    } else if (slots.edit?.body !== undefined && slots.edit.judge && !slots.edit.outboxSettled) {
+      await this.webhookService.changeMessageCopies?.(
+        sessionId,
+        waMessageId,
+        { kind: 'rewrite', body: slots.edit.body },
+        this.outboxPredicateFor(slots.edit.judge),
+      );
+      slots.edit.outboxSettled = true;
+    }
+  }
+
+  /** Withdraw the delivery copies of a revoked message: an engine revoke closes them, a delete through the API redacts. */
+  private async revokeCopies(
+    sessionId: string,
+    waMessageId: string,
+    slot: RevokeSlot,
+    verdict?: StoredRowVerdict,
+  ): Promise<void> {
+    const filed = verdict?.moved && verdict.row ? revokeSourceFor(verdict.row) : undefined;
+    const ours = Boolean(verdict?.exists && !verdict.reason);
+    const predicate = slot.source ? this.outboxPredicateFor(slot.source, ours, filed) : undefined;
+    await this.webhookService.changeMessageCopies?.(
+      sessionId,
+      waMessageId,
+      { kind: slot.announced ? 'close' : 'redact' },
+      predicate,
+    );
+  }
+
+  /**
+   * Write kept or held changes to the row they are judged against, dropping each slot that settles: the revoke first,
+   * then the edit, the reactions and the receipts. Throws when the database fails or the row cannot be read, with the
+   * slots not yet settled left in `slots`. `announce` says the engine that took the changes is still live; `owned`
+   * that this node still owns the session: an edit or a reaction kept past a takeover is dropped (the new owner may
+   * have a newer one, and the row has no version to order them), a revoke and receipts always apply. Must run on the
+   * message's chain.
+   */
+  private async runSlots(
+    sessionId: string,
+    waMessageId: string,
+    slots: ChangeSlots,
+    opts: { announce: boolean; owned: boolean },
+  ): Promise<void> {
+    if (slots.revoke) {
+      await this.applyRevoke(sessionId, waMessageId, slots.revoke, opts.announce);
+      delete slots.revoke;
+    }
+    if (!opts.owned && (slots.edit || slots.reactions?.size)) {
+      this.logger.error('A kept change of a session this node no longer owns is dropped', undefined, {
+        sessionId,
+        messageId: waMessageId,
+        slots: slotNames({ edit: slots.edit, reactions: slots.reactions }),
+        reason: 'ownership',
+        action: 'message_change_lost',
+      });
+      delete slots.edit;
+      delete slots.reactions;
+    }
+    if (slots.edit) {
+      await this.mutationProjector.writeEdit(sessionId, waMessageId, slots.edit, opts.announce);
+      delete slots.edit;
+    }
+    // One write for the reactions judged alike (those held for a message in flight are), one per judgement else.
+    while (slots.reactions?.size) {
+      const [, first] = slots.reactions.entries().next().value!;
+      const alike = [...slots.reactions].filter(
+        ([, r]) => r.judge.chatId === first.judge.chatId && r.own?.rowId === first.own?.rowId,
+      );
+      const changes = Object.fromEntries(alike.map(([sender, r]) => [sender, r.value]));
+      await this.storeReactions(sessionId, waMessageId, changes, first.judge, first.own);
+      for (const [sender] of alike) slots.reactions.delete(sender);
+    }
+    if (slots.reactions && !slots.reactions.size) delete slots.reactions;
+    if (slots.acks) {
+      await this.advanceKeptAcks(sessionId, waMessageId, slots.acks);
+      delete slots.acks;
+    }
+  }
+
+  /** {@link runSlots} for changes not kept yet: what the database refuses is kept to try again. */
+  private async runOrPark(
+    sessionId: string,
+    waMessageId: string,
+    slots: ChangeSlots,
+    announce: boolean,
+    engine?: IWhatsAppEngine,
+  ): Promise<void> {
+    try {
+      await this.runSlots(sessionId, waMessageId, slots, { announce, owned: true });
+    } catch (err) {
+      this.parkChange(sessionId, waMessageId, slots, err, engine);
+    }
   }
 
   /** Stamp the session's last-active time, at most once per {@link LAST_ACTIVE_WRITE_WINDOW_MS} for this engine. */
@@ -1156,7 +1452,7 @@ export class MessageProjector {
       return null;
     }
     if (outcome.landed === 'yes') {
-      this.applyChangesMadeInFlight(id, engineMessage, entry, insertedCleared);
+      this.applyChangesMadeInFlight(id, engineMessage, entry, insertedCleared, undefined, false, dbMessage);
       if (prepared !== undefined && !outcome.rowOnly) {
         return {
           dbMessage,
@@ -1176,7 +1472,7 @@ export class MessageProjector {
     // that row still has to take a revoke or edit that arrived in flight. So does the row of an insert that
     // failed, when its commit landed before the error and the row stored alone after it failed too.
     if ((outcome.landed === 'dup' && outcome.retried) || outcome.landed === 'failed') {
-      this.applyChangesMadeInFlight(id, engineMessage, entry, false, claim, outcome.landed === 'failed');
+      this.applyChangesMadeInFlight(id, engineMessage, entry, false, claim);
     }
     // A delivery that came deleted clears the row it lost to, as a revoke does, once the row proves to be the message.
     if (outcome.landed === 'dup' && incoming.type === 'revoked') {
@@ -1235,19 +1531,17 @@ export class MessageProjector {
       await this.webhookService.reconcilePreparedDeliveries?.(committed, id, event, final, committed, openNew);
     }
     // Judged by the message as the engine reported it, which its row keeps when a handler filed it elsewhere.
-    const written = revokeSourceFor(refOf(identity));
+    const engineOf = this.engines.get(id);
     await new Promise<void>(resolve =>
       this.enqueueMessageMutation(id, message.id, async () => {
         try {
-          // A row that could not be read may be another chat's, as in applyChangesMadeInFlight.
+          // A row that could not be read may be another chat's, as in applyChangesMadeInFlight: the changes are kept
+          // until a read tells, and written then, with nothing announced for the retired engine.
+          const slots = this.heldSlots(entry, identity, false);
           const verdict = await this.mutationProjector.storedRowVerdict(id, message.id, claim);
-          const { exists, reason } = verdict;
-          const ours = exists && !reason;
-          if (ours) await this.advanceParkedAck(id, message.id, entry);
-          if (!reason && (entry.revoked || ours)) {
-            const target = this.mutationProjector.writeTarget(id, message.id, claim, verdict) ?? undefined;
-            await this.writeChangesMadeInFlight(id, message.id, entry, false, written, false, ours, target);
-          }
+          if (!slots || verdict.reason || (!verdict.exists && !verdict.unread)) return;
+          if (verdict.unread) return this.parkChange(id, message.id, slots, unreadRowError(verdict), engineOf);
+          await this.runOrPark(id, message.id, slots, false, engineOf);
         } finally {
           resolve();
         }
@@ -1586,7 +1880,8 @@ export class MessageProjector {
    * another message's (an id reused from another chat): the changes go to it only if it is the message. The
    * judgement is the first step of the slot taken on the chain here, not a read ahead of it, so a change
    * of the message that arrives while the row is read queues behind the write instead of being
-   * overwritten by it.
+   * overwritten by it. A row that cannot be read, and a write the database refuses, keep the changes to be
+   * judged and written once it answers (see ParkedChange); none is written to a row nobody could read.
    *
    * `message` is the delivery as the engine reported it: a change held for it was judged against that, and its
    * row keeps it as its engine ref when a handler filed the row under another chat, side or author. A row from
@@ -1599,54 +1894,94 @@ export class MessageProjector {
     pending: InFlightEntry,
     insertedCleared = false,
     lostInsert?: MutationSource,
-    insertFailed = false,
+    unrevokedOnly = false,
+    inserted?: Pick<Message, 'id'>,
   ): void {
     const waMessageId = message.id;
-    const written = revokeSourceFor(refOf(message));
-    const { acks } = pending;
-    const rowChanges = Boolean(
-      pending.revoked || pending.editedBody !== undefined || pending.edited || pending.reactions,
-    );
-    if (!acks?.size && !rowChanges) return;
-    const advance = (): void => void this.advanceParkedAck(id, waMessageId, pending);
-    if (!lostInsert) {
-      advance();
-      if (rowChanges) {
-        this.enqueueMessageMutation(id, waMessageId, () =>
-          this.writeChangesMadeInFlight(id, waMessageId, pending, insertedCleared, written),
-        );
-      }
-      return;
-    }
+    // The row this commit inserted is the message's own: its changes go to it by its key, with no read.
+    const own = lostInsert ? undefined : { rowId: inserted?.id };
+    const slots = this.heldSlots(pending, message, !insertedCleared, unrevokedOnly, own);
+    if (!slots) return;
+    const engine = this.engines.get(id);
     this.enqueueMessageMutation(id, waMessageId, async () => {
-      const verdict = await this.mutationProjector.storedRowVerdict(id, waMessageId, lostInsert);
-      const { exists, reason } = verdict;
-      if (reason) {
-        this.logger.warn('Not applying the changes of a message to the stored message that holds its id', {
-          sessionId: id,
-          messageId: waMessageId,
-          reason,
-        });
-        return;
+      if (lostInsert) {
+        const verdict = await this.mutationProjector.storedRowVerdict(id, waMessageId, lostInsert);
+        if (verdict.reason) {
+          this.logger.warn('Not applying the changes of a message to the stored message that holds its id', {
+            sessionId: id,
+            messageId: waMessageId,
+            reason: verdict.reason,
+          });
+          return;
+        }
+        // A row that cannot be read may be the message's (an attempt that committed before its error) or another
+        // chat's: nothing is written to it, and nothing is dropped, until a read tells which.
+        if (verdict.unread) return this.parkChange(id, waMessageId, slots, unreadRowError(verdict), engine);
+        // No row: the commit did not land, and nothing is left to change.
+        if (!verdict.exists) return;
       }
-      // The row a duplicate lost to is most likely the message's own (an earlier attempt, the send path), so
-      // it takes the changes even when it could not be read. After a failed insert a row that could not be read
-      // may be another chat's: only a revoke goes on, which withdraws the pending deliveries and clears only a
-      // row revokeRow can read.
-      const rowKnown = exists || !insertFailed;
-      if (!rowKnown && !pending.revoked) return;
-      if (rowKnown) advance();
-      const target = this.mutationProjector.writeTarget(id, waMessageId, lostInsert, verdict) ?? undefined;
-      await this.writeChangesMadeInFlight(id, waMessageId, pending, insertedCleared, written, true, rowKnown, target);
+      await this.runOrPark(id, waMessageId, slots, true, engine);
     });
   }
 
-  /** Advance the row by the acks kept for it while it was in flight. Never rejects. */
-  private advanceParkedAck(id: string, waMessageId: string, pending: InFlightEntry): Promise<unknown> {
-    if (!pending.acks?.size) return Promise.resolve();
-    return this.furthestParkedAck(pending.ref, pending.acks)
-      .then(status => (status ? this.advanceAck(id, waMessageId, status) : 0))
-      .catch(err => this.logger.error(`Failed to advance ack for ${waMessageId}`, String(err)));
+  /**
+   * The changes held on a message's in-flight entry, as slots judged by what the commit computed: the revoke by the
+   * message as the engine reported it (`message`), the rest by its claim. `notify` hands a row the revoke clears to
+   * `message:persisted` (not when it was inserted cleared); `unrevokedOnly` clears only a row not cleared already.
+   */
+  private heldSlots(
+    pending: InFlightEntry,
+    message: Pick<IncomingMessage, 'chatId' | 'fromMe' | 'author'>,
+    notify: boolean,
+    unrevokedOnly = false,
+    own?: OwnRow,
+  ): ChangeSlots | undefined {
+    const claim = claimOf(message);
+    const slots: ChangeSlots = {};
+    if (pending.revoked) {
+      slots.revoke = {
+        source: revokeSourceFor(refOf(message)),
+        judge: claim,
+        own,
+        announced: pending.revokeAnnounced === true,
+        notify,
+        unrevokedOnly,
+      };
+    } else {
+      if (pending.editedBody !== undefined || pending.edited) {
+        slots.edit = {
+          body: pending.editedBody,
+          judge: claim,
+          own,
+          mark: pending.edited ? 'always' : 'never',
+          announceText: notify,
+        };
+      }
+      if (pending.reactions) {
+        const judge: MutationSource = { kind: 'reaction', chatId: message.chatId };
+        slots.reactions = new Map(
+          Object.entries(pending.reactions).map(([sender, value]) => [sender, { value, judge, own }]),
+        );
+      }
+    }
+    if (pending.acks?.size) slots.acks = { judge: claim, own, ref: pending.ref, acks: new Map(pending.acks) };
+    return slotNames(slots).length ? slots : undefined;
+  }
+
+  /**
+   * Advance the row by the receipts kept for it while it was in flight, judged by the message's claim. A row that
+   * cannot be read throws, so the receipts are kept; none is written to a row of another chat.
+   */
+  private async advanceKeptAcks(sessionId: string, waMessageId: string, slot: AckSlot): Promise<void> {
+    const verdict = slot.own
+      ? ownRowVerdict(slot.own)
+      : await this.mutationProjector.storedRowVerdict(sessionId, waMessageId, slot.judge);
+    if (verdict.unread) throw unreadRowError(verdict);
+    if (!verdict.exists || verdict.reason) return;
+    const status = await this.furthestParkedAck(slot.ref, slot.acks);
+    if (status) {
+      await this.advanceAck(sessionId, waMessageId, status, verdict.rowId ? { id: verdict.rowId } : undefined);
+    }
   }
 
   /**
@@ -1665,42 +2000,6 @@ export class MessageProjector {
       if (!furthest || ackStatusTransitionFrom(status).includes(furthest)) furthest = status;
     }
     return furthest;
-  }
-
-  /** The row part of {@link applyChangesMadeInFlight}. Must run on the mutation chain. */
-  private async writeChangesMadeInFlight(
-    id: string,
-    waMessageId: string,
-    pending: InFlightEntry,
-    insertedCleared: boolean,
-    written: MutationSource,
-    announce = true,
-    rowKnown = true,
-    target: FindOptionsWhere<Message> = { sessionId: id, waMessageId },
-  ): Promise<void> {
-    if (pending.revoked) {
-      const announced = pending.revokeAnnounced === true;
-      return this.revokeRow(id, waMessageId, announce && !insertedCleared, written, announced, !rowKnown);
-    }
-    try {
-      // Never onto a revoked row, as the edit paths: a message delivered deleted, or deleted before it, stays cleared.
-      // Compared in the write: a row inserted with the edit already applied is not changed again here. Written to the
-      // row the changes were judged against (`target`), or to the one this commit inserted.
-      let textChanged = false;
-      if (pending.editedBody !== undefined) {
-        const result = await this.messageRepository.update(
-          { ...target, type: Not('revoked'), body: Or(Not(pending.editedBody), IsNull()) },
-          { body: pending.editedBody },
-        );
-        textChanged = Boolean(result?.affected);
-      }
-      if (pending.reactions) await this.storeReactions(target, pending.reactions);
-      // The marker an edit of a stored row leaves, written last so a lost metadata race costs it alone.
-      if (pending.edited) await this.mutationProjector.markMessageEdited(id, waMessageId, target);
-      if (textChanged && announce) await this.announceChangedRow(id, waMessageId);
-    } catch (err) {
-      this.logger.error(`Failed to apply changes to message ${waMessageId}`, String(err));
-    }
   }
 
   /**
@@ -1771,15 +2070,16 @@ export class MessageProjector {
   }
 
   /** Merge reactions into the row's metadata, withdrawing a sender's on ''. Must run on the mutation chain. */
-  private async storeReactions(target: FindOptionsWhere<Message>, changes: Record<string, string>): Promise<void> {
-    await updateMessageMetadata(this.messageRepository, target, metadata => {
-      const reactions = { ...(metadata.reactions as Record<string, string> | undefined) };
-      for (const [sender, reaction] of Object.entries(changes)) {
-        if (reaction) reactions[sender] = reaction;
-        else delete reactions[sender];
-      }
-      return { ...metadata, reactions };
-    });
+  private async storeReactions(
+    sessionId: string,
+    waMessageId: string,
+    changes: Record<string, string>,
+    judge: MutationSource,
+    own?: OwnRow,
+  ): Promise<void> {
+    if (own)
+      await this.mutationProjector.writeJudgedReactions(sessionId, waMessageId, changes, judge, ownRowVerdict(own));
+    else await this.mutationProjector.writeReactions(sessionId, waMessageId, changes, judge);
   }
 
   /**
@@ -1815,10 +2115,8 @@ export class MessageProjector {
   }
 
   /**
-   * Apply {@link REVOKED_ROW_PATCH}, then hand the cleared row to `message:persisted` so a plugin index
-   * keyed by row id drops the content too. Must run on the message's mutation chain. The row is the
-   * table's one under the id, which another chat's message may hold: a `source` that the row proves
-   * foreign leaves it alone.
+   * Clear a revoked message's row (see {@link applyRevoke}); what the database refuses is kept and written once it
+   * answers (see ParkedChange). Must run on the message's mutation chain. Never rejects.
    */
   private async revokeRow(
     sessionId: string,
@@ -1826,67 +2124,86 @@ export class MessageProjector {
     notify = true,
     source?: MutationSource,
     announced = false,
-    skipUnreadRow = false,
   ): Promise<void> {
     // An undefined condition is DROPPED from the where-clause, which would clear every row of the session.
     if (!waMessageId) return;
+    const slot: RevokeSlot = { source, announced, notify };
     try {
-      const judge = async () => {
-        const judged = source && (await this.mutationProjector.storedRowVerdict(sessionId, waMessageId, source));
-        if (judged?.reason) {
-          this.logger.warn('Dropping a revoke aimed at a message of another chat or sender', {
-            sessionId,
-            messageId: waMessageId,
-            reason: judged.reason,
-          });
-        }
-        return judged;
-      };
-      let verdict = await judge();
-      if (verdict?.reason) return;
-      // Guard any pending outbox rows committed before this revoke arrived (for example, if the
-      // engine retired or crashed before live dispatch): engine revokes suppress replay altogether,
-      // while REST deletes redact the pending payload so deleted content cannot replay. Before the row is
-      // cleared, so a database that stops answering between the two never leaves a cleared row whose
-      // deliveries still carry the content.
-      //
-      // When `source` is provided, verify each candidate pending outbox row against its own payload
-      // using the same foreign-row rule so a spoofed cross-chat revoke (especially when no stored
-      // `messages` row existed to check) cannot close or redact another chat's pending outbox row. A
-      // payload that names no chat goes only when the stored row was read as the message's.
-      const filed = verdict?.moved && verdict.row ? revokeSourceFor(verdict.row) : undefined;
-      const ours = Boolean(verdict?.exists && !verdict.reason);
-      const outboxPredicate = source ? this.outboxPredicateFor(source, ours, filed) : undefined;
-      if (announced) {
-        await this.webhookService.closePendingDeliveriesForMessage?.(sessionId, waMessageId, outboxPredicate);
-      } else {
-        await this.webhookService.redactPendingDeliveriesForMessage?.(sessionId, waMessageId, outboxPredicate);
-      }
-      // A row stored under the id while the deliveries went (none was there to judge) is judged before it is cleared.
-      if (verdict && !verdict.exists && !verdict.unread) {
-        verdict = await judge();
-        if (verdict?.reason) return;
-      }
-      // Where nothing has shown the row under this id to be the message's, one that cannot be read may be
-      // another chat's: it is left alone, and only the pending deliveries, each judged by its payload, go. The row
-      // judged is cleared by its key, and with none found only the message's own row can take it (see writeTarget).
-      const target =
-        source && verdict ? this.mutationProjector.writeTarget(sessionId, waMessageId, source, verdict) : undefined;
-      if (target === null) return;
-      const result =
-        skipUnreadRow && verdict?.unread
-          ? undefined
-          : await this.messageRepository.update(target ?? { sessionId, waMessageId }, REVOKED_ROW_PATCH);
-      this.markedEdited.get(sessionId)?.delete(waMessageId);
-      if (!result?.affected || !notify) return;
-      const row = await this.messageRepository.findOne({ where: target ?? { sessionId, waMessageId } });
-      if (!row) return;
-      void this.hookManager
-        .execute('message:persisted', { sessionId, message: row }, { sessionId, source: 'SessionService' })
-        .catch(() => undefined);
+      await this.applyRevoke(sessionId, waMessageId, slot, true);
+      this.settleParked(sessionId, waMessageId, { revoke: slot });
     } catch (err) {
-      this.logger.error(`Failed to clear revoked message ${waMessageId}`, String(err));
+      this.parkChange(sessionId, waMessageId, { revoke: slot }, err);
     }
+  }
+
+  /**
+   * Apply {@link REVOKED_ROW_PATCH}, then hand the cleared row to `message:persisted` so a plugin index keyed by row id
+   * drops the content too. The row is the table's one under the id, which another chat's message may hold: one that
+   * the slot's `judge` (else its `source`) proves foreign is left alone. A revoke with neither was judged by its
+   * caller (the engine's revoke event without an actor).
+   *
+   * The delivery copies go first (engine revokes close them, REST deletes redact them), each judged by its own
+   * payload, so a database that stops answering between the two never leaves a cleared row whose deliveries still
+   * carry the content, and a spoofed cross-chat revoke cannot withdraw another chat's delivery; a payload that names no
+   * chat goes only when the stored row was read as the message's. A row that cannot be read is never cleared: the
+   * copies go, judged by their payloads, and the read's error is thrown, as is any database failure, for the caller
+   * to keep the revoke and try again. `announce` says the engine is still live. Must run on the message's chain.
+   */
+  private async applyRevoke(
+    sessionId: string,
+    waMessageId: string,
+    slot: RevokeSlot,
+    announce: boolean,
+  ): Promise<void> {
+    const judgeBy = slot.judge ?? slot.source;
+    const judge = async (): Promise<StoredRowVerdict | undefined> => {
+      const judged = judgeBy && (await this.mutationProjector.storedRowVerdict(sessionId, waMessageId, judgeBy));
+      if (judged?.reason) {
+        this.logger.warn('Dropping a revoke aimed at a message of another chat or sender', {
+          sessionId,
+          messageId: waMessageId,
+          reason: judged.reason,
+        });
+      }
+      return judged;
+    };
+    let verdict = slot.own ? ownRowVerdict(slot.own) : await judge();
+    if (verdict?.reason) return;
+    if (verdict?.unread) {
+      if (!slot.outboxSettled) {
+        await this.revokeCopies(sessionId, waMessageId, slot);
+        slot.outboxSettled = true;
+      }
+      throw unreadRowError(verdict);
+    }
+    // Again once the row is read: a payload of a moved message carries the chat a handler filed it under.
+    if (!slot.outboxSettled || verdict?.moved) {
+      await this.revokeCopies(sessionId, waMessageId, slot, verdict);
+      slot.outboxSettled = true;
+    }
+    // A row stored under the id while the deliveries went (none was there to judge) is judged before it is cleared.
+    if (verdict && !verdict.exists) {
+      verdict = await judge();
+      if (verdict?.reason) return;
+      if (verdict?.unread) throw unreadRowError(verdict);
+    }
+    // The row judged is cleared by its key, and with none found only the message's own row can take it.
+    const target =
+      (judgeBy || slot.own) && verdict
+        ? this.mutationProjector.writeTarget(sessionId, waMessageId, judgeBy!, verdict)
+        : { sessionId, waMessageId };
+    if (!target) return;
+    const result = await this.messageRepository.update(
+      slot.unrevokedOnly ? { ...target, type: Not('revoked') } : target,
+      REVOKED_ROW_PATCH,
+    );
+    this.markedEdited.get(sessionId)?.delete(waMessageId);
+    if (!result?.affected || !slot.notify || !announce) return;
+    const row = await this.messageRepository.findOne({ where: target }).catch(() => null);
+    if (!row) return;
+    void this.hookManager
+      .execute('message:persisted', { sessionId, message: row }, { sessionId, source: 'SessionService' })
+      .catch(() => undefined);
   }
 
   /** Fan an accepted inbound message out: `message:persisted` plugin hook, webhook, websocket emit. */
@@ -2218,7 +2535,7 @@ export class MessageProjector {
         }
         // The id had no row, so a mark remembered for it was of a row removed since.
         this.markedEdited.get(id)?.delete(outgoing.id);
-        this.applyChangesMadeInFlight(id, engineMessage, entry, insertedCleared);
+        this.applyChangesMadeInFlight(id, engineMessage, entry, insertedCleared, undefined, false, dbMessage);
         // Fire-and-forget, mirroring onMessage: plugin providers (search etc.) see phone-
         // composed sends exactly like API sends.
         void this.hookManager
@@ -2240,7 +2557,7 @@ export class MessageProjector {
       }
       // A commit can land before its error and the row stored alone after it fail: that row, if it is the
       // message's, still takes the changes that arrived in flight.
-      if (outcome.landed === 'failed') this.applyChangesMadeInFlight(id, engineMessage, entry, false, claim, true);
+      if (outcome.landed === 'failed') this.applyChangesMadeInFlight(id, engineMessage, entry, false, claim);
     }
 
     if (!this.engines.isLive(id, engine)) {
@@ -2512,12 +2829,14 @@ export class MessageProjector {
    * same-id row in another session. The In() guard makes the UPDATE forward-only (a late/out-of-order
    * ack can't downgrade) and idempotent on retry.
    */
-  private advanceAck(id: string, messageId: string, messageStatus: MessageStatus): Promise<number> {
+  private advanceAck(
+    id: string,
+    messageId: string,
+    messageStatus: MessageStatus,
+    target: FindOptionsWhere<Message> = { sessionId: id, waMessageId: messageId },
+  ): Promise<number> {
     return this.messageRepository
-      .update(
-        { sessionId: id, waMessageId: messageId, status: In(ackStatusTransitionFrom(messageStatus)) },
-        { status: messageStatus },
-      )
+      .update({ ...target, status: In(ackStatusTransitionFrom(messageStatus)) }, { status: messageStatus })
       .then(result => result.affected ?? 0);
   }
 

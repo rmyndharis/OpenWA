@@ -23,6 +23,7 @@ import {
   redactSsrfError,
 } from '../../common/security/ssrf-guard';
 import { PreparedWebhookDelivery, WebhookDeliveryService, WebhookPayload } from './webhook-delivery.service';
+import type { MessageCopyChange } from './webhook-outbox.service';
 
 // Delivery-engine types (payload and queue job shapes) live on WebhookDeliveryService; re-exported
 // here so existing importers (the queue processor) keep a single stable path.
@@ -480,6 +481,16 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
   ): Promise<void> {
     return this.delivery.redactPendingForMessage(sessionId, waMessageId, shouldApply);
+  }
+
+  /** Apply a change of a message to every copy its deliveries hold; throws when the database fails. */
+  changeMessageCopies(
+    sessionId: string,
+    waMessageId: string,
+    change: MessageCopyChange,
+    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    return this.delivery.changeMessageCopies(sessionId, waMessageId, change, shouldApply);
   }
 
   /** Write an edit of a stored message into its open outbox rows and kept failure copies. */
