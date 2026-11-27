@@ -9,6 +9,7 @@ jest.mock('undici', () => {
 
 import 'reflect-metadata';
 import { DataSource } from 'typeorm';
+import { BetterSqlite3QueryRunner } from 'typeorm/driver/better-sqlite3/BetterSqlite3QueryRunner';
 import { ConfigService } from '@nestjs/config';
 import { fetch as undiciFetch } from 'undici';
 import { Session, SessionStatus } from './entities/session.entity';
@@ -286,5 +287,66 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
 
     expect(await delivered('M-5')).toMatchObject({ state: 'queued', payload: { body: 'first text' } });
     expect(await keptCopy('M-5')).toMatchObject({ body: 'first text' });
+  });
+
+  describe('a revoke the database stops answering after, once the row is cleared', () => {
+    // Every statement fails from the moment the revoke's UPDATE of the message lands until the test lifts it.
+    let down = false;
+    beforeEach(() => {
+      down = false;
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- applied below with the runner as `this`
+      const realQuery = BetterSqlite3QueryRunner.prototype.query;
+      jest.spyOn(BetterSqlite3QueryRunner.prototype, 'query').mockImplementation(function (
+        this: BetterSqlite3QueryRunner,
+        ...args: Parameters<BetterSqlite3QueryRunner['query']>
+      ) {
+        if (down) return Promise.reject(Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' }));
+        const result = realQuery.apply(this, args);
+        if (/^\s*UPDATE\s+"messages"/i.test(String(args[0]))) down = true;
+        return result;
+      } as never);
+    });
+
+    it.each([
+      ['engine revoke', engineRevoke, { state: 'dispatched', payload: null }],
+      ['delete through the API', apiDelete, { state: 'pending', payload: { body: '', type: 'revoked' } }],
+    ] as const)('has withdrawn the pending delivery first (%s)', async (_label, change, expected) => {
+      await storeRow('M-6');
+      await openDelivery('M-6', 'pending');
+
+      await change('M-6');
+      down = false;
+
+      expect(await ds.getRepository(Message).findOneByOrFail({ waMessageId: 'M-6' })).toMatchObject({
+        type: 'revoked',
+      });
+      expect(await delivered('M-6')).toMatchObject(expected);
+      await sweep();
+      expect(postedBodies()).not.toContainEqual(expect.objectContaining({ body: 'first text' }));
+    });
+  });
+
+  // The revoke withdraws its deliveries before it clears the row, so time passes between its judging read and the write.
+  describe("a revoke whose judging read found no row, before another chat's message takes the id", () => {
+    it.each([
+      ['an engine revoke', engineRevoke],
+      ['a delete through the API', apiDelete],
+    ] as const)('leaves that row alone (%s)', async (_label, change) => {
+      const repository = ds.getRepository(Message);
+      const findOne = repository.findOne.bind(repository);
+      jest.spyOn(repository, 'findOne').mockImplementationOnce(async options => {
+        const row = await findOne(options);
+        await storeRow('M-13', OTHER_CHAT);
+        return row;
+      });
+
+      await change('M-13');
+
+      expect(await repository.findOneByOrFail({ sessionId, waMessageId: 'M-13' })).toMatchObject({
+        chatId: OTHER_CHAT,
+        type: 'text',
+        body: 'first text',
+      });
+    });
   });
 });

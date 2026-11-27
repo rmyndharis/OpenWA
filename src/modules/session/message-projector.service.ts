@@ -1857,15 +1857,41 @@ export class MessageProjector {
     // An undefined condition is DROPPED from the where-clause, which would clear every row of the session.
     if (!waMessageId) return;
     try {
-      const verdict = source && (await this.mutationProjector.storedRowVerdict(sessionId, waMessageId, source));
-      const reason = verdict?.reason;
-      if (reason) {
-        this.logger.warn('Dropping a revoke aimed at a message of another chat or sender', {
-          sessionId,
-          messageId: waMessageId,
-          reason,
-        });
-        return;
+      const judge = async () => {
+        const judged = source && (await this.mutationProjector.storedRowVerdict(sessionId, waMessageId, source));
+        if (judged?.reason) {
+          this.logger.warn('Dropping a revoke aimed at a message of another chat or sender', {
+            sessionId,
+            messageId: waMessageId,
+            reason: judged.reason,
+          });
+        }
+        return judged;
+      };
+      let verdict = await judge();
+      if (verdict?.reason) return;
+      // Guard any pending outbox rows committed before this revoke arrived (for example, if the
+      // engine retired or crashed before live dispatch): engine revokes suppress replay altogether,
+      // while REST deletes redact the pending payload so deleted content cannot replay. Before the row is
+      // cleared, so a database that stops answering between the two never leaves a cleared row whose
+      // deliveries still carry the content.
+      //
+      // When `source` is provided, verify each candidate pending outbox row against its own payload
+      // using the same foreign-row rule so a spoofed cross-chat revoke (especially when no stored
+      // `messages` row existed to check) cannot close or redact another chat's pending outbox row. A
+      // payload that names no chat goes only when the stored row was read as the message's.
+      const filed = verdict?.moved && verdict.row ? revokeSourceFor(verdict.row) : undefined;
+      const ours = Boolean(verdict?.exists && !verdict.reason);
+      const outboxPredicate = source ? this.outboxPredicateFor(source, ours, filed) : undefined;
+      if (announced) {
+        await this.webhookService.closePendingDeliveriesForMessage?.(sessionId, waMessageId, outboxPredicate);
+      } else {
+        await this.webhookService.redactPendingDeliveriesForMessage?.(sessionId, waMessageId, outboxPredicate);
+      }
+      // A row stored under the id while the deliveries went (none was there to judge) is judged before it is cleared.
+      if (verdict && !verdict.exists && !verdict.unread) {
+        verdict = await judge();
+        if (verdict?.reason) return;
       }
       // Where nothing has shown the row under this id to be the message's, one that cannot be read may be
       // another chat's: it is left alone, and only the pending deliveries, each judged by its payload, go.
@@ -1874,20 +1900,6 @@ export class MessageProjector {
           ? undefined
           : await this.messageRepository.update({ sessionId, waMessageId }, REVOKED_ROW_PATCH);
       this.markedEdited.get(sessionId)?.delete(waMessageId);
-      // Guard any pending outbox rows committed before this revoke arrived (for example, if the
-      // engine retired or crashed before live dispatch): engine revokes suppress replay altogether,
-      // while REST deletes redact the pending payload so deleted content cannot replay.
-      //
-      // When `source` is provided, verify each candidate pending outbox row against its own payload
-      // using the same foreign-row rule so a spoofed cross-chat revoke (especially when no stored
-      // `messages` row existed to check) cannot close or redact another chat's pending outbox row.
-      const filed = verdict?.moved && verdict.row ? revokeSourceFor(verdict.row) : undefined;
-      const outboxPredicate = source ? this.outboxPredicateFor(source, Boolean(result?.affected), filed) : undefined;
-      if (announced) {
-        await this.webhookService.closePendingDeliveriesForMessage?.(sessionId, waMessageId, outboxPredicate);
-      } else {
-        await this.webhookService.redactPendingDeliveriesForMessage?.(sessionId, waMessageId, outboxPredicate);
-      }
       if (!result?.affected || !notify) return;
       const row = await this.messageRepository.findOne({ where: { sessionId, waMessageId } });
       if (!row) return;
