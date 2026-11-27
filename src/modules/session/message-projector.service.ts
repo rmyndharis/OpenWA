@@ -1466,13 +1466,16 @@ export class MessageProjector {
       return { dbMessage, persisted: true };
     }
     if (outcome.landed === 'stale') return null;
-    // A duplicate on the first attempt is a re-fire: the original already persisted and dispatched.
-    // A duplicate on the retry is ambiguous: the first attempt may have committed before its error,
-    // in which case nothing dispatched yet, so dispatch fail-open (without the row-bound hook), and
-    // that row still has to take a revoke or edit that arrived in flight. So does the row of an insert that
-    // failed, when its commit landed before the error and the row stored alone after it failed too.
-    if ((outcome.landed === 'dup' && outcome.retried) || outcome.landed === 'failed') {
-      this.applyChangesMadeInFlight(id, engineMessage, entry, false, claim);
+    // A duplicate on the first attempt is a re-fire, whose original already persisted and dispatched, or a row
+    // another writer stored meanwhile (a history sync, an import): that row still takes a change held for the
+    // message, which found no row when it arrived. It clears only a row not cleared already, so a re-fire does not
+    // announce the row its original cleared once more. A duplicate on the retry is ambiguous: the first attempt
+    // may have committed before its error, in which case nothing dispatched yet, so dispatch fail-open (without
+    // the row-bound hook), and that row still has to take a revoke or edit that arrived in flight. So does the row
+    // of an insert that failed, when its commit landed before the error and the row stored alone after it failed too.
+    if (outcome.landed === 'dup' || outcome.landed === 'failed') {
+      const firstAttemptDup = outcome.landed === 'dup' && !outcome.retried;
+      this.applyChangesMadeInFlight(id, engineMessage, entry, false, claim, firstAttemptDup);
     }
     // A delivery that came deleted clears the row it lost to, as a revoke does, once the row proves to be the message.
     if (outcome.landed === 'dup' && incoming.type === 'revoked') {

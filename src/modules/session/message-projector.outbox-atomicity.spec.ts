@@ -3541,4 +3541,134 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
       },
     );
   });
+
+  describe('a change held for an inbound message whose first attempt lost to a row another writer stored', () => {
+    type InFlightLike = { revoked?: boolean; editedBody?: string };
+    const OTHER_CHAT = '628999@c.us';
+    const chainsIdle = (): boolean =>
+      (projector as unknown as { messageMutations: { size: number } }).messageMutations.size === 0;
+    /**
+     * The change found no row and is held on the message's in-flight entry. An engine revoke that names its actor writes
+     * once its row read answered, as it announces the revoke.
+     */
+    const held = (): boolean =>
+      chainsIdle() &&
+      (!revokedByEngine || eventsGateway.emitMessageRevoked.mock.calls.length > 0) &&
+      [...(projector as unknown as { inboundInFlight: Map<string, InFlightLike> }).inboundInFlight.values()].some(
+        entry => entry.revoked === true || entry.editedBody !== undefined,
+      );
+    /** Every delivery committed or gave up, and what it queued for the message ran. */
+    const settled = (): boolean =>
+      (projector as unknown as { inboundInFlight: Map<string, unknown> }).inboundInFlight.size === 0 && chainsIdle();
+    const changes: Record<string, (msg: IncomingMessage) => void> = {
+      'an edit': msg =>
+        projector.applyMessageEditQueued(sessionId, {
+          messageId: msg.id,
+          chatId: msg.chatId,
+          body: 'edited text',
+          fromMe: false,
+        } as never),
+      'an engine revoke naming its actor': msg =>
+        projector.handleMessageRevoked(
+          sessionId,
+          engine,
+          { id: msg.id, revokedId: msg.id, chatId: msg.chatId, from: msg.from, timestamp: msg.timestamp + 1 } as never,
+          { fromMe: false },
+        ),
+      'an engine revoke naming no actor': msg =>
+        projector.handleMessageRevoked(sessionId, engine, {
+          id: msg.id,
+          revokedId: msg.id,
+          chatId: msg.chatId,
+          from: msg.from,
+          timestamp: msg.timestamp + 1,
+        } as never),
+      'a delete through the API': msg =>
+        void projector.recordRevoke(sessionId, msg.id, { kind: 'revoke', chatId: msg.chatId }),
+    };
+    const changed: Record<string, Partial<Message>> = {
+      'an edit': { body: 'edited text', metadata: expect.objectContaining({ edited: true }) as never },
+      'an engine revoke naming its actor': { type: 'revoked', body: '' },
+      'an engine revoke naming no actor': { type: 'revoked', body: '' },
+      'a delete through the API': { type: 'revoked', body: '' },
+    };
+
+    /**
+     * The message waits in its message:received chain; `change` arrives, finds no row, and is held for it; a history
+     * sync stores `stored` under the id; the live insert then loses its first attempt to that row.
+     */
+    let revokedByEngine = false;
+    async function loseToAStoredRow(change: string, stored: IncomingMessage): Promise<void> {
+      revokedByEngine = change.startsWith('an engine revoke');
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      let reached = false;
+      hookManager.register('gate', 'message:received', async () => {
+        reached = true;
+        await gate;
+        return { continue: true };
+      });
+      const msg = incomingMsg({ id: stored.id, body: 'first text' });
+      projector.handleInboundMessage(sessionId, engine, msg);
+      await waitFor(() => reached);
+      changes[change](msg);
+      await waitFor(held);
+      await projector.persistHistoryMessages(sessionId, engine, [stored]);
+      release();
+      await waitFor(settled);
+    }
+
+    it.each(Object.keys(changes))('writes %s to the stored row when it is the message', async change => {
+      const stored = incomingMsg({ id: 'WA-FD-1', body: 'first text' });
+
+      await loseToAStoredRow(change, stored);
+
+      expect(await ds.getRepository(Message).findOneByOrFail({ sessionId, waMessageId: stored.id })).toMatchObject(
+        changed[change],
+      );
+    });
+
+    it.each(Object.keys(changes))("never writes %s to another chat's row stored under the id", async change => {
+      const stored = incomingMsg({
+        id: 'WA-FD-2',
+        chatId: OTHER_CHAT,
+        from: OTHER_CHAT,
+        body: 'another chat keeps this',
+      });
+
+      await loseToAStoredRow(change, stored);
+
+      expect(await ds.getRepository(Message).findOneByOrFail({ sessionId, waMessageId: stored.id })).toMatchObject({
+        chatId: OTHER_CHAT,
+        type: 'text',
+        body: 'another chat keeps this',
+      });
+    });
+
+    it('hands the row a re-fire cleared to message:persisted once, not again for the repeat', async () => {
+      const persisted = collectPersisted();
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      let reached = 0;
+      hookManager.register('gate', 'message:received', async () => {
+        reached += 1;
+        await gate;
+        return { continue: true };
+      });
+      const msg = incomingMsg({ id: 'WA-FD-3', body: 'first text' });
+      projector.handleInboundMessage(sessionId, engine, msg);
+      projector.handleInboundMessage(sessionId, engine, { ...msg });
+      await waitFor(() => reached === 2);
+      revokedByEngine = true;
+      changes['an engine revoke naming its actor'](msg);
+      await waitFor(held);
+      release();
+      await waitFor(settled);
+
+      expect(await ds.getRepository(Message).findOneByOrFail({ sessionId, waMessageId: msg.id })).toMatchObject({
+        type: 'revoked',
+      });
+      expect(persisted.filter(row => row.waMessageId === msg.id && row.type === 'revoked')).toHaveLength(1);
+    });
+  });
 });

@@ -63,6 +63,8 @@ describePostgres('Changes the database refused, kept until it answers (PostgreSQ
   let sessionId: string;
   // 'on': every statement fails; 'reads': only the reads that judge a change against the row fail.
   let outage: 'off' | 'on' | 'reads';
+  let hookManager: HookManager;
+  let gateway: Record<string, jest.Mock>;
 
   beforeAll(async () => {
     admin = await new DataSource(options).initialize();
@@ -120,7 +122,7 @@ describePostgres('Changes the database refused, kept until it answers (PostgreSQ
         return (key in values ? values[key] : defaultValue) as T;
       },
     } as unknown as ConfigService;
-    const hookManager = new HookManager();
+    hookManager = new HookManager();
     outbox = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent));
     delivery = new WebhookDeliveryService(
       ds.getRepository(Webhook),
@@ -144,7 +146,9 @@ describePostgres('Changes the database refused, kept until it answers (PostgreSQ
       ds.getRepository(Message),
       ds.getRepository(Session),
       engines,
-      new Proxy({}, { get: () => jest.fn() }) as unknown as EventsGateway,
+      new Proxy((gateway = {}), {
+        get: (calls: Record<string, jest.Mock>, name: string): jest.Mock => (calls[name] ??= jest.fn()),
+      }) as unknown as EventsGateway,
       webhookService,
       hookManager,
       {} as unknown as StatusStoreService,
@@ -307,6 +311,57 @@ describePostgres('Changes the database refused, kept until it answers (PostgreSQ
       await recover();
 
       expect(await rowOf('DF-1')).toMatchObject({ type: 'text', body: 'another chat keeps this' });
+    },
+  );
+
+  it.each(Object.keys(changes) as Change[])(
+    'writes %s held for a message whose first attempt lost to a row a history sync stored meanwhile',
+    async change => {
+      const msg = {
+        id: `FD-${change.length}`,
+        chatId: CHAT,
+        from: CHAT,
+        to: '628222@c.us',
+        body: 'first text',
+        type: 'text',
+        timestamp: 1_700_000_000,
+        fromMe: false,
+      } as IncomingMessage;
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      let reached = false;
+      hookManager.register('gate', 'message:received', async () => {
+        reached = true;
+        await gate;
+        return { continue: true };
+      });
+      const internals = projector as unknown as {
+        messageMutations: { size: number };
+        inboundInFlight: Map<string, { revoked?: boolean; editedBody?: string }>;
+      };
+      const ticket = projector.admitInbound(sessionId, engine, {
+        id: msg.id,
+        chatId: CHAT,
+        needsRoom: false,
+        status: false,
+        fromMe: false,
+      });
+
+      projector.handleInboundMessage(sessionId, engine, msg, ticket);
+      await waitFor(() => reached);
+      changes[change](msg.id);
+      // The change found no row and is held for the message (an engine revoke writes once it is announced).
+      await waitFor(
+        () =>
+          internals.messageMutations.size === 0 &&
+          (change !== 'an engine revoke' || (gateway.emitMessageRevoked?.mock.calls.length ?? 0) > 0) &&
+          [...internals.inboundInFlight.values()].some(e => e.revoked === true || e.editedBody !== undefined),
+      );
+      await projector.persistHistoryMessages(sessionId, engine, [{ ...msg }]);
+      release();
+      await waitFor(() => internals.inboundInFlight.size === 0 && internals.messageMutations.size === 0);
+
+      expect(await rowOf(msg.id)).toMatchObject(changed[change]);
     },
   );
 });
