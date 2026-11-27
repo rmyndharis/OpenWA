@@ -87,7 +87,7 @@ import {
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { handsBackInbound } from '../../engine/interfaces/inbound-redelivery';
 import { BaileysMessageStoreService } from '../../engine/adapters/baileys-message-store.service';
-import { ChatStateStoreService } from '../../engine/adapters/baileys-chat-state-store.service';
+import { ChatStateStoreService, type KeptChatStateWrite } from '../../engine/adapters/baileys-chat-state-store.service';
 import { deferred, InboundRoom, roomState, type RoomState } from './inbound-room';
 import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -197,7 +197,14 @@ function unlinkedAt(raw: string): Date | undefined {
 }
 
 /** What an unlink drops of what is kept for the engine of the account it unlinked (see forgetKeptInbound). */
-const FORGOTTEN_AT_UNLINK: ReadonlySet<KeptInboundKind> = new Set(['message', 'copy', 'blank', 'text', 'remove']);
+const FORGOTTEN_AT_UNLINK: ReadonlySet<KeptInboundKind> = new Set([
+  'message',
+  'copy',
+  'blank',
+  'text',
+  'remove',
+  'chat-state',
+]);
 
 /** The log line and action of each kind of kept inbound record given up. */
 const KEPT_INBOUND_LOSS: Readonly<Record<KeptInboundKind, [string, string]>> = {
@@ -226,6 +233,10 @@ const KEPT_INBOUND_LOSS: Readonly<Record<KeptInboundKind, [string, string]>> = {
   'story-removal': [
     'A status its poster deleted could not be removed: it stays listed until it expires',
     'status_removal_lost',
+  ],
+  'chat-state': [
+    "A chat's pin, mute, archive or deletion mark the database refused could not be kept any longer",
+    'chat_state_write_lost',
   ],
   wipe: [
     'What an unlinked account left in the stored messages and chat states could not be cleared: the next account may see it',
@@ -604,6 +615,11 @@ export class MessageProjector {
             ),
           );
     this.webhookService.setSessionOwnership?.(sessionId => nodeOwnsSession(this.ownership, sessionId));
+    // A chat's pin, mute, archive or deletion mark the database refused is kept here and replayed once it answers.
+    this.chatStateStore?.onRefusedWrite(write => {
+      const key = keptInboundKey(write.sessionId, write.chatId, 'chat-state', String(write.at));
+      this.keepInbound(key, write.sessionId, write.chatId, JSON.stringify(write), 'chat-state', write.chatId);
+    });
     this.mutationProjector = new MessageMutationProjector(
       this.messageRepository,
       this.eventsGateway,
@@ -681,8 +697,14 @@ export class MessageProjector {
 
   private readonly inboundSteps: KeptInboundSteps = {
     redeliver: async kept => {
-      // The stores are shared services: an unlinked account is cleared whether or not an engine runs here.
+      // The stores are shared services: an unlinked account is cleared whether or not an engine runs here, and a chat's
+      // flags replayed, behind an older write of the same chat.
       if (kept.kind === 'wipe') return this.clearUnlinked(kept);
+      if (kept.kind === 'chat-state') {
+        if (this.keptBefore(kept)) return false;
+        await this.chatStateStore?.replayWrite(JSON.parse(kept.raw) as KeptChatStateWrite);
+        return true;
+      }
       // A status is the session's own: stored or removed whatever engine runs, behind an older record of the same story.
       if (kept.kind === 'story' || kept.kind === 'story-removal') {
         return this.keptBefore(kept) ? false : this.applyKeptStory(kept);

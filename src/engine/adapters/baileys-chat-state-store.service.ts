@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThanOrEqual, Repository } from 'typeorm';
+import { LessThan, LessThanOrEqual, Repository } from 'typeorm';
+import { isDatabaseUnavailable } from '../../common/utils/recovery-queue';
 import { ChatState } from './baileys-chat-state.entity';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
@@ -71,6 +72,19 @@ const DEFAULT_STATE: ChatStateValue = { muteEndTime: null, archived: false, pinn
 
 /** The field's value, an absent `deletedAt` (a row or patch from before it was kept) read as its default. */
 const valueOf = (v: Partial<ChatStateValue>, field: ChatStateField) => v[field] ?? DEFAULT_STATE[field];
+
+/** A chat state write the database could not take, as data, to replay once it answers (see onRefusedWrite). */
+export interface KeptChatStateWrite {
+  sessionId: string;
+  chatId: string;
+  /** The columns it set. */
+  columns: Record<string, unknown>;
+  /** Whether it creates the row where none is, and the observed list such a row starts with when it carries none. */
+  create: boolean;
+  observed?: string;
+  /** Its stamp, in ms: replayed over a row stamped before it only. */
+  at: number;
+}
 
 function fromRow(row: ChatState): ChatStateValue {
   return {
@@ -519,6 +533,9 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
       await this.repo.upsert({ sessionId, chatId, ...columns, updatedAt: at }, ['sessionId', 'chatId']);
       return true;
     } catch (err) {
+      if (isDatabaseUnavailable(err)) {
+        this.refusedWrite?.({ sessionId, chatId, columns, create: true, at: at.getTime() });
+      }
       this.logger.warn(
         `Failed to persist chat state for ${chatId}: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -540,18 +557,22 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     const carried = FIELDS.filter(f => Object.hasOwn(patch, f));
     const columns = Object.fromEntries(carried.map(f => [f, patch[f]]));
     const updatedAt = this.stamp();
+    const observed = carried.join(',');
     try {
       if (create) {
         await this.repo
           .createQueryBuilder()
           .insert()
-          .values({ sessionId, chatId, ...columns, observed: carried.join(','), updatedAt })
+          .values({ sessionId, chatId, ...columns, observed, updatedAt })
           .orIgnore()
           .execute();
       }
       await this.repo.update({ sessionId, chatId }, { ...columns, updatedAt });
       return true;
     } catch (err) {
+      if (isDatabaseUnavailable(err)) {
+        this.refusedWrite?.({ sessionId, chatId, columns, create, observed, at: updatedAt.getTime() });
+      }
       this.logger.warn(
         `Failed to persist chat state for ${chatId}: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -601,6 +622,43 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   hideUpTo(sessionId: string, upTo: Date): void {
     const hidden = this.clearedUpTo.get(sessionId);
     if (!hidden || hidden < upTo) this.clearedUpTo.set(sessionId, upTo);
+  }
+
+  /** Where a write the database could not take is handed, as data, to be kept and replayed (see replayWrite). */
+  onRefusedWrite(listener: (write: KeptChatStateWrite) => void): void {
+    this.refusedWrite = listener;
+  }
+
+  private refusedWrite?: (write: KeptChatStateWrite) => void;
+
+  /**
+   * A write the database refused, replayed once it answers: over a row stamped before it only, so a newer live write
+   * stands, and as a new row where none is (when the write may create one). A write the unlinked account made, hidden
+   * until its clear lands, is not replayed. Throws while the database still fails.
+   */
+  async replayWrite(write: KeptChatStateWrite): Promise<void> {
+    const { sessionId, chatId, columns, create, at } = write;
+    const hidden = this.clearedUpTo.get(sessionId);
+    if (hidden && at <= hidden.getTime()) return;
+    const updatedAt = new Date(at);
+    if (create) {
+      await this.repo
+        .createQueryBuilder()
+        .insert()
+        .values({
+          sessionId,
+          chatId,
+          ...(write.observed !== undefined ? { observed: write.observed } : {}),
+          ...columns,
+          updatedAt,
+        })
+        .orIgnore()
+        .execute();
+    }
+    await this.repo.update({ sessionId, chatId, updatedAt: LessThan(updatedAt) }, { ...columns, updatedAt });
+    // What the cache holds of the chat may be what the write replaced: the next read takes the table.
+    this.states.delete(this.key(sessionId, chatId));
+    this.completeSessions.delete(sessionId);
   }
 
   /**

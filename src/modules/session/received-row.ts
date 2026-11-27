@@ -120,9 +120,9 @@ export class KeptInbound implements RecoveryRecord {
     return this.kind === 'wipe';
   }
 
-  /** A received status, media and all, goes first once the lane or the byte budget is full. */
+  /** A received status, media and all, or a chat's flags, goes first once the lane or the byte budget is full. */
   expendable(): boolean {
-    return this.kind === 'story';
+    return this.kind === 'story' || this.kind === 'chat-state';
   }
 
   retry(): Promise<boolean> {
@@ -141,11 +141,12 @@ export class KeptInbound implements RecoveryRecord {
 /**
  * What a kept inbound record holds: a message to read again, the engine's copy of a message to write, a change of that
  * copy to apply (a delete, `blank`, an edit, `text`, or the removal of a conflicting copy, `remove`), the clear of what
- * an unlinked account left (`wipe`), a received status to store (`story`) or remove once its poster deleted it, or the
- * replace of a forward placeholder by its send's echo (`forward`).
+ * an unlinked account left (`wipe`), a received status to store (`story`) or remove once its poster deleted it, the
+ * replace of a forward placeholder by its send's echo (`forward`), or a chat's pin, mute, archive or deletion mark
+ * (`chat-state`).
  */
 export type KeptInboundKind =
-  'message' | 'copy' | 'blank' | 'text' | 'remove' | 'wipe' | 'story' | 'story-removal' | 'forward';
+  'message' | 'copy' | 'blank' | 'text' | 'remove' | 'wipe' | 'story' | 'story-removal' | 'forward' | 'chat-state';
 
 /** A record's key: a message by its own id, a copy by its message's, a change of a copy by both. */
 export const keptInboundKey = (sessionId: string, id: string, kind: KeptInboundKind, changeId?: string): string =>
@@ -157,7 +158,9 @@ export const keptInboundKey = (sessionId: string, id: string, kind: KeptInboundK
         ? `${sessionId}:wipe`
         : kind === 'story' || kind === 'story-removal' || kind === 'forward'
           ? `${sessionId}:${kind}:${id}`
-          : `${sessionId}:copy-change:${id}:${changeId ?? ''}`;
+          : kind === 'chat-state'
+            ? `${sessionId}:chat-state:${id}:${changeId ?? ''}`
+            : `${sessionId}:copy-change:${id}:${changeId ?? ''}`;
 
 /** A kept inbound message as the journal keeps it. */
 interface JournaledInbound {
@@ -189,7 +192,17 @@ export function restoredKeptInbound(
     return undefined;
   }
   const targetId = typeof v.g === 'string' ? v.g : undefined;
-  const kinds: readonly unknown[] = ['copy', 'blank', 'text', 'remove', 'wipe', 'story', 'story-removal', 'forward'];
+  const kinds: readonly unknown[] = [
+    'copy',
+    'blank',
+    'text',
+    'remove',
+    'wipe',
+    'story',
+    'story-removal',
+    'forward',
+    'chat-state',
+  ];
   const kind = kinds.includes(v.c) ? (v.c as KeptInboundKind) : 'message';
   return { sessionId: v.s, messageId: v.i, raw: v.m, kind, targetId, since: v.t };
 }

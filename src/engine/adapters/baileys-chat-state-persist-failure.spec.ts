@@ -1,6 +1,6 @@
 import { DataSource, Repository } from 'typeorm';
 import { ChatState } from './baileys-chat-state.entity';
-import { ChatStateStoreService } from './baileys-chat-state-store.service';
+import { ChatStateStoreService, type KeptChatStateWrite } from './baileys-chat-state-store.service';
 
 const SID = 'session-a';
 const PHONE = '22222@s.whatsapp.net';
@@ -150,5 +150,89 @@ describe('Chat states of the next account while an unlink clear is kept', () => 
     await store.refreshSession(SID);
 
     expect(store.get(SID, 'restored')).toMatchObject({ archived: true });
+  });
+});
+
+describe('A chat state write the database refused', () => {
+  let db: DataSource;
+  let repo: Repository<ChatState>;
+  beforeEach(async () => {
+    db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [ChatState], synchronize: true });
+    await db.initialize();
+    repo = db.getRepository(ChatState);
+  });
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await db.destroy();
+  });
+  const unavailable = (): Error => Object.assign(new Error('Connection terminated'), { code: 'ECONNREFUSED' });
+  const row = (chatId: string) => repo.findOneBy({ sessionId: SID, chatId });
+
+  it('is handed on to keep, and replayed once the database answers', async () => {
+    const store = new ChatStateStoreService(repo);
+    const kept: KeptChatStateWrite[] = [];
+    store.onRefusedWrite(write => kept.push(write));
+    jest.spyOn(repo, 'upsert').mockRejectedValueOnce(unavailable());
+
+    await store.remember(SID, PHONE, { pinned: true });
+    expect(kept).toHaveLength(1);
+    expect(await row(PHONE)).toBeNull();
+
+    await store.replayWrite(JSON.parse(JSON.stringify(kept[0])) as KeptChatStateWrite);
+
+    expect(await row(PHONE)).toMatchObject({ pinned: true });
+  });
+
+  it('leaves a newer live write standing when the older kept one is replayed after it', async () => {
+    const store = new ChatStateStoreService(repo);
+    const kept: KeptChatStateWrite[] = [];
+    store.onRefusedWrite(write => kept.push(write));
+    jest.spyOn(repo, 'upsert').mockRejectedValueOnce(unavailable());
+    await store.remember(SID, PHONE, { pinned: true });
+    await store.remember(SID, PHONE, { pinned: false, archived: true });
+
+    await store.replayWrite(kept[0]);
+
+    expect(await row(PHONE)).toMatchObject({ pinned: false, archived: true });
+  });
+
+  it('replays a write made blind, its row unreadable, carrying only what it patched', async () => {
+    await repo.upsert({ sessionId: SID, chatId: PHONE, muteEndTime: -1, updatedAt: new Date(1_000) }, [
+      'sessionId',
+      'chatId',
+    ]);
+    const store = new ChatStateStoreService(repo);
+    const kept: KeptChatStateWrite[] = [];
+    store.onRefusedWrite(write => kept.push(write));
+    jest.spyOn(repo, 'findOne').mockRejectedValueOnce(unavailable());
+    jest.spyOn(repo, 'update').mockRejectedValueOnce(unavailable());
+
+    await store.remember(SID, PHONE, { archived: true });
+    expect(kept).toHaveLength(1);
+    await store.replayWrite(kept[0]);
+
+    expect(await row(PHONE)).toMatchObject({ muteEndTime: -1, archived: true });
+  });
+
+  it('is not replayed when the account that made it was unlinked since, its clear kept', async () => {
+    const store = new ChatStateStoreService(repo);
+    store.hideUpTo(SID, new Date(5_000));
+
+    await store.replayWrite({ sessionId: SID, chatId: PHONE, columns: { pinned: true }, create: true, at: 4_000 });
+
+    expect(await row(PHONE)).toBeNull();
+  });
+
+  it('keeps nothing of a write refused for a reason of its own', async () => {
+    const store = new ChatStateStoreService(repo);
+    const kept: KeptChatStateWrite[] = [];
+    store.onRefusedWrite(write => kept.push(write));
+    jest
+      .spyOn(repo, 'upsert')
+      .mockRejectedValueOnce(Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' }));
+
+    await store.remember(SID, PHONE, { pinned: true });
+
+    expect(kept).toEqual([]);
   });
 });

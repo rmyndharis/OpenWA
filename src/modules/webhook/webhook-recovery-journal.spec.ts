@@ -648,6 +648,18 @@ describe('What the database refused, across a restart', () => {
     expect(await ds.getRepository(ChatState).count({ where: { sessionId } })).toBe(0);
   });
 
+  it('writes a chat state refused before a crash once the database answers', async () => {
+    outage = 'on';
+    await node.chatStates.remember(sessionId, CHAT, { pinned: true });
+    await settle();
+
+    await crash();
+    node = boot({ engine: false });
+    await recover();
+
+    expect(await ds.getRepository(ChatState).findOneBy({ sessionId, chatId: CHAT })).toMatchObject({ pinned: true });
+  });
+
   it('lets go of what it cannot read back as a record, and of copies whose queued job will never run here', async () => {
     node.journal.close();
     appendFileSync(

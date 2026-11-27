@@ -50,7 +50,7 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
   // The engine stores the projector clears an unlinked account from, shared services that need no engine.
   let stores: {
     messages: { clearSession: jest.Mock; hideUpTo: jest.Mock };
-    chatStates: { clearSession: jest.Mock; hideUpTo: jest.Mock };
+    chatStates: { clearSession: jest.Mock; hideUpTo: jest.Mock; onRefusedWrite: jest.Mock; replayWrite: jest.Mock };
   };
   let engine: IWhatsAppEngine;
   let projector: MessageProjector;
@@ -131,7 +131,12 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
     reconciler = new WebhookReconcilerService(ds.getRepository(Webhook), outbox, delivery, configService);
     stores = {
       messages: { clearSession: jest.fn().mockResolvedValue(undefined), hideUpTo: jest.fn() },
-      chatStates: { clearSession: jest.fn().mockResolvedValue(undefined), hideUpTo: jest.fn() },
+      chatStates: {
+        clearSession: jest.fn().mockResolvedValue(undefined),
+        hideUpTo: jest.fn(),
+        onRefusedWrite: jest.fn(),
+        replayWrite: jest.fn().mockResolvedValue(undefined),
+      },
     };
     engines = new EngineRegistry();
     engine = {} as IWhatsAppEngine;
@@ -1235,6 +1240,35 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
         expect(projector.recoveryQueue().get('receive', `${sessionId}:wipe`)).toBeUndefined();
       });
 
+      it('replays a chat state write the database refused once it answers, and drops it at an unlink', async () => {
+        const [[refused]] = stores.chatStates.onRefusedWrite.mock.calls as Array<[(write: unknown) => void]>;
+        const write = (chatId: string, at: number) => ({
+          sessionId,
+          chatId,
+          columns: { pinned: true },
+          create: true,
+          at,
+        });
+        refused(write('A@c.us', 1_000));
+        refused(write('A@c.us', 2_000));
+        refused(write('B@c.us', 3_000));
+        expect(projector.recoveryQueue().get('receive', `${sessionId}:chat-state:A@c.us:1000`)?.expendable?.()).toBe(
+          true,
+        );
+
+        await recover();
+        expect(stores.chatStates.replayWrite.mock.calls).toEqual([
+          [write('A@c.us', 1_000)],
+          [write('A@c.us', 2_000)],
+          [write('B@c.us', 3_000)],
+        ]);
+
+        refused(write('C@c.us', 4_000));
+        projector.forgetKeptInbound(sessionId);
+        await recover();
+        expect(stores.chatStates.replayWrite).toHaveBeenCalledTimes(3);
+      });
+
       it('lets the clear of an unlinked account go with the session once its rows are removed', async () => {
         projector.keepStoredWipe(sessionId, { raw: JSON.stringify({ before: new Date().toISOString() }) });
 
@@ -1327,6 +1361,7 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
       ['story', 'status_ingest_lost'],
       ['story-removal', 'status_removal_lost'],
       ['forward', 'message_forward_replace_lost'],
+      ['chat-state', 'chat_state_write_lost'],
     ] as const)('logs a kept %s given up as %s', async (kind, action) => {
       const refuse = jest.fn().mockRejectedValue(new Error('Unexpected token'));
       Object.assign(engine, {
