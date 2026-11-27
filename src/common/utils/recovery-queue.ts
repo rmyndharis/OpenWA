@@ -46,6 +46,34 @@ export const RECOVERY_MAX_RECORD_FAILURES = 3;
 /** 64 MiB, the byte budget every lane shares. */
 export const RECOVERY_MAX_BYTES = 64 * 1024 * 1024;
 
+/** Records a lane keeps: a message's changes and a send's rerun one each, a dispatch one per webhook event. */
+export const RECOVERY_MAX_RECORDS: Readonly<Record<RecoveryLane, number>> = {
+  send: 1000,
+  change: 1000,
+  dispatch: 10_000,
+};
+
+/** How long a record with content is kept (a revoke alone is kept until its lane is full). */
+export const RECOVERY_MAX_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * The queue of one process, every lane sharing it so a pass runs them in order. A record waits before its next try
+ * while the database keeps failing: SQLite is one node, and every try against a lock can hold the event loop for its
+ * busy timeout, so it backs off to 30 s; on PostgreSQL the wait plus a pass must stay under the sweep's grace
+ * (`graceMs`), so a peer's sweep, held for one grace after the database comes back, does not replay what this node is
+ * about to withdraw.
+ */
+export function recoveryQueueOptions(postgres: boolean, graceMs: number): RecoveryQueueOptions {
+  const cap = postgres ? Math.max(1000, Math.min(5000, graceMs / 4)) : 30_000;
+  return {
+    maxBytes: RECOVERY_MAX_BYTES,
+    maxRecords: { ...RECOVERY_MAX_RECORDS },
+    maxAgeMs: { send: RECOVERY_MAX_AGE_MS, change: RECOVERY_MAX_AGE_MS, dispatch: RECOVERY_MAX_AGE_MS },
+    baseDelayMs: Math.min(1000, cap),
+    capDelayMs: cap,
+  };
+}
+
 /**
  * SQLite codes that say the database file cannot be used now (an I/O error, a full or read-only disk, a file that
  * cannot be opened), not that a statement is wrong: like a dropped connection, they say nothing of the record.
@@ -76,6 +104,10 @@ export class RecoveryQueue {
     change: new Map(),
     dispatch: new Map(),
   };
+  // When each record was first kept, across lanes: the byte budget gives up on the first kept, records kept within
+  // one millisecond included.
+  private readonly order = new Map<RecoveryRecord, number>();
+  private keptCount = 0;
   // What each record counted against the byte budget when it was last measured, and their sum.
   private readonly sizes = new Map<RecoveryRecord, number>();
   private bytes = 0;
@@ -85,7 +117,8 @@ export class RecoveryQueue {
   private running?: Promise<void>;
   private failing = false;
   private delayMs: number;
-  private stopped = false;
+  // Lanes whose shutdown pass ran: what is kept in them after it is lost.
+  private readonly stopped = new Set<RecoveryLane>();
 
   constructor(private readonly options: RecoveryQueueOptions) {
     this.now = options.now ?? (() => Date.now());
@@ -102,7 +135,7 @@ export class RecoveryQueue {
 
   /** Keep a record (one already kept under the key keeps its place), then hold every bound. */
   park(key: string, record: RecoveryRecord): void {
-    if (this.stopped) {
+    if (this.stopped.has(record.lane)) {
       record.lost('shutdown');
       return;
     }
@@ -110,6 +143,7 @@ export class RecoveryQueue {
     const was = lane.get(key);
     if (was && was !== record) this.forgetSize(was);
     lane.set(key, record);
+    if (!this.order.has(record)) this.order.set(record, ++this.keptCount);
     this.measure(record);
     this.bound(record.lane);
     this.schedule();
@@ -135,17 +169,18 @@ export class RecoveryQueue {
   }
 
   /**
-   * One pass at shutdown, bounded by `budgetMs`, then the loss of whatever is left is logged. Nothing is kept or
-   * retried after it.
+   * One pass at shutdown over `lanes`, bounded by `budgetMs` (the outbox steps of every lane run first, as in any pass),
+   * then the loss of whatever is left in them is logged. Nothing is kept in them or retried after it; the other lanes
+   * go on until their own pass.
    */
-  async drain(budgetMs: number): Promise<void> {
-    this.stopped = true;
+  async drain(budgetMs: number, lanes: readonly RecoveryLane[] = LANES): Promise<void> {
+    for (const lane of lanes) this.stopped.add(lane);
     clearTimeout(this.timer);
     this.timer = undefined;
-    if (this.size) {
+    if (this.entries(lanes).length) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        (this.running ?? Promise.resolve()).then(() => this.pass(true)),
+        (this.running ?? Promise.resolve()).then(() => this.pass(true, lanes)),
         new Promise<void>(resolve => {
           timer = setTimeout(resolve, budgetMs);
           timer.unref?.();
@@ -153,10 +188,11 @@ export class RecoveryQueue {
       ]);
       clearTimeout(timer);
     }
-    for (const [key, record] of this.entries()) {
+    for (const [key, record] of this.entries(lanes)) {
       this.drop(key, record);
       record.lost('shutdown');
     }
+    this.schedule();
   }
 
   /** Run a pass now (tests, and the recovery of a database that answers again). */
@@ -166,16 +202,21 @@ export class RecoveryQueue {
     // A pass already under way may have started before the database answered: this one runs after it.
     while (this.running) await this.running;
     // Once the pass is over, a record kept meanwhile or one that still waits gets the next.
-    this.running = this.pass(false).finally(() => {
+    this.running = this.pass(false, this.live()).finally(() => {
       this.running = undefined;
       this.schedule();
     });
     await this.running;
   }
 
-  /** Every record, lanes in order and the oldest first. */
-  private entries(): Array<[string, RecoveryRecord]> {
-    return LANES.flatMap(lane => [...this.lanes[lane]]);
+  /** Every record of `lanes`, lanes in order and the oldest first. */
+  private entries(lanes: readonly RecoveryLane[] = LANES): Array<[string, RecoveryRecord]> {
+    return LANES.filter(lane => lanes.includes(lane)).flatMap(lane => [...this.lanes[lane]]);
+  }
+
+  /** The lanes a pass still tries. */
+  private live(): RecoveryLane[] {
+    return LANES.filter(lane => !this.stopped.has(lane));
   }
 
   private kept(key: string, record: RecoveryRecord): boolean {
@@ -183,7 +224,7 @@ export class RecoveryQueue {
   }
 
   private schedule(): void {
-    if (this.stopped || this.timer || this.running || this.size === 0) return;
+    if (this.timer || this.running || this.entries(this.live()).length === 0) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
       void this.flush();
@@ -191,16 +232,20 @@ export class RecoveryQueue {
     this.timer.unref?.();
   }
 
-  private async pass(final: boolean): Promise<void> {
+  private async pass(final: boolean, lanes: readonly RecoveryLane[] = this.live()): Promise<void> {
     this.evictAged();
     try {
       if (this.failing && !final) {
-        const [first] = this.entries();
+        const [first] = this.entries(lanes);
         if (first && (await this.step(first, true))) this.recovered();
         else return;
       }
-      for (const entry of this.entries()) if (entry[1].prepare && this.kept(...entry)) await this.step(entry, false);
-      for (const entry of this.entries()) if (this.kept(...entry)) await this.step(entry, true);
+      // The outbox steps of every lane still kept go first, also in a pass that tries only some lanes.
+      const prepared = [...new Set([...lanes, ...this.live()])];
+      for (const entry of this.entries(prepared)) {
+        if (entry[1].prepare && this.kept(...entry)) await this.step(entry, false);
+      }
+      for (const entry of this.entries(lanes)) if (this.kept(...entry)) await this.step(entry, true);
       this.recovered();
     } catch {
       // Only a database failure leaves step(): the rest of the pass would fail the same way.
@@ -250,6 +295,7 @@ export class RecoveryQueue {
   private forgetSize(record: RecoveryRecord): void {
     this.bytes -= this.sizes.get(record) ?? 0;
     this.sizes.delete(record);
+    this.order.delete(record);
     this.failures.delete(record);
   }
 
@@ -278,7 +324,7 @@ export class RecoveryQueue {
       let oldest: [string, RecoveryRecord] | undefined;
       for (const each of LANES) {
         const first = this.lanes[each].entries().next().value;
-        if (first && (!oldest || first[1].since < oldest[1].since)) oldest = first;
+        if (first && (!oldest || this.order.get(first[1])! < this.order.get(oldest[1])!)) oldest = first;
       }
       if (!oldest) break;
       this.drop(...oldest);

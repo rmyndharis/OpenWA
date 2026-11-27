@@ -228,6 +228,40 @@ describe('RecoveryQueue', () => {
     expect(queue.size).toBe(0);
   });
 
+  it("drains only the lanes it is given, after every lane's outbox steps, and keeps the others going", async () => {
+    const queue = new RecoveryQueue(options());
+    const prepare = (name: string) => () => (log.push(`prepare ${name}`), Promise.resolve());
+    queue.park(
+      'c',
+      record('c', 'change', { prepare: prepare('c'), retry: () => (log.push('retry c'), Promise.resolve(false)) }),
+    );
+    queue.park('d', record('d', 'dispatch', { retry: () => Promise.reject(down()) }));
+
+    await queue.drain(1000, ['dispatch']);
+    queue.park('late', record('late', 'dispatch'));
+
+    expect(log).toEqual(['prepare c', 'lost d shutdown', 'lost late shutdown']);
+    expect(queue.get('change', 'c')).toBeDefined();
+    log.length = 0;
+    // The database failed the dispatch: the next pass comes after twice the first delay, and tries the change.
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(log).toEqual(['retry c']);
+  });
+
+  it('gives up on the first kept, across lanes, of records kept in the same millisecond', () => {
+    const queue = new RecoveryQueue(options());
+    const at = now;
+    const first = record('first', 'dispatch', { bytes: 400 });
+    const second = record('second', 'change', { bytes: 400 });
+    Object.assign(first, { since: at });
+    Object.assign(second, { since: at });
+    queue.park('first', first);
+    queue.park('second', second);
+    queue.park('third', record('third', 'send', { bytes: 400 }));
+
+    expect(log).toEqual(['lost first bytes']);
+  });
+
   it('ends the shutdown pass at its budget', async () => {
     const queue = new RecoveryQueue(options());
     const hung = record('hung', 'change', { retry: () => new Promise<boolean>(() => undefined) });
