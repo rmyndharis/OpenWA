@@ -482,6 +482,51 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
     });
   });
 
+  it.each([
+    [
+      'an engine revoke',
+      (): void =>
+        projector.handleMessageRevoked(
+          sessionId,
+          engine,
+          { id: 'E-9', revokedId: 'E-9', chatId: CHAT, timestamp: 1_700_000_002 } as never,
+          { fromMe: false },
+        ),
+    ],
+    [
+      'a delete through the API',
+      (): void => void projector.recordRevoke(sessionId, 'E-9', { kind: 'revoke', chatId: CHAT }),
+    ],
+  ] as const)('withdraws the kept message.edited of a message when %s follows the edit', async (_label, revoke) => {
+    await ds.getRepository(Message).insert({
+      sessionId,
+      waMessageId: 'E-9',
+      chatId: CHAT,
+      from: CHAT,
+      to: '628222@c.us',
+      body: 'first text',
+      type: 'text',
+      direction: MessageDirection.INCOMING,
+      timestamp: 1_700_000_000,
+    });
+    outage = 'on';
+    projector.applyMessageEditQueued(sessionId, {
+      messageId: 'E-9',
+      chatId: CHAT,
+      body: 'secret edit',
+      fromMe: false,
+    } as never);
+    await settle();
+    revoke();
+    await settle();
+
+    await recover();
+    await recover();
+
+    expect(posted().filter(post => JSON.stringify(post.data).includes('secret edit'))).toEqual([]);
+    expect(posted().map(post => post.event)).not.toContain('message.edited');
+  });
+
   describe('a received message whose row the database refused', () => {
     const msg = {
       id: 'R-1',

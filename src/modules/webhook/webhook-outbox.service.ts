@@ -85,6 +85,18 @@ export function messageDeliveryKeys(
   return { pattern: `${prefix.replace(/[\\%_]/g, ch => `\\${ch}`)}%`, keyFor: webhookId => `${prefix}${webhookId}` };
 }
 
+/**
+ * The keys of a message's message.edited deliveries, one per edit occurrence (`edit_<session>_<id><occurrence>` per
+ * webhook): a LIKE pattern (escaped, used with `ESCAPE '\'`). Another message's id can start with this one, so a copy
+ * is the message's only where its payload names it in `messageId`.
+ */
+export function messageEditKeys(sessionId: string, waMessageId: string): string {
+  return `${`edit_${sessionId}_${waMessageId}`.replace(/[\\%_]/g, ch => `\\${ch}`)}%`;
+}
+
+/** Events that carry a change of a message (an edit), which name it in `messageId` and are withdrawn with it. */
+export const MESSAGE_CHANGE_EVENTS = ['message.edited'];
+
 /** A message's delivery data once it was deleted through the API: the placeholder, without its content. */
 export function redactedMessagePayload(payload: Record<string, unknown>): Record<string, unknown> {
   /* eslint-disable @typescript-eslint/no-unused-vars */
@@ -486,6 +498,9 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     passes?: MessageCopyFilter,
   ): Promise<void> {
     if (!waMessageId) return;
+    // A message taken back (by an engine revoke or a delete through the API) takes its edit events with it: each is an
+    // occurrence of its own, so an edit rewrites none of them, and a redacted one would read as an edit to empty.
+    if (change.kind !== 'rewrite') await this.closeOpenEditsForMessage(sessionId, waMessageId, shouldApply);
     const rows = await this.findPendingForMessage(sessionId, waMessageId);
     const matching: WebhookOutboxEvent[] = [];
     for (const row of rows) {
@@ -511,6 +526,35 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
           : { payload }) as QueryDeepPartialEntity<WebhookOutboxEvent>,
       );
     }
+  }
+
+  /** Close the still-open message.edited rows of a message (see {@link messageEditKeys}) its copies would take. */
+  private async closeOpenEditsForMessage(
+    sessionId: string,
+    waMessageId: string,
+    shouldApply?: MessageCopyPredicate,
+  ): Promise<void> {
+    if (typeof this.outbox.createQueryBuilder !== 'function') return;
+    const rows = await this.outbox
+      .createQueryBuilder('o')
+      .where('o.sessionId = :sessionId', { sessionId })
+      .andWhere('o.event IN (:...events)', { events: MESSAGE_CHANGE_EVENTS })
+      .andWhere('o.state IN (:...states)', { states: OPEN_STATES })
+      .andWhere('o.payload IS NOT NULL')
+      .andWhere("o.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern: messageEditKeys(sessionId, waMessageId) })
+      .addSelect('o.engineRef')
+      .getMany();
+    const matching: string[] = [];
+    for (const row of rows) {
+      if (row.payload?.messageId !== waMessageId) continue;
+      if (shouldApply && !(await shouldApply(row.payload, row.engineRef))) continue;
+      matching.push(row.id);
+    }
+    if (matching.length === 0) return;
+    await this.outbox.update(
+      { id: In(matching), state: In(OPEN_STATES) },
+      { state: 'dispatched', payload: null, lastAttemptAt: new Date() },
+    );
   }
 
   /**

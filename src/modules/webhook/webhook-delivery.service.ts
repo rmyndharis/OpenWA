@@ -9,10 +9,12 @@ import { setTimeout } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { Webhook } from './entities/webhook.entity';
 import {
+  MESSAGE_CHANGE_EVENTS,
   MESSAGE_DELIVERY_EVENTS,
   WebhookOutboxService,
   changedMessagePayload,
   messageDeliveryKeys,
+  messageEditKeys,
   type MessageCopyChange,
   type MessageCopyFilter,
   type MessageCopyPredicate,
@@ -860,6 +862,40 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         payload: payload && passes && !(await passes(row, payload)) ? null : payload,
       } as QueryDeepPartialEntity<WebhookDeliveryFailure>);
     }
+    if (change.kind !== 'rewrite') await this.dropKeptEditCopies(sessionId, waMessageId, shouldApply);
+  }
+
+  /**
+   * A message taken back takes the copies its failed message.edited deliveries keep with it (see the outbox's
+   * closeOpenEditsForMessage): a redrive sends none of them.
+   */
+  private async dropKeptEditCopies(
+    sessionId: string,
+    waMessageId: string,
+    shouldApply?: MessageCopyPredicate,
+  ): Promise<void> {
+    const rows = await this.failureRepository
+      .createQueryBuilder('f')
+      .select(['f.id', 'f.webhookId', 'f.idempotencyKey'])
+      .addSelect('f.payload')
+      .where('f.sessionId = :sessionId', { sessionId })
+      .andWhere('f.event IN (:...events)', { events: MESSAGE_CHANGE_EVENTS })
+      .andWhere('f.payload IS NOT NULL')
+      .andWhere("f.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern: messageEditKeys(sessionId, waMessageId) })
+      .getMany();
+    const kept = rows.filter(row => row.payload?.messageId === waMessageId);
+    const engineRefs =
+      shouldApply && kept.length ? await this.outbox.engineRefsFor(kept) : new Map<string, MessageEngineRef>();
+    for (const row of kept) {
+      const engineRef = engineRefs.get(`${row.webhookId}\u0000${row.idempotencyKey}`);
+      if (shouldApply && !(await shouldApply(row.payload!, engineRef))) continue;
+      await this.failureRepository.update(
+        { id: row.id },
+        {
+          payload: null,
+        },
+      );
+    }
   }
 
   /** Whether a delivery's webhook, read once per change, still takes a rewritten copy: its subscription and filters. */
@@ -1027,9 +1063,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     for (const parked of [...(this.parkedDispatches.get(sessionId) ?? [])]) {
-      if (!MESSAGE_DELIVERY_EVENTS.includes(parked.event) || parked.data.id !== waMessageId) continue;
+      // A message taken back takes its kept edit events with it; an edit leaves them, each its own occurrence.
+      const edit = MESSAGE_CHANGE_EVENTS.includes(parked.event) && parked.data.messageId === waMessageId;
+      if (!(edit && change.kind !== 'rewrite')) {
+        if (!MESSAGE_DELIVERY_EVENTS.includes(parked.event) || parked.data.id !== waMessageId) continue;
+      }
       if (shouldApply && !(await shouldApply(parked.data, parked.engineRef))) continue;
-      const data = changedMessagePayload(parked.data, change);
+      const data = edit ? null : changedMessagePayload(parked.data, change);
       if (!data) {
         this.recovery.settle('dispatch', parked.key);
         continue;

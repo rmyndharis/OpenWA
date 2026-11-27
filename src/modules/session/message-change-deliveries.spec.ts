@@ -263,6 +263,95 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
   const apiDelete = (id: string): Promise<void> =>
     projector.recordRevoke(sessionId, id, { kind: 'revoke', chatId: CHAT });
 
+  describe('the message.edited deliveries of a message', () => {
+    // An edit event of `id`: its own occurrence, keyed edit_<session>_<id><occurrence>, naming the message in messageId.
+    const editKey = (id: string, occurrence: string): string => `edit_${sessionId}_${id}_${occurrence}_${webhook.id}`;
+    const editPayload = (id: string, body: string, chatId = CHAT): Record<string, unknown> => ({
+      messageId: id,
+      chatId,
+      from: chatId,
+      to: '628222@c.us',
+      fromMe: false,
+      body,
+      type: 'text',
+      timestamp: 1_700_000_001,
+    });
+    const openEdit = async (id: string, occurrence: string, body: string, chatId = CHAT): Promise<void> => {
+      await ds.getRepository(Webhook).update(webhook.id, { events: ['message.received', 'message.edited'] });
+      await outbox.open({
+        webhookId: webhook.id,
+        sessionId,
+        event: 'message.edited',
+        idempotencyKey: editKey(id, occurrence),
+        deliveryId: `delivery-edit-${occurrence}`,
+        payload: editPayload(id, body, chatId),
+      });
+      await ds.getRepository(WebhookDeliveryFailure).insert({
+        webhookId: webhook.id,
+        sessionId,
+        event: 'message.edited',
+        url: webhook.url,
+        idempotencyKey: editKey(id, occurrence),
+        deliveryId: `delivery-edit-${occurrence}`,
+        attempts: 1,
+        lastError: 'HTTP 500: down',
+        payload: editPayload(id, body, chatId),
+      } as never);
+    };
+    const editCopies = async (occurrence: string, id: string): Promise<unknown[]> => {
+      const key = editKey(id, occurrence);
+      const row = await ds.getRepository(WebhookOutboxEvent).findOneOrFail({ where: { idempotencyKey: key } });
+      const kept = await ds
+        .getRepository(WebhookDeliveryFailure)
+        .createQueryBuilder('f')
+        .addSelect('f.payload')
+        .where('f.idempotencyKey = :key', { key })
+        .getOneOrFail();
+      return [row.state, (row.payload as { body?: string } | null)?.body ?? null, kept.payload?.body ?? null];
+    };
+
+    it.each([
+      ['an engine revoke', (id: string) => engineRevoke(id)],
+      ['a delete through the API', (id: string) => apiDelete(id)],
+    ] as const)('are withdrawn, the open row and the copy a failed delivery keeps, by %s', async (_label, revoke) => {
+      await storeRow('E-1');
+      await openEdit('E-1', 'o1', 'secret edit');
+
+      await revoke('E-1');
+
+      expect(await editCopies('o1', 'E-1')).toEqual(['dispatched', null, null]);
+      await sweep();
+      await redrive.redrive({ sessionId });
+      expect(postedBodies()).toEqual([]);
+    });
+
+    it("leave the edits of another chat's message, and of a message whose id only starts with it, alone", async () => {
+      await storeRow('E_2');
+      await openEdit('E_2', 'o2', 'kept edit', OTHER_CHAT);
+      await openEdit('EX2', 'o3', 'kept edit');
+      await openEdit('E_20', 'o4', 'kept edit');
+
+      await engineRevoke('E_2');
+
+      expect(await editCopies('o2', 'E_2')).toEqual(['pending', 'kept edit', 'kept edit']);
+      expect(await editCopies('o3', 'EX2')).toEqual(['pending', 'kept edit', 'kept edit']);
+      expect(await editCopies('o4', 'E_20')).toEqual(['pending', 'kept edit', 'kept edit']);
+    });
+
+    it('keep the text of their own edit when the message is edited again', async () => {
+      await storeRow('E-3');
+      await openEdit('E-3', 'o5', 'first fix');
+
+      await projector.recordOutboundMessageEdit(sessionId, 'E-3', 'second fix', {
+        kind: 'edit',
+        chatId: CHAT,
+        fromMe: false,
+      });
+
+      expect(await editCopies('o5', 'E-3')).toEqual(['pending', 'first fix', 'first fix']);
+    });
+  });
+
   describe('a delivery already handed to the queue', () => {
     it('is closed when the engine revokes the message, and the sweep replays nothing', async () => {
       await storeRow('M-1');
