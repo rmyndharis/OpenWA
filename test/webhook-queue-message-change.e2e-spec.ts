@@ -51,6 +51,7 @@ import { Message, MessageDirection } from '../src/modules/message/entities/messa
 import { WebhookService } from '../src/modules/webhook/webhook.service';
 import { WebhookReconcilerService } from '../src/modules/webhook/webhook-reconciler.service';
 import { MessageProjector } from '../src/modules/session/message-projector.service';
+import { BetterSqlite3QueryRunner } from 'typeorm/driver/better-sqlite3/BetterSqlite3QueryRunner';
 
 const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 20000): Promise<void> => {
   const start = Date.now();
@@ -125,8 +126,30 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
   const queueIdle = async (): Promise<boolean> =>
     Object.values(await webhookQueue.getJobCounts('active', 'waiting', 'delayed', 'prioritized')).every(n => n === 0);
 
+  // 'outbox writes': every write of the outbox table fails; 'on': every statement does.
+  let outage: 'off' | 'outbox writes' | 'on' = 'off';
+  beforeEach(() => {
+    outage = 'off';
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- applied below with the runner as `this`
+    const realQuery = BetterSqlite3QueryRunner.prototype.query;
+    jest.spyOn(BetterSqlite3QueryRunner.prototype, 'query').mockImplementation(function (
+      this: BetterSqlite3QueryRunner,
+      ...args: Parameters<BetterSqlite3QueryRunner['query']>
+    ) {
+      const sql = String(args[0]);
+      const outboxWrite = !/^\s*SELECT/i.test(sql) && sql.includes('webhook_outbox_events');
+      if (outage === 'on' || (outage === 'outbox writes' && outboxWrite)) {
+        return Promise.reject(Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' }));
+      }
+      return realQuery.apply(this, args);
+    } as never);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
   /** A stored message whose delivery failed once: its job waits for the retry, its outbox row is queued. */
-  const failedOnce = async (): Promise<{ sessionId: string; id: string; webhookId: string }> => {
+  const failedOnce = async (
+    during: 'off' | 'outbox writes' = 'off',
+  ): Promise<{ sessionId: string; id: string; webhookId: string }> => {
     received.length = 0;
     receiverStatus = 500;
     const session = await sessions.save(sessions.create({ name: `queue-change-${Date.now()}-${Math.random()}` }));
@@ -151,6 +174,7 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
       direction: MessageDirection.INCOMING,
       timestamp: 1790000000,
     });
+    outage = during;
     await webhookService.dispatch(session.id, 'message.received', {
       id,
       chatId: CHAT,
@@ -162,6 +186,7 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
       timestamp: 1790000000,
     });
     await waitFor(() => received.length >= 1);
+    outage = 'off';
     return { sessionId: session.id, id, webhookId: webhook.id };
   };
 
@@ -183,6 +208,21 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
     'retries as %s left the message, while its job waits',
     async change => {
       const { sessionId, id } = await failedOnce();
+
+      await changes[change](sessionId, id);
+      receiverStatus = 200;
+      await waitFor(queueIdle);
+
+      expect(received.slice(1)).toEqual(expected[change]);
+    },
+    60000,
+  );
+
+  it.each(Object.keys(changes))(
+    'retries as %s left the message, while its job waits, though no outbox row could be written for it',
+    async change => {
+      const { sessionId, id, webhookId } = await failedOnce('outbox writes');
+      expect(await outbox.countBy({ webhookId })).toBe(0);
 
       await changes[change](sessionId, id);
       receiverStatus = 200;

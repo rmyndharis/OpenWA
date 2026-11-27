@@ -49,7 +49,10 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
   let webhook: Webhook;
   let owns: boolean;
   // 'on': every statement fails; 'writes': the database reads but refuses every write.
-  let outage: 'off' | 'on' | 'writes';
+  // 'outbox writes': the database answers everything but a write of the outbox table.
+  let outage: 'off' | 'on' | 'writes' | 'outbox writes';
+  let retryDelay: number;
+  let retentionHours: number;
 
   beforeEach(async () => {
     jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
@@ -57,6 +60,8 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
     mockFetch.mockReset();
     mockFetch.mockResolvedValue(new Response('ok', { status: 200 }));
     outage = 'off';
+    retryDelay = 50;
+    retentionHours = 0;
     owns = true;
     ds = await new DataSource({
       type: 'better-sqlite3',
@@ -76,7 +81,8 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
       ...args: Parameters<BetterSqlite3QueryRunner['query']>
     ) {
       const write = !/^\s*SELECT/i.test(String(args[0]));
-      if (outage === 'on' || (outage === 'writes' && write)) {
+      const outboxWrite = write && String(args[0]).includes('webhook_outbox_events');
+      if (outage === 'on' || (outage === 'writes' && write) || (outage === 'outbox writes' && outboxWrite)) {
         return Promise.reject(Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' }));
       }
       return realQuery.apply(this, args);
@@ -88,9 +94,9 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
           'webhook.dispatchConcurrency': 8,
           'webhook.dispatchMaxQueued': 100,
           'webhook.timeout': 5000,
-          'webhook.retryDelay': 50,
+          'webhook.retryDelay': retryDelay,
           'webhook.shutdownDrainMs': 1000,
-          'webhook.failurePayloadRetentionHours': 0,
+          'webhook.failurePayloadRetentionHours': retentionHours,
           'webhook.maxPayloadBytes': 1024 * 1024,
           'webhook.mediaInlineMaxBytes': 1024,
         };
@@ -525,6 +531,132 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
 
     expect(posted().filter(post => JSON.stringify(post.data).includes('secret edit'))).toEqual([]);
     expect(posted().map(post => post.event)).not.toContain('message.edited');
+  });
+
+  describe('a delivery whose outbox row could not be written, while its retry waits', () => {
+    const msg = {
+      id: 'U-1',
+      chatId: CHAT,
+      from: CHAT,
+      to: '628222@c.us',
+      fromMe: false,
+      type: 'text',
+      body: 'first text',
+      timestamp: 1_700_000_000,
+    };
+    const waitFor = async (until: () => boolean | Promise<boolean>): Promise<void> => {
+      for (const deadline = Date.now() + 10_000; !(await until());) {
+        if (Date.now() > deadline) throw new Error('Timed out waiting for condition');
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+    };
+    const received = (): Array<Record<string, unknown>> =>
+      posted()
+        .filter(post => post.event === 'message.received')
+        .map(post => post.data);
+    /** The first attempt failed with no outbox row written, and its retry waits: `change` lands, then the retry runs. */
+    const failedOnce = async (change: () => Promise<unknown>): Promise<void> => {
+      retryDelay = 800;
+      await ds.getRepository(Webhook).update(webhook.id, { retryCount: 2 });
+      await ds.getRepository(Message).insert({
+        sessionId,
+        waMessageId: 'U-1',
+        chatId: CHAT,
+        from: CHAT,
+        to: '628222@c.us',
+        body: 'first text',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        timestamp: 1_700_000_000,
+      });
+      outage = 'outbox writes';
+      mockFetch.mockResolvedValueOnce(new Response('down', { status: 500 }));
+      // Not awaited: a dispatch resolves once every attempt, retries included, has run.
+      const dispatched = webhookService.dispatch(sessionId, 'message.received', msg);
+      await waitFor(() => mockFetch.mock.calls.length === 1);
+      await change();
+      await settle();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      await dispatched;
+    };
+    const keptCopy = async (): Promise<Record<string, unknown> | null | undefined> =>
+      (
+        await ds
+          .getRepository(WebhookDeliveryFailure)
+          .createQueryBuilder('f')
+          .addSelect('f.payload')
+          .where('f.event = :event', { event: 'message.received' })
+          .getOne()
+      )?.payload;
+
+    it('sends nothing more once an engine revoke took the message back', async () => {
+      await failedOnce(() =>
+        projector.recordRevoke(sessionId, 'U-1', { kind: 'revoke', chatId: CHAT, fromMe: false }, true),
+      );
+
+      expect(received().map(data => data.body)).toEqual(['first text']);
+    });
+
+    it('sends the placeholder once a delete through the API took it back', async () => {
+      await failedOnce(() => projector.recordRevoke(sessionId, 'U-1', { kind: 'revoke', chatId: CHAT }));
+
+      expect(received().map(data => [data.type, data.body])).toEqual([
+        ['text', 'first text'],
+        ['revoked', ''],
+      ]);
+    });
+
+    it('sends the edited text', async () => {
+      await failedOnce(() =>
+        projector.recordOutboundMessageEdit(sessionId, 'U-1', 'edited text', {
+          kind: 'edit',
+          chatId: CHAT,
+          fromMe: false,
+        }),
+      );
+      expect(received().map(data => data.body)).toEqual(['first text', 'edited text']);
+    });
+
+    it('sends nothing of an edit its webhook filters exclude', async () => {
+      await ds.getRepository(Webhook).update(webhook.id, {
+        filters: { conditions: [{ field: 'body', operator: 'contains', value: 'first' }] },
+      });
+      await failedOnce(() =>
+        projector.recordOutboundMessageEdit(sessionId, 'U-1', 'edited text', {
+          kind: 'edit',
+          chatId: CHAT,
+          fromMe: false,
+        }),
+      );
+
+      expect(received().map(data => data.body)).toEqual(['first text']);
+    });
+
+    it.each([
+      [
+        'the edited text',
+        () =>
+          projector.recordOutboundMessageEdit(sessionId, 'U-1', 'edited text', {
+            kind: 'edit',
+            chatId: CHAT,
+            fromMe: false,
+          }),
+        { body: 'edited text' },
+      ],
+      [
+        'nothing once taken back',
+        () => projector.recordRevoke(sessionId, 'U-1', { kind: 'revoke', chatId: CHAT, fromMe: false }, true),
+        undefined,
+      ],
+    ] as const)('keeps %s on the terminal failure row', async (_label, change, kept) => {
+      retentionHours = 24;
+      mockFetch.mockResolvedValue(new Response('down', { status: 500 }));
+
+      await failedOnce(change);
+
+      if (kept) expect(await keptCopy()).toMatchObject(kept);
+      else expect(await keptCopy()).toBeFalsy();
+    });
   });
 
   describe('a received message whose row the database refused', () => {

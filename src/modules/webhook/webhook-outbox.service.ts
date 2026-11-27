@@ -94,6 +94,18 @@ export function messageEditKeys(sessionId: string, waMessageId: string): string 
   return `${`edit_${sessionId}_${waMessageId}`.replace(/[\\%_]/g, ch => `\\${ch}`)}%`;
 }
 
+/** Deliveries whose outbox rows could not be written that this node keeps a copy of; past it the oldest is let go. */
+const UNWRITTEN_COPIES_MAX = 10_000;
+
+/** What a delivery whose outbox row could not be written holds now, kept in memory for its later steps. */
+interface UnwrittenCopy {
+  sessionId: string;
+  event: string;
+  /** Null once the message was taken back or the webhook's filters no longer take it. */
+  data: Record<string, unknown> | null;
+  engineRef: MessageEngineRef | null;
+}
+
 /** Events that carry a change of a message (an edit), which name it in `messageId` and are withdrawn with it. */
 export const MESSAGE_CHANGE_EVENTS = ['message.edited'];
 
@@ -157,6 +169,9 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
 
   // The delivery key, less its webhook, of each message with a change kept on this node that touches its copies.
   private readonly heldMessages = new Set<string>();
+  // By webhook and key, the deliveries whose outbox rows could not be written: their copy, which a change of the
+  // message reaches as it reaches a row, read by their later attempts (direct or queued) and their failure record.
+  private readonly unwritten = new Map<string, UnwrittenCopy>();
 
   constructor(
     @InjectRepository(WebhookOutboxEvent, 'data')
@@ -628,6 +643,57 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     return candidates.filter(row => row.idempotencyKey === keyFor(row.webhookId));
   }
 
+  /** Keep a copy of deliveries whose outbox rows could not be written, until they settle (see `unwritten`). */
+  holdUnwritten(rows: readonly OutboxOpenRow[]): void {
+    for (const row of rows) {
+      this.unwritten.set(`${row.webhookId}\u0000${row.idempotencyKey}`, {
+        sessionId: row.sessionId,
+        event: row.event,
+        data: row.payload,
+        engineRef: row.engineRef ?? null,
+      });
+    }
+    for (const key of this.unwritten.keys()) {
+      if (this.unwritten.size <= UNWRITTEN_COPIES_MAX) break;
+      this.unwritten.delete(key);
+    }
+  }
+
+  /** The copy a delivery whose outbox row could not be written holds now: undefined when none is kept for it. */
+  unwrittenCopy(webhookId: string, idempotencyKey: string): Record<string, unknown> | null | undefined {
+    return this.unwritten.get(`${webhookId}\u0000${idempotencyKey}`)?.data;
+  }
+
+  forgetUnwritten(webhookId: string, idempotencyKey: string): void {
+    this.unwritten.delete(`${webhookId}\u0000${idempotencyKey}`);
+  }
+
+  /**
+   * A change of a message reaches the copies kept for its deliveries whose outbox rows could not be written, as it
+   * reaches their rows: a close withdraws them, a redaction leaves the placeholder, a rewrite the edited text unless the
+   * webhook's filters no longer take it (filters that cannot be read leave the edit). Edit events go with the message.
+   */
+  async changeUnwrittenForMessage(
+    sessionId: string,
+    waMessageId: string,
+    change: MessageCopyChange,
+    shouldApply?: MessageCopyPredicate,
+    passes?: MessageCopyFilter,
+  ): Promise<void> {
+    for (const [key, copy] of this.unwritten) {
+      if (copy.sessionId !== sessionId || !copy.data) continue;
+      const edit = MESSAGE_CHANGE_EVENTS.includes(copy.event) && copy.data.messageId === waMessageId;
+      const message = MESSAGE_DELIVERY_EVENTS.includes(copy.event) && copy.data.id === waMessageId;
+      if (!(message || (edit && change.kind !== 'rewrite'))) continue;
+      if (shouldApply && !(await shouldApply(copy.data, copy.engineRef))) continue;
+      const data = edit ? null : changedMessagePayload(copy.data, change);
+      const webhookId = key.slice(0, key.indexOf('\u0000'));
+      const taken =
+        !data || !passes || (await Promise.resolve(passes({ webhookId, event: copy.event }, data)).catch(() => true));
+      copy.data = taken ? data : null;
+    }
+  }
+
   /**
    * The event data the outbox row of a message delivery holds now: null once the row was closed (dispatched or failed:
    * the message was taken back, or the delivery settled elsewhere), undefined when the row says nothing either way
@@ -640,6 +706,9 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     idempotencyKey: string,
     event: string,
   ): Promise<Record<string, unknown> | null | undefined> {
+    // A delivery whose row could not be written: its copy, as the changes of the message left it.
+    const copy = this.unwritten.get(`${webhookId}\u0000${idempotencyKey}`);
+    if (copy && copy.event === event) return copy.data;
     if (!MESSAGE_DELIVERY_EVENTS.includes(event)) return undefined;
     let row: Pick<WebhookOutboxEvent, 'event' | 'state' | 'payload'> | null;
     try {
@@ -662,6 +731,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     idempotencyKey: string,
     state: Exclude<WebhookOutboxState, 'pending' | 'queued'>,
   ): Promise<void> {
+    this.forgetUnwritten(webhookId, idempotencyKey);
     try {
       await this.outbox.update({ webhookId, idempotencyKey }, { state, payload: null, lastAttemptAt: new Date() });
     } catch (error) {

@@ -648,7 +648,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       // A row this dispatch did not write holds whatever its writer put there: a check before a send cannot read a
       // change from it, only that it was closed.
       for (const item of prepared) if (!opened.includes(item)) item.storedHash = null;
-      return inserted === null ? null : opened;
+      // No row could be written: the deliveries keep their copy in memory, which a change of the message still reaches.
+      if (inserted === null) {
+        this.outbox.holdUnwritten(rows);
+        for (const item of prepared) item.storedHash = undefined;
+        return null;
+      }
+      return opened;
     }
     if (manager) {
       throw new Error('WebhookOutboxService.openBatch is required for transactional outbox writes');
@@ -835,10 +841,12 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     if (!waMessageId) return;
-    // First the events kept from a database that refused them, which need none of it.
-    await this.changeKeptDispatches(sessionId, waMessageId, change, shouldApply);
     // A rewrite (an edit) can change what a webhook's filters read: a copy they no longer take is closed or dropped.
     const passes = change.kind === 'rewrite' ? this.webhookStillTakes() : undefined;
+    // First what is held in memory: the events kept from a database that refused them, and the copies of deliveries
+    // whose outbox rows could not be written. Neither needs the database to change.
+    await this.changeKeptDispatches(sessionId, waMessageId, change, shouldApply);
+    await this.outbox.changeUnwrittenForMessage(sessionId, waMessageId, change, shouldApply, passes);
     await this.outbox.changeOpenForMessage(sessionId, waMessageId, change, shouldApply, passes);
     const { pattern, keyFor } = messageDeliveryKeys(sessionId, waMessageId);
     const rows = await this.failureRepository
@@ -966,8 +974,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     // its failure either is kept for its webhook, under the same key, until the database answers.
     if (opened === null && kept) {
       for (const item of prepared) {
-        item.onUnrecorded = () =>
-          this.keepDispatch(sessionId, event, item.baseData, item.webhook.id, engineRef ?? null, occurrenceId);
+        item.onUnrecorded = () => {
+          // As a change of the message left it; nothing once it was taken back.
+          const copy = this.outbox.unwrittenCopy(item.webhook.id, item.idempotencyKey);
+          this.outbox.forgetUnwritten(item.webhook.id, item.idempotencyKey);
+          if (copy === null) return;
+          this.keepDispatch(sessionId, event, copy ?? item.baseData, item.webhook.id, engineRef ?? null, occurrenceId);
+        };
       }
     }
     await this.dispatchPrepared(prepared);
