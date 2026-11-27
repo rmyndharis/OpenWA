@@ -13,7 +13,7 @@ import type { ApiKey } from './entities/api-key.entity';
  * blocking `messages:send` on an ADMIN key only removes the send routes.
  */
 export enum ApiKeyCapability {
-  /** Read stored messages: history, chat history, reactions, receipts, media downloads, batch status. */
+  /** Read stored messages: history, chat history, reactions, receipts, media downloads, batch status, and forwarding one. */
   MESSAGES_READ = 'messages:read',
   /** Send messages: text, media, template, location, contact, sticker, poll, reply, forward, react, bulk, product, typing, presence. */
   MESSAGES_SEND = 'messages:send',

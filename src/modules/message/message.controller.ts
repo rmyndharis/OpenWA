@@ -551,7 +551,7 @@ export class MessageController {
   }
 
   @ChatScoped('fenced')
-  @Capability(ApiKeyCapability.MESSAGES_SEND)
+  @Capability(ApiKeyCapability.MESSAGES_SEND, ApiKeyCapability.MESSAGES_READ)
   @Post('forward')
   @IdempotentSend()
   @RequireRole(ApiKeyRole.OPERATOR)

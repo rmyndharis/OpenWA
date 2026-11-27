@@ -145,7 +145,8 @@ dashboard browser-session endpoints) bypass that classification.
 | Integrations | `integrations:manage`                                                                                          | Integration instances and redrive                                                                                                                                                                         |
 | API keys     | `apikeys:manage`                                                                                               | Key lifecycle (create/list/get/update/revoke/delete)                                                                                                                                                      |
 
-A route that touches more than one surface lists every capability, and blocking **any** of them
+A route that touches more than one surface lists every capability (forwarding needs `messages:send`
+and `messages:read`, since it hands a stored message to another chat), and blocking **any** of them
 refuses it — the safe direction, since the operator blocked a capability for the data it reaches.
 The role is still checked first: blocking nothing cannot lift a `viewer` key above its role, and
 blocking `messages:send` on an `admin` key only removes the send routes.
