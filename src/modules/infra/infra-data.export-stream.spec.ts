@@ -13,6 +13,8 @@ import type { INestApplication } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { InfraDataController } from './infra-data.controller';
 import { InfraDataService, type InfraExportDataResult } from './infra-data.service';
+import { BaileysMessageStoreService } from '../../engine/adapters/baileys-message-store.service';
+import { ChatStateStoreService } from '../../engine/adapters/baileys-chat-state-store.service';
 import { EXPORT_TABLES } from './export-tables';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { Session, SessionStatus } from '../session/entities/session.entity';
@@ -479,6 +481,42 @@ describe('GET /infra/export-data over HTTP', () => {
     },
     CLIENT_PROCESS_TIMEOUT_MS,
   );
+
+  it('leaves out the stored messages and chat states an unlinked account left while its clear is kept', async () => {
+    await seedSession('s1');
+    const unlinkedAt = new Date('2026-11-28T00:00:00.000Z');
+    const before = new Date(unlinkedAt.getTime() - 60_000);
+    const after = new Date(unlinkedAt.getTime() + 60_000);
+    const stored = ds.getRepository(BaileysStoredMessage);
+    await stored.insert({ sessionId: 's1', waMessageId: 'OLD', serializedMessage: '{}', createdAt: before });
+    await stored.insert({ sessionId: 's1', waMessageId: 'NEW', serializedMessage: '{}', createdAt: after });
+    const states = ds.getRepository(ChatState);
+    await states.insert({ sessionId: 's1', chatId: 'old@c.us', pinned: true, updatedAt: before });
+    await states.insert({ sessionId: 's1', chatId: 'new@c.us', pinned: true, updatedAt: after });
+    const messageStore = new BaileysMessageStoreService(stored);
+    const chatStates = new ChatStateStoreService(states);
+    messageStore.hideUpTo('s1', unlinkedAt);
+    chatStates.hideUpTo('s1', unlinkedAt);
+    const fenced = new InfraDataService(
+      cfg as never,
+      ds,
+      auditLog as never,
+      undefined,
+      undefined,
+      undefined,
+      chatStates,
+      undefined,
+      undefined,
+      messageStore,
+    );
+
+    let document = '';
+    for await (const piece of fenced.exportData()) document += piece;
+
+    const { tables } = JSON.parse(document) as InfraExportDataResult;
+    expect(tables.baileysStoredMessages.map(row => row.waMessageId)).toEqual(['NEW']);
+    expect(tables.chatStates?.map(row => row.chatId)).toEqual(['new@c.us']);
+  });
 
   it('hands the document on in pieces of bounded size, never as one string', async () => {
     await seedSession('s1');

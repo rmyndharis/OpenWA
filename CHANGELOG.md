@@ -88,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Baileys: never give up a kept clear of an unlinked account for a full lane; a burst of received messages in the same outage dropped it.
 - Baileys: run a kept clear of an unlinked account once the database answers, with no engine on the node; it waited for the session's engine, which may never run there again.
 - Baileys: hide an unlinked account's stored rows from the start after a restart while its kept clear waits; they were readable until it ran.
+- Backups: leave out the stored messages and chat states an unlinked account left while its kept clear waits; a restore handed them to the next account.
 - Statuses: give up a kept status with its media first once the recovery byte budget is spent; a burst of them pushed out kept messages and changes.
 - Baileys: keep the removal of a stored copy a conflicting delivery left, refused by the database, and run it once it answers; the copy judged the real message's changes.
 - Statuses: keep a received status, or its poster's delete, the database refused and apply it once it answers; the status was never stored, or a deleted one stayed listed until it expired.

@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { ChatStateStoreService, mergeTwinStates } from './baileys-chat-state-store.service';
 import { ChatState } from './baileys-chat-state.entity';
 import { BaileysSessionStore } from './baileys-session-store';
@@ -995,5 +995,44 @@ describe('ChatStateStoreService', () => {
       releaseWrite();
       await activeWrite;
     });
+  });
+});
+
+// A backup reads the table raw: SQLite hands back the UTC text it stores, with no zone in it. Read in the host's zone, a
+// stamp moves by the zone's offset, which a host in UTC cannot see, so the stamp is also held to the ORM's reading.
+describe('ChatStateStoreService rows read raw while an unlinked account is hidden', () => {
+  let db: DataSource;
+
+  beforeEach(async () => {
+    db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [ChatState], synchronize: true });
+    await db.initialize();
+  });
+
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await db.destroy();
+  });
+
+  it('hides a raw row up to the unlink, its stamp read as the ORM reads its own rows', async () => {
+    const repo = db.getRepository(ChatState);
+    const unlinkedAt = new Date('2026-11-28T00:00:00.000Z');
+    for (const [chatId, offset] of [
+      ['old@c.us', -60_000],
+      ['new@c.us', 60_000],
+    ] as const) {
+      await repo.insert({ sessionId: 's', chatId, pinned: true, updatedAt: new Date(unlinkedAt.getTime() + offset) });
+    }
+    const states = new ChatStateStoreService(repo);
+    states.hideUpTo('s', unlinkedAt);
+    const raw = await db.query<Array<Record<string, unknown>>>('SELECT * FROM "chat_states" ORDER BY "chatId"');
+    const hydrate = jest.spyOn(db.driver, 'prepareHydratedValue');
+
+    expect(raw.map(row => [row.chatId, states.hidesRaw(row)])).toEqual([
+      ['new@c.us', false],
+      ['old@c.us', true],
+    ]);
+    expect(hydrate.mock.calls.map(([value, column]) => [value as unknown, column.propertyName])).toEqual(
+      raw.map(row => [row.updatedAt, 'updatedAt']),
+    );
   });
 });

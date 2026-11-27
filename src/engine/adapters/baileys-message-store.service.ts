@@ -240,6 +240,20 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
     if (!hidden || hidden < upTo) this.clearedUpTo.set(sessionId, upTo);
   }
 
+  /**
+   * Whether a row read raw from the table (a backup) is one an unlinked account left, hidden until its kept clear lands.
+   * Its stamp is read as the ORM reads it for an entity, so it compares as the reads of this store do.
+   */
+  hidesRaw(row: { sessionId?: unknown; createdAt?: unknown }): boolean {
+    const hidden = typeof row.sessionId === 'string' ? this.clearedUpTo.get(row.sessionId) : undefined;
+    if (!hidden) return false;
+    const column = this.repo.metadata.findColumnWithPropertyName('createdAt');
+    const stamp: unknown = column
+      ? this.repo.manager.connection.driver.prepareHydratedValue(row.createdAt, column)
+      : row.createdAt;
+    return new Date(stamp as string | number | Date).getTime() <= hidden.getTime();
+  }
+
   // Up to when an unlinked account's rows read as absent, by session, until clearSession deletes them.
   private readonly clearedUpTo = new Map<string, Date>();
 

@@ -28,6 +28,7 @@ import { AuditAction } from '../audit/entities/audit-log.entity';
 import { SessionService } from '../session/session.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { ChatStateStoreService } from '../../engine/adapters/baileys-chat-state-store.service';
+import { BaileysMessageStoreService } from '../../engine/adapters/baileys-message-store.service';
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { ScopeBindingService } from '../integration/scope-binding.service';
 import { AutomationRulesService } from '../automation/automation-rules.service';
@@ -479,6 +480,9 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
     // Stops a restore between chunks once teardown has begun.
     @Optional()
     private readonly shutdown?: ShutdownService,
+    // Same convention: what an unlinked account left while its kept clear waits is hidden from a backup as from reads.
+    @Optional()
+    private readonly baileysMessageStore?: BaileysMessageStoreService,
   ) {}
 
   /** An export that died with its process may have left a copy of the database beside it. */
@@ -739,7 +743,7 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
         signal?.throwIfAborted();
         entry.afterRead?.(rows as never[], exportContext);
         const restorable = entry.sessionFk ? await this.rowsOfArchivedSessions(snapshot, rows) : rows;
-        for (const row of restorable) {
+        for (const row of this.withoutUnlinkedRows(entry, restorable)) {
           unsent += `${summary.counts[entry.key]++ === 0 ? '' : ','}${JSON.stringify(row)}`;
           if (unsent.length >= EXPORT_WRITE_CHUNK_CHARS) {
             summary.started = true;
@@ -751,6 +755,20 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
       unsent += ']';
     }
     return unsent;
+  }
+
+  /**
+   * The rows an unlinked account left in the Baileys stores while its kept clear waits are hidden from every read, and
+   * from a backup too: restored, they would hand that account's messages and chat flags to the next one.
+   */
+  private withoutUnlinkedRows<R>(entry: AnyExportTable, rows: R[]): R[] {
+    const store =
+      entry.table === 'baileys_stored_messages'
+        ? this.baileysMessageStore
+        : entry.table === 'chat_states'
+          ? this.chatStateStore
+          : undefined;
+    return store ? rows.filter(row => !store.hidesRaw(row as Record<string, unknown>)) : rows;
   }
 
   /**

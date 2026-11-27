@@ -530,6 +530,37 @@ describe('BaileysMessageStoreService', () => {
     expect(await repo.count({ where: { sessionId: 's1' } })).toBe(0);
   });
 
+  // A backup reads the table raw: SQLite hands back the UTC text it stores, with no zone in it. Read in the host's zone,
+  // a stamp moves by the zone's offset, which a host in UTC cannot see, so the stamp is also held to the ORM's reading.
+  it('hides a raw row up to the unlink, its stamp read as the ORM reads its own rows', async () => {
+    await seedSession('s1');
+    const unlinkedAt = new Date('2026-11-28T00:00:00.000Z');
+    for (const [id, offset] of [
+      ['OLD', -60_000],
+      ['NEW', 60_000],
+    ] as const) {
+      await repo.insert({
+        sessionId: 's1',
+        waMessageId: id,
+        serializedMessage: '{}',
+        createdAt: new Date(unlinkedAt.getTime() + offset),
+      });
+    }
+    service.hideUpTo('s1', unlinkedAt);
+    const raw = await ds.query<Array<Record<string, unknown>>>(
+      'SELECT * FROM "baileys_stored_messages" ORDER BY "waMessageId"',
+    );
+    const hydrate = jest.spyOn(ds.driver, 'prepareHydratedValue');
+
+    expect(raw.map(row => [row.waMessageId, service.hidesRaw(row)])).toEqual([
+      ['NEW', false],
+      ['OLD', true],
+    ]);
+    expect(hydrate.mock.calls.map(([value, column]) => [value as unknown, column.propertyName])).toEqual(
+      raw.map(row => [row.createdAt, 'createdAt']),
+    );
+  });
+
   it('clearSession lifts the hiding once it lands, whatever Date it is handed', async () => {
     await seedSession('s1');
     service.hideUpTo('s1', new Date(2_000));
