@@ -149,6 +149,41 @@ describe('RecoveryQueue', () => {
     expect(queue.get('change', 'new')).toBeDefined();
   });
 
+  it('keeps the place of a record kept again under its key, and gives up on the first kept when its lane is full', () => {
+    const queue = new RecoveryQueue(options());
+    const [a, b, c] = ['a', 'b', 'c'].map(name => record(name));
+    queue.park('a', a);
+    queue.park('b', b);
+    queue.park('c', c);
+    queue.park('a', a);
+    queue.park('d', record('d'));
+    queue.park('e', record('e'));
+
+    expect(log).toEqual(['lost a count', 'lost b count']);
+    expect(queue.get('change', 'c')).toBe(c);
+  });
+
+  it('counts a record against the byte budget as it was last measured', async () => {
+    const queue = new RecoveryQueue(options());
+    let size = 600;
+    const shrinking = record('shrinking', 'change', { bytes: 0, retry: () => ((size = 100), Promise.resolve(false)) });
+    shrinking.bytes = () => size;
+    queue.park('shrinking', shrinking);
+    // A try that wrote part of it leaves it smaller.
+    await queue.flush();
+    queue.park('b', record('b', 'dispatch', { bytes: 600 }));
+    expect(log).toEqual([]);
+
+    // Grown again (another change kept in it), and measured again.
+    size = 500;
+    queue.remeasure('change', 'shrinking');
+
+    expect(log).toEqual(['lost shrinking bytes']);
+    expect(queue.size).toBe(1);
+    queue.park('c', record('c', 'send', { bytes: 300 }));
+    expect(log).toEqual(['lost shrinking bytes']);
+  });
+
   it('gives up on a record past its age cap, and keeps one the cap does not apply to', async () => {
     const queue = new RecoveryQueue(options());
     const aged = record('aged', 'change', { retry: () => Promise.resolve(false) });

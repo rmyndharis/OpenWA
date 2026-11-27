@@ -69,7 +69,16 @@ export function isDatabaseUnavailable(error: unknown): boolean {
  * never take cannot hold back the others.
  */
 export class RecoveryQueue {
-  private readonly records = new Map<string, RecoveryRecord>();
+  // Per lane, in the order the records were first kept: one kept again under its key keeps its place, so the first is
+  // always the oldest, and a bound gives it up without sorting.
+  private readonly lanes: Record<RecoveryLane, Map<string, RecoveryRecord>> = {
+    send: new Map(),
+    change: new Map(),
+    dispatch: new Map(),
+  };
+  // What each record counted against the byte budget when it was last measured, and their sum.
+  private readonly sizes = new Map<RecoveryRecord, number>();
+  private bytes = 0;
   private readonly failures = new Map<RecoveryRecord, number>();
   private readonly now: () => number;
   private timer?: ReturnType<typeof setTimeout>;
@@ -84,11 +93,11 @@ export class RecoveryQueue {
   }
 
   get size(): number {
-    return this.records.size;
+    return LANES.reduce((size, lane) => size + this.lanes[lane].size, 0);
   }
 
   get(lane: RecoveryLane, key: string): RecoveryRecord | undefined {
-    return this.records.get(`${lane}:${key}`);
+    return this.lanes[lane].get(key);
   }
 
   /** Keep a record (one already kept under the key keeps its place), then hold every bound. */
@@ -97,20 +106,32 @@ export class RecoveryQueue {
       record.lost('shutdown');
       return;
     }
-    this.records.set(`${record.lane}:${key}`, record);
+    const lane = this.lanes[record.lane];
+    const was = lane.get(key);
+    if (was && was !== record) this.forgetSize(was);
+    lane.set(key, record);
+    this.measure(record);
     this.bound(record.lane);
     this.schedule();
   }
 
+  /** Count a kept record against the byte budget again, once what it holds changed. */
+  remeasure(lane: RecoveryLane, key: string): void {
+    const record = this.lanes[lane].get(key);
+    if (!record) return;
+    this.measure(record);
+    this.bound(lane);
+  }
+
   /** The record needs nothing more, settled by a later change. */
   settle(lane: RecoveryLane, key: string): void {
-    const record = this.records.get(`${lane}:${key}`);
-    if (record) this.release(`${lane}:${key}`, record);
+    const record = this.lanes[lane].get(key);
+    if (record) this.release(key, record);
   }
 
   /** Drop a removed session's records: nothing they hold can apply any more. */
   forget(sessionId: string): void {
-    for (const [key, record] of [...this.records]) if (record.sessionId === sessionId) this.release(key, record);
+    for (const [key, record] of this.entries()) if (record.sessionId === sessionId) this.release(key, record);
   }
 
   /**
@@ -121,7 +142,7 @@ export class RecoveryQueue {
     this.stopped = true;
     clearTimeout(this.timer);
     this.timer = undefined;
-    if (this.records.size) {
+    if (this.size) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         (this.running ?? Promise.resolve()).then(() => this.pass(true)),
@@ -132,7 +153,7 @@ export class RecoveryQueue {
       ]);
       clearTimeout(timer);
     }
-    for (const [key, record] of [...this.records]) {
+    for (const [key, record] of this.entries()) {
       this.drop(key, record);
       record.lost('shutdown');
     }
@@ -152,8 +173,17 @@ export class RecoveryQueue {
     await this.running;
   }
 
+  /** Every record, lanes in order and the oldest first. */
+  private entries(): Array<[string, RecoveryRecord]> {
+    return LANES.flatMap(lane => [...this.lanes[lane]]);
+  }
+
+  private kept(key: string, record: RecoveryRecord): boolean {
+    return this.lanes[record.lane].get(key) === record;
+  }
+
   private schedule(): void {
-    if (this.stopped || this.timer || this.running || this.records.size === 0) return;
+    if (this.stopped || this.timer || this.running || this.size === 0) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
       void this.flush();
@@ -163,16 +193,14 @@ export class RecoveryQueue {
 
   private async pass(final: boolean): Promise<void> {
     this.evictAged();
-    const ordered = (): Array<[string, RecoveryRecord]> =>
-      LANES.flatMap(lane => [...this.records].filter(([, r]) => r.lane === lane));
     try {
       if (this.failing && !final) {
-        const [first] = ordered();
+        const [first] = this.entries();
         if (first && (await this.step(first, true))) this.recovered();
         else return;
       }
-      for (const entry of ordered()) if (entry[1].prepare && this.records.has(entry[0])) await this.step(entry, false);
-      for (const entry of ordered()) if (this.records.has(entry[0])) await this.step(entry, true);
+      for (const entry of this.entries()) if (entry[1].prepare && this.kept(...entry)) await this.step(entry, false);
+      for (const entry of this.entries()) if (this.kept(...entry)) await this.step(entry, true);
       this.recovered();
     } catch {
       // Only a database failure leaves step(): the rest of the pass would fail the same way.
@@ -188,14 +216,19 @@ export class RecoveryQueue {
         await record.prepare?.();
         return false;
       }
-      if (!(await record.retry())) return false;
+      const settled = await record.retry();
+      if (!settled) {
+        // A try that wrote part of what the record holds leaves it smaller.
+        if (this.kept(key, record)) this.measure(record);
+        return false;
+      }
       this.release(key, record);
       return true;
     } catch (error) {
       if (isDatabaseUnavailable(error)) throw error;
       const failures = (this.failures.get(record) ?? 0) + 1;
       this.failures.set(record, failures);
-      if (failures >= RECOVERY_MAX_RECORD_FAILURES && this.records.get(key) === record) {
+      if (failures >= RECOVERY_MAX_RECORD_FAILURES && this.kept(key, record)) {
         this.drop(key, record);
         record.lost('failures');
       }
@@ -208,40 +241,54 @@ export class RecoveryQueue {
     this.delayMs = this.options.baseDelayMs;
   }
 
-  private drop(key: string, record: RecoveryRecord): void {
-    if (this.records.get(key) === record) this.records.delete(key);
+  private measure(record: RecoveryRecord): void {
+    const size = record.bytes();
+    this.bytes += size - (this.sizes.get(record) ?? 0);
+    this.sizes.set(record, size);
+  }
+
+  private forgetSize(record: RecoveryRecord): void {
+    this.bytes -= this.sizes.get(record) ?? 0;
+    this.sizes.delete(record);
     this.failures.delete(record);
+  }
+
+  private drop(key: string, record: RecoveryRecord): void {
+    if (!this.kept(key, record)) return;
+    this.lanes[record.lane].delete(key);
+    this.forgetSize(record);
   }
 
   /** Remove a record with nothing lost. */
   private release(key: string, record: RecoveryRecord): void {
-    if (this.records.get(key) !== record) return;
+    if (!this.kept(key, record)) return;
     this.drop(key, record);
     record.dropped?.();
   }
 
-  /** Hold the lane's count cap and the shared byte budget, giving up on the oldest first. */
+  /** Hold the lane's count cap and the shared byte budget, giving up on the oldest first: the first of a lane. */
   private bound(lane: RecoveryLane): void {
-    const inLane = [...this.records].filter(([, r]) => r.lane === lane);
-    for (let excess = inLane.length - this.options.maxRecords[lane], i = 0; excess > 0; excess--, i++) {
-      const [key, record] = inLane[i];
+    const inLane = this.lanes[lane];
+    while (inLane.size > this.options.maxRecords[lane]) {
+      const [key, record] = inLane.entries().next().value!;
       this.drop(key, record);
       record.lost('count');
     }
-    let bytes = 0;
-    for (const record of this.records.values()) bytes += record.bytes();
-    const oldest = [...this.records].sort(([, a], [, b]) => a.since - b.since);
-    for (const [key, record] of oldest) {
-      if (bytes <= this.options.maxBytes) break;
-      bytes -= record.bytes();
-      this.drop(key, record);
-      record.lost('bytes');
+    while (this.bytes > this.options.maxBytes) {
+      let oldest: [string, RecoveryRecord] | undefined;
+      for (const each of LANES) {
+        const first = this.lanes[each].entries().next().value;
+        if (first && (!oldest || first[1].since < oldest[1].since)) oldest = first;
+      }
+      if (!oldest) break;
+      this.drop(...oldest);
+      oldest[1].lost('bytes');
     }
   }
 
   private evictAged(): void {
     const now = this.now();
-    for (const [key, record] of [...this.records]) {
+    for (const [key, record] of this.entries()) {
       if (record.ageCapped() && now - record.since > this.options.maxAgeMs[record.lane]) {
         this.drop(key, record);
         record.lost('age');

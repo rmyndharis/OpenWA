@@ -686,7 +686,10 @@ export class MessageProjector {
       else if (kind === 'acks') delete record.slots.acks;
       else record.slots.reactions?.clear();
       if (record.empty()) this.recovery.settle('change', record.key);
-      else record.measure();
+      else {
+        record.measure();
+        this.recovery.remeasure('change', record.key);
+      }
     }
   }
 
@@ -713,7 +716,10 @@ export class MessageProjector {
         }
       }
       if (record.empty()) this.recovery.settle('change', record.key);
-      else record.measure();
+      else {
+        record.measure();
+        this.recovery.remeasure('change', record.key);
+      }
     }
     this.holdCopies(sessionId, waMessageId);
   }
