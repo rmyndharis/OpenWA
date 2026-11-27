@@ -605,6 +605,79 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       }
     });
 
+    describe('a revoke kept beside content', () => {
+      const later = async (ms: number, run: () => Promise<void>): Promise<void> => {
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'], now: Date.now() });
+        try {
+          await run();
+          jest.setSystemTime(Date.now() + ms);
+          await recover();
+        } finally {
+          jest.useRealTimers();
+        }
+      };
+
+      it('outlives the content age cap when it follows an edit of the message', async () => {
+        await storeRow('A-3');
+        await later(PARKED_CHANGE_MAX_AGE_MS + 1, async () => {
+          outage = 'on';
+          changes['an edit']('A-3');
+          await settle();
+          changes['an engine revoke']('A-3');
+          await settle();
+        });
+
+        expect(await rowOf('A-3')).toMatchObject({ type: 'revoked', body: '' });
+        const swept = await sweptBodies();
+        expect(swept).not.toContain('first text');
+        expect(swept).not.toContain('edited text');
+      });
+
+      it('outlives the content age cap beside an edit of another chat, which alone is lost', async () => {
+        await storeRow('A-4');
+        await later(PARKED_CHANGE_MAX_AGE_MS + 1, async () => {
+          outage = 'on';
+          projector.applyMessageEditQueued(sessionId, {
+            messageId: 'A-4',
+            chatId: OTHER_CHAT,
+            body: 'forged',
+            fromMe: false,
+          } as never);
+          await settle();
+          changes['an engine revoke']('A-4');
+          await settle();
+        });
+
+        expect(await rowOf('A-4')).toMatchObject({ type: 'revoked', body: '' });
+        expect(changesLost()).toEqual([expect.objectContaining({ messageId: 'A-4', slots: ['edit'], reason: 'age' })]);
+      });
+
+      it('outlives the byte budget when it follows an edit of the message', async () => {
+        await storeRow('A-5');
+        outage = 'on';
+        projector.applyMessageEditQueued(sessionId, {
+          messageId: 'A-5',
+          chatId: CHAT,
+          body: 'x'.repeat(1024 * 1024),
+          fromMe: false,
+        } as never);
+        await settle();
+        changes['an engine revoke']('A-5');
+        await settle();
+        const big = 'y'.repeat(1024 * 1024);
+        for (let i = 0; i < 66; i++) {
+          await (
+            projector as unknown as { webhookService: { dispatch: (...a: unknown[]) => Promise<void> } }
+          ).webhookService.dispatch(sessionId, 'group.update', { sessionId, i, big });
+        }
+
+        await recover();
+
+        expect(await rowOf('A-5')).toMatchObject({ type: 'revoked', body: '' });
+        expect(changesLost().filter(meta => (meta as { messageId?: string }).messageId === 'A-5')).toEqual([]);
+      });
+    });
+
     it("closes the delivery of a kept edit whose text its webhook's filters no longer take", async () => {
       await ds.getRepository(Webhook).update(webhookId, {
         filters: { conditions: [{ field: 'body', operator: 'contains', value: 'first' }] },

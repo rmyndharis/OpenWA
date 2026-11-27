@@ -580,7 +580,13 @@ export class MessageProjector {
     const records = this.parkedFor.get(key) ?? [];
     this.parkedFor.set(key, records);
     const touched = new Set<ParkedChange>();
-    /** The record a change of a kind goes to: one whose kept change agrees with it, else one without that kind. */
+    // A revoke never shares a record with content: the bounds may then give up the content, never the revoke.
+    const content = (record: ParkedChange): boolean =>
+      Boolean(record.slots.edit || record.slots.reactions?.size || record.slots.acks);
+    /**
+     * The record a change of a kind goes to: one whose kept change agrees with it, else one without that kind that a
+     * revoke and content do not then share.
+     */
     const recordFor = async (
       keptOf: (record: ParkedChange) => MutationSource | false | undefined,
       by: MutationSource | undefined,
@@ -591,7 +597,9 @@ export class MessageProjector {
         if (kept !== false && (await this.claimsAgree(kept, by))) return { record, agrees: true };
       }
       this.boundVariants(records, keptOf, kind);
-      const free = records.find(record => keptOf(record) === false);
+      const free = records.find(
+        record => keptOf(record) === false && (kind === 'revoke' ? !content(record) : !record.slots.revoke),
+      );
       if (free) return { record: free, agrees: false };
       const record = new ParkedChange(
         sessionId,
@@ -606,8 +614,10 @@ export class MessageProjector {
     };
     if (slots.revoke) {
       const by = slots.revoke.judge ?? slots.revoke.source;
+      // What it supersedes goes now, as for a revoke that lands: an edit or a reaction whose claim agrees with it.
+      await this.supersedeKept(records, { revoke: slots.revoke });
       const { record, agrees } = await recordFor(
-        r => r.slots.revoke && (r.slots.revoke.judge ?? r.slots.revoke.source),
+        r => (r.slots.revoke ? (r.slots.revoke.judge ?? r.slots.revoke.source) : false),
         by,
         'revoke',
       );
@@ -615,12 +625,20 @@ export class MessageProjector {
       if (!agrees || !kept || (slots.revoke.announced && !kept.announced)) record.slots.revoke = slots.revoke;
       touched.add(record);
     }
-    if (slots.edit) {
+    // A revoke kept whose claim agrees with an edit or a reaction wins over it: such a change is not kept beside it.
+    const revoked = async (by: MutationSource | undefined): Promise<boolean> => {
+      for (const { slots: kept } of records) {
+        if (kept.revoke && (await this.claimsAgree(kept.revoke.judge ?? kept.revoke.source, by))) return true;
+      }
+      return false;
+    };
+    if (slots.edit && !(await revoked(slots.edit.judge))) {
       const { record } = await recordFor(r => Boolean(r.slots.edit) && r.slots.edit!.judge, slots.edit.judge, 'edit');
       record.slots.edit = slots.edit;
       touched.add(record);
     }
     for (const [sender, reaction] of slots.reactions ?? []) {
+      if (await revoked(reaction.judge)) continue;
       const { record } = await recordFor(
         r => r.slots.reactions?.has(sender) === true && r.slots.reactions.get(sender)!.judge,
         reaction.judge,
@@ -701,6 +719,12 @@ export class MessageProjector {
   private async settleParked(sessionId: string, waMessageId: string, landed: ChangeSlots): Promise<void> {
     const records = this.parkedFor.get(`${sessionId}:${waMessageId}`);
     if (!records?.length) return;
+    await this.supersedeKept(records, landed);
+    this.holdCopies(sessionId, waMessageId);
+  }
+
+  /** Let go of what `landed` supersedes in `records` (see settleParked); a record left empty leaves the queue. */
+  private async supersedeKept(records: ParkedChange[], landed: ChangeSlots): Promise<void> {
     const by = landed.revoke?.judge ?? landed.revoke?.source ?? landed.edit?.judge;
     for (const record of [...records]) {
       const kept = record.slots;
@@ -721,7 +745,6 @@ export class MessageProjector {
         this.recovery.remeasure('change', record.key);
       }
     }
-    this.holdCopies(sessionId, waMessageId);
   }
 
   /**
