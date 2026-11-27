@@ -562,6 +562,28 @@ describe('What the database refused, across a restart', () => {
     expect(node.projector.isStoredCopyKept(sessionId, 'J-1')).toBe(false);
   });
 
+  it('applies a delete of a stored copy the store refused before a crash, after the copy it waits for', async () => {
+    outage = 'on';
+    node.projector.keepStoredCopy(sessionId, { messageId: 'J-1', raw: 'copy' });
+    node.projector.keepStoredChange(sessionId, { messageId: 'J-1', changeId: 'RV-1', raw: 'blank', blank: true });
+    await settle();
+
+    await crash();
+    node = boot({ engine: false });
+    expect(node.projector.isChangeKept(sessionId, 'J-1')).toBe(true);
+    await recover();
+    const calls: string[] = [];
+    node.engines.set(sessionId, {
+      redeliverInbound: jest.fn(),
+      restoreStoredCopy: jest.fn((raw: string) => Promise.resolve(calls.push(`copy ${raw}`) > 0)),
+      restoreStoredChange: jest.fn((raw: string) => Promise.resolve(calls.push(`change ${raw}`) > 0)),
+    } as unknown as IWhatsAppEngine);
+    await recover();
+    await recover();
+
+    expect(calls).toEqual(['copy copy', 'change blank']);
+  });
+
   it('lets go of what it cannot read back as a record, and of copies whose queued job will never run here', async () => {
     node.journal.close();
     appendFileSync(

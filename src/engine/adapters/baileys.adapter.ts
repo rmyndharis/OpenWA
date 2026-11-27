@@ -6,7 +6,7 @@ import type { GroupMetadata, WASocket } from '@whiskeysockets/baileys';
 import { BaileysChannels } from './baileys-channels';
 import { BaileysCatalog } from './baileys-catalog';
 import { BaileysContacts } from './baileys-contacts';
-import { BaileysEvents, keptInboundRaw, revivedInbound, type GroupMember } from './baileys-events';
+import { BaileysEvents, keptInboundRaw, revivedInbound, type GroupMember, type StoredChange } from './baileys-events';
 import { isDatabaseUnavailable } from '../../common/utils/recovery-queue';
 import { BaileysGroups } from './baileys-groups';
 import { BaileysHistory, toUnixSeconds } from './baileys-history';
@@ -236,6 +236,13 @@ export class BaileysAdapter implements IWhatsAppEngine {
       isChangeKept: targetId => this.callbacks.isChangeKept?.(targetId) === true,
       isStoredCopyKept: messageId => this.callbacks.isStoredCopyKept?.(messageId) === true,
       onStoredAccountCleared: () => this.callbacks.onStoredAccountCleared?.(),
+      keepStoredChange: (messageId, changeId, change) =>
+        this.callbacks.onStoredChangeRefused?.({
+          messageId,
+          changeId,
+          raw: JSON.stringify({ messageId, change }),
+          blank: change.kind === 'blank',
+        }),
       noteUnreadStoredMessage: key => delegates.events?.noteUnreadStoredMessage(key),
       getStoredMessages: messageIds => this.config.messageStore?.getMessages(this.config.dbSessionId, messageIds),
       recordLidMapping: (lid, pn, isReported = true) =>
@@ -372,6 +379,13 @@ export class BaileysAdapter implements IWhatsAppEngine {
     if (this.getStatus() !== EngineStatus.READY) return false;
     const lib = await this.lifecycle.loadLib();
     await this.events.redeliverInbound(revivedInbound(lib, raw));
+    return true;
+  }
+
+  /** An edit or delete of a stored copy the database refused, applied once it answers (see InboundRedelivery). */
+  async restoreStoredChange(raw: string): Promise<boolean> {
+    const { messageId, change } = JSON.parse(raw) as { messageId: string; change: StoredChange };
+    await this.events.restoreStoredChange(messageId, change);
     return true;
   }
 

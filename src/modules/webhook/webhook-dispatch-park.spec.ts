@@ -1155,6 +1155,10 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
             calls.push(`copy ${raw}${revoked ? ' revoked' : ''}`);
             return Promise.resolve(true);
           }),
+          restoreStoredChange: jest.fn((raw: string) => {
+            calls.push(`change ${raw}`);
+            return Promise.resolve(true);
+          }),
         });
       });
 
@@ -1173,9 +1177,35 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
         expect(projector.isStoredCopyKept(sessionId, 'E-1')).toBe(false);
       });
 
+      it('applies the kept edits and deletes of the copy after it, in the order they came in', async () => {
+        projector.keepStoredCopy(sessionId, { messageId: 'E-1', raw: copyOf('E-1') });
+        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'ED-1', raw: 'edit', blank: false });
+        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'RV-1', raw: 'blank', blank: true });
+        expect(projector.isChangeKept(sessionId, 'E-1')).toBe(true);
+
+        await recover();
+        await recover();
+
+        expect(calls).toEqual([`copy ${copyOf('E-1')}`, 'change edit', 'change blank']);
+        expect(projector.isChangeKept(sessionId, 'E-1')).toBe(false);
+      });
+
+      it('names a lost delete of a copy in its log, as a deleted text may survive in the copy', async () => {
+        Object.assign(engine, { restoreStoredChange: jest.fn().mockRejectedValue(new Error('Unexpected token')) });
+        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'RV-1', raw: 'blank', blank: true });
+
+        for (let i = 0; i < 3; i++) await recover();
+
+        const lost = ((LoggerService.prototype.error as jest.Mock).mock.calls as unknown[][])
+          .map(call => call.at(-1) as { action?: string; messageId?: string } | undefined)
+          .filter(meta => meta?.action === 'message_copy_blank_lost');
+        expect(lost).toEqual([expect.objectContaining({ messageId: 'E-1', reason: 'failures' })]);
+      });
+
       it('hands nothing back to the next account once the session unlinked the one it was kept for', async () => {
         projector.keepStoredCopy(sessionId, { messageId: 'E-1', raw: copyOf('E-1') });
         projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: 'A', targetId: 'E-1' });
+        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'RV-1', raw: 'blank', blank: true });
 
         projector.forgetKeptInbound(sessionId);
         await recover();

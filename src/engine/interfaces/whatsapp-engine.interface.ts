@@ -1116,6 +1116,12 @@ export interface EngineEventCallbacks {
   /** Whether the session keeps the copy of `messageId` to be written (see onStoredCopyRefused). Baileys only. */
   isStoredCopyKept?: (messageId: string) => boolean;
   /**
+   * Fired when an edit or delete of the engine's copy of `messageId` could not be written because the database could not
+   * answer (`changeId` names the message that made it, `blank` says it is a delete): `raw` is the change, for the
+   * session to keep and hand back once it answers, through the engine's InboundRedelivery. Baileys only.
+   */
+  onStoredChangeRefused?: (kept: { messageId: string; changeId: string; raw: string; blank: boolean }) => void;
+  /**
    * Fired when the engine starts clearing the stored messages of an account it unlinked: what the session keeps to hand
    * back to it (onInboundUnreadable, onStoredCopyRefused) belongs to that account and is dropped, so the next account to
    * link the session gets none of it. Not guarded on the engine still being live: the store it clears is the session's.

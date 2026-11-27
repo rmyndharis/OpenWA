@@ -50,6 +50,7 @@ import {
   keptInboundKey,
   restoredKeptInbound,
   restoredReceivedRow,
+  type KeptInboundKind,
   type KeptInboundSteps,
   type ReceivedRowSteps,
 } from './received-row';
@@ -173,6 +174,20 @@ export const PARKED_CHANGES_MAX = RECOVERY_MAX_RECORDS.change;
 export const PARKED_CHANGE_MAX_AGE_MS = RECOVERY_MAX_AGE_MS;
 /** Changes of one kind kept for one message whose claims disagree, each judged against the row when it is tried. */
 export const PARKED_VARIANTS_MAX = 4;
+
+/** The log line and action of each kind of kept inbound record given up. */
+const KEPT_INBOUND_LOSS: Readonly<Record<KeptInboundKind, [string, string]>> = {
+  message: [
+    'A message kept until its stored target could be read could not be kept any longer',
+    'message_inbound_lost',
+  ],
+  copy: ['The stored copy of a message the database refused could not be kept any longer', 'message_copy_lost'],
+  blank: [
+    'A delete of the stored copy of a message could not be kept any longer: its deleted text may survive in the copy',
+    'message_copy_blank_lost',
+  ],
+  text: ['An edit of the stored copy of a message could not be kept any longer', 'message_copy_edit_lost'],
+};
 
 /** The one pass the kept changes get at shutdown, once the engines are gone (a stage of shutdown-budget.ts). */
 export const PARKED_CHANGES_SHUTDOWN_PASS_MS = 1_000;
@@ -622,6 +637,9 @@ export class MessageProjector {
       // the same message still kept (one that failed for a reason of its own), so they land in the order they came in.
       if (!engine || !handsBackInbound(engine) || this.keptBefore(kept)) return false;
       if (kept.kind === 'message') return engine.redeliverInbound(kept.raw);
+      // A change of a copy comes after the copy and the older changes kept of it (keptBefore), so a delete wins over an
+      // edit in either order: an edit finds nothing to set in a blank copy.
+      if (kept.kind !== 'copy') return engine.restoreStoredChange(kept.raw);
       // A copy waits for its row and the changes kept of its message, and is written blank when the row says revoked:
       // a revoke that landed while it was kept found no copy to clear, and its mark did not outlive a restart.
       const { sessionId, messageId } = kept;
@@ -634,19 +652,13 @@ export class MessageProjector {
     },
     released: (kept, reason) => {
       if (!reason) return;
-      const copy = kept.kind === 'copy';
-      this.logger.error(
-        copy
-          ? 'The stored copy of a message the database refused could not be kept any longer'
-          : 'A message kept until its stored target could be read could not be kept any longer',
-        undefined,
-        {
-          sessionId: kept.sessionId,
-          messageId: kept.messageId,
-          reason,
-          action: copy ? 'message_copy_lost' : 'message_inbound_lost',
-        },
-      );
+      const [message, action] = KEPT_INBOUND_LOSS[kept.kind];
+      this.logger.error(message, undefined, {
+        sessionId: kept.sessionId,
+        messageId: kept.kind === 'message' ? kept.messageId : kept.targetId,
+        reason,
+        action,
+      });
     },
   };
 
@@ -655,24 +667,38 @@ export class MessageProjector {
    * failing), to hand it back to the engine once the database answers (see KeptInbound).
    */
   keepUnreadInbound(sessionId: string, kept: { messageId: string; raw: string; targetId?: string }): void {
-    this.keepInbound(sessionId, kept.messageId, kept.raw, 'message', kept.targetId);
+    const key = keptInboundKey(sessionId, kept.messageId, 'message');
+    this.keepInbound(key, sessionId, kept.messageId, kept.raw, 'message', kept.targetId);
   }
 
   /** Keep the engine's copy of a message the database refused, to write it once it answers (see KeptInbound). */
   keepStoredCopy(sessionId: string, kept: { messageId: string; raw: string }): void {
-    this.keepInbound(sessionId, kept.messageId, kept.raw, 'copy', kept.messageId);
+    const key = keptInboundKey(sessionId, kept.messageId, 'copy');
+    this.keepInbound(key, sessionId, kept.messageId, kept.raw, 'copy', kept.messageId);
+  }
+
+  /** Keep an edit or delete of the engine's copy of a message the database refused, to apply it once it answers. */
+  keepStoredChange(
+    sessionId: string,
+    kept: { messageId: string; changeId: string; raw: string; blank: boolean },
+  ): void {
+    const kind = kept.blank ? 'blank' : 'text';
+    const key = keptInboundKey(sessionId, kept.messageId, kind, kept.changeId);
+    this.keepInbound(key, sessionId, kept.changeId, kept.raw, kind, kept.messageId);
   }
 
   private keepInbound(
+    key: string,
     sessionId: string,
     messageId: string,
     raw: string,
-    kind: 'message' | 'copy',
+    kind: KeptInboundKind,
     targetId: string | undefined,
   ): void {
-    const key = keptInboundKey(sessionId, messageId, kind);
-    const record = new KeptInbound(key, sessionId, messageId, raw, kind, targetId, Date.now(), this.inboundSteps);
-    this.recovery.park(key, record);
+    this.recovery.park(
+      key,
+      new KeptInbound(key, sessionId, messageId, raw, kind, targetId, Date.now(), this.inboundSteps),
+    );
   }
 
   /**

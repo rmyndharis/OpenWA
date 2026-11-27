@@ -5499,6 +5499,32 @@ describe('BaileysAdapter store-backed ops', () => {
     );
   });
 
+  it.each([
+    ['a delete for everyone', 'delete', { kind: 'blank' }],
+    ['an edit', 'edit', { kind: 'text', body: 'new text' }],
+  ] as const)(
+    'keeps %s of the stored copy the database refused, to apply it once it answers',
+    async (_l, op, change) => {
+      fakeStore.getMessage.mockResolvedValue(ownStored);
+      fakeStore.update.mockRejectedValueOnce(
+        Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
+      );
+      const onStoredChangeRefused = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize({ onStoredChangeRefused });
+      fakeSock.fire('connection.update', { connection: 'open' });
+
+      if (op === 'delete') await adapter.deleteMessage('628111@s.whatsapp.net', 'TARGET', true);
+      else await adapter.editMessage('628111@s.whatsapp.net', 'TARGET', 'new text');
+
+      expect(onStoredChangeRefused).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'TARGET', blank: op === 'delete' }),
+      );
+      const [[{ raw }]] = onStoredChangeRefused.mock.calls as Array<[{ raw: string }]>;
+      expect(JSON.parse(raw)).toMatchObject({ messageId: 'TARGET', change: { ...change, envelope: ownStored.key } });
+    },
+  );
+
   it('deleteMessage for everyone of a message the account received deletes it for the account only', async () => {
     // WhatsApp ignores a sender revoke of somebody else's message, so sending one reported a deletion
     // that never happened. WhatsApp Web deletes it for the account instead, and so does this.
@@ -14381,5 +14407,47 @@ describe('a message whose stored target the store fails to read', () => {
       ['db-uuid-1', received('M1')],
       ['db-uuid-1', { ...received('M1'), message: null }],
     ]);
+  });
+
+  it('keeps a delete the store refused for a stored copy, and applies it to the copy once the store answers', async () => {
+    const onStoredChangeRefused = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onStoredChangeRefused, onMessageRevoked: jest.fn() });
+    fakeStore.update.mockRejectedValueOnce(
+      Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
+    );
+
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: chat, fromMe: false, id: 'REV-1' },
+          message: { protocolMessage: { type: 0, key: { remoteJid: chat, fromMe: false, id: 'M1' } } },
+          messageTimestamp: 1700000063,
+        },
+      ],
+    });
+    await turns();
+
+    expect(onStoredChangeRefused).toHaveBeenCalledWith({
+      messageId: 'M1',
+      changeId: 'REV-1',
+      blank: true,
+      raw: expect.any(String) as unknown,
+    });
+    const stored = { key: { remoteJid: chat, fromMe: false, id: 'M1' }, message: { conversation: 'hello' } };
+    fakeStore.getMessage.mockReset().mockResolvedValue(stored);
+    let written: unknown;
+    fakeStore.update
+      .mockReset()
+      .mockImplementation((_session: string, _id: string, change: (m: unknown) => unknown) => {
+        written = change(stored);
+        return Promise.resolve();
+      });
+    const [[{ raw }]] = onStoredChangeRefused.mock.calls as Array<[{ raw: string }]>;
+
+    await expect(adapter.restoreStoredChange(raw)).resolves.toBe(true);
+
+    expect(written).toEqual({ ...stored, message: null });
   });
 });

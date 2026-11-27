@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
+import { isDatabaseUnavailable } from '../../common/utils/recovery-queue';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { WACallEvent, WAMessage, WAMessageKey, WASocket } from '@whiskeysockets/baileys';
 import {
@@ -266,6 +267,18 @@ export function revivedInbound(b: typeof BaileysLib, raw: string): WAMessage {
   return msg;
 }
 
+/**
+ * A change of the stored copy of a message, as data, so one the store refused can be kept and applied once it answers:
+ * a delete blanks the copy, an edit sets its text. Each is judged against the copy when it is applied, as `mayChange`
+ * judges it (`anyAuthor` is its delete exemption).
+ */
+export interface StoredChange {
+  kind: 'blank' | 'text';
+  envelope: WAMessageKey;
+  anyAuthor: boolean;
+  body?: string;
+}
+
 /** A read of the store that failed, handed on by a reader that cannot go on without what it would have read. */
 class StoreUnreadable extends Error {
   constructor(readonly cause: unknown) {
@@ -329,6 +342,11 @@ export interface BaileysEventsHost {
   isChangeKept?(targetId: string): boolean;
   /** Whether the session keeps the copy of `messageId` the store refused, to write it once it answers. */
   isStoredCopyKept?(messageId: string): boolean;
+  /**
+   * Keep a change of the stored copy of `messageId` the store refused (`changeId` names the message that made it), for
+   * the session to hand back once the store answers (see BaileysEvents.restoreStoredChange); undefined without one.
+   */
+  keepStoredChange?(messageId: string, changeId: string, change: StoredChange): void;
   /** The currently-registered admitInbound callback, if any (assigned at initialize()). */
   getAdmitInbound?(): EngineEventCallbacks['admitInbound'];
   /** The Baileys module once loaded (it is, before any socket exists), without waiting for it. */
@@ -640,8 +658,13 @@ export class BaileysEvents {
     if (generation !== this.storeGeneration) return undefined;
     if (!this.mayChange(original, envelope, true, resolve)) return undefined;
     if (found) this.markDeletedForEveryone(target.id);
-    this.changeStoredMessage(target.id, copy =>
-      this.mayChange(copy.key, envelope, true, resolve) ? { ...copy, message: null } : null,
+    // A blank needs no library; waiting for it here would let a store wipe pass between the check above and the change.
+    this.changeStoredMessage(
+      this.host.getLoadedLib?.(),
+      target.id,
+      envelope.id,
+      { kind: 'blank', envelope, anyAuthor: true },
+      resolve,
     );
     return original;
   }
@@ -729,6 +752,18 @@ export class BaileysEvents {
     });
     this.host.keepUnreadInbound?.(msg, targetId);
     return true;
+  }
+
+  /**
+   * A change of a stored copy the store refused (see keepStoredChange), applied once it answers, judged against the copy
+   * then. A copy the store does not hold takes nothing. Throws while the store still refuses, so the caller keeps it.
+   */
+  async restoreStoredChange(messageId: string, change: StoredChange): Promise<void> {
+    const stored = await this.host.getStoredMessage(messageId);
+    if (!stored) return;
+    const b = await this.host.loadLib();
+    const resolve = await this.reportedPhones(stored.key, change.envelope);
+    await this.host.updateStoredMessage(messageId, this.storedChangeOf(b, change, resolve));
   }
 
   handleMessagesUpsert(event: { messages: WAMessage[]; type: string }): void {
@@ -1508,8 +1543,12 @@ export class BaileysEvents {
           storedChatJid,
         );
         if (opts.generation !== this.storeGeneration) return;
-        this.changeStoredMessage(pm.key?.id, stored =>
-          this.mayChange(stored.key, msg.key, anyAuthor, resolveStored) ? { ...stored, message: null } : null,
+        this.changeStoredMessage(
+          b,
+          pm.key?.id,
+          msg.key.id,
+          { kind: 'blank', envelope: msg.key, anyAuthor },
+          resolveStored,
         );
         // The payload of a status post's delete names no sender (its chat is the status chat), and the stored copy
         // judged above may be gone, which lets any delete through: the session holds it to the poster of the story.
@@ -1616,12 +1655,13 @@ export class BaileysEvents {
           storedChatJid,
         );
         if (opts.generation !== this.storeGeneration) return;
-        this.changeStoredMessage(edited.messageId, stored => {
-          const content = this.mayChange(stored.key, msg.key, false, resolveStored)
-            ? b.normalizeMessageContent(stored.message ?? undefined)
-            : undefined;
-          return content && setBaileysText(content, edited.body) ? stored : null;
-        });
+        this.changeStoredMessage(
+          b,
+          edited.messageId,
+          msg.key.id,
+          { kind: 'text', envelope: msg.key, anyAuthor: false, body: edited.body },
+          resolveStored,
+        );
         this.announceWhenHandedOn(edited.messageId, opts.ticket, () => this.host.getOnMessageEdited()?.(edited));
         return;
       }
@@ -2159,24 +2199,55 @@ export class BaileysEvents {
    * Detached and best-effort, like the put.
    */
   private changeStoredMessage(
+    b: typeof BaileysLib | undefined,
     messageId: string | null | undefined,
-    change: (stored: WAMessage) => WAMessage | null,
+    changeId: string | null | undefined,
+    change: StoredChange,
+    resolve?: (jid: string) => string | null,
   ): void {
     if (!messageId) return;
     const generation = this.storeGeneration;
+    // Kept rather than lost: a delete the copy misses leaves the taken-back text in it, to quote, forward or resend.
+    const keep = (error?: unknown): void => {
+      this.host.logger.warn('Keeping an edit or delete of a stored copy, to apply it once the store answers', {
+        msgId: messageId,
+        kind: change.kind,
+        ...(error instanceof Error ? { error: error.message } : {}),
+        action: 'baileys_copy_change_kept',
+      });
+      this.host.keepStoredChange?.(messageId, changeId || messageId, change);
+    };
+    // A copy kept to be written is not in the store yet: the change applies after it lands, not to nothing now.
+    if (this.host.isStoredCopyKept?.(messageId)) return keep();
     const apply = async (): Promise<void> => {
       if (generation !== this.storeGeneration) return;
+      const changed = this.storedChangeOf(b, change, resolve);
       await this.host.updateStoredMessage(messageId, stored =>
-        generation === this.storeGeneration ? change(stored) : null,
+        generation === this.storeGeneration ? changed(stored) : null,
       );
     };
     const inFlight = this.inboundInFlight.get(messageId)?.done;
-    void (inFlight ? inFlight.then(apply) : apply()).catch(err =>
+    void (inFlight ? inFlight.then(apply) : apply()).catch(err => {
+      if (generation === this.storeGeneration && isDatabaseUnavailable(err)) return keep(err);
       this.host.logger.warn('Failed to apply an edit or delete to the message store', {
         msgId: messageId,
         error: err instanceof Error ? err.message : String(err),
-      }),
-    );
+      });
+    });
+  }
+
+  /** What a change does to a stored copy it may change: null, leaving the copy as it is, for one it may not. */
+  private storedChangeOf(
+    b: typeof BaileysLib | undefined,
+    change: StoredChange,
+    resolve?: (jid: string) => string | null,
+  ): (stored: WAMessage) => WAMessage | null {
+    return stored => {
+      if (!this.mayChange(stored.key, change.envelope, change.anyAuthor, resolve)) return null;
+      if (change.kind === 'blank') return { ...stored, message: null };
+      const content = b?.normalizeMessageContent(stored.message ?? undefined);
+      return content && setBaileysText(content, change.body ?? '') ? stored : null;
+    };
   }
 
   /**

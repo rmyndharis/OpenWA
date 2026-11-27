@@ -99,7 +99,7 @@ export class KeptInbound implements RecoveryRecord {
     readonly sessionId: string,
     readonly messageId: string,
     readonly raw: string,
-    readonly kind: 'message' | 'copy',
+    readonly kind: KeptInboundKind,
     /** The message it changes (an edit's, a reaction's, a vote's poll, an RSVP's event), when it names one. */
     readonly targetId: string | undefined,
     readonly since: number,
@@ -127,15 +127,26 @@ export class KeptInbound implements RecoveryRecord {
   }
 }
 
-export const keptInboundKey = (sessionId: string, messageId: string, kind: 'message' | 'copy'): string =>
-  `${sessionId}:${kind === 'copy' ? 'copy' : 'inbound'}:${messageId}`;
+/**
+ * What a kept inbound record holds: a message to read again, the engine's copy of a message to write, or a change of
+ * that copy to apply, a delete (`blank`) or an edit (`text`).
+ */
+export type KeptInboundKind = 'message' | 'copy' | 'blank' | 'text';
+
+/** A record's key: a message by its own id, a copy by its message's, a change of a copy by both. */
+export const keptInboundKey = (sessionId: string, id: string, kind: KeptInboundKind, changeId?: string): string =>
+  kind === 'message'
+    ? `${sessionId}:inbound:${id}`
+    : kind === 'copy'
+      ? `${sessionId}:copy:${id}`
+      : `${sessionId}:copy-change:${id}:${changeId ?? ''}`;
 
 /** A kept inbound message as the journal keeps it. */
 interface JournaledInbound {
   s: string;
   i: string;
   m: string;
-  c?: 1;
+  c?: Exclude<KeptInboundKind, 'message'>;
   g?: string;
   t: number;
 }
@@ -144,7 +155,7 @@ export const journalKeptInbound = (record: KeptInbound): JournaledInbound => ({
   s: record.sessionId,
   i: record.messageId,
   m: record.raw,
-  ...(record.kind === 'copy' ? { c: 1 as const } : {}),
+  ...(record.kind === 'message' ? {} : { c: record.kind }),
   ...(record.targetId ? { g: record.targetId } : {}),
   t: record.since,
 });
@@ -153,12 +164,13 @@ export const journalKeptInbound = (record: KeptInbound): JournaledInbound => ({
 export function restoredKeptInbound(
   value: unknown,
 ):
-  | { sessionId: string; messageId: string; raw: string; kind: 'message' | 'copy'; targetId?: string; since: number }
+  | { sessionId: string; messageId: string; raw: string; kind: KeptInboundKind; targetId?: string; since: number }
   | undefined {
   const v = value as Partial<JournaledInbound> | null;
   if (!v || typeof v.s !== 'string' || typeof v.i !== 'string' || typeof v.m !== 'string' || typeof v.t !== 'number') {
     return undefined;
   }
   const targetId = typeof v.g === 'string' ? v.g : undefined;
-  return { sessionId: v.s, messageId: v.i, raw: v.m, kind: v.c === 1 ? 'copy' : 'message', targetId, since: v.t };
+  const kind = v.c === 'copy' || v.c === 'blank' || v.c === 'text' ? v.c : 'message';
+  return { sessionId: v.s, messageId: v.i, raw: v.m, kind, targetId, since: v.t };
 }

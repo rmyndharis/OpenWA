@@ -41,10 +41,18 @@ describe('onInboundUnreadable wiring', () => {
     const isChangeKept = jest.fn((_sessionId: string, targetId: string) => targetId === 'M1');
     const keepStoredCopy = jest.fn();
     const forgetKeptInbound = jest.fn();
+    const keepStoredChange = jest.fn();
     const isStoredCopyKept = jest.fn((_sessionId: string, messageId: string) => messageId === 'M1');
     const host = {
       isLiveEngine: () => live,
-      messages: { keepUnreadInbound, isChangeKept, keepStoredCopy, isStoredCopyKept, forgetKeptInbound },
+      messages: {
+        keepUnreadInbound,
+        isChangeKept,
+        keepStoredCopy,
+        isStoredCopyKept,
+        forgetKeptInbound,
+        keepStoredChange,
+      },
     } as unknown as SessionEngineWiringHost;
     const callbacks = new SessionEngineEventWiring({ logger: createLogger('test') }).buildCallbacks(
       'sess-1',
@@ -52,7 +60,7 @@ describe('onInboundUnreadable wiring', () => {
       'sess-1-name',
       host,
     );
-    return { callbacks, keepUnreadInbound, isChangeKept, keepStoredCopy, forgetKeptInbound };
+    return { callbacks, keepUnreadInbound, isChangeKept, keepStoredCopy, forgetKeptInbound, keepStoredChange };
   };
 
   it('keeps the message with the projector, to hand back once the database answers', () => {
@@ -86,6 +94,18 @@ describe('onInboundUnreadable wiring', () => {
     callbacks.onStoredAccountCleared?.();
 
     expect(forgetKeptInbound).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('keeps a change of a stored copy the store refused with the projector, from a live engine only', () => {
+    const kept = { messageId: 'M1', changeId: 'RV-1', raw: '{}', blank: true };
+    const live = setup(true);
+    const gone = setup(false);
+
+    live.callbacks.onStoredChangeRefused?.(kept);
+    gone.callbacks.onStoredChangeRefused?.(kept);
+
+    expect(live.keepStoredChange).toHaveBeenCalledWith('sess-1', kept);
+    expect(gone.keepStoredChange).not.toHaveBeenCalled();
   });
 
   it('keeps a copy the store refused with the projector, and answers whether one is kept', () => {

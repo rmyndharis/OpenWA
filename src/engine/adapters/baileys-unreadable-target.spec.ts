@@ -1,7 +1,13 @@
 import { createCipheriv, createHmac } from 'node:crypto';
 import { BufferJSON } from '@whiskeysockets/baileys';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
-import { BaileysEvents, keptInboundRaw, revivedInbound, type BaileysEventsHost } from './baileys-events';
+import {
+  BaileysEvents,
+  keptInboundRaw,
+  revivedInbound,
+  type BaileysEventsHost,
+  type StoredChange,
+} from './baileys-events';
 import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
@@ -151,6 +157,8 @@ function setup({ copyKept = false }: { copyKept?: boolean } = {}) {
   const revoked: string[] = [];
   // What the session keeps, and whether it was handed back yet.
   const kept: Array<{ msg: WAMessage; targetId?: string; handed: boolean }> = [];
+  // The changes of the stored copy the session keeps, refused by the store.
+  const storedChanges: Array<{ messageId: string; changeId: string; change: StoredChange }> = [];
   // The library maps the event creator's lid to the phone number the RSVP is sealed with.
   const socket = {
     user: { id: '6280000000000:1@s.whatsapp.net' },
@@ -179,10 +187,13 @@ function setup({ copyKept = false }: { copyKept?: boolean } = {}) {
     },
     putStoredMessage: () => undefined,
     updateStoredMessage: (_id: string, change: (m: WAMessage) => WAMessage | null) => {
-      const next = change(stored);
+      if (store === 'fails') return Promise.reject(unavailable());
+      const next = store === 'answers' ? change(stored) : null;
       if (next) Object.assign(stored, next);
       return Promise.resolve();
     },
+    keepStoredChange: (messageId: string, changeId: string, change: StoredChange) =>
+      storedChanges.push({ messageId, changeId, change }),
     removeStoredMessage: () => undefined,
     keepUnreadInbound: (msg: WAMessage, targetId?: string) => kept.push({ msg, targetId, handed: false }),
     isChangeKept: (targetId: string) => kept.some(entry => !entry.handed && entry.targetId === targetId),
@@ -215,6 +226,7 @@ function setup({ copyKept = false }: { copyKept?: boolean } = {}) {
     responded,
     revoked,
     kept,
+    storedChanges,
     debug,
     store: (answer: 'answers' | 'empty' | 'fails') => (store = answer),
     /** Hand back what the session kept, in the order it kept it, as the session does: through the JSON form. */
@@ -414,5 +426,70 @@ describe('an encrypted change whose target the store cannot read', () => {
     for (let i = 0; i < 30; i++) await new Promise(resolve => setImmediate(resolve));
 
     expect(run.kept).toEqual([]);
+  });
+});
+
+describe('a change of the stored copy of a message the store refused', () => {
+  const copyText = (run: ReturnType<typeof setup>) =>
+    (run.stored.message as { conversation?: string } | null)?.conversation;
+  /** Applies what the session kept, in the order it kept it, through the JSON form the journal holds. */
+  const restore = async (run: ReturnType<typeof setup>, order = run.storedChanges): Promise<void> => {
+    for (const { messageId, change } of order) {
+      await run.events.restoreStoredChange(messageId, JSON.parse(JSON.stringify(change)) as StoredChange);
+    }
+  };
+
+  it('keeps a delete, and blanks the copy once the store answers', async () => {
+    const run = setup();
+    run.store('fails');
+
+    run.upsert(plainRevoke());
+    await until(() => run.revoked.length === 1 && run.storedChanges.length === 1, 'the delete and its kept change');
+    expect(run.storedChanges[0]).toMatchObject({ messageId: 'ORIG1', changeId: 'ENV-D', change: { kind: 'blank' } });
+    expect(copyText(run)).toBe('old text');
+
+    run.store('answers');
+    await restore(run);
+
+    expect(run.stored.message).toBeNull();
+  });
+
+  it('keeps an edit, and a delete wins over it in either order', async () => {
+    for (const reversed of [false, true]) {
+      const run = setup();
+      run.store('fails');
+      run.upsert(plainEdit('second edit'));
+      await until(() => run.storedChanges.length === 1, 'the edit kept');
+      run.upsert(plainRevoke());
+      await until(() => run.storedChanges.length === 2, 'the delete kept');
+      expect(run.storedChanges.map(kept => kept.change.kind)).toEqual(['text', 'blank']);
+
+      run.store('answers');
+      await restore(run, reversed ? [...run.storedChanges].reverse() : run.storedChanges);
+
+      expect(run.stored.message).toBeNull();
+    }
+  });
+
+  it('applies a kept edit to the copy once the store answers', async () => {
+    const run = setup();
+    run.store('fails');
+    run.upsert(plainEdit('second edit'));
+    await until(() => run.storedChanges.length === 1, 'the edit kept');
+
+    run.store('answers');
+    await restore(run);
+
+    expect(copyText(run)).toBe('second edit');
+  });
+
+  it('keeps a change of a message whose copy is itself kept, to apply after that copy lands', async () => {
+    const run = setup({ copyKept: true });
+    run.store('empty');
+
+    run.upsert(plainRevoke());
+    await until(() => run.storedChanges.length === 1, 'the delete kept');
+
+    expect(run.storedChanges[0].change.kind).toBe('blank');
   });
 });

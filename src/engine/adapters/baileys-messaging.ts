@@ -1,4 +1,6 @@
 import { queryLidPhone } from './baileys-identity-query';
+import { isDatabaseUnavailable } from '../../common/utils/recovery-queue';
+import type { StoredChange } from './baileys-events';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type {
   AnyMessageContent,
@@ -92,6 +94,8 @@ export interface BaileysMessagingHost {
   getStoredMessage(messageId: string): Promise<WAMessage | null> | undefined;
   /** Rewrite a stored message in place (see BaileysMessageStore.update); undefined without a store. */
   updateStoredMessage(messageId: string, change: (stored: WAMessage) => WAMessage | null): Promise<void> | undefined;
+  /** Keep a change of a stored copy the store refused, to apply once it answers (see BaileysEventsHost). */
+  keepStoredChange?(messageId: string, changeId: string, change: StoredChange): void;
   /** Whether this message was deleted for everyone, even where the stored copy does not show it yet. */
   wasDeletedForEveryone(messageId: string): boolean;
   /** Record a delete for everyone this session just made (see wasDeletedForEveryone). */
@@ -1050,12 +1054,21 @@ export class BaileysMessaging {
       forEveryone &&
       (target.key.fromMe === true || (await this.selfIsGroupAdmin(target.key.remoteJid, socket)) !== false)
     ) {
-      await this.send(await this.toDeliverableJid(chatId, socket), { delete: target.key }, undefined, socket);
+      const sent = await this.send(
+        await this.toDeliverableJid(chatId, socket),
+        { delete: target.key },
+        undefined,
+        socket,
+      );
       this.host.recordMessageEdit(previewJid, messageId, '', 'revoked');
       // Clear the stored copy before the buffered echo arrives. Record the deletion first so it
       // survives a failed store write or a repeat delivery of the original.
       this.host.markDeletedForEveryone(messageId);
-      await this.changeStored(messageId, stored => ({ ...stored, message: null }));
+      await this.changeStored(messageId, sent?.key?.id, stored => ({ ...stored, message: null }), {
+        kind: 'blank',
+        envelope: target.key,
+        anyAuthor: true,
+      });
       return { engineChatId: this.host.toNeutralJid(previewJid) };
     }
     // Delete-for-me (revoke on this device only): Baileys exposes it as a chat modification, not a
@@ -1133,14 +1146,19 @@ export class BaileysMessaging {
     // protocolMessage edit envelope, so an edit can re-tag participants. An edit REPLACES the
     // content, so omitting mentions drops whatever tags the original carried.
     const editContent = { text: body, ...this.withMentions(mentions), edit: target.key };
-    await this.send(jid, this.previewSafe(editContent), this.previewSafeOptions(editContent), socket);
+    const sent = await this.send(jid, this.previewSafe(editContent), this.previewSafeOptions(editContent), socket);
     // Update the preview and raw copy immediately, ahead of the buffered echo.
     this.host.recordMessageEdit(target.key.remoteJid ?? chatId, messageId, body);
     // A later quote must carry the updated text even before the edit's echo arrives.
-    await this.changeStored(messageId, stored => {
-      const content = b.normalizeMessageContent(stored.message ?? undefined);
-      return content && setBaileysText(content, body) ? stored : null;
-    });
+    await this.changeStored(
+      messageId,
+      sent?.key?.id,
+      stored => {
+        const content = b.normalizeMessageContent(stored.message ?? undefined);
+        return content && setBaileysText(content, body) ? stored : null;
+      },
+      { kind: 'text', envelope: target.key, anyAuthor: false, body },
+    );
     // Both fields describe the EDITED MESSAGE, not the protocol envelope that carried the edit.
     // That envelope has an id and a send time of its own; answering with either would name something
     // no route can address and no stored row is keyed by, and would disagree with the
@@ -1546,11 +1564,29 @@ export class BaileysMessaging {
     return copy;
   }
 
-  /** Apply a change this session just made to the stored copy. Best-effort: the change already went out. */
-  private async changeStored(messageId: string, change: (stored: WAMessage) => WAMessage | null): Promise<void> {
+  /**
+   * Apply a change this session just made to the stored copy. The change already went out, so a store that cannot
+   * answer keeps it (`kept`, the same change as data) to apply once it does: a delete the copy missed would leave the
+   * taken-back text in it to quote, forward or resend.
+   */
+  private async changeStored(
+    messageId: string,
+    changeId: string | null | undefined,
+    change: (stored: WAMessage) => WAMessage | null,
+    kept: StoredChange,
+  ): Promise<void> {
     try {
       await this.host.updateStoredMessage(messageId, change);
     } catch (err) {
+      if (isDatabaseUnavailable(err) && this.host.keepStoredChange) {
+        this.host.logger.warn('Keeping an edit or delete of a stored copy, to apply it once the store answers', {
+          msgId: messageId,
+          kind: kept.kind,
+          error: err instanceof Error ? err.message : String(err),
+          action: 'baileys_copy_change_kept',
+        });
+        return this.host.keepStoredChange(messageId, changeId || `${messageId}:${kept.kind}`, kept);
+      }
       this.host.logger.warn('Failed to apply an edit or delete to the message store', {
         msgId: messageId,
         error: err instanceof Error ? err.message : String(err),

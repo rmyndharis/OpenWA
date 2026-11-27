@@ -11,6 +11,11 @@ export interface InboundRedelivery {
    * message was deleted for everyone meanwhile (`revoked`); resolves true once written, rejects while refused.
    */
   restoreStoredCopy(raw: string, revoked: boolean): Promise<boolean>;
+  /**
+   * Apply an edit or delete of a stored copy the database refused (see EngineEventCallbacks.onStoredChangeRefused);
+   * resolves true once applied (or nothing is left to change), rejects while refused.
+   */
+  restoreStoredChange(raw: string): Promise<boolean>;
 }
 
 /** Whether an engine hands back the messages it kept (see InboundRedelivery). */
