@@ -1712,7 +1712,7 @@ export class BaileysLifecycle {
   private async clearStoredAccountState(): Promise<void> {
     // First, so nothing kept for that account is written into the store, or handed to the next account, after it.
     this.host.onStoredAccountCleared?.();
-    const refused = await this.wipeStoredAccountState(undefined).catch((err: unknown) => err);
+    const refused = await this.wipeStoredAccountState().catch((err: unknown) => err);
     if (!refused || !isDatabaseUnavailable(refused)) return;
     // Taken once the clear waited out the writes in flight: what it left is the account's, what comes later the next
     // one's. Those rows read as absent until the clear, kept, runs again up to here once the database answers.
@@ -1722,11 +1722,8 @@ export class BaileysLifecycle {
     this.host.onStoredAccountWipeRefused?.(before);
   }
 
-  /**
-   * Delete the stored messages and chat states of the unlinked account, all of them or (a clear the database refused,
-   * run again once it answers) those written up to `before`, each logged; rejects with a failure once both were tried.
-   */
-  async wipeStoredAccountState(before: Date | undefined): Promise<void> {
+  /** Delete the stored messages and chat states of the unlinked account, each logged; rejects once both were tried. */
+  private async wipeStoredAccountState(): Promise<void> {
     const { messageStore, chatStateStore, dbSessionId, sessionId } = this.host.config;
     let failure: unknown;
     const warn =
@@ -1736,20 +1733,13 @@ export class BaileysLifecycle {
         this.host.logger.warn(`Failed to clear the stored ${what} of an unlinked account`, {
           sessionId,
           error: err instanceof Error ? err.message : String(err),
-          ...(before ? { action: 'baileys_clear_retry_failed' } : {}),
         });
       };
     // Logged when it completes too: nothing else dates the moment earlier messages stopped answering a reply.
     const cleared = (what: string) => (): void =>
       this.host.logger.log(`Cleared the stored ${what} of an unlinked account`, { sessionId });
-    const clearMessages = before
-      ? messageStore?.clearSession(dbSessionId, before)
-      : messageStore?.clearSession(dbSessionId);
-    await clearMessages?.then(cleared('messages'), warn('messages'));
-    const clearStates = before
-      ? chatStateStore?.clearSession(sessionId, before)
-      : chatStateStore?.clearSession(sessionId);
-    await clearStates?.then(cleared('chat states'), warn('chat states'));
+    await messageStore?.clearSession(dbSessionId).then(cleared('messages'), warn('messages'));
+    await chatStateStore?.clearSession(sessionId).then(cleared('chat states'), warn('chat states'));
     if (failure !== undefined) throw failure instanceof Error ? failure : new Error('The stores could not be cleared');
   }
 

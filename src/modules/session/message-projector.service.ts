@@ -86,6 +86,8 @@ import {
   RevokedMessage,
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { handsBackInbound } from '../../engine/interfaces/inbound-redelivery';
+import { BaileysMessageStoreService } from '../../engine/adapters/baileys-message-store.service';
+import { ChatStateStoreService } from '../../engine/adapters/baileys-chat-state-store.service';
 import { deferred, InboundRoom, roomState, type RoomState } from './inbound-room';
 import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -182,6 +184,16 @@ interface ForwardEcho {
   type: Message['type'];
   body: Message['body'];
   metadata: Message['metadata'];
+}
+
+/** The time a kept clear of an unlinked account runs up to, or undefined for a record that names none. */
+function unlinkedAt(raw: string): Date | undefined {
+  try {
+    const at = new Date((JSON.parse(raw) as { before?: unknown }).before as string);
+    return Number.isNaN(at.getTime()) ? undefined : at;
+  } catch {
+    return undefined;
+  }
 }
 
 /** What an unlink drops of what is kept for the engine of the account it unlinked (see forgetKeptInbound). */
@@ -575,6 +587,9 @@ export class MessageProjector {
     private readonly automationRules?: AutomationRulesService,
     @Optional() private readonly lidMappingStore?: LidMappingStoreService,
     @Optional() private readonly ownership?: SessionOwnershipService,
+    // The Baileys stores, shared services: the clear of an unlinked account runs against them, with no engine.
+    @Optional() private readonly baileysMessageStore?: BaileysMessageStoreService,
+    @Optional() private readonly chatStateStore?: ChatStateStoreService,
   ) {
     // The queue the delivery service keeps its refused dispatches in, so a pass withdraws or rewrites what a kept change
     // touches before the events it touches go out; one of its own where none is wired (a projector built standalone).
@@ -664,6 +679,8 @@ export class MessageProjector {
 
   private readonly inboundSteps: KeptInboundSteps = {
     redeliver: async kept => {
+      // The stores are shared services: an unlinked account is cleared whether or not an engine runs here.
+      if (kept.kind === 'wipe') return this.clearUnlinked(kept);
       // A status is the session's own: stored or removed whatever engine runs, behind an older record of the same story.
       if (kept.kind === 'story' || kept.kind === 'story-removal') {
         return this.keptBefore(kept) ? false : this.applyKeptStory(kept);
@@ -683,7 +700,6 @@ export class MessageProjector {
       // the same message still kept (one that failed for a reason of its own), so they land in the order they came in.
       if (!engine || !handsBackInbound(engine) || this.keptBefore(kept)) return false;
       if (kept.kind === 'message') return engine.redeliverInbound(kept.raw);
-      if (kept.kind === 'wipe') return engine.restoreStoredWipe(kept.raw);
       // A change of a copy comes after the copy and the older changes kept of it (keptBefore), so a delete wins over an
       // edit in either order: an edit finds nothing to set in a blank copy.
       if (kept.kind !== 'copy') return engine.restoreStoredChange(kept.raw);
@@ -726,7 +742,34 @@ export class MessageProjector {
 
   /** Keep the clear of what an unlinked account left in the engine's stores, refused by the database (see KeptInbound). */
   keepStoredWipe(sessionId: string, kept: { raw: string }): void {
+    this.hideUnlinked(sessionId, kept.raw);
     this.keepInbound(keptInboundKey(sessionId, '', 'wipe'), sessionId, '', kept.raw, 'wipe', undefined);
+  }
+
+  /** Hide what an unlinked account wrote up to its unlink in the stores, until its kept clear lands. */
+  private hideUnlinked(sessionId: string, raw: string): void {
+    const before = unlinkedAt(raw);
+    if (!before) return;
+    this.baileysMessageStore?.hideUpTo(sessionId, before);
+    this.chatStateStore?.hideUpTo(sessionId, before);
+  }
+
+  /** The kept clear of an unlinked account, run against the stores up to its unlink; throws while the database fails. */
+  private async clearUnlinked(kept: KeptInbound): Promise<boolean> {
+    const before = unlinkedAt(kept.raw);
+    if (!before) throw new Error('The kept clear of an unlinked account names no time');
+    try {
+      await this.baileysMessageStore?.clearSession(kept.sessionId, before);
+      await this.chatStateStore?.clearSession(kept.sessionId, before);
+    } catch (error) {
+      this.logger.warn('Failed to clear the stored messages and chat states of an unlinked account', {
+        sessionId: kept.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'baileys_clear_retry_failed',
+      });
+      throw error;
+    }
+    return true;
   }
 
   /** Keep an edit or delete of the engine's copy of a message the database refused, to apply it once it answers. */

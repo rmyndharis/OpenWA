@@ -592,8 +592,7 @@ describe('BaileysAdapter lifecycle & status', () => {
     const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
     try {
       const onStoredAccountWipeRefused = jest.fn();
-      const adapter = newAdapter();
-      await adapter.initialize(noopCallbacks({ onStoredAccountWipeRefused }));
+      await newAdapter().initialize(noopCallbacks({ onStoredAccountWipeRefused }));
       fakeStore.clearSession.mockRejectedValueOnce(
         Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
       );
@@ -610,11 +609,6 @@ describe('BaileysAdapter lifecycle & status', () => {
       const [[{ raw }]] = onStoredAccountWipeRefused.mock.calls as Array<[{ raw: string }]>;
       const cutoff = new Date((JSON.parse(raw) as { before: string }).before);
       expect(fakeStore.hideUpTo).toHaveBeenCalledWith('db-uuid-1', cutoff);
-      fakeStore.clearSession.mockClear();
-
-      await expect(adapter.restoreStoredWipe(raw)).resolves.toBe(true);
-
-      expect(fakeStore.clearSession).toHaveBeenCalledWith('db-uuid-1', cutoff);
     } finally {
       rmSpy.mockRestore();
     }

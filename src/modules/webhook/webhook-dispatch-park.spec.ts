@@ -30,6 +30,8 @@ import { EventsGateway } from '../events/events.gateway';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { SessionLidResolver } from '../session/session-lid-resolver.service';
 import { RECOVERY_MAX_RECORDS } from '../../common/utils/recovery-queue';
+import type { BaileysMessageStoreService } from '../../engine/adapters/baileys-message-store.service';
+import type { ChatStateStoreService } from '../../engine/adapters/baileys-chat-state-store.service';
 import { LoggerService } from '../../common/services/logger.service';
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
@@ -45,6 +47,11 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
   let reconciler: WebhookReconcilerService;
   let hookManager: HookManager;
   let engines: EngineRegistry;
+  // The engine stores the projector clears an unlinked account from, shared services that need no engine.
+  let stores: {
+    messages: { clearSession: jest.Mock; hideUpTo: jest.Mock };
+    chatStates: { clearSession: jest.Mock; hideUpTo: jest.Mock };
+  };
   let engine: IWhatsAppEngine;
   let projector: MessageProjector;
   let sessionId: string;
@@ -122,6 +129,10 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
       delivery,
     );
     reconciler = new WebhookReconcilerService(ds.getRepository(Webhook), outbox, delivery, configService);
+    stores = {
+      messages: { clearSession: jest.fn().mockResolvedValue(undefined), hideUpTo: jest.fn() },
+      chatStates: { clearSession: jest.fn().mockResolvedValue(undefined), hideUpTo: jest.fn() },
+    };
     engines = new EngineRegistry();
     engine = {} as IWhatsAppEngine;
     engines.set(sessionId, engine);
@@ -139,6 +150,8 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
       undefined,
       undefined,
       { owns: () => owns } as unknown as SessionOwnershipService,
+      stores.messages as unknown as BaileysMessageStoreService,
+      stores.chatStates as unknown as ChatStateStoreService,
     );
     webhook = await ds.getRepository(Webhook).save(
       ds.getRepository(Webhook).create({
@@ -1207,17 +1220,29 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
         expect(lost).toEqual([expect.objectContaining({ messageId: 'E-1', reason: 'failures' })]);
       });
 
-      it('clears what an unlinked account left in the stores once the database answers, a later unlink kept apart', async () => {
-        const restoreStoredWipe = jest.fn().mockResolvedValue(true);
-        Object.assign(engine, { restoreStoredWipe });
-        projector.keepStoredWipe(sessionId, { raw: 'wipe' });
+      it('clears what an unlinked account left in the stores once the database answers, with no engine, a later unlink kept apart', async () => {
+        engines.delete(sessionId);
+        const unlinkedAt = new Date('2026-11-28T00:00:00.000Z');
+        projector.keepStoredWipe(sessionId, { raw: JSON.stringify({ before: unlinkedAt.toISOString() }) });
         projector.forgetKeptInbound(sessionId);
         const record = projector.recoveryQueue().get('receive', `${sessionId}:wipe`);
         expect(record?.ageCapped()).toBe(false);
 
         await recover();
 
-        expect(restoreStoredWipe.mock.calls).toEqual([['wipe']]);
+        expect(stores.messages.clearSession.mock.calls).toEqual([[sessionId, unlinkedAt]]);
+        expect(stores.chatStates.clearSession.mock.calls).toEqual([[sessionId, unlinkedAt]]);
+        expect(projector.recoveryQueue().get('receive', `${sessionId}:wipe`)).toBeUndefined();
+      });
+
+      it('lets the clear of an unlinked account go with the session once its rows are removed', async () => {
+        projector.keepStoredWipe(sessionId, { raw: JSON.stringify({ before: new Date().toISOString() }) });
+
+        projector.forgetSession(sessionId);
+        await recover();
+
+        expect(stores.messages.clearSession).not.toHaveBeenCalled();
+        expect(projector.recoveryQueue().get('receive', `${sessionId}:wipe`)).toBeUndefined();
       });
 
       it('keeps the clear of an unlinked account however full the lane grows, a status given up before others', () => {
@@ -1234,7 +1259,7 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
               ): void;
             }
           ).keepInbound(`${sessionId}:story:${id}`, sessionId, id, '{}', 'story', id);
-        projector.keepStoredWipe(sessionId, { raw: 'wipe' });
+        projector.keepStoredWipe(sessionId, { raw: JSON.stringify({ before: new Date().toISOString() }) });
         for (let i = 0; i < RECOVERY_MAX_RECORDS.receive; i++) {
           // A status kept among the messages, newer than the oldest of them.
           if (i === 10) keepStory('S-1');

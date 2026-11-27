@@ -1135,9 +1135,9 @@ export interface EngineEventCallbacks {
    */
   onStoredAccountCleared?: () => void;
   /**
-   * Fired when the database refused that clear: `raw` holds the time of the unlink, for the session to keep and hand
-   * back once it answers (InboundRedelivery.restoreStoredWipe), which clears what the account wrote up to then and
-   * leaves what the next account wrote since. Baileys only.
+   * Fired when the database refused that clear: `raw` holds the time it was refused at, for the session to keep and run
+   * against the engine's stores (shared services) once it answers, with or without an engine, clearing what the account
+   * wrote up to then and leaving what the next account wrote since. Baileys only.
    */
   onStoredAccountWipeRefused?: (kept: { raw: string }) => void;
   /**

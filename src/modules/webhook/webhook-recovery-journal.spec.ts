@@ -34,6 +34,10 @@ import { LoggerService } from '../../common/services/logger.service';
 import { RecoveryJournal } from '../../common/utils/recovery-journal';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
+import { BaileysMessageStoreService } from '../../engine/adapters/baileys-message-store.service';
+import { ChatState } from '../../engine/adapters/baileys-chat-state.entity';
+import { ChatStateStoreService } from '../../engine/adapters/baileys-chat-state-store.service';
 
 const CHAT = '628111@c.us';
 
@@ -106,6 +110,9 @@ describe('What the database refused, across a restart', () => {
     const reconciler = new WebhookReconcilerService(ds.getRepository(Webhook), outbox, delivery, configService);
     const engines = new EngineRegistry();
     if (engine) engines.set(sessionId, {} as IWhatsAppEngine);
+    // The engine stores of this process, shared services that know nothing of the last one.
+    const messageStore = new BaileysMessageStoreService(ds.getRepository(BaileysStoredMessage));
+    const chatStates = new ChatStateStoreService(ds.getRepository(ChatState));
     const projector = new MessageProjector(
       ds.getRepository(Message),
       ds.getRepository(Session),
@@ -116,9 +123,26 @@ describe('What the database refused, across a restart', () => {
       {} as unknown as StatusStoreService,
       { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
       configService,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      messageStore,
+      chatStates,
     );
     delivery.onApplicationBootstrap();
-    return { journal, hookManager, outbox, delivery, webhookService, reconciler, projector, engines };
+    return {
+      journal,
+      hookManager,
+      outbox,
+      delivery,
+      webhookService,
+      reconciler,
+      projector,
+      engines,
+      messageStore,
+      chatStates,
+    };
   };
   /** What `message:persisted` handlers of a process are handed, as type and body. */
   const persistedOn = (hookManager: HookManager): Array<[string, string]> => {
@@ -211,7 +235,15 @@ describe('What the database refused, across a restart', () => {
     ds = await new DataSource({
       type: 'better-sqlite3',
       database: ':memory:',
-      entities: [Session, Message, Webhook, WebhookOutboxEvent, WebhookDeliveryFailure],
+      entities: [
+        Session,
+        Message,
+        Webhook,
+        WebhookOutboxEvent,
+        WebhookDeliveryFailure,
+        BaileysStoredMessage,
+        ChatState,
+      ],
       synchronize: true,
     }).initialize();
     sessionId = (
@@ -584,19 +616,31 @@ describe('What the database refused, across a restart', () => {
     expect(calls).toEqual(['copy copy', 'change blank']);
   });
 
-  it('clears an unlinked account the stores could not clear before a crash, once an engine runs', async () => {
+  it('clears an unlinked account kept before a crash once the database answers, no engine run', async () => {
+    const unlinkedAt = new Date('2026-11-28T00:00:00.000Z');
+    await ds.getRepository(BaileysStoredMessage).insert({
+      sessionId,
+      waMessageId: 'OLD-1',
+      serializedMessage: JSON.stringify({ key: { id: 'OLD-1' } }),
+      createdAt: new Date(unlinkedAt.getTime() - 60_000),
+    });
+    await ds.getRepository(ChatState).insert({
+      sessionId,
+      chatId: CHAT,
+      pinned: true,
+      updatedAt: new Date(unlinkedAt.getTime() - 60_000),
+    });
     outage = 'on';
-    node.projector.keepStoredWipe(sessionId, { raw: '{"before":"2026-11-28T00:00:00.000Z"}' });
+    node.projector.keepStoredWipe(sessionId, { raw: JSON.stringify({ before: unlinkedAt.toISOString() }) });
     await settle();
 
     await crash();
     node = boot({ engine: false });
-    await recover();
-    const restoreStoredWipe = jest.fn().mockResolvedValue(true);
-    node.engines.set(sessionId, { redeliverInbound: jest.fn(), restoreStoredWipe } as unknown as IWhatsAppEngine);
+
     await recover();
 
-    expect(restoreStoredWipe.mock.calls).toEqual([['{"before":"2026-11-28T00:00:00.000Z"}']]);
+    expect(await ds.getRepository(BaileysStoredMessage).count({ where: { sessionId } })).toBe(0);
+    expect(await ds.getRepository(ChatState).count({ where: { sessionId } })).toBe(0);
   });
 
   it('lets go of what it cannot read back as a record, and of copies whose queued job will never run here', async () => {

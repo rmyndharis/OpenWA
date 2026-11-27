@@ -384,13 +384,6 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return true;
   }
 
-  /** A clear of an unlinked account's stores the database refused, run once it answers (see InboundRedelivery). */
-  async restoreStoredWipe(raw: string): Promise<boolean> {
-    const { before } = JSON.parse(raw) as { before: string };
-    await this.lifecycle.wipeStoredAccountState(new Date(before));
-    return true;
-  }
-
   /** An edit or delete of a stored copy the database refused, applied once it answers (see InboundRedelivery). */
   async restoreStoredChange(raw: string): Promise<boolean> {
     const { messageId, change } = JSON.parse(raw) as { messageId: string; change: StoredChange };

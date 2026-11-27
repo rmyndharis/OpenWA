@@ -16,11 +16,6 @@ export interface InboundRedelivery {
    * resolves true once applied (or nothing is left to change), rejects while refused.
    */
   restoreStoredChange(raw: string): Promise<boolean>;
-  /**
-   * Clear what an unlinked account left in the engine's stores, up to its unlink, a clear the database refused (see
-   * EngineEventCallbacks.onStoredAccountWipeRefused); resolves true once done, rejects while refused.
-   */
-  restoreStoredWipe(raw: string): Promise<boolean>;
 }
 
 /** Whether an engine hands back the messages it kept (see InboundRedelivery). */
