@@ -638,9 +638,14 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
         outage = 'on';
         changes['an edit']('A-6');
         await settle();
+        const hold = jest.spyOn(delivery, 'holdMessage');
         changes['an engine revoke']('A-6');
         await settle();
 
+        // Never let go while the revoke is parked, though the edit it superseded leaves before the revoke is listed.
+        const held = hold.mock.calls.filter(([, id]) => id === 'A-6').map(([, , as]) => as);
+        expect(held.length).toBeGreaterThan(0);
+        expect(new Set(held)).toEqual(new Set(['revoke']));
         const editEvent = { sessionId, event: 'message.edited', data: { messageId: 'A-6' } };
         expect(outbox.isMessageHeld(`edit_${sessionId}_A-6_o1_${webhookId}`, webhookId, editEvent)).toBe(true);
         await recover();

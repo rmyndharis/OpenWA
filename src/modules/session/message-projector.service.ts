@@ -471,6 +471,8 @@ export class MessageProjector {
   private readonly recovery: RecoveryQueue;
   // The records kept for each message, oldest first: more than one when the claims of its kept changes disagree.
   private readonly parkedFor = new Map<string, ParkedChange[]>();
+  // The changes of each message being parked now: they hold its deliveries as kept ones do until their records are final.
+  private readonly parking = new Map<string, ChangeSlots[]>();
   private parkSeq = 0;
   private readonly parkSteps: ParkedChangeSteps = {
     outbox: change => this.parkedOutboxSteps(change),
@@ -577,6 +579,28 @@ export class MessageProjector {
   ): Promise<void> {
     if (!waMessageId || !slotNames(slots).length) return;
     const key = `${sessionId}:${waMessageId}`;
+    const parking = this.parking.get(key) ?? [];
+    this.parking.set(key, parking);
+    parking.push(slots);
+    this.holdCopies(sessionId, waMessageId);
+    try {
+      await this.keepChange(sessionId, waMessageId, slots, error, engine);
+    } finally {
+      parking.splice(parking.indexOf(slots), 1);
+      if (!parking.length) this.parking.delete(key);
+      this.holdCopies(sessionId, waMessageId);
+    }
+  }
+
+  /** Keep a change in the records of its message (see parkChange), which holds the message's deliveries meanwhile. */
+  private async keepChange(
+    sessionId: string,
+    waMessageId: string,
+    slots: ChangeSlots,
+    error: unknown,
+    engine: IWhatsAppEngine | undefined,
+  ): Promise<void> {
+    const key = `${sessionId}:${waMessageId}`;
     const records = this.parkedFor.get(key) ?? [];
     this.parkedFor.set(key, records);
     const touched = new Set<ParkedChange>();
@@ -669,7 +693,6 @@ export class MessageProjector {
     }
     // A record let go while the claims were judged may have taken the list out of the map.
     if (records.length) this.parkedFor.set(key, records);
-    this.holdCopies(sessionId, waMessageId);
     for (const record of touched) this.recovery.park(record.key, record);
   }
 
@@ -752,11 +775,13 @@ export class MessageProjector {
    * (a revoke, an edit with its text); a reaction or a receipt leaves them as they are.
    */
   private holdCopies(sessionId: string, waMessageId: string): void {
-    const records = this.parkedFor.get(`${sessionId}:${waMessageId}`) ?? [];
+    const key = `${sessionId}:${waMessageId}`;
+    // A change still being parked holds them too: a record it supersedes may leave before its own is listed.
+    const kept = [...(this.parkedFor.get(key) ?? []).map(({ slots }) => slots), ...(this.parking.get(key) ?? [])];
     // A kept revoke holds the message's edit events too, which it withdraws as well.
-    const held = records.some(({ slots }) => slots.revoke)
+    const held = kept.some(slots => slots.revoke)
       ? 'revoke'
-      : records.some(({ slots }) => slots.edit?.body !== undefined)
+      : kept.some(slots => slots.edit?.body !== undefined)
         ? 'copies'
         : false;
     this.webhookService.holdMessage?.(sessionId, waMessageId, held);
