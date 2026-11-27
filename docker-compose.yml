@@ -61,11 +61,11 @@ services:
     restart: unless-stopped
     # Give the ordered teardown room to finish before Docker SIGKILLs the container, which would cut
     # Chromium, the usage flush and the database close short. Bounded stages in order: drain 3s
-    # (SHUTDOWN_DELAY_MS) + ingress reconciler 5s + engines 10s + auto-start wait 5s + bulk batch drain 5s
-    # + maintenance prune/index waits 4s + storage fallback sync drain 1s + webhook drain 5s
-    # (WEBHOOK_SHUTDOWN_DRAIN_MS) + usage flush 5s = 43s. An enabled plugin adds 10s. QUEUE_ENABLED and
-    # REDIS_ENABLED add 22s (worker close 10s, producer queue close 2s for each of two queues, four
-    # Redis quits 2s each): 75s worst case. The process force-exits 82s after the drain and 5s before
+    # (SHUTDOWN_DELAY_MS) + ingress reconciler 5s + engines 10s + kept message changes 1s + auto-start
+    # wait 5s + bulk batch drain 5s + maintenance prune/index waits 4s + storage fallback sync drain 1s
+    # + webhook drain 5s (WEBHOOK_SHUTDOWN_DRAIN_MS) + usage flush 5s = 44s. An enabled plugin adds 10s.
+    # QUEUE_ENABLED and REDIS_ENABLED add 22s (worker close 10s, producer queue close 2s for each of two
+    # queues, four Redis quits 2s each): 76s worst case. The process force-exits 82s after the drain and 5s before
     # this deadline. Raising SHUTDOWN_DELAY_MS or WEBHOOK_SHUTDOWN_DRAIN_MS moves that exit later by the
     # same amount, so raise this by the same amount too. The session count does not add: engines stop
     # in parallel.

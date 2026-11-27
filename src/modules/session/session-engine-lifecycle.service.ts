@@ -8,7 +8,7 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { decideReconnect, clampNumber, STABLE_READY_MS, type ReconnectAttemptState } from './reconnect-policy';
 import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
-import { MessageProjector } from './message-projector.service';
+import { MessageProjector, PARKED_CHANGES_SHUTDOWN_PASS_MS } from './message-projector.service';
 import { SessionErrorStore } from './session-error-store.service';
 import { SessionRestrictionStore } from './session-restriction-store.service';
 import { PresenceStore } from './presence-store.service';
@@ -578,13 +578,20 @@ export class SessionEngineLifecycle {
     return this.controls.holdDelete(id);
   }
 
-  /** Delegate: SessionEngineControls.shutdown. */
-  shutdown(): Promise<void> {
+  /**
+   * Delegate: SessionEngineControls.shutdown. Once the engines are gone, one bounded pass writes what the database
+   * refused while it was away (see MessageProjector.settleParkedChanges).
+   */
+  async shutdown(): Promise<void> {
     this.closed = true;
     for (const id of [...this.reconnectStates.keys()]) {
       this.cancelReconnect(id);
     }
-    return this.controls.shutdown();
+    try {
+      await this.controls.shutdown();
+    } finally {
+      await this.messages.settleParkedChanges(PARKED_CHANGES_SHUTDOWN_PASS_MS);
+    }
   }
 
   /** Delegate: SessionEngineControls.stopOrphanEngines. */

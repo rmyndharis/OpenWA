@@ -167,7 +167,7 @@ version: '3.8'
 services:
   app:
     image: ghcr.io/rmyndharis/openwa:latest
-    # Teardown takes up to 75 s with every datastore on; raise this by the amount SHUTDOWN_DELAY_MS or
+    # Teardown takes up to 76 s with every datastore on; raise this by the amount SHUTDOWN_DELAY_MS or
     # WEBHOOK_SHUTDOWN_DRAIN_MS exceeds its default, or Docker's 10 s default kills the container mid-teardown.
     stop_grace_period: 90s
     deploy:

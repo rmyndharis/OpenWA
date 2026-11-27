@@ -46,7 +46,7 @@ function fixture() {
     factory as never,
     new EngineRegistry(),
     { clear: jest.fn() } as never,
-    {} as never,
+    { settleParkedChanges: jest.fn().mockResolvedValue(undefined) } as never,
     { attachTo: <T>(value: T): T => value, clear: jest.fn(), set: jest.fn(), get: jest.fn() } as never,
     { attachTo: <T>(value: T): T => value, clear: jest.fn(), clearIfDisprovedByReady: jest.fn() } as never,
     { clear: jest.fn(), getOwnIntent: jest.fn() } as never,
