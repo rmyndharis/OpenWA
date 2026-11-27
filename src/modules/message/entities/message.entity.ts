@@ -24,6 +24,13 @@ export enum MessageDirection {
   OUTGOING = 'outgoing',
 }
 
+/** Where the engine reported a message and who it said wrote it (see {@link Message.engineRef}). */
+export interface MessageEngineRef {
+  chatId: string;
+  direction: MessageDirection;
+  author?: string | null;
+}
+
 export enum MessageStatus {
   PENDING = 'pending',
   SENT = 'sent',
@@ -79,6 +86,15 @@ export class Message {
    */
   @Column({ nullable: true })
   author?: string;
+
+  /**
+   * The chat, direction and author the engine reported, kept only when a `message:received` or `message:sent`
+   * handler filed the row under others: a revoke, edit, reaction or receipt is judged by them, never by what the
+   * handler chose. Null on every other row and on rows of earlier releases, which are judged by their own columns.
+   * Never selected by default, so no API read returns the chat a handler moved the message away from.
+   */
+  @Column({ type: jsonColumnType(), nullable: true, select: false })
+  engineRef?: MessageEngineRef | null;
 
   @Column()
   from!: string;

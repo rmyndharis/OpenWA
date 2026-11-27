@@ -2144,6 +2144,44 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
     expect(restored.mediaMimetype).toBe('image/png');
   });
 
+  // A message a hook filed under another chat is judged by the chat the engine reported, kept in a column no default
+  // read returns: a restore without it would judge the row by the chat the hook chose again.
+  it("restores the engine's chat of a message a hook moved on a backup→restore", async () => {
+    await seedSession('s1');
+    const msgRepo = ds.getRepository(Message);
+    const engineRef = { chatId: '628111@c.us', direction: MessageDirection.INCOMING, author: null };
+    await msgRepo.insert([
+      {
+        sessionId: 's1',
+        waMessageId: 'WA-MOVED',
+        chatId: '628999@c.us',
+        from: '628111@c.us',
+        to: 'me@c.us',
+        engineRef,
+      },
+      { sessionId: 's1', waMessageId: 'WA-KEPT', chatId: '628111@c.us', from: '628111@c.us', to: 'me@c.us' },
+    ]);
+
+    const dump = await controller.exportData().then(readExport);
+    const exported = (dump.tables.messages as Array<{ waMessageId: string; engineRef: unknown }>).map(row => [
+      row.waMessageId,
+      row.engineRef,
+    ]);
+    expect(exported).toEqual(expect.arrayContaining([['WA-KEPT', null]]));
+    await msgRepo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    const restored = (await msgRepo.find({
+      select: { waMessageId: true, engineRef: true },
+      order: { waMessageId: 'ASC' },
+    })) as Array<Pick<Message, 'waMessageId' | 'engineRef'>>;
+    expect(restored).toEqual([
+      { waMessageId: 'WA-KEPT', engineRef: null },
+      { waMessageId: 'WA-MOVED', engineRef },
+    ]);
+  });
+
   // DELETE FROM sessions cascades to templates + baileys_stored_messages (both FK ON DELETE CASCADE),
   // so an import that never re-inserts them permanently wipes both on the documented backup flow.
   it('restores templates and baileys_stored_messages instead of cascade-wiping them', async () => {

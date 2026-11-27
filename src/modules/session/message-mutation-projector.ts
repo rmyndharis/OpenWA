@@ -6,7 +6,11 @@ import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { ReactionEvent, EditedMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { updateMessageMetadata } from '../message/message-metadata';
-import { mutationTargetsForeignRowPersisted, type MutationSource } from './message-mutation-guard';
+import {
+  mutationTargetsForeignRowPersisted,
+  type MutationSource,
+  type StoredMessageRef,
+} from './message-mutation-guard';
 
 /**
  * Applies stored-message mutations — reactions, inbound edits, REST outbound-edit echoes — behind
@@ -64,22 +68,22 @@ export class MessageMutationProjector {
 
   /**
    * What the stored row says of a change: whether there is one to ask, and why the change must not touch
-   * it (null when it may). A row that cannot be read is reported absent with no reason, as before, and
-   * marked unread.
+   * it (null when it may), with the row it read. A row that cannot be read is reported absent with no reason,
+   * as before, and marked unread.
    */
   async storedRowVerdict(
     sessionId: string,
     waMessageId: string,
     source: MutationSource,
-  ): Promise<{ exists: boolean; reason: string | null; unread?: boolean }> {
+  ): Promise<{ exists: boolean; reason: string | null; unread?: boolean; row?: StoredMessageRef }> {
     if (!waMessageId) return { exists: false, reason: null };
     try {
       const row = await this.messageRepository.findOne({
         where: { sessionId, waMessageId },
-        select: { chatId: true, direction: true, author: true },
+        select: { chatId: true, direction: true, author: true, engineRef: true },
       });
       return row
-        ? { exists: true, reason: await mutationTargetsForeignRowPersisted(row, source, this.resolveLid) }
+        ? { exists: true, reason: await mutationTargetsForeignRowPersisted(row, source, this.resolveLid), row }
         : { exists: false, reason: null };
     } catch {
       return { exists: false, reason: null, unread: true };

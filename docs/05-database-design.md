@@ -287,6 +287,7 @@ erDiagram
         timestamp createdAt
         varchar mediaPath
         varchar mediaMimetype
+        json engineRef
     }
 
     API_KEY {
@@ -566,7 +567,8 @@ CREATE TABLE messages (
     status VARCHAR NOT NULL DEFAULT 'sent',          -- pending | sent | delivered | read | failed
     "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     "mediaPath" VARCHAR,                  -- nullable; storage key of the archived media copy
-    "mediaMimetype" VARCHAR               -- nullable; mimetype of that archived copy
+    "mediaMimetype" VARCHAR,              -- nullable; mimetype of that archived copy
+    "engineRef" TEXT                      -- nullable JSON; see below
 );
 
 -- Indexes (declared on the entity). Names TypeORM derives are hashes, not readable slugs —
@@ -591,6 +593,8 @@ CREATE INDEX "IDX_messages_mediaPath" ON messages("mediaPath") WHERE "mediaPath"
 CREATE UNIQUE INDEX "UQ_messages_sessionId_waMessageId"
     ON messages("sessionId", "waMessageId");
 ```
+
+`engineRef` is set only on a row a `message:received` or `message:sent` handler filed under another chat, direction or author than the engine reported: it holds the engine's `{ chatId, direction, author }`. A revoke, edit, reaction, receipt or history tombstone for that message is judged by it, never by the columns the handler chose (see [19 - Plugin Architecture](./19-plugin-architecture.md)). Every other row, and every row written before the column existed, keeps `NULL` and is judged by its own columns. No API read returns it (the entity column is `select: false`); a data export carries it and an import restores it.
 
 > [!NOTE]
 > There is **no** PostgreSQL RANGE partitioning, `create_messages_partition()` function, or `pg_cron` schedule in OpenWA. `messages` is a single plain table on both backends. The `timestamp` column uses a `bigint→number` value transformer so the REST/SDK/MCP contract returns a JS number on both SQLite and PostgreSQL.
@@ -1028,7 +1032,8 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1791600000000-RepairSqliteMessageFts.ts   # rebuilds the SQLite full-text index when it no longer matches messages
 ├── 1791700000000-AddChatStateDeletedAt.ts   # chat_states.deletedAt (when WhatsApp deleted the chat)
 ├── 1791800000000-AddStatusMediaPathIndex.ts   # partial index on status_updates.mediaPath (orphan sweep)
-└── 1791900000000-AddHighVolumeQueryIndexes.ts   # composite and retention indexes across messages, webhook_delivery_failures, message_batches, and integration_delivery_failures
+├── 1791900000000-AddHighVolumeQueryIndexes.ts   # composite and retention indexes across messages, webhook_delivery_failures, message_batches, and integration_delivery_failures
+└── 1792000000000-AddMessageEngineRef.ts   # messages.engineRef, the engine's chat of a message a hook filed under another
 ```
 
 > [!NOTE]

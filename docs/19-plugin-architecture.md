@@ -475,6 +475,15 @@ message it was handed instead of returning one is held to the same rule, `id` an
 Damaging that message (removing its `id`, say) does not bring back what an earlier handler removed: the
 gateway goes on with the message as the chain left it, never with the one that arrived.
 
+A message a handler filed under another `chatId`, `fromMe` or `author` keeps taking the changes made to it
+where it lives: a revoke, edit, reaction or receipt that names the chat, side and author the engine
+reported reaches its row, and one that names the chat the handler chose never does, so a handler cannot
+widen who may change a message. A delete or edit through the API is judged by the chat the engine reports
+it found the message in: to change a message filed under another contact's chat, name the chat the
+engine reported (the one `message:received` or `message:sent` was handed), since the engine looks the
+message up there. Rows a handler moved before the gateway kept the engine's chat keep the earlier
+behaviour (see [14 - Migration Guide](./14-migration-guide.md#known-upgrade-hazards)).
+
 On a **pre-action** event it is a veto, because the action has not been taken yet: `false` on
 `message:sending` blocks the send (the caller gets a `400`), and on `webhook:before` it cancels that one
 delivery.

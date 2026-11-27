@@ -5,7 +5,7 @@ import { Session } from '../session/entities/session.entity';
 import { MessageProjector } from '../session/message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { HookManager } from '../../core/hooks';
-import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import type { EventsGateway } from '../events/events.gateway';
 import type { WebhookService } from '../webhook/webhook.service';
 import type { StatusStoreService } from '../status-store/status-store.service';
@@ -29,6 +29,8 @@ describe('a delete or edit through the API, judged by the chat the engine found 
   let service: MessageService;
   let engine: { deleteMessage: jest.Mock; editMessage: jest.Mock };
   let persisted: string[];
+  let hooks: HookManager;
+  let projector: MessageProjector;
 
   const store = (row: Partial<Message>): Promise<unknown> =>
     messages.insert({
@@ -42,6 +44,7 @@ describe('a delete or edit through the API, judged by the chat the engine found 
       ...row,
     } as never);
   const row = (): Promise<Message> => messages.findOneByOrFail({ waMessageId: 'WA-1' });
+  const lidRef = (direction: 'incoming' | 'outgoing') => ({ chatId: LID, direction: direction as MessageDirection });
   const engineFound = (engineChatId?: string): void => {
     engine.deleteMessage.mockResolvedValue(engineChatId ? { engineChatId } : undefined);
     engine.editMessage.mockResolvedValue({ id: 'WA-1', timestamp: 1, ...(engineChatId ? { engineChatId } : {}) });
@@ -58,17 +61,17 @@ describe('a delete or edit through the API, judged by the chat the engine found 
     const engines = new EngineRegistry();
     engine = { deleteMessage: jest.fn(), editMessage: jest.fn() };
     engines.set('s1', engine as unknown as IWhatsAppEngine);
-    const hooks = new HookManager();
+    hooks = new HookManager();
     persisted = [];
     hooks.register('index', 'message:persisted', ctx => {
       persisted.push((ctx.data as { message: Message }).message.type);
       return Promise.resolve({ continue: true });
     });
-    const projector = new MessageProjector(
+    projector = new MessageProjector(
       messages,
       ds.getRepository(Session),
       engines,
-      {} as EventsGateway,
+      { emitMessage: jest.fn() } as unknown as EventsGateway,
       { dispatch: jest.fn() } as unknown as WebhookService,
       hooks,
       {} as StatusStoreService,
@@ -138,6 +141,67 @@ describe('a delete or edit through the API, judged by the chat the engine found 
     await service.deleteMessage('s1', { chatId: PHONE, messageId: 'WA-1' });
 
     expect(await row()).toMatchObject({ chatId: PHONE, type: 'revoked', body: '' });
+  });
+
+  describe('a message a hook filed under another chat', () => {
+    const FILED = '628999@c.us';
+
+    it('is cleared and edited when the engine reports the lid a phone number names, with no pairing reported', async () => {
+      await store({ chatId: PHONE, to: PHONE, direction: MessageDirection.OUTGOING, engineRef: lidRef('outgoing') });
+      engineFound(LID);
+
+      await service.editMessage('s1', { chatId: PHONE, messageId: 'WA-1', body: 'edited' });
+      expect(await row()).toMatchObject({ chatId: PHONE, body: 'edited' });
+
+      await service.deleteMessage('s1', { chatId: PHONE, messageId: 'WA-1' });
+      expect(await row()).toMatchObject({ chatId: PHONE, type: 'revoked' });
+    });
+
+    it('is cleared by a delete naming its list when a hook filed it under the list', async () => {
+      hooks.register('lister', 'message:received', ctx =>
+        Promise.resolve({ continue: true, data: { ...(ctx.data as IncomingMessage), chatId: LIST } }),
+      );
+      const received = {
+        id: 'WA-1',
+        chatId: SENDER,
+        from: SENDER,
+        to: SELF,
+        author: SENDER,
+        body: 'the original text',
+      };
+      await projector.handleInboundMessage('s1', engine as unknown as IWhatsAppEngine, {
+        ...received,
+        type: 'text',
+        timestamp: 1,
+        fromMe: false,
+        isGroup: false,
+        kind: 'individual',
+      })?.settled;
+      expect(await row()).toMatchObject({ chatId: LIST, type: 'text' });
+      engineFound(SENDER);
+
+      await service.deleteMessage('s1', { chatId: LIST, messageId: 'WA-1' });
+
+      expect(await row()).toMatchObject({ chatId: LIST, type: 'revoked' });
+    });
+
+    it('is cleared by a delete naming the engine chat when the engine reports none', async () => {
+      await store({ chatId: FILED, engineRef: { chatId: SENDER, direction: MessageDirection.INCOMING } });
+      engineFound(undefined);
+
+      await service.deleteMessage('s1', { chatId: SENDER, messageId: 'WA-1' });
+
+      expect(await row()).toMatchObject({ chatId: FILED, type: 'revoked' });
+    });
+
+    it('is never changed for naming the chat it is filed under', async () => {
+      await store({ chatId: FILED, engineRef: { chatId: SENDER, direction: MessageDirection.INCOMING } });
+      engineFound('628777@c.us');
+
+      await service.deleteMessage('s1', { chatId: FILED, messageId: 'WA-1' });
+
+      expect(await row()).toMatchObject({ chatId: FILED, type: 'text', body: 'the original text' });
+    });
   });
 
   it('leaves the row of another chat that holds the id alone', async () => {

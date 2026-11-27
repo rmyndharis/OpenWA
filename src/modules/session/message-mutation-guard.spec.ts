@@ -134,6 +134,29 @@ describe('mutationTargetsForeignRow', () => {
     expect(await mutationTargetsForeignRowPersisted(row, lidCaller, () => Promise.resolve(null))).toBe('chat');
   });
 
+  // A row a message hook filed elsewhere keeps what the engine reported, and only that judges a change to it.
+  it('judges a row a hook moved by its engine ref alone', async () => {
+    const moved = { chatId: '628999@c.us', direction: OUT, engineRef: { chatId: direct, direction: IN } };
+    expect(mutationTargetsForeignRow(moved, { kind: 'revoke', chatId: direct, fromMe: false })).toBeNull();
+    expect(mutationTargetsForeignRow(moved, { kind: 'revoke', chatId: '628999@c.us', fromMe: true })).toBe('chat');
+    // Neither the chat an API caller named nor how a delivery was filed brings the filed columns back.
+    const filedChat = { chatId: '628999@c.us', fromMe: true };
+    expect(
+      mutationTargetsForeignRow(moved, { kind: 'revoke', chatId: '628777@c.us', callerChatId: '628999@c.us' }),
+    ).toBe('chat');
+    expect(mutationTargetsForeignRow(moved, { kind: 'edit', chatId: '628777@c.us', filedAs: filedChat })).toBe('chat');
+    // A row without one may take a delivery as a hook filed it.
+    const legacy = { chatId: '628999@c.us', direction: OUT };
+    expect(mutationTargetsForeignRow(legacy, { kind: 'edit', chatId: direct, filedAs: filedChat })).toBeNull();
+    expect(
+      await mutationTargetsForeignRowPersisted(
+        { chatId: '111@lid', direction: IN, engineRef: { chatId: '222@lid', direction: IN } },
+        { kind: 'revoke', chatId: direct, fromMe: false },
+        jid => Promise.resolve(jid === '222@lid' ? '628111' : null),
+      ),
+    ).toBeNull();
+  });
+
   // The send routes store the chat id as the caller wrote it, in either dialect the docs give, while the
   // engines report the neutral one.
   it('reads the id a REST send stored in any dialect of the chat as the same chat', () => {
