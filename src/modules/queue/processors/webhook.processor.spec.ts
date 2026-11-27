@@ -29,7 +29,12 @@ describe('WebhookProcessor', () => {
   let processor: WebhookProcessor;
   let repo: { update: jest.Mock; findOne: jest.Mock };
   let failureRepo: { insert: jest.Mock; count: jest.Mock; delete: jest.Mock; update: jest.Mock };
-  let outbox: { close: jest.Mock; currentMessagePayload: jest.Mock; isMessageHeld: jest.Mock };
+  let outbox: {
+    close: jest.Mock;
+    currentMessagePayload: jest.Mock;
+    isMessageHeld: jest.Mock;
+    forgetUnwritten: jest.Mock;
+  };
   let failureRows: Array<{ webhookId?: string; idempotencyKey?: string | null; attempts?: number }>;
   let hookManager: { execute: jest.Mock };
   let configService: { get: jest.Mock };
@@ -85,6 +90,7 @@ describe('WebhookProcessor', () => {
       close: jest.fn().mockResolvedValue(undefined),
       currentMessagePayload: jest.fn().mockResolvedValue(undefined),
       isMessageHeld: jest.fn().mockReturnValue(false),
+      forgetUnwritten: jest.fn(),
     };
     failureRepo = {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
@@ -940,6 +946,7 @@ describe('WebhookProcessor', () => {
       const result = await processor.process(queuedJob(2));
 
       expect(outbox.currentMessagePayload).toHaveBeenCalledWith('wh-1', 'k', 'message.received');
+      expect(outbox.forgetUnwritten).toHaveBeenCalledWith('wh-1', 'k');
       expect(result.success).toBe(false);
       expect(mockFetch).not.toHaveBeenCalled();
       expect(failureRepo.insert).not.toHaveBeenCalled();

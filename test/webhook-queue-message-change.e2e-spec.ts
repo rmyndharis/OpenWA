@@ -235,6 +235,10 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
       await waitFor(queueIdle);
 
       expect(received.slice(1)).toEqual(expected[change]);
+      // The delivery ended, withdrawn or sent: no copy is left behind for it.
+      expect(app.get(WebhookOutboxService).unwrittenCopy(webhookId, `msg_${sessionId}_${id}_${webhookId}`)).toBe(
+        undefined,
+      );
     },
     60000,
   );

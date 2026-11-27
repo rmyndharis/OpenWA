@@ -1,7 +1,9 @@
 import { DataSource, In } from 'typeorm';
-import { WebhookOutboxService } from './webhook-outbox.service';
+import { type MessageCopyChange, WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookOutboxEvent } from './entities/webhook-outbox-event.entity';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
+import { LoggerService } from '../../common/services/logger.service';
+import { MessageDirection } from '../message/entities/message.entity';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -434,5 +436,207 @@ describe('WebhookOutboxService.openBatch dialect paths', () => {
     } as never);
 
     await expect(service.openBatch([base])).resolves.toBeNull();
+  });
+});
+
+describe('WebhookOutboxService copies of deliveries with no outbox row written', () => {
+  const MiB = 1024 * 1024;
+  const row = (i: number, payload: Record<string, unknown> = {}) => ({
+    webhookId: 'w',
+    sessionId: 's',
+    event: 'message.received',
+    idempotencyKey: `msg_s_${i}_w`,
+    deliveryId: `d${i}`,
+    payload: { id: String(i), chatId: '628111@c.us', fromMe: false, author: '628222@c.us', body: 'hi', ...payload },
+  });
+  const losses = (error: jest.SpyInstance) =>
+    error.mock.calls
+      .map(([, , meta]) => meta as { action?: string; reason?: string; idempotencyKey?: string })
+      .filter(meta => meta?.action === 'webhook_copy_lost');
+  let service: WebhookOutboxService;
+  let warn: jest.SpyInstance;
+
+  beforeEach(() => {
+    // No outbox row was written for any of these deliveries.
+    service = new WebhookOutboxService({ findOne: () => Promise.resolve(null) } as never);
+    warn = jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => warn.mockRestore());
+
+  it('hold at most 64 MiB of content, letting the oldest go first, each a logged loss', () => {
+    const rows = Array.from({ length: 200 }, (_, i) => row(i, { media: { data: 'x'.repeat(MiB) + i } }));
+    service.holdUnwritten(rows);
+
+    const held = rows.filter(r => service.unwrittenCopy(r.webhookId, r.idempotencyKey));
+    const bytes = held.reduce((sum, r) => sum + JSON.stringify(service.unwrittenCopy('w', r.idempotencyKey)).length, 0);
+    expect(bytes).toBeLessThanOrEqual(64 * MiB);
+    expect(held.at(-1)).toBe(rows.at(-1));
+    expect(held[0]).not.toBe(rows[0]);
+    const shed = rows.length - held.length;
+    expect(losses(warn)).toHaveLength(shed);
+    expect(losses(warn)[0]).toMatchObject({ reason: 'bytes', idempotencyKey: 'msg_s_0_w' });
+  });
+
+  it('let the content of the oldest go past 10,000, keeping what names its message, each a logged loss', async () => {
+    service.holdUnwritten(Array.from({ length: 10_001 }, (_, i) => row(i)));
+
+    expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeUndefined();
+    expect(service.unwrittenCopy('w', 'msg_s_1_w')).toMatchObject({ body: 'hi' });
+    expect(losses(warn)).toEqual([expect.objectContaining({ reason: 'count', idempotencyKey: 'msg_s_0_w' })]);
+    // A revoke still reaches it.
+    await service.changeUnwrittenForMessage('s', '0', { kind: 'close' });
+    await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBeNull();
+  });
+
+  it('drop a copy with no content past 16 MiB of them, oldest first, each a logged loss', async () => {
+    // What names each message is 1 MiB here, so a copy that let its content go still holds about that much.
+    service.holdUnwritten(Array.from({ length: 90 }, (_, i) => row(i, { chatId: `${'x'.repeat(MiB)}${i}` })));
+
+    const reasons = losses(warn).map(({ reason, idempotencyKey }) => [reason, idempotencyKey]);
+    expect(reasons.filter(([reason]) => reason === 'dropped')[0]).toEqual(['dropped', 'msg_s_0_w']);
+    const shed = reasons.filter(([reason]) => reason === 'bytes').length;
+    const dropped = reasons.filter(([reason]) => reason === 'dropped').length;
+    expect(shed - dropped).toBeLessThanOrEqual(16);
+    expect(shed - dropped).toBeGreaterThanOrEqual(15);
+    // Nothing of a dropped copy is kept: a revoke no longer reaches it, and its delivery reads its row (none here).
+    await service.changeUnwrittenForMessage('s', '0', { kind: 'close' });
+    await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBeUndefined();
+    // The newest copy that let its content go is still reached.
+    const newestShed = reasons.filter(([reason]) => reason === 'bytes').at(-1)![1]!;
+    await service.changeUnwrittenForMessage('s', newestShed.split('_')[2], { kind: 'close' });
+    await expect(service.currentMessagePayload('w', newestShed, 'message.received')).resolves.toBeNull();
+  });
+
+  it('hold at least 30,000 copies of typical messages once their content was let go', () => {
+    const SESSION = '11111111-2222-4333-8444-555555555555';
+    const WEBHOOK = '66666666-7777-4888-8999-000000000000';
+    service.holdUnwritten(
+      Array.from({ length: 40_000 }, (_, i) => ({
+        webhookId: WEBHOOK,
+        sessionId: SESSION,
+        event: 'message.received',
+        idempotencyKey: `msg_${SESSION}_false_120363000000000001@g.us_3EB0C431C26A${i}_123456789012345@lid_${WEBHOOK}`,
+        deliveryId: `d${i}`,
+        payload: {
+          id: `false_120363000000000001@g.us_3EB0C431C26A${i}_123456789012345@lid`,
+          chatId: '120363000000000001@g.us',
+          fromMe: false,
+          author: '123456789012345@lid',
+          sender: '123456789012345@lid',
+          body: 'hi',
+        },
+        engineRef: {
+          chatId: '120363000000000001@g.us',
+          direction: MessageDirection.INCOMING,
+          author: '123456789012345@lid',
+        },
+      })),
+    );
+
+    expect(losses(warn).filter(({ reason }) => reason === 'dropped')).toEqual([]);
+  });
+
+  describe('a copy a change landed on', () => {
+    // Later copies whose identity alone is 1 MiB: they pass the content bound, then the ceiling of copies without it.
+    const pressure = (): void =>
+      service.holdUnwritten(Array.from({ length: 90 }, (_, i) => row(i + 1, { author: `${'a'.repeat(MiB)}${i}` })));
+    const changed = async (change: MessageCopyChange): Promise<void> => {
+      service.holdUnwritten([row(0, { body: 'secret' })]);
+      await service.changeUnwrittenForMessage('s', '0', change);
+    };
+
+    it('stays withdrawn past every bound, once a revoke reached it', async () => {
+      await changed({ kind: 'close' });
+      pressure();
+      service.holdUnwritten(Array.from({ length: 10_001 }, (_, i) => row(i + 100)));
+
+      expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeNull();
+      await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBeNull();
+    });
+
+    it.each([
+      ['a delete through the API', { kind: 'redact' }, { type: 'revoked', body: '' }],
+      ['an edit', { kind: 'rewrite', body: 'edited text' }, { body: 'edited text' }],
+    ] as const)('keeps what %s left while copies no change reached can go first', async (_label, change, kept) => {
+      await changed(change);
+      pressure();
+      service.holdUnwritten(Array.from({ length: 10_001 }, (_, i) => row(i + 100)));
+
+      expect(service.unwrittenCopy('w', 'msg_s_0_w')).toMatchObject(kept);
+      expect(losses(warn).filter(({ idempotencyKey }) => idempotencyKey === 'msg_s_0_w')).toEqual([]);
+    });
+
+    // Copies whose edits each add 1 MiB: past the byte bound with no copy left that no change landed on.
+    const rewrittenPast64MiB = async (): Promise<void> => {
+      for (let i = 1; i <= 70; i++) {
+        service.holdUnwritten([row(i)]);
+        await service.changeUnwrittenForMessage('s', String(i), { kind: 'rewrite', body: 'x'.repeat(MiB) });
+      }
+    };
+
+    it('withdraws a redacted copy, never sending what it held, once only changed copies are left to bound', async () => {
+      await changed({ kind: 'redact' });
+      await rewrittenPast64MiB();
+
+      expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeNull();
+      await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBeNull();
+      expect(losses(warn).filter(({ idempotencyKey }) => idempotencyKey === 'msg_s_0_w')).toEqual([
+        expect.objectContaining({ reason: 'bytes' }),
+      ]);
+    });
+
+    it('logs the lost rewrite of a rewritten copy it lets go, once only changed copies are left to bound', async () => {
+      await changed({ kind: 'rewrite', body: 'edited text' });
+      await rewrittenPast64MiB();
+
+      expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeUndefined();
+      expect(losses(warn).filter(({ idempotencyKey }) => idempotencyKey === 'msg_s_0_w')).toEqual([
+        expect.objectContaining({ reason: 'rewrite' }),
+      ]);
+      // What names the message is kept: a revoke still reaches it.
+      await service.changeUnwrittenForMessage('s', '0', { kind: 'close' });
+      expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeNull();
+    });
+  });
+
+  describe('once the byte bound let the content go', () => {
+    const shed = () => {
+      service.holdUnwritten([row(0, { body: 'secret' })]);
+      service.holdUnwritten(Array.from({ length: 65 }, (_, i) => row(i + 1, { media: { data: 'x'.repeat(MiB) } })));
+      expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeUndefined();
+    };
+
+    it('send what the delivery holds when no change reaches it', async () => {
+      shed();
+
+      await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBeUndefined();
+    });
+
+    it.each([
+      ['a revoke', { kind: 'close' }],
+      ['a delete through the API', { kind: 'redact' }],
+    ] as const)('withdraw the delivery once %s reaches it, by what still names the message', async (_label, change) => {
+      shed();
+      const judged: unknown[] = [];
+
+      await service.changeUnwrittenForMessage('s', '0', change, payload => {
+        judged.push(payload);
+        return Promise.resolve(true);
+      });
+
+      expect(judged).toEqual([{ id: '0', chatId: '628111@c.us', fromMe: false, author: '628222@c.us' }]);
+      await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBeNull();
+      expect(service.unwrittenCopy('w', 'msg_s_0_w')).toBeNull();
+    });
+
+    it('log the lost rewrite of an edit that reaches it, and leave the delivery as it is', async () => {
+      shed();
+
+      await service.changeUnwrittenForMessage('s', '0', { kind: 'rewrite', body: 'edited' });
+
+      expect(losses(warn).at(-1)).toMatchObject({ reason: 'rewrite', idempotencyKey: 'msg_s_0_w' });
+      await expect(service.currentMessagePayload('w', 'msg_s_0_w', 'message.received')).resolves.toBeUndefined();
+    });
   });
 });

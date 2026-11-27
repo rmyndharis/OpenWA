@@ -1619,6 +1619,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
                 }
                 if (changed === null) {
                   this.logSkippedRetracted(webhook.id, event, deliveryId, idempotencyKey);
+                  // The delivery ends here: a copy kept for it in memory has nothing left to answer.
+                  this.outbox.forgetUnwritten(webhook.id, idempotencyKey);
                   return;
                 }
                 if (changed && changed !== 'unread') occurrence = { ...ctx, baseData: changed, storedHash: undefined };

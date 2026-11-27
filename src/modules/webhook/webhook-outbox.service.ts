@@ -7,6 +7,7 @@ import type { MessageEngineRef } from '../message/entities/message.entity';
 import { createLogger } from '../../common/services/logger.service';
 import { SHUTDOWN_MAINTENANCE_WAIT_MS } from '../../common/services/shutdown-budget';
 import { pruneInBatches } from '../../common/utils/batched-prune';
+import { RECOVERY_MAX_BYTES } from '../../common/utils/recovery-queue';
 import { startGuardedInterval } from '../../common/utils/guarded-interval';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
 
@@ -97,8 +98,21 @@ export function messageEditKeys(sessionId: string, waMessageId: string): string 
 /** What a kept change of a message holds of its deliveries: all of them once a revoke is kept, else its own copies. */
 export type MessageHold = 'revoke' | 'copies';
 
-/** Deliveries whose outbox rows could not be written that this node keeps a copy of; past it the oldest is let go. */
+/**
+ * Copies with content this node keeps of deliveries whose outbox rows could not be written, and the bytes they may hold
+ * in all; past either, the oldest let their content go and keep what names their message, those no change landed on
+ * first. A bound never undoes a change that landed: a withdrawn copy is outside every bound and stays until its
+ * delivery ends, a redacted one goes to withdrawn, and a rewritten one is a logged lost rewrite.
+ */
 const UNWRITTEN_COPIES_MAX = 10_000;
+const UNWRITTEN_COPIES_MAX_BYTES = RECOVERY_MAX_BYTES;
+/**
+ * The bytes the copies that let their content go, with no change landed on them, may hold: about 35,000 to 70,000 of
+ * typical messages. Past it the oldest is dropped, and a change of its message no longer reaches its delivery.
+ */
+const UNWRITTEN_SHED_MAX_BYTES = 16 * 1024 * 1024;
+/** The fields of a delivery's data that name its message: all a copy keeps once its content is let go. */
+const MESSAGE_IDENTITY_FIELDS = ['id', 'messageId', 'chatId', 'fromMe', 'author', 'sender'];
 
 /** What a delivery whose outbox row could not be written holds now, kept in memory for its later steps. */
 interface UnwrittenCopy {
@@ -107,7 +121,23 @@ interface UnwrittenCopy {
   /** Null once the message was taken back or the webhook's filters no longer take it. */
   data: Record<string, unknown> | null;
   engineRef: MessageEngineRef | null;
+  bytes: number;
+  /**
+   * Set once a bound let the content go: `data` keeps only what names the message. The delivery then sends what it
+   * holds, unless a revoke or a delete reaches it and withdraws it; an edit that reaches it is a lost rewrite.
+   */
+  shed?: true;
+  /** The change that landed on the content: a delete through the API (kept once it landed), else an edit. */
+  changed?: 'redact' | 'rewrite';
 }
+
+const splitUnwrittenKey = (key: string): [string, string] => {
+  const at = key.indexOf('\u0000');
+  return [key.slice(0, at), key.slice(at + 1)];
+};
+
+const copyBytes = (key: string, copy: UnwrittenCopy): number =>
+  key.length + copy.event.length + JSON.stringify(copy.data).length + JSON.stringify(copy.engineRef).length;
 
 /** Events that carry a change of a message (an edit), which name it in `messageId` and are withdrawn with it. */
 export const MESSAGE_CHANGE_EVENTS = ['message.edited'];
@@ -176,6 +206,14 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   // By webhook and key, the deliveries whose outbox rows could not be written: their copy, which a change of the
   // message reaches as it reaches a row, read by their later attempts (direct or queued) and their failure record.
   private readonly unwritten = new Map<string, UnwrittenCopy>();
+  // The keys of those copies, each in the order it came to its state: with content no change landed on, with content a
+  // change rewrote or redacted, and let go to what names the message; the bytes of the first two, and of the third.
+  // A withdrawn copy is in none.
+  private readonly unwrittenFresh = new Set<string>();
+  private readonly unwrittenChanged = new Set<string>();
+  private contentBytes = 0;
+  private readonly unwrittenShed = new Set<string>();
+  private shedBytes = 0;
 
   constructor(
     @InjectRepository(WebhookOutboxEvent, 'data')
@@ -662,26 +700,140 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   /** Keep a copy of deliveries whose outbox rows could not be written, until they settle (see `unwritten`). */
   holdUnwritten(rows: readonly OutboxOpenRow[]): void {
     for (const row of rows) {
-      this.unwritten.set(`${row.webhookId}\u0000${row.idempotencyKey}`, {
+      this.forgetUnwritten(row.webhookId, row.idempotencyKey);
+      const key = `${row.webhookId}\u0000${row.idempotencyKey}`;
+      const copy: UnwrittenCopy = {
         sessionId: row.sessionId,
         event: row.event,
         data: row.payload,
         engineRef: row.engineRef ?? null,
-      });
+        bytes: 0,
+      };
+      copy.bytes = copyBytes(key, copy);
+      this.unwritten.set(key, copy);
+      this.unwrittenSet(copy)?.add(key);
+      this.countUnwritten(copy, copy.bytes);
     }
-    for (const key of this.unwritten.keys()) {
-      if (this.unwritten.size <= UNWRITTEN_COPIES_MAX) break;
-      this.unwritten.delete(key);
-    }
+    this.boundUnwritten();
   }
 
-  /** The copy a delivery whose outbox row could not be written holds now: undefined when none is kept for it. */
+  /**
+   * The copy a delivery whose outbox row could not be written holds now: null once withdrawn, undefined when none is
+   * kept for it or its content was let go (the delivery sends what it holds).
+   */
   unwrittenCopy(webhookId: string, idempotencyKey: string): Record<string, unknown> | null | undefined {
-    return this.unwritten.get(`${webhookId}\u0000${idempotencyKey}`)?.data;
+    const copy = this.unwritten.get(`${webhookId}\u0000${idempotencyKey}`);
+    return copy?.shed && copy.data ? undefined : copy?.data;
   }
 
   forgetUnwritten(webhookId: string, idempotencyKey: string): void {
-    this.unwritten.delete(`${webhookId}\u0000${idempotencyKey}`);
+    const key = `${webhookId}\u0000${idempotencyKey}`;
+    const copy = this.unwritten.get(key);
+    if (!copy) return;
+    this.unwrittenSet(copy)?.delete(key);
+    this.countUnwritten(copy, -copy.bytes);
+    this.unwritten.delete(key);
+  }
+
+  /** The bound a copy is under, by what it holds: none once withdrawn. */
+  private unwrittenSet(copy: UnwrittenCopy): Set<string> | undefined {
+    if (!copy.data) return undefined;
+    if (copy.shed) return this.unwrittenShed;
+    return copy.changed ? this.unwrittenChanged : this.unwrittenFresh;
+  }
+
+  private countUnwritten(copy: UnwrittenCopy, bytes: number): void {
+    const set = this.unwrittenSet(copy);
+    if (set === this.unwrittenShed) this.shedBytes += bytes;
+    else if (set) this.contentBytes += bytes;
+  }
+
+  /** Set what a copy holds now and what came to it, keeping the totals (the caller applies the bounds). */
+  private setUnwrittenData(
+    key: string,
+    copy: UnwrittenCopy,
+    data: Record<string, unknown> | null,
+    came: { shed?: true; changed?: 'redact' | 'rewrite' } = {},
+  ): void {
+    const before = this.unwrittenSet(copy);
+    this.countUnwritten(copy, -copy.bytes);
+    copy.data = data;
+    if (came.shed) copy.shed = true;
+    if (came.changed && copy.changed !== 'redact') copy.changed = came.changed;
+    copy.bytes = copyBytes(key, copy);
+    const after = this.unwrittenSet(copy);
+    if (before !== after) {
+      before?.delete(key);
+      after?.add(key);
+    }
+    this.countUnwritten(copy, copy.bytes);
+  }
+
+  /**
+   * Past the count or the bytes of copies with content, the oldest let it go, those no change landed on first: such a
+   * copy, or a rewritten one (a logged lost rewrite), keeps what names its message, and a redacted one is withdrawn.
+   * Past the bytes of copies that let their content go, the oldest is dropped.
+   */
+  private boundUnwritten(): void {
+    const over = (): 'count' | 'bytes' | undefined =>
+      this.unwrittenFresh.size + this.unwrittenChanged.size > UNWRITTEN_COPIES_MAX
+        ? 'count'
+        : this.contentBytes > UNWRITTEN_COPIES_MAX_BYTES
+          ? 'bytes'
+          : undefined;
+    for (const set of [this.unwrittenFresh, this.unwrittenChanged]) {
+      for (const key of set) {
+        const reason = over();
+        if (!reason) return this.boundShed();
+        const copy = this.unwritten.get(key)!;
+        const data = copy.data!;
+        if (copy.changed === 'redact') {
+          this.logLostCopy(key, copy, reason, 'The placeholder of the deleted message is let go: nothing is sent');
+          this.setUnwrittenData(key, copy, null);
+          continue;
+        }
+        if (copy.changed === 'rewrite') this.logLostCopy(key, copy, 'rewrite');
+        else this.logLostCopy(key, copy, reason);
+        const identity = Object.fromEntries(MESSAGE_IDENTITY_FIELDS.filter(f => f in data).map(f => [f, data[f]]));
+        this.setUnwrittenData(key, copy, identity, { shed: true });
+      }
+    }
+    this.boundShed();
+  }
+
+  private boundShed(): void {
+    for (const key of this.unwrittenShed) {
+      if (this.shedBytes <= UNWRITTEN_SHED_MAX_BYTES) break;
+      const copy = this.unwritten.get(key)!;
+      this.forgetUnwritten(...splitUnwrittenKey(key));
+      this.logLostCopy(key, copy, 'dropped');
+    }
+  }
+
+  private logLostCopy(
+    key: string,
+    copy: UnwrittenCopy,
+    reason: 'count' | 'bytes' | 'dropped' | 'rewrite',
+    what?: string,
+  ): void {
+    const [webhookId, idempotencyKey] = splitUnwrittenKey(key);
+    const shed = 'A revoke or a delete still withdraws it; an edit no longer rewrites it';
+    const lost =
+      what ??
+      {
+        count: shed,
+        bytes: shed,
+        dropped: 'Nothing of it is kept: a change of its message no longer reaches it',
+        rewrite: 'The edit is not applied: its content was let go',
+      }[reason];
+    this.logger.error(`A kept copy of a delivery with no outbox row lost what it held. ${lost}`, undefined, {
+      sessionId: copy.sessionId,
+      webhookId,
+      idempotencyKey,
+      event: copy.event,
+      reason,
+      action: 'webhook_copy_lost',
+    });
   }
 
   /**
@@ -702,11 +854,22 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       const message = MESSAGE_DELIVERY_EVENTS.includes(copy.event) && copy.data.id === waMessageId;
       if (!(message || (edit && change.kind !== 'rewrite'))) continue;
       if (shouldApply && !(await shouldApply(copy.data, copy.engineRef))) continue;
-      const data = edit ? null : changedMessagePayload(copy.data, change);
-      const webhookId = key.slice(0, key.indexOf('\u0000'));
+      const data = copy.shed || edit ? null : changedMessagePayload(copy.data, change);
       const taken =
-        !data || !passes || (await Promise.resolve(passes({ webhookId, event: copy.event }, data)).catch(() => true));
-      copy.data = taken ? data : null;
+        !data ||
+        !passes ||
+        (await Promise.resolve(passes({ webhookId: splitUnwrittenKey(key)[0], event: copy.event }, data)).catch(
+          () => true,
+        ));
+      // Settled while the change was judged: nothing left to change.
+      if (this.unwritten.get(key) !== copy) continue;
+      // A copy whose content was let go is withdrawn by a revoke or a delete, never sent with a placeholder of it.
+      if (copy.shed && change.kind === 'rewrite') this.logLostCopy(key, copy, 'rewrite');
+      else {
+        const changed = change.kind === 'close' ? undefined : change.kind;
+        this.setUnwrittenData(key, copy, copy.shed || !taken ? null : data, { changed });
+      }
+      this.boundUnwritten();
     }
   }
 
@@ -724,7 +887,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   ): Promise<Record<string, unknown> | null | undefined> {
     // A delivery whose row could not be written: its copy, as the changes of the message left it.
     const copy = this.unwritten.get(`${webhookId}\u0000${idempotencyKey}`);
-    if (copy && copy.event === event) return copy.data;
+    if (copy && copy.event === event) return copy.shed && copy.data ? undefined : copy.data;
     // An edit event is checked against its own row as a message's delivery is: closed once the message was taken back.
     if (!MESSAGE_DELIVERY_EVENTS.includes(event) && !MESSAGE_CHANGE_EVENTS.includes(event)) return undefined;
     let row: Pick<WebhookOutboxEvent, 'event' | 'state' | 'payload'> | null;

@@ -209,6 +209,8 @@ export class WebhookProcessor extends WorkerHost {
             action: 'webhook_skipped_retracted',
           },
         );
+        // The job ends here: a copy kept for it in memory has nothing left to answer.
+        this.outbox.forgetUnwritten(webhookId, payload.idempotencyKey);
         return { statusCode: 0, success: false, error: 'outbox row closed', responseTime: 0 };
       }
       // A change of the message kept on this node may still withdraw or rewrite this copy: the job waits for it. The

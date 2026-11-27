@@ -742,6 +742,8 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
       await Promise.all([first, second]);
 
       expect(received()).toEqual([]);
+      // The delivery ended with its withdrawal: no copy is left behind for it.
+      expect(outbox.unwrittenCopy(webhook.id, `msg_${sessionId}_U-1_${webhook.id}`)).toBeUndefined();
     });
 
     it('sends nothing more once an engine revoke took the message back', async () => {
@@ -770,6 +772,93 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
         }),
       );
       expect(received().map(data => data.body)).toEqual(['first text', 'edited text']);
+    });
+
+    describe('once a change landed on its copy, past the bounds of the copies', () => {
+      // Newer copies of other deliveries whose identity alone is 1 MiB: past the content bound, then the ceiling.
+      const pressure = (): void =>
+        outbox.holdUnwritten(
+          Array.from({ length: 90 }, (_, i) => ({
+            webhookId: 'other',
+            sessionId: 'other',
+            event: 'message.received',
+            idempotencyKey: `msg_other_P-${i}_other`,
+            deliveryId: `p${i}`,
+            payload: { id: `P-${i}`, author: `${'a'.repeat(1024 * 1024)}${i}` },
+          })),
+        );
+
+      it('sends nothing more once an engine revoke took the message back', async () => {
+        await failedOnce(async () => {
+          await projector.recordRevoke(sessionId, 'U-1', { kind: 'revoke', chatId: CHAT, fromMe: false }, true);
+          pressure();
+        });
+
+        expect(received().map(data => data.body)).toEqual(['first text']);
+        expect(outbox.unwrittenCopy(webhook.id, `msg_${sessionId}_U-1_${webhook.id}`)).toBeUndefined();
+      });
+
+      it('sends the placeholder once a delete through the API took it back', async () => {
+        await failedOnce(async () => {
+          await projector.recordRevoke(sessionId, 'U-1', { kind: 'revoke', chatId: CHAT });
+          pressure();
+        });
+
+        expect(received().map(data => [data.type, data.body])).toEqual([
+          ['text', 'first text'],
+          ['revoked', ''],
+        ]);
+      });
+    });
+
+    describe('whose copy the byte bound let go', () => {
+      // Newer copies of other deliveries, past the bytes the copies may hold: the oldest content goes first.
+      const pressure = (): void =>
+        outbox.holdUnwritten(
+          Array.from({ length: 65 }, (_, i) => ({
+            webhookId: 'other',
+            sessionId: 'other',
+            event: 'message.received',
+            idempotencyKey: `msg_other_P-${i}_other`,
+            deliveryId: `p${i}`,
+            payload: { id: `P-${i}`, media: { data: 'x'.repeat(1024 * 1024) } },
+          })),
+        );
+
+      it.each([
+        [
+          'an engine revoke',
+          () => projector.recordRevoke(sessionId, 'U-1', { kind: 'revoke', chatId: CHAT, fromMe: false }, true),
+        ],
+        ['a delete through the API', () => projector.recordRevoke(sessionId, 'U-1', { kind: 'revoke', chatId: CHAT })],
+      ] as const)('sends nothing more once %s took the message back', async (_label, revoke) => {
+        await failedOnce(async () => {
+          pressure();
+          await revoke();
+        });
+
+        expect(received().map(data => data.body)).toEqual(['first text']);
+      });
+
+      it.each([
+        ['no change reaches it', (): Promise<unknown> => Promise.resolve()],
+        [
+          'an edit reaches it',
+          () =>
+            projector.recordOutboundMessageEdit(sessionId, 'U-1', 'edited text', {
+              kind: 'edit',
+              chatId: CHAT,
+              fromMe: false,
+            }),
+        ],
+      ] as const)('sends what it holds when %s', async (_label, change) => {
+        await failedOnce(async () => {
+          pressure();
+          await change();
+        });
+
+        expect(received().map(data => data.body)).toEqual(['first text', 'first text']);
+      });
     });
 
     it('sends nothing of an edit its webhook filters exclude', async () => {
