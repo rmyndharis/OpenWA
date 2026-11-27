@@ -1220,15 +1220,30 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
         expect(restoreStoredWipe.mock.calls).toEqual([['wipe']]);
       });
 
-      it('keeps the clear of an unlinked account however full the lane grows', () => {
+      it('keeps the clear of an unlinked account however full the lane grows, a status given up before others', () => {
+        const keepStory = (id: string): void =>
+          (
+            projector as unknown as {
+              keepInbound(
+                key: string,
+                sessionId: string,
+                id: string,
+                raw: string,
+                kind: string,
+                targetId: string,
+              ): void;
+            }
+          ).keepInbound(`${sessionId}:story:${id}`, sessionId, id, '{}', 'story', id);
         projector.keepStoredWipe(sessionId, { raw: 'wipe' });
-        for (let i = 0; i < RECOVERY_MAX_RECORDS.receive + 1; i++) {
+        for (let i = 0; i < RECOVERY_MAX_RECORDS.receive; i++) {
+          // A status kept among the messages, newer than the oldest of them.
+          if (i === 10) keepStory('S-1');
           projector.keepUnreadInbound(sessionId, { messageId: `M-${i}`, raw: '{}' });
         }
 
         const kept = (key: string) => projector.recoveryQueue().get('receive', `${sessionId}:${key}`) !== undefined;
-        // Over the bound by two: the two oldest messages go; the clear stays.
-        expect([kept('wipe'), kept('inbound:M-0'), kept('inbound:M-1'), kept('inbound:M-2')]).toEqual([
+        // Over the bound by two: the status goes first, then the oldest message; the clear stays.
+        expect([kept('wipe'), kept('story:S-1'), kept('inbound:M-0'), kept('inbound:M-1')]).toEqual([
           true,
           false,
           false,

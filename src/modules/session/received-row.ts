@@ -120,6 +120,11 @@ export class KeptInbound implements RecoveryRecord {
     return this.kind === 'wipe';
   }
 
+  /** A received status, media and all, goes first once the lane or the byte budget is full. */
+  expendable(): boolean {
+    return this.kind === 'story';
+  }
+
   retry(): Promise<boolean> {
     return this.steps.redeliver(this);
   }

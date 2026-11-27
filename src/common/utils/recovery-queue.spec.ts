@@ -227,6 +227,16 @@ describe('RecoveryQueue', () => {
     expect(queue.get('change', 'clear')).toBeDefined();
   });
 
+  it('gives up expendable records first once the byte budget is spent, an older record that is not staying', () => {
+    const queue = new RecoveryQueue(options());
+    queue.park('row', record('row', 'receive', { bytes: 400 }));
+    queue.park('status-1', record('status-1', 'receive', { bytes: 400, expendable: true }));
+    queue.park('status-2', record('status-2', 'receive', { bytes: 400, expendable: true }));
+
+    expect(log).toEqual(['lost status-1 bytes']);
+    expect(queue.get('receive', 'row')).toBeDefined();
+  });
+
   it('never gives up a pinned record for bytes, though the age cap applies to it', () => {
     const queue = new RecoveryQueue(options());
     queue.park('clear', record('clear', 'receive', { bytes: 700, pinned: true }));

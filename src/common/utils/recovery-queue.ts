@@ -27,7 +27,10 @@ export interface RecoveryRecord {
   bytes(): number;
   /** Whether the lane's age cap applies; a record holding only a revoke is kept until the count cap. */
   ageCapped(): boolean;
-  /** Whether it goes first once its lane is full (a status ack), ahead of older records that matter more. */
+  /**
+   * Whether it goes first once its lane is full or the byte budget is spent (a status ack, a received status with its
+   * media), ahead of older records that matter more.
+   */
   expendable?(): boolean;
   /** Never given up for count or bytes (one per session at most, the clear of an unlinked account), only for failures. */
   pinned?(): boolean;
@@ -456,7 +459,7 @@ export class RecoveryQueue {
     }
     while (this.bytes > this.options.maxBytes && this.evictable.size > 0) {
       const evictable = [...this.evictable.entries()].filter(([kept]) => kept.pinned?.() !== true);
-      const [record, key] = evictable[0] ?? [];
+      const [record, key] = evictable.find(([kept]) => kept.expendable?.() === true) ?? evictable[0] ?? [];
       if (!record || key === undefined) break;
       this.drop(key, record);
       record.lost('bytes');
