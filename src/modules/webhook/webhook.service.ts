@@ -23,7 +23,8 @@ import {
   redactSsrfError,
 } from '../../common/security/ssrf-guard';
 import { PreparedWebhookDelivery, WebhookDeliveryService, WebhookPayload } from './webhook-delivery.service';
-import type { MessageCopyChange } from './webhook-outbox.service';
+import type { MessageCopyChange, MessageCopyPredicate } from './webhook-outbox.service';
+import type { MessageEngineRef } from '../message/entities/message.entity';
 
 // Delivery-engine types (payload and queue job shapes) live on WebhookDeliveryService; re-exported
 // here so existing importers (the queue processor) keep a single stable path.
@@ -421,8 +422,13 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
    * WebhookDeliveryService. Not async on purpose: a frame suspended on the engine would keep the
    * unshed event alive until every delivery settles.
    */
-  dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
-    return this.delivery.dispatch(sessionId, event, data);
+  dispatch(
+    sessionId: string,
+    event: string,
+    data: Record<string, unknown>,
+    options?: { engineRef?: MessageEngineRef | null },
+  ): Promise<void> {
+    return this.delivery.dispatch(sessionId, event, data, options);
   }
 
   /** Pre-transaction read-only phase: resolve matching webhooks and build outbox rows. */
@@ -430,7 +436,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     sessionId: string,
     event: string,
     data: Record<string, unknown>,
-    options?: { throwOnLookupError?: boolean },
+    options?: { throwOnLookupError?: boolean; engineRef?: MessageEngineRef | null },
   ): Promise<PreparedWebhookDelivery[]> {
     return this.delivery.prepareDeliveries(sessionId, event, data, null, options);
   }
@@ -451,8 +457,9 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     finalData: Record<string, unknown>,
     owned?: readonly PreparedWebhookDelivery[],
     openNew?: boolean,
+    engineRef?: MessageEngineRef | null,
   ): Promise<PreparedWebhookDelivery[]> {
-    return this.delivery.reconcilePrepared(committed, sessionId, event, finalData, owned, openNew);
+    return this.delivery.reconcilePrepared(committed, sessionId, event, finalData, owned, openNew, engineRef);
   }
 
   /** Post-commit async dispatch phase: run webhook:before hooks and deliver/enqueue prepared rows. */
@@ -469,7 +476,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
   closePendingDeliveriesForMessage(
     sessionId: string,
     waMessageId: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     return this.delivery.closePendingForMessage(sessionId, waMessageId, shouldApply);
   }
@@ -478,7 +485,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
   redactPendingDeliveriesForMessage(
     sessionId: string,
     waMessageId: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     return this.delivery.redactPendingForMessage(sessionId, waMessageId, shouldApply);
   }
@@ -488,7 +495,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     sessionId: string,
     waMessageId: string,
     change: MessageCopyChange,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     return this.delivery.changeMessageCopies(sessionId, waMessageId, change, shouldApply);
   }
@@ -503,7 +510,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     sessionId: string,
     waMessageId: string,
     body: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     return this.delivery.rewritePendingForMessage(sessionId, waMessageId, body, shouldApply);
   }

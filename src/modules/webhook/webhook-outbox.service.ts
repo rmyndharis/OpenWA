@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { And, EntityManager, In, IsNull, LessThan, Not, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
 import { WebhookOutboxEvent, WebhookOutboxState } from './entities/webhook-outbox-event.entity';
+import type { MessageEngineRef } from '../message/entities/message.entity';
 import { createLogger } from '../../common/services/logger.service';
 import { SHUTDOWN_MAINTENANCE_WAIT_MS } from '../../common/services/shutdown-budget';
 import { pruneInBatches } from '../../common/utils/batched-prune';
@@ -19,10 +20,10 @@ const CAPPED_PRUNE_FOLLOW_UP_MS = 60_000;
 /** Upper bound on waiting for an active outbox prune pass during shutdown. */
 const OUTBOX_PRUNE_SHUTDOWN_WAIT_MS = SHUTDOWN_MAINTENANCE_WAIT_MS;
 /**
- * Maximum outbox rows inserted per statement: 9 bound parameters per row yields at most 900
+ * Maximum outbox rows inserted per statement: 10 bound parameters per row yields at most 900
  * variables per query, safely below SQLite's 999 bind limit and PostgreSQL's 65535 limit.
  */
-export const OUTBOX_OPEN_BATCH_CHUNK_SIZE = 100;
+export const OUTBOX_OPEN_BATCH_CHUNK_SIZE = 90;
 
 /**
  * How long a stranded delivery whose stored payload cannot be read is left out of the page reads, as the ingress sweep
@@ -45,7 +46,20 @@ export interface ReplayableDelivery {
 }
 
 /** Input shape for opening a pending outbox row before delivery starts. */
-export type OutboxOpenRow = Omit<ReplayableDelivery, 'id' | 'attempts'> & { deliveryId: string };
+export type OutboxOpenRow = Omit<ReplayableDelivery, 'id' | 'attempts'> & {
+  deliveryId: string;
+  /** What the engine reported of the message a delivery carries, when a handler filed it elsewhere (see the entity). */
+  engineRef?: MessageEngineRef | null;
+};
+
+/**
+ * Whether a copy of a message (an outbox payload, a kept failure payload) takes a change: judged by its payload, or by
+ * `engineRef`, what the engine reported of the message, when a handler filed it elsewhere.
+ */
+export type MessageCopyPredicate = (
+  payload: Record<string, unknown>,
+  engineRef?: MessageEngineRef | null,
+) => boolean | Promise<boolean>;
 
 /** States in which a row still holds a copy that can be delivered: before dispatch, or owned by a queued job. */
 const OPEN_STATES: WebhookOutboxState[] = ['pending', 'queued'];
@@ -218,27 +232,48 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - olderThanDays);
     const task = (async (): Promise<number> => {
+      const settled = { state: In(['dispatched', 'delivered', 'failed']), createdAt: LessThan(cutoff) };
       const settledDeleted = await pruneInBatches({
         repository: this.outbox,
-        where: { state: In(['dispatched', 'delivered', 'failed']), createdAt: LessThan(cutoff) },
+        where: { ...settled, engineRef: IsNull() },
         maxRows,
         stopped: () => this.stopped,
       });
-      const remaining = Math.max(0, maxRows - settledDeleted);
+      let remaining = Math.max(0, maxRows - settledDeleted);
       if (remaining <= 0 || this.stopped) return settledDeleted;
+      // The row of a message a handler filed elsewhere stays while a failed delivery keeps a copy of it: a change of the
+      // message reaches that copy by what the row says the engine reported. Few rows have one, so only looked for then.
+      const moved = { ...settled, engineRef: Not(IsNull()) };
+      const hasMoved = typeof this.outbox.exists === 'function' && (await this.outbox.exists({ where: moved }));
+      const movedDeleted = hasMoved
+        ? await pruneInBatches({
+            repository: this.outbox,
+            where: {
+              ...moved,
+              idempotencyKey: Raw(
+                key =>
+                  `NOT EXISTS (SELECT 1 FROM "webhook_delivery_failures" "kept" WHERE "kept"."idempotencyKey" = ${key} AND "kept"."payload" IS NOT NULL)`,
+              ),
+            },
+            maxRows: remaining,
+            stopped: () => this.stopped,
+          })
+        : 0;
+      remaining -= movedDeleted;
+      if (remaining <= 0 || this.stopped) return settledDeleted + movedDeleted;
       // Avoid a full empty-result find() pass on Postgres/SQLite when no legacy NULL-state rows exist.
       const hasLegacyNulls =
         typeof this.outbox.exists === 'function'
           ? await this.outbox.exists({ where: { state: IsNull(), createdAt: LessThan(cutoff) } })
           : true;
-      if (!hasLegacyNulls || this.stopped) return settledDeleted;
+      if (!hasLegacyNulls || this.stopped) return settledDeleted + movedDeleted;
       const legacyDeleted = await pruneInBatches({
         repository: this.outbox,
         where: { state: IsNull(), createdAt: LessThan(cutoff) },
         maxRows: remaining,
         stopped: () => this.stopped,
       });
-      return settledDeleted + legacyDeleted;
+      return settledDeleted + movedDeleted + legacyDeleted;
     })();
     const settled = task.then(
       () => undefined,
@@ -268,6 +303,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
         idempotencyKey: row.idempotencyKey,
         deliveryId: row.deliveryId,
         payload: row.payload,
+        engineRef: row.engineRef ?? null,
         state: 'pending',
         attempts: 0,
       } as QueryDeepPartialEntity<WebhookOutboxEvent>);
@@ -321,6 +357,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
                 idempotencyKey: row.idempotencyKey,
                 deliveryId: row.deliveryId,
                 payload: row.payload,
+                engineRef: row.engineRef ?? null,
                 state: 'pending' as const,
                 attempts: 0,
               })) as QueryDeepPartialEntity<WebhookOutboxEvent>[],
@@ -356,6 +393,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
               idempotencyKey: row.idempotencyKey,
               deliveryId: row.deliveryId,
               payload: row.payload,
+              engineRef: row.engineRef ?? null,
               state: 'pending' as const,
               attempts: 0,
             })) as QueryDeepPartialEntity<WebhookOutboxEvent>[],
@@ -422,7 +460,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   async closePendingForMessage(
     sessionId: string,
     waMessageId: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     await this.changeOpenForMessage(sessionId, waMessageId, { kind: 'close' }, shouldApply).catch((error: unknown) =>
       this.logger.warn(`Could not close pending outbound deliveries for message ${waMessageId}: ${String(error)}`),
@@ -438,13 +476,13 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     sessionId: string,
     waMessageId: string,
     change: MessageCopyChange,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     if (!waMessageId) return;
     const rows = await this.findPendingForMessage(sessionId, waMessageId);
     const matching: WebhookOutboxEvent[] = [];
     for (const row of rows) {
-      if (!row.payload || (shouldApply && !(await shouldApply(row.payload)))) continue;
+      if (!row.payload || (shouldApply && !(await shouldApply(row.payload, row.engineRef)))) continue;
       matching.push(row);
     }
     if (matching.length === 0) return;
@@ -469,11 +507,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
    * job reads the row before posting and sends what the redaction left. When `shouldApply` is
    * supplied, only rows whose stored payload satisfies the predicate are redacted.
    */
-  redactPendingForMessage(
-    sessionId: string,
-    waMessageId: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
-  ): Promise<void> {
+  redactPendingForMessage(sessionId: string, waMessageId: string, shouldApply?: MessageCopyPredicate): Promise<void> {
     return this.changeOpenForMessage(sessionId, waMessageId, { kind: 'redact' }, shouldApply).catch((error: unknown) =>
       this.logger.warn(`Could not redact pending outbound deliveries for message ${waMessageId}: ${String(error)}`),
     );
@@ -487,7 +521,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     sessionId: string,
     waMessageId: string,
     body: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     return this.changeOpenForMessage(sessionId, waMessageId, { kind: 'rewrite', body }, shouldApply).catch(
       (error: unknown) =>
@@ -496,6 +530,23 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Find still-open message outbox rows whose idempotencyKey matches `msg_<session>_<waId>_<webhookId>`. */
+  /**
+   * What the engine reported of the message each delivery key carries, where a handler filed it elsewhere, for the
+   * copies a failed delivery keeps. The outbox row stays while such a copy does (see pruneSettled).
+   */
+  async engineRefsFor(
+    webhookKeys: ReadonlyArray<{ webhookId: string; idempotencyKey: string }>,
+  ): Promise<Map<string, MessageEngineRef>> {
+    const refs = new Map<string, MessageEngineRef>();
+    if (webhookKeys.length === 0) return refs;
+    const rows = await this.outbox.find({
+      select: { webhookId: true, idempotencyKey: true, engineRef: true },
+      where: { idempotencyKey: In(webhookKeys.map(k => k.idempotencyKey)), engineRef: Not(IsNull()) },
+    });
+    for (const row of rows) if (row.engineRef) refs.set(`${row.webhookId}\u0000${row.idempotencyKey}`, row.engineRef);
+    return refs;
+  }
+
   private async findPendingForMessage(sessionId: string, waMessageId: string): Promise<WebhookOutboxEvent[]> {
     const { pattern, keyFor } = messageDeliveryKeys(sessionId, waMessageId);
     const candidates =
@@ -507,6 +558,7 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
             .andWhere('o.state IN (:...states)', { states: OPEN_STATES })
             .andWhere('o.payload IS NOT NULL')
             .andWhere("o.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern })
+            .addSelect('o.engineRef')
             .getMany()
         : await this.outbox.find({
             where: {

@@ -82,8 +82,11 @@ export function outboxPayloadPredicate(
   resolveLid?: (jid: string) => Promise<string | null>,
   allowUnverifiedFallback = false,
   filed?: MutationSource,
-): (payload: Record<string, unknown>) => Promise<boolean> {
-  return async (payload: Record<string, unknown>): Promise<boolean> => {
+): (payload: Record<string, unknown>, engineRef?: StoredMessageRef | null) => Promise<boolean> {
+  return async (payload: Record<string, unknown>, engineRef?: StoredMessageRef | null): Promise<boolean> => {
+    // A copy whose delivery kept what the engine reported (a handler filed the message elsewhere) is judged by that
+    // alone, as a row with an engine ref is: never by the chat the handler chose, and so also with no row to read.
+    if (engineRef) return (await mutationTargetsForeignRowPersisted(engineRef, source, resolveLid)) === null;
     const ref = outboxPayloadToRef(payload);
     if (!ref) return allowUnverifiedFallback;
     if ((await mutationTargetsForeignRowPersisted(ref, source, resolveLid)) === null) return true;

@@ -508,8 +508,8 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
   defineTableImporter({
     key: 'webhookOutboxEvents',
     label: 'webhook outbox event',
-    sql: `INSERT INTO webhook_outbox_events (id, "webhookId", "sessionId", event, "idempotencyKey", "deliveryId", payload, state, attempts, "lastAttemptAt", "createdAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    sql: `INSERT INTO webhook_outbox_events (id, "webhookId", "sessionId", event, "idempotencyKey", "deliveryId", payload, state, attempts, "lastAttemptAt", "createdAt", "engineRef")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     id: (row: WebhookOutboxEventRow) => row.id,
     map: (row: WebhookOutboxEventRow) => [
       row.id,
@@ -523,6 +523,8 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       row.attempts,
       row.lastAttemptAt,
       row.createdAt,
+      // What the engine reported of a message a handler filed elsewhere; absent from a backup of an earlier release.
+      row.engineRef == null ? null : typeof row.engineRef === 'string' ? row.engineRef : JSON.stringify(row.engineRef),
     ],
   }),
 

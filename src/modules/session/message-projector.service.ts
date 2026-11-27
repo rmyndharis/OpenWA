@@ -1652,6 +1652,32 @@ export class MessageProjector {
    * the same foreign-row rule applied to stored `messages` rows. A payload carries the message as a handler
    * filed it: `filed`, the row's own ref once its engine ref accepted the change, also matches.
    */
+  /** Dispatch a message event, with what the engine reported of the message when a handler filed it elsewhere. */
+  private dispatchMessage(
+    id: string,
+    event: string,
+    data: Record<string, unknown>,
+    engineRef: MessageEngineRef | null,
+  ): void {
+    void (engineRef
+      ? this.webhookService.dispatch(id, event, data, { engineRef })
+      : this.webhookService.dispatch(id, event, data));
+  }
+
+  /**
+   * The copies a delivery of this message opened: by what the engine reported when a handler filed it elsewhere (the
+   * copies keep it), and by the filed message too, as a copy from before engine refs were kept carries only that.
+   */
+  private ownCopiesPredicate(
+    message: Pick<IncomingMessage, 'chatId' | 'fromMe' | 'author'>,
+    engineRef?: MessageEngineRef | null,
+  ): ReturnType<typeof outboxPayloadPredicate> {
+    const filed = revokeSourceFor(refOf(message));
+    return engineRef
+      ? this.outboxPredicateFor(revokeSourceFor(engineRef), false, filed)
+      : this.outboxPredicateFor(filed);
+  }
+
   private outboxPredicateFor(
     source: MutationSource,
     allowUnverifiedFallback = false,
@@ -1708,6 +1734,7 @@ export class MessageProjector {
       try {
         const deliveries = await this.webhookService.prepareDeliveries(id, event, payload, {
           throwOnLookupError: true,
+          engineRef: dbMessage.engineRef ?? null,
         });
         return { deliveries, stale: false, failed: false };
       } catch (err) {
@@ -1724,6 +1751,7 @@ export class MessageProjector {
       try {
         const deliveries = await this.webhookService.prepareDeliveries(id, event, payload, {
           throwOnLookupError: true,
+          engineRef: dbMessage.engineRef ?? null,
         });
         return { deliveries, stale: false, failed: false };
       } catch (err) {
@@ -2337,6 +2365,7 @@ export class MessageProjector {
       void this.chatMediaArchive?.archive(dbMessage).catch(() => undefined);
     }
 
+    const engineRef = dbMessage.engineRef ?? null;
     const announced = this.withChangesMadeInFlight(finalMessage, entry);
     const currentSnap = snapshotInFlight(entry);
     if (!announced) {
@@ -2346,7 +2375,7 @@ export class MessageProjector {
         await this.webhookService.closePendingDeliveriesForMessage?.(
           id,
           finalMessage.id,
-          this.outboxPredicateFor(revokeSourceFor(refOf(finalMessage))),
+          this.ownCopiesPredicate(finalMessage, engineRef),
         );
       }
       return;
@@ -2363,6 +2392,8 @@ export class MessageProjector {
           'message.received',
           announced,
           openedDeliveries,
+          undefined,
+          engineRef,
         );
         if (reconciled.length > 0) void this.webhookService.dispatchPreparedDeliveries(reconciled);
       }
@@ -2378,11 +2409,14 @@ export class MessageProjector {
           id,
           'message.received',
           announced,
+          undefined,
+          undefined,
+          engineRef,
         );
         if (reconciled.length > 0) void this.webhookService.dispatchPreparedDeliveries(reconciled);
       }
     } else {
-      void this.webhookService.dispatch(id, 'message.received', announced);
+      this.dispatchMessage(id, 'message.received', announced, engineRef);
     }
     // Autoreply rules ride the same at-most-once dispatch (the insert oracle above dedupes engine
     // re-fires) and stay fail-open like the webhook: a broken rule must never break the receive path.
@@ -2539,6 +2573,12 @@ export class MessageProjector {
       resolveFeatureFlags(this.configService).storeEphemeralMessages ||
       !(outgoing.ephemeralDuration && outgoing.ephemeralDuration > 0);
 
+    // An echo row is outgoing and keeps no author whatever a hook says: only its chat, `from` and `to` can differ.
+    const engineRef = engineRefFor(
+      { chatId: identity.chatId, direction: MessageDirection.OUTGOING },
+      { chatId: outgoing.chatId, direction: MessageDirection.OUTGOING },
+      endsRewritten(identity, outgoing),
+    );
     let rowMarked = false;
     let prepared: PreparedWebhookDelivery[] | undefined;
     let openedDeliveries: PreparedWebhookDelivery[] | undefined;
@@ -2559,12 +2599,7 @@ export class MessageProjector {
         timestamp: outgoing.timestamp,
         status: MessageStatus.SENT,
         metadata,
-        // An echo row is outgoing and keeps no author whatever a hook says: only its chat, `from` and `to` can differ.
-        engineRef: engineRefFor(
-          { chatId: identity.chatId, direction: MessageDirection.OUTGOING },
-          { chatId: outgoing.chatId, direction: MessageDirection.OUTGOING },
-          endsRewritten(identity, outgoing),
-        ),
+        engineRef,
       });
       // The hook chain above is async; a delete()/teardown can retire this engine while it
       // awaits. Re-check liveness so a late continuation can't persist an orphan row
@@ -2669,10 +2704,12 @@ export class MessageProjector {
             'message.sent',
             deletedPlaceholder(outgoing),
             openedDeliveries,
+            undefined,
+            engineRef,
           );
         }
       } else if (retriedDup) {
-        const predicate = this.outboxPredicateFor(revokeSourceFor(refOf(finalMessage)));
+        const predicate = this.ownCopiesPredicate(finalMessage, engineRef);
         if (entry?.revokeAnnounced) {
           await this.webhookService.closePendingDeliveriesForMessage?.(id, finalMessage.id, predicate);
         } else if (entry?.revoked) {
@@ -2690,7 +2727,7 @@ export class MessageProjector {
         await this.webhookService.closePendingDeliveriesForMessage?.(
           id,
           finalMessage.id,
-          this.outboxPredicateFor(revokeSourceFor(refOf(finalMessage))),
+          this.ownCopiesPredicate(finalMessage, engineRef),
         );
       }
       return;
@@ -2705,6 +2742,8 @@ export class MessageProjector {
           'message.sent',
           sent,
           openedDeliveries,
+          undefined,
+          engineRef,
         );
         if (reconciled.length > 0) void this.webhookService.dispatchPreparedDeliveries(reconciled);
       }
@@ -2715,13 +2754,21 @@ export class MessageProjector {
           void this.webhookService.dispatchPreparedDeliveries(prepared);
         }
       } else if (retriedDup) {
-        const reconciled = await this.webhookService.reconcilePreparedDeliveries(prepared, id, 'message.sent', sent);
+        const reconciled = await this.webhookService.reconcilePreparedDeliveries(
+          prepared,
+          id,
+          'message.sent',
+          sent,
+          undefined,
+          undefined,
+          engineRef,
+        );
         if (reconciled.length > 0) void this.webhookService.dispatchPreparedDeliveries(reconciled);
       } else {
-        void this.webhookService.dispatch(id, 'message.sent', sent);
+        this.dispatchMessage(id, 'message.sent', sent, engineRef);
       }
     } else {
-      void this.webhookService.dispatch(id, 'message.sent', sent);
+      this.dispatchMessage(id, 'message.sent', sent, engineRef);
     }
     // Emit real-time event to WebSocket clients (as message.sent, not message.received)
     this.eventsGateway.emitMessageSent(id, sent);

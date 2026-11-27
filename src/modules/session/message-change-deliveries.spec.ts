@@ -70,6 +70,7 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
   let webhook: Webhook;
   let retentionHours: number;
   let engine: IWhatsAppEngine;
+  let hookManager: HookManager;
 
   beforeEach(async () => {
     jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
@@ -106,7 +107,7 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
         return (key in values ? values[key] : defaultValue) as T;
       },
     } as unknown as ConfigService;
-    const hookManager = new HookManager();
+    hookManager = new HookManager();
     outbox = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent));
     delivery = new WebhookDeliveryService(
       ds.getRepository(Webhook),
@@ -537,6 +538,74 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
       mockFetch.mockResolvedValue(new Response('ok', { status: 200 }));
       await redrive.redrive({ sessionId });
       expect(bodies()).toEqual(['edited text']);
+    });
+
+    describe('that a message:sent handler filed under another chat', () => {
+      const FILED = '628444@c.us';
+      beforeEach(() => {
+        hookManager.register('mover', 'message:sent', (ctx: { data: unknown }) =>
+          Promise.resolve({
+            continue: true,
+            data: { ...(ctx.data as Record<string, unknown>), chatId: FILED, to: FILED },
+          }),
+        );
+      });
+      const outboxRow = (): Promise<WebhookOutboxEvent | null> =>
+        ds.getRepository(WebhookOutboxEvent).findOne({ where: { sessionId } });
+
+      it.each(Object.keys(edits) as Array<keyof typeof edits>)(
+        'reaches the retry of its delivery when it comes %s, naming the chat the engine sent it in',
+        async edit => {
+          let endBackoff: (() => void) | undefined;
+          (sleep as unknown as jest.Mock).mockImplementationOnce(() => new Promise<void>(r => (endBackoff = r)));
+
+          projector.handleOwnSendEcho(sessionId, engine, ephemeralSend as never);
+          await settle(() => endBackoff !== undefined);
+          await edits[edit]();
+          await settle(() => false);
+          endBackoff!();
+          await settle(() => mockFetch.mock.calls.length >= 2);
+          await settle(() => false);
+
+          expect(await ds.getRepository(Message).count()).toBe(0);
+          expect(postedBodies()).toEqual([
+            expect.objectContaining({ chatId: FILED, body: 'first text' }),
+            expect.objectContaining({ chatId: FILED, body: 'edited text' }),
+          ]);
+        },
+      );
+
+      it('is withdrawn by a revoke from the phone, from its pending delivery and the copy its failed delivery keeps', async () => {
+        await ds.getRepository(Webhook).update(webhook.id, { retryCount: 1 });
+        projector.handleOwnSendEcho(sessionId, engine, ephemeralSend as never);
+        await settle(() => false);
+        await settle(() => false);
+        expect(await ds.getRepository(WebhookDeliveryFailure).count()).toBe(1);
+
+        await projector.recordRevoke(sessionId, 'M-16', { kind: 'revoke', chatId: CHAT, fromMe: true }, true);
+
+        mockFetch.mockReset();
+        mockFetch.mockResolvedValue(new Response('ok', { status: 200 }));
+        await redrive.redrive({ sessionId });
+        expect(bodies()).toEqual([]);
+      });
+
+      it('leaves its copies alone for a change naming the chat the handler chose', async () => {
+        let endBackoff: (() => void) | undefined;
+        (sleep as unknown as jest.Mock).mockImplementationOnce(() => new Promise<void>(r => (endBackoff = r)));
+        projector.handleOwnSendEcho(sessionId, engine, ephemeralSend as never);
+        await settle(() => endBackoff !== undefined);
+
+        await projector.recordOutboundMessageEdit(sessionId, 'M-16', 'edited text', {
+          kind: 'edit',
+          chatId: FILED,
+          fromMe: true,
+        });
+
+        expect((await outboxRow())?.payload).toMatchObject({ chatId: FILED, body: 'first text' });
+        endBackoff!();
+        await settle(() => mockFetch.mock.calls.length >= 2);
+      });
     });
 
     it("leaves the copies of another chat's message under the id alone", async () => {

@@ -14,10 +14,12 @@ import {
   changedMessagePayload,
   messageDeliveryKeys,
   type MessageCopyChange,
+  type MessageCopyPredicate,
   type OutboxOpenRow,
   type ReplayableDelivery,
 } from './webhook-outbox.service';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
+import type { MessageEngineRef } from '../message/entities/message.entity';
 import { clearDeliveryFailureRows, recordWebhookDeliveryFailure } from './utils/record-delivery-failure';
 import {
   buildDeliveryHeaders,
@@ -382,8 +384,14 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     this.inFlightDeliveries.clear();
   }
 
-  async dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
-    if (!WILDCARD_EXCLUDED_EVENTS.includes(event)) return this.fanOut(sessionId, event, data, null);
+  /** `engineRef`: what the engine reported of the message the event carries, when a handler filed it elsewhere. */
+  async dispatch(
+    sessionId: string,
+    event: string,
+    data: Record<string, unknown>,
+    options?: { engineRef?: MessageEngineRef | null },
+  ): Promise<void> {
+    if (!WILDCARD_EXCLUDED_EVENTS.includes(event)) return this.fanOut(sessionId, event, data, null, options?.engineRef);
     // An opt-in event fires per recipient (about 2,000 per message to a 1,000-member group): skip it
     // before the per-dispatch webhook read when no active webhook of the session names it.
     const webhookIds = await this.webhooksNamingOptInEvent(sessionId, event);
@@ -487,7 +495,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     event: string,
     data: Record<string, unknown>,
     only: string | null = null,
-    options?: { throwOnLookupError?: boolean },
+    options?: { throwOnLookupError?: boolean; engineRef?: MessageEngineRef | null },
   ): Promise<PreparedWebhookDelivery[]> {
     const webhooks = await this.loadActiveWebhooks(sessionId, event, options?.throwOnLookupError === true);
     const matchingWebhooks = await this.filterMatchingWebhooks(
@@ -522,6 +530,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         idempotencyKey,
         deliveryId,
         payload: baseData,
+        engineRef: options?.engineRef ?? null,
       };
       return {
         webhook,
@@ -587,6 +596,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     finalData: Record<string, unknown>,
     owned?: readonly PreparedWebhookDelivery[],
     openNew = true,
+    engineRef?: MessageEngineRef | null,
   ): Promise<PreparedWebhookDelivery[]> {
     const keyOf = (item: Pick<PreparedWebhookDelivery, 'webhook' | 'idempotencyKey'>): string =>
       `${item.webhook.id}\u0000${item.idempotencyKey}`;
@@ -595,7 +605,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
 
     let fresh: PreparedWebhookDelivery[];
     try {
-      fresh = await this.prepareDeliveries(sessionId, event, finalData, null, { throwOnLookupError: true });
+      fresh = await this.prepareDeliveries(sessionId, event, finalData, null, { throwOnLookupError: true, engineRef });
     } catch (error) {
       this.logger.warn(
         `Could not reload webhooks while reconciling ${event} for session ${sessionId}; preserving committed outbox rows`,
@@ -713,11 +723,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * Close any still-open message outbox rows when an engine revoke arrives for a message, and drop the event data
    * its failed deliveries keep for a redrive.
    */
-  closePendingForMessage(
-    sessionId: string,
-    waMessageId: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
-  ): Promise<void> {
+  closePendingForMessage(sessionId: string, waMessageId: string, shouldApply?: MessageCopyPredicate): Promise<void> {
     return this.changeCopiesQuietly(sessionId, waMessageId, { kind: 'close' }, shouldApply);
   }
 
@@ -725,11 +731,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * Redact payloads on any still-open message outbox rows when a REST delete clears a message, and the event data
    * its failed deliveries keep for a redrive.
    */
-  redactPendingForMessage(
-    sessionId: string,
-    waMessageId: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
-  ): Promise<void> {
+  redactPendingForMessage(sessionId: string, waMessageId: string, shouldApply?: MessageCopyPredicate): Promise<void> {
     return this.changeCopiesQuietly(sessionId, waMessageId, { kind: 'redact' }, shouldApply);
   }
 
@@ -738,7 +740,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     sessionId: string,
     waMessageId: string,
     body: string,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     return this.changeCopiesQuietly(sessionId, waMessageId, { kind: 'rewrite', body }, shouldApply);
   }
@@ -753,7 +755,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     sessionId: string,
     waMessageId: string,
     change: MessageCopyChange,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     if (!waMessageId) return;
     await this.outbox.changeOpenForMessage(sessionId, waMessageId, change, shouldApply);
@@ -767,9 +769,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       .andWhere('f.payload IS NOT NULL')
       .andWhere("f.idempotencyKey LIKE :pattern ESCAPE '\\'", { pattern })
       .getMany();
-    for (const row of rows) {
-      if (!row.payload || row.idempotencyKey !== keyFor(row.webhookId)) continue;
-      if (shouldApply && !(await shouldApply(row.payload))) continue;
+    const kept = rows.filter(row => row.payload && row.idempotencyKey === keyFor(row.webhookId));
+    const engineRefs =
+      shouldApply && kept.length ? await this.outbox.engineRefsFor(kept) : new Map<string, MessageEngineRef>();
+    for (const row of kept) {
+      if (!row.payload) continue;
+      const engineRef = engineRefs.get(`${row.webhookId}\u0000${row.idempotencyKey}`);
+      if (shouldApply && !(await shouldApply(row.payload, engineRef))) continue;
       await this.failureRepository.update({ id: row.id }, {
         payload: changedMessagePayload(row.payload, change),
       } as QueryDeepPartialEntity<WebhookDeliveryFailure>);
@@ -781,7 +787,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     sessionId: string,
     waMessageId: string,
     change: MessageCopyChange,
-    shouldApply?: (payload: Record<string, unknown>) => boolean | Promise<boolean>,
+    shouldApply?: MessageCopyPredicate,
   ): Promise<void> {
     return this.changeMessageCopies(sessionId, waMessageId, change, shouldApply).catch((error: unknown) =>
       this.logger.warn(`Could not change the delivery copies of message ${waMessageId}: ${String(error)}`),
@@ -797,8 +803,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     event: string,
     data: Record<string, unknown>,
     only: string | null,
+    engineRef?: MessageEngineRef | null,
   ): Promise<void> {
-    const prepared = await this.prepareDeliveries(sessionId, event, data, only);
+    const prepared = await this.prepareDeliveries(sessionId, event, data, only, { engineRef });
     // The awaits below hold this frame, parameters included, until every delivery settles: point
     // `data` at the shed copy so parked deliveries pin only that, not the caller's full blob.
     // eslint-disable-next-line no-useless-assignment

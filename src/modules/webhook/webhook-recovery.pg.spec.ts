@@ -467,6 +467,27 @@ describePostgres('webhook and media recovery on PostgreSQL', () => {
       expect(await outbox.count()).toBe(5);
     });
 
+    it('keeps a settled row of a message a handler filed elsewhere while a failed delivery keeps a copy of it', async () => {
+      const outbox = ds.getRepository(WebhookOutboxEvent);
+      await ds.query(
+        `INSERT INTO webhook_outbox_events (id, "webhookId", "sessionId", event, "idempotencyKey", "deliveryId", payload, state, attempts, "createdAt", "engineRef")
+         SELECT gen_random_uuid(), 'wh-1', 'sess-1', 'message.sent', k, 'dlv-' || k, NULL, 'failed', 1, now() - interval '30 days', r
+         FROM (VALUES ('moved-kept', '{"chatId":"628111@c.us","direction":"outgoing","author":null}'),
+                      ('moved-gone', '{"chatId":"628111@c.us","direction":"outgoing","author":null}'),
+                      ('plain-kept', NULL)) AS v(k, r)`,
+      );
+      await seedFailures(1, 'moved-kept-x', '1 day');
+      await ds.query(`UPDATE webhook_delivery_failures SET "idempotencyKey" = 'moved-kept'`);
+      await ds.query(
+        `INSERT INTO webhook_delivery_failures (id, "webhookId", "sessionId", event, url, "idempotencyKey", "deliveryId", attempts, "lastStatusCode", "lastError", payload, "createdAt")
+         VALUES (gen_random_uuid(), 'wh-1', 'sess-1', 'message.sent', 'https://receiver.example/hook', 'plain-kept', 'dlv-plain', 3, 503, 'HTTP 503', '{"id":"P"}'::jsonb, now())`,
+      );
+
+      await expect(new WebhookOutboxService(outbox).pruneSettled(7)).resolves.toBe(2);
+
+      expect((await outbox.find()).map(row => row.idempotencyKey)).toEqual(['moved-kept']);
+    });
+
     it('clears the payloads of a backlog of failure rows, then expires the rows, in bounded statements', async () => {
       const backlog = 2 * PRUNE_BATCH_SIZE + 300;
       await seedFailures(backlog, 'old', '200 days');

@@ -1,6 +1,7 @@
 import { DataSource, In } from 'typeorm';
 import { WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookOutboxEvent } from './entities/webhook-outbox-event.entity';
+import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -180,6 +181,51 @@ describe('WebhookOutboxService retention', () => {
 
       const survivors = (await ds.getRepository(WebhookOutboxEvent).find()).map(r => r.idempotencyKey).sort();
       expect(survivors).toEqual(['old-pending', 'old-queued', 'recent-delivered', 'recent-dispatched', 'recent-null']);
+    } finally {
+      await ds.destroy();
+    }
+  });
+
+  it('keeps the settled row of a message a handler filed elsewhere while a failed delivery keeps a copy of it', async () => {
+    const ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [WebhookOutboxEvent, WebhookDeliveryFailure],
+      synchronize: true,
+    }).initialize();
+    try {
+      const engineRef = JSON.stringify({ chatId: '628111@c.us', direction: 'outgoing', author: null });
+      const insertRow = (id: string, key: string, moved: boolean): Promise<unknown> =>
+        ds.query(
+          `INSERT INTO webhook_outbox_events (id, webhookId, sessionId, event, idempotencyKey, deliveryId, payload, state, attempts, createdAt, engineRef)
+           VALUES (?, 'wh-1', 'sess-1', 'message.sent', ?, ?, NULL, 'failed', 1, datetime('now', '-14 days'), ?)`,
+          [id, key, `dlv-${key}`, moved ? engineRef : null],
+        );
+      await insertRow('00000000-0000-4000-8000-000000000001', 'moved-kept', true);
+      await insertRow('00000000-0000-4000-8000-000000000002', 'moved-gone', true);
+      await insertRow('00000000-0000-4000-8000-000000000003', 'plain-kept', false);
+      const failures = ds.getRepository(WebhookDeliveryFailure);
+      for (const [key, payload] of [
+        ['moved-kept', { id: 'M', body: 'first text' }],
+        ['moved-gone', null],
+        ['plain-kept', { id: 'P', body: 'first text' }],
+      ] as const) {
+        await failures.insert({
+          webhookId: 'wh-1',
+          sessionId: 'sess-1',
+          event: 'message.sent',
+          url: 'https://receiver.example/hook',
+          idempotencyKey: key,
+          deliveryId: `dlv-${key}`,
+          attempts: 1,
+          lastError: 'receiver down',
+          payload,
+        });
+      }
+
+      expect(await new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent)).pruneSettled(7)).toBe(2);
+
+      expect((await ds.getRepository(WebhookOutboxEvent).find()).map(r => r.idempotencyKey)).toEqual(['moved-kept']);
     } finally {
       await ds.destroy();
     }

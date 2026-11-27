@@ -2182,6 +2182,48 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
     ]);
   });
 
+  // The outbox row of a send a hook moved, never stored, is how a change of it still reaches its copies.
+  it("restores the engine's chat of a delivery whose message a hook moved on a backup→restore", async () => {
+    await seedSession('s1');
+    const outboxRepo = ds.getRepository(WebhookOutboxEvent);
+    const engineRef = { chatId: '628111@c.us', direction: MessageDirection.OUTGOING, author: null };
+    await outboxRepo.insert([
+      {
+        webhookId: 'wh-1',
+        sessionId: 's1',
+        event: 'message.sent',
+        idempotencyKey: 'msg_s1_WA-MOVED_wh-1',
+        deliveryId: 'd-1',
+        payload: { id: 'WA-MOVED', chatId: '628999@c.us', fromMe: true },
+        state: 'pending',
+        engineRef,
+      },
+      {
+        webhookId: 'wh-1',
+        sessionId: 's1',
+        event: 'message.sent',
+        idempotencyKey: 'msg_s1_WA-KEPT_wh-1',
+        deliveryId: 'd-2',
+        payload: { id: 'WA-KEPT', chatId: '628111@c.us', fromMe: true },
+        state: 'pending',
+      },
+    ]);
+
+    const dump = await controller.exportData().then(readExport);
+    await outboxRepo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    const restored = await outboxRepo.find({
+      select: { deliveryId: true, engineRef: true },
+      order: { deliveryId: 'ASC' },
+    });
+    expect(restored).toEqual([
+      { deliveryId: 'd-1', engineRef },
+      { deliveryId: 'd-2', engineRef: null },
+    ]);
+  });
+
   // DELETE FROM sessions cascades to templates + baileys_stored_messages (both FK ON DELETE CASCADE),
   // so an import that never re-inserts them permanently wipes both on the documented backup flow.
   it('restores templates and baileys_stored_messages instead of cascade-wiping them', async () => {

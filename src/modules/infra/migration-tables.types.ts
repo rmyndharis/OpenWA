@@ -211,6 +211,7 @@ export interface WebhookOutboxEventRow {
   attempts: number;
   lastAttemptAt: string | null;
   createdAt: string;
+  engineRef?: string | Record<string, unknown> | null;
 }
 
 export interface IntegrationDeliveryFailureRow {
