@@ -1813,6 +1813,42 @@ describe('BaileysEvents removal of a conflicting copy the store refused', () => 
   });
 });
 
+describe('BaileysEvents removal of a conflicting copy refused for a reason of its own', () => {
+  it('keeps nothing', async () => {
+    const kept: string[] = [];
+    let tried = false;
+    const events = new BaileysEvents(
+      makeHost({
+        getOnMessage: () => () => ({ settled: Promise.resolve({ conflict: true }) }),
+        removeStoredMessage: () => {
+          tried = true;
+          return Promise.reject(
+            Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' }),
+          );
+        },
+        keepStoredChange: (messageId: string) => kept.push(messageId),
+      }),
+    );
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'C2', remoteJid: '6282222222222@s.whatsapp.net', fromMe: false },
+          messageTimestamp: 1_700_000_000,
+          message: { conversation: 'hi' },
+        },
+      ],
+    });
+    const deadline = Date.now() + 5_000;
+    while (!tried && Date.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+    for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
+
+    expect(tried).toBe(true);
+    expect(kept).toEqual([]);
+  });
+});
+
 describe('BaileysEvents record of conflicting copies removed', () => {
   it('forgets the id removed longest ago once it holds its limit', async () => {
     const limit = BaileysEvents.DELETED_FOR_EVERYONE_LIMIT;

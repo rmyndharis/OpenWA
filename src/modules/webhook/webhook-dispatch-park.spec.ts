@@ -1080,6 +1080,10 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
       ((LoggerService.prototype.error as jest.Mock).mock.calls as unknown[][])
         .map(call => call.at(-1) as { action?: string; reason?: string } | undefined)
         .filter(meta => meta?.action === 'message_inbound_lost');
+    const lostAs = (action: string): number =>
+      ((LoggerService.prototype.error as jest.Mock).mock.calls as unknown[][]).filter(
+        call => (call.at(-1) as { action?: string; reason?: string } | undefined)?.action === action,
+      ).length;
 
     it('is handed back to its engine once, after the database answers, and kept while the target read fails', async () => {
       const redeliverInbound = jest.fn().mockRejectedValueOnce(unavailable()).mockResolvedValue(true);
@@ -1254,6 +1258,36 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
 
         expect(calls).toEqual([`copy ${copyOf('R-1')} revoked`]);
       });
+    });
+
+    it.each([
+      ['message', 'message_inbound_lost'],
+      ['copy', 'message_copy_lost'],
+      ['blank', 'message_copy_blank_lost'],
+      ['text', 'message_copy_edit_lost'],
+      ['remove', 'message_copy_remove_lost'],
+      ['wipe', 'message_store_wipe_lost'],
+      ['story', 'status_ingest_lost'],
+      ['story-removal', 'status_removal_lost'],
+      ['forward', 'message_forward_replace_lost'],
+    ] as const)('logs a kept %s given up as %s', async (kind, action) => {
+      const refuse = jest.fn().mockRejectedValue(new Error('Unexpected token'));
+      Object.assign(engine, {
+        redeliverInbound: refuse,
+        restoreStoredCopy: refuse,
+        restoreStoredChange: refuse,
+        restoreStoredWipe: refuse,
+      });
+      // What none of those can read, nor the status store this harness leaves out, so each try fails on its own.
+      (
+        projector as unknown as {
+          keepInbound(key: string, sessionId: string, id: string, raw: string, kind: string, targetId: string): void;
+        }
+      ).keepInbound(`${sessionId}:${kind}:X-1`, sessionId, 'X-1', '{', kind, 'X-1');
+
+      for (let i = 0; i < 3; i++) await recover();
+
+      expect(lostAs(action)).toBe(1);
     });
 
     it('waits for an engine that can take it back', async () => {

@@ -624,8 +624,9 @@ describe('BaileysAdapter lifecycle & status', () => {
     const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
     try {
       const onDisconnected = jest.fn();
+      const onStoredAccountWipeRefused = jest.fn();
       const adapter = newAdapter();
-      await adapter.initialize(noopCallbacks({ onDisconnected }));
+      await adapter.initialize(noopCallbacks({ onDisconnected, onStoredAccountWipeRefused }));
       fakeStore.clearSession.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
       fakeSock.fire('connection.update', {
         connection: 'close',
@@ -635,6 +636,8 @@ describe('BaileysAdapter lifecycle & status', () => {
       expect(fakeStore.clearSession).toHaveBeenCalledWith('db-uuid-1');
       // A store failure does not turn the unlink into a failed cleanup.
       expect(onDisconnected).toHaveBeenCalledWith('logged out');
+      // Nor is a failure of its own kept to run again: only a database that cannot answer is.
+      expect(onStoredAccountWipeRefused).not.toHaveBeenCalled();
     } finally {
       rmSpy.mockRestore();
     }

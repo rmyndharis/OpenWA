@@ -912,6 +912,31 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       expect(keptChangesOf('K-3')).toEqual([]);
     });
 
+    it.each([
+      ['its write', 'update', undefined],
+      ['the read that judges it', 'findOne', CHAT],
+    ] as const)('keeps nothing of an ack when %s fails for a reason of its own', async (_l, method, chatId) => {
+      await storeRow('K-6', CHAT, true);
+      jest
+        .spyOn(ds.getRepository(Message), method)
+        .mockRejectedValueOnce(
+          Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' }),
+        );
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+      try {
+        projector.handleMessageAck(sessionId, engine, 'K-6', 'read', chatId);
+        await settle();
+        // The retry a moment later, which a row read as absent gets, runs before the test ends.
+        await jest.advanceTimersByTimeAsync(1000);
+        await settle();
+      } finally {
+        jest.useRealTimers();
+      }
+
+      // Never kept, rather than kept and settled by a pass meanwhile.
+      expect(keptFor('K-6')).toBe(false);
+    });
+
     it('sends its receipt once, at once, though its status is kept', async () => {
       await storeRow('K-4', CHAT, true);
       const dispatch = jest.spyOn(WebhookService.prototype, 'dispatch');

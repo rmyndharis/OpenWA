@@ -2440,6 +2440,36 @@ describe('MessageProjector (inbound projection)', () => {
       expect(persisted()).toHaveLength(1);
     });
 
+    it.each([
+      ['for a reason of its own, keeps nothing', false],
+      ['because the database is away, survives an unlink of the account', true],
+    ] as const)('a replace the database refused %s', async (_l, away) => {
+      let refuse = true;
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      messageRepository.insert.mockRejectedValueOnce(dup());
+      messageRepository.update.mockImplementation((where: { type?: unknown }) => {
+        if (where.type === 'forward' && refuse) {
+          refuse = false;
+          return Promise.reject(
+            away
+              ? Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })
+              : Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' }),
+          );
+        }
+        return Promise.resolve({ affected: 1 });
+      });
+      messageRepository.findOne.mockResolvedValue(placeholder);
+      projector.handleOwnSendEcho(SESSION_ID, engine, echo());
+      await flush();
+
+      projector.forgetKeptInbound(SESSION_ID);
+      await projector.retryParkedChanges();
+      await flush();
+
+      expect(replaces()).toHaveLength(away ? 2 : 1);
+    });
+
     it('leaves a row that is not a forward placeholder alone', async () => {
       await deliver(echo(), { ...placeholder, type: 'image' }, false);
 

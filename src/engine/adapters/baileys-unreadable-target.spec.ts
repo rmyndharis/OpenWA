@@ -483,6 +483,19 @@ describe('a change of the stored copy of a message the store refused', () => {
     expect(copyText(run)).toBe('second edit');
   });
 
+  it('keeps nothing of a change the store refused for a reason of its own', async () => {
+    const run = setup();
+    const constraint = Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' });
+    (run.events as unknown as { host: { updateStoredMessage: () => Promise<void> } }).host.updateStoredMessage = () =>
+      Promise.reject(constraint);
+
+    run.upsert(plainRevoke());
+    await until(() => run.revoked.length === 1, 'the delete');
+    for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+
+    expect(run.storedChanges).toEqual([]);
+  });
+
   it('keeps a change of a message whose copy is itself kept, to apply after that copy lands', async () => {
     const run = setup({ copyKept: true });
     run.store('empty');

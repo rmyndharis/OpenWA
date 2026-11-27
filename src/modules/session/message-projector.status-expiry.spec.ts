@@ -113,6 +113,32 @@ describe('a status the database refused', () => {
     expect(dispatch).toHaveBeenCalledWith('s1', 'status.received', expect.objectContaining({ statusId: 'st1' }));
   });
 
+  it('keeps nothing of a status, or of its delete, refused for a reason of its own', async () => {
+    const { projector, engine, ingest, removeRevoked, remove } = setup();
+    const constraint = Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' });
+    ingest.mockRejectedValue(constraint);
+    removeRevoked.mockRejectedValue(constraint);
+
+    await projector.handleInboundMessage('s1', engine, status)?.settled;
+    remove();
+    await turns();
+    await projector.retryParkedChanges();
+
+    expect([ingest.mock.calls.length, removeRevoked.mock.calls.length]).toEqual([1, 1]);
+  });
+
+  it("keeps a status through an unlink of the account, as it is the session's own", async () => {
+    const { projector, engine, dispatch, ingest, stored } = setup();
+    ingest.mockRejectedValueOnce(unavailable()).mockResolvedValue(stored);
+    await projector.handleInboundMessage('s1', engine, status)?.settled;
+    await turns();
+
+    projector.forgetKeptInbound('s1');
+    await projector.retryParkedChanges();
+
+    expect(dispatch).toHaveBeenCalledWith('s1', 'status.received', expect.objectContaining({ statusId: 'st1' }));
+  });
+
   it('removes a story its poster deleted once the database answers', async () => {
     const { projector, removeRevoked, remove } = setup();
     removeRevoked.mockRejectedValueOnce(unavailable()).mockResolvedValue(true);
