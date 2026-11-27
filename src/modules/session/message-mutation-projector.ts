@@ -174,6 +174,8 @@ export class MessageMutationProjector {
     private readonly lidsForPhone?: (phone: string) => Promise<string[]>,
     // The reported rows the lid store refuses, which such a write takes as no pairing, as a read of the row would.
     private readonly lidRowVetoes?: () => LidRowVetoes,
+    // Whether the SENT write of an API send under the id is kept to run again: its row is not under the id yet.
+    private readonly sendPending?: (sessionId: string, waMessageId: string) => boolean,
   ) {}
 
   /**
@@ -211,7 +213,8 @@ export class MessageMutationProjector {
   /**
    * What the stored row says of a change: whether there is one to ask, and why the change must not touch
    * it (null when it may), with the row it read. A row that cannot be read is reported absent with no reason,
-   * as before, and marked unread.
+   * as before, and marked unread, and so is no row while the SENT write of the send under the id is kept to run
+   * again: the change waits for that row instead of going on without it.
    */
   async storedRowVerdict(sessionId: string, waMessageId: string, source: MutationSource): Promise<StoredRowVerdict> {
     if (!waMessageId) return { exists: false, reason: null };
@@ -220,9 +223,23 @@ export class MessageMutationProjector {
         where: { sessionId, waMessageId },
         select: { id: true, chatId: true, direction: true, author: true, engineRef: true, from: true, to: true },
       });
-      return row
-        ? { exists: true, ...(await judgeStoredRow(row, waMessageId, source, this.resolveLid)), row, rowId: row.id }
-        : { exists: false, reason: null };
+      if (row) {
+        return {
+          exists: true,
+          ...(await judgeStoredRow(row, waMessageId, source, this.resolveLid)),
+          row,
+          rowId: row.id,
+        };
+      }
+      if (this.sendPending?.(sessionId, waMessageId)) {
+        return {
+          exists: false,
+          reason: null,
+          unread: true,
+          error: new Error('The row of the send is not written yet'),
+        };
+      }
+      return { exists: false, reason: null };
     } catch (error) {
       return { exists: false, reason: null, unread: true, error };
     }

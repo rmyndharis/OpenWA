@@ -38,6 +38,7 @@ import {
   RECOVERY_MAX_RECORDS,
   RecoveryQueue,
   recoveryQueueOptions,
+  sendRerunKey,
   type RecoveryLoss,
 } from '../../common/utils/recovery-queue';
 import { resolveWebhookReconcilerOptions } from '../webhook/webhook-reconciler.service';
@@ -540,6 +541,7 @@ export class MessageProjector {
       (sessionId, waMessageId, slots) => this.settleParked(sessionId, waMessageId, slots),
       this.lidMappingStore ? phone => this.lidMappingStore!.findLidsForPhone(phone) : undefined,
       this.lidMappingStore ? () => this.lidMappingStore!.rowVetoes() : undefined,
+      (sessionId, waMessageId) => this.recovery.get('send', sendRerunKey(sessionId, waMessageId)) !== undefined,
     );
     // What the last process kept of these changes comes back before anything is tried, its deliveries held again.
     this.recovery.register('change', {
@@ -566,6 +568,11 @@ export class MessageProjector {
   settleParkedChanges(budgetMs = PARKED_CHANGES_SHUTDOWN_PASS_MS): Promise<void> {
     // The kept webhook dispatches get their own pass, in the delivery service's shutdown drain.
     return this.recovery.drain(budgetMs, ['send', 'change']);
+  }
+
+  /** The queue this process keeps what the database refused in, shared with the send path's SENT writes. */
+  recoveryQueue(): RecoveryQueue {
+    return this.recovery;
   }
 
   /** Run the kept changes now: a test's clock, and the shutdown pass, do not wait for the timer. */
@@ -2174,8 +2181,10 @@ export class MessageProjector {
   }
 
   /**
-   * Advance the row by the receipts kept for it while it was in flight, judged by the message's claim. A row that
-   * cannot be read throws, so the receipts are kept; none is written to a row of another chat.
+   * Advance the row by the receipts kept for it, judged by the message's claim: each receipt by the receipt rule
+   * against the message as it was in flight, or, kept with no such ref (a receipt that came while the send's SENT write
+   * waited), against the row read. A row that cannot be read throws, so the receipts are kept; none is written to a row
+   * of another chat.
    */
   private async advanceKeptAcks(sessionId: string, waMessageId: string, slot: AckSlot): Promise<void> {
     const verdict = slot.own
@@ -2183,7 +2192,7 @@ export class MessageProjector {
       : await this.mutationProjector.storedRowVerdict(sessionId, waMessageId, slot.judge);
     if (verdict.unread) throw unreadRowError(verdict);
     if (!verdict.exists || verdict.reason) return;
-    const status = await this.furthestParkedAck(slot.ref, slot.acks);
+    const status = await this.furthestParkedAck(slot.ref ?? verdict.row, slot.acks);
     if (status) {
       await this.advanceAck(sessionId, waMessageId, status, verdict.rowId ? { id: verdict.rowId } : undefined);
     }
@@ -2903,17 +2912,28 @@ export class MessageProjector {
 
     const onAckError = (err: unknown): void => this.logger.error(`Failed to advance ack for ${messageId}`, String(err));
 
+    // The send's row takes the id only once its SENT write, which the database refused, runs again: the ack is kept
+    // with the message's changes, which run after that write, on its first try or on its retry.
+    const keepForSend = (): Promise<void> | undefined => {
+      if (!messageStatus || !this.recovery.get('send', sendRerunKey(id, messageId))) return undefined;
+      const chat = receiptChat ?? '';
+      // The row is read naming no chat, and the receipt judged against it as receiptVerdict judges one (advanceKeptAcks).
+      const acks: AckSlot = { judge: { kind: 'reaction', chatId: '' }, acks: new Map([[chat, messageStatus]]) };
+      return this.parkChange(id, messageId, { acks }, new Error('The row of the send is not written yet'));
+    };
     const advance = (first: () => Promise<number>, retry: () => Promise<number> = first): Promise<void> =>
       first()
         .then(affected => {
           if (affected > 0) return;
+          const kept = keepForSend();
+          if (kept) return kept;
           // affected:0 — most likely the send's 2nd save (which writes waMessageId) hasn't committed
           // yet, so the row isn't matchable. Each ack is one-shot (WhatsApp won't necessarily resend),
           // so retry ONCE after a short delay to close that race rather than leave it stuck at SENT.
           const timer = setTimeout(() => {
             void retry()
               .then(retried => {
-                if (retried === 0) logNoop();
+                if (retried === 0) return keepForSend() ?? logNoop();
               })
               .catch(onAckError);
           }, ACK_RECONCILE_DELAY_MS);

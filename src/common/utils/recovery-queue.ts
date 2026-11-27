@@ -8,6 +8,9 @@ import type { RecoveryJournal } from './recovery-journal';
 export type RecoveryLane = 'send' | 'change' | 'dispatch';
 const LANES: RecoveryLane[] = ['send', 'change', 'dispatch'];
 
+/** The key a send's SENT write is kept under in the `send` lane, by the message id it writes. */
+export const sendRerunKey = (sessionId: string, waMessageId: string): string => `${sessionId}:${waMessageId}`;
+
 /** Why a record was given up on: its lane is full, it is too old, the byte budget is spent, it kept failing, or the process stopped. */
 export type RecoveryLoss = 'count' | 'age' | 'bytes' | 'failures' | 'shutdown';
 

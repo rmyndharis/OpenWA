@@ -120,6 +120,8 @@ export class PendingMessageReaperService implements OnModuleInit, OnModuleDestro
       });
       for (const row of rows) {
         if (this.stopping) break;
+        // Its SENT write is kept to run once the database answers: the send went out, and the row holds its media.
+        if (this.sender?.hasPendingSentWrite(row.id)) continue;
         stats.scanned++;
         try {
           if (await this.reapRow(row, now)) {
