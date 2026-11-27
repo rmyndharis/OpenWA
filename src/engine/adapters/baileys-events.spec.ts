@@ -6,7 +6,13 @@ import { dirname, join, resolve } from 'node:path';
 import { compileFunction } from 'node:vm';
 import * as ts from 'typescript';
 import { BufferJSON } from '@whiskeysockets/baileys';
-import { BaileysEvents, keptInboundRaw, revivedInbound, type BaileysEventsHost } from './baileys-events';
+import {
+  BaileysEvents,
+  keptInboundRaw,
+  revivedInbound,
+  type BaileysEventsHost,
+  type StoredChange,
+} from './baileys-events';
 import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { inboundMediaConcurrency } from './inbound-media-cap';
@@ -1767,6 +1773,43 @@ describe('BaileysEvents own status addressed by LID', () => {
     expect(onMessage).not.toHaveBeenCalled();
     expect(onMessageCreate).toHaveBeenCalledWith(expect.objectContaining({ id: 'ST-ALT-SELF', fromMe: true }));
     expect(stored.get('ST-ALT-SELF')?.key.fromMe).toBe(true);
+  });
+});
+
+describe('BaileysEvents removal of a conflicting copy the store refused', () => {
+  it("is kept, and removes the copy once the store answers if it still carries that delivery's key", async () => {
+    const peer = '6282222222222@s.whatsapp.net';
+    const kept: Array<{ messageId: string; change: StoredChange }> = [];
+    const removed: string[] = [];
+    let failing = true;
+    const copy = { key: { id: 'C1', remoteJid: peer, fromMe: false }, message: { conversation: 'hi' } } as WAMessage;
+    const events = new BaileysEvents(
+      makeHost({
+        getOnMessage: () => () => ({ settled: Promise.resolve({ conflict: true }) }),
+        removeStoredMessage: (id: string, shouldRemove: (stored: WAMessage) => boolean) => {
+          if (failing) {
+            return Promise.reject(Object.assign(new Error('Connection terminated'), { code: 'ECONNREFUSED' }));
+          }
+          if (shouldRemove(copy)) removed.push(id);
+          return Promise.resolve();
+        },
+        keepStoredChange: (messageId: string, _changeId: string, change: StoredChange) =>
+          kept.push({ messageId, change }),
+      }),
+    );
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [{ key: copy.key, messageTimestamp: 1_700_000_000, message: { conversation: 'hi' } }],
+    });
+    const deadline = Date.now() + 5_000;
+    while (kept.length === 0 && Date.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+    expect(kept).toEqual([{ messageId: 'C1', change: expect.objectContaining({ kind: 'remove' }) as unknown }]);
+
+    failing = false;
+    await events.restoreStoredChange('C1', JSON.parse(JSON.stringify(kept[0].change)) as StoredChange);
+
+    expect(removed).toEqual(['C1']);
   });
 });
 

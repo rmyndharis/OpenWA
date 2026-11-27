@@ -243,7 +243,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
           messageId,
           changeId,
           raw: JSON.stringify({ messageId, change }),
-          blank: change.kind === 'blank',
+          kind: change.kind,
         }),
       noteUnreadStoredMessage: key => delegates.events?.noteUnreadStoredMessage(key),
       getStoredMessages: messageIds => this.config.messageStore?.getMessages(this.config.dbSessionId, messageIds),

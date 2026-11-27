@@ -115,7 +115,7 @@ describe('onInboundUnreadable wiring', () => {
   });
 
   it('keeps a change of a stored copy the store refused with the projector, from a live engine only', () => {
-    const kept = { messageId: 'M1', changeId: 'RV-1', raw: '{}', blank: true };
+    const kept = { messageId: 'M1', changeId: 'RV-1', raw: '{}', kind: 'blank' as const };
     const live = setup(true);
     const gone = setup(false);
 

@@ -188,6 +188,10 @@ const KEPT_INBOUND_LOSS: Readonly<Record<KeptInboundKind, [string, string]>> = {
     'message_copy_blank_lost',
   ],
   text: ['An edit of the stored copy of a message could not be kept any longer', 'message_copy_edit_lost'],
+  remove: [
+    'The removal of a stored copy a conflicting message left could not be kept any longer: the copy stays',
+    'message_copy_remove_lost',
+  ],
   wipe: [
     'What an unlinked account left in the stored messages and chat states could not be cleared: the next account may see it',
     'message_store_wipe_lost',
@@ -691,9 +695,9 @@ export class MessageProjector {
   /** Keep an edit or delete of the engine's copy of a message the database refused, to apply it once it answers. */
   keepStoredChange(
     sessionId: string,
-    kept: { messageId: string; changeId: string; raw: string; blank: boolean },
+    kept: { messageId: string; changeId: string; raw: string; kind: 'blank' | 'text' | 'remove' },
   ): void {
-    const kind = kept.blank ? 'blank' : 'text';
+    const { kind } = kept;
     const key = keptInboundKey(sessionId, kept.messageId, kind, kept.changeId);
     this.keepInbound(key, sessionId, kept.changeId, kept.raw, kind, kept.messageId);
   }

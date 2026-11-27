@@ -565,7 +565,7 @@ describe('What the database refused, across a restart', () => {
   it('applies a delete of a stored copy the store refused before a crash, after the copy it waits for', async () => {
     outage = 'on';
     node.projector.keepStoredCopy(sessionId, { messageId: 'J-1', raw: 'copy' });
-    node.projector.keepStoredChange(sessionId, { messageId: 'J-1', changeId: 'RV-1', raw: 'blank', blank: true });
+    node.projector.keepStoredChange(sessionId, { messageId: 'J-1', changeId: 'RV-1', raw: 'blank', kind: 'blank' });
     await settle();
 
     await crash();

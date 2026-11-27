@@ -1179,8 +1179,8 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
 
       it('applies the kept edits and deletes of the copy after it, in the order they came in', async () => {
         projector.keepStoredCopy(sessionId, { messageId: 'E-1', raw: copyOf('E-1') });
-        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'ED-1', raw: 'edit', blank: false });
-        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'RV-1', raw: 'blank', blank: true });
+        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'ED-1', raw: 'edit', kind: 'text' });
+        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'RV-1', raw: 'blank', kind: 'blank' });
         expect(projector.isChangeKept(sessionId, 'E-1')).toBe(true);
 
         await recover();
@@ -1192,7 +1192,7 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
 
       it('names a lost delete of a copy in its log, as a deleted text may survive in the copy', async () => {
         Object.assign(engine, { restoreStoredChange: jest.fn().mockRejectedValue(new Error('Unexpected token')) });
-        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'RV-1', raw: 'blank', blank: true });
+        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'RV-1', raw: 'blank', kind: 'blank' });
 
         for (let i = 0; i < 3; i++) await recover();
 
@@ -1218,7 +1218,7 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
       it('hands nothing back to the next account once the session unlinked the one it was kept for', async () => {
         projector.keepStoredCopy(sessionId, { messageId: 'E-1', raw: copyOf('E-1') });
         projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: 'A', targetId: 'E-1' });
-        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'RV-1', raw: 'blank', blank: true });
+        projector.keepStoredChange(sessionId, { messageId: 'E-1', changeId: 'RV-1', raw: 'blank', kind: 'blank' });
 
         projector.forgetKeptInbound(sessionId);
         await recover();

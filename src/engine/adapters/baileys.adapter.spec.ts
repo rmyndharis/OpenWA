@@ -5551,7 +5551,7 @@ describe('BaileysAdapter store-backed ops', () => {
       else await adapter.editMessage('628111@s.whatsapp.net', 'TARGET', 'new text');
 
       expect(onStoredChangeRefused).toHaveBeenCalledWith(
-        expect.objectContaining({ messageId: 'TARGET', blank: op === 'delete' }),
+        expect.objectContaining({ messageId: 'TARGET', kind: op === 'delete' ? 'blank' : 'text' }),
       );
       const [[{ raw }]] = onStoredChangeRefused.mock.calls as Array<[{ raw: string }]>;
       expect(JSON.parse(raw)).toMatchObject({ messageId: 'TARGET', change: { ...change, envelope: ownStored.key } });
@@ -14465,7 +14465,7 @@ describe('a message whose stored target the store fails to read', () => {
     expect(onStoredChangeRefused).toHaveBeenCalledWith({
       messageId: 'M1',
       changeId: 'REV-1',
-      blank: true,
+      kind: 'blank',
       raw: expect.any(String) as unknown,
     });
     const stored = { key: { remoteJid: chat, fromMe: false, id: 'M1' }, message: { conversation: 'hello' } };

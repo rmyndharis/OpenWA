@@ -269,15 +269,22 @@ export function revivedInbound(b: typeof BaileysLib, raw: string): WAMessage {
 
 /**
  * A change of the stored copy of a message, as data, so one the store refused can be kept and applied once it answers:
- * a delete blanks the copy, an edit sets its text. Each is judged against the copy when it is applied, as `mayChange`
- * judges it (`anyAuthor` is its delete exemption).
+ * a delete blanks the copy, an edit sets its text, a removal drops a copy a conflicting delivery stored (`envelope` is
+ * that delivery's key). Each is judged against the copy when it is applied, as `mayChange` judges it (`anyAuthor` is
+ * its delete exemption), a removal by the key the copy still carries.
  */
 export interface StoredChange {
-  kind: 'blank' | 'text';
+  kind: 'blank' | 'text' | 'remove';
   envelope: WAMessageKey;
   anyAuthor: boolean;
   body?: string;
 }
+
+/** Whether a stored copy still carries the key of a delivery: its chat, its sender and its direction. */
+const sameDelivery = (stored: WAMessageKey | null | undefined, key: WAMessageKey): boolean =>
+  stored?.remoteJid === key.remoteJid &&
+  keyParticipant(stored ?? {}) === keyParticipant(key) &&
+  (stored?.fromMe === true) === (key.fromMe === true);
 
 /** A read of the store that failed, handed on by a reader that cannot go on without what it would have read. */
 class StoreUnreadable extends Error {
@@ -759,6 +766,10 @@ export class BaileysEvents {
    * then. A copy the store does not hold takes nothing. Throws while the store still refuses, so the caller keeps it.
    */
   async restoreStoredChange(messageId: string, change: StoredChange): Promise<void> {
+    if (change.kind === 'remove') {
+      await this.host.removeStoredMessage(messageId, stored => sameDelivery(stored.key, change.envelope));
+      return;
+    }
     const stored = await this.host.getStoredMessage(messageId);
     if (!stored) return;
     const b = await this.host.loadLib();
@@ -1814,18 +1825,25 @@ export class BaileysEvents {
       remoteJid: key.remoteJid,
     });
     try {
-      await this.host.removeStoredMessage(
-        id,
-        stored =>
-          stored.key?.remoteJid === key.remoteJid &&
-          keyParticipant(stored.key ?? {}) === keyParticipant(key) &&
-          (stored.key?.fromMe === true) === (key.fromMe === true),
-      );
+      await this.host.removeStoredMessage(id, stored => sameDelivery(stored.key, key));
     } catch (err) {
-      this.host.logger.warn('Failed to remove the stored copy of a conflicting message', {
-        msgId: id,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      // Kept rather than lost: the wrong copy would judge the real message's changes, and be quoted or forwarded as it.
+      if (isDatabaseUnavailable(err) && this.host.keepStoredChange) {
+        this.host.logger.warn('Keeping the removal of a conflicting stored copy, to run it once the store answers', {
+          msgId: id,
+          action: 'baileys_copy_change_kept',
+        });
+        this.host.keepStoredChange(id, `remove:${keyParticipant(key) ?? key.remoteJid ?? ''}`, {
+          kind: 'remove',
+          envelope: key,
+          anyAuthor: false,
+        });
+      } else {
+        this.host.logger.warn('Failed to remove the stored copy of a conflicting message', {
+          msgId: id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
     // Counted even when the removal failed: the session said this delivery is not the message the id names.
     const removed = this.removalsOf(id) + 1;

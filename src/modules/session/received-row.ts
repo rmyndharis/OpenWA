@@ -132,7 +132,7 @@ export class KeptInbound implements RecoveryRecord {
  * What a kept inbound record holds: a message to read again, the engine's copy of a message to write, a change of that
  * copy to apply, a delete (`blank`) or an edit (`text`), or the clear of what an unlinked account left (`wipe`).
  */
-export type KeptInboundKind = 'message' | 'copy' | 'blank' | 'text' | 'wipe';
+export type KeptInboundKind = 'message' | 'copy' | 'blank' | 'text' | 'remove' | 'wipe';
 
 /** A record's key: a message by its own id, a copy by its message's, a change of a copy by both. */
 export const keptInboundKey = (sessionId: string, id: string, kind: KeptInboundKind, changeId?: string): string =>
@@ -174,6 +174,7 @@ export function restoredKeptInbound(
     return undefined;
   }
   const targetId = typeof v.g === 'string' ? v.g : undefined;
-  const kind = v.c === 'copy' || v.c === 'blank' || v.c === 'text' || v.c === 'wipe' ? v.c : 'message';
+  const kinds: readonly unknown[] = ['copy', 'blank', 'text', 'remove', 'wipe'];
+  const kind = kinds.includes(v.c) ? (v.c as KeptInboundKind) : 'message';
   return { sessionId: v.s, messageId: v.i, raw: v.m, kind, targetId, since: v.t };
 }
