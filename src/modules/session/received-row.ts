@@ -111,8 +111,13 @@ export class KeptInbound implements RecoveryRecord {
   }
 
   ageCapped(): boolean {
-    // A clear of an unlinked account is kept until the lane is full: the next account would see what it leaves.
+    // A clear of an unlinked account is kept, however old: the next account would see what it leaves.
     return this.kind !== 'wipe';
+  }
+
+  /** The clear of an unlinked account is never given up for count or bytes; there is one per session at most. */
+  pinned(): boolean {
+    return this.kind === 'wipe';
   }
 
   retry(): Promise<boolean> {

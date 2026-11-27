@@ -29,6 +29,7 @@ import { HookManager } from '../../core/hooks';
 import { EventsGateway } from '../events/events.gateway';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { SessionLidResolver } from '../session/session-lid-resolver.service';
+import { RECOVERY_MAX_RECORDS } from '../../common/utils/recovery-queue';
 import { LoggerService } from '../../common/services/logger.service';
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
@@ -1217,6 +1218,22 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
         await recover();
 
         expect(restoreStoredWipe.mock.calls).toEqual([['wipe']]);
+      });
+
+      it('keeps the clear of an unlinked account however full the lane grows', () => {
+        projector.keepStoredWipe(sessionId, { raw: 'wipe' });
+        for (let i = 0; i < RECOVERY_MAX_RECORDS.receive + 1; i++) {
+          projector.keepUnreadInbound(sessionId, { messageId: `M-${i}`, raw: '{}' });
+        }
+
+        const kept = (key: string) => projector.recoveryQueue().get('receive', `${sessionId}:${key}`) !== undefined;
+        // Over the bound by two: the two oldest messages go; the clear stays.
+        expect([kept('wipe'), kept('inbound:M-0'), kept('inbound:M-1'), kept('inbound:M-2')]).toEqual([
+          true,
+          false,
+          false,
+          true,
+        ]);
       });
 
       it('hands nothing back to the next account once the session unlinked the one it was kept for', async () => {

@@ -85,6 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Messages: keep a delete or edit of a Baileys message copy refused while the database was down and apply it once it answers; a delete left the taken-back text in the copy, to quote, forward or resend.
 - Messages: keep a delivery or read ack the database refused and advance the message once it answers; the status stayed behind for good.
 - Baileys: keep a clear of an unlinked account's stored messages and chat states the database refused, and run it once it answers; the next account to link the session saw them.
+- Baileys: never give up a kept clear of an unlinked account for a full lane; a burst of received messages in the same outage dropped it.
 - Baileys: keep the removal of a stored copy a conflicting delivery left, refused by the database, and run it once it answers; the copy judged the real message's changes.
 - Statuses: keep a received status, or its poster's delete, the database refused and apply it once it answers; the status was never stored, or a deleted one stayed listed until it expired.
 - Messages: keep the replace of a forward placeholder by its send's echo, refused by the database, and run it once it answers; the row stayed a forward with no content.

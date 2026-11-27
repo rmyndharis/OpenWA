@@ -29,6 +29,8 @@ export interface RecoveryRecord {
   ageCapped(): boolean;
   /** Whether it goes first once its lane is full (a status ack), ahead of older records that matter more. */
   expendable?(): boolean;
+  /** Never given up for count or bytes (one per session at most, the clear of an unlinked account), only for failures. */
+  pinned?(): boolean;
   /** A step that must run for every record before any record's retry (the outbox steps of message changes). */
   prepare?(): Promise<void>;
   /** One more try: resolves true once nothing is left of the record, and throws when the database fails. */
@@ -446,13 +448,16 @@ export class RecoveryQueue {
   private bound(lane: RecoveryLane): void {
     const inLane = this.lanes[lane];
     while (inLane.size > this.options.maxRecords[lane]) {
-      const [key, record] =
-        [...inLane.entries()].find(([, kept]) => kept.expendable?.() === true) ?? inLane.entries().next().value!;
-      this.drop(key, record);
-      record.lost('count');
+      const entries = [...inLane.entries()].filter(([, kept]) => kept.pinned?.() !== true);
+      const entry = entries.find(([, kept]) => kept.expendable?.() === true) ?? entries[0];
+      if (!entry) break;
+      this.drop(...entry);
+      entry[1].lost('count');
     }
     while (this.bytes > this.options.maxBytes && this.evictable.size > 0) {
-      const [record, key] = this.evictable.entries().next().value!;
+      const evictable = [...this.evictable.entries()].filter(([kept]) => kept.pinned?.() !== true);
+      const [record, key] = evictable[0] ?? [];
+      if (!record || key === undefined) break;
       this.drop(key, record);
       record.lost('bytes');
     }

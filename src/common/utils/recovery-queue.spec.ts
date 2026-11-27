@@ -37,6 +37,7 @@ describe('RecoveryQueue', () => {
       retry: () => Promise<boolean>;
       prepare: () => Promise<void>;
       expendable: boolean;
+      pinned: boolean;
     }> = {},
   ): RecoveryRecord & { lostAs?: RecoveryLoss } => {
     const r: RecoveryRecord & { lostAs?: RecoveryLoss } = {
@@ -48,6 +49,7 @@ describe('RecoveryQueue', () => {
       retry: over.retry ?? (() => (log.push(`retry ${name}`), Promise.resolve(true))),
       ...(over.prepare ? { prepare: over.prepare } : {}),
       ...(over.expendable !== undefined ? { expendable: () => over.expendable! } : {}),
+      ...(over.pinned !== undefined ? { pinned: () => over.pinned! } : {}),
       lost: reason => {
         r.lostAs = reason;
         log.push(`lost ${name} ${reason}`);
@@ -214,6 +216,24 @@ describe('RecoveryQueue', () => {
 
     expect(log).toEqual(['lost ack-1 count', 'lost ack-2 count']);
     expect(queue.get('change', 'revoke')).toBeDefined();
+  });
+
+  it('never gives up a pinned record for count, however full its lane', () => {
+    const queue = new RecoveryQueue(options());
+    queue.park('clear', record('clear', 'change', { ageCapped: false, pinned: true }));
+    for (const name of ['a', 'b', 'c', 'd']) queue.park(name, record(name, 'change'));
+
+    expect(log).toEqual(['lost a count', 'lost b count']);
+    expect(queue.get('change', 'clear')).toBeDefined();
+  });
+
+  it('never gives up a pinned record for bytes, though the age cap applies to it', () => {
+    const queue = new RecoveryQueue(options());
+    queue.park('clear', record('clear', 'receive', { bytes: 700, pinned: true }));
+    queue.park('row', record('row', 'receive', { bytes: 400 }));
+
+    expect(log).toEqual(['lost row bytes']);
+    expect(queue.get('receive', 'clear')).toBeDefined();
   });
 
   it('counts a record against the byte budget as it was last measured', async () => {
