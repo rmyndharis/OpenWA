@@ -528,6 +528,7 @@ export class MessageProjector {
       (sessionId, waMessageId) => this.announceChangedRow(sessionId, waMessageId),
       (sessionId, waMessageId, slots, error) => this.parkChange(sessionId, waMessageId, slots, error),
       (sessionId, waMessageId, slots) => this.settleParked(sessionId, waMessageId, slots),
+      this.lidMappingStore ? phone => this.lidMappingStore!.findLidsForPhone(phone) : undefined,
     );
     this.engines.onRetire((id, engine) => {
       for (const t of this.tickets.get(id) ?? []) if (t.engine === engine) t.drop();
@@ -2211,7 +2212,7 @@ export class MessageProjector {
     // The row judged is cleared by its key, and with none found only the message's own row can take it.
     const target =
       (judgeBy || slot.own) && verdict
-        ? this.mutationProjector.writeTarget(sessionId, waMessageId, judgeBy!, verdict)
+        ? await this.mutationProjector.writeTarget(sessionId, waMessageId, judgeBy!, verdict)
         : { sessionId, waMessageId };
     if (!target) return;
     const result = await this.messageRepository.update(

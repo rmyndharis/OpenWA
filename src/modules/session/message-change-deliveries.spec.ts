@@ -36,6 +36,8 @@ import { WebhookService } from '../webhook/webhook.service';
 import { WebhookReconcilerService } from '../webhook/webhook-reconciler.service';
 import { WebhookRedriveService } from '../webhook/webhook-redrive.service';
 import { MessageProjector } from './message-projector.service';
+import type { MutationSource } from './message-mutation-guard';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { HookManager } from '../../core/hooks';
 import { EventsGateway } from '../events/events.gateway';
@@ -46,6 +48,10 @@ import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.in
 
 const CHAT = '628111@c.us';
 const OTHER_CHAT = '628999@c.us';
+const LID = '999555@lid';
+const GROUP = '120363000000000001@g.us';
+const MEMBER = '628333@c.us';
+const MEMBER_LID = '999666@lid';
 
 /**
  * A revoke, a delete through the API or an edit of a stored message reaches every copy of the message the gateway
@@ -143,6 +149,15 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
       {} as unknown as StatusStoreService,
       { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
       configService,
+      undefined,
+      undefined,
+      // Reported pairings: the chat's phone with LID, and a group member's phone with MEMBER_LID.
+      {
+        findPhoneForLid: (jid: string) =>
+          Promise.resolve(jid === LID ? '628111' : jid === MEMBER_LID ? '628333' : null),
+        findLidsForPhone: (phone: string) =>
+          Promise.resolve(phone === '628111' ? ['999555'] : phone === '628333' ? ['999666'] : []),
+      } as unknown as LidMappingStoreService,
     );
     webhook = await ds.getRepository(Webhook).save(
       ds.getRepository(Webhook).create({
@@ -699,5 +714,129 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
         expect(await rowOf('M-20')).toMatchObject({ direction: MessageDirection.OUTGOING, ...expected });
       },
     );
+
+    describe('stored under another spelling of the chat or author the change names', () => {
+      /** Store a message under `id` right after the last read that judges the change. */
+      const storedAs = (
+        id: string,
+        row: Partial<Pick<Message, 'chatId' | 'from' | 'to' | 'direction' | 'author'>>,
+        reads: number,
+      ): void => {
+        const repository = ds.getRepository(Message);
+        const findOne = repository.findOne.bind(repository);
+        let judged = 0;
+        jest.spyOn(repository, 'findOne').mockImplementation(async options => {
+          const found = await findOne(options);
+          const select = (options as { select?: Record<string, unknown> }).select;
+          if (select?.engineRef && ++judged === reads) {
+            await repository.insert({
+              sessionId,
+              waMessageId: id,
+              chatId: CHAT,
+              from: CHAT,
+              to: '628222@c.us',
+              body: 'first text',
+              type: 'text',
+              direction: MessageDirection.INCOMING,
+              timestamp: 1_700_000_000,
+              ...row,
+            });
+          }
+          return found;
+        });
+      };
+      const revoke = (id: string, source: Omit<MutationSource, 'kind'>) =>
+        projector.recordRevoke(sessionId, id, { kind: 'revoke', ...source }, true);
+      const edit = async (id: string, message: Record<string, unknown>): Promise<void> => {
+        projector.applyMessageEditQueued(sessionId, { messageId: id, body: 'edited text', ...message } as never);
+        await settle();
+      };
+      const react = async (id: string, chatId: string, senderId: string): Promise<void> => {
+        projector.applyReactionQueued(sessionId, { messageId: id, chatId, senderId, reaction: 'x' });
+        await settle();
+      };
+      const own = { direction: MessageDirection.OUTGOING, from: '628222@c.us', to: CHAT };
+      const member = { chatId: GROUP, from: GROUP, author: MEMBER };
+
+      it.each([
+        ['a revoke from the phone', 'S-1', own, () => revoke('S-1', { chatId: LID, fromMe: true }), 2],
+        ['an engine edit', 'S-2', own, () => edit('S-2', { chatId: LID, fromMe: true }), 1],
+        ['a reaction', 'S-3', own, () => react('S-3', LID, LID), 1],
+        [
+          'an engine revoke',
+          'S-4',
+          { chatId: LID, from: LID },
+          () => revoke('S-4', { chatId: CHAT, fromMe: false }),
+          2,
+        ],
+        [
+          'an edit naming the phone',
+          'S-5',
+          { chatId: LID, from: LID },
+          () => edit('S-5', { chatId: CHAT, fromMe: false }),
+          1,
+        ],
+        ['a reaction naming the phone', 'S-6', { chatId: LID, from: LID }, () => react('S-6', CHAT, CHAT), 1],
+        [
+          'a revoke naming @c.us',
+          'S-7',
+          { chatId: '628111@s.whatsapp.net', from: '628111@s.whatsapp.net' },
+          () => revoke('S-7', { chatId: CHAT, fromMe: false }),
+          2,
+        ],
+        [
+          'an edit naming @c.us',
+          'S-8',
+          { chatId: '628111@s.whatsapp.net', from: '628111@s.whatsapp.net' },
+          () => edit('S-8', { chatId: CHAT, fromMe: false }),
+          1,
+        ],
+        [
+          'a group edit whose author is named by lid',
+          'S-9',
+          member,
+          () => edit('S-9', { chatId: GROUP, fromMe: false, author: MEMBER_LID }),
+          1,
+        ],
+        [
+          'a member revoke whose author is named by lid',
+          'S-10',
+          member,
+          () => revoke('S-10', { chatId: GROUP, fromMe: false, author: MEMBER_LID, admin: false }),
+          2,
+        ],
+      ] as const)(
+        'lands on the message stored under its other spelling (%s)',
+        async (label, id, row, change, reads) => {
+          storedAs(id, row, reads);
+
+          await change();
+
+          const stored = await rowOf(id);
+          if (label.includes('revoke')) expect(stored).toMatchObject({ type: 'revoked', body: '' });
+          else if (label.includes('edit')) expect(stored).toMatchObject({ body: 'edited text' });
+          else expect(stored.metadata).toMatchObject({ reactions: { [label.includes('phone') ? CHAT : LID]: 'x' } });
+        },
+      );
+
+      it('lands a member revoke naming its author by a lid with no reported phone on the row that stores a phone', async () => {
+        storedAs('S-12', member, 2);
+
+        await revoke('S-12', { chatId: GROUP, fromMe: false, author: '111222@lid', admin: false });
+
+        expect(await rowOf('S-12')).toMatchObject({ type: 'revoked', body: '' });
+      });
+
+      it.each([
+        ['a group edit', () => edit('S-11', { chatId: GROUP, fromMe: false, author: MEMBER_LID })],
+        ['a member revoke', () => revoke('S-11', { chatId: GROUP, fromMe: false, author: MEMBER_LID, admin: false })],
+      ] as const)("leaves another member's message alone (%s)", async (label, change) => {
+        storedAs('S-11', { ...member, author: '628444@c.us' }, label.includes('revoke') ? 2 : 1);
+
+        await change();
+
+        expect(await rowOf('S-11')).toMatchObject({ author: '628444@c.us', ...unchanged });
+      });
+    });
   });
 });

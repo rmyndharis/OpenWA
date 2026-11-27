@@ -10226,12 +10226,13 @@ describe('SessionService', () => {
       onMessageEdited(edited());
       await new Promise(resolve => setImmediate(resolve));
 
-      // No row is read back here, so the edit lands only on the row it claims: its chat and side, no engine ref.
+      // No row is read back here, so the edit lands only on the row it claims: its chat (in each dialect) and side,
+      // no engine ref.
       expect(messageRepository.update).toHaveBeenCalledWith(
         {
           sessionId: 'sess-uuid-1',
           waMessageId: 'WA_MSG_EDIT_1',
-          chatId: In(['123@c.us']),
+          chatId: In(['123@c.us', '123@s.whatsapp.net', '123@hosted']),
           engineRef: IsNull(),
           direction: 'incoming',
           type: Not('revoked'),

@@ -1,5 +1,6 @@
 import { MessageDirection, type MessageEngineRef } from '../message/entities/message.entity';
 import { parseWaId } from '../../engine/identity/wa-id';
+import { type ContactDirectory, resolveJidCandidates } from '../../engine/identity/jid-candidates';
 
 /** What a stored row says about whose message it is and where it lives. */
 export interface StoredMessageRef {
@@ -64,6 +65,30 @@ export function phoneSpellings(local: string): string[] {
     .replace(/^54(\d+)$/, '549$1');
   // A spelling has to fold back into the same number: taking the marker off twice would name another one.
   return [...new Set([digits, key, marked])].filter(spelling => spelling !== '' && phoneKey(spelling) === key);
+}
+
+/**
+ * Every id a writer may store for the entity `jid` names, as {@link provablyDifferent} takes it: a phone in each user
+ * dialect and each spelling {@link phoneKey} folds into it, with the lids reported for it, and a lid in both lid
+ * dialects with the phone reported for it (other lids of that phone are other people). A group or any other id is
+ * itself and its neutral form.
+ */
+export async function storedSpellings(jid: string, directory?: ContactDirectory): Promise<string[]> {
+  const lid = parseWaId(jid).kind === 'lid';
+  const ids = new Set([jid, ...(await resolveJidCandidates(jid, directory))]);
+  for (const id of [...ids]) {
+    const parsed = parseWaId(id);
+    if (parsed.kind !== 'user') continue;
+    for (const spelling of phoneSpellings(parsed.userPart)) {
+      for (const other of await resolveJidCandidates(`${spelling}@c.us`, lid ? undefined : directory)) ids.add(other);
+    }
+  }
+  for (const id of [...ids]) {
+    const parsed = parseWaId(id);
+    if (parsed.kind === 'user') ids.add(`${parsed.userPart}@hosted`);
+    if (parsed.kind === 'lid') ids.add(`${parsed.userPart}@hosted.lid`);
+  }
+  return [...ids];
 }
 
 /**

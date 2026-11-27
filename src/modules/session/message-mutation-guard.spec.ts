@@ -4,6 +4,7 @@ import {
   mutationTargetsForeignRowPersisted,
   phoneKey,
   phoneSpellings,
+  storedSpellings,
 } from './message-mutation-guard';
 
 const OUT = MessageDirection.OUTGOING;
@@ -260,5 +261,51 @@ describe('phoneSpellings', () => {
       expect(spellings).toContain(number);
       expect(new Set(spellings.map(phoneKey))).toEqual(new Set([phoneKey(number)]));
     }
+  });
+});
+
+describe('storedSpellings', () => {
+  // 5511987654321 is reported for lid 999555; the number's other spelling for lid 999556.
+  const directory = {
+    resolveLid: (lid: string) => ({ '999555': '5511987654321', '999556': '551187654321' })[lid] ?? null,
+    lidsForPhone: (phone: string) => ({ '5511987654321': ['999555'], '551187654321': ['999556'] })[phone] ?? [],
+  };
+  const sameEntity = (a: string, b: string): boolean =>
+    mutationTargetsForeignRow({ chatId: a, direction: IN }, { kind: 'reaction', chatId: b }, jid =>
+      directory.resolveLid(jid.split('@')[0]),
+    ) === null;
+
+  it('gives a phone in every dialect and spelling, with the lids reported for each, all of them the same entity', async () => {
+    const ids = await storedSpellings('5511987654321@c.us', directory);
+
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        '5511987654321@c.us',
+        '5511987654321@s.whatsapp.net',
+        '5511987654321@hosted',
+        '551187654321@c.us',
+        '551187654321@s.whatsapp.net',
+        '999555@lid',
+        '999555@hosted.lid',
+        '999556@lid',
+      ]),
+    );
+    for (const id of ids) expect(sameEntity(id, '5511987654321@c.us')).toBe(true);
+  });
+
+  it('gives a lid with the phone reported for it, and no other lid of that phone', async () => {
+    const ids = await storedSpellings('999555@lid', directory);
+
+    expect(ids).toEqual(
+      expect.arrayContaining(['999555@lid', '999555@hosted.lid', '5511987654321@c.us', '551187654321@s.whatsapp.net']),
+    );
+    expect(ids).not.toContain('999556@lid');
+    for (const id of ids) expect(sameEntity(id, '999555@lid')).toBe(true);
+  });
+
+  it('gives an unpaired lid, a group and an unknown id only as themselves', async () => {
+    expect(await storedSpellings('111@lid', directory)).toEqual(['111@lid', '111@hosted.lid']);
+    expect(await storedSpellings('120363000000000001@g.us', directory)).toEqual(['120363000000000001@g.us']);
+    expect(await storedSpellings('status@broadcast', directory)).toEqual(['status@broadcast']);
   });
 });

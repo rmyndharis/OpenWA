@@ -1,4 +1,4 @@
-import { Equal, type FindOptionsWhere, In, IsNull, Not, Or, Repository } from 'typeorm';
+import { type FindOptionsWhere, In, IsNull, Like, Not, Or, Repository } from 'typeorm';
 import { Message, MessageDirection } from '../message/entities/message.entity';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { LoggerService } from '../../common/services/logger.service';
@@ -6,7 +6,9 @@ import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { ReactionEvent, EditedMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { updateMessageMetadata } from '../message/message-metadata';
-import { type MutationSource, type StoredMessageRef } from './message-mutation-guard';
+import { type MutationSource, type StoredMessageRef, storedSpellings } from './message-mutation-guard';
+import type { ContactDirectory } from '../../engine/identity/jid-candidates';
+import { parseWaId } from '../../engine/identity/wa-id';
 import { judgeStoredRow, outboxPayloadPredicate, revokeSourceFor } from './message-row-judgement';
 import type { ChangeSlots, EditSlot, OwnRow } from './message-change-park';
 
@@ -35,27 +37,45 @@ export const unreadRowError = (verdict: StoredRowVerdict): unknown =>
 
 /**
  * The row of a message the change itself names, for a write made with no row read: its chat as the change names it
- * (or the chat an API caller named), the side and author the change implies where the rule judges them, and no
- * engine ref, since a row a hook moved is judged by its engine ref, which only a read applies. A row of another
- * chat, side or author under the id matches none of it.
+ * (or the chat an API caller named), the side and author the change implies where the rule judges them, each chat and
+ * author in every spelling the rule takes as the same entity ({@link storedSpellings}: dialects, spellings of one
+ * number, and the lid and phone reported as a pair), and no engine ref, since a row a hook moved is judged by its
+ * engine ref, which only a read applies. A row of another chat, side or author under the id matches none of it.
  */
-function claimedRow(sessionId: string, waMessageId: string, source: MutationSource): FindOptionsWhere<Message> {
+async function claimedRow(
+  sessionId: string,
+  waMessageId: string,
+  source: MutationSource,
+  directory?: ContactDirectory,
+): Promise<FindOptionsWhere<Message>> {
   const group = Boolean(source.chatId?.endsWith('@g.us'));
   const memberRevoke = source.kind === 'revoke' && group && source.fromMe === false && source.admin === false;
   const authorOnly = source.kind === 'edit' || (source.kind === 'revoke' && !group);
-  const chats = [...new Set([source.chatId, source.callerChatId].filter((c): c is string => Boolean(c)))];
+  const chats = new Set<string>();
+  for (const chat of [source.chatId, source.callerChatId]) {
+    for (const id of chat ? await storedSpellings(chat, directory) : []) chats.add(id);
+  }
   // A change that names no chat is judged foreign by no chat, so it claims none.
   const where: FindOptionsWhere<Message> = {
     sessionId,
     waMessageId,
-    ...(chats.length ? { chatId: In(chats) } : {}),
+    ...(chats.size ? { chatId: In([...chats]) } : {}),
     engineRef: IsNull(),
   };
   if ((authorOnly && source.fromMe !== undefined) || memberRevoke) {
     where.direction = source.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING;
   }
   if (source.author && (memberRevoke || (source.kind === 'edit' && group && source.fromMe === false))) {
-    where.author = Or(IsNull(), Equal(source.author));
+    const authors = [IsNull(), In(await storedSpellings(source.author, directory))];
+    // A member revoke is foreign only to an author it proves another: a lid with no reported phone proves no phone so.
+    if (
+      memberRevoke &&
+      parseWaId(source.author).kind === 'lid' &&
+      !(await directory?.resolveLid(parseWaId(source.author).userPart))
+    ) {
+      authors.push(...['c.us', 's.whatsapp.net', 'hosted'].map(domain => Like(`%@${domain}`)));
+    }
+    where.author = Or(...authors);
   }
   return where;
 }
@@ -89,6 +109,8 @@ export class MessageMutationProjector {
     ) => this.logger.error(`Failed to update message ${waMessageId} of session ${sessionId}`, String(error)),
     // Told of a change that landed, so one kept for the message that it supersedes is let go.
     private readonly settled: (sessionId: string, waMessageId: string, slots: ChangeSlots) => void = () => undefined,
+    // The lids reported for a phone, so a write with no row read takes the message stored under either.
+    private readonly lidsForPhone?: (phone: string) => Promise<string[]>,
   ) {}
 
   /**
@@ -150,16 +172,25 @@ export class MessageMutationProjector {
    * message's own row, stored after the read, still takes it. A row that could not be read is matched by the id, as
    * before. Null when the change is foreign to the row.
    */
-  writeTarget(
+  async writeTarget(
     sessionId: string,
     waMessageId: string,
     source: MutationSource,
     verdict: StoredRowVerdict,
-  ): FindOptionsWhere<Message> | null {
+  ): Promise<FindOptionsWhere<Message> | null> {
     if (verdict.reason) return null;
     if (verdict.exists && verdict.rowId) return { id: verdict.rowId };
     if (verdict.unread || verdict.exists) return { sessionId, waMessageId };
-    return claimedRow(sessionId, waMessageId, source);
+    const resolveLid = this.resolveLid;
+    return claimedRow(
+      sessionId,
+      waMessageId,
+      source,
+      resolveLid && {
+        resolveLid: lid => resolveLid(`${lid}@lid`).catch(() => null),
+        lidsForPhone: phone => this.lidsForPhone?.(phone).catch(() => []) ?? [],
+      },
+    );
   }
 
   private async applyReaction(id: string, event: ReactionEvent, needsRow: boolean): Promise<void> {
@@ -291,7 +322,7 @@ export class MessageMutationProjector {
     }
     const target =
       verdict && (slot.judge || slot.own)
-        ? this.writeTarget(sessionId, waMessageId, slot.judge!, verdict)!
+        ? (await this.writeTarget(sessionId, waMessageId, slot.judge!, verdict))!
         : { sessionId, waMessageId };
     if (slot.body !== undefined && !slot.textChanged) {
       const result = await this.messageRepository.update(
@@ -341,7 +372,7 @@ export class MessageMutationProjector {
     if (verdict.unread) throw unreadRowError(verdict);
     return updateMessageMetadata(
       this.messageRepository,
-      this.writeTarget(sessionId, waMessageId, judge, verdict)!,
+      (await this.writeTarget(sessionId, waMessageId, judge, verdict))!,
       current => {
         const reactions = { ...(current.reactions as Record<string, string> | undefined) };
         for (const [sender, reaction] of Object.entries(changes)) {

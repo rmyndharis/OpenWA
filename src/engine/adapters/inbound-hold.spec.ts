@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { WAState, type Message as WwebjsMessage } from 'whatsapp-web.js';
-import type { Repository } from 'typeorm';
+import { FindOperator, type Repository } from 'typeorm';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { BaileysEvents, type BaileysEventsHost, type GroupMember } from './baileys-events';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
@@ -42,9 +42,20 @@ const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
  */
 function heldProjector(options: { unique?: boolean; sqlite?: boolean } = {}) {
   const rows: Row[] = [];
+  // The compare-in-write conditions a write puts on the text and the type, which the table holds it to.
+  const holds = (value: unknown, condition: unknown): boolean => {
+    if (!(condition instanceof FindOperator)) return condition === undefined || value === condition;
+    const operand: unknown = condition.value;
+    if (condition.type === 'not') return !holds(value, operand);
+    if (condition.type === 'isNull') return value == null;
+    if (condition.type === 'or') return (operand as unknown[]).some(c => holds(value, c));
+    return true;
+  };
   // A row is found by its key when a write names one, else by the message id.
   const keyed = (r: Row, where: Row): boolean =>
-    where.id !== undefined ? r.id === where.id : r.waMessageId === where.waMessageId;
+    (where.id !== undefined ? r.id === where.id : r.waMessageId === where.waMessageId) &&
+    holds(r.body, where.body) &&
+    holds(r.type, where.type);
   const hookStarts: string[] = [];
   const hookedBodies: Record<string, string> = {};
   const stalls = new Map<string, Promise<void>>();
