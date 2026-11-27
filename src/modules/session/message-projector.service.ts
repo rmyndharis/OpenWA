@@ -176,6 +176,14 @@ export const PARKED_CHANGE_MAX_AGE_MS = RECOVERY_MAX_AGE_MS;
 /** Changes of one kind kept for one message whose claims disagree, each judged against the row when it is tried. */
 export const PARKED_VARIANTS_MAX = 4;
 
+/** What replaces a forward placeholder: the echo of the send, as the row it lost its insert with holds it. */
+interface ForwardEcho {
+  waMessageId: string;
+  type: Message['type'];
+  body: Message['body'];
+  metadata: Message['metadata'];
+}
+
 /** What an unlink drops of what is kept for the engine of the account it unlinked (see forgetKeptInbound). */
 const FORGOTTEN_AT_UNLINK: ReadonlySet<KeptInboundKind> = new Set(['message', 'copy', 'blank', 'text', 'remove']);
 
@@ -198,6 +206,10 @@ const KEPT_INBOUND_LOSS: Readonly<Record<KeptInboundKind, [string, string]>> = {
   story: [
     'A received status the database refused could not be kept any longer: it is not stored or announced',
     'status_ingest_lost',
+  ],
+  forward: [
+    'The replace of a forward placeholder could not be kept any longer: the row stays a forward with no content',
+    'message_forward_replace_lost',
   ],
   'story-removal': [
     'A status its poster deleted could not be removed: it stays listed until it expires',
@@ -655,6 +667,16 @@ export class MessageProjector {
       // A status is the session's own: stored or removed whatever engine runs, behind an older record of the same story.
       if (kept.kind === 'story' || kept.kind === 'story-removal') {
         return this.keptBefore(kept) ? false : this.applyKeptStory(kept);
+      }
+      // A row's own: replaced on the message's chain, as a live echo replaces it, whatever engine runs.
+      if (kept.kind === 'forward') {
+        const { echo, source } = JSON.parse(kept.raw) as { echo: ForwardEcho; source: MutationSource };
+        await new Promise<void>((resolve, reject) =>
+          this.enqueueMessageMutation(kept.sessionId, echo.waMessageId, () =>
+            this.replaceForwardPlaceholderOnce(kept.sessionId, echo, source).then(resolve, reject),
+          ),
+        );
+        return true;
       }
       const engine = this.engines.get(kept.sessionId);
       // Kept until the session's engine runs here again (after a restart, or a reconnect), and behind an older change of
@@ -2533,35 +2555,46 @@ export class MessageProjector {
     entry: InFlightEntry,
   ): Promise<void> {
     const { waMessageId, type, metadata } = echoRow;
-    const body = entry.editedBody ?? echoRow.body;
+    const echo: ForwardEcho = { waMessageId, type, body: entry.editedBody ?? echoRow.body, metadata };
     if (!waMessageId || type === 'revoked') return;
     try {
-      const placeholder = await this.messageRepository.findOne({
-        where: { sessionId: id, waMessageId, type: 'forward' },
-        select: { id: true },
-      });
-      if (!placeholder) return;
-      const reason = await this.mutationProjector.foreignRowReason(id, waMessageId, source);
-      if (reason) {
-        this.logger.warn('Not replacing the forward placeholder with a message that is not the one it holds', {
-          sessionId: id,
-          messageId: waMessageId,
-          reason,
-        });
-        return;
-      }
-      // Before the type flips, so a merge that fails leaves the placeholder as it was, not a typed row without its media.
-      // The placeholder read above, by its key, so a row stored under the id since is not the one replaced.
-      if (metadata) {
-        await updateMessageMetadata(this.messageRepository, { id: placeholder.id }, current =>
-          mergeSentMetadata(current, metadata),
-        );
-      }
-      const replaced = await this.messageRepository.update({ id: placeholder.id, type: 'forward' }, { type, body });
-      if (replaced?.affected) await this.announceChangedRow(id, waMessageId);
+      await this.replaceForwardPlaceholderOnce(id, echo, source);
     } catch (err) {
+      // Kept rather than lost: the row would stay a bodyless forward for good. Guarded by the type, so it runs late safely.
+      if (isDatabaseUnavailable(err)) {
+        const key = keptInboundKey(id, waMessageId, 'forward');
+        return this.keepInbound(key, id, waMessageId, JSON.stringify({ echo, source }), 'forward', waMessageId);
+      }
       this.logger.error(`Failed to replace the forward placeholder of ${waMessageId}`, String(err));
     }
+  }
+
+  /** One try of a forward placeholder's replace (see replaceForwardPlaceholder); throws when the database fails. */
+  private async replaceForwardPlaceholderOnce(id: string, echo: ForwardEcho, source: MutationSource): Promise<void> {
+    const { waMessageId, type, body, metadata } = echo;
+    const placeholder = await this.messageRepository.findOne({
+      where: { sessionId: id, waMessageId, type: 'forward' },
+      select: { id: true },
+    });
+    if (!placeholder) return;
+    const reason = await this.mutationProjector.foreignRowReason(id, waMessageId, source);
+    if (reason) {
+      this.logger.warn('Not replacing the forward placeholder with a message that is not the one it holds', {
+        sessionId: id,
+        messageId: waMessageId,
+        reason,
+      });
+      return;
+    }
+    // Before the type flips, so a merge that fails leaves the placeholder as it was, not a typed row without its media.
+    // The placeholder read above, by its key, so a row stored under the id since is not the one replaced.
+    if (metadata) {
+      await updateMessageMetadata(this.messageRepository, { id: placeholder.id }, current =>
+        mergeSentMetadata(current, metadata),
+      );
+    }
+    const replaced = await this.messageRepository.update({ id: placeholder.id, type: 'forward' }, { type, body });
+    if (replaced?.affected) await this.announceChangedRow(id, waMessageId);
   }
 
   /**

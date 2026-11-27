@@ -2412,6 +2412,34 @@ describe('MessageProjector (inbound projection)', () => {
       ]);
     });
 
+    it('keeps a replace the database refused and runs it once the database answers', async () => {
+      let refuse = true;
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      messageRepository.insert.mockRejectedValueOnce(dup());
+      messageRepository.update.mockImplementation((where: { type?: unknown }) => {
+        if (where.type === 'forward' && refuse) {
+          refuse = false;
+          return Promise.reject(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+        }
+        return Promise.resolve({ affected: 1 });
+      });
+      messageRepository.findOne.mockResolvedValue(placeholder);
+      projector.handleOwnSendEcho(SESSION_ID, engine, echo());
+      await flush();
+      expect(persisted()).toHaveLength(0);
+
+      await projector.retryParkedChanges();
+      await flush();
+
+      expect(replaces()).toHaveLength(2);
+      expect(replaces()[1]).toEqual([
+        { id: 'row-1', type: 'forward' },
+        { type: 'image', body: 'the caption' },
+      ]);
+      expect(persisted()).toHaveLength(1);
+    });
+
     it('leaves a row that is not a forward placeholder alone', async () => {
       await deliver(echo(), { ...placeholder, type: 'image' }, false);
 

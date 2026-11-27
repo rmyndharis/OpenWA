@@ -87,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Baileys: keep a clear of an unlinked account's stored messages and chat states the database refused, and run it once it answers; the next account to link the session saw them.
 - Baileys: keep the removal of a stored copy a conflicting delivery left, refused by the database, and run it once it answers; the copy judged the real message's changes.
 - Statuses: keep a received status, or its poster's delete, the database refused and apply it once it answers; the status was never stored, or a deleted one stayed listed until it expired.
+- Messages: keep the replace of a forward placeholder by its send's echo, refused by the database, and run it once it answers; the row stayed a forward with no content.
 - Webhooks: keep an event whose webhooks could not be read or whose outbox rows could not be written, and dispatch it once the database answers under the same idempotency key; it was lost.
 - Webhooks: a revoke withdraws the queued, retrying and kept deliveries of the message and its `message.edited` deliveries, and clears the copy a failure row keeps for a redrive; they delivered the taken-back text.
 - Webhooks: a delete through the API, or an edit, reaches the queued, retrying and kept deliveries of the message; they delivered the original text.
