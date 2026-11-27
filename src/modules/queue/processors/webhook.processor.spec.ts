@@ -1,5 +1,6 @@
 import { DelayedError, Job } from 'bullmq';
-import { FindOperator, Repository } from 'typeorm';
+import { DataSource, FindOperator, Repository } from 'typeorm';
+import { WebhookOutboxEvent } from '../../webhook/entities/webhook-outbox-event.entity';
 import { ConfigService } from '@nestjs/config';
 import { WebhookOutboxService } from '../../webhook/webhook-outbox.service';
 import { dataHash } from '../../webhook/utils/deliver-once';
@@ -854,6 +855,66 @@ describe('WebhookProcessor', () => {
 
     it('waits no longer than the close cap for a long delivery timeout', async () => {
       expect(await settleAfter(25_000)).toBe(MAX_WORKER_CLOSE_WAIT_MS);
+    });
+  });
+
+  describe('a queued message delivery against the outbox row as SQLite stores it', () => {
+    let ds: DataSource;
+    let realOutbox: WebhookOutboxService;
+    const queued = { id: 'M-1', chatId: '628111@c.us', fromMe: false, body: 'first text' };
+
+    beforeEach(async () => {
+      ds = await new DataSource({
+        type: 'better-sqlite3',
+        database: ':memory:',
+        entities: [WebhookOutboxEvent],
+        synchronize: true,
+      }).initialize();
+      realOutbox = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent));
+      processor = new WebhookProcessor(
+        repo as unknown as Repository<Webhook>,
+        failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+        hookManager as unknown as HookManager,
+        configService as unknown as ConfigService,
+        realOutbox,
+      );
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    });
+    afterEach(() => ds.destroy());
+
+    const row = (state: string | null, payload: Record<string, unknown> | null): Promise<unknown> =>
+      ds.getRepository(WebhookOutboxEvent).insert({
+        webhookId: 'wh-1',
+        sessionId: 'sess-1',
+        event: 'message.received',
+        idempotencyKey: 'k',
+        deliveryId: 'd',
+        payload,
+        state,
+      } as never);
+    const job = (): Job<WebhookJobData> => {
+      const queuedJob = makeJob({ baseHash: dataHash(queued) });
+      queuedJob.data.payload.data = { ...queued };
+      return queuedJob;
+    };
+
+    it.each([
+      ['a row left from before rows had a state', null, queued],
+      ['an open row without a payload', 'queued', null],
+    ] as const)('posts what it holds for %s, which says nothing of a change', async (_label, state, payload) => {
+      await row(state, payload);
+
+      await processor.process(job());
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['dispatched', 'failed'])('posts nothing for a row closed as %s', async state => {
+      await row(state, null);
+
+      await processor.process(job());
+
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 

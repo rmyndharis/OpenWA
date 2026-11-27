@@ -1520,7 +1520,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   }
 
   private logSkippedRetracted(webhookId: string, event: string, deliveryId: string, idempotencyKey: string): void {
-    this.logger.warn('Skipping webhook delivery: the message was taken back', {
+    this.logger.warn('Skipping webhook delivery: its outbox row was closed (message taken back or delivered)', {
       webhookId,
       event,
       deliveryId,

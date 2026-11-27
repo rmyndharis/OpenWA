@@ -492,6 +492,19 @@ describe('WebhookOutboxService.currentMessagePayload() (SQLite)', () => {
     expect(await outbox.currentMessagePayload('w1', 'msg_s1_M_w1', 'message.sent')).toBeNull();
   });
 
+  it.each([
+    ['a legacy row without a state', null, '{"body":"first text"}', undefined],
+    ['an open row without a payload', 'pending', null, undefined],
+    ['a row closed as failed', 'failed', null, null],
+  ])('answers %s as %s', async (_label, state, payload, expected) => {
+    await ds.query(
+      `INSERT INTO webhook_outbox_events (id, webhookId, sessionId, event, idempotencyKey, deliveryId, payload, state, attempts)
+       VALUES ('r1', 'w1', 's1', 'message.received', 'msg_s1_M_w1', 'd1', ?, ?, 0)`,
+      [payload, state],
+    );
+    expect(await outbox.currentMessagePayload('w1', 'msg_s1_M_w1', 'message.received')).toBe(expected);
+  });
+
   it('reads a payload that does not parse as no row, and throws when the database cannot answer', async () => {
     await ds.query(
       `INSERT INTO webhook_outbox_events (id, webhookId, sessionId, event, idempotencyKey, deliveryId, payload, state, attempts)

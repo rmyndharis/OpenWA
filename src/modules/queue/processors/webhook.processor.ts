@@ -199,14 +199,17 @@ export class WebhookProcessor extends WorkerHost {
         return { statusCode: 0, success: false, error: 'webhook removed, disabled or unsubscribed', responseTime: 0 };
       }
       if (held === null) {
-        this.logger.warn('Skipping queued webhook delivery: the message was taken back since it was queued', {
-          webhookId,
-          event,
-          deliveryId: payload.deliveryId,
-          idempotencyKey: payload.idempotencyKey,
-          action: 'webhook_skipped_retracted',
-        });
-        return { statusCode: 0, success: false, error: 'message taken back', responseTime: 0 };
+        this.logger.warn(
+          'Skipping queued webhook delivery: its outbox row was closed (message taken back or delivered)',
+          {
+            webhookId,
+            event,
+            deliveryId: payload.deliveryId,
+            idempotencyKey: payload.idempotencyKey,
+            action: 'webhook_skipped_retracted',
+          },
+        );
+        return { statusCode: 0, success: false, error: 'outbox row closed', responseTime: 0 };
       }
       ctx.url = current.url;
       let body = JSON.stringify(payload);
