@@ -21,7 +21,8 @@ import { WebhookOutboxService } from '../webhook/webhook-outbox.service';
 import { WebhookDeliveryService } from '../webhook/webhook-delivery.service';
 import { WebhookService } from '../webhook/webhook.service';
 import { WebhookReconcilerService } from '../webhook/webhook-reconciler.service';
-import { MessageProjector, PARKED_CHANGE_MAX_AGE_MS } from './message-projector.service';
+import { MessageProjector, PARKED_CHANGE_MAX_AGE_MS, PARKED_VARIANTS_MAX } from './message-projector.service';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { RECOVERY_MAX_BYTES } from '../../common/utils/recovery-queue';
 import { SessionOwnershipService } from './session-ownership.service';
 import * as sharedConnection from '../../common/utils/shared-connection';
@@ -35,6 +36,7 @@ import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/w
 
 const CHAT = '628111@c.us';
 const REFUSED = 'REFUSED text';
+const LID = '999555@lid';
 const OTHER_CHAT = '628999@c.us';
 
 /**
@@ -57,6 +59,8 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
   // 'on': every statement fails; 'reads': only the reads that judge a change against the row fail.
   // 'refuse': the database answers, but refuses a write of a message row that carries REFUSED, as for a bad value.
   let outage: 'off' | 'on' | 'reads' | 'refuse';
+  // With 'refuse', a write of the row with this key is refused too.
+  let refusedRow: string;
   const ioerr = (): Error => Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' });
   // eslint-disable-next-line @typescript-eslint/unbound-method -- a jest spy, read for its calls
   const lost = (): jest.Mock => LoggerService.prototype.error as jest.Mock;
@@ -67,6 +71,7 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
     mockFetch.mockReset();
     mockFetch.mockResolvedValue(new Response('ok', { status: 200 }));
     outage = 'off';
+    refusedRow = '\u0000';
     owns = true;
 
     ds = await new DataSource({
@@ -89,7 +94,12 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       const sql = String(args[0]);
       const judging = /^\s*SELECT/i.test(sql) && sql.includes('"messages"') && sql.includes('"engineRef"');
       if (outage === 'on' || (outage === 'reads' && judging)) return Promise.reject(ioerr());
-      if (outage === 'refuse' && /^\s*UPDATE "messages"/i.test(sql) && JSON.stringify(args[1]).includes(REFUSED)) {
+      const refused = JSON.stringify(args[1]);
+      if (
+        outage === 'refuse' &&
+        /^\s*UPDATE "messages"/i.test(sql) &&
+        (refused.includes(REFUSED) || refused.includes(refusedRow))
+      ) {
         return Promise.reject(Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' }));
       }
       return realQuery.apply(this, args);
@@ -143,7 +153,11 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       configService,
       undefined,
       undefined,
-      undefined,
+      // The chat's phone is reported with LID.
+      {
+        findPhoneForLid: (jid: string) => Promise.resolve(jid === LID ? '628111' : null),
+        findLidsForPhone: (phone: string) => Promise.resolve(phone === '628111' ? ['999555'] : []),
+      } as unknown as LidMappingStoreService,
       { owns: () => owns } as unknown as SessionOwnershipService,
     );
     webhookId = (
@@ -197,6 +211,10 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
     );
   };
 
+  const changesLost = (): unknown[] =>
+    lost()
+      .mock.calls.map(([, , meta]) => meta as { action?: string } | undefined)
+      .filter(meta => meta?.action === 'message_change_lost');
   const keptFor = (id: string): boolean =>
     (LoggerService.prototype.warn as jest.Mock).mock.calls.some(
       ([, meta]) =>
@@ -573,6 +591,124 @@ describe('Changes the database refused, kept until it answers (SQLite)', () => {
       } finally {
         jest.useRealTimers();
       }
+    });
+
+    describe('changes of one message whose claims disagree', () => {
+      const GROUP = '120363000000000001@g.us';
+      const AUTHOR = '628111@c.us';
+      const MEMBER = '628777@c.us';
+      const memberRevoke = (id: string, participant: string): void =>
+        projector.handleMessageRevoked(
+          sessionId,
+          engine,
+          { id, revokedId: id, chatId: GROUP, timestamp: 1_700_000_001 } as never,
+          { fromMe: false, participant, admin: false },
+        );
+      const storeGroupRow = async (id: string): Promise<string> => {
+        const { identifiers } = await ds.getRepository(Message).insert({
+          sessionId,
+          waMessageId: id,
+          chatId: GROUP,
+          author: AUTHOR,
+          from: GROUP,
+          to: '628222@c.us',
+          body: 'first text',
+          type: 'text',
+          direction: MessageDirection.INCOMING,
+          timestamp: 1_700_000_000,
+        });
+        await outbox.open({
+          webhookId,
+          sessionId,
+          event: 'message.received',
+          idempotencyKey: `msg_${sessionId}_${id}_${webhookId}`,
+          deliveryId: `delivery-${id}`,
+          payload: { id, chatId: GROUP, fromMe: false, author: AUTHOR, type: 'text', body: 'first text' },
+        });
+        return identifiers[0].id as string;
+      };
+
+      it.each([
+        ['alone', [AUTHOR]],
+        ["kept after another member's revoke of it", [MEMBER, AUTHOR]],
+        ["kept before another member's revoke of it", [AUTHOR, MEMBER]],
+      ])("lands the author's revoke %s, and the sweep delivers nothing of the message", async (_label, order) => {
+        await storeGroupRow('G-1');
+        outage = 'on';
+        for (const participant of order) {
+          memberRevoke('G-1', participant);
+          await settle();
+        }
+        await recover();
+
+        expect(await rowOf('G-1')).toMatchObject({ type: 'revoked', body: '' });
+        expect(await sweptBodies()).not.toContain('first text');
+        expect(changesLost()).toEqual([]);
+      });
+
+      it("keeps the message's deliveries held while one of its kept changes still waits", async () => {
+        refusedRow = await storeGroupRow('G-2');
+        outage = 'on';
+        memberRevoke('G-2', AUTHOR);
+        await settle();
+        memberRevoke('G-2', MEMBER);
+        await settle();
+        // The author's revoke is refused once more; the member's is judged foreign and let go.
+        outage = 'refuse';
+        await projector.retryParkedChanges();
+        await settle();
+
+        expect(await rowOf('G-2')).toMatchObject({ type: 'text' });
+        expect(heldOnThisNode('G-2')).toBe(true);
+      });
+
+      it.each([
+        ['kept as well', true],
+        ['written while the older one is kept', false],
+      ])('lands a newer edit claimed by the lid paired with the phone of a kept one, %s', async (_label, kept) => {
+        await storeRow('E-1');
+        outage = 'on';
+        projector.applyMessageEditQueued(sessionId, {
+          messageId: 'E-1',
+          chatId: CHAT,
+          body: 'first fix',
+          fromMe: false,
+        } as never);
+        await settle();
+        if (!kept) outage = 'off';
+        projector.applyMessageEditQueued(sessionId, {
+          messageId: 'E-1',
+          chatId: LID,
+          body: 'second fix',
+          fromMe: false,
+        } as never);
+        await settle();
+        await recover();
+
+        expect(await rowOf('E-1')).toMatchObject({ body: 'second fix' });
+      });
+
+      it('gives up on the oldest of too many kept changes of one kind whose claims disagree, and logs it as lost', async () => {
+        await storeGroupRow('G-3');
+        outage = 'on';
+        const members = Array.from({ length: PARKED_VARIANTS_MAX + 1 }, (_, i) => `62877700${i}@c.us`);
+        for (const participant of members) {
+          memberRevoke('G-3', participant);
+          await settle();
+        }
+
+        expect(changesLost()).toHaveLength(1);
+        expect(lost()).toHaveBeenCalledWith(
+          expect.any(String),
+          undefined,
+          expect.objectContaining({
+            messageId: 'G-3',
+            slots: ['revoke'],
+            reason: 'conflict',
+            action: 'message_change_lost',
+          }),
+        );
+      });
     });
 
     it('drops what a removed session kept', async () => {

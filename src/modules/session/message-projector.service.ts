@@ -149,6 +149,8 @@ const sameInFlightSnapshot = (a: InFlightMutationSnapshot, b: InFlightMutationSn
 /** Bounds of the changes kept while the database refuses them: per message id, and for how long one with content stays. */
 export const PARKED_CHANGES_MAX = 1000;
 export const PARKED_CHANGE_MAX_AGE_MS = 60 * 60 * 1000;
+/** Changes of one kind kept for one message whose claims disagree, each judged against the row when it is tried. */
+export const PARKED_VARIANTS_MAX = 4;
 
 /** The one pass the kept changes get at shutdown, once the engines are gone (a stage of shutdown-budget.ts). */
 export const PARKED_CHANGES_SHUTDOWN_PASS_MS = 1_000;
@@ -472,6 +474,9 @@ export class MessageProjector {
   // Changes the database refused (a write that failed, or a row it could not read to judge them), kept to try again
   // once it answers, one record per message id: see ParkedChange and RecoveryQueue.
   private readonly recovery: RecoveryQueue;
+  // The records kept for each message, oldest first: more than one when the claims of its kept changes disagree.
+  private readonly parkedFor = new Map<string, ParkedChange[]>();
+  private parkSeq = 0;
   private readonly parkSteps: ParkedChangeSteps = {
     outbox: change => this.parkedOutboxSteps(change),
     apply: change =>
@@ -480,7 +485,7 @@ export class MessageProjector {
           announce: change.engine !== undefined && this.engines.isLive(change.sessionId, change.engine),
           owned: nodeOwnsSession(this.ownership, change.sessionId),
         }),
-      ).finally(() => this.holdCopies(change)),
+      ).finally(() => this.holdCopies(change.sessionId, change.waMessageId)),
     released: (change, reason) => this.releaseParked(change, reason),
   };
 
@@ -557,61 +562,82 @@ export class MessageProjector {
   }
 
   /**
-   * Keep changes of a message the database refused (see ParkedChange), merged into what is kept for it already: a newer
-   * edit or reaction of a sender replaces the kept one, a revoke stays once kept (an engine revoke replaces a delete
-   * through the API, as it withdraws more).
+   * Keep changes of a message the database refused (see ParkedChange), merged into what is kept for it already, kind by
+   * kind: with a kept one whose claim agrees (a newer edit or reaction of a sender replaces it, a revoke stays once kept,
+   * though an engine revoke replaces a delete through the API, as it withdraws more), else beside the others, in a record
+   * of its own if need be. Each is judged against the row when it is tried, so a change of another chat or sender
+   * neither applies nor cancels a kept one. Past {@link PARKED_VARIANTS_MAX} of a kind, the oldest is lost.
    */
-  private parkChange(
+  private async parkChange(
     sessionId: string,
     waMessageId: string,
     slots: ChangeSlots,
     error: unknown,
     engine = this.engines.get(sessionId),
-  ): void {
+  ): Promise<void> {
     if (!waMessageId || !slotNames(slots).length) return;
     const key = `${sessionId}:${waMessageId}`;
-    const change =
-      (this.recovery.get('change', key) as ParkedChange | undefined) ??
-      new ParkedChange(sessionId, waMessageId, engine, Date.now(), this.parkSteps);
-    if (engine) change.engine = engine;
-    const kept = change.slots;
-    // A later change replaces a kept one only where it is consistent with it: one of another chat can neither cancel
-    // a kept change nor be kept beside it (a record keeps one of each), and is lost.
-    const conflicting: string[] = [];
-    const replaces = (was: MutationSource | undefined, by: MutationSource | undefined): boolean =>
-      !was || !by || mutationTargetsForeignRow(refOfSource(was), by) === null;
+    const records = this.parkedFor.get(key) ?? [];
+    this.parkedFor.set(key, records);
+    const touched = new Set<ParkedChange>();
+    /** The record a change of a kind goes to: one whose kept change agrees with it, else one without that kind. */
+    const recordFor = async (
+      keptOf: (record: ParkedChange) => MutationSource | false | undefined,
+      by: MutationSource | undefined,
+      kind: string,
+    ): Promise<{ record: ParkedChange; agrees: boolean }> => {
+      for (const record of records) {
+        const kept = keptOf(record);
+        if (kept !== false && (await this.claimsAgree(kept, by))) return { record, agrees: true };
+      }
+      this.boundVariants(records, keptOf, kind);
+      const free = records.find(record => keptOf(record) === false);
+      if (free) return { record: free, agrees: false };
+      const record = new ParkedChange(
+        sessionId,
+        waMessageId,
+        engine,
+        Date.now(),
+        this.parkSteps,
+        `${key}#${++this.parkSeq}`,
+      );
+      records.push(record);
+      return { record, agrees: false };
+    };
     if (slots.revoke) {
-      if (!kept.revoke) kept.revoke = slots.revoke;
-      else if (!replaces(kept.revoke.judge ?? kept.revoke.source, slots.revoke.judge ?? slots.revoke.source)) {
-        conflicting.push('revoke');
-      } else if (slots.revoke.announced && !kept.revoke.announced) kept.revoke = slots.revoke;
+      const by = slots.revoke.judge ?? slots.revoke.source;
+      const { record, agrees } = await recordFor(
+        r => r.slots.revoke && (r.slots.revoke.judge ?? r.slots.revoke.source),
+        by,
+        'revoke',
+      );
+      const kept = record.slots.revoke;
+      if (!agrees || !kept || (slots.revoke.announced && !kept.announced)) record.slots.revoke = slots.revoke;
+      touched.add(record);
     }
     if (slots.edit) {
-      if (replaces(kept.edit?.judge, slots.edit.judge)) kept.edit = slots.edit;
-      else conflicting.push('edit');
+      const { record } = await recordFor(r => Boolean(r.slots.edit) && r.slots.edit!.judge, slots.edit.judge, 'edit');
+      record.slots.edit = slots.edit;
+      touched.add(record);
     }
     for (const [sender, reaction] of slots.reactions ?? []) {
-      if (replaces(kept.reactions?.get(sender)?.judge, reaction.judge)) {
-        (kept.reactions ??= new Map()).set(sender, reaction);
-      } else conflicting.push('reactions');
-    }
-    if (conflicting.length) {
-      this.logger.error('A change of another chat than one kept for the message is lost', undefined, {
-        sessionId,
-        messageId: waMessageId,
-        slots: [...new Set(conflicting)],
-        reason: 'conflict',
-        action: 'message_change_lost',
-      });
+      const { record } = await recordFor(
+        r => r.slots.reactions?.has(sender) === true && r.slots.reactions.get(sender)!.judge,
+        reaction.judge,
+        'reactions',
+      );
+      (record.slots.reactions ??= new Map()).set(sender, reaction);
+      touched.add(record);
     }
     if (slots.acks) {
-      const acks = (kept.acks ??= { ...slots.acks, acks: new Map<string, MessageStatus>() }).acks;
+      const { record } = await recordFor(r => Boolean(r.slots.acks) && r.slots.acks!.judge, slots.acks.judge, 'acks');
+      const acks = (record.slots.acks ??= { ...slots.acks, acks: new Map<string, MessageStatus>() }).acks;
       for (const [chat, status] of slots.acks.acks) {
         const parked = acks.get(chat);
         if (!parked || ackStatusTransitionFrom(status).includes(parked)) acks.set(chat, status);
       }
+      touched.add(record);
     }
-    change.measure();
     this.logger.warn('Keeping changes the database refused, to write them once it answers', {
       sessionId,
       messageId: waMessageId,
@@ -619,53 +645,97 @@ export class MessageProjector {
       error: error instanceof Error ? error.message : String(error),
       action: 'message_change_parked',
     });
-    this.holdCopies(change);
-    this.recovery.park(key, change);
+    for (const record of touched) {
+      if (engine) record.engine = engine;
+      record.measure();
+    }
+    // A record let go while the claims were judged may have taken the list out of the map.
+    if (records.length) this.parkedFor.set(key, records);
+    this.holdCopies(sessionId, waMessageId);
+    for (const record of touched) this.recovery.park(record.key, record);
+  }
+
+  /** Whether a change claimed by `by` agrees with one kept under `kept`: no claim, or one the rule does not prove foreign. */
+  private async claimsAgree(kept: MutationSource | undefined, by: MutationSource | undefined): Promise<boolean> {
+    if (!kept || !by) return true;
+    const resolveLid = this.lidMappingStore ? (jid: string) => this.lidMappingStore!.findPhoneForLid(jid) : undefined;
+    return (await mutationTargetsForeignRowPersisted(refOfSource(kept), by, resolveLid)) === null;
+  }
+
+  /** Make room for one more change of a kind whose claim agrees with none kept: the oldest past the bound is lost. */
+  private boundVariants(
+    records: ParkedChange[],
+    keptOf: (record: ParkedChange) => MutationSource | false | undefined,
+    kind: string,
+  ): void {
+    const holding = records.filter(record => keptOf(record) !== false);
+    for (const record of holding.slice(0, Math.max(0, holding.length - PARKED_VARIANTS_MAX + 1))) {
+      this.logger.error(
+        'Too many changes of one message whose claims disagree are kept; the oldest is lost',
+        undefined,
+        {
+          sessionId: record.sessionId,
+          messageId: record.waMessageId,
+          slots: [kind],
+          reason: 'conflict',
+          action: 'message_change_lost',
+        },
+      );
+      if (kind === 'revoke') delete record.slots.revoke;
+      else if (kind === 'edit') delete record.slots.edit;
+      else if (kind === 'acks') delete record.slots.acks;
+      else record.slots.reactions?.clear();
+      if (record.empty()) this.recovery.settle('change', record.key);
+      else record.measure();
+    }
   }
 
   /**
    * A change of the message landed: what is kept for it that the change supersedes is let go. An edit supersedes a kept
-   * edit, a reaction the same sender's, and a revoke the kept edit and reactions, each only where the kept one is
-   * consistent with it, so a change of another chat neither applies nor cancels a kept one. A kept revoke stays.
+   * edit, a reaction the same sender's, and a revoke the kept edit and reactions, each only where the kept one's claim
+   * agrees with it, so a change of another chat neither applies nor cancels a kept one. A kept revoke stays.
    */
-  private settleParked(sessionId: string, waMessageId: string, landed: ChangeSlots): void {
-    const key = `${sessionId}:${waMessageId}`;
-    const change = this.recovery.get('change', key) as ParkedChange | undefined;
-    if (!change) return;
-    const consistent = (kept: MutationSource | undefined, by: MutationSource | undefined): boolean =>
-      !kept || !by || mutationTargetsForeignRow(refOfSource(kept), by) === null;
-    const kept = change.slots;
+  private async settleParked(sessionId: string, waMessageId: string, landed: ChangeSlots): Promise<void> {
+    const records = this.parkedFor.get(`${sessionId}:${waMessageId}`);
+    if (!records?.length) return;
     const by = landed.revoke?.judge ?? landed.revoke?.source ?? landed.edit?.judge;
-    if ((landed.edit || landed.revoke) && kept.edit && consistent(kept.edit.judge, by)) delete kept.edit;
-    for (const [sender, reaction] of kept.reactions ?? []) {
-      const landedReaction = landed.reactions?.get(sender);
-      if ((landedReaction || landed.revoke) && consistent(reaction.judge, landedReaction?.judge ?? by)) {
-        kept.reactions!.delete(sender);
+    for (const record of [...records]) {
+      const kept = record.slots;
+      if ((landed.edit || landed.revoke) && kept.edit && (await this.claimsAgree(kept.edit.judge, by)))
+        delete kept.edit;
+      for (const [sender, reaction] of kept.reactions ?? []) {
+        const landedReaction = landed.reactions?.get(sender);
+        if (
+          (landedReaction || landed.revoke) &&
+          (await this.claimsAgree(reaction.judge, landedReaction?.judge ?? by))
+        ) {
+          kept.reactions!.delete(sender);
+        }
       }
+      if (record.empty()) this.recovery.settle('change', record.key);
+      else record.measure();
     }
-    if (change.empty()) this.recovery.settle('change', key);
-    else {
-      change.measure();
-      this.holdCopies(change);
-    }
+    this.holdCopies(sessionId, waMessageId);
   }
 
   /**
-   * Hold the message's deliveries on this node while what is kept for it may still withdraw or rewrite their copies (a
-   * revoke, an edit with its text); a reaction or a receipt leaves them as they are.
+   * Hold the message's deliveries on this node while any of its kept records may still withdraw or rewrite their copies
+   * (a revoke, an edit with its text); a reaction or a receipt leaves them as they are.
    */
-  private holdCopies(change: ParkedChange): void {
-    const { revoke, edit } = change.slots;
-    this.webhookService.holdMessage?.(
-      change.sessionId,
-      change.waMessageId,
-      Boolean(revoke || edit?.body !== undefined),
+  private holdCopies(sessionId: string, waMessageId: string): void {
+    const held = (this.parkedFor.get(`${sessionId}:${waMessageId}`) ?? []).some(
+      ({ slots }) => slots.revoke || slots.edit?.body !== undefined,
     );
+    this.webhookService.holdMessage?.(sessionId, waMessageId, held);
   }
 
-  /** A kept change left the queue: its deliveries are let go, and a loss is logged, the only trace of it. */
+  /** A kept change left the queue: its deliveries are let go unless another record holds them, and a loss is logged. */
   private releaseParked(change: ParkedChange, reason?: RecoveryLoss): void {
-    this.webhookService.holdMessage?.(change.sessionId, change.waMessageId, false);
+    const key = `${change.sessionId}:${change.waMessageId}`;
+    const records = this.parkedFor.get(key) ?? [];
+    if (records.includes(change)) records.splice(records.indexOf(change), 1);
+    if (!records.length) this.parkedFor.delete(key);
+    this.holdCopies(change.sessionId, change.waMessageId);
     if (!reason) return;
     this.logger.error('A change the database refused could not be kept any longer and is lost', undefined, {
       sessionId: change.sessionId,
@@ -783,7 +853,7 @@ export class MessageProjector {
     try {
       await this.runSlots(sessionId, waMessageId, slots, { announce, owned: true });
     } catch (err) {
-      this.parkChange(sessionId, waMessageId, slots, err, engine);
+      await this.parkChange(sessionId, waMessageId, slots, err, engine);
     }
   }
 
@@ -2152,9 +2222,9 @@ export class MessageProjector {
     const slot: RevokeSlot = { source, announced, notify };
     try {
       await this.applyRevoke(sessionId, waMessageId, slot, true);
-      this.settleParked(sessionId, waMessageId, { revoke: slot });
+      await this.settleParked(sessionId, waMessageId, { revoke: slot });
     } catch (err) {
-      this.parkChange(sessionId, waMessageId, { revoke: slot }, err);
+      await this.parkChange(sessionId, waMessageId, { revoke: slot }, err);
     }
   }
 

@@ -101,6 +101,8 @@ export class ParkedChange implements RecoveryRecord {
     public engine: IWhatsAppEngine | undefined,
     readonly since: number,
     private readonly steps: ParkedChangeSteps,
+    /** Its key in the recovery queue: one message can keep several records, whose claims disagree. */
+    readonly key = `${sessionId}:${waMessageId}`,
   ) {}
 
   bytes(): number {

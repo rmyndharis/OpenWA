@@ -101,14 +101,19 @@ export class MessageMutationProjector {
     // Told of each row whose text an edit changed, once its marker is written. Must not reject.
     private readonly onTextChanged: (sessionId: string, waMessageId: string) => Promise<void> = () => Promise.resolve(),
     // Handed a change whose write or judging read failed, to keep and try again. Standalone, it is only logged.
-    private readonly park: (sessionId: string, waMessageId: string, slots: ChangeSlots, error: unknown) => void = (
-      sessionId,
-      waMessageId,
-      _slots,
-      error,
-    ) => this.logger.error(`Failed to update message ${waMessageId} of session ${sessionId}`, String(error)),
-    // Told of a change that landed, so one kept for the message that it supersedes is let go.
-    private readonly settled: (sessionId: string, waMessageId: string, slots: ChangeSlots) => void = () => undefined,
+    private readonly park: (
+      sessionId: string,
+      waMessageId: string,
+      slots: ChangeSlots,
+      error: unknown,
+    ) => void | Promise<void> = (sessionId, waMessageId, _slots, error) =>
+      this.logger.error(`Failed to update message ${waMessageId} of session ${sessionId}`, String(error)),
+    // Told of a change that landed, so one kept for the message that it supersedes is let go. Awaited on the chain.
+    private readonly settled: (
+      sessionId: string,
+      waMessageId: string,
+      slots: ChangeSlots,
+    ) => void | Promise<void> = () => undefined,
     // The lids reported for a phone, so a write with no row read takes the message stored under either.
     private readonly lidsForPhone?: (phone: string) => Promise<string[]>,
   ) {}
@@ -230,9 +235,9 @@ export class MessageMutationProjector {
           judge,
           verdict,
         );
-        this.settled(id, event.messageId, kept);
+        await this.settled(id, event.messageId, kept);
       } catch (err) {
-        this.park(id, event.messageId, kept, err);
+        await this.park(id, event.messageId, kept, err);
       }
       const reactions = metadata?.reactions as Record<string, string> | undefined;
 
@@ -277,9 +282,9 @@ export class MessageMutationProjector {
           (await this.messageRepository.findOne({ where: { ...target, type: 'revoked' }, select: { id: true } })) !==
           null;
       }
-      this.settled(id, message.messageId, { edit: slot });
+      await this.settled(id, message.messageId, { edit: slot });
     } catch (err) {
-      this.park(id, message.messageId, { edit: slot }, err);
+      await this.park(id, message.messageId, { edit: slot }, err);
     }
     if (revoked) return;
 
@@ -442,9 +447,9 @@ export class MessageMutationProjector {
           const slot: EditSlot = { body, judge: source, mark: 'always', announceText: true };
           try {
             await this.writeEdit(sessionId, messageId, slot, true, verdict);
-            this.settled(sessionId, messageId, { edit: slot });
+            await this.settled(sessionId, messageId, { edit: slot });
           } catch (err) {
-            this.park(sessionId, messageId, { edit: slot }, err);
+            await this.park(sessionId, messageId, { edit: slot }, err);
           }
         } catch (err) {
           this.logger.warn(`Failed to update stored body of edited message ${messageId}`, { error: String(err) });
