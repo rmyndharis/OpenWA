@@ -33,6 +33,11 @@
 > (`WEBHOOK_RECONCILE_GRACE_MS`) so they land first. A node partitioned from the database cannot hold
 > a healthy peer's sweep, which may replay a delivery of a message the partitioned node is about to
 > withdraw. The recovery journal (`RECOVERY_JOURNAL_PATH`) belongs to one process: never share the file.
+> A delivery queued while its outbox row could not be written has its copy only in the memory of the node that
+> queued it. A worker of another node judges it by the message's stored row: nothing is sent once the row was
+> taken back (a revoke, or a delete through the API, whose placeholder is not sent then), and an edit written to
+> the row is sent. A change that node still keeps, or one that reached only its copy (a message with no stored
+> row), does not reach that worker.
 >
 > Bulk-send batches follow the same rule. A batch is only ever driven by the process
 > holding its session's engine, so a booting replica now reaps only the batches whose

@@ -88,6 +88,7 @@ describe('WebhookDeliveryService', () => {
     currentMessagePayload: jest.Mock;
     isMessageHeld: jest.Mock;
     queuedUnwritten: jest.Mock;
+    hasUnwritten: jest.Mock;
   };
   let insertedFailures: Array<Partial<WebhookDeliveryFailure>>;
 
@@ -200,6 +201,7 @@ describe('WebhookDeliveryService', () => {
       currentMessagePayload: jest.fn().mockResolvedValue(undefined),
       isMessageHeld: jest.fn().mockReturnValue(false),
       queuedUnwritten: jest.fn(),
+      hasUnwritten: jest.fn().mockReturnValue(false),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -2274,6 +2276,28 @@ describe('WebhookDeliveryService', () => {
 
         expect(queuedJob().payload.data).toEqual({ messageId: 'renamed' });
         expect(queuedJob().messageId).toBe('M-1');
+      });
+
+      it.each([
+        ['a message delivery', 'message.received', message, true],
+        ['an edit event', 'message.edited', { messageId: 'M-1', chatId: '628111@c.us', body: 'edited text' }, true],
+        ['another event', 'group.join', { groupId: '1203@g.us' }, false],
+      ] as const)(
+        'carries the pre-hook data of %s whose outbox row could not be written: %s',
+        async (_label, event, data, carried) => {
+          (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: [event] })]);
+          outboxService.hasUnwritten.mockReturnValue(true);
+
+          await (await queueService()).dispatch('sess-1', event, data);
+
+          expect(queuedJob().unwritten).toEqual(carried ? expect.objectContaining(data) : undefined);
+        },
+      );
+
+      it('carries no pre-hook data when the outbox row was written', async () => {
+        await (await queueService()).dispatch('sess-1', 'message.received', message);
+
+        expect(queuedJob().unwritten).toBeUndefined();
       });
 
       it('is left out when the row under the key was opened by another dispatch', async () => {

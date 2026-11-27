@@ -91,6 +91,12 @@ export interface WebhookJobData {
    * `webhook:before` hook may have given the body's `messageId` another value. Absent on a job queued before it existed.
    */
   messageId?: string;
+  /**
+   * The pre-hook event data of a message delivery or an edit event whose outbox row could not be written: what that row
+   * would hold. The node that queued it keeps its copy in memory; a worker of another node, with neither, judges the job
+   * by the message's stored row instead (a revoke withholds it, an edit rewrites it).
+   */
+  unwritten?: Record<string, unknown>;
 }
 
 /**
@@ -1425,6 +1431,10 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         ...this.heldHash(ctx),
         ...(MESSAGE_CHANGE_EVENTS.includes(event) && typeof ctx.baseData.messageId === 'string'
           ? { messageId: ctx.baseData.messageId }
+          : {}),
+        ...((MESSAGE_DELIVERY_EVENTS.includes(event) || MESSAGE_CHANGE_EVENTS.includes(event)) &&
+        this.outbox.hasUnwritten(webhook.id, idempotencyKey)
+          ? { unwritten: ctx.baseData }
           : {}),
       };
 

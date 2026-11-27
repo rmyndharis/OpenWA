@@ -15,6 +15,7 @@ import { WebhookOutboxModule } from '../webhook/webhook-outbox.module';
 import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
 import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 import { IngressEvent } from '../integration/entities/ingress-event.entity';
+import { Message } from '../message/entities/message.entity';
 import { HooksModule } from '../../core/hooks/hooks.module';
 import { PluginsModule } from '../../core/plugins/plugins.module';
 
@@ -37,7 +38,10 @@ BullModule.queueClass = ShutdownSafeQueue;
     // Required for WebhookProcessor to inject Repository<Webhook> + Repository<WebhookDeliveryFailure>;
     // IngressProcessor to inject Repository<IntegrationDeliveryFailure> + Repository<IngressEvent> (all on
     // the 'data' connection).
-    TypeOrmModule.forFeature([Webhook, WebhookDeliveryFailure, IntegrationDeliveryFailure, IngressEvent], 'data'),
+    TypeOrmModule.forFeature(
+      [Webhook, WebhookDeliveryFailure, IntegrationDeliveryFailure, IngressEvent, Message],
+      'data',
+    ),
     // Required for WebhookProcessor to inject the one WebhookOutboxService the webhook module also uses.
     WebhookOutboxModule,
     // Required for WebhookProcessor/IngressProcessor to inject HookManager

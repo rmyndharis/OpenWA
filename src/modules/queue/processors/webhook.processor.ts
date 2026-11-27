@@ -1,6 +1,7 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { DelayedError, Job } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { createLogger } from '../../../common/services/logger.service';
@@ -9,7 +10,14 @@ import { workerConnectionOptions, webhookWorkerConcurrency } from '../redis-conn
 import { closeWorkerIfStarted } from './close-worker';
 import { WebhookJobData, WebhookPayload } from '../../webhook/webhook.service';
 import { Webhook } from '../../webhook/entities/webhook.entity';
-import { WebhookOutboxService } from '../../webhook/webhook-outbox.service';
+import {
+  MESSAGE_CHANGE_EVENTS,
+  WebhookOutboxService,
+  editedMessagePayload,
+} from '../../webhook/webhook-outbox.service';
+import { Message } from '../../message/entities/message.entity';
+import { LidMappingStoreService } from '../../../engine/identity/lid-mapping-store.service';
+import { judgeStoredRow } from '../../session/message-row-judgement';
 import { WebhookDeliveryFailure } from '../../webhook/entities/webhook-delivery-failure.entity';
 import {
   clearDeliveryFailureRows,
@@ -84,6 +92,13 @@ export class WebhookProcessor extends WorkerHost {
     private readonly hookManager: HookManager,
     private readonly configService: ConfigService,
     private readonly outbox: WebhookOutboxService,
+    // The stored messages, read for a job whose outbox row could not be written when this node has no copy of it.
+    @Optional()
+    @InjectRepository(Message, 'data')
+    private readonly messages?: Repository<Message>,
+    // Tells a contact's lid and phone for the same entity, so an edit stored under either is judged the message's.
+    @Optional()
+    private readonly lidMappingStore?: LidMappingStoreService,
   ) {
     super();
     // WEBHOOK_DEGRADED_SESSION_CONCURRENCY, else a quarter of the worker pool.
@@ -180,6 +195,10 @@ export class WebhookProcessor extends WorkerHost {
       try {
         current = await this.loadDeliverableWebhook(webhookId, event, sessionId);
         held = current ? await this.outbox.currentMessagePayload(webhookId, payload.idempotencyKey, event) : undefined;
+        // Queued while its outbox row could not be written, and no copy of it here: the message's row says instead.
+        if (current && held === undefined && job.data.unwritten) {
+          held = await this.storedChange(sessionId, event, job.data.unwritten);
+        }
       } catch (readError) {
         // A database that cannot answer now spends no attempt: the job waits as a bounced one does, and an outage
         // does not use up its retries. A stored row that does not parse never will, and counts as a failed attempt.
@@ -419,6 +438,52 @@ export class WebhookProcessor extends WorkerHost {
       if (recorded !== false) incrementWebhookDeliveryFailures();
       if (recorded !== null) await this.outbox.close(webhookId, payload.idempotencyKey, 'dispatched');
     }
+  }
+
+  /**
+   * What the stored rows of a job's message say of its delivery, for a job queued while its outbox row could not be
+   * written and run where no copy of it is kept: null once any row under the id was taken back (a revoke, or a delete
+   * through the API, which a row does not tell apart: nothing is sent; withholding is the safe side, so another chat's
+   * message under the same id withholds it too), the copy with the stored text once an edit marked a row judged the
+   * delivery's own message (as a change of it would be judged, lid and phone of one contact included), and undefined
+   * otherwise. Throws when the rows cannot be read: the job waits rather than send on a guess.
+   */
+  private async storedChange(
+    sessionId: string,
+    event: string,
+    data: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | null | undefined> {
+    const edit = MESSAGE_CHANGE_EVENTS.includes(event);
+    const waMessageId = edit ? data.messageId : data.id;
+    if (!this.messages || typeof waMessageId !== 'string' || !waMessageId) return undefined;
+    const rows = await this.messages.find({
+      where: { sessionId, waMessageId },
+      select: {
+        id: true,
+        chatId: true,
+        from: true,
+        to: true,
+        direction: true,
+        author: true,
+        type: true,
+        body: true,
+        metadata: true,
+        engineRef: true,
+      },
+    });
+    if (rows.some(row => row.type === 'revoked')) return null;
+    if (edit || typeof data.chatId !== 'string' || typeof data.fromMe !== 'boolean') return undefined;
+    const author =
+      typeof data.author === 'string' ? data.author : typeof data.sender === 'string' ? data.sender : undefined;
+    const source = { kind: 'edit' as const, chatId: data.chatId, fromMe: data.fromMe, author };
+    const resolveLid = this.lidMappingStore ? (jid: string) => this.lidMappingStore!.findPhoneForLid(jid) : undefined;
+    for (const row of rows) {
+      if (row.metadata?.edited !== true || typeof row.body !== 'string' || row.body === data.body) continue;
+      if ((await judgeStoredRow(row, waMessageId, source, resolveLid)).reason === null) {
+        return editedMessagePayload(data, row.body);
+      }
+    }
+    return undefined;
   }
 
   /**

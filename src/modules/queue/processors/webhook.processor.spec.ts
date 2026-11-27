@@ -3,6 +3,8 @@ import { DataSource, FindOperator, Repository } from 'typeorm';
 import { WebhookOutboxEvent } from '../../webhook/entities/webhook-outbox-event.entity';
 import { ConfigService } from '@nestjs/config';
 import { WebhookOutboxService } from '../../webhook/webhook-outbox.service';
+import { Message } from '../../message/entities/message.entity';
+import { LidMappingStoreService } from '../../../engine/identity/lid-mapping-store.service';
 import { dataHash } from '../../webhook/utils/deliver-once';
 import { FAILING_WEBHOOKS_MAX, WebhookProcessor } from './webhook.processor';
 import { MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
@@ -939,6 +941,160 @@ describe('WebhookProcessor', () => {
       job.data.payload.data = { ...queuedData };
       return job;
     };
+
+    // Queued where its outbox row could not be written, and run where no copy of it is kept: the message row says.
+    describe('of a job queued with no outbox row, run where no copy of it is kept', () => {
+      let messages: { find: jest.Mock };
+      const stored = (row: Record<string, unknown>) => ({
+        id: 'r1',
+        chatId: '628111@c.us',
+        type: 'text',
+        body: 'first text',
+        metadata: {},
+        ...row,
+      });
+      const marked = (event = 'message.received', data: Record<string, unknown> = queuedData): Job<WebhookJobData> => {
+        const job = makeJob({ event, baseHash: dataHash(data), unwritten: data });
+        job.data.payload = { ...job.data.payload, event, data: { ...data } };
+        (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = jest.fn().mockResolvedValue(undefined);
+        return job;
+      };
+
+      beforeEach(() => {
+        mockFetch.mockResolvedValue({ ok: true, status: 200 });
+        outbox.currentMessagePayload.mockResolvedValue(undefined);
+        messages = { find: jest.fn() };
+        processor = new WebhookProcessor(
+          repo as unknown as Repository<Webhook>,
+          failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+          hookManager as unknown as HookManager,
+          configService as unknown as ConfigService,
+          outbox as unknown as WebhookOutboxService,
+          messages as unknown as Repository<Message>,
+        );
+      });
+
+      it.each([
+        ['a message delivery', 'message.received', queuedData],
+        ['an edit event', 'message.edited', { messageId: 'M-1', chatId: '628111@c.us', body: 'edited text' }],
+      ] as const)('withholds %s once the message row was taken back', async (_label, event, data) => {
+        messages.find.mockResolvedValue([stored({ type: 'revoked', body: '' })]);
+
+        const result = await processor.process(marked(event, data));
+
+        expect(messages.find).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { sessionId: 'sess-1', waMessageId: 'M-1' } }),
+        );
+        expect(result.success).toBe(false);
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(failureRepo.insert).not.toHaveBeenCalled();
+      });
+
+      it('sends the stored text once an edit marked the message row', async () => {
+        messages.find.mockResolvedValue([stored({ body: 'edited text', metadata: { edited: true } })]);
+
+        await processor.process(marked());
+
+        expect(sentBody().data).toMatchObject({ id: 'M-1', body: 'edited text' });
+      });
+
+      it.each([
+        ['no row of the message', []],
+        [
+          'only an edited row of another chat',
+          [stored({ chatId: '628999@c.us', body: 'x', metadata: { edited: true } })],
+        ],
+        ['a row no change reached', [stored({})]],
+        ['a row an edit marked with the text it holds', [stored({ metadata: { edited: true } })]],
+      ] as const)('sends what it holds with %s', async (_label, rows) => {
+        messages.find.mockResolvedValue(rows);
+
+        await processor.process(marked());
+
+        expect(sentBody().data).toMatchObject({ body: 'first text' });
+      });
+
+      // An own send to a contact named by lid is filed under the phone, while its message.sent names the lid.
+      describe('of an own send whose row is filed under the phone while the delivery names the lid', () => {
+        const LID = '999555@lid';
+        const PHONE = '628111@s.whatsapp.net';
+        const sent = {
+          id: 'M-1',
+          chatId: LID,
+          from: '628000@s.whatsapp.net',
+          to: LID,
+          fromMe: true,
+          body: 'first text',
+        };
+        const own = (row: Record<string, unknown>) =>
+          stored({ chatId: PHONE, from: '628000@s.whatsapp.net', to: PHONE, direction: 'outgoing', ...row });
+        const paired = (pair: boolean): void => {
+          processor = new WebhookProcessor(
+            repo as unknown as Repository<Webhook>,
+            failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+            hookManager as unknown as HookManager,
+            configService as unknown as ConfigService,
+            outbox as unknown as WebhookOutboxService,
+            messages as unknown as Repository<Message>,
+            {
+              findPhoneForLid: (jid: string) => Promise.resolve(pair && jid === LID ? '628111' : null),
+            } as unknown as LidMappingStoreService,
+          );
+        };
+
+        it.each([true, false])('withholds it once that row was taken back (pair reported: %s)', async pair => {
+          paired(pair);
+          messages.find.mockResolvedValue([own({ type: 'revoked', body: '' })]);
+
+          await processor.process(marked('message.sent', sent));
+
+          expect(mockFetch).not.toHaveBeenCalled();
+        });
+
+        it('sends the stored text of an edit when the pair is reported', async () => {
+          paired(true);
+          messages.find.mockResolvedValue([own({ body: 'edited text', metadata: { edited: true } })]);
+
+          await processor.process(marked('message.sent', sent));
+
+          expect(sentBody().data).toMatchObject({ id: 'M-1', body: 'edited text' });
+        });
+
+        it('sends what it holds of an edit while no pair is reported, as for any row not judged its own', async () => {
+          paired(false);
+          messages.find.mockResolvedValue([own({ body: 'edited text', metadata: { edited: true } })]);
+
+          await processor.process(marked('message.sent', sent));
+
+          expect(sentBody().data).toMatchObject({ body: 'first text' });
+        });
+      });
+
+      it('judges by the chat the engine reported of a row a handler moved', async () => {
+        messages.find.mockResolvedValue([
+          stored({ chatId: '628777@c.us', engineRef: { chatId: '628111@c.us' }, type: 'revoked' }),
+        ]);
+
+        await processor.process(marked());
+
+        expect(mockFetch).not.toHaveBeenCalled();
+      });
+
+      it('waits, spending no attempt, while the message row cannot be read', async () => {
+        messages.find.mockRejectedValue(new Error('connection terminated'));
+        const job = marked();
+
+        await expect(processor.process(job, 'tok')).rejects.toBeInstanceOf(DelayedError);
+
+        expect(mockFetch).not.toHaveBeenCalled();
+      });
+
+      it('reads no message row for a job that carries no mark', async () => {
+        await processor.process(queuedJob());
+
+        expect(messages.find).not.toHaveBeenCalled();
+      });
+    });
 
     it('completes a job whose message was taken back without posting or filing a dead-letter row', async () => {
       outbox.currentMessagePayload.mockResolvedValue(null);

@@ -794,6 +794,11 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     if (copy.queued !== undefined) this.journal?.del('copy', key);
   }
 
+  /** Whether this node keeps a copy for a delivery whose outbox row could not be written. */
+  hasUnwritten(webhookId: string, idempotencyKey: string): boolean {
+    return this.unwritten.has(`${webhookId}\u0000${idempotencyKey}`);
+  }
+
   /** The delivery a copy is kept for was queued as `deliveryId`: from now on the copy is journaled with its job. */
   queuedUnwritten(webhookId: string, idempotencyKey: string, deliveryId: string): void {
     const key = `${webhookId}\u0000${idempotencyKey}`;

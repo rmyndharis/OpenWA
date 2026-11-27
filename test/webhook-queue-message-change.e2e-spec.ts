@@ -370,6 +370,44 @@ describeQueueOn('A queued message delivery after its message changed (e2e)', () 
     }
   }, 60000);
 
+  // The node that queued the job keeps its copy in memory; a worker of another node has none, and no outbox row to read.
+  describe('a queued delivery whose outbox row could not be written, run by a worker with no copy of it', () => {
+    const elsewhere = (sessionId: string, id: string, webhookId: string): void =>
+      app.get(WebhookOutboxService).forgetUnwritten(webhookId, `msg_${sessionId}_${id}_${webhookId}`);
+
+    it.each([
+      ['an engine revoke', []],
+      ['a delete through the API', []],
+      ['an edit', [{ body: 'edited text', type: 'text' }]],
+    ] as const)(
+      'sends what the message row says once %s landed on it',
+      async (change, sent) => {
+        const { sessionId, id, webhookId } = await failedOnce('outbox writes');
+        await webhookQueue.pause();
+        await changes[change](sessionId, id);
+        elsewhere(sessionId, id, webhookId);
+
+        receiverStatus = 200;
+        await webhookQueue.resume();
+        await waitFor(queueIdle);
+
+        expect(received.slice(1)).toEqual(sent);
+        expect(await failures.countBy({ sessionId })).toBe(0);
+      },
+      60000,
+    );
+
+    it('sends what it holds when no change reached the message row', async () => {
+      const { sessionId, id, webhookId } = await failedOnce('outbox writes');
+      elsewhere(sessionId, id, webhookId);
+
+      receiverStatus = 200;
+      await waitFor(queueIdle);
+
+      expect(received.slice(1)).toEqual([{ body: 'first text', type: 'text' }]);
+    }, 60000);
+  });
+
   describe('a queued delivery whose outbox row could not be written, across a restart', () => {
     // Paused across the restart, so the job's next attempt comes only once the change below was made.
     const restarted = async (): Promise<void> => {
