@@ -36,10 +36,11 @@ export interface MessageResult {
    */
   body?: string;
   /**
-   * The phone id the message was addressed to, when the engine's number lookup answered another number than the
+   * The chat the persisted row is filed under, when the engine's number lookup answered another id than the
    * caller's chat id names. WhatsApp holds some numbers under other digits than people type (a Brazilian mobile
-   * with or without its ninth digit), and the conversation lives under the number it holds, so the persisted row
-   * is filed there. Neutral dialect (`<phone>@c.us`), also when the engine sent to that number's LID.
+   * with or without its ninth digit), and the conversation lives under the number it holds, so the row is filed
+   * there: a phone id in the neutral dialect (`<phone>@c.us`), also when the engine sent to that number's LID. It
+   * is the contact's `<lid>@lid` when WhatsApp answered only a LID, which it pairs with no phone (whatsapp-web.js).
    */
   resolvedChatId?: string;
   /**

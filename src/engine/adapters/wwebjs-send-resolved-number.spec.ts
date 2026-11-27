@@ -7,8 +7,8 @@ import { WwebjsMessaging } from './wwebjs-messaging';
  * The number lookup a send makes first can answer another number than the caller wrote: WhatsApp holds some
  * numbers under other digits than people type (a Brazilian mobile with or without its ninth digit). The message
  * goes to the number the lookup answered, and the send result names it, so the stored row is filed in the chat the
- * conversation is in. A lookup that answers the contact's lid names no phone, and its pair is reported under the
- * id the caller wrote, so that result names nothing.
+ * conversation is in. A lookup that answers the contact's lid names that lid: WhatsApp paired the digits written
+ * with no phone, so the row is filed where the contact's replies arrive.
  */
 const logger = createLogger('wwebjs-send-resolved-number.spec');
 const TYPED = '5511987654321@c.us';
@@ -40,7 +40,7 @@ function makeMessaging(lookup: (number: string) => Promise<string | null>) {
     isPageTransportError: () => false,
     reportIfPageTransportError: jest.fn(),
   } as unknown as WwebjsEngineHost;
-  return { messaging: new WwebjsMessaging(host), client, getNumberId, held, chat };
+  return { messaging: new WwebjsMessaging(host), client, getNumberId, held, chat, host };
 }
 const IMAGE = {
   data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -128,15 +128,102 @@ describe('WwebjsMessaging: a send to a number WhatsApp holds under other digits'
     expect(result).toStrictEqual({ id: 'M1', timestamp: 1 });
     expect(sentTo(client)).toEqual([to]);
   });
-  it('names the lid as the chat the message went to when the lookup answers the lid of the contact', async () => {
+  it.each(sends)('files %s under the lid when the lookup answers the lid of the contact', async (_kind, send) => {
     const { messaging, client } = makeMessaging(() => Promise.resolve(LID));
 
-    await expect(messaging.sendTextMessage(TYPED, 'hi')).resolves.toStrictEqual({
+    await expect(send(messaging, TYPED)).resolves.toStrictEqual({
       id: 'M1',
       timestamp: 1,
+      resolvedChatId: LID,
       engineChatId: LID,
     });
     expect(sentTo(client)).toEqual([LID]);
+  });
+
+  it('files a reply under the lid when the lookup answers the lid of the contact', async () => {
+    const { messaging, held } = makeMessaging(() => Promise.resolve(LID));
+
+    await expect(messaging.replyToMessage(TYPED, 'Q1', 'hi')).resolves.toStrictEqual({
+      id: 'M1',
+      timestamp: 1,
+      resolvedChatId: LID,
+      engineChatId: LID,
+    });
+    expect(held.reply).toHaveBeenCalledWith('hi', LID);
+  });
+
+  it.each([
+    ['whose copy it finds in the chat', [{ id: { _serialized: 'FWD' }, timestamp: 5, isForwarded: true }], 'FWD'],
+    ['whose copy it cannot tell', [], ''],
+  ])('files a forward %s under the lid the lookup answered', async (_case, after, id) => {
+    const { messaging, held, chat } = makeMessaging(() => Promise.resolve(LID));
+    chat.fetchMessages.mockResolvedValueOnce([held]).mockResolvedValueOnce([]).mockResolvedValueOnce(after);
+
+    const result = await messaging.forwardMessage('628111@c.us', TYPED, 'Q1');
+
+    expect(result).toMatchObject({ id, resolvedChatId: LID, engineChatId: LID });
+    expect(held.forward).toHaveBeenCalledWith(LID);
+  });
+
+  it.each([
+    ['a channel', '120363000000000002@newsletter'],
+    ['a group', '120363000000000001@g.us'],
+  ])('names no other chat for a send to %s', async (_case, chatId) => {
+    const { messaging, client } = makeMessaging(() => Promise.resolve(LID));
+
+    await expect(messaging.sendTextMessage(chatId, 'hi')).resolves.toStrictEqual({ id: 'M1', timestamp: 1 });
+    expect(sentTo(client)).toEqual([chatId]);
+  });
+
+  describe('the pair a lid answer reports', () => {
+    /** A store whose table holds `reported` for the lid; its writes are recorded. */
+    const withStore = (reported: string | null) => {
+      const world = makeMessaging(() => Promise.resolve(LID));
+      const store = {
+        findPhoneForLid: jest.fn(() => Promise.resolve(reported)),
+        remember: jest.fn(() => Promise.resolve(true)),
+      };
+      Object.assign(world.host.config, { lidMappingStore: store, sessionId: 's1' });
+      return { ...world, store };
+    };
+    const settle = async (): Promise<void> => {
+      for (let turn = 0; turn < 3; turn++) await new Promise(resolve => setImmediate(resolve));
+    };
+
+    it.each([
+      ['no phone', null],
+      ['the digits written', '5511987654321'],
+    ])('reports the digits written when the table holds %s for the lid', async (_case, reported) => {
+      const { messaging, store } = withStore(reported);
+
+      await messaging.sendTextMessage(TYPED, 'hi');
+      await settle();
+
+      expect(store.findPhoneForLid).toHaveBeenCalledWith(LID);
+      expect(store.remember.mock.calls).toEqual([['484848484848', '5511987654321', 's1']]);
+    });
+
+    it('keeps another phone the table holds reported for the lid', async () => {
+      const { messaging, store } = withStore('551187654321');
+
+      await messaging.sendTextMessage(TYPED, 'hi');
+      await settle();
+
+      expect(store.remember).not.toHaveBeenCalled();
+    });
+
+    it('reports it again on the next send when the read of the table throws', async () => {
+      const { messaging, store } = withStore(null);
+      store.findPhoneForLid.mockImplementationOnce(() => Promise.reject(new Error('database is locked')));
+
+      await messaging.sendTextMessage(TYPED, 'first');
+      await settle();
+      expect(store.remember).not.toHaveBeenCalled();
+      await messaging.sendTextMessage(TYPED, 'second');
+      await settle();
+
+      expect(store.remember.mock.calls).toEqual([['484848484848', '5511987654321', 's1']]);
+    });
   });
 
   describe('named from the id the send was handed, not from what the lookup memory holds afterwards', () => {
@@ -180,6 +267,7 @@ describe('WwebjsMessaging: a send to a number WhatsApp holds under other digits'
       await expect(messaging.sendTextMessage(TYPED, 'second')).resolves.toStrictEqual({
         id: 'M1',
         timestamp: 1,
+        resolvedChatId: LID,
         engineChatId: LID,
       });
       release();

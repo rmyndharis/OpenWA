@@ -87,8 +87,8 @@ export interface SaveOutgoingMessageData {
    */
   quotedMessageId?: string;
   /**
-   * The phone id the engine addressed, when its number lookup answered another number than `chatId` names (see
-   * MessageResult.resolvedChatId). The row is filed under it. When the own-send echo wrote its row first, that
+   * The id the engine addressed, when its number lookup answered another id than `chatId` names: the number
+   * WhatsApp holds, or the contact's lid (see MessageResult.resolvedChatId). The row is filed under it. When the own-send echo wrote its row first, that
    * row stays in the chat the echo names, as it does for a send to the number WhatsApp holds.
    */
   resolvedChatId?: string;
@@ -1107,8 +1107,9 @@ export class MessageSendService {
     if (result.id) message.waMessageId = result.id;
     message.status = MessageStatus.SENT;
     message.timestamp = result.timestamp;
-    // WhatsApp holds the number under other digits than the caller wrote. The message went to the number it
-    // holds and the reply arrives there, so the row is filed there too, not under a spelling nothing else uses.
+    // WhatsApp holds the number under other digits than the caller wrote, or answered only the contact's lid. The
+    // message went there and the reply arrives there, so the row is filed there too, not under a spelling nothing
+    // else uses.
     const resolved = result.resolvedChatId ? { chatId: result.resolvedChatId, to: result.resolvedChatId } : {};
     // The id the caller wrote holds no row from here on: pacing has to know it is a contact the account knows.
     if (result.resolvedChatId) {

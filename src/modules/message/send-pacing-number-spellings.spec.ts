@@ -233,6 +233,15 @@ describe('cold-reachout rule for a number written in its other spelling', () => 
       await expect(service.assertSendAllowed(sessionId, '6281234567890@s.whatsapp.net')).resolves.toBeDefined();
     });
 
+    it('reads the history under the lid a send to the written id was filed under', async () => {
+      await add(`${LID}@lid`, YESTERDAY);
+      await expect(service.assertSendAllowed(sessionId, WROTE)).rejects.toMatchObject(refused);
+
+      service.rememberResolvedNumber(sessionId, WROTE, `${LID}@lid`);
+
+      await expect(service.assertSendAllowed(sessionId, WROTE)).resolves.toBeDefined();
+    });
+
     it('is remembered for the session whose send showed it, and for no other', async () => {
       const other = (await sessions.save({ name: 'other', createdAt: new Date(NOW.getTime() - 30 * DAY_MS) })).id;
       await add(RESOLVED, YESTERDAY);

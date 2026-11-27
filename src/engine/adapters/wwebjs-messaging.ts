@@ -567,20 +567,17 @@ export class WwebjsMessaging {
   }
 
   /**
-   * `result`, naming the phone id the send was handed (`handedTo`, see sendResolved) when it is not the one the
-   * caller wrote: WhatsApp holds the recipient under other digits (see MessageResult.resolvedChatId). Read from
-   * the send itself, not from the lookup memory, which another send to the same number may have changed since.
-   * A send handed the contact's `@lid` names no phone, and its pair is reported under the id the caller wrote
-   * (see reportLid), so it names nothing. Only a phone id is ever resolved to another phone id. The id handed, when it
-   * is not the one the caller wrote, is the chat the message went to (`engineChatId`).
+   * `result`, naming the id the send was handed (`handedTo`, see sendResolved) when it is not the one the caller
+   * wrote, as the chat the message went to (`engineChatId`) and the one its row is filed under (`resolvedChatId`):
+   * the number WhatsApp holds the recipient under when it holds it under other digits, or the contact's `@lid`
+   * when the lookup answered only that. WhatsApp did not pair the digits written with the lid, and once another
+   * source reports the phone it holds for it, a row under them would be in no thread of the contact. Read from the
+   * send itself, not from the lookup memory, which another send to the same number may have changed since.
    */
   private resolvedResult(chatId: string, handedTo: string | undefined, result: MessageResult): MessageResult {
     if (!handedTo) return result;
     const engineChatId = toNeutralJid(handedTo);
-    if (engineChatId === toNeutralJid(chatId)) return result;
-    return parseWaId(handedTo).kind === 'user'
-      ? { ...result, resolvedChatId: engineChatId, engineChatId }
-      : { ...result, engineChatId };
+    return engineChatId === toNeutralJid(chatId) ? result : { ...result, resolvedChatId: engineChatId, engineChatId };
   }
 
   private rememberResolvedSendId(chatId: string, wid: string): void {
@@ -620,14 +617,23 @@ export class WwebjsMessaging {
    * `@c.us` and `@lid` rows on a pure whatsapp-web.js deployment (#583 R3). Fire-and-forget: resolution (and
    * the send) must never block/fail on the write. A write the store reports failed (it resolves false, or
    * rejects) is marked for the next send, unless a newer resolution has replaced this one meanwhile.
+   *
+   * WhatsApp said these digits reach the lid, not that they are the phone it holds for it: a lid already reported
+   * with other digits (the number as WhatsApp holds it, by another source) keeps them, so a send to another
+   * spelling does not take the lid's chat away from a key scoped to that number.
    */
   private reportLid(chatId: string, wid: string): void {
+    const store = this.host.config.lidMappingStore;
+    if (!store) return;
     const failed = (): void => {
       if (this.resolvedSendIds.get(chatId) === wid) this.unreportedLids.add(chatId);
     };
-    void this.host.config.lidMappingStore
-      ?.remember(userPart(wid), userPart(chatId), this.host.config.sessionId)
-      ?.then(stored => {
+    const phone = userPart(chatId);
+    void Promise.resolve(store.findPhoneForLid?.(wid))
+      .then(reported =>
+        reported && reported !== phone ? true : store.remember(userPart(wid), phone, this.host.config.sessionId),
+      )
+      .then(stored => {
         if (stored === false) failed();
       }, failed);
   }
