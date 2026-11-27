@@ -327,6 +327,8 @@ export interface BaileysEventsHost {
   keepUnreadInbound?(msg: WAMessage, targetId?: string): void;
   /** Whether the session keeps a message that changes `targetId` (see keepUnreadInbound); undefined without a session. */
   isChangeKept?(targetId: string): boolean;
+  /** Whether the session keeps the copy of `messageId` the store refused, to write it once it answers. */
+  isStoredCopyKept?(messageId: string): boolean;
   /** The currently-registered admitInbound callback, if any (assigned at initialize()). */
   getAdmitInbound?(): EngineEventCallbacks['admitInbound'];
   /** The Baileys module once loaded (it is, before any socket exists), without waiting for it. */
@@ -1838,8 +1840,14 @@ export class BaileysEvents {
    */
   private async readStoredMessage(messageId: string, purpose: string, strict = false): Promise<WAMessage | null> {
     try {
-      return (await this.host.getStoredMessage(messageId)) ?? null;
+      const stored = (await this.host.getStoredMessage(messageId)) ?? null;
+      // Not written yet: its copy, refused by the store, is kept to be written, and reads as a failed read until it is.
+      if (!stored && strict && this.host.isStoredCopyKept?.(messageId)) {
+        throw new StoreUnreadable(new Error('The stored copy of the message is not written yet'));
+      }
+      return stored;
     } catch (err) {
+      if (err instanceof StoreUnreadable) throw err;
       // A reader that decrypts with the stored message's secret cannot go on without it: the failure is handed on, so
       // the message is kept to be read once the store answers rather than dropped as if its target were not stored.
       if (strict) throw new StoreUnreadable(err);

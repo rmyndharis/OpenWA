@@ -384,6 +384,12 @@ export class SessionEngineEventWiring {
         host.messages.keepUnreadInbound(id, kept);
       },
       isChangeKept: (targetId): boolean => host.messages.isChangeKept(id, targetId),
+      onStoredCopyRefused: (kept): void => {
+        if (!host.isLiveEngine(id, engine) || !owns()) return;
+        host.messages.keepStoredCopy(id, kept);
+      },
+      isStoredCopyKept: (messageId): boolean => host.messages.isStoredCopyKept(id, messageId),
+      onStoredAccountCleared: (): void => host.messages.forgetKeptInbound(id),
       onEventResponse: (event): void => {
         if (!host.isLiveEngine(id, engine) || !owns()) return;
         this.logger.debug(`Event response: ${event.response} to ${event.eventMessageId}`, {

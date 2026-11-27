@@ -81,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Messages: keep a revoke, edit, reaction or receipt the database refused and write it once it answers; it was dropped, or written to a row it was not judged against.
 - Messages: store a message received while the database refused writes once it answers; its webhook went out but no row was written, so history and search missed it.
 - Messages: keep a Baileys encrypted edit or reaction, poll vote or RSVP whose message could not be read while the database was down, and apply it once it answers; it was dropped as unreadable.
+- Messages: keep the Baileys copy of a message received or sent while the database was down and write it once it answers; later edits, reactions, votes and RSVPs of the message were dropped as unreadable.
 - Webhooks: keep an event whose webhooks could not be read or whose outbox rows could not be written, and dispatch it once the database answers under the same idempotency key; it was lost.
 - Webhooks: a revoke withdraws the queued, retrying and kept deliveries of the message and its `message.edited` deliveries, and clears the copy a failure row keeps for a redrive; they delivered the taken-back text.
 - Webhooks: a delete through the API, or an edit, reaches the queued, retrying and kept deliveries of the message; they delivered the original text.

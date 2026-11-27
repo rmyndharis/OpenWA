@@ -39,9 +39,12 @@ describe('onInboundUnreadable wiring', () => {
   const setup = (live: boolean) => {
     const keepUnreadInbound = jest.fn();
     const isChangeKept = jest.fn((_sessionId: string, targetId: string) => targetId === 'M1');
+    const keepStoredCopy = jest.fn();
+    const forgetKeptInbound = jest.fn();
+    const isStoredCopyKept = jest.fn((_sessionId: string, messageId: string) => messageId === 'M1');
     const host = {
       isLiveEngine: () => live,
-      messages: { keepUnreadInbound, isChangeKept },
+      messages: { keepUnreadInbound, isChangeKept, keepStoredCopy, isStoredCopyKept, forgetKeptInbound },
     } as unknown as SessionEngineWiringHost;
     const callbacks = new SessionEngineEventWiring({ logger: createLogger('test') }).buildCallbacks(
       'sess-1',
@@ -49,7 +52,7 @@ describe('onInboundUnreadable wiring', () => {
       'sess-1-name',
       host,
     );
-    return { callbacks, keepUnreadInbound, isChangeKept };
+    return { callbacks, keepUnreadInbound, isChangeKept, keepStoredCopy, forgetKeptInbound };
   };
 
   it('keeps the message with the projector, to hand back once the database answers', () => {
@@ -68,10 +71,29 @@ describe('onInboundUnreadable wiring', () => {
   });
 
   it('keeps nothing from an engine that is no longer live', () => {
-    const { callbacks, keepUnreadInbound } = setup(false);
+    const { callbacks, keepUnreadInbound, keepStoredCopy } = setup(false);
 
     callbacks.onInboundUnreadable?.({ messageId: 'ENV-A', raw: '{}' });
+    callbacks.onStoredCopyRefused?.({ messageId: 'M1', raw: '{}' });
 
     expect(keepUnreadInbound).not.toHaveBeenCalled();
+    expect(keepStoredCopy).not.toHaveBeenCalled();
+  });
+
+  it('drops what is kept for the store once the engine clears it, from an engine no longer live too', () => {
+    const { callbacks, forgetKeptInbound } = setup(false);
+
+    callbacks.onStoredAccountCleared?.();
+
+    expect(forgetKeptInbound).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('keeps a copy the store refused with the projector, and answers whether one is kept', () => {
+    const { callbacks, keepStoredCopy } = setup(true);
+
+    callbacks.onStoredCopyRefused?.({ messageId: 'M1', raw: '{}' });
+
+    expect(keepStoredCopy).toHaveBeenCalledWith('sess-1', { messageId: 'M1', raw: '{}' });
+    expect([callbacks.isStoredCopyKept?.('M1'), callbacks.isStoredCopyKept?.('M2')]).toEqual([true, false]);
   });
 });

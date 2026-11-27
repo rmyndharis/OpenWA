@@ -6,6 +6,11 @@
  */
 export interface InboundRedelivery {
   redeliverInbound(raw: string): Promise<boolean>;
+  /**
+   * Write a copy of a message the database refused (see EngineEventCallbacks.onStoredCopyRefused), blank when the
+   * message was deleted for everyone meanwhile (`revoked`); resolves true once written, rejects while refused.
+   */
+  restoreStoredCopy(raw: string, revoked: boolean): Promise<boolean>;
 }
 
 /** Whether an engine hands back the messages it kept (see InboundRedelivery). */

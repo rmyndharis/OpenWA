@@ -566,6 +566,27 @@ describe('BaileysAdapter lifecycle & status', () => {
     }
   });
 
+  it('on a logged-out close: drops what the session keeps for the store before it clears the store', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    try {
+      const order: string[] = [];
+      const adapter = newAdapter();
+      await adapter.initialize(noopCallbacks({ onStoredAccountCleared: () => order.push('dropped') }));
+      fakeStore.clearSession.mockImplementationOnce(() => {
+        order.push('cleared');
+        return Promise.resolve();
+      });
+      fakeSock.fire('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 401 } } },
+      });
+      await new Promise(r => setImmediate(r));
+      expect(order).toEqual(['dropped', 'cleared']);
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
   it('on a logged-out close: clears the stored messages, as an API logout does', async () => {
     const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
     try {
@@ -14302,16 +14323,21 @@ describe('a message whose stored target the store fails to read', () => {
     expect(onInboundUnreadable).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps an RSVP the library could not decrypt because its read of the event failed', async () => {
+  it.each([
+    ['its read of the event failed', false],
+    ['the store does not hold its event yet, its copy kept to be written', true],
+  ] as const)('keeps an RSVP the library could not decrypt because %s', async (_l, copyKept) => {
+    if (copyKept) fakeStore.getMessage.mockResolvedValue(null);
     const onInboundUnreadable = jest.fn();
-    await newAdapter().initialize({ onInboundUnreadable });
+    await newAdapter().initialize({ onInboundUnreadable, isStoredCopyKept: id => copyKept && id === 'EV1' });
     const [[{ getMessage }]] = baileys.default.mock.calls as Array<
       [{ getMessage: (key: { remoteJid?: string; id?: string }) => Promise<unknown> }]
     >;
     const eventKey = { remoteJid: chat, fromMe: false, id: 'EV1' };
 
     // The library reads the event with the key the RSVP carries, before the RSVP reaches the adapter.
-    await expect(getMessage(eventKey)).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+    if (copyKept) await expect(getMessage(eventKey)).resolves.toBeUndefined();
+    else await expect(getMessage(eventKey)).rejects.toMatchObject({ code: 'ECONNREFUSED' });
     fakeSock.fire('messages.upsert', {
       type: 'notify',
       messages: [
@@ -14327,5 +14353,33 @@ describe('a message whose stored target the store fails to read', () => {
     await turns();
 
     expect(onInboundUnreadable).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'RSVP-A' }));
+  });
+
+  it('keeps the copy of a message the store refused, and writes it back, blank once it was deleted for everyone', async () => {
+    const onStoredCopyRefused = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onStoredCopyRefused, onMessage: jest.fn() });
+    const received = (id: string) => ({
+      key: { remoteJid: chat, fromMe: false, id },
+      message: { conversation: 'hello', messageContextInfo: { messageSecret: 'cw==' } },
+      messageTimestamp: 1700000062,
+    });
+    fakeStore.put.mockRejectedValueOnce(
+      Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNREFUSED' }),
+    );
+    fakeStore.put.mockRejectedValueOnce(new Error('CHECK constraint failed'));
+
+    fakeSock.fire('messages.upsert', { type: 'notify', messages: [received('M1'), received('M2')] });
+    await turns();
+
+    // Kept only for a database that cannot answer, not for a write it refused for a reason of its own.
+    expect(onStoredCopyRefused.mock.calls).toEqual([[{ messageId: 'M1', raw: JSON.stringify(received('M1')) }]]);
+    fakeStore.put.mockReset().mockResolvedValue(undefined);
+    await expect(adapter.restoreStoredCopy(JSON.stringify(received('M1')), false)).resolves.toBe(true);
+    await expect(adapter.restoreStoredCopy(JSON.stringify(received('M1')), true)).resolves.toBe(true);
+    expect(fakeStore.put.mock.calls).toEqual([
+      ['db-uuid-1', received('M1')],
+      ['db-uuid-1', { ...received('M1'), message: null }],
+    ]);
   });
 });

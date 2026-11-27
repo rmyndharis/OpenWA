@@ -137,7 +137,7 @@ const rsvp = (): WAMessage => ({
   },
 });
 
-function setup() {
+function setup({ copyKept = false }: { copyKept?: boolean } = {}) {
   const stored = {
     key: { id: 'ORIG1', remoteJid: group, participant: author, fromMe: false },
     messageTimestamp: 1_786_000_000,
@@ -186,6 +186,8 @@ function setup() {
     removeStoredMessage: () => undefined,
     keepUnreadInbound: (msg: WAMessage, targetId?: string) => kept.push({ msg, targetId, handed: false }),
     isChangeKept: (targetId: string) => kept.some(entry => !entry.handed && entry.targetId === targetId),
+    // The session keeps the copy of the original the store refused, to write it once it answers.
+    isStoredCopyKept: (messageId: string) => copyKept && messageId === 'ORIG1',
     getOnMessage: () => () => undefined,
     getOnMessageCreate: () => undefined,
     getOnMessageRevoked: () => (r: { id: string }) => revoked.push(r.id),
@@ -274,6 +276,20 @@ describe('an encrypted change whose target the store cannot read', () => {
 
     expect(run.edited).toEqual(['edited text']);
     expect(run.kept).toEqual([]);
+  });
+
+  it.each([
+    ['an edit', edit],
+    ['a reaction', reaction],
+  ] as const)('keeps %s whose original the store does not hold yet, its copy kept to be written', async (_l, make) => {
+    const run = setup({ copyKept: true });
+    run.store('empty');
+
+    run.upsert(make());
+    await until(() => run.kept.length === 1, 'the change to be kept');
+
+    expect(run.kept[0].targetId).toBe('ORIG1');
+    expect([...run.edited, ...run.reacted]).toEqual([]);
   });
 
   it('drops an encrypted change whose target the store answers it does not hold, as before', async () => {

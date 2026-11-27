@@ -3251,6 +3251,23 @@ describe('BaileysEvents poll votes', () => {
     );
   });
 
+  it('keeps a vote whose poll the store does not hold yet, its copy kept to be written', async () => {
+    const kept: WAMessage[] = [];
+    const { events, onPollVote } = setup(
+      { keepUnreadInbound: (msg: WAMessage) => kept.push(msg), isStoredCopyKept: (id: string) => id === 'POLL1' },
+      null,
+    );
+    const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['Sushi'], {
+      key: { participant: voterPhone },
+    });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [vote] });
+    await flush();
+
+    expect(kept).toEqual([vote]);
+    expect(onPollVote).not.toHaveBeenCalled();
+  });
+
   it('emits poll.vote with multiple selected options', async () => {
     const { events, onPollVote, onMessage, onMessageCreate } = setup();
     const vote = makeVoteEnvelope({ pollCreatorJid: peerPhone, voterJid: voterPhone }, ['Pizza', 'Tacos'], {

@@ -1108,6 +1108,21 @@ export interface EngineEventCallbacks {
    */
   isChangeKept?: (targetId: string) => boolean;
   /**
+   * Fired when the engine's copy of a message (the one a later edit, reaction, poll vote or RSVP of it is read with)
+   * could not be written because the database could not answer: `raw` is that copy, for the session to keep and hand
+   * back once it answers, through the engine's InboundRedelivery (inbound-redelivery.ts). Baileys only.
+   */
+  onStoredCopyRefused?: (kept: { messageId: string; raw: string }) => void;
+  /** Whether the session keeps the copy of `messageId` to be written (see onStoredCopyRefused). Baileys only. */
+  isStoredCopyKept?: (messageId: string) => boolean;
+  /**
+   * Fired when the engine starts clearing the stored messages of an account it unlinked: what the session keeps to hand
+   * back to it (onInboundUnreadable, onStoredCopyRefused) belongs to that account and is dropped, so the next account to
+   * link the session gets none of it. Not guarded on the engine still being live: the store it clears is the session's.
+   * Baileys only.
+   */
+  onStoredAccountCleared?: () => void;
+  /**
    * Fired for each RSVP to a WhatsApp event (consumers emit `event.response`). Baileys only: it
    * decrypts the RSVP itself from the stored event creation message. whatsapp-web.js never fires it.
    */

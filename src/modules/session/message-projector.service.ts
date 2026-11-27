@@ -569,8 +569,8 @@ export class MessageProjector {
       decode: (key, value) => {
         const inbound = restoredKeptInbound(value);
         if (inbound) {
-          const { sessionId, messageId, raw, targetId, since } = inbound;
-          return new KeptInbound(key, sessionId, messageId, raw, targetId, since, this.inboundSteps);
+          const { sessionId, messageId, raw, kind, targetId, since } = inbound;
+          return new KeptInbound(key, sessionId, messageId, raw, kind, targetId, since, this.inboundSteps);
         }
         const restored = restoredReceivedRow(value);
         return restored
@@ -616,23 +616,35 @@ export class MessageProjector {
   };
 
   private readonly inboundSteps: KeptInboundSteps = {
-    redeliver: kept => {
+    redeliver: async kept => {
       const engine = this.engines.get(kept.sessionId);
       // Kept until the session's engine runs here again (after a restart, or a reconnect), and behind an older change of
       // the same message still kept (one that failed for a reason of its own), so they land in the order they came in.
-      if (!engine || !handsBackInbound(engine) || this.keptBefore(kept)) return Promise.resolve(false);
-      return engine.redeliverInbound(kept.raw);
+      if (!engine || !handsBackInbound(engine) || this.keptBefore(kept)) return false;
+      if (kept.kind === 'message') return engine.redeliverInbound(kept.raw);
+      // A copy waits for its row and the changes kept of its message, and is written blank when the row says revoked:
+      // a revoke that landed while it was kept found no copy to clear, and its mark did not outlive a restart.
+      const { sessionId, messageId } = kept;
+      if (this.rowPending(sessionId, messageId) || this.recovery.get('change', `${sessionId}:${messageId}`))
+        return false;
+      const revoked = await this.messageRepository.exists({
+        where: { sessionId, waMessageId: messageId, type: 'revoked' },
+      });
+      return engine.restoreStoredCopy(kept.raw, revoked);
     },
     released: (kept, reason) => {
       if (!reason) return;
+      const copy = kept.kind === 'copy';
       this.logger.error(
-        'A message kept until its stored target could be read could not be kept any longer',
+        copy
+          ? 'The stored copy of a message the database refused could not be kept any longer'
+          : 'A message kept until its stored target could be read could not be kept any longer',
         undefined,
         {
           sessionId: kept.sessionId,
           messageId: kept.messageId,
           reason,
-          action: 'message_inbound_lost',
+          action: copy ? 'message_copy_lost' : 'message_inbound_lost',
         },
       );
     },
@@ -643,9 +655,39 @@ export class MessageProjector {
    * failing), to hand it back to the engine once the database answers (see KeptInbound).
    */
   keepUnreadInbound(sessionId: string, kept: { messageId: string; raw: string; targetId?: string }): void {
-    const key = keptInboundKey(sessionId, kept.messageId);
-    const { messageId, raw, targetId } = kept;
-    this.recovery.park(key, new KeptInbound(key, sessionId, messageId, raw, targetId, Date.now(), this.inboundSteps));
+    this.keepInbound(sessionId, kept.messageId, kept.raw, 'message', kept.targetId);
+  }
+
+  /** Keep the engine's copy of a message the database refused, to write it once it answers (see KeptInbound). */
+  keepStoredCopy(sessionId: string, kept: { messageId: string; raw: string }): void {
+    this.keepInbound(sessionId, kept.messageId, kept.raw, 'copy', kept.messageId);
+  }
+
+  private keepInbound(
+    sessionId: string,
+    messageId: string,
+    raw: string,
+    kind: 'message' | 'copy',
+    targetId: string | undefined,
+  ): void {
+    const key = keptInboundKey(sessionId, messageId, kind);
+    const record = new KeptInbound(key, sessionId, messageId, raw, kind, targetId, Date.now(), this.inboundSteps);
+    this.recovery.park(key, record);
+  }
+
+  /**
+   * Drop what is kept to hand back to the engine of an account the session unlinked (see keepUnreadInbound,
+   * keepStoredCopy): its store was cleared, and the next account to link the session must get none of it.
+   */
+  forgetKeptInbound(sessionId: string): void {
+    for (const record of [...this.recovery.records('receive')]) {
+      if (record instanceof KeptInbound && record.sessionId === sessionId) this.recovery.settle('receive', record.key);
+    }
+  }
+
+  /** Whether the engine's copy of `messageId` is kept to be written (see keepStoredCopy). */
+  isStoredCopyKept(sessionId: string, messageId: string): boolean {
+    return this.recovery.get('receive', keptInboundKey(sessionId, messageId, 'copy')) !== undefined;
   }
 
   /** Whether a message that changes `targetId` is kept to be handed back (see keepUnreadInbound). */

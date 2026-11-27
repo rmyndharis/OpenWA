@@ -64,10 +64,13 @@ export const RECOVERY_MAX_RECORD_FAILURES = 3;
 /** 64 MiB, the byte budget every lane shares. */
 export const RECOVERY_MAX_BYTES = 64 * 1024 * 1024;
 
-/** Records a lane keeps: a message's changes and a send's rerun one each, a dispatch one per webhook event. */
+/**
+ * Records a lane keeps: a message's changes and a send's rerun one each, a dispatch one per webhook event. A message
+ * received on Baileys takes two in its lane, its row and the copy the engine reads its changes with.
+ */
 export const RECOVERY_MAX_RECORDS: Readonly<Record<RecoveryLane, number>> = {
   send: 1000,
-  receive: 1000,
+  receive: 2000,
   change: 1000,
   dispatch: 10_000,
 };

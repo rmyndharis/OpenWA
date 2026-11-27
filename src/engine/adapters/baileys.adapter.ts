@@ -7,6 +7,7 @@ import { BaileysChannels } from './baileys-channels';
 import { BaileysCatalog } from './baileys-catalog';
 import { BaileysContacts } from './baileys-contacts';
 import { BaileysEvents, keptInboundRaw, revivedInbound, type GroupMember } from './baileys-events';
+import { isDatabaseUnavailable } from '../../common/utils/recovery-queue';
 import { BaileysGroups } from './baileys-groups';
 import { BaileysHistory, toUnixSeconds } from './baileys-history';
 import { type BaileysEngineHost } from './baileys-host';
@@ -178,7 +179,17 @@ export class BaileysAdapter implements IWhatsAppEngine {
         type,
         accept?: Parameters<BaileysSessionStore['recordMessageEdit']>[4],
       ) => this.sessionStore.recordMessageEdit(chatId, messageId, text, type, accept),
-      putStoredMessage: msg => this.config.messageStore?.put(this.config.dbSessionId, msg),
+      // A copy the database could not take is kept to be written once it answers (see restoreStoredCopy): a later edit,
+      // reaction, vote or RSVP of the message is read with the secret it holds.
+      putStoredMessage: msg =>
+        this.config.messageStore?.put(this.config.dbSessionId, msg).catch((error: unknown) => {
+          const lib = this.lifecycle.loadedLib;
+          const callback = this.callbacks.onStoredCopyRefused;
+          if (lib && callback && msg.key.id && isDatabaseUnavailable(error)) {
+            callback({ messageId: msg.key.id, raw: keptInboundRaw(lib, msg) });
+          }
+          throw error;
+        }),
       updateStoredMessage: (messageId, change) =>
         this.config.messageStore?.update(this.config.dbSessionId, messageId, change),
       removeStoredMessage: (messageId, shouldRemove) =>
@@ -223,6 +234,8 @@ export class BaileysAdapter implements IWhatsAppEngine {
         callback({ messageId: msg.key.id, raw: keptInboundRaw(lib, msg), ...(targetId ? { targetId } : {}) });
       },
       isChangeKept: targetId => this.callbacks.isChangeKept?.(targetId) === true,
+      isStoredCopyKept: messageId => this.callbacks.isStoredCopyKept?.(messageId) === true,
+      onStoredAccountCleared: () => this.callbacks.onStoredAccountCleared?.(),
       noteUnreadStoredMessage: key => delegates.events?.noteUnreadStoredMessage(key),
       getStoredMessages: messageIds => this.config.messageStore?.getMessages(this.config.dbSessionId, messageIds),
       recordLidMapping: (lid, pn, isReported = true) =>
@@ -359,6 +372,16 @@ export class BaileysAdapter implements IWhatsAppEngine {
     if (this.getStatus() !== EngineStatus.READY) return false;
     const lib = await this.lifecycle.loadLib();
     await this.events.redeliverInbound(revivedInbound(lib, raw));
+    return true;
+  }
+
+  /** A copy of a message the database refused, written once it answers (see InboundRedelivery). */
+  async restoreStoredCopy(raw: string, revoked: boolean): Promise<boolean> {
+    const store = this.config.messageStore;
+    if (!store) return true;
+    const msg = revivedInbound(await this.lifecycle.loadLib(), raw);
+    const deleted = revoked || (!!msg.key.id && this.events.wasDeletedForEveryone(msg.key.id));
+    await store.put(this.config.dbSessionId, deleted ? { ...msg, message: null } : msg);
     return true;
   }
 

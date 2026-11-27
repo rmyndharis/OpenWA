@@ -263,6 +263,10 @@ export interface BaileysLifecycleHost {
   readonly liveCalls: Map<string, { callFrom: string; expiresAt: number }>;
   /** The library failed to read a stored message (see BaileysEvents.noteUnreadStoredMessage). */
   noteUnreadStoredMessage?(key: BaileysLib.WAMessageKey): void;
+  /** Whether the session keeps the copy of a message the store refused, to write it once it answers. */
+  isStoredCopyKept?(messageId: string): boolean;
+  /** The stored messages of the unlinked account are about to be cleared (see EngineEventCallbacks). */
+  onStoredAccountCleared?(): void;
   /** `628999:12@s.whatsapp.net` / `628999@s.whatsapp.net` -> `628999`. */
   extractPhone(id: string | undefined): string | null;
   toNeutralJid(jid: string): string;
@@ -650,6 +654,8 @@ export class BaileysLifecycle {
               throw error;
             });
           if (!stored) {
+            // Not written yet, its copy kept: what the library could not read for it is kept as for a failed read.
+            if (this.host.isStoredCopyKept?.(key.id)) this.host.noteUnreadStoredMessage?.(key);
             return undefined;
           }
           // An RSVP to an event this account posted in a 1:1 chat names the event by its key as the guest
@@ -1712,6 +1718,8 @@ export class BaileysLifecycle {
     // Logged when it completes too: nothing else dates the moment earlier messages stopped answering a reply.
     const cleared = (what: string) => (): void =>
       this.host.logger.log(`Cleared the stored ${what} of an unlinked account`, { sessionId });
+    // First, so nothing kept for that account is written into the store, or handed to the next account, after it.
+    this.host.onStoredAccountCleared?.();
     await messageStore?.clearSession(dbSessionId).then(cleared('messages'), warn('messages'));
     await chatStateStore?.clearSession(sessionId).then(cleared('chat states'), warn('chat states'));
   }

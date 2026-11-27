@@ -1141,6 +1141,78 @@ describe('Webhook events the database refused, kept until it answers (SQLite)', 
       expect(redeliverInbound.mock.calls).toEqual([['A'], ['A'], ['B']]);
     });
 
+    describe('with the copy of the message it changes kept too, the store having refused it', () => {
+      const copyOf = (id: string) => `{"key":{"id":"${id}"}}`;
+      let calls: string[];
+      beforeEach(() => {
+        calls = [];
+        Object.assign(engine, {
+          redeliverInbound: jest.fn((raw: string) => {
+            calls.push(`message ${raw}`);
+            return Promise.resolve(true);
+          }),
+          restoreStoredCopy: jest.fn((raw: string, revoked: boolean) => {
+            calls.push(`copy ${raw}${revoked ? ' revoked' : ''}`);
+            return Promise.resolve(true);
+          }),
+        });
+      });
+
+      it('writes the copy back first, and hands the change back after it', async () => {
+        projector.keepStoredCopy(sessionId, { messageId: 'E-1', raw: copyOf('E-1') });
+        projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: 'A', targetId: 'E-1' });
+        expect([projector.isChangeKept(sessionId, 'E-1'), projector.isStoredCopyKept(sessionId, 'E-1')]).toEqual([
+          true,
+          true,
+        ]);
+
+        await recover();
+        await recover();
+
+        expect(calls).toEqual([`copy ${copyOf('E-1')}`, 'message A']);
+        expect(projector.isStoredCopyKept(sessionId, 'E-1')).toBe(false);
+      });
+
+      it('hands nothing back to the next account once the session unlinked the one it was kept for', async () => {
+        projector.keepStoredCopy(sessionId, { messageId: 'E-1', raw: copyOf('E-1') });
+        projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: 'A', targetId: 'E-1' });
+
+        projector.forgetKeptInbound(sessionId);
+        await recover();
+
+        expect(calls).toEqual([]);
+        expect([projector.isChangeKept(sessionId, 'E-1'), projector.isStoredCopyKept(sessionId, 'E-1')]).toEqual([
+          false,
+          false,
+        ]);
+        expect(losses()).toEqual([]);
+      });
+
+      it('writes the copy blank once its row and a revoke that waited for the row landed', async () => {
+        projector.keepStoredCopy(sessionId, { messageId: 'R-1', raw: copyOf('R-1') });
+        outage = 'writes';
+        void projector.handleInboundMessage(sessionId, engine, {
+          id: 'R-1',
+          chatId: CHAT,
+          from: CHAT,
+          to: '628222@c.us',
+          fromMe: false,
+          type: 'text',
+          body: 'first text',
+          timestamp: 1_700_000_000,
+        } as unknown as IncomingMessage);
+        await settle(200);
+        outage = 'off';
+        await projector.recordRevoke(sessionId, 'R-1', { kind: 'revoke', chatId: CHAT, fromMe: false }, true);
+        await settle();
+
+        await recover();
+        await recover();
+
+        expect(calls).toEqual([`copy ${copyOf('R-1')} revoked`]);
+      });
+    });
+
     it('waits for an engine that can take it back', async () => {
       projector.keepUnreadInbound(sessionId, { messageId: 'ENV-A', raw: '{}' });
       await recover();
