@@ -1017,7 +1017,10 @@ data store is refused, before anything is written, while `DATABASE_TYPE` is `pos
 SQLite install, then move that install as [14.3](./14-migration-guide.md#143-database-migration-sqlite--postgresql)
 shows. It also restores whatsapp-web.js/Baileys auth state, local media, plugins, and generated
 secret/config files, all as the archive holds them, so restore only archives you made. It snapshots the
-current data dir first so a bad restore can be undone:
+current data dir first so a bad restore can be undone. When it replaces the SQLite data store or stages
+`database.sql`, it moves the recovery journal (`RECOVERY_JOURNAL_PATH`, default `./data/recovery-journal.jsonl`)
+aside to `recovery-journal.jsonl.pre-restore-<ts>` beside it and prints where: what the stopped app kept to
+retry belongs to the data store it replaced, and the restored app starts without it. Read that file or delete it:
 
 ```bash
 # 1. Stop the app (so files are quiescent)

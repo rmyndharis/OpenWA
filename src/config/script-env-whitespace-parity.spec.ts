@@ -39,7 +39,7 @@ const KEYS = [
 /** The keys restore.sh takes a target for: a path from the archive's .env.generated must lie inside the data dir. */
 const ARCHIVE_KEYS = keysAfter(scriptText('restore.sh'), 'archive_target').sort();
 
-/** The archive member each of those keys' targets is restored from. */
+/** The archive member each of those keys' targets is restored from, or, for the recovery journal, moved aside for. */
 const MEMBERS: Record<string, { name: string; kind: 'file' | 'dir' }> = {
   MAIN_DATABASE_NAME: { name: 'main.sqlite', kind: 'file' },
   DATABASE_NAME: { name: 'openwa.sqlite', kind: 'file' },
@@ -49,6 +49,7 @@ const MEMBERS: Record<string, { name: string; kind: 'file' | 'dir' }> = {
   PLUGINS_DIR: { name: 'plugin-packages', kind: 'dir' },
   PLUGIN_STATE_DIR: { name: 'plugin-state', kind: 'dir' },
   BOOTSTRAP_KEY_FILE: { name: '.api-key', kind: 'file' },
+  RECOVERY_JOURNAL_PATH: { name: 'openwa.sqlite', kind: 'file' },
 };
 
 const NBSP = String.fromCodePoint(0xa0);

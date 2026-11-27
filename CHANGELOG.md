@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SDKs: `npm run check:sdk-coverage` compares the query keys each SDK call sends with the parameters the contract declares, so a renamed or dropped query parameter fails CI instead of leaving a client on the old key.
 - Audit: `browser_session_created` and `browser_session_ended` rows record which key opened or ended a dashboard browser session, with the client IP and user agent.
 - Recovery: what the database refused is kept in a journal (`RECOVERY_JOURNAL_PATH`, default `./data/recovery-journal.jsonl`), so a restart or a crash while it is away no longer loses it.
+- Scripts: `restore.sh` moves the recovery journal aside when it replaces or stages the data store, so the restored app does not replay it.
 
 ### Changed
 

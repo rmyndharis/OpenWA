@@ -119,6 +119,9 @@
 #   (ba) WAL-mode online backup preserves uncheckpointed -wal transactions when sqlite3 is present; without sqlite3,
 #       backup refuses any database carrying a non-empty -wal sidecar (no silent data loss) while still allowing a
 #       plain copy when -wal is absent or empty
+#   (bc) a restore that replaces the SQLite data store or stages a PostgreSQL dump moves the recovery journal aside, at
+#       the path the app reads (default, environment, ./.env), and leaves it in place otherwise; a journal path from the
+#       archive's .env.generated outside the data dir is refused
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -129,6 +132,7 @@ set -euo pipefail
 # case starts from none of them and sets exactly the paths it uses.
 unset OPENWA_DATA_DIR BACKUP_DIR DATABASE_TYPE MAIN_DATABASE_NAME DATABASE_NAME SESSION_DATA_PATH \
   BAILEYS_AUTH_DIR STORAGE_LOCAL_PATH PLUGINS_DIR PLUGIN_STATE_DIR OPENWA_RESTORE_SNAPSHOT_DIR BOOTSTRAP_KEY_FILE \
+  RECOVERY_JOURNAL_PATH \
   ENGINE_TYPE DATABASE_URL DATABASE_HOST DATABASE_PORT DATABASE_USERNAME DATABASE_PASSWORD \
   DATABASE_SSL DATABASE_SSL_REJECT_UNAUTHORIZED PGSSLMODE PGSSLROOTCERT \
   NODE_EXTRA_CA_CERTS
@@ -3538,6 +3542,63 @@ if [ -d "$BB/dst/snaps/data.pre-restore-$BB_TS/data" ]; then
   fail "(bb) same-second restore nested data inside existing snapshot directory"
 fi
 pass "(bb) snapshot dir containment, preflight order, and -2/-3 collision naming verified"
+
+echo ""
+echo "==> (bc) a restore that replaces or stages the data store moves the recovery journal aside"
+# What a stopped app kept to retry against the data store it replaces would be replayed into the restored one.
+BC="$WORK/bc"
+mkdir -p "$BC/sqlite" "$BC/postgres" "$BC/main-only" "$BC/generated"
+make_fixture "$BC/sqlite/main.sqlite" "bc-main"
+make_fixture "$BC/sqlite/openwa.sqlite" "bc-data"
+make_fixture "$BC/postgres/main.sqlite" "bc-main"
+printf -- '-- dump\n' >"$BC/postgres/database.sql"
+make_fixture "$BC/main-only/main.sqlite" "bc-main"
+cp -R "$BC/sqlite/." "$BC/generated/"
+printf 'RECOVERY_JOURNAL_PATH=%s\n' "$BC/outside/journal.jsonl" >"$BC/generated/.env.generated"
+for archive in sqlite postgres main-only generated; do
+  tar -czf "$BC/$archive.tar.gz" -C "$BC/$archive" .
+done
+# bc_restore <archive> <journal, relative to the target> [VAR=value...]: a restore into a target whose journal holds a
+# line, with ./.env holding BC_DOTENV; its output left in OUT_BC and its status in rc.
+bc_restore() {
+  rm -rf "$BC/dst" "$BC/outside" && mkdir -p "$BC/dst" "$BC/outside" "$(dirname "$BC/dst/$2")"
+  printf '{"l":"change","k":"a","v":{}}\n' >"$BC/dst/$2"
+  [ -z "${BC_DOTENV:-}" ] || printf '%b' "$BC_DOTENV" >"$BC/dst/.env"
+  set +e
+  OUT_BC="$(cd "$BC/dst" && env "${@:3}" "$RESTORE" "$1" 2>&1)"
+  rc=$?
+  set -e
+}
+# bc_aside <what> <journal>: the restore succeeded, and the journal left its path for one beside it the output names.
+bc_aside() {
+  local aside
+  aside="$(find "$(dirname "$2")" -maxdepth 1 -name "$(basename "$2").pre-restore-*" | head -n 1)"
+  if [ "$rc" -ne 0 ] || [ -e "$2" ] || [ -z "$aside" ] || ! grep -qF '"k":"a"' "$aside" ||
+    ! grep -qF "$(basename "$aside")" <<<"$OUT_BC"; then
+    fail "(bc) $1: the recovery journal was not moved aside (rc $rc): $OUT_BC"
+  fi
+}
+for archive in sqlite postgres; do
+  bc_restore "$BC/$archive.tar.gz" data/recovery-journal.jsonl
+  bc_aside "a $archive archive" "$BC/dst/data/recovery-journal.jsonl"
+done
+bc_restore "$BC/sqlite.tar.gz" state/journal.jsonl RECOVERY_JOURNAL_PATH="$BC/dst/state/journal.jsonl"
+bc_aside "a journal RECOVERY_JOURNAL_PATH names in the environment" "$BC/dst/state/journal.jsonl"
+BC_DOTENV='RECOVERY_JOURNAL_PATH=./data/kept/journal.jsonl\n'
+bc_restore "$BC/postgres.tar.gz" data/kept/journal.jsonl
+bc_aside "a journal RECOVERY_JOURNAL_PATH names in ./.env" "$BC/dst/data/kept/journal.jsonl"
+BC_DOTENV=''
+bc_restore "$BC/main-only.tar.gz" data/recovery-journal.jsonl
+if [ "$rc" -ne 0 ] || ! grep -qF '"k":"a"' "$BC/dst/data/recovery-journal.jsonl"; then
+  fail "(bc) a restore that leaves the data store in place moved the recovery journal (rc $rc): $OUT_BC"
+fi
+bc_restore "$BC/generated.tar.gz" data/recovery-journal.jsonl
+if [ "$rc" -ne 1 ] ||
+  ! grep -qF "RECOVERY_JOURNAL_PATH from the archive's .env.generated is not inside the data directory" <<<"$OUT_BC" ||
+  [ ! -s "$BC/dst/data/recovery-journal.jsonl" ]; then
+  fail "(bc) a journal path from the archive's .env.generated outside the data dir was not refused (rc $rc): $OUT_BC"
+fi
+pass "(bc) the recovery journal is moved aside when the data store is replaced or staged, and only then"
 
 echo ""
 echo "All smoke tests passed!"
