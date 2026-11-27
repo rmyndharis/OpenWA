@@ -9,12 +9,18 @@ import {
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
+import { setImmediate } from 'timers/promises';
 import { DataSource, QueryRunner } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { createLogger } from '../../common/services/logger.service';
 import { isMissingTableError } from '../../common/utils/db-errors';
 import { closeSessionWrites } from '../../common/utils/session-write-scope';
-import { awaitNoOpenTransaction, SHARED_CONNECTION_DIALECTS } from '../../common/utils/shared-connection';
+import {
+  awaitNoOpenTransaction,
+  holdSharedConnection,
+  SHARED_CONNECTION_DIALECTS,
+  type SharedConnectionHold,
+} from '../../common/utils/shared-connection';
 import { failUnfinishedSessionBatches } from '../message/batch-media.util';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -360,6 +366,12 @@ function parsePluginInstanceConfig(raw: unknown): Record<string, unknown> | null
   return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
 }
 
+/**
+ * Rows a SQLite restore on its own connection deletes or inserts between two turns of the event loop: a few
+ * milliseconds of work each, about 55 ms with the message search triggers in place.
+ */
+const RESTORE_CHUNK_ROWS = 500;
+
 const EMPTY_ARCHIVE_WARNING = 'Backup contained no rows to restore; refused to replace existing data. Check the file.';
 
 /** Result of POST /infra/import-data; InfraImportDataResponseDto is the published contract. */
@@ -423,6 +435,8 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
   private openingSnapshot?: Promise<unknown>;
   /** Aborted at a stop: it ends a copy being written and refuses an export started after it. */
   private readonly stopping = new AbortController();
+  /** Set while a restore holds the shared connection, resolved once it has let the callers it held go on. */
+  private restoring?: Promise<void>;
 
   constructor(
     private readonly configService: ConfigService,
@@ -473,6 +487,8 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
         code: 'EXPORT_STOPPED',
       }),
     );
+    // A restore on a connection of its own ends before the shared connection closes under the callers it holds.
+    await this.restoring;
     const closed = this.closeStoppedSnapshot();
     // Only a SQLite reader holds the shutdown checkpoint back. On PostgreSQL the open can wait for a pool
     // connection and the rollback for a read in flight; DataSource.destroy() waits for the connection.
@@ -904,6 +920,26 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
     }
   }
 
+  /**
+   * Whether the restore runs on a connection of its own: a SQLite file. `:memory:` and '' would open an empty
+   * database of their own, so they keep the shared connection.
+   */
+  private restoresOnOwnConnection(): boolean {
+    const { type, database } = this.dataDataSource.options;
+    return type === 'better-sqlite3' && typeof database === 'string' && !['', ':memory:'].includes(database.trim());
+  }
+
+  /** The restore's connection to the data file: the shared connection's options, with nothing that writes at open. */
+  private openRestoreSource(): Promise<DataSource> {
+    return new DataSource({
+      ...this.dataDataSource.options,
+      synchronize: false,
+      migrationsRun: false,
+      dropSchema: false,
+      subscribers: [],
+    }).initialize();
+  }
+
   /** The replace-all restore itself. Only ever entered through importData's single-flight guard. */
   private async runImport(data: {
     tables: Partial<MigrationTables>;
@@ -1089,6 +1125,14 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
     // Set when another transaction opened on the shared connection while the writes drained.
     let foreignTransaction = false;
 
+    // A SQLite file is restored on a connection of its own, in chunks with a turn of the event loop between them,
+    // while the shared connection holds every other caller: they wait as on a blocked loop and see the data from
+    // before or after the restore, never a half state.
+    const restoresAside = this.restoresOnOwnConnection();
+    let hold: SharedConnectionHold | undefined;
+    // What runs on the shared connection after the restore goes ahead of the callers it held.
+    const asOwner = <T>(work: () => Promise<T>): Promise<T> => (hold ? hold.asOwner(work) : work());
+
     // Everything from here is wrapped so the token cannot outlive this request. It is not enough to
     // release it in the transaction's own finally: createQueryRunner/connect/startTransaction sit
     // before that finally exists, so any throw there — a driver change, a broadcaster subscriber, a
@@ -1096,7 +1140,23 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
     // and deliberately so: a leaked token disables loss detection for the lifetime of the process,
     // silently, which is strictly worse than the teardown the suspension prevents.
     try {
-      const queryRunner = this.dataDataSource.createQueryRunner();
+      const sharedRunner = this.dataDataSource.createQueryRunner();
+      let queryRunner = sharedRunner;
+      let restoreSource: DataSource | undefined;
+      // The restore's own connection is closed and the callers held let through, on every path, before the shared
+      // connection is used again.
+      let endRestoring = (): void => undefined;
+      const endRestore = async (): Promise<void> => {
+        const source = restoreSource;
+        restoreSource = undefined;
+        await source
+          ?.destroy()
+          .catch((error: unknown) =>
+            this.logger.warn('Could not close the connection of a restore', { error: String(error) }),
+          );
+        hold?.release();
+        endRestoring();
+      };
 
       // Refuse BEFORE a single row is deleted, not after. On better-sqlite3 every query runner is a
       // driver SINGLETON, so if anything else already holds a transaction on this DataSource — a
@@ -1113,17 +1173,17 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
       // The try/finally that releases the runner opens only after BEGIN, so the refusal and a failing
       // BEGIN give the runner back here: a pooled PostgreSQL client would otherwise stay checked out for
       // the life of the process.
+      const nestedTransaction = (): ConflictException =>
+        new ConflictException({
+          statusCode: 409,
+          error: 'Conflict',
+          message:
+            'Another database transaction is in progress on this connection, so a restore could not be ' +
+            'made durable. Retry with no other data operation in flight.',
+          code: 'IMPORT_NESTED_TRANSACTION',
+        });
       const refuseNestedTransaction = (): void => {
-        if (queryRunner.isTransactionActive) {
-          throw new ConflictException({
-            statusCode: 409,
-            error: 'Conflict',
-            message:
-              'Another database transaction is in progress on this connection, so a restore could not be ' +
-              'made durable. Retry with no other data operation in flight.',
-            code: 'IMPORT_NESTED_TRANSACTION',
-          });
-        }
+        if (sharedRunner.isTransactionActive) throw nestedTransaction();
       };
       try {
         refuseNestedTransaction();
@@ -1134,337 +1194,392 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
         const existing = await this.dataDataSource.query<Array<{ id: string }>>(
           'SELECT id FROM sessions',
           [],
-          sharesOneConnection ? queryRunner : undefined,
+          sharesOneConnection ? sharedRunner : undefined,
         );
         retired = existing
           .filter(({ id }) => !importedSessionIds.has(id) && !leftRunning.has(id))
           .map(({ id }) => ({ id, writes: closeSessionWrites(this.dataDataSource, id) }));
         await Promise.all(retired.map(({ writes }) => writes.drain()));
-        await queryRunner.connect();
-        // Again after the drain's await: BEGIN must follow the check with nothing in between.
-        if (queryRunner.isTransactionActive) foreignTransaction = true;
-        refuseNestedTransaction();
+        if (restoresAside) {
+          restoreSource = await this.openRestoreSource();
+          // Taken on a turn that finds no transaction open on the shared connection, which a restore must not
+          // nest into; one still open after the wait's bound is refused as above.
+          hold = await holdSharedConnection(this.dataDataSource);
+          this.restoring = new Promise(resolve => (endRestoring = resolve));
+          if (!hold) {
+            foreignTransaction = true;
+            throw nestedTransaction();
+          }
+          queryRunner = restoreSource.createQueryRunner();
+        } else {
+          await queryRunner.connect();
+          // Again after the drain's await: BEGIN must follow the check with nothing in between.
+          if (queryRunner.isTransactionActive) foreignTransaction = true;
+          refuseNestedTransaction();
+        }
         await queryRunner.startTransaction();
       } catch (error) {
         await queryRunner.release().catch(() => undefined);
+        await endRestore();
         throw error;
       }
 
-      try {
-        const isPostgres = this.dataDataSource.options.type === 'postgres';
-        if (isPostgres) {
-          // The runtime pool carries a statement_timeout sized for request traffic (30 s by default), but
-          // the clears and scrubs below scale with the live tables, not with the archive: restoring an
-          // earlier export onto an instance whose messages table has since grown to millions of rows
-          // would be cancelled mid-DELETE, after the engines of the sessions it drops were already
-          // stopped. Lifted for this transaction only, as the migrations do. A lock wait keeps the bound
-          // the statement timeout gave it, so a stuck lock still fails the import instead of hanging it.
-          const lockWaitMs = Math.max(
-            0,
-            Math.trunc(this.configService.get<number>('dataDatabase.statementTimeoutMs', 30000)) || 0,
-          );
-          await queryRunner.query('SET LOCAL statement_timeout = 0');
-          await queryRunner.query(`SET LOCAL lock_timeout = ${lockWaitMs}`);
-        }
-        // Clear existing data (in correct order due to foreign keys). templates,
-        // baileys_stored_messages, and automation_rules FK sessions ON DELETE CASCADE, so the
-        // sessions DELETE would clear them too; clearing them explicitly first keeps the order
-        // correct on engines where the cascade is not enforced. Tolerate a genuinely-absent table (isMissingTableError) but let any
-        // OTHER failure (lock, I/O, aborted tx) propagate to the transaction rollback below — a blind
-        // `.catch(() => {})` here could otherwise silently commit a MERGED (not replaced) restore on
-        // SQLite, violating the endpoint's "replaces existing data" contract.
-        const clearTable = async (table: string, where = ''): Promise<void> => {
-          // Asked first on PostgreSQL: a statement that names a missing relation aborts the whole transaction even
-          // when its error is caught, and every later statement then fails with 25P02.
-          if (isPostgres && !(await queryRunner.hasTable(table))) {
-            this.logger.debug('Skipped clearing a table that does not exist during import', { table });
-            return;
+      // Read inside the transaction, used once it has committed.
+      let previousPluginBindings: Parameters<ScopeBindingService['resyncAfterImport']>[0] = [];
+      let counts = {} as TableCounts;
+      // Undefined once committed, otherwise the answer of a restore that rolled back.
+      const replace = async (): Promise<InfraImportDataResult | undefined> => {
+        try {
+          const isPostgres = this.dataDataSource.options.type === 'postgres';
+          if (isPostgres) {
+            // The runtime pool carries a statement_timeout sized for request traffic (30 s by default), but
+            // the clears and scrubs below scale with the live tables, not with the archive: restoring an
+            // earlier export onto an instance whose messages table has since grown to millions of rows
+            // would be cancelled mid-DELETE, after the engines of the sessions it drops were already
+            // stopped. Lifted for this transaction only, as the migrations do. A lock wait keeps the bound
+            // the statement timeout gave it, so a stuck lock still fails the import instead of hanging it.
+            const lockWaitMs = Math.max(
+              0,
+              Math.trunc(this.configService.get<number>('dataDatabase.statementTimeoutMs', 30000)) || 0,
+            );
+            await queryRunner.query('SET LOCAL statement_timeout = 0');
+            await queryRunner.query(`SET LOCAL lock_timeout = ${lockWaitMs}`);
           }
-          try {
-            await queryRunner.query(`DELETE FROM ${table}${where}`);
-          } catch (err) {
-            if (isPostgres || !isMissingTableError(err)) throw err;
-            this.logger.debug('Skipped clearing a table that does not exist during import', { table });
-          }
-        };
-        // The INSERTs below are written once, in Postgres' `$N` placeholder form. better-sqlite3 differs
-        // from the legacy sqlite3 driver on raw queries in two ways: SQLite parses `$N` as a NAMED
-        // parameter, which cannot be bound from the positional array TypeORM passes through (RangeError),
-        // and strict binding rejects booleans/undefined — which a Postgres-made backup carries (real
-        // booleans survive the JSON round-trip). Postgres needs `$N` and binds booleans natively, so both
-        // rewrites apply only on the SQLite path. Safe: every `$N` below occurs once, in ascending order.
-        const insert = (text: string, params: unknown[]): Promise<unknown> =>
-          queryRunner.query(
-            isPostgres ? text : text.replace(/\$\d+/g, '?'),
-            isPostgres ? params : params.map(v => (typeof v === 'boolean' ? Number(v) : (v ?? null))),
-          );
-        await queryRunner.query('DELETE FROM webhooks');
-        await clearTable('messages');
-        await clearTable('message_batches');
-        await clearTable('templates');
-        await clearTable('baileys_stored_messages');
-        await clearTable('automation_rules');
-        // lid_mappings is not a FK to sessions, so the sessions DELETE below won't clear it; clear it
-        // explicitly so a restore replaces the cache rather than colliding on existing lid PKs.
-        await clearTable('lid_mappings');
-        // chat_states is the same case: PK (sessionId, chatId), no FK to sessions, so the sessions DELETE
-        // does not reach it. Without this, a restore onto an instance that already holds chat_states rows
-        // collides on those PKs and the all-or-nothing gate rolls the whole import back.
-        await clearTable('chat_states');
-        // The runtime plugin bindings (activeSessions, per-session config) were projected from the rows
-        // about to be deleted. Remember which scopes they bound so the post-commit resync can retire
-        // the ones the restore drops. Probed first: on PostgreSQL a failed SELECT would abort the
-        // transaction, and a missing table is tolerated by clearTable below.
-        const previousPluginBindings = (await queryRunner.hasTable('plugin_instances'))
-          ? (
-              (await queryRunner.query(
-                'SELECT "pluginId", "instanceId", "sessionScope", enabled, config FROM plugin_instances',
-              )) as Array<{
-                pluginId: string;
-                instanceId?: string;
-                sessionScope: string | null;
-                enabled: boolean | number;
-                config?: unknown;
-              }>
-            ).map(row => ({
-              ...row,
-              enabled: Number(row.enabled) === 1,
-              config: parsePluginInstanceConfig(row.config),
-            }))
-          : [];
-        // Integration Fabric + both DLQs: none carry an FK constraint to sessions (sessionId is provenance),
-        // so clearing them here before the sessions DELETE keeps the replace-semantics complete.
-        await clearTable('plugin_instances');
-        await clearTable('conversation_mappings');
-        await clearTable('ingress_events');
-        await clearTable('webhook_delivery_failures');
-        // Same rule, and it bites harder here: webhook_outbox_events carries UNIQUE(webhookId,
-        // idempotencyKey), so without this clear a restore onto an instance that already holds the
-        // archive's rows collides on every one of them, and the all-or-nothing gate below rolls the
-        // whole import back. Restoring a backup onto the instance that produced it is exactly the
-        // rollback flow, so leaving it out broke the recovery path rather than a corner of it.
-        await clearTable('webhook_outbox_events');
-        await clearTable('integration_delivery_failures');
-        // status_updates has no FK to sessions; clear it explicitly so the replace is complete.
-        await clearTable('status_updates');
-        // Session ownership is CLUSTER RUNTIME STATE, not backup payload: which process currently holds
-        // a session's engine, and until when. The replace below deletes it along with everything else,
-        // and the sessions importer does not restore it (deliberately — see below), so without this the
-        // committed rows come back unclaimed and the next lease renewal reads "claim lost" and tears
-        // down engines that never stopped running.
-        //
-        // It must NOT be restored from the payload instead. export-data does `SELECT *`, so real backups
-        // DO carry these columns even though SessionRow does not declare them — restoring them would
-        // install the SOURCE host's nodeId with its still-future lease, and every start would then 409
-        // "running on another node" until that lease lapsed. Strictly worse than the bug.
-        //
-        // Read through the SAME queryRunner (a repository would take a second connection and self-
-        // deadlock on Postgres) and tolerate the columns being absent, so a database whose ownership
-        // migration has been rolled back still imports.
-        const preservedOwnership = await readSessionOwnership(queryRunner);
-        // Stamped AFTER the read, so the remaining lease time carried forward later is measured from
-        // the latest moment these values are known to have been true — never longer than they were.
-        const ownershipReadAt = new Date();
-
-        await queryRunner.query('DELETE FROM sessions');
-
-        // Restore table by table in TABLE_IMPORTERS order (FK-safe: sessions first). The descriptors
-        // carry each table's INSERT text, param mapping, and per-row skip guard; a missing or empty
-        // table keeps its 0 count and contributes no warnings.
-        const counts = Object.fromEntries(TABLE_IMPORTERS.map(importer => [importer.key, 0] as const)) as TableCounts;
-        const regeneratedPluginInstances: string[] = [];
-        // SQLite only: archived datetime values are normalized to the form TypeORM writes there, so a
-        // PostgreSQL-made backup compares and sorts like rows the app wrote itself.
-        const datetimeColumns = isPostgres ? undefined : sqliteDatetimeColumns(this.dataDataSource);
-        restore: for (const importer of TABLE_IMPORTERS) {
-          const rows =
-            importer.key === 'webhookDeliveryFailures'
-              ? deduplicateArchivedWebhookFailures(data.tables.webhookDeliveryFailures ?? [])
-              : data.tables[importer.key];
-          if (!rows?.length) continue;
-          const dateColumns = datetimeColumns?.get(importer.key) ?? [];
-          for (const archivedRow of rows) {
-            const source = archivedRow as unknown as Record<string, unknown>;
-            const untypedRow = {
-              ...source,
-              ...Object.fromEntries(
-                dateColumns
-                  .filter(column => column in source)
-                  .map(column => [column, toSqliteDatetime(source[column])]),
-              ),
-            };
-            // `rows` was read from `data.tables[importer.key]`, so it holds exactly the row type this
-            // descriptor's id/map/skip declare. That correlation is what the erased importer type
-            // cannot carry, and this loop is the one place it is known, so the cast lives here rather
-            // than at each of the three uses below.
-            const row = untypedRow as never;
-            const skipWarning = importer.skip?.(row, rows as never);
-            if (skipWarning != null) {
-              warnings.push(skipWarning);
-              continue;
+          // Clear existing data (in correct order due to foreign keys). templates,
+          // baileys_stored_messages, and automation_rules FK sessions ON DELETE CASCADE, so the
+          // sessions DELETE would clear them too; clearing them explicitly first keeps the order
+          // correct on engines where the cascade is not enforced. Tolerate a genuinely-absent table (isMissingTableError) but let any
+          // OTHER failure (lock, I/O, aborted tx) propagate to the transaction rollback below — a blind
+          // `.catch(() => {})` here could otherwise silently commit a MERGED (not replaced) restore on
+          // SQLite, violating the endpoint's "replaces existing data" contract.
+          // A restore on its own connection gives the event loop a turn every RESTORE_CHUNK_ROWS rows.
+          const turn = restoresAside ? (): Promise<void> => setImmediate() : undefined;
+          // There it deletes in chunks too (no table is WITHOUT ROWID), and `affected` counts the rows a chunk took.
+          const deleteRows = async (table: string, where = ''): Promise<void> => {
+            if (!turn) {
+              await queryRunner.query(`DELETE FROM ${table}${where}`);
+              return;
+            }
+            const chunk = `SELECT rowid FROM ${table}${where} LIMIT ${RESTORE_CHUNK_ROWS}`;
+            const deleteChunk = `DELETE FROM ${table} WHERE rowid IN (${chunk})`;
+            while ((await queryRunner.query(deleteChunk, [], true)).affected === RESTORE_CHUNK_ROWS) {
+              await turn();
+            }
+          };
+          const clearTable = async (table: string, where = ''): Promise<void> => {
+            // Asked first on PostgreSQL: a statement that names a missing relation aborts the whole transaction even
+            // when its error is caught, and every later statement then fails with 25P02.
+            if (isPostgres && !(await queryRunner.hasTable(table))) {
+              this.logger.debug('Skipped clearing a table that does not exist during import', { table });
+              return;
             }
             try {
-              await insert(importer.sql, importer.map(row));
-              counts[importer.key]++;
-              if (
-                importer.key === 'pluginInstances' &&
-                isRedactedPluginSecret((untypedRow as unknown as PluginInstanceRow).secret)
-              ) {
-                regeneratedPluginInstances.push(importer.id(row));
-              }
+              await deleteRows(table, where);
             } catch (err) {
+              if (isPostgres || !isMissingTableError(err)) throw err;
+              this.logger.debug('Skipped clearing a table that does not exist during import', { table });
+            }
+          };
+          // The INSERTs below are written once, in Postgres' `$N` placeholder form. better-sqlite3 differs
+          // from the legacy sqlite3 driver on raw queries in two ways: SQLite parses `$N` as a NAMED
+          // parameter, which cannot be bound from the positional array TypeORM passes through (RangeError),
+          // and strict binding rejects booleans/undefined — which a Postgres-made backup carries (real
+          // booleans survive the JSON round-trip). Postgres needs `$N` and binds booleans natively, so both
+          // rewrites apply only on the SQLite path. Safe: every `$N` below occurs once, in ascending order.
+          const insert = (text: string, params: unknown[]): Promise<unknown> =>
+            queryRunner.query(
+              isPostgres ? text : text.replace(/\$\d+/g, '?'),
+              isPostgres ? params : params.map(v => (typeof v === 'boolean' ? Number(v) : (v ?? null))),
+            );
+          await deleteRows('webhooks');
+          await clearTable('messages');
+          await clearTable('message_batches');
+          await clearTable('templates');
+          await clearTable('baileys_stored_messages');
+          await clearTable('automation_rules');
+          // lid_mappings is not a FK to sessions, so the sessions DELETE below won't clear it; clear it
+          // explicitly so a restore replaces the cache rather than colliding on existing lid PKs.
+          await clearTable('lid_mappings');
+          // chat_states is the same case: PK (sessionId, chatId), no FK to sessions, so the sessions DELETE
+          // does not reach it. Without this, a restore onto an instance that already holds chat_states rows
+          // collides on those PKs and the all-or-nothing gate rolls the whole import back.
+          await clearTable('chat_states');
+          // The runtime plugin bindings (activeSessions, per-session config) were projected from the rows
+          // about to be deleted. Remember which scopes they bound so the post-commit resync can retire
+          // the ones the restore drops. Probed first: on PostgreSQL a failed SELECT would abort the
+          // transaction, and a missing table is tolerated by clearTable below.
+          previousPluginBindings = (await queryRunner.hasTable('plugin_instances'))
+            ? (
+                (await queryRunner.query(
+                  'SELECT "pluginId", "instanceId", "sessionScope", enabled, config FROM plugin_instances',
+                )) as Array<{
+                  pluginId: string;
+                  instanceId?: string;
+                  sessionScope: string | null;
+                  enabled: boolean | number;
+                  config?: unknown;
+                }>
+              ).map(row => ({
+                ...row,
+                enabled: Number(row.enabled) === 1,
+                config: parsePluginInstanceConfig(row.config),
+              }))
+            : [];
+          // Integration Fabric + both DLQs: none carry an FK constraint to sessions (sessionId is provenance),
+          // so clearing them here before the sessions DELETE keeps the replace-semantics complete.
+          await clearTable('plugin_instances');
+          await clearTable('conversation_mappings');
+          await clearTable('ingress_events');
+          await clearTable('webhook_delivery_failures');
+          // Same rule, and it bites harder here: webhook_outbox_events carries UNIQUE(webhookId,
+          // idempotencyKey), so without this clear a restore onto an instance that already holds the
+          // archive's rows collides on every one of them, and the all-or-nothing gate below rolls the
+          // whole import back. Restoring a backup onto the instance that produced it is exactly the
+          // rollback flow, so leaving it out broke the recovery path rather than a corner of it.
+          await clearTable('webhook_outbox_events');
+          await clearTable('integration_delivery_failures');
+          // status_updates has no FK to sessions; clear it explicitly so the replace is complete.
+          await clearTable('status_updates');
+          // Session ownership is CLUSTER RUNTIME STATE, not backup payload: which process currently holds
+          // a session's engine, and until when. The replace below deletes it along with everything else,
+          // and the sessions importer does not restore it (deliberately — see below), so without this the
+          // committed rows come back unclaimed and the next lease renewal reads "claim lost" and tears
+          // down engines that never stopped running.
+          //
+          // It must NOT be restored from the payload instead. export-data does `SELECT *`, so real backups
+          // DO carry these columns even though SessionRow does not declare them — restoring them would
+          // install the SOURCE host's nodeId with its still-future lease, and every start would then 409
+          // "running on another node" until that lease lapsed. Strictly worse than the bug.
+          //
+          // Read through the SAME queryRunner (a repository would take a second connection and self-
+          // deadlock on Postgres) and tolerate the columns being absent, so a database whose ownership
+          // migration has been rolled back still imports.
+          const preservedOwnership = await readSessionOwnership(queryRunner);
+          // Stamped AFTER the read, so the remaining lease time carried forward later is measured from
+          // the latest moment these values are known to have been true — never longer than they were.
+          const ownershipReadAt = new Date();
+
+          await deleteRows('sessions');
+
+          // Restore table by table in TABLE_IMPORTERS order (FK-safe: sessions first). The descriptors
+          // carry each table's INSERT text, param mapping, and per-row skip guard; a missing or empty
+          // table keeps its 0 count and contributes no warnings.
+          counts = Object.fromEntries(TABLE_IMPORTERS.map(importer => [importer.key, 0] as const)) as TableCounts;
+          const regeneratedPluginInstances: string[] = [];
+          let rowsSinceTurn = 0;
+          // SQLite only: archived datetime values are normalized to the form TypeORM writes there, so a
+          // PostgreSQL-made backup compares and sorts like rows the app wrote itself.
+          const datetimeColumns = isPostgres ? undefined : sqliteDatetimeColumns(this.dataDataSource);
+          restore: for (const importer of TABLE_IMPORTERS) {
+            const rows =
+              importer.key === 'webhookDeliveryFailures'
+                ? deduplicateArchivedWebhookFailures(data.tables.webhookDeliveryFailures ?? [])
+                : data.tables[importer.key];
+            if (!rows?.length) continue;
+            const dateColumns = datetimeColumns?.get(importer.key) ?? [];
+            for (const archivedRow of rows) {
+              if (turn && ++rowsSinceTurn === RESTORE_CHUNK_ROWS) {
+                rowsSinceTurn = 0;
+                await turn();
+              }
+              const source = archivedRow as unknown as Record<string, unknown>;
+              const untypedRow = {
+                ...source,
+                ...Object.fromEntries(
+                  dateColumns
+                    .filter(column => column in source)
+                    .map(column => [column, toSqliteDatetime(source[column])]),
+                ),
+              };
+              // `rows` was read from `data.tables[importer.key]`, so it holds exactly the row type this
+              // descriptor's id/map/skip declare. That correlation is what the erased importer type
+              // cannot carry, and this loop is the one place it is known, so the cast lives here rather
+              // than at each of the three uses below.
+              const row = untypedRow as never;
+              const skipWarning = importer.skip?.(row, rows as never);
+              if (skipWarning != null) {
+                warnings.push(skipWarning);
+                continue;
+              }
+              try {
+                await insert(importer.sql, importer.map(row));
+                counts[importer.key]++;
+                if (
+                  importer.key === 'pluginInstances' &&
+                  isRedactedPluginSecret((untypedRow as unknown as PluginInstanceRow).secret)
+                ) {
+                  regeneratedPluginInstances.push(importer.id(row));
+                }
+              } catch (err) {
+                warnings.push(
+                  `Failed to import ${importer.label} ${importer.id(row)}: ${err instanceof Error ? err.message : String(err)}`,
+                );
+                // PostgreSQL aborts the transaction on a failed statement: every later one would fail with
+                // "current transaction is aborted" and bury this row's real error. Stop at the first.
+                if (isPostgres) break restore;
+              }
+            }
+          }
+
+          // Re-apply the claims read before the DELETE, for ids that exist in both. This runs BEFORE the
+          // all-or-nothing gate below on purpose: a failure here must take the same rollback the gate
+          // already implements. Degrading it to a notice and committing anyway would be worse than the
+          // bug it fixes — on PostgreSQL a failed statement aborts the transaction, so the COMMIT would
+          // execute as a ROLLBACK and the endpoint would report a fully discarded import as a success,
+          // with per-table counts, to an operator restoring after data loss.
+          // Skipped once a row has failed: the rollback below is already certain, and on PostgreSQL the
+          // aborted transaction would only add a misleading warning.
+          if (warnings.length === 0) {
+            try {
+              await restoreSessionOwnership(preservedOwnership, insert, ownershipReadAt);
+            } catch (error) {
               warnings.push(
-                `Failed to import ${importer.label} ${importer.id(row)}: ${err instanceof Error ? err.message : String(err)}`,
-              );
-              // PostgreSQL aborts the transaction on a failed statement: every later one would fail with
-              // "current transaction is aborted" and bury this row's real error. Stop at the first.
-              if (isPostgres) break restore;
-            }
-          }
-        }
-
-        // Re-apply the claims read before the DELETE, for ids that exist in both. This runs BEFORE the
-        // all-or-nothing gate below on purpose: a failure here must take the same rollback the gate
-        // already implements. Degrading it to a notice and committing anyway would be worse than the
-        // bug it fixes — on PostgreSQL a failed statement aborts the transaction, so the COMMIT would
-        // execute as a ROLLBACK and the endpoint would report a fully discarded import as a success,
-        // with per-table counts, to an operator restoring after data loss.
-        // Skipped once a row has failed: the rollback below is already certain, and on PostgreSQL the
-        // aborted transaction would only add a misleading warning.
-        if (warnings.length === 0) {
-          try {
-            await restoreSessionOwnership(preservedOwnership, insert, ownershipReadAt);
-          } catch (error) {
-            warnings.push(
-              `Failed to restore session ownership: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        }
-
-        // An archive taken before 0.23.5 keys chat_states by session NAME. The migration that re-keys
-        // them to the session id has already run on this database, so a restored name-keyed row would
-        // never be read again and its mute, archive and pin state would be silently lost. Run the same
-        // re-key here, inside the transaction. A failure takes the rollback below, like the ownership
-        // restore, because on PostgreSQL it has already aborted the transaction.
-        if (warnings.length === 0) {
-          try {
-            if (await queryRunner.hasTable('chat_states')) {
-              await queryRunner.query(
-                ReKeyChatStatesBySessionId1786500000000.rekey('name', 'id', { skipAlreadyKeyed: true }),
+                `Failed to restore session ownership: ${error instanceof Error ? error.message : String(error)}`,
               );
             }
-          } catch (error) {
-            warnings.push(`Failed to re-key chat states: ${error instanceof Error ? error.message : String(error)}`);
           }
-        }
 
-        // The same holds for the 0.24.0 scrubs: an archive taken before them restores revoked messages
-        // with their media, quote and reactions, and lid mappings with a broadcast id as the phone.
-        if (warnings.length === 0) {
-          try {
-            await ScrubRevokedMessageContent1786900000000.scrub(queryRunner);
-            await ScrubNonPhoneLidMappings1786950000000.scrub(queryRunner);
-            // An archive taken before the neutral message vocabulary restores the raw wwebjs tokens, which
-            // the boot-time backfill no longer converts on a migration-managed database.
-            await BackfillLegacyMessageTypes1791300000000.backfill(queryRunner);
-          } catch (error) {
-            warnings.push(`Failed to clean restored rows: ${error instanceof Error ? error.message : String(error)}`);
+          // An archive taken before 0.23.5 keys chat_states by session NAME. The migration that re-keys
+          // them to the session id has already run on this database, so a restored name-keyed row would
+          // never be read again and its mute, archive and pin state would be silently lost. Run the same
+          // re-key here, inside the transaction. A failure takes the rollback below, like the ownership
+          // restore, because on PostgreSQL it has already aborted the transaction.
+          if (warnings.length === 0) {
+            try {
+              if (await queryRunner.hasTable('chat_states')) {
+                await queryRunner.query(
+                  ReKeyChatStatesBySessionId1786500000000.rekey('name', 'id', { skipAlreadyKeyed: true }),
+                );
+              }
+            } catch (error) {
+              warnings.push(`Failed to re-key chat states: ${error instanceof Error ? error.message : String(error)}`);
+            }
           }
-        }
 
-        // send_idempotency_keys is not archived, so it is trimmed rather than cleared. A claim of a session
-        // this restore dropped would outlive it by up to 24 h, and a later restore that brings the id back
-        // would answer a retried send with the old stored response instead of sending it. The claims of a
-        // session the restore keeps stay: a retry of a send made before the restore still replays.
-        // Asked first rather than caught: on PostgreSQL a statement that fails, a missing table included,
-        // aborts the whole import transaction, and every later statement then fails with it.
-        if (warnings.length === 0 && (await queryRunner.hasTable('send_idempotency_keys'))) {
-          try {
-            // CAST: sessions.id is a uuid on PostgreSQL and the claim's sessionId a varchar, which `IN` does not
-            // compare.
-            await clearTable(
-              'send_idempotency_keys',
-              ' WHERE "sessionId" NOT IN (SELECT CAST("id" AS TEXT) FROM sessions)',
-            );
-          } catch (error) {
-            warnings.push(
-              `Failed to drop the send idempotency claims of removed sessions: ${error instanceof Error ? error.message : String(error)}`,
-            );
+          // The same holds for the 0.24.0 scrubs: an archive taken before them restores revoked messages
+          // with their media, quote and reactions, and lid mappings with a broadcast id as the phone.
+          if (warnings.length === 0) {
+            try {
+              await ScrubRevokedMessageContent1786900000000.scrub(queryRunner);
+              await ScrubNonPhoneLidMappings1786950000000.scrub(queryRunner);
+              // An archive taken before the neutral message vocabulary restores the raw wwebjs tokens, which
+              // the boot-time backfill no longer converts on a migration-managed database.
+              await BackfillLegacyMessageTypes1791300000000.backfill(queryRunner);
+            } catch (error) {
+              warnings.push(`Failed to clean restored rows: ${error instanceof Error ? error.message : String(error)}`);
+            }
           }
-        }
 
-        // "Replace all data" must be all-or-nothing: the import already DELETEd every row, so if any
-        // INSERT failed we must roll back (restoring the pre-import data) rather than commit a
-        // half-wiped DB and report success. A partial restore reported as imported:true was how
-        // message history could silently vanish on a SQLite->Postgres migration. It must precede
-        // every further statement: on PostgreSQL a failure has aborted the transaction, so the
-        // normalization UPDATE below would throw and turn this answer into a 500.
-        if (warnings.length > 0) {
-          await queryRunner.rollbackTransaction();
-          return {
-            imported: false,
-            counts,
-            warnings,
-            notices,
-            ...engineStateAfterRollback,
-          };
-        }
-
-        // Normalize imported statuses the same way boot does: an ACTIVE status (ready,
-        // initializing, ...) in a backup describes the SOURCE host's engines, and restoring it
-        // verbatim leaves rows reading ready with no engine anywhere - invisible to auto-start
-        // (selects disconnected) and to the takeover sweep, until a process restart. Scoped to
-        // CLAIMABLE rows: a PEER's preserved claim (a live engine backs the row elsewhere) keeps
-        // the backup's status; this node's own claims normalize exactly like boot's reset does -
-        // for a live self-engine the row understates reality until the next engine status event,
-        // which is the same trade boot makes.
-        const ACTIVE_STATUSES = [
-          SessionStatus.READY,
-          SessionStatus.INITIALIZING,
-          SessionStatus.QR_READY,
-          SessionStatus.AUTHENTICATING,
-          SessionStatus.ACTION_REQUIRED,
-        ];
-        const claimable = this.ownership?.claimableWhere() ?? [{}];
-        // An empty clause list means nothing is claimable (no rows to normalize). TypeORM also
-        // rejects empty update criteria, so skip rather than build an empty OR.
-        const normalized =
-          claimable.length === 0
-            ? { affected: 0 }
-            : await queryRunner.manager.getRepository(SessionEntity).update(
-                claimable.map(clause => ({ ...clause, status: In(ACTIVE_STATUSES) })),
-                { status: SessionStatus.DISCONNECTED },
+          // send_idempotency_keys is not archived, so it is trimmed rather than cleared. A claim of a session
+          // this restore dropped would outlive it by up to 24 h, and a later restore that brings the id back
+          // would answer a retried send with the old stored response instead of sending it. The claims of a
+          // session the restore keeps stay: a retry of a send made before the restore still replays.
+          // Asked first rather than caught: on PostgreSQL a statement that fails, a missing table included,
+          // aborts the whole import transaction, and every later statement then fails with it.
+          if (warnings.length === 0 && (await queryRunner.hasTable('send_idempotency_keys'))) {
+            try {
+              // CAST: sessions.id is a uuid on PostgreSQL and the claim's sessionId a varchar, which `IN` does not
+              // compare.
+              await clearTable(
+                'send_idempotency_keys',
+                ' WHERE "sessionId" NOT IN (SELECT CAST("id" AS TEXT) FROM sessions)',
               );
-        if (normalized.affected && normalized.affected > 0) {
-          notices.push(
-            `${normalized.affected} imported session(s) carried an active status (the source host's engines): ` +
-              'restored as disconnected - start them via POST /api/sessions/:id/start or let auto-start adopt them.',
-          );
-        }
-        if (regeneratedPluginInstances.length > 0) {
-          notices.push(
-            `${regeneratedPluginInstances.length} imported plugin instance(s) had redacted or missing ingress secrets ` +
-              `(${regeneratedPluginInstances.join(', ')}): regenerated fresh secrets and restored them disabled. ` +
-              'Re-sync regenerated ingress secrets and any redacted plugin config secrets before re-enabling them.',
-          );
-        }
+            } catch (error) {
+              warnings.push(
+                `Failed to drop the send idempotency claims of removed sessions: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
 
-        // A wrong/empty/garbage backup file restores zero rows but the DELETE already ran — committing
-        // would silently WIPE the database and report success. Refuse it and roll back instead. (#488)
-        const totalRestored = Object.values(counts).reduce((sum, n) => sum + n, 0);
-        if (totalRestored === 0) {
+          // "Replace all data" must be all-or-nothing: the import already DELETEd every row, so if any
+          // INSERT failed we must roll back (restoring the pre-import data) rather than commit a
+          // half-wiped DB and report success. A partial restore reported as imported:true was how
+          // message history could silently vanish on a SQLite->Postgres migration. It must precede
+          // every further statement: on PostgreSQL a failure has aborted the transaction, so the
+          // normalization UPDATE below would throw and turn this answer into a 500.
+          if (warnings.length > 0) {
+            await queryRunner.rollbackTransaction();
+            return {
+              imported: false,
+              counts,
+              warnings,
+              notices,
+              ...engineStateAfterRollback,
+            };
+          }
+
+          // Normalize imported statuses the same way boot does: an ACTIVE status (ready,
+          // initializing, ...) in a backup describes the SOURCE host's engines, and restoring it
+          // verbatim leaves rows reading ready with no engine anywhere - invisible to auto-start
+          // (selects disconnected) and to the takeover sweep, until a process restart. Scoped to
+          // CLAIMABLE rows: a PEER's preserved claim (a live engine backs the row elsewhere) keeps
+          // the backup's status; this node's own claims normalize exactly like boot's reset does -
+          // for a live self-engine the row understates reality until the next engine status event,
+          // which is the same trade boot makes.
+          const ACTIVE_STATUSES = [
+            SessionStatus.READY,
+            SessionStatus.INITIALIZING,
+            SessionStatus.QR_READY,
+            SessionStatus.AUTHENTICATING,
+            SessionStatus.ACTION_REQUIRED,
+          ];
+          const claimable = this.ownership?.claimableWhere() ?? [{}];
+          // An empty clause list means nothing is claimable (no rows to normalize). TypeORM also
+          // rejects empty update criteria, so skip rather than build an empty OR.
+          const normalized =
+            claimable.length === 0
+              ? { affected: 0 }
+              : await queryRunner.manager.getRepository(SessionEntity).update(
+                  claimable.map(clause => ({ ...clause, status: In(ACTIVE_STATUSES) })),
+                  { status: SessionStatus.DISCONNECTED },
+                );
+          if (normalized.affected && normalized.affected > 0) {
+            notices.push(
+              `${normalized.affected} imported session(s) carried an active status (the source host's engines): ` +
+                'restored as disconnected - start them via POST /api/sessions/:id/start or let auto-start adopt them.',
+            );
+          }
+          if (regeneratedPluginInstances.length > 0) {
+            notices.push(
+              `${regeneratedPluginInstances.length} imported plugin instance(s) had redacted or missing ingress secrets ` +
+                `(${regeneratedPluginInstances.join(', ')}): regenerated fresh secrets and restored them disabled. ` +
+                'Re-sync regenerated ingress secrets and any redacted plugin config secrets before re-enabling them.',
+            );
+          }
+
+          // A wrong/empty/garbage backup file restores zero rows but the DELETE already ran — committing
+          // would silently WIPE the database and report success. Refuse it and roll back instead. (#488)
+          const totalRestored = Object.values(counts).reduce((sum, n) => sum + n, 0);
+          if (totalRestored === 0) {
+            await queryRunner.rollbackTransaction();
+            return {
+              imported: false,
+              counts,
+              warnings: [EMPTY_ARCHIVE_WARNING],
+              notices,
+              ...engineStateAfterRollback,
+            };
+          }
+
+          await queryRunner.commitTransaction();
+          committed = true;
+          return undefined;
+        } catch (error) {
           await queryRunner.rollbackTransaction();
-          return {
-            imported: false,
-            counts,
-            warnings: [EMPTY_ARCHIVE_WARNING],
-            notices,
-            ...engineStateAfterRollback,
-          };
+          throw error;
+        } finally {
+          await queryRunner.release();
         }
+      };
+      let rolledBack: InfraImportDataResult | undefined;
+      try {
+        rolledBack = await (hold ? hold.asRestore(replace) : replace());
+      } finally {
+        await endRestore();
+      }
+      if (rolledBack) return rolledBack;
 
-        await queryRunner.commitTransaction();
-        committed = true;
+      return await asOwner(async () => {
         // The replace removed these sessions without a delete, so what this process keeps for them goes here.
         for (const { id } of retired) this.sessionService?.forgetSession(id);
         // Retained live sessions and force-kept orphans bypass forgetSession() above, so clear all cached
@@ -1527,35 +1642,32 @@ export class InfraDataService implements OnApplicationBootstrap, OnModuleDestroy
           stoppedOrphanEngines,
           failedOrphanEngines,
         };
-      } catch (error) {
-        await queryRunner.rollbackTransaction();
-        throw error;
-      } finally {
-        await queryRunner.release();
-      }
+      });
     } finally {
       // A restore that did not commit keeps those sessions, but a batch run that captured their writes before
       // the close stays stopped, so its row is failed before the release, as a failed delete does. Their
       // engines are gone, so the batch could not have sent anyway. Not inside a transaction another caller
       // opened on the shared connection while the writes drained: the fail would roll back with it.
-      if (foreignTransaction && retired.length > 0 && !(await awaitNoOpenTransaction(this.dataDataSource))) {
-        this.logger.warn('Failing the unfinished batches of a refused import inside another open transaction', {
-          action: 'infra_import_foreign_transaction_open',
-          sessionIds: retired.map(({ id }) => id),
-        });
-      }
-      for (const { id } of committed ? [] : retired) {
-        await failUnfinishedSessionBatches(this.dataDataSource, id).catch((error: unknown) =>
-          this.logger.warn(
-            `Could not fail the unfinished batches of session ${id} after an import that did not commit`,
-            {
-              sessionId: id,
-              action: 'infra_import_batch_fail_failed',
-              error: error instanceof Error ? error.message : String(error),
-            },
-          ),
-        );
-      }
+      await asOwner(async () => {
+        if (foreignTransaction && retired.length > 0 && !(await awaitNoOpenTransaction(this.dataDataSource))) {
+          this.logger.warn('Failing the unfinished batches of a refused import inside another open transaction', {
+            action: 'infra_import_foreign_transaction_open',
+            sessionIds: retired.map(({ id }) => id),
+          });
+        }
+        for (const { id } of committed ? [] : retired) {
+          await failUnfinishedSessionBatches(this.dataDataSource, id).catch((error: unknown) =>
+            this.logger.warn(
+              `Could not fail the unfinished batches of session ${id} after an import that did not commit`,
+              {
+                sessionId: id,
+                action: 'infra_import_batch_fail_failed',
+                error: error instanceof Error ? error.message : String(error),
+              },
+            ),
+          );
+        }
+      });
       for (const { writes } of retired) writes.release();
       // Its own finally, so a throwing release() cannot strand the token either.
       resumeLossDetection?.();

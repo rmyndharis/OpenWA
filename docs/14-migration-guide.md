@@ -194,37 +194,23 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
 > work when both sides use the same database type; between types the import is the only way, and
 > an export above the limit cannot be moved with it.
 >
-> **On a SQLite target the restore holds the gateway until it commits.** It runs on the event loop
-> from its first statement to its last, so no request is answered meanwhile, `GET /api/health/live`
-> included. Measured with a 1 GiB heap, a 268 MB export (500,000 messages) took 74 s, a 322 MB one
-> 60 s and a 376 MB one 68 s, and with a 4 GiB heap the 536.6 MB one took 103 s; in each the slowest
-> `/api/health/live` answer took as long as the restore. A PostgreSQL target was not measured.
+> **On a SQLite target the restore holds the data, not the gateway.** It writes on a connection of
+> its own, 500 rows at a time with a turn of the event loop between them, so the gateway goes on
+> answering `GET /api/health/live`, its websocket clients and its WhatsApp sessions. Every other read
+> or write of the data database waits until the restore has committed or rolled back, and then sees
+> the data from before it or after it, never a half state; a message that arrives meanwhile is stored
+> once the restore has ended. That wait lasts as long as the restore: one to two minutes for 500,000
+> messages on the hosts measured. A PostgreSQL target does not hold the gateway.
 >
-> A stop signal waits for the restore too: a gateway sent SIGTERM 30 s into one committed all
-> 500,000 rows, answered `200` and exited 16 s after the signal. Only SIGKILL cuts it short, and the
-> restore is one transaction: a gateway killed that way 30 s in came back with the data it had
-> before.
+> A stop signal waits for the restore to end, then the gateway answers it and exits. Only SIGKILL
+> cuts it short, and the restore is one transaction: a gateway killed that way 30 s into one came
+> back with the data it had before.
 >
-> **On the Helm chart a long restore is killed.** The chart's liveness probe asks
-> `/api/health/live` every 10 s with a 5 s timeout and stops the container after 6 failures in a
-> row, 55 to 65 s after the gateway stopped answering: SIGTERM first, then SIGKILL once
-> `terminationGracePeriodSeconds` (90 s by default) has passed. So a restore that commits within
-> about 145 s of its start completes and the pod restarts right after it, and a longer one is rolled
-> back and has to start again, against the same probe (worked out from the chart, not observed on a
-> cluster). The margin is small: the same 376 MB restore took 68 s on one run and 109 s on a busier one.
-> When both sides use the same database type, restore a `scripts/backup.sh` archive with
-> `scripts/restore.sh` instead, with the StatefulSet scaled to 0, as
+> **On the Helm chart the liveness probe keeps answering during a restore**, so a long one is not
+> restarted. When both sides use the same database type, a `scripts/backup.sh` archive can also be
+> restored with `scripts/restore.sh`, with the StatefulSet scaled to 0, as
 > [11 - Runbook: Restore from Backup](./11-operational-runbooks.md#runbook-restore-from-backup)
-> shows for the chart. When the target is SQLite and the source is not, relax the probe for the
-> restore. The chart writes it into its template rather than taking it from its values, so patch the
-> StatefulSet, which rolls the pod, and patch it back to `6` the same way once the restore has
-> answered:
->
-> ```bash
-> # For a release named openwa (`kubectl get statefulset` shows the name of another).
-> kubectl patch statefulset/openwa --type=json -p \
->   '[{"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/failureThreshold","value":60}]'
-> ```
+> shows for the chart.
 >
 > **Webhook, proxy, and plugin credentials do not travel by default.** Webhooks are restored without their `secret` and
 > custom `headers`, so deliveries go unsigned until you set them again with

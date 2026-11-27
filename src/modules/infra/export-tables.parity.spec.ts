@@ -223,9 +223,9 @@ describe('InfraDataService.exportData validates the registry against live entity
 
 describe('the import clears every re-inserted table that DELETE FROM sessions cannot cascade', () => {
   const src = readFileSync(join(__dirname, 'infra-data.service.ts'), 'utf8');
-  const sessionsDelete = src.indexOf("'DELETE FROM sessions'");
+  const sessionsDelete = src.indexOf("deleteRows('sessions')");
   // These tables carry no FK to sessions (a sessionId, where present, is provenance, not a foreign
-  // key), so the import's `DELETE FROM sessions` never reaches them. They are re-inserted from the
+  // key), so the import's delete of the sessions never reaches them. They are re-inserted from the
   // archive, so without an explicit clear a restore onto an instance that already holds their rows
   // collides on PK and the all-or-nothing gate rolls the whole import back (the exact restore-onto-self
   // flow). The set is derived from the registry, so a new table is covered without editing this spec.

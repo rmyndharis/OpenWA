@@ -88,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Infrastructure: one data export runs at a time (`409` `EXPORT_IN_PROGRESS`), a download is ended after 60 minutes or 10 idle minutes, and a failure after the first byte resets the connection instead of ending the body.
 - Infrastructure: `POST /api/infra/import-data` refuses a backup the process has no memory to parse instead of running out of heap on it (a 483 MB body ended a gateway with a 1 GiB heap).
 - Infrastructure: request validation no longer copies every row of a backup posted to `POST /api/infra/import-data`, which held the gateway for about 4 s per 45,000 messages on SQLite and PostgreSQL alike.
+- Infrastructure: a SQLite restore through `POST /api/infra/import-data` writes on a connection of its own, 500 rows at a time, so health checks, websockets and WhatsApp sessions keep being served while other data requests wait for it.
 - Database: SQLite in WAL mode cuts the `-wal` file back to 64 MiB once the log starts over, instead of keeping the size a long read such as a data export let it reach.
 - Dashboard: the backup download saves the export as received (compact JSON) instead of parsing and re-serializing it, which copied a large backup twice in the browser, and reports a download that was cut short instead of saving it.
 - Audit: stop writing an `api_key_auth_failed` row for the dashboard's signed-out `GET /api/auth/session` check on every login-page visit; a rejected key or session cookie is still recorded.

@@ -8,7 +8,12 @@ jest.mock('undici', () => {
 });
 
 import 'reflect-metadata';
+import { AsyncResource } from 'async_hooks';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { DataSource } from 'typeorm';
+import { BetterSqlite3QueryRunner } from 'typeorm/driver/better-sqlite3/BetterSqlite3QueryRunner';
 import { ConfigService } from '@nestjs/config';
 import { fetch as undiciFetch } from 'undici';
 import { Session, SessionStatus } from './entities/session.entity';
@@ -90,6 +95,8 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
   let engine: IWhatsAppEngine;
   let projector: MessageProjector;
   let sessionId: string;
+  /** The data database. A file only where a case needs one: a restore of a file runs on a connection of its own. */
+  let database = ':memory:';
 
   beforeEach(async () => {
     jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
@@ -99,7 +106,7 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
 
     ds = await new DataSource({
       type: 'better-sqlite3',
-      database: ':memory:',
+      database,
       // Every table of the data database: the import case below walks each of them.
       entities: [
         Session,
@@ -2985,10 +2992,11 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    // The holders that scale with the data. Each begins and ends its transaction within one turn of the event loop,
-    // so no wait ever finds it open: a message handed over meanwhile is stored once the holder is done. One that
-    // gave the loop a turn while holding its transaction would be met by the insert's bound instead, and by the
-    // case above.
+    // The holders that scale with the data. The index builds begin and end their transaction within one turn of the
+    // event loop, and the restore of a file database runs on a connection of its own while the shared one holds
+    // every other caller, so no wait ever finds a transaction open: a message handed over meanwhile is stored once
+    // the holder is done. One that gave the loop a turn while holding a transaction on the shared connection would
+    // be met by the insert's bound instead, and by the case above.
     const dataImport = (): InfraDataService => {
       const sessions = { getActiveSessionIds: () => [sessionId], forgetSession: jest.fn() };
       const config = { get: (key: string, fallback?: unknown) => (key === 'dataDatabase.type' ? 'sqlite' : fallback) };
@@ -3062,7 +3070,9 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
     describe.each([
       [
         'the data import',
-        'DELETE FROM webhooks',
+        // A file database: its restore runs on a connection of its own, which holds the shared one meanwhile.
+        true,
+        'DELETE FROM webhooks WHERE rowid IN (SELECT rowid FROM webhooks LIMIT 500)',
         async (): Promise<void> => {
           await fillEveryImportedTable();
           archive = (await readExport(dataImport().exportData())).tables;
@@ -3078,6 +3088,7 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
       ],
       [
         'the word index build of the search',
+        false,
         'BEGIN IMMEDIATE',
         (): Promise<void> => Promise.resolve(),
         async (): Promise<void> => {
@@ -3088,6 +3099,7 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
       ],
       [
         'the contains index build of the search',
+        false,
         'BEGIN IMMEDIATE',
         (): Promise<void> => Promise.resolve(),
         async (): Promise<void> => {
@@ -3097,8 +3109,25 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
           await provider.onModuleDestroy();
         },
       ],
-    ] as const)('%s', (_holder, firstStatement, prepare, run) => {
-      it('never leaves its transaction open for a wait to find, and the message handed over meanwhile is stored', async () => {
+    ] as const)('%s', (_holder, onOwnConnection, firstStatement, prepare, run) => {
+      if (onOwnConnection) {
+        let dir: string;
+        beforeAll(() => {
+          dir = mkdtempSync(join(tmpdir(), 'owa-atomicity-'));
+          database = join(dir, 'data.sqlite');
+        });
+        // One file per case, so each starts from an empty database.
+        afterEach(() => {
+          for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(database + suffix, { force: true });
+        });
+        afterAll(() => {
+          database = ':memory:';
+          rmSync(dir, { recursive: true, force: true });
+        });
+      }
+
+      /** The first messages, delivered and settled, and the holder's archive or index prepared. */
+      const settleEarlierMessages = async (): Promise<void> => {
         jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
         await seedWebhook(['message.received']);
         for (const id of ['WA-EARLIER-1', 'WA-EARLIER-2']) {
@@ -3108,24 +3137,48 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
         await waitFor(outboxRowDispatched);
         await prepare();
         mockFetch.mockClear();
+      };
+      /**
+       * Runs `handOver` once, at the holder's first statement inside its transaction, on the holder's runner: the
+       * restore's own for the import, the shared one for the index builds. It runs in the context of the test, as
+       * an engine event or another request does. Reports whether the holder's transaction was open then, and every
+       * statement the shared connection ran, in order.
+       */
+      const atFirstStatement = (handOver: () => void): { wasOpen: () => boolean | undefined; shared: string[] } => {
+        const outside = AsyncResource.bind(handOver);
+        const realQuery = Reflect.get(BetterSqlite3QueryRunner.prototype, 'query') as (
+          this: BetterSqlite3QueryRunner,
+          ...args: unknown[]
+        ) => Promise<unknown>;
+        let wasOpen: boolean | undefined;
+        const shared: string[] = [];
+        jest.spyOn(BetterSqlite3QueryRunner.prototype, 'query').mockImplementation(async function (
+          this: BetterSqlite3QueryRunner,
+          sql: string,
+          ...rest: unknown[]
+        ) {
+          if (this.connection === ds) shared.push(sql);
+          const result = (await realQuery.call(this, sql, ...rest)) as never;
+          if (sql === firstStatement && wasOpen === undefined && (this.connection !== ds) === onOwnConnection) {
+            wasOpen = (this.connection.driver as unknown as { databaseConnection: { inTransaction: boolean } })
+              .databaseConnection.inTransaction;
+            outside();
+          }
+          return result;
+        });
+        return { wasOpen: () => wasOpen, shared };
+      };
+
+      it('never leaves its transaction open for a wait to find, and the message handed over meanwhile is stored', async () => {
+        await settleEarlierMessages();
         const persisted = collectPersisted();
         // No patience at all: a transaction a wait finds open counts as one that outlasted the bound.
         const waits = waitsBoundedTo(0);
         const openBatch = jest.spyOn(outbox, 'openBatch');
         const msg = incomingMsg({ id: 'WA-DURING-A-HOLDER-1', body: 'arrived meanwhile' });
-        // Handed over at the holder's first statement inside its transaction.
         let receipt: ReturnType<MessageProjector['handleInboundMessage']>;
-        const runner = ds.createQueryRunner();
-        const realQuery = runner.query.bind(runner) as (sql: string, ...rest: unknown[]) => Promise<unknown>;
-        let wasOpen: boolean | undefined;
-        jest.spyOn(runner, 'query').mockImplementation(async (sql: string, ...rest: unknown[]) => {
-          const result = await realQuery(sql, ...rest);
-          if (sql === firstStatement && wasOpen === undefined) {
-            wasOpen = (ds.driver as unknown as { databaseConnection: { inTransaction: boolean } }).databaseConnection
-              .inTransaction;
-            receipt = projector.handleInboundMessage(sessionId, engine, msg);
-          }
-          return result;
+        const { wasOpen } = atFirstStatement(() => {
+          receipt = projector.handleInboundMessage(sessionId, engine, msg);
         });
 
         await run();
@@ -3134,7 +3187,7 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
         await waitFor(async () => (await ds.getRepository(WebhookOutboxEvent).countBy({ state: 'pending' })) === 0);
         await flush();
 
-        expect(wasOpen).toBe(true);
+        expect(wasOpen()).toBe(true);
         expect(waits.length).toBeGreaterThanOrEqual(2);
         expect(waits.every(Boolean)).toBe(true);
         const stored = await ds.getRepository(Message).findOne({ where: { sessionId, waMessageId: msg.id } });
@@ -3145,6 +3198,41 @@ describe('MessageProjector + WebhookOutbox transactional atomicity (SQLite)', ()
         expect(mockFetch).toHaveBeenCalledTimes(1);
         expect(eventsGateway.emitMessage).toHaveBeenCalledTimes(3);
       });
+
+      if (onOwnConnection) {
+        it('never runs a save held beside the message inside the message transaction', async () => {
+          await settleEarlierMessages();
+          const msg = incomingMsg({ id: 'WA-BESIDE-A-SAVE-1', body: 'arrived meanwhile' });
+          let receipt: ReturnType<MessageProjector['handleInboundMessage']>;
+          let saved: Promise<unknown> | undefined;
+          const { shared } = atFirstStatement(() => {
+            receipt = projector.handleInboundMessage(sessionId, engine, msg);
+            saved = ds.getRepository(Template).save({ sessionId, name: 'saved meanwhile', body: 'Hi' });
+          });
+
+          await run();
+          await receipt?.settled;
+          await saved;
+          await flush();
+
+          const transactions: string[][] = [];
+          let open: string[] | undefined;
+          for (const sql of shared) {
+            if (sql === 'BEGIN TRANSACTION') transactions.push((open = []));
+            else if (sql === 'COMMIT') open = undefined;
+            else open?.push(sql);
+          }
+          const inserts = (table: string) => (body: string[]) =>
+            body.some(sql => sql.startsWith(`INSERT INTO "${table}"`));
+          const [messageTransaction, ...others] = transactions.filter(inserts('messages'));
+          expect(others).toEqual([]);
+          expect(inserts('webhook_outbox_events')(messageTransaction)).toBe(true);
+          // The save took a transaction of its own, before or after the message's.
+          expect(inserts('templates')(messageTransaction)).toBe(false);
+          expect(transactions.filter(inserts('templates'))).toHaveLength(1);
+          expect(await ds.getRepository(Template).countBy({ name: 'saved meanwhile' })).toBe(1);
+        });
+      }
     });
   });
 
