@@ -359,6 +359,39 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     expect(sessionRoomJoins(sock)).toEqual([]);
   });
 
+  it('keeps one room per chat for a chat key that blocks nothing a chat room carries', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      name: 'k',
+      allowedSessions: null,
+      allowedChats: ['123@g.us'],
+      deniedPermissions: [ApiKeyCapability.SESSIONS_PAIR],
+    });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(asSocket(sock), subscribeMsg('sess-1', ['*']))) as WSSubscribedResponse;
+
+    expect(res.events).toEqual(['*']);
+    expect(sessionRoomJoins(sock)).toEqual([`${buildRoomName('sess-1', '*')}:chat:123%40g.us`]);
+  });
+
+  it('does not suggest "*" when a blocked chat event makes the wildcard cost a room per event', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      name: 'k',
+      allowedSessions: null,
+      allowedChats: Array.from({ length: 2000 }, (_, i) => `${i}@g.us`),
+      deniedPermissions: [ApiKeyCapability.MESSAGES_READ],
+    });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(asSocket(sock), subscribeMsg('sess-1', ['*']))) as WSErrorResponse;
+
+    expect(res.code).toBe('TOO_MANY_SUBSCRIPTIONS');
+    expect(res.message).toContain('name fewer events');
+    expect(res.message).not.toContain('"*"');
+  });
+
   it('refuses a subscribe that would take the socket past its room cap', async () => {
     authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: null });
     const sock = makeSocket({ apiKey: 'good' });

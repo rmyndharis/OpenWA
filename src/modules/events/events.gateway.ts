@@ -1048,12 +1048,14 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       );
     }
 
-    // A wildcard cannot remain a wildcard room for a capability-restricted key: that room receives
-    // every event, including ones its key blocks. Expand it to the concrete catalog (preserving the
-    // existing message.receipt opt-in rule), then remove every event whose payload reaches a blocked
-    // surface. An explicitly named receipt stays included.
-    const needsEventFiltering =
-      validEvents.includes('*') && SUBSCRIBABLE_EVENTS.some(event => isEventDenied(subscriberKey, event));
+    // A wildcard cannot remain a wildcard room when that room would carry an event the key blocks. Expand it
+    // to the concrete catalog (preserving the existing message.receipt opt-in rule), then remove every event
+    // whose payload reaches a blocked surface. An explicitly named receipt stays included. A chat room only
+    // ever carries chat events, so a chat-restricted key needs this only when one of those is blocked.
+    const wildcardCarriesBlocked = SUBSCRIBABLE_EVENTS.some(
+      event => (!chatRestricted || CHAT_EVENTS.has(event)) && isEventDenied(subscriberKey, event),
+    );
+    const needsEventFiltering = validEvents.includes('*') && wildcardCarriesBlocked;
     const expandedEvents = needsEventFiltering
       ? [
           ...SUBSCRIBABLE_EVENTS.filter(event => event !== 'message.receipt'),
@@ -1072,7 +1074,8 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     // No amount of unsubscribing makes that fit, so the reply names the cost per event, not the generic text.
     if (chats && permittedEvents.length * chats.length > MAX_ROOMS_PER_SOCKET) {
       // Fewer events help only while one event fits: a list stored before allowedChats was bounded may not.
-      const remedy = chats.length <= MAX_ROOMS_PER_SOCKET ? 'name fewer events or use "*"' : 'shorten the allowlist';
+      const fewer = wildcardCarriesBlocked ? 'name fewer events' : 'name fewer events or use "*"';
+      const remedy = chats.length <= MAX_ROOMS_PER_SOCKET ? fewer : 'shorten the allowlist';
       return this.createError(
         'TOO_MANY_SUBSCRIPTIONS',
         `This key's chat allowlist makes every event ${chats.length} subscriptions and a connection may hold at most ${MAX_ROOMS_PER_SOCKET}; ${remedy}`,
