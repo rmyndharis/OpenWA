@@ -401,7 +401,12 @@ describe('a Baileys send to a phone id that goes out to the lid of the contact',
 
       await waitUntil(() => reported(), WAIT_MS);
       expect(sock.sendMessage).toHaveBeenCalledWith(`${LID}@lid`, expect.anything(), expect.anything());
-      expect(sent).toEqual({ id: 'OUT-1', timestamp: expect.any(Number) as unknown, resolvedChatId: `${PHONE}@c.us` });
+      expect(sent).toEqual({
+        id: 'OUT-1',
+        timestamp: expect.any(Number) as unknown,
+        resolvedChatId: `${PHONE}@c.us`,
+        engineChatId: `${LID}@lid`,
+      });
       expect(asked()).toEqual([`${PHONE}@s.whatsapp.net`]);
       expect(await pair()).toMatchObject({ phone: PHONE, isReported: true });
       expect(await ds.getRepository(LidMapping).countBy({ phone: typed })).toBe(0);
@@ -418,7 +423,23 @@ describe('a Baileys send to a phone id that goes out to the lid of the contact',
 
     expect(sock.sendMessage).toHaveBeenCalledWith(`${LID}@lid`, expect.anything(), expect.anything());
     expect(sent).not.toHaveProperty('resolvedChatId');
+    expect(sent).toHaveProperty('engineChatId', `${LID}@lid`);
     expect(asked()).toEqual([]);
+  });
+
+  it.each<[string, string, string | undefined]>([
+    ['a phone id it sent to the lid of', `${PHONE}@c.us`, `${LID}@lid`],
+    ['a lid it sent to', `${LID}@lid`, undefined],
+    ['a phone id with no lid known', '6289999999@c.us', undefined],
+    ['a group', '120363000000000001@g.us', undefined],
+  ])('names the chat a send went to only when it is not the one the caller named: %s', async (_case, chatId, to) => {
+    const sent = await messaging.sendTextMessage(chatId, 'hello');
+    const located = await messaging.sendLocationMessage(chatId, { latitude: 1, longitude: 2 });
+
+    for (const result of [sent, located]) {
+      if (to) expect(result).toHaveProperty('engineChatId', to);
+      else expect(result).not.toHaveProperty('engineChatId');
+    }
   });
 
   it('asks once for several sends to the same contact', async () => {

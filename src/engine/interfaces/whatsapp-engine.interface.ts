@@ -43,10 +43,12 @@ export interface MessageResult {
    */
   resolvedChatId?: string;
   /**
-   * The chat the engine acted in, neutral dialect: for an edit, the chat the edited message is stored under, which
-   * can be another form of the caller's chat id (the LID of a contact the caller named by phone number). The stored
-   * row is judged by it, so a row a `message:received` or `message:sent` handler filed under another chat still
-   * takes the edit. Absent when the engine does not report it.
+   * The chat the engine acted in, neutral dialect: for a send, the chat the message was delivered to, reported when
+   * it is not the one the caller named; for an edit, the chat the edited message is stored under. Either can be another
+   * form of the caller's chat id (the LID of a contact the caller named by phone number). A send's row keeps it beside
+   * the chat it is filed under when the two differ, and an edit's stored row is judged by it, so a row a
+   * `message:received` or `message:sent` handler filed under another chat still takes the edit. Absent when the engine
+   * does not report it.
    */
   engineChatId?: string;
 }

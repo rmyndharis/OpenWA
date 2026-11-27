@@ -63,7 +63,12 @@ describe('WwebjsMessaging: a send to a number WhatsApp holds under other digits'
   it.each(sends)('names the number the lookup answered in the result of %s', async (_kind, send) => {
     const { messaging, client } = makeMessaging(() => Promise.resolve(HELD));
 
-    await expect(send(messaging, TYPED)).resolves.toEqual({ id: 'M1', timestamp: 1, resolvedChatId: HELD });
+    await expect(send(messaging, TYPED)).resolves.toEqual({
+      id: 'M1',
+      timestamp: 1,
+      resolvedChatId: HELD,
+      engineChatId: HELD,
+    });
     expect(sentTo(client)).toEqual([HELD]);
   });
 
@@ -74,6 +79,7 @@ describe('WwebjsMessaging: a send to a number WhatsApp holds under other digits'
       id: 'M1',
       timestamp: 1,
       resolvedChatId: HELD,
+      engineChatId: HELD,
     });
     expect(held.reply).toHaveBeenCalledWith('hi', HELD);
   });
@@ -88,7 +94,7 @@ describe('WwebjsMessaging: a send to a number WhatsApp holds under other digits'
 
     const result = await messaging.forwardMessage('628111@c.us', TYPED, 'Q1');
 
-    expect(result).toMatchObject({ id, resolvedChatId: HELD });
+    expect(result).toMatchObject({ id, resolvedChatId: HELD, engineChatId: HELD });
     expect(held.forward).toHaveBeenCalledWith(HELD);
   });
 
@@ -99,7 +105,7 @@ describe('WwebjsMessaging: a send to a number WhatsApp holds under other digits'
     const second = await messaging.sendTextMessage('5511987654321@s.whatsapp.net', 'second');
 
     expect(getNumberId).toHaveBeenCalledTimes(1);
-    expect(second).toEqual({ id: 'M1', timestamp: 1, resolvedChatId: HELD });
+    expect(second).toEqual({ id: 'M1', timestamp: 1, resolvedChatId: HELD, engineChatId: HELD });
   });
 
   it.each<[string, string, () => Promise<string | null>, string]>([
@@ -110,7 +116,6 @@ describe('WwebjsMessaging: a send to a number WhatsApp holds under other digits'
       () => Promise.resolve(HELD),
       HELD,
     ],
-    ['the lookup answers the lid of the contact', TYPED, () => Promise.resolve(LID), LID],
     ['the lookup answers nothing', TYPED, () => Promise.resolve(null), TYPED],
     ['the lookup fails', TYPED, () => Promise.reject(new Error('page busy')), TYPED],
     ['the caller addressed a lid', LID, () => Promise.resolve(HELD), LID],
@@ -123,6 +128,17 @@ describe('WwebjsMessaging: a send to a number WhatsApp holds under other digits'
     expect(result).toStrictEqual({ id: 'M1', timestamp: 1 });
     expect(sentTo(client)).toEqual([to]);
   });
+  it('names the lid as the chat the message went to when the lookup answers the lid of the contact', async () => {
+    const { messaging, client } = makeMessaging(() => Promise.resolve(LID));
+
+    await expect(messaging.sendTextMessage(TYPED, 'hi')).resolves.toStrictEqual({
+      id: 'M1',
+      timestamp: 1,
+      engineChatId: LID,
+    });
+    expect(sentTo(client)).toEqual([LID]);
+  });
+
   describe('named from the id the send was handed, not from what the lookup memory holds afterwards', () => {
     const sent = { id: { _serialized: 'M1' }, timestamp: 1 };
     /** The first send is held in the page until the test lets it go; every later one answers at once. */
@@ -161,11 +177,15 @@ describe('WwebjsMessaging: a send to a number WhatsApp holds under other digits'
       // The second send is refused under the number and resolves the recipient again, to its lid this time.
       client.sendMessage.mockImplementationOnce(() => Promise.reject(new Error('No LID for user')));
       getNumberId.mockImplementationOnce(() => Promise.resolve(LID));
-      await expect(messaging.sendTextMessage(TYPED, 'second')).resolves.toStrictEqual({ id: 'M1', timestamp: 1 });
+      await expect(messaging.sendTextMessage(TYPED, 'second')).resolves.toStrictEqual({
+        id: 'M1',
+        timestamp: 1,
+        engineChatId: LID,
+      });
       release();
 
       expect(sentTo(client)).toEqual([HELD, HELD, LID]);
-      await expect(first).resolves.toEqual({ id: 'M1', timestamp: 1, resolvedChatId: HELD });
+      await expect(first).resolves.toEqual({ id: 'M1', timestamp: 1, resolvedChatId: HELD, engineChatId: HELD });
     });
 
     it('names it after the memory dropped the number for 5000 newer recipients', async () => {
@@ -180,7 +200,7 @@ describe('WwebjsMessaging: a send to a number WhatsApp holds under other digits'
       }
       release();
 
-      await expect(first).resolves.toEqual({ id: 'M1', timestamp: 1, resolvedChatId: HELD });
+      await expect(first).resolves.toEqual({ id: 'M1', timestamp: 1, resolvedChatId: HELD, engineChatId: HELD });
     }, 30_000);
   });
 });

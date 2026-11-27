@@ -571,12 +571,16 @@ export class WwebjsMessaging {
    * caller wrote: WhatsApp holds the recipient under other digits (see MessageResult.resolvedChatId). Read from
    * the send itself, not from the lookup memory, which another send to the same number may have changed since.
    * A send handed the contact's `@lid` names no phone, and its pair is reported under the id the caller wrote
-   * (see reportLid), so it names nothing. Only a phone id is ever resolved to another phone id.
+   * (see reportLid), so it names nothing. Only a phone id is ever resolved to another phone id. The id handed, when it
+   * is not the one the caller wrote, is the chat the message went to (`engineChatId`).
    */
   private resolvedResult(chatId: string, handedTo: string | undefined, result: MessageResult): MessageResult {
-    if (!handedTo || parseWaId(handedTo).kind !== 'user') return result;
-    const resolvedChatId = toNeutralJid(handedTo);
-    return resolvedChatId === toNeutralJid(chatId) ? result : { ...result, resolvedChatId };
+    if (!handedTo) return result;
+    const engineChatId = toNeutralJid(handedTo);
+    if (engineChatId === toNeutralJid(chatId)) return result;
+    return parseWaId(handedTo).kind === 'user'
+      ? { ...result, resolvedChatId: engineChatId, engineChatId }
+      : { ...result, engineChatId };
   }
 
   private rememberResolvedSendId(chatId: string, wid: string): void {

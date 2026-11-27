@@ -419,6 +419,8 @@ function isInvalidRecipientSendError(error: unknown): boolean {
 interface RenamedRecipient {
   phone?: string;
   jid?: string;
+  /** The jid the message went to, whatever the number check answered: a phone or a LID. */
+  to?: string;
 }
 
 export class BaileysMessaging {
@@ -658,6 +660,7 @@ export class BaileysMessaging {
       id: sent?.key?.id ?? '',
       timestamp: this.host.toUnixSeconds(sent?.messageTimestamp),
       ...(renamed.phone ? { resolvedChatId: renamed.phone } : {}),
+      ...this.deliveredChat(chatId, renamed.to ?? jid),
     };
   }
 
@@ -1355,7 +1358,14 @@ export class BaileysMessaging {
       id: sent?.key?.id ?? '',
       timestamp: this.host.toUnixSeconds(sent?.messageTimestamp),
       ...(renamed.phone ? { resolvedChatId: renamed.phone } : {}),
+      ...this.deliveredChat(chatId, renamed.to ?? jid),
     };
+  }
+
+  /** The chat a send went to, when it is not the one the caller named (the contact's LID, or the number resolved). */
+  private deliveredChat(chatId: string, jid: string): Pick<MessageResult, 'engineChatId'> {
+    const engineChatId = this.host.toNeutralJid(jid);
+    return engineChatId === this.host.toNeutralJid(chatId) ? {} : { engineChatId };
   }
 
   /**
@@ -1418,6 +1428,7 @@ export class BaileysMessaging {
         jid = await this.toDeliverableJid(numberId, sock);
         if (applyEphemeral) options = this.withEphemeral(jid, options);
         if (renamed && parseWaId(numberId).kind === 'user') Object.assign(renamed, { phone: numberId, jid });
+        if (renamed) renamed.to = jid;
       }
     }
     const message = typeof content === 'function' ? await content() : content;
