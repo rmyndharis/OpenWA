@@ -97,6 +97,13 @@ interface Gate {
 
 const gates = new WeakMap<DataSource, Gate>();
 const holder = new AsyncLocalStorage<object>();
+/** Each hold not yet released, as the promise its release resolves. */
+const closedHolds = new Set<Promise<void>>();
+
+/** Resolves once every restore holding a shared connection now has released it; undefined when none holds one. */
+export function sharedConnectionHeld(): Promise<void> | undefined {
+  return closedHolds.size > 0 ? Promise.all(closedHolds).then(() => undefined) : undefined;
+}
 
 const transactionOpen = (gate: Gate): boolean =>
   gate.connection.inTransaction === true || gate.runner.isTransactionActive;
@@ -159,6 +166,9 @@ function tryHold(dataSource: DataSource): SharedConnectionHold | undefined {
     };
   }
   gates.set(dataSource, gate);
+  let opened = (): void => undefined;
+  const closed = new Promise<void>(resolve => (opened = resolve));
+  closedHolds.add(closed);
 
   const nextTurn = (): void => {
     if (transactionOpen(gate) && gate.waitedTurns < OPEN_TRANSACTION_TURNS) {
@@ -196,6 +206,8 @@ function tryHold(dataSource: DataSource): SharedConnectionHold | undefined {
     release: () => {
       if (gate.released) return;
       gate.released = true;
+      closedHolds.delete(closed);
+      opened();
       globalThis.setImmediate(nextTurn);
     },
   };

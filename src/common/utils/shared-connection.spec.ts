@@ -1,6 +1,6 @@
 import * as timers from 'timers/promises';
 import { Column, DataSource, Entity, PrimaryGeneratedColumn } from 'typeorm';
-import { awaitNoOpenTransaction, holdSharedConnection } from './shared-connection';
+import { awaitNoOpenTransaction, holdSharedConnection, sharedConnectionHeld } from './shared-connection';
 
 // Fake timers leave timers/promises alone, so the helper's waits are watched here; they still run for real.
 jest.mock('timers/promises', () => {
@@ -289,6 +289,21 @@ describe('holdSharedConnection', () => {
     const second = await holdSharedConnection(db);
     expect(second).toBeDefined();
     second!.release();
+  });
+
+  it('reports a hold until it is released, for the requests that wait on it', async () => {
+    expect(sharedConnectionHeld()).toBeUndefined();
+    const hold = (await holdSharedConnection(db))!;
+    const released = sharedConnectionHeld();
+    expect(released).toBeDefined();
+    let settled = false;
+    void released!.then(() => (settled = true));
+    await turns(5);
+    expect(settled).toBe(false);
+
+    hold.release();
+    await released;
+    expect(sharedConnectionHeld()).toBeUndefined();
   });
 
   it('times a wait for no open transaction from its turn, not from when it was held', async () => {
