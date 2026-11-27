@@ -77,19 +77,30 @@ const holdsOwnToString = (value: unknown): boolean =>
   value !== null &&
   ((!Array.isArray(value) && Object.hasOwn(value, 'toString')) || Object.values(value).some(holdsOwnToString));
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && Object.getPrototypeOf(value) === Object.prototype;
+
 /**
  * The ValidationPipe, answering as the caller's mistake the one failure its implicit conversion raises on the caller's
  * data. A string or number property is converted with String() or Number(), and both throw a TypeError on an object
  * whose own `toString` is not a function, before any validator runs, which would answer 500 for a value every other
  * wrong type answers 400 for. Only that case is answered: a TypeError from the application's own code (a custom
  * transform, a validator) is a defect and still reaches the exception handler, so the body must hold such an object.
+ *
+ * A restore body is validated without its `tables`, which ImportDataDto never descends into, and handed on with the
+ * parsed tables themselves: transforming them copied every row of the database, which held the event loop for about
+ * 4 s at 45,000 messages.
  */
 export class GlobalValidationPipe extends ValidationPipe {
   override async transform(value: unknown, metadata: ArgumentMetadata): Promise<unknown> {
+    const tables = metadata.metatype === ImportDataDto && isPlainObject(value) ? value.tables : undefined;
+    const input = isPlainObject(tables) ? { ...(value as object), tables: {} } : value;
     try {
-      return await super.transform(value, metadata);
+      const result: unknown = await super.transform(input, metadata);
+      if (input !== value) (result as { tables: unknown }).tables = tables;
+      return result;
     } catch (error) {
-      if (error instanceof TypeError && holdsOwnToString(value)) {
+      if (error instanceof TypeError && holdsOwnToString(input)) {
         // The pipe also runs over a query DTO, so the answer names the part of the request that holds the value.
         throw new BadRequestException(
           `Request ${metadata.type === 'custom' ? 'input' : metadata.type} holds a value of the wrong type`,
