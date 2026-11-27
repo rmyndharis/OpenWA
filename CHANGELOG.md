@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- API keys: an optional `deniedPermissions` blocklist refuses chosen capabilities, such as sending or reading messages, across REST, the `/events` stream and webhooks; MCP and the queue dashboard refuse a key that has one. Thanks @ziyadfazyan.
+
 ## [0.32.1] - 2026-11-24
 
 ### Fixed

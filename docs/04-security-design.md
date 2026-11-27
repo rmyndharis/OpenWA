@@ -155,7 +155,7 @@ this release does not know (a hand edit, or a value another release wrote) block
 so only the self-checks answer until an unrestricted admin sets the list again.
 
 The practical shapes this enables: an `operator` key that keeps everything except `messages:read`
-(so integration code can push messages but never read history or subscribe to events), a key that
+(so integration code can push messages but never read history or receive message events), a key that
 keeps `sessions:read` but blocks `sessions:create` and `sessions:lifecycle` (so it can inspect
 sessions without touching them), or a key blocked from `apikeys:manage` so it can never mint a wider
 credential.
