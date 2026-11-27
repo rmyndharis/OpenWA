@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The release workflow fails before promotion when the exact `X.Y.Z` image tag already serves another digest, so a second full run of a published version cannot re-point it.
 - Engines: `deleteMessage` resolves `{ id?, engineChatId? }` and `editMessage` results carry `engineChatId`, the chat the engine found the message in; an engine plugin that resolves the id alone keeps working.
 - Engines: send results carry `engineChatId` when the message went to another chat than the one named, and `replyToMessage` takes an optional `{ quotedChatId }`, the chat its quoted message is checked in.
+- `GET /api/health/ready` keeps answering `200` while a SQLite restore runs, since its database check reads no table.
 
 ### Fixed
 

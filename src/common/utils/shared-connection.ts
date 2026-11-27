@@ -15,7 +15,7 @@ export const SHARED_CONNECTION_DIALECTS = new Set(['better-sqlite3', 'sqlite']);
  */
 export const FOREIGN_TRANSACTION_WAIT_MS = 10_000;
 
-type SharedConnection = { inTransaction?: unknown };
+type SharedConnection = { inTransaction?: unknown; prepare?: (sql: string) => { get(): unknown } };
 
 const sharedConnectionOf = (dataSource: DataSource): SharedConnection | undefined =>
   (dataSource.driver as { databaseConnection?: SharedConnection } | undefined)?.databaseConnection;
@@ -53,6 +53,18 @@ export async function awaitNoOpenTransaction(
     await setTimeout(5);
   }
   return true;
+}
+
+/**
+ * The readiness probe's `SELECT 1`, which goes past a restore's hold (holdSharedConnection). It reads no table, so a
+ * restore's write lock on another connection never makes it wait, and a held probe would report a single-node gateway
+ * down, with nothing to fail over to, for the whole restore.
+ */
+export function selectOne(dataSource: DataSource): Promise<unknown> {
+  const gate = gates.get(dataSource);
+  if (!gate) return dataSource.query('SELECT 1');
+  // On the handle itself: the runner's own query would wait behind the hold at its connect.
+  return new Promise(resolve => resolve(gate.connection.prepare?.('SELECT 1').get()));
 }
 
 /** A restore that holds the shared connection while it writes on a connection of its own. */

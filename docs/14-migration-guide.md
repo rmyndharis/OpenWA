@@ -202,6 +202,11 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
 > once the restore has ended. That wait lasts as long as the restore: one to two minutes for 500,000
 > messages on the hosts measured. A PostgreSQL target does not hold the gateway.
 >
+> `GET /api/health/ready` keeps answering `200` while a SQLite restore runs: its database check reads
+> no table, so the restore's lock does not make it wait, and a single-node gateway is neither taken
+> out of rotation nor restarted in the middle of a restore. It still answers `503` while the gateway
+> drains for shutdown and when a database does not answer.
+>
 > A stop signal waits for the restore to end, then the gateway answers it and exits. Only SIGKILL
 > cuts it short, and the restore is one transaction: a gateway killed that way 30 s into one came
 > back with the data it had before.
