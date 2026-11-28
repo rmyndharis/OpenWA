@@ -101,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Webhooks: a delete through the API, or an edit, reaches the queued, retrying and kept deliveries of the message; they delivered the original text.
 - Webhooks: hold a message's deliveries while a change of it is kept, so the sweep, a retry or a queued job does not send the copy that change withdraws or rewrites.
 - Webhooks: a retry or a queued job that cannot read its outbox row waits without spending an attempt.
+- Messages: clear the row of a group member's revoke naming a phone when the row is stored as the revoke is written and its LID author's failed write was forgotten past `LID_MAPPING_CACHE_MAX`; the row kept the taken-back text.
 - Plugins: keep the gateway's `from`, `to`, `fromMe`, `timestamp`, `type`, `author`, `isLidSender` and `ephemeralDuration`, and the chat's `isGroup` and `kind`, when a `message:received` or `message:sent` handler leaves them out, returns them as `null` or in another type, or removes them from the message it was handed; such a message was not stored.
 - Plugins: keep one handler's redaction when a later `message:received` or `message:sent` handler removes the `id` or `chatId` of the message it was handed; the original text and media were stored and delivered.
 - Infrastructure: `GET /api/infra/export-data` streams the backup from one snapshot of the database, a batch of rows at a time, instead of building it in memory, so a large table no longer fails with `Invalid string length` or exhausts the heap.

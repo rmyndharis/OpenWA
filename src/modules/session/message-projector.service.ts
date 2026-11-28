@@ -2874,15 +2874,24 @@ export class MessageProjector {
       if (verdict?.unread) throw unreadRowError(verdict);
     }
     // The row judged is cleared by its key, and with none found only the message's own row can take it.
-    const target =
+    let target =
       (judgeBy || slot.own) && verdict
         ? await this.mutationProjector.writeTarget(sessionId, waMessageId, judgeBy!, verdict)
         : { sessionId, waMessageId };
     if (!target) return;
-    const result = await this.messageRepository.update(
-      slot.unrevokedOnly ? { ...target, type: Not('revoked') } : target,
-      REVOKED_ROW_PATCH,
-    );
+    const clear = (where: FindOptionsWhere<Message>) =>
+      this.messageRepository.update(slot.unrevokedOnly ? { ...where, type: Not('revoked') } : where, REVOKED_ROW_PATCH);
+    let result = await clear(target);
+    // A row stored since the last judge that the condition did not take is judged as a read judges it, and cleared by
+    // its key: the condition cannot name a lid the lid store refuses only because its bound forgot a failed write of it.
+    if (!result?.affected && judgeBy && verdict && !verdict.exists) {
+      const stored = await judge();
+      if (stored?.unread) throw unreadRowError(stored);
+      if (stored?.rowId && !stored.reason) {
+        target = { id: stored.rowId };
+        result = await clear(target);
+      }
+    }
     this.markedEdited.get(sessionId)?.delete(waMessageId);
     if (!result?.affected || !slot.notify || !announce) return;
     const row = await this.messageRepository.findOne({ where: target }).catch(() => null);

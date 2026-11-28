@@ -74,6 +74,8 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
   let hookManager: HookManager;
   // The reported rows the lid store refuses.
   let vetoes: LidRowVetoes;
+  // A lid store over the table, which the stub below answers with when a test sets one.
+  let lidStore: LidMappingStoreService | undefined;
 
   beforeEach(async () => {
     vetoes = { unreported: [], revoking: [], held: [] };
@@ -159,10 +161,12 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
       // Reported pairings: the chat's phone with LID, and a group member's phone with MEMBER_LID.
       {
         findPhoneForLid: (jid: string) =>
+          lidStore?.findPhoneForLid(jid) ??
           Promise.resolve(jid === LID ? '628111' : jid === MEMBER_LID ? '628333' : null),
         findLidsForPhone: (phone: string) =>
+          lidStore?.findLidsForPhone(phone) ??
           Promise.resolve(phone === '628111' ? ['999555'] : phone === '628333' ? ['999666'] : []),
-        rowVetoes: () => vetoes,
+        rowVetoes: () => lidStore?.rowVetoes() ?? vetoes,
       } as unknown as LidMappingStoreService,
     );
     webhook = await ds.getRepository(Webhook).save(
@@ -1110,6 +1114,113 @@ describe('Changes to a stored message and the copies its deliveries hold (SQLite
           await revoke('S-14', { chatId: GROUP, fromMe: false, author: '628444@c.us', admin: false });
 
           expect(await rowOf('S-14')).toMatchObject({ author: MEMBER_LID, ...unchanged });
+        });
+
+        describe('judged again once the conditioned write cleared no row', () => {
+          const marks = (): Map<string, Set<string>> =>
+            (projector as unknown as { markedEdited: Map<string, Set<string>> }).markedEdited;
+
+          it.each([
+            ['finds no row', undefined],
+            ['finds a row the revoke is foreign to', { ...member, author: MEMBER_LID }],
+          ] as const)('forgets the edited mark of the message when it %s', async (_label, row) => {
+            marks().set(sessionId, new Set(['S-20']));
+            if (row) storedAs('S-20', row, 2);
+
+            await revoke('S-20', { chatId: GROUP, fromMe: false, author: '628444@c.us', admin: false });
+
+            expect(marks().get(sessionId)?.has('S-20')).toBe(false);
+            if (row) expect(await rowOf('S-20')).toMatchObject({ author: MEMBER_LID, ...unchanged });
+          });
+
+          it('keeps the revoke to try again when that read fails, and clears the row once it answers', async () => {
+            // The row lands after the conditioned write, as the read that would judge it fails.
+            const repository = ds.getRepository(Message);
+            const findOne = repository.findOne.bind(repository);
+            let judged = 0;
+            jest.spyOn(repository, 'findOne').mockImplementation(async options => {
+              const select = (options as { select?: Record<string, unknown> }).select;
+              if (select?.engineRef && ++judged === 3) {
+                await repository.insert({
+                  sessionId,
+                  waMessageId: 'S-21',
+                  chatId: GROUP,
+                  from: GROUP,
+                  to: '628222@c.us',
+                  author: MEMBER,
+                  body: 'first text',
+                  type: 'text',
+                  direction: MessageDirection.INCOMING,
+                  timestamp: 1_700_000_000,
+                });
+                throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+              }
+              return findOne(options);
+            });
+
+            await revoke('S-21', { chatId: GROUP, fromMe: false, author: MEMBER, admin: false });
+            expect(await rowOf('S-21')).toMatchObject({ type: 'text', body: 'first text' });
+
+            await projector.retryParkedChanges();
+
+            expect(await rowOf('S-21')).toMatchObject({ type: 'revoked', body: '' });
+          });
+        });
+
+        describe('as a lid store judges it that forgot failed writes past its bound', () => {
+          const prevMax = process.env.LID_MAPPING_CACHE_MAX;
+          beforeEach(async () => {
+            process.env.LID_MAPPING_CACHE_MAX = '1';
+            lidStore = new LidMappingStoreService(ds.getRepository(LidMapping));
+            await lidStore.reload();
+          });
+          afterEach(() => {
+            lidStore?.onModuleDestroy();
+            lidStore = undefined;
+            if (prevMax === undefined) delete process.env.LID_MAPPING_CACHE_MAX;
+            else process.env.LID_MAPPING_CACHE_MAX = prevMax;
+          });
+
+          /** Every report of these lids fails, as in a sync while the database is down; past the first, a mark goes. */
+          const failReports = async (...reports: Array<[string, string]>): Promise<void> => {
+            const upsert = jest
+              .spyOn(ds.getRepository(LidMapping), 'upsert')
+              .mockRejectedValue(new Error('connection lost'));
+            for (const [lid, phone] of reports) await expect(lidStore!.remember(lid, phone)).resolves.toBe(false);
+            upsert.mockRestore();
+          };
+
+          it('lands on the row whose lid answers no phone once the mark of its failed write went', async () => {
+            await failReports(['999666', '628444'], ['999777', '628777']);
+            expect(await lidStore!.findPhoneForLid(MEMBER_LID)).toBeNull();
+            storedAs('S-17', { ...member, author: MEMBER_LID }, 2);
+
+            await revoke('S-17', { chatId: GROUP, fromMe: false, author: '628444@c.us', admin: false });
+
+            expect(await rowOf('S-17')).toMatchObject({ type: 'revoked', body: '' });
+          });
+
+          it("leaves the row whose lid is reported for another phone while another lid's mark went", async () => {
+            await failReports(['999701', '628701'], ['999702', '628702']);
+            expect(await lidStore!.findPhoneForLid(MEMBER_LID)).toBe('628333');
+            storedAs('S-18', { ...member, author: MEMBER_LID }, 2);
+
+            await revoke('S-18', { chatId: GROUP, fromMe: false, author: '628444@c.us', admin: false });
+
+            expect(await rowOf('S-18')).toMatchObject({ author: MEMBER_LID, ...unchanged });
+          });
+
+          it('lands on the row whose lid has an unreported pairing to another phone, which vouches for none', async () => {
+            await ds.getRepository(LidMapping).insert({ lid: '999601', phone: '628601', isReported: false });
+            await lidStore!.reload();
+            await failReports(['999701', '628701'], ['999702', '628702']);
+            expect(await lidStore!.findPhoneForLid('999601@lid')).toBeNull();
+            storedAs('S-19', { ...member, author: '999601@lid' }, 2);
+
+            await revoke('S-19', { chatId: GROUP, fromMe: false, author: '628444@c.us', admin: false });
+
+            expect(await rowOf('S-19')).toMatchObject({ type: 'revoked', body: '' });
+          });
         });
       });
 
