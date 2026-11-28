@@ -1,7 +1,7 @@
 /**
  * Post-install hook (npm `postinstall`).
  *
- * Fifteen conditional steps, each skipped when its target is absent so the hook is a no-op where the
+ * Sixteen conditional steps, each skipped when its target is absent so the hook is a no-op where the
  * piece is missing (the Docker builder stage copies package*.json long before any source):
  *
  *   1. `npm ci` inside dashboard/ when dashboard/ exists: the dashboard carries its own lockfile and
@@ -41,6 +41,8 @@
  *      event buffer keeps every group update, history sync lid to phone pair and RSVP it holds.
  *  15. `node scripts/patch-wwebjs-puppeteer.js` when present. Browser teardown must use the
  *      connected getter required by Puppeteer 25; an unknown source shape aborts the install.
+ *  16. `node scripts/patch-wwebjs-login-route.js --best-effort` when present, so a session not linked
+ *      yet still gets a QR or pairing code on WhatsApp Web's /login/ page, gated the same way.
  *
  * Structured with pure planning + injectable spawn, so the spec (scripts/postinstall.spec.js,
  * node:test) exercises every branch without a real npm run.
@@ -207,6 +209,15 @@ function planSteps(root, env = process.env) {
       name: 'whatsapp-web.js Puppeteer compatibility (scripts/patch-wwebjs-puppeteer.js)',
       command: process.execPath,
       args: [puppeteerPatcher],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
+  }
+  const loginRoutePatcher = path.join(root, 'scripts', 'patch-wwebjs-login-route.js');
+  if (fs.existsSync(loginRoutePatcher)) {
+    steps.push({
+      name: 'whatsapp-web.js /login/ route handling (scripts/patch-wwebjs-login-route.js --best-effort)',
+      command: process.execPath,
+      args: [loginRoutePatcher, '--best-effort'],
       options: { stdio: 'inherit', cwd: root, env: cleanEnv },
     });
   }

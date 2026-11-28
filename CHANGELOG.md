@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- whatsapp-web.js: a session that is not linked yet gets a QR code again on WhatsApp Web's `/login/` page, where the start failed with `auth timeout`. Thanks @pycriador for the fix, and @ebnhatem, @JBrito19 and @JosueAshton for the reports.
+
 ## [0.32.1] - 2026-11-24
 
 ### Fixed
