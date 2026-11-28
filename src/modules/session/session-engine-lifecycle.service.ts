@@ -1202,10 +1202,10 @@ export class SessionEngineLifecycle {
       }
     };
 
-    // The status and times of a READY are written at once, fenced on this node's ownership when
-    // SessionOwnershipService is wired. Only the number it links waits behind the phone writes of the
-    // session: held with it, the status could land after a stop or a failure that followed this READY
-    // and put the session back to READY with no engine. Each part the database refuses is kept to be
+    // The status and times of a READY wait only for the status writes issued before them, fenced on this
+    // node's ownership when SessionOwnershipService is wired. Only the number it links waits behind the phone
+    // writes of the session: held with it, the status could land after a stop or a failure that followed this
+    // READY and put the session back to READY with no engine. Each part the database refuses is kept to be
     // written once it answers, so a restart before then does not lose the number auto-start needs.
     const where = this.ownedRowWhere(id);
     const at = new Date();

@@ -97,6 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Baileys: keep the removal of a stored copy a conflicting delivery left, refused by the database, and run it once it answers; the copy judged the real message's changes.
 - Statuses: keep a received status, or its poster's delete, the database refused and apply it once it answers; the status was never stored, or a deleted one stayed listed until it expired.
 - Messages: keep the replace of a forward placeholder by its send's echo, refused by the database, and run it once it answers; the row stayed a forward with no content.
+- Sessions: write a session's status changes in the order they happen; on PostgreSQL one could land after the next and leave a stale status, such as `ready` on a session that had dropped.
 - Sessions: keep a status write the database refused and write it once it answers, at the next start before the boot reset; a lost FAILED stayed until the next status write, and the reset and auto-start acted on the stale one.
 - Sessions: keep the row a READY writes, its number included, when the database refused it, and write it once it answers, at the next start before auto-start reads it; a restart first left the session without its number, and auto-start skipped it.
 - Sessions: keep the clear of a session's number after WhatsApp unlinked it, or after a logout, when the database refused it, and write it once it answers; the old number stayed, auto-start brought the session back to a QR, and linking another number was refused.

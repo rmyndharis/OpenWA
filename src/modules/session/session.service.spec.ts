@@ -36,6 +36,7 @@ import {
   SessionStoppedException,
 } from './session-engine-controls';
 import { decideReconnect, STABLE_READY_MS } from './reconnect-policy';
+import { LIVE_WRITE_WAIT_MS } from './session-row-park';
 import { ACK_RECONCILE_DELAY_MS } from './message-projector.service';
 import {
   QR_AUDIT_READERS_PER_CODE,
@@ -3753,7 +3754,10 @@ describe('SessionService', () => {
         await jest.advanceTimersByTimeAsync(60_000);
         expect(storedStatus).toBe(SessionStatus.DISCONNECTED);
         (engineFactory.create as jest.Mock).mockReturnValueOnce(replacement);
-        await service.start('sess-uuid-1', { explicit: true });
+        // The replacement's status writes go out once the old one has held them up for the limit.
+        const started = service.start('sess-uuid-1', { explicit: true });
+        await jest.advanceTimersByTimeAsync(LIVE_WRITE_WAIT_MS);
+        await started;
         expect(storedStatus).toBe(SessionStatus.READY);
         finishStatus();
         const error = await pending;

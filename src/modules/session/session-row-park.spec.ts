@@ -29,6 +29,7 @@ import { resolveEngineInitTimeoutMs } from '../../engine/engine-init-timeout';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { EngineStatus, type EngineEventCallbacks } from '../../engine/interfaces/whatsapp-engine.interface';
 import { RecoveryQueue, recoveryQueueOptions } from '../../common/utils/recovery-queue';
+import { LIVE_WRITE_WAIT_MS } from './session-row-park';
 import { RecoveryJournal } from '../../common/utils/recovery-journal';
 import { LoggerService } from '../../common/services/logger.service';
 import { postgresUtcExtra } from '../../database/postgres-utc';
@@ -420,13 +421,14 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
     });
 
     it('refused while an earlier write of the column was on its way stays kept when that one lands', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
       const node = boot();
       await node.lifecycle.updateStatus(id, SessionStatus.READY);
       refuse = patch => ('status' in patch ? unavailable() : undefined);
       await expect(node.lifecycle.updateStatus(id, SessionStatus.DISCONNECTED)).rejects.toThrow('disk I/O error');
       refuse = undefined;
-      // The engine came back, and its READY lands well before the answer comes back. Meanwhile the engine fails, and
-      // the database refuses that FAILED.
+      // The engine came back, and its READY lands well before the answer comes back. Meanwhile the engine fails: its
+      // FAILED goes out once the READY has held it up for the limit, and the database refuses it.
       let answer!: () => void;
       const answered = new Promise<void>(resolve => (answer = resolve));
       let landed = false;
@@ -438,7 +440,9 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       const ready = node.lifecycle.updateStatus(id, SessionStatus.READY);
       await until(() => landed);
       refuse = patch => ('status' in patch ? unavailable() : undefined);
-      await expect(node.lifecycle.updateStatus(id, SessionStatus.FAILED)).rejects.toThrow('disk I/O error');
+      const failed = expect(node.lifecycle.updateStatus(id, SessionStatus.FAILED)).rejects.toThrow('disk I/O error');
+      await jest.advanceTimersByTimeAsync(LIVE_WRITE_WAIT_MS);
+      await failed;
       refuse = undefined;
       answer();
       await ready;
@@ -923,6 +927,54 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       await expect(node.service.logout(id)).rejects.toThrow('disk I/O error');
       refuse = undefined;
       await node.queue.flush();
+
+      expect((await rowOf()).phone).toBeNull();
+    });
+  });
+
+  describe('two live writes of one column', () => {
+    /** Holds the writes `held` picks before they reach the database, as a pool can keep one waiting for a connection. */
+    function holding(held: (patch: Record<string, unknown>) => boolean) {
+      const arrived: Array<Record<string, unknown>> = [];
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      beforeWrite = patch => {
+        arrived.push(patch);
+        return held(patch) ? released : Promise.resolve();
+      };
+      return { arrived, release };
+    }
+    const isStatus = (status: SessionStatus) => (patch: Record<string, unknown>) => patch.status === status;
+
+    it('land in the order the engine reported them, also when the first waits for a connection', async () => {
+      const node = boot();
+      await node.service.start(id, { explicit: true });
+      // The engine reports READY, whose write waits for a connection of the pool, and drops at once.
+      const ready = holding(isStatus(SessionStatus.READY));
+      node.callbacks().onReady!('628111', 'Alice');
+      await until(() => ready.arrived.some(isStatus(SessionStatus.READY)));
+      node.callbacks().onStateChanged!(EngineStatus.DISCONNECTED);
+      await settle();
+      // A write that went out meanwhile has landed by the time the READY gets its connection.
+      const dropped = isStatus(SessionStatus.DISCONNECTED);
+      await until(() => !ready.arrived.some(dropped) || answeredWrites.some(dropped));
+      ready.release();
+      await until(() => answeredWrites.some(dropped) && answeredWrites.some(isStatus(SessionStatus.READY)));
+
+      expect((await rowOf()).status).toBe(SessionStatus.DISCONNECTED);
+    });
+
+    it('of the number land in the order issued: the clear of an unlink after the number a READY linked', async () => {
+      const node = boot();
+      await node.service.start(id, { explicit: true });
+      const linked = holding(patch => patch.phone === '628111');
+      node.callbacks().onReady!('628111', 'Alice');
+      await until(() => linked.arrived.some(patch => patch.phone === '628111'));
+      const unlinked = node.lifecycle.handleEngineDisconnected(id, node.engine as never, 'LOGOUT');
+      await settle();
+      linked.release();
+      await unlinked;
+      await until(() => answeredWrites.some(patch => patch.phone === null));
 
       expect((await rowOf()).phone).toBeNull();
     });

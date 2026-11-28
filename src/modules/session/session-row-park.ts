@@ -52,6 +52,9 @@ const LOSS: Record<SessionRowField, { message: string; action: string }> = {
 
 const keyOf = (sessionId: string, field: SessionRowField): string => `${sessionId}:${field}`;
 
+/** Longest one live write of a column holds up the next one of that column, as the phone writes do. */
+export const LIVE_WRITE_WAIT_MS = 5_000;
+
 /** The value a write leaves of `value`: its move's, or the value itself when no move starts there. */
 const after = (moves: SessionRowWrite['moves'], value: string | null): string | null => {
   const move = moves.find(([from]) => from === value);
@@ -138,7 +141,8 @@ export interface SessionRowsDeps {
  * of its own, so its writes are never under ours, and this node lands what it keeps of a session before it hands the
  * claim back (keeping the claim, to lapse with its lease, while something could not land). A blind write is guarded
  * on the value this process last wrote or read for the column, and is not kept while it knows none. What the last
- * process kept lands at boot, before the reset and auto-start read the rows.
+ * process kept lands at boot, before the reset and auto-start read the rows. The live writes of a column go out one at
+ * a time, in the order they were issued (see begin()): on a pool of connections, two in flight can land either way.
  */
 export class SessionRows {
   // Per session, what this process last wrote to or read from the row, and how many of its writes landed: a read
@@ -150,6 +154,10 @@ export class SessionRows {
   // live write can land well before its answer comes back, and a kept write tried meanwhile would land over it.
   private readonly writing = new Map<string, number>();
   private readonly trying = new Map<string, Promise<void>>();
+  // By key, how many live writes of the column are still open (begun, and neither ended nor past the limit), and the
+  // settling of the last one begun: two in flight at once can land in either order on a pool of connections.
+  private readonly open = new Map<string, number>();
+  private readonly lastBegun = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: SessionRowsDeps) {
     deps.queue?.register('session', {
@@ -171,17 +179,44 @@ export class SessionRows {
 
   /**
    * A live write of `field` is about to go out: no kept write of the column is tried until `end()`, and the caller
-   * first waits for `wait`, a try already under way. What is kept (kept()) is read after that wait.
+   * first waits for `wait`, the live writes of the column issued before it and a try of its kept write under way, so
+   * the writes of a column land in the order they were issued. What is kept (kept()) is read after that wait.
    */
   begin(sessionId: string, field: SessionRowField): { wait?: Promise<void>; end(): void } {
     const key = keyOf(sessionId, field);
     this.writing.set(key, (this.writing.get(key) ?? 0) + 1);
+    const before = this.open.get(key) ? this.lastBegun.get(key) : undefined;
+    const trying = this.trying.get(key);
+    this.open.set(key, (this.open.get(key) ?? 0) + 1);
+    let release!: () => void;
+    const released = new Promise<void>(resolve => (release = resolve));
+    let opened = true;
+    // Lets the next live write of the column go; at the latest LIVE_WRITE_WAIT_MS after this one could go out, the
+    // order then being best effort.
+    const close = (): void => {
+      if (!opened) return;
+      opened = false;
+      release();
+      const left = (this.open.get(key) ?? 1) - 1;
+      if (left > 0) this.open.set(key, left);
+      else {
+        this.open.delete(key);
+        this.lastBegun.delete(key);
+      }
+    };
+    const settled = (before ?? Promise.resolve()).then(() => {
+      const timer = setTimeout(close, LIVE_WRITE_WAIT_MS);
+      timer.unref();
+      return released.then(() => clearTimeout(timer));
+    });
+    this.lastBegun.set(key, settled);
     let ended = false;
     return {
-      wait: this.trying.get(key),
+      wait: before && trying ? Promise.all([before, trying]).then(() => undefined) : (before ?? trying),
       end: () => {
         if (ended) return;
         ended = true;
+        close();
         const left = (this.writing.get(key) ?? 1) - 1;
         if (left > 0) this.writing.set(key, left);
         else this.writing.delete(key);
