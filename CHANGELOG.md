@@ -126,6 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API: a request the database cannot serve, such as one PostgreSQL refuses a connection for, answers `503` instead of `500`.
 - Recovery: keep a write the database refused because its host did not resolve or could not be reached, instead of giving it up after three tries.
 - Integration: a redrive takes each delivery before it dispatches it, so neither the reconciler nor another redrive sends it again meanwhile; a take left unsettled by a stopped node or a failed database write is taken again after five minutes.
+- Messages: a keyed send that never reached the engine frees its `Idempotency-Key` when the database refused it, or once its request has stalled for ten minutes, so the retry sends it once instead of answering `409`.
 
 ## [0.32.1] - 2026-11-24
 

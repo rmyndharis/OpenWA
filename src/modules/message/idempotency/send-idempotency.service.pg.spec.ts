@@ -134,17 +134,30 @@ const utcInstant = (wallText: string): number => new Date(`${wallText.replace(' 
     expect((await serviceB.claim({ ...input, key: 'k-2', requestHash: 'h2' })).kind).toBe('claimed');
   });
 
-  it('keeps a failed or abandoned key taken, and reclaims and prunes an expired one', async () => {
+  it('keeps a failed key and one abandoned at the engine taken, takes over one abandoned before it, and reclaims and prunes an expired one', async () => {
     const failed = await serviceA.claim({ ...input, key: 'k-failed' });
     if (failed.kind !== 'claimed') throw new Error('expected a claim');
     await serviceA.markFailed(failed.id);
     expect(await serviceB.claim({ ...input, key: 'k-failed' })).toEqual({ kind: 'outcome_unknown' });
 
+    const claimedLongAgo = Date.now() - SEND_IDEMPOTENCY_STALE_PENDING_MS - 1000;
+    // Handed to the engine, then its node stopped: the message may have gone out.
     const abandoned = await serviceA.claim({ ...input, key: 'k-abandoned' });
     if (abandoned.kind !== 'claimed') throw new Error('expected a claim');
-    const claimedLongAgo = Date.now() - SEND_IDEMPOTENCY_STALE_PENDING_MS - 1000;
+    await serviceA.handOver(abandoned.id);
     await keys.update({ id: abandoned.id }, { expiresAt: new Date(claimedLongAgo + SEND_IDEMPOTENCY_TTL_MS) });
     expect(await serviceB.claim({ ...input, key: 'k-abandoned' })).toEqual({ kind: 'outcome_unknown' });
+
+    // Its node stopped before the engine: the next request with the key, on another node, takes it over.
+    const unsent = await serviceA.claim({ ...input, key: 'k-unsent' });
+    if (unsent.kind !== 'claimed') throw new Error('expected a claim');
+    await keys.update({ id: unsent.id }, { expiresAt: new Date(claimedLongAgo + SEND_IDEMPOTENCY_TTL_MS) });
+    const takenOver = await serviceB.claim({ ...input, key: 'k-unsent' });
+    expect(takenOver.kind).toBe('claimed');
+    expect(takenOver).not.toEqual(unsent);
+    await expect(serviceA.handOver(unsent.id)).rejects.toMatchObject({
+      response: { code: 'IDEMPOTENCY_KEY_IN_PROGRESS' },
+    });
 
     const done = await serviceA.claim({ ...input, key: 'k-done' });
     if (done.kind !== 'claimed') throw new Error('expected a claim');
@@ -154,6 +167,6 @@ const utcInstant = (wallText: string): number => new Date(`${wallText.replace(' 
 
     await keys.update({ id: failed.id }, { expiresAt: new Date(Date.now() - 1000) });
     expect(await serviceA.pruneExpired()).toBe(1);
-    expect((await keys.find()).map(row => row.idempotencyKey).sort()).toEqual(['k-abandoned', 'k-done']);
+    expect((await keys.find()).map(row => row.idempotencyKey).sort()).toEqual(['k-abandoned', 'k-done', 'k-unsent']);
   });
 });

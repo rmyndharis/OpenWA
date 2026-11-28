@@ -4,15 +4,18 @@ import { DateTransformer } from '../../../common/transformers/date.transformer';
 
 /**
  * The lifecycle of one `Idempotency-Key` claim on a send route:
- *  - 'pending'   - the request holding the key is running (or the node died while it ran).
+ *  - 'claimed'   - the request holding the key has not handed its message to the engine yet. Past the stale window
+ *                  another request takes the key over, since nothing can have been sent.
+ *  - 'pending'   - the request holding the key is running and may have reached the engine (or the node died while
+ *                  it ran). A node that predates 'claimed' writes this for the whole send.
  *  - 'completed' - the send succeeded; `responseBody` is replayed to every retry with the same key.
  *  - 'failed'    - the send failed in a way that does not say whether WhatsApp got the message (an
  *                  engine error or timeout). The key stays taken so a retry cannot send it twice.
- * A refusal before the engine call deletes the row, so the client may retry with the same key.
+ * A failure before the engine call deletes the row, so the client may retry with the same key.
  * Engine-stage failures keep it taken whatever their HTTP status, including a disconnected socket's 409,
  * unless the engine proves that nothing was sent (see sendFailureProvesNothingSent), which deletes it too.
  */
-export type SendIdempotencyState = 'pending' | 'completed' | 'failed';
+export type SendIdempotencyState = 'claimed' | 'pending' | 'completed' | 'failed';
 
 /**
  * One `Idempotency-Key` a client sent on a send route, kept for SEND_IDEMPOTENCY_TTL (24 h) so a

@@ -1,6 +1,8 @@
 import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { markEngineSendFailure } from '../../common/errors/engine-send-failure';
+import { markNothingSent } from '../../common/errors/engine-not-sent.error';
+import { handOverSend, isHandOverRefusal } from './idempotency/run-idempotent-send';
 import { mergeSentMetadata, updateMessageMetadata } from './message-metadata';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, LessThan, Not, Repository, QueryDeepPartialEntity, type FindOptionsSelect } from 'typeorm';
@@ -285,6 +287,8 @@ export class MessageSendService {
     initiatedDuringMessageSent: boolean,
     invoke: () => Promise<MessageResult>,
   ): Promise<MessageResult> {
+    // Every sender reaches the engine here, so a keyed send's claim records the hand-over at this one point.
+    await handOverSend();
     if (!initiatedDuringMessageSent) {
       return invoke();
     }
@@ -443,6 +447,9 @@ export class MessageSendService {
       lifetime.assertCurrent();
       persisted = true;
       return { finalDto, engine, prepared, message, sessionLinkPreview, initiatedDuringMessageSent };
+    } catch (error) {
+      // Nothing was handed to the engine yet, whatever failed: a keyed send frees its key for it.
+      throw markNothingSent(error);
     } finally {
       release?.(persisted);
       lifetime.close();
@@ -463,6 +470,13 @@ export class MessageSendService {
     input: unknown,
     error: unknown,
   ): Promise<never> {
+    // A keyed send whose claim refused the hand-over never reached the engine: nothing failed there to record or tell
+    // plugins about. Its row is failed at once all the same, not left PENDING for the reaper; a database that refuses
+    // this write as well leaves it to the reaper.
+    if (isHandOverRefusal(error)) {
+      await this.saveFailedMessage(message).catch(() => undefined);
+      throw error;
+    }
     try {
       // Only failures that say something about the account's standing feed the breaker: adapters also
       // raise client-fault and engine-state errors from inside this call (a blocked media URL, an
@@ -521,10 +535,14 @@ export class MessageSendService {
    */
   async sendTemplate(sessionId: string, dto: SendTemplateMessageDto): Promise<MessageResponseDto> {
     const initiatedDuringMessageSent = this.isInitiatedDuringMessageSent();
-    const template = await this.templateService.resolve(sessionId, {
-      templateId: dto.templateId,
-      templateName: dto.templateName,
-    });
+    const template = await this.templateService
+      .resolve(sessionId, {
+        templateId: dto.templateId,
+        templateName: dto.templateName,
+      })
+      .catch((error: unknown) => {
+        throw markNothingSent(error);
+      });
 
     const vars = dto.vars ?? {};
     const parts = [template.header, template.body, template.footer].filter(

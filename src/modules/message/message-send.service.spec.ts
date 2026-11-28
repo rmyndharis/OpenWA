@@ -4,7 +4,13 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, FindOperator, In, Repository } from 'typeorm';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import type { LidMapping } from '../../engine/identity/lid-mapping.entity';
-import { BadRequestException, ExecutionContext, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ExecutionContext,
+  NotFoundException,
+  PayloadTooLargeException,
+} from '@nestjs/common';
 import { from, lastValueFrom } from 'rxjs';
 import { MessageSendService } from './message-send.service';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
@@ -24,6 +30,8 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { SendIdempotencyKey } from './entities/send-idempotency-key.entity';
 import { SendIdempotencyService } from './idempotency/send-idempotency.service';
 import { SendIdempotencyInterceptor, sendFailureProvesNothingSent } from './idempotency/send-idempotency.interceptor';
+import { runClaimedSend } from './idempotency/run-idempotent-send';
+import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
 import { BaileysMessaging, type BaileysMessagingHost } from '../../engine/adapters/baileys-messaging';
 import { WhatsAppWebJsAdapter } from '../../engine/adapters/whatsapp-web-js.adapter';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -1997,7 +2005,8 @@ describe('MessageSendService', () => {
         const complete = jest.fn().mockResolvedValue(undefined);
         const release = jest.fn().mockResolvedValue(undefined);
         const markFailed = jest.fn().mockResolvedValue(undefined);
-        const store = { claim, complete, release, markFailed } as unknown as SendIdempotencyService;
+        const handOver = jest.fn().mockResolvedValue(undefined);
+        const store = { claim, complete, release, markFailed, handOver } as unknown as SendIdempotencyService;
         const interceptor = new SendIdempotencyInterceptor(store);
 
         mockEngine.clickButton.mockImplementationOnce(() => tc.runEngine());
@@ -2030,6 +2039,8 @@ describe('MessageSendService', () => {
         expect(sendFailureProvesNothingSent(caught)).toBe(true);
         expect(release).toHaveBeenCalledWith(`claim-${tc.label}`);
         expect(markFailed).not.toHaveBeenCalled();
+        // The claim was handed over before the engine refused: the proof comes from the engine, not the hand-over.
+        expect(handOver).toHaveBeenCalledWith(`claim-${tc.label}`);
       }
     });
   });
@@ -2786,6 +2797,57 @@ describe('MessageSendService', () => {
         expect(archive.archive).toHaveBeenCalledWith(expect.objectContaining({ waMessageId: `wa-${status}`, status }));
       },
     );
+  });
+
+  describe('a keyed send whose claim refused the hand-over', () => {
+    const claimRefusing = (refusal: Error) =>
+      ({
+        handOver: jest.fn().mockRejectedValue(refusal),
+        release: jest.fn().mockResolvedValue(undefined),
+        markFailed: jest.fn().mockResolvedValue(undefined),
+        complete: jest.fn().mockResolvedValue(undefined),
+      }) as unknown as SendIdempotencyService;
+
+    // The claim can be taken over while pacing holds the send: the hand-over refuses it before the engine.
+    it('fails its row at once, and tells no plugin of a send failure it never had', async () => {
+      const refusal = new ConflictException('taken over');
+
+      await expect(
+        runClaimedSend(claimRefusing(refusal), 'row-1', () =>
+          service.sendText('sess-1', { chatId: 'test@c.us', text: 'hi' }),
+        ),
+      ).rejects.toBe(refusal);
+
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+      expect(repository.update).toHaveBeenCalledWith(
+        { id: 'msg-uuid-1', sessionId: 'sess-1' },
+        expect.objectContaining({ status: MessageStatus.FAILED }),
+      );
+      expect(hookManager.execute).not.toHaveBeenCalledWith('message:failed', expect.anything(), expect.anything());
+    });
+
+    it('leaves its row to the pending reaper when the database refuses that write as well', async () => {
+      const refusal = new Error('Connection terminated unexpectedly');
+      (repository.update as jest.Mock).mockRejectedValue(new Error('Connection terminated unexpectedly'));
+
+      await expect(
+        runClaimedSend(claimRefusing(refusal), 'row-1', () =>
+          service.sendText('sess-1', { chatId: 'test@c.us', text: 'hi' }),
+        ),
+      ).rejects.toBe(refusal);
+
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it('marks a template lookup the database refused as raised before anything was sent', async () => {
+    const refused = new Error('Connection terminated unexpectedly');
+    (templateService.resolve as jest.Mock).mockRejectedValue(refused);
+
+    await expect(service.sendTemplate('sess-1', { chatId: 'test@c.us', templateName: 'greet' })).rejects.toBe(refused);
+
+    expect(provesNothingSent(refused)).toBe(true);
+    expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
   });
 });
 
