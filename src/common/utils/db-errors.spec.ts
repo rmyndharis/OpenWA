@@ -181,3 +181,42 @@ describe('markConnectFailures', () => {
     expect(isDatabaseError(refusedSocket())).toBe(false);
   });
 });
+
+describe('isTransientDbError on a database host that cannot be reached', () => {
+  /** What a socket raises for the code, as Node reports it. */
+  const socketError = (code: string): Error =>
+    Object.assign(new Error(`connect ${code} openwa-db:5432`), { code, syscall: 'connect' });
+
+  const fromDataConnection = async (code: string): Promise<Error> => {
+    const driver = { obtainMasterConnection: () => Promise.reject(socketError(code)) };
+    markConnectFailures({ driver } as unknown as DataSource);
+    return driver.obtainMasterConnection().catch((error: Error) => error);
+  };
+
+  const codes = [
+    'ENOTFOUND',
+    'EAI_AGAIN',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+    'EHOSTDOWN',
+    'ENETDOWN',
+    'ECONNABORTED',
+    'EPIPE',
+  ];
+
+  it.each(codes)('is true for a connect failure of the data connection (%s)', async code => {
+    expect(isTransientDbError(await fromDataConnection(code))).toBe(true);
+  });
+
+  it.each(codes)('is true for a statement whose connection broke (%s)', code => {
+    expect(isTransientDbError(new QueryFailedError('SELECT 1', [], socketError(code)))).toBe(true);
+  });
+
+  // A webhook target or an engine raises the same codes; only the message regex reads a bare error, as before.
+  it.each(['ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH', 'EHOSTDOWN', 'ENETDOWN', 'ECONNABORTED', 'EPIPE'])(
+    'is false for the same error from any other client (%s)',
+    code => {
+      expect(isTransientDbError(socketError(code))).toBe(false);
+    },
+  );
+});

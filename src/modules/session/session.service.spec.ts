@@ -1370,6 +1370,21 @@ describe('SessionService', () => {
       expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
     });
 
+    // A database host that does not resolve is transient once the data connection marks its error; an engine's is not.
+    it("does NOT retry an engine's DNS failure, whose code a database host can raise too", async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (engineFactory.create as jest.Mock).mockClear().mockReturnValue(mockEngine);
+      const dns = Object.assign(new Error('getaddrinfo ENOTFOUND web.whatsapp.com'), {
+        code: 'ENOTFOUND',
+        syscall: 'getaddrinfo',
+      });
+      mockEngine.initialize.mockRejectedValue(dns);
+
+      await expect(service.start('sess-uuid-1')).rejects.toBe(dns);
+      expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
+    });
+
     it('gives up after the single retry and surfaces the failure (no unbounded loop)', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });

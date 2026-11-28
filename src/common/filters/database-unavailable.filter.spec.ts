@@ -167,6 +167,20 @@ describe('DatabaseUnavailableFilter', () => {
     expect((await answer(withFilter, refusedSocket(5432))).status).toBe(500);
   });
 
+  it.each(['ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH'])(
+    'answers 503 to a database host the data connection could not reach (%s), and 500 to it from elsewhere',
+    async code => {
+      const unreachable = (): Error =>
+        Object.assign(new Error(`getaddrinfo ${code} openwa-db`), { code, syscall: 'getaddrinfo' });
+      const driver = { obtainMasterConnection: () => Promise.reject(unreachable()) };
+      markConnectFailures({ driver } as unknown as DataSource);
+      const marked = await driver.obtainMasterConnection().catch((error: Error) => error);
+
+      expect((await answer(withFilter, marked)).status).toBe(503);
+      expect((await answer(withFilter, unreachable())).status).toBe(500);
+    },
+  );
+
   it('leaves a thrown value that is not an object as it is', () => {
     expect(markAfterEffect('not an object')).toBe('not an object');
   });

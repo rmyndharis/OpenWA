@@ -106,15 +106,37 @@ export function isMissingTableError(err: unknown): boolean {
 const TRANSIENT_DB_CODES = new Set(['SQLITE_BUSY', 'SQLITE_LOCKED', '57P01', '57P03', '53300']);
 
 /**
+ * Socket codes saying the database's host cannot be reached now: a name that does not resolve, no route to the host
+ * or its network, a connection aborted or broken. Read only on an error that is the database's (a failed statement, or
+ * the data connection failing to connect), since a webhook target or an engine raises the same codes.
+ */
+const UNREACHABLE_HOST_CODES = new Set([
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EHOSTDOWN',
+  'ENETDOWN',
+  'ECONNABORTED',
+  'EPIPE',
+]);
+
+/**
  * A database failure worth one retry: the database or its pool said "not now" (lock contention, a
- * dropped connection, pg-pool's connection timeout), not a rejected statement. A unique violation is
- * never transient: callers read it as the dedup oracle.
+ * dropped connection, pg-pool's connection timeout, a host it cannot reach), not a rejected statement. A
+ * unique violation is never transient: callers read it as the dedup oracle.
  */
 export function isTransientDbError(err: unknown): boolean {
   if (err == null || typeof err !== 'object' || isUniqueViolation(err)) return false;
   const e = err as DriverErrorWrapperShape;
   const code = e.driverError?.code ?? e.code;
   if (typeof code === 'string' && TRANSIENT_DB_CODES.has(code)) return true;
+  if (
+    typeof code === 'string' &&
+    UNREACHABLE_HOST_CODES.has(code) &&
+    (isQueryFailedErrorLike(err) || connectFailures.has(err))
+  )
+    return true;
   return /connection|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|terminating connection|timeout exceeded when trying to connect/i.test(
     typeof e.message === 'string' ? e.message : '',
   );
