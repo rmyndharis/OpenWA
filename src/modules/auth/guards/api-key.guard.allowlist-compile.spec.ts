@@ -20,6 +20,7 @@ describe('ApiKeyGuard chat fence cost', () => {
     allowedIps: null,
     allowedSessions: null,
     allowedChats: allowlist,
+    deniedPermissions: null,
     isActive: true,
     expiresAt: null,
     lastUsedAt: null,

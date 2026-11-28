@@ -50,7 +50,8 @@
     "errorGeneric": "發生錯誤",
     "unknownError": "未知錯誤",
     "retry": "重試",
-    "copyFailed": "無法複製到剪貼簿"
+    "copyFailed": "無法複製到剪貼簿",
+    "noDashboardAccess": "此 API 金鑰已被禁止存取所有儀表板頁面。"
   },
   "theme": {
     "light": "淺色",
@@ -800,6 +801,15 @@
     "sessionSelect": "工作階段"
   },
   "apiKeys": {
+    "capabilities": {
+      "accessLabel": "權限存取",
+      "label": "已封鎖權限",
+      "hint": "留空 = 不封鎖任何權限",
+      "blockAll": "全部封鎖",
+      "clearAll": "全部清除",
+      "inherited": "無法移除從目前 API 金鑰繼承的限制。",
+      "selfLocked": "正在使用的 API 金鑰無法更改自身限制。"
+    },
     "title": "API 金鑰",
     "subtitle": "管理用於認證及存取控制的 API 金鑰",
     "createBtn": "建立 API 金鑰",
@@ -871,6 +881,7 @@
       "signedIn": "此控制台正以此金鑰登入。更改其角色、IP 位址、聊天或到期時間可能會令你登出。"
     },
     "restrictions": {
+      "capabilities": "{{count}} 項封鎖",
       "none": "無",
       "ips": "IP：{{count}}",
       "chats": "聊天：{{count}}",

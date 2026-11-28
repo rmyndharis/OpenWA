@@ -50,7 +50,8 @@
     "errorGeneric": "오류가 발생했습니다",
     "unknownError": "알 수 없는 오류",
     "retry": "다시 시도",
-    "copyFailed": "클립보드에 복사할 수 없습니다"
+    "copyFailed": "클립보드에 복사할 수 없습니다",
+    "noDashboardAccess": "이 API 키는 모든 대시보드 페이지에서 차단되었습니다."
   },
   "theme": {
     "light": "라이트",
@@ -800,6 +801,15 @@
     "sessionSelect": "세션"
   },
   "apiKeys": {
+    "capabilities": {
+      "accessLabel": "권한 접근",
+      "label": "차단된 권한",
+      "hint": "비어 있음 = 차단 없음",
+      "blockAll": "모두 차단",
+      "clearAll": "모두 지우기",
+      "inherited": "현재 API 키에서 상속된 제한은 제거할 수 없습니다.",
+      "selfLocked": "사용 중인 API 키는 자체 제한을 변경할 수 없습니다."
+    },
     "title": "API 키",
     "subtitle": "인증 및 접근 제어를 위한 API 키를 관리하세요",
     "createBtn": "API 키 생성",
@@ -871,6 +881,7 @@
       "signedIn": "이 대시보드는 이 키로 로그인되어 있습니다. 역할, IP 주소, 채팅 또는 만료를 변경하면 로그아웃될 수 있습니다."
     },
     "restrictions": {
+      "capabilities": "{{count}}개 차단",
       "none": "없음",
       "ips": "IP: {{count}}",
       "chats": "채팅: {{count}}",

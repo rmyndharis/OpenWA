@@ -1,7 +1,8 @@
 import { Body, Controller, Get, Post, Put, Delete, Param, Query, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { ContactService } from './contact.service';
-import { ChatScoped, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, ChatScoped, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { ChatScopeService } from '../auth/chat-scope.service';
 import { paginate } from '../../common/utils/paginate';
@@ -26,6 +27,7 @@ export class ContactController {
   ) {}
 
   @ChatScoped('filtered')
+  @Capability(ApiKeyCapability.CONTACTS_READ)
   @Get()
   @ApiOperation({ summary: 'Get all contacts for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -70,6 +72,7 @@ export class ContactController {
     return paginate(visible, limit ? parseInt(limit, 10) : undefined, skip);
   }
 
+  @Capability(ApiKeyCapability.CONTACTS_READ)
   @Get('profile-pictures')
   @ApiOperation({
     summary: 'Batch-resolve profile picture URLs for up to 50 contacts',
@@ -93,6 +96,7 @@ export class ContactController {
     return { pictures };
   }
 
+  @Capability(ApiKeyCapability.CONTACTS_READ)
   @Get('blocked')
   @ApiOperation({
     summary: 'List the contacts this account has blocked',
@@ -113,6 +117,7 @@ export class ContactController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CONTACTS_READ)
   @Get(':contactId')
   @ApiOperation({ summary: 'Get a specific contact by ID' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -139,6 +144,7 @@ export class ContactController {
 
   // OPERATOR, unlike the other reads here: each call is an outbound WhatsApp query about a third
   // party, and bulk number checks put the linked account's standing at risk.
+  @Capability(ApiKeyCapability.CONTACTS_READ)
   @Get('check/:number')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({
@@ -184,6 +190,7 @@ export class ContactController {
 
   // OPERATOR for the same reason as the number check: it is an outbound WhatsApp query about a third party.
   // No @ChatScoped: the route names a phone number, not a chat, so a chat-restricted key is refused.
+  @Capability(ApiKeyCapability.CONTACTS_READ)
   @Get(':number/lid')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({
@@ -222,6 +229,7 @@ export class ContactController {
   // ========== Gap Quick Wins: Profile Picture, Block/Unblock ==========
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CONTACTS_READ)
   @Get(':contactId/profile-picture')
   @ApiOperation({ summary: 'Get profile picture URL for a contact' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -246,6 +254,7 @@ export class ContactController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CONTACTS_READ)
   @Get(':contactId/phone')
   @ApiOperation({ summary: 'Resolve a contact id (e.g. an @lid) to a phone number — best-effort' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -263,6 +272,7 @@ export class ContactController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CONTACTS_WRITE)
   @Put(':contactId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -293,6 +303,7 @@ export class ContactController {
   // Two path segments on the sibling route (`:contactId/block`) keep this single-segment DELETE
   // from shadowing the unblock route, whichever order they are declared in.
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CONTACTS_WRITE)
   @Delete(':contactId')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: "Remove a contact from the account's addressbook" })
@@ -316,6 +327,7 @@ export class ContactController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CONTACTS_WRITE)
   @Post(':contactId/block')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
@@ -347,6 +359,7 @@ export class ContactController {
   }
 
   @ChatScoped('fenced')
+  @Capability(ApiKeyCapability.CONTACTS_WRITE)
   @Delete(':contactId/block')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Unblock a contact' })

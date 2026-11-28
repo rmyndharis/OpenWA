@@ -26,7 +26,14 @@ import {
   PluginCatalogEntryDto,
 } from './dto/plugin.dto';
 import type { CatalogPlugin } from './catalog';
-import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import {
+  Capability,
+  RequireRole,
+  RequireUnscopedKey,
+  RequireUnrestrictedKey,
+  RequireUnblockedKey,
+} from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -43,12 +50,11 @@ const UNINSTALLING_CONFLICT = 'The plugin is being uninstalled; nothing was chan
 
 @ApiTags('plugins')
 @Controller('plugins')
-// Plugin installation and lifecycle are deployment-global and execute plugin code as the OpenWA
-// process user, so session-restricted keys are fenced off route by route below. The fence is NOT
-// applied at class level because @RequireUnscopedKey takes no argument and cannot be opted out of:
-// `updateSessions` is fenced too (it overwrites the ENTIRE active set, so a scoped key could delete
-// another tenant's activation by sending its own session or []), and `updateSessionConfig` is
-// already covered by the guard through its own :sessionId route param.
+// Plugin reads are deployment-global, so they reject session-scoped keys route by route. Plugin
+// lifecycle/configuration writes execute code or replace global state and therefore use the stronger
+// @RequireUnrestrictedKey fence, which also rejects session- and chat-scoped keys. The per-session
+// config override stays open to a session-scoped key, which the guard fences through its :sessionId
+// param, and refuses only a key with blocked capabilities (@RequireUnblockedKey).
 export class PluginsController {
   constructor(
     private readonly pluginsService: PluginsService,
@@ -73,6 +79,7 @@ export class PluginsController {
     }
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_READ)
   @Get()
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -82,9 +89,10 @@ export class PluginsController {
     return this.pluginsService.findAll();
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
+  @RequireUnrestrictedKey()
   @Post('install')
   @RequireRole(ApiKeyRole.ADMIN)
-  @RequireUnscopedKey()
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: MAX_PLUGIN_UPLOAD_BYTES, fields: 0, files: 1, parts: 1 },
@@ -112,9 +120,10 @@ export class PluginsController {
     return plugin;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
+  @RequireUnrestrictedKey()
   @Post('install-url')
   @RequireRole(ApiKeyRole.ADMIN)
-  @RequireUnscopedKey()
   @ApiOperation({ summary: 'Install a plugin by downloading its .zip from a URL (SSRF-guarded)' })
   @ApiResponse({ status: 201, description: 'Plugin installed', type: PluginDto })
   @ApiResponse({ status: 400, description: 'Invalid URL, download failed, or invalid package' })
@@ -132,6 +141,7 @@ export class PluginsController {
   }
 
   // Declared before `:id` so `GET /plugins/catalog` is not captured by the `:id` route.
+  @Capability(ApiKeyCapability.PLUGINS_READ)
   @Get('catalog')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -142,6 +152,7 @@ export class PluginsController {
     return await this.pluginsService.getCatalog();
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_READ)
   @Get(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -152,9 +163,10 @@ export class PluginsController {
     return this.pluginsService.findOne(id);
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
+  @RequireUnrestrictedKey()
   @Post(':id/enable')
   @RequireRole(ApiKeyRole.ADMIN)
-  @RequireUnscopedKey()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Enable a plugin' })
   @ApiResponse({ status: 200, description: 'Plugin enabled successfully', type: PluginActionResponseDto })
@@ -166,9 +178,10 @@ export class PluginsController {
     return result;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
+  @RequireUnrestrictedKey()
   @Post(':id/disable')
   @RequireRole(ApiKeyRole.ADMIN)
-  @RequireUnscopedKey()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Disable a plugin' })
   @ApiResponse({ status: 200, description: 'Plugin disabled successfully', type: PluginActionResponseDto })
@@ -180,9 +193,10 @@ export class PluginsController {
     return result;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
+  @RequireUnrestrictedKey()
   @Put(':id/config')
   @RequireRole(ApiKeyRole.ADMIN)
-  @RequireUnscopedKey()
   @ApiOperation({ summary: 'Update plugin configuration' })
   @ApiResponse({ status: 200, description: 'Plugin configuration updated', type: PluginActionResponseDto })
   @ApiResponse({ status: 400, description: 'Validation failed, or the body carries a field the DTO does not declare.' })
@@ -202,6 +216,7 @@ export class PluginsController {
   // The dashboard fetches this WITH the API key and injects the body as an opaque-origin sandboxed
   // iframe srcdoc. It attaches that document's response-specific nonce to inline scripts so the
   // inherited CSP allows only the isolated editor bootstrap, without enabling parent unsafe-inline.
+  @Capability(ApiKeyCapability.PLUGINS_READ)
   @Get(':id/config-ui')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
@@ -221,6 +236,8 @@ export class PluginsController {
     return this.pluginsService.getConfigUiHtml(id);
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
+  @RequireUnblockedKey()
   @Put(':id/config/:sessionId')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Set a plugin config override for a specific session (empty = clear it)' })
@@ -240,9 +257,10 @@ export class PluginsController {
     return result;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
+  @RequireUnrestrictedKey()
   @Put(':id/sessions')
   @RequireRole(ApiKeyRole.ADMIN)
-  @RequireUnscopedKey()
   @ApiOperation({ summary: "Set which sessions a session-scoped plugin is activated for (['*'] = all)" })
   @ApiResponse({ status: 200, description: 'Plugin session activation updated', type: PluginDto })
   @ApiResponse({ status: 400, description: 'Plugin is global (not session-scoped), or the body failed validation' })
@@ -257,15 +275,16 @@ export class PluginsController {
   updateSessions(@Param('id') id: string, @Body() dto: PluginSessionsDto): PluginDto {
     // This is a full-replacement PUT (setPluginSessions overwrites the entire activeSessions array),
     // so a scoped key must never reach it: sending [] or its own session would delete every other
-    // tenant's activation. The @RequireUnscopedKey fence above enforces that before the handler runs.
+    // tenant's activation. The @RequireUnrestrictedKey fence above enforces that before the handler runs.
     const plugin = this.pluginsService.updateSessions(id, dto.sessions);
     this.record(AuditAction.PLUGIN_SESSIONS_UPDATED, id, { sessions: dto.sessions });
     return plugin;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
+  @RequireUnrestrictedKey()
   @Post(':id/update')
   @RequireRole(ApiKeyRole.ADMIN)
-  @RequireUnscopedKey()
   @ApiOperation({ summary: 'Update an installed plugin in place from a URL (preserves config + enabled state)' })
   @ApiResponse({ status: 201, description: 'Plugin updated', type: PluginDto })
   @ApiResponse({ status: 400, description: 'Invalid URL/package, id mismatch, or built-in' })
@@ -284,9 +303,10 @@ export class PluginsController {
     return plugin;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_WRITE)
+  @RequireUnrestrictedKey()
   @Delete(':id')
   @RequireRole(ApiKeyRole.ADMIN)
-  @RequireUnscopedKey()
   @ApiOperation({ summary: 'Uninstall a plugin (removes its files; built-ins are protected)' })
   @ApiResponse({ status: 200, description: 'Plugin uninstalled', type: PluginActionResponseDto })
   @ApiResponse({ status: 400, description: 'Cannot uninstall (e.g. built-in)' })
@@ -306,6 +326,7 @@ export class PluginsController {
     return result;
   }
 
+  @Capability(ApiKeyCapability.PLUGINS_READ)
   @Get(':id/health')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()

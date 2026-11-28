@@ -28,10 +28,11 @@ type HealthReadyResponse struct {
 // engine the gateway runs, and whether the key is restricted to selected
 // sessions.
 type AuthValidateResponse struct {
-	Valid      bool   `json:"valid"`
-	Role       string `json:"role,omitempty"`
-	EngineType string `json:"engineType,omitempty"`
-	Scoped     bool   `json:"scoped,omitempty"`
+	Valid             bool     `json:"valid"`
+	Role              string   `json:"role,omitempty"`
+	EngineType        string   `json:"engineType,omitempty"`
+	Scoped            bool     `json:"scoped,omitempty"`
+	DeniedPermissions []string `json:"deniedPermissions,omitempty"`
 }
 
 // ── Template ───────────────────────────────────────────

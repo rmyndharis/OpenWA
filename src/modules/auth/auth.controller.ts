@@ -1,9 +1,22 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Req, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Param,
+  Req,
+  HttpCode,
+  HttpStatus,
+  ForbiddenException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { CreateApiKeyDto, UpdateApiKeyDto, ApiKeyResponseDto, ApiKeyCreatedResponseDto } from './dto';
-import { RequireRole, CurrentApiKey, RequireUnscopedKey } from './decorators/auth.decorators';
+import { Capability, RequireRole, CurrentApiKey, RequireUnscopedKey } from './decorators/auth.decorators';
+import { apiKeyDeniedCapabilities, ApiKeyCapability, normalizeDeniedCapabilities } from '../auth/api-key-permissions';
 import { type ApiKey, ApiKeyRole } from './entities/api-key.entity';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from './../audit/entities/audit-log.entity';
@@ -48,6 +61,7 @@ export class AuthController {
       allowedIps: key.allowedIps,
       allowedSessions: key.allowedSessions,
       allowedChats: key.allowedChats,
+      deniedPermissions: key.deniedPermissions,
       expiresAt: readableExpiry(key.expiresAt),
     };
   }
@@ -61,6 +75,7 @@ export class AuthController {
       allowedIps: k.allowedIps || undefined,
       allowedSessions: k.allowedSessions || undefined,
       allowedChats: k.allowedChats || undefined,
+      deniedPermissions: k.deniedPermissions || undefined,
       isActive: k.isActive,
       expiresAt: readableExpiry(k.expiresAt) || undefined,
       lastUsedAt: k.lastUsedAt || undefined,
@@ -69,6 +84,38 @@ export class AuthController {
     };
   }
 
+  /** A restricted admin may delegate key management, but never grant a capability it cannot use. */
+  private inheritDeniedPermissions(dto: CreateApiKeyDto, actor?: ApiKey): CreateApiKeyDto {
+    const inherited = apiKeyDeniedCapabilities(actor);
+    if (inherited.length === 0) return dto;
+    const requested = normalizeDeniedCapabilities(dto.deniedPermissions) ?? [];
+    return {
+      ...dto,
+      deniedPermissions: [...new Set([...requested, ...inherited])],
+    };
+  }
+
+  /**
+   * A capability-restricted admin changes only keys that already block everything it blocks, keeps those blocks, and
+   * cannot change its own list. An update is never rewritten to add them: it is refused instead.
+   */
+  private assertWithinOwnBlocks(target: ApiKey, dto: UpdateApiKeyDto, actor?: ApiKey): void {
+    const own = apiKeyDeniedCapabilities(actor);
+    if (own.length === 0) return;
+    const stored = apiKeyDeniedCapabilities(target);
+    const next =
+      dto.deniedPermissions === undefined ? stored : (normalizeDeniedCapabilities(dto.deniedPermissions) ?? []);
+    if (actor?.id === target.id && (next.length !== stored.length || stored.some(c => !next.includes(c)))) {
+      throw new ForbiddenException('A capability-restricted API key cannot change its own blocked capabilities');
+    }
+    if (!own.every(c => stored.includes(c) && next.includes(c))) {
+      throw new ForbiddenException(
+        'A capability-restricted API key may change only keys that block everything it blocks, and must keep those blocks',
+      );
+    }
+  }
+
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Post()
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Create a new API key (admin only)' })
@@ -83,7 +130,7 @@ export class AuthController {
     @Req() req: Request,
     @CurrentApiKey() actor?: ApiKey,
   ): Promise<ApiKeyCreatedResponseDto> {
-    const { apiKey, rawKey } = await this.authService.createApiKey(dto);
+    const { apiKey, rawKey } = await this.authService.createApiKey(this.inheritDeniedPermissions(dto, actor));
     await this.auditService.logInfo(AuditAction.API_KEY_CREATED, {
       ...this.auditContext(req, actor),
       metadata: {
@@ -96,6 +143,7 @@ export class AuthController {
     return { ...this.toResponse(apiKey), apiKey: rawKey };
   }
 
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Get()
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'List all API keys (admin only)' })
@@ -109,6 +157,7 @@ export class AuthController {
     return keys.map(k => this.toResponse(k));
   }
 
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Get(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get API key details (admin only)' })
@@ -123,6 +172,7 @@ export class AuthController {
     return this.toResponse(k);
   }
 
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Put(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Update API key (admin only)' })
@@ -140,6 +190,7 @@ export class AuthController {
     @CurrentApiKey() actor?: ApiKey,
   ): Promise<ApiKeyResponseDto> {
     const before = await this.authService.findOne(id);
+    this.assertWithinOwnBlocks(before, dto, actor);
     const k = await this.authService.update(id, dto);
     await this.auditService.logInfo(AuditAction.API_KEY_UPDATED, {
       ...this.auditContext(req, actor),
@@ -153,6 +204,7 @@ export class AuthController {
     return this.toResponse(k);
   }
 
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Delete(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -172,6 +224,7 @@ export class AuthController {
     });
   }
 
+  @Capability(ApiKeyCapability.APIKEYS_MANAGE)
   @Post(':id/revoke')
   @RequireRole(ApiKeyRole.ADMIN)
   @HttpCode(HttpStatus.OK)

@@ -52,7 +52,8 @@
     "showApiKey": "Mostrar clave API",
     "hideApiKey": "Ocultar clave API",
     "retry": "Reintentar",
-    "copyFailed": "No se pudo copiar al portapapeles"
+    "copyFailed": "No se pudo copiar al portapapeles",
+    "noDashboardAccess": "Esta clave de API está bloqueada en todas las páginas del panel."
   },
   "theme": {
     "light": "Claro",
@@ -756,6 +757,15 @@
     }
   },
   "apiKeys": {
+    "capabilities": {
+      "accessLabel": "Acceso a permisos",
+      "label": "Capacidades bloqueadas",
+      "hint": "Vacío = nada bloqueado",
+      "blockAll": "Bloquear todo",
+      "clearAll": "Borrar todo",
+      "inherited": "Las restricciones heredadas de la clave API actual no se pueden eliminar.",
+      "selfLocked": "La clave API en uso no puede cambiar sus propias restricciones."
+    },
     "title": "Claves API",
     "subtitle": "Gestiona las claves API para autenticación y control de acceso",
     "createBtn": "Crear clave API",
@@ -827,6 +837,7 @@
       "signedIn": "Este panel ha iniciado sesión con esta clave. Cambiar su rol, direcciones IP, chats o caducidad puede cerrar tu sesión."
     },
     "restrictions": {
+      "capabilities": "{{count}} bloqueadas",
       "none": "Ninguna",
       "ips": "IP: {{count}}",
       "chats": "Chats: {{count}}",

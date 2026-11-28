@@ -6,7 +6,8 @@ import { StatusService } from './status.service';
 import { retryAfterWhenBusy, storedFileAttachment } from '../../common/storage/storage-transfer';
 import { SendTextStatusDto } from './dto/send-text-status.dto';
 import { SendImageStatusDto, SendVideoStatusDto, SendVoiceStatusDto } from './dto/send-media-status.dto';
-import { RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import {
   ENGINE_NOT_READY_409,
@@ -22,6 +23,7 @@ import {
 export class StatusController {
   constructor(private readonly statusService: StatusService) {}
 
+  @Capability(ApiKeyCapability.STATUS_READ)
   @Get()
   @ApiOperation({ summary: 'Get all contact status updates' })
   @ApiResponse({
@@ -36,6 +38,7 @@ export class StatusController {
   // The segment is `:id` on both verbs because GET reads a contact's statuses and DELETE removes one
   // of our own. Naming it per verb gave the same route two contract entries; the meaning belongs in
   // @ApiParam, which is per-operation.
+  @Capability(ApiKeyCapability.STATUS_READ)
   @Get(':id')
   @ApiOperation({ summary: 'Get status updates from a specific contact' })
   @ApiParam({ name: 'id', description: 'Contact ID' })
@@ -46,6 +49,7 @@ export class StatusController {
 
   // Two path segments (`:statusId/media`) never collides with the single-segment `:id`
   // route above regardless of declaration order — Nest/Express match on segment count.
+  @Capability(ApiKeyCapability.STATUS_READ)
   @Get(':statusId/media')
   @ApiOperation({ summary: 'Stream a stored status media file' })
   @ApiResponse({
@@ -75,6 +79,7 @@ export class StatusController {
     return storedFileAttachment(res, source, mimetype);
   }
 
+  @Capability(ApiKeyCapability.STATUS_SEND)
   @Post('send-text')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Post a text status' })
@@ -97,6 +102,7 @@ export class StatusController {
     });
   }
 
+  @Capability(ApiKeyCapability.STATUS_SEND)
   @Post('send-image')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Post an image status' })
@@ -124,6 +130,7 @@ export class StatusController {
     });
   }
 
+  @Capability(ApiKeyCapability.STATUS_SEND)
   @Post('send-video')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Post a video status' })
@@ -151,6 +158,7 @@ export class StatusController {
     });
   }
 
+  @Capability(ApiKeyCapability.STATUS_SEND)
   @Post('send-voice')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Post an audio status as a voice note' })
@@ -179,6 +187,7 @@ export class StatusController {
     });
   }
 
+  @Capability(ApiKeyCapability.STATUS_DELETE)
   @Delete(':id')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Delete own status' })

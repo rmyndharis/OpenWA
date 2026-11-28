@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useContext, type RefObject } from 'react';
+import { useState, useEffect, useMemo, useRef, useContext, useCallback, type RefObject } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import {
   useTable,
@@ -20,8 +20,9 @@ import {
   AlertTriangle,
   AlertCircle,
   Pencil,
+  Search,
 } from 'lucide-react';
-import type { ApiKey } from '../services/api';
+import { API_KEY_CAPABILITIES, type ApiKey, type ApiKeyCapability } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
   useApiKeysQuery,
@@ -58,7 +59,28 @@ import './ApiKeys.css';
 
 const roleNames = ['admin', 'operator', 'viewer'] as const;
 
-const emptyKeyForm = { name: '', role: 'operator', allowedSessions: [] as string[], ips: '', chats: '', expires: '' };
+const CAPABILITY_GROUPS = Object.entries(
+  API_KEY_CAPABILITIES.reduce<Record<string, ApiKeyCapability[]>>((groups, capability) => {
+    const namespace = capability.split(':', 1)[0];
+    (groups[namespace] ??= []).push(capability);
+    return groups;
+  }, {}),
+);
+
+const emptyKeyForm = {
+  name: '',
+  role: 'operator',
+  allowedSessions: [] as string[],
+  ips: '',
+  chats: '',
+  deniedPermissions: [] as ApiKeyCapability[],
+  expires: '',
+};
+
+const keyFormWithInheritedPermissions = (permissions: readonly ApiKeyCapability[]) => ({
+  ...emptyKeyForm,
+  deniedPermissions: [...permissions],
+});
 
 // What the gateway lists for the key seeded from API_MASTER_KEY: its first characters are secret, so none is shown.
 const MASTER_KEY_PREFIX = '(master key)';
@@ -106,29 +128,142 @@ function KeyLimitFields({
   role,
   ips,
   chats,
+  deniedPermissions,
   expires,
   errors,
   onChange,
   disabled,
+  lockedPermissions = [],
+  lockAllCapabilities = false,
   expiresRef,
 }: {
   idPrefix: string;
   role: string;
   ips: string;
   chats: string;
+  deniedPermissions: ApiKeyCapability[];
   expires: string;
   errors: LimitErrors;
-  onChange: (patch: { ips?: string; chats?: string; expires?: string }) => void;
+  onChange: (patch: { ips?: string; chats?: string; deniedPermissions?: ApiKeyCapability[]; expires?: string }) => void;
   disabled?: boolean;
+  lockedPermissions?: readonly ApiKeyCapability[];
+  lockAllCapabilities?: boolean;
   expiresRef: RefObject<HTMLInputElement | null>;
 }) {
   const { t } = useTranslation();
   // A datetime-local with a blank segment reports value '', like an empty field, so only badInput says
   // there are leftover segments to clear.
   const [partialExpiry, setPartialExpiry] = useState(false);
+  const [capabilityExpanded, setCapabilityExpanded] = useState(() => deniedPermissions.length > 0);
+  const [capabilityQuery, setCapabilityQuery] = useState('');
+  const normalizedCapabilityQuery = capabilityQuery.trim().toLocaleLowerCase();
+  const matchingCapabilities = normalizedCapabilityQuery
+    ? API_KEY_CAPABILITIES.filter(capability => capability.toLocaleLowerCase().includes(normalizedCapabilityQuery))
+    : [];
+  const renderCapability = (capability: ApiKeyCapability) => (
+    <label
+      key={capability}
+      className="permission-option"
+      title={lockedPermissions.includes(capability) ? t('apiKeys.capabilities.inherited') : undefined}
+    >
+      <input
+        type="checkbox"
+        checked={deniedPermissions.includes(capability)}
+        disabled={disabled || lockAllCapabilities || lockedPermissions.includes(capability)}
+        onChange={() =>
+          onChange({
+            deniedPermissions: deniedPermissions.includes(capability)
+              ? deniedPermissions.filter(entry => entry !== capability)
+              : [...deniedPermissions, capability],
+          })
+        }
+      />
+      <code>{capability}</code>
+    </label>
+  );
+  const setCapabilityGroup = (capabilities: ApiKeyCapability[], blocked: boolean) => {
+    const group = new Set(capabilities);
+    onChange({
+      deniedPermissions: blocked
+        ? API_KEY_CAPABILITIES.filter(capability => group.has(capability) || deniedPermissions.includes(capability))
+        : deniedPermissions.filter(capability => !group.has(capability) || lockedPermissions.includes(capability)),
+    });
+  };
   const lidHintId = normalizeChatScope(chats).some(entry => /@lid$/i.test(entry)) ? `${idPrefix}-chats-lid` : undefined;
   return (
     <>
+      <div className="access-scope-field key-permissions-field">
+        <span className="access-scope-label">
+          {t('apiKeys.capabilities.accessLabel')} ({t('common.optional')})
+        </span>
+        <details
+          className="access-scope-picker key-permissions"
+          open={capabilityExpanded}
+          onToggle={event => setCapabilityExpanded(event.currentTarget.open)}
+        >
+          <summary className="access-scope-summary">
+            <span>{t('apiKeys.capabilities.label')}</span>
+            <span className="access-scope-count">
+              {t('apiKeys.restrictions.capabilities', { count: deniedPermissions.length })}
+            </span>
+          </summary>
+          <div className="access-scope-content">
+            <div className="permission-toolbar">
+              <span className="key-field-hint">{t('apiKeys.capabilities.hint')}</span>
+              <label className="permission-search">
+                <Search size={14} aria-hidden="true" />
+                <input
+                  type="search"
+                  value={capabilityQuery}
+                  disabled={disabled}
+                  aria-label={`${t('common.search')} ${t('apiKeys.capabilities.label')}`}
+                  placeholder={t('common.search')}
+                  onChange={event => setCapabilityQuery(event.target.value)}
+                />
+              </label>
+            </div>
+            {(lockAllCapabilities || lockedPermissions.length > 0) && (
+              <span className="key-field-hint" role="note">
+                {t(lockAllCapabilities ? 'apiKeys.capabilities.selfLocked' : 'apiKeys.capabilities.inherited')}
+              </span>
+            )}
+            {normalizedCapabilityQuery ? (
+              <div className="permission-options permission-search-results">
+                {matchingCapabilities.map(renderCapability)}
+              </div>
+            ) : (
+              <div className="permission-groups">
+                {CAPABILITY_GROUPS.map(([namespace, capabilities]) => {
+                  const blockedCount = capabilities.filter(capability => deniedPermissions.includes(capability)).length;
+                  return (
+                    <details key={namespace} className="permission-group">
+                      <summary>
+                        <code>{namespace}</code>
+                        <span>{t('apiKeys.restrictions.capabilities', { count: blockedCount })}</span>
+                      </summary>
+                      <div className="permission-group-content">
+                        <button
+                          type="button"
+                          className="permission-group-action"
+                          disabled={disabled || lockAllCapabilities}
+                          onClick={() => setCapabilityGroup(capabilities, blockedCount !== capabilities.length)}
+                        >
+                          {t(
+                            blockedCount === capabilities.length
+                              ? 'apiKeys.capabilities.clearAll'
+                              : 'apiKeys.capabilities.blockAll',
+                          )}
+                        </button>
+                        <div className="permission-options">{capabilities.map(renderCapability)}</div>
+                      </div>
+                    </details>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </details>
+      </div>
       <label htmlFor={`${idPrefix}-ips`}>{t('apiKeys.ips.label')}</label>
       <textarea
         id={`${idPrefix}-ips`}
@@ -252,6 +387,11 @@ export function ApiKeys() {
 
   const confirmKey = confirmAction ? apiKeys.find(key => key.id === confirmAction.id) : undefined;
   const roleContext = useContext(RoleContext);
+  const actorDeniedPermissions = roleContext?.deniedPermissions;
+  const inheritedDeniedPermissions = useMemo(
+    () => API_KEY_CAPABILITIES.filter(capability => actorDeniedPermissions?.includes(capability)),
+    [actorDeniedPermissions],
+  );
   const signedInApiKeyId = roleContext?.apiKeyId !== undefined ? roleContext.apiKeyId : getActiveApiKeyId();
   const isSignedInKey = (apiKey: ApiKey): boolean => Boolean(signedInApiKeyId && apiKey.id === signedInApiKeyId);
 
@@ -267,7 +407,7 @@ export function ApiKeys() {
   const closeCreateModal = () => {
     setShowModal(false);
     setCreatedKey(null);
-    setNewKey(emptyKeyForm);
+    setNewKey(keyFormWithInheritedPermissions(inheritedDeniedPermissions));
     // The answer holds the plaintext key too; drop it with the dialog.
     createMutation.reset();
   };
@@ -294,10 +434,11 @@ export function ApiKeys() {
         ...(scoped ? { allowedSessions: newKey.allowedSessions } : {}),
         ...(allowedIps.length > 0 ? { allowedIps } : {}),
         ...(allowedChats.length > 0 ? { allowedChats } : {}),
+        ...(newKey.deniedPermissions.length > 0 ? { deniedPermissions: newKey.deniedPermissions } : {}),
         ...(newKey.expires ? { expiresAt: new Date(newKey.expires).toISOString() } : {}),
       });
       setCreatedKey(created.apiKey || null);
-      setNewKey(emptyKeyForm);
+      setNewKey(keyFormWithInheritedPermissions(inheritedDeniedPermissions));
     } catch (err) {
       console.error('Failed to create:', err);
       toast.error(t('apiKeys.createBtn'), err instanceof Error ? err.message : t('common.unknownError'));
@@ -306,11 +447,16 @@ export function ApiKeys() {
 
   const editVisit = useRef<object | null>(null);
 
-  const openEdit = (apiKey: ApiKey) => {
+  const openEdit = useCallback((apiKey: ApiKey) => {
     editVisit.current = {};
     setEditingKey(apiKey);
-    setEditDraft(apiKeyDraft(apiKey));
-  };
+    const draft = apiKeyDraft(apiKey);
+    // A stored name this picker does not list cannot be saved back, so the save sends the checked ones.
+    setEditDraft({
+      ...draft,
+      deniedPermissions: draft.deniedPermissions.filter(capability => API_KEY_CAPABILITIES.includes(capability)),
+    });
+  }, []);
 
   const closeEdit = () => {
     editVisit.current = null;
@@ -438,8 +584,15 @@ export function ApiKeys() {
           id: 'restrictions',
           header: () => t('apiKeys.columns.restrictions'),
           cell: info => {
-            const { allowedIps, allowedChats, expiresAt } = info.row.original;
+            const { allowedIps, allowedChats, deniedPermissions, expiresAt } = info.row.original;
             const badges = [];
+            if (deniedPermissions?.length) {
+              badges.push(
+                <span key="capabilities" className="restriction-badge" title={deniedPermissions.join('\n')}>
+                  {t('apiKeys.restrictions.capabilities', { count: deniedPermissions.length })}
+                </span>,
+              );
+            }
             if (allowedIps?.length) {
               badges.push(
                 <span key="ips" className="restriction-badge" title={allowedIps.join('\n')}>
@@ -501,11 +654,13 @@ export function ApiKeys() {
               <span className="actions-cell">
                 {/* No per-row copy: the full key only exists once (post-creation modal); the row
                     only has the prefix, so a copy button here could only copy a useless fragment. */}
-                {apiKey.isActive && (
-                  <button className="icon-btn" onClick={() => openEdit(apiKey)} title={t('apiKeys.actions.edit')}>
-                    <Pencil size={16} />
-                  </button>
-                )}
+                {/* A restricted key may change only keys that block everything it blocks; the API refuses the rest. */}
+                {apiKey.isActive &&
+                  inheritedDeniedPermissions.every(capability => apiKey.deniedPermissions?.includes(capability)) && (
+                    <button className="icon-btn" onClick={() => openEdit(apiKey)} title={t('apiKeys.actions.edit')}>
+                      <Pencil size={16} />
+                    </button>
+                  )}
                 {apiKey.isActive && (
                   <button
                     className="icon-btn"
@@ -527,7 +682,7 @@ export function ApiKeys() {
           },
         }),
       ]),
-    [t, sessions],
+    [t, sessions, openEdit, inheritedDeniedPermissions],
   );
 
   const table = useTable({
@@ -555,7 +710,13 @@ export function ApiKeys() {
         title={t('apiKeys.title')}
         subtitle={t('apiKeys.subtitle')}
         actions={
-          <button className="btn-primary" onClick={() => setShowModal(true)}>
+          <button
+            className="btn-primary"
+            onClick={() => {
+              setNewKey(keyFormWithInheritedPermissions(inheritedDeniedPermissions));
+              setShowModal(true);
+            }}
+          >
             <Plus size={18} />
             {t('apiKeys.createBtn')}
           </button>
@@ -670,10 +831,12 @@ export function ApiKeys() {
                 role={newKey.role}
                 ips={newKey.ips}
                 chats={newKey.chats}
+                deniedPermissions={newKey.deniedPermissions}
                 expires={newKey.expires}
                 errors={newErrors}
                 onChange={patch => setNewKey(prev => ({ ...prev, ...patch }))}
                 disabled={createMutation.isPending}
+                lockedPermissions={inheritedDeniedPermissions}
                 expiresRef={newExpiresRef}
               />
             </>
@@ -733,10 +896,13 @@ export function ApiKeys() {
             role={editDraft.role}
             ips={editDraft.ips}
             chats={editDraft.chats}
+            deniedPermissions={editDraft.deniedPermissions}
             expires={editDraft.expires}
             errors={editErrors ?? { ip: null, chat: null, chatCount: null }}
             onChange={patch => setEditDraft(prev => (prev ? { ...prev, ...patch } : prev))}
             disabled={updateMutation.isPending}
+            lockedPermissions={inheritedDeniedPermissions}
+            lockAllCapabilities={isSignedInKey(editingKey) && inheritedDeniedPermissions.length > 0}
             expiresRef={editExpiresRef}
           />
         </Modal>
@@ -804,6 +970,16 @@ export function ApiKeys() {
               </div>
             ))}
           </div>
+          <details className="capabilities-reference">
+            <summary>{t('apiKeys.capabilities.label')}</summary>
+            <div className="permissions-list">
+              {API_KEY_CAPABILITIES.map(capability => (
+                <div key={capability} className="perm-item">
+                  <code>{capability}</code>
+                </div>
+              ))}
+            </div>
+          </details>
         </div>
       </div>
 

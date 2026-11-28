@@ -13,6 +13,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ToStrictArray, ToStrictString } from '../../../common/utils/strict-boolean';
 import { MaxCodePoints } from '../../../common/validation/max-code-points';
 import { ApiKeyRole } from '../entities/api-key.entity';
+import { API_KEY_CAPABILITIES, ApiKeyCapability } from '../api-key-permissions';
 import { IsIpOrCidrConstraint } from './is-ip-or-cidr.validator';
 import { IsSessionIdConstraint } from './is-session-id.validator';
 import { IsChatIdConstraint } from './is-chat-id.validator';
@@ -94,6 +95,26 @@ export class CreateApiKeyDto {
   allowedChats?: string[];
 
   @ApiPropertyOptional({
+    description:
+      'Capabilities this key is BLOCKED from — a blocklist independent of `role`. Omit or leave empty to let ' +
+      'the role and scopes decide everything. Each entry turns off the routes tagged with that capability: ' +
+      'for example `["messages:read"]` keeps the key from reading message history, reactions, receipts ' +
+      'and stored media, while everything else its role allows keeps working.',
+    enum: ApiKeyCapability,
+    isArray: true,
+    example: [ApiKeyCapability.MESSAGES_READ],
+    maxItems: API_KEY_CAPABILITIES.length,
+  })
+  @IsOptional()
+  @ToStrictArray()
+  @IsArray()
+  @ArrayMaxSize(API_KEY_CAPABILITIES.length)
+  @IsString({ each: true })
+  @ArrayUnique()
+  @IsEnum(ApiKeyCapability, { each: true })
+  deniedPermissions?: ApiKeyCapability[];
+
+  @ApiPropertyOptional({
     description: 'Expiration date (ISO 8601)',
     example: '2027-12-31T23:59:59Z',
   })
@@ -126,6 +147,13 @@ export class ApiKeyResponseDto {
 
   @ApiPropertyOptional()
   allowedChats?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Capabilities this key is blocked from. Omitted when nothing is blocked.',
+    enum: ApiKeyCapability,
+    isArray: true,
+  })
+  deniedPermissions?: ApiKeyCapability[];
 
   @ApiProperty()
   isActive!: boolean;
@@ -170,6 +198,13 @@ export class ValidateApiKeyResponseDto {
     example: false,
   })
   scoped?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Capabilities the active key is blocked from. Empty when nothing is blocked.',
+    enum: ApiKeyCapability,
+    isArray: true,
+  })
+  deniedPermissions?: ApiKeyCapability[];
 }
 
 /** Result of `POST /auth/session` and `GET /auth/session`. */
@@ -227,6 +262,21 @@ export class UpdateApiKeyDto {
   @ArrayUnique()
   @Validate(IsChatIdConstraint, { each: true })
   allowedChats?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Capabilities this key is blocked from; an empty array clears the blocklist.',
+    enum: ApiKeyCapability,
+    isArray: true,
+    maxItems: API_KEY_CAPABILITIES.length,
+  })
+  @IsOptional()
+  @ToStrictArray()
+  @IsArray()
+  @ArrayMaxSize(API_KEY_CAPABILITIES.length)
+  @IsString({ each: true })
+  @ArrayUnique()
+  @IsEnum(ApiKeyCapability, { each: true })
+  deniedPermissions?: ApiKeyCapability[];
 
   @ApiPropertyOptional({
     type: String,

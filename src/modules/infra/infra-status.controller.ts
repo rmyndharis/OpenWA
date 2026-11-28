@@ -14,7 +14,8 @@ import { producerReady } from '../queue/redis-connection';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { Public, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { Capability, Public, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { getEffectiveWebVersionInfo, resolveCurrentWebVersion } from '../../engine/wa-web-version';
@@ -159,6 +160,7 @@ export class InfraStatusController {
     }
   }
 
+  @Capability(ApiKeyCapability.INFRA_READ)
   @Get('status')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get infrastructure status' })
@@ -311,6 +313,7 @@ export class InfraStatusController {
     }
   }
 
+  @Capability(ApiKeyCapability.INFRA_READ)
   @Get('engines')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get available WhatsApp engines' })
@@ -319,6 +322,7 @@ export class InfraStatusController {
     return this.engineFactory.getAvailableEngines();
   }
 
+  @Capability(ApiKeyCapability.INFRA_READ)
   @Get('engines/current')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get current active engine' })
@@ -327,6 +331,7 @@ export class InfraStatusController {
     return { engineType: this.engineFactory.getCurrentEngine() };
   }
 
+  @Capability(ApiKeyCapability.INFRA_READ)
   @Get('update-check')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({

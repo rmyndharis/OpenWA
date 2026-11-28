@@ -16,6 +16,56 @@
 /** A WhatsApp JID, e.g. `628123456789@c.us` (user) or `120363…@g.us` (group). */
 export type Jid = string;
 
+/** A surface that may be removed from an API key's role-derived access. */
+export type ApiKeyCapability =
+  | 'apikeys:manage'
+  | 'audit:read'
+  | 'automation:read'
+  | 'automation:write'
+  | 'calls:manage'
+  | 'catalog:read'
+  | 'catalog:send'
+  | 'channels:read'
+  | 'channels:write'
+  | 'chats:manage'
+  | 'chats:read'
+  | 'contacts:read'
+  | 'contacts:write'
+  | 'events:read'
+  | 'groups:invite'
+  | 'groups:manage'
+  | 'groups:read'
+  | 'infra:read'
+  | 'infra:write'
+  | 'integrations:manage'
+  | 'labels:read'
+  | 'labels:write'
+  | 'media:convert'
+  | 'messages:delete'
+  | 'messages:edit'
+  | 'messages:moderate'
+  | 'messages:read'
+  | 'messages:send'
+  | 'plugins:read'
+  | 'plugins:write'
+  | 'profile:write'
+  | 'search:read'
+  | 'sessions:config'
+  | 'sessions:create'
+  | 'sessions:lifecycle'
+  | 'sessions:pair'
+  | 'sessions:proxy'
+  | 'sessions:read'
+  | 'settings:read'
+  | 'stats:read'
+  | 'status:delete'
+  | 'status:read'
+  | 'status:send'
+  | 'templates:read'
+  | 'templates:write'
+  | 'webhooks:read'
+  | 'webhooks:write';
+
 /** Chat/message kind discriminator. */
 export type ChatKind = 'individual' | 'group' | 'channel' | 'status' | 'broadcast' | 'unknown';
 
@@ -1383,6 +1433,7 @@ export interface AuthValidateResponse {
   role?: 'admin' | 'operator' | 'viewer';
   engineType?: string;
   scoped?: boolean;
+  deniedPermissions?: ApiKeyCapability[];
 }
 
 // ── Template ──────────────────────────────────────────────────────

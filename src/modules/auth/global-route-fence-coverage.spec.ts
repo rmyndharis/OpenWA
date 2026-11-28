@@ -3,10 +3,11 @@
 // The ApiKeyGuard resolves the scoped sessionId from ROUTE PARAMS only (api-key.guard.ts), and
 // auth.service.ts short-circuits its allowedSessions check when no session id is present. So a route
 // with NO session dimension admits a session-restricted key by default — the model is fail-open.
-// The fence for those routes is @RequireUnscopedKey (auth.decorators.ts).
+// The fences for those routes are @RequireUnscopedKey and its stronger form
+// @RequireUnrestrictedKey (auth.decorators.ts).
 //
 // This test fails when a controller handler is deployment-global (no :sessionId route param, not on
-// a @SessionScoped controller) and carries neither @RequireUnscopedKey, @Public, nor an entry in
+// a @SessionScoped controller) and carries neither scope fence, @Public, nor an entry in
 // ALLOWLIST below — so a future endpoint cannot silently re-introduce the gap.
 import { readdirSync, readFileSync } from 'fs';
 import { basename, join, sep } from 'path';
@@ -49,13 +50,14 @@ const ALLOWLIST = new Map<string, string>([
 
 /**
  * Return the names of handlers in `source` that look deployment-global but carry no fence.
- * A handler is considered fenced when it (or its class) has @RequireUnscopedKey or @Public, and
+ * A handler is considered fenced when it (or its class) has @RequireUnscopedKey,
+ * @RequireUnrestrictedKey or @Public, and
  * session-dimensioned when it declares a `:sessionId` route param or the class is @SessionScoped.
  */
 export function handlersMissingGlobalFence(source: string): string[] {
   const beforeClass = source.split('export class')[0] ?? '';
   const classIsSessionScoped = /@SessionScoped\(\)/.test(beforeClass);
-  const classIsFenced = /@RequireUnscopedKey\(\)/.test(beforeClass);
+  const classIsFenced = /@Require(?:Unscoped|Unrestricted)Key\(\)/.test(beforeClass);
   const classIsPublic = /@Public\(\)/.test(beforeClass);
   // A :sessionId in the class-level @Controller(...) prefix (e.g. @Controller('sessions/:sessionId/messages'))
   // gives EVERY handler on the controller a session dimension the guard scopes against — the per-session
@@ -75,7 +77,7 @@ export function handlersMissingGlobalFence(source: string): string[] {
     // routes too, so a handler using one is still an endpoint the fence decision applies to.
     if (!/@(Get|Post|Put|Patch|Delete|All|Sse|Head)\(/.test(decorators)) continue;
     if (/@Public\(\)/.test(decorators)) continue;
-    if (/@RequireUnscopedKey\(\)/.test(decorators)) continue;
+    if (/@Require(?:Unscoped|Unrestricted)Key\(\)/.test(decorators)) continue;
     // A :sessionId route param gives the guard something to scope against.
     if (/@(Get|Post|Put|Patch|Delete|All|Sse|Head)\([^)]*:sessionId/.test(decorators)) continue;
     // On a @SessionScoped controller the bare `:id` param is a session id, so it is scoped too.
@@ -142,6 +144,19 @@ export class ThingController {
   @Get('everything')
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
+  findAll(): string[] {
+    return [];
+  }
+}
+`;
+    expect(handlersMissingGlobalFence(fixed)).toEqual([]);
+  });
+
+  it('clears a handler carrying the stronger unrestricted fence', () => {
+    const fixed = `
+export class ThingController {
+  @Get('everything')
+  @RequireUnrestrictedKey()
   findAll(): string[] {
     return [];
   }

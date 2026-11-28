@@ -2,7 +2,7 @@ import { Controller, Delete, Get, HttpCode, HttpStatus, Post, Req, Res, Unauthor
 import { ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import type { Request, Response } from 'express';
-import { CurrentApiKey, HeaderAuthOnly, Public } from './decorators/auth.decorators';
+import { CapabilityAgnostic, CurrentApiKey, HeaderAuthOnly, Public } from './decorators/auth.decorators';
 import { ApiKey } from './entities/api-key.entity';
 import { BrowserSessionLogoutResponseDto, BrowserSessionResponseDto } from './dto';
 import { BrowserSessionService } from './browser-session.service';
@@ -15,6 +15,7 @@ import {
 } from './browser-session.util';
 import { EngineFactory } from '../../engine/engine.factory';
 import { presentedApiKey } from '../../common/security/bearer-token';
+import { apiKeyDeniedCapabilities } from './api-key-permissions';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -26,6 +27,7 @@ export class BrowserSessionController {
   ) {}
 
   @Post('session')
+  @CapabilityAgnostic()
   @HeaderAuthOnly()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Exchange an API key header for an HttpOnly browser session cookie' })
@@ -60,11 +62,13 @@ export class BrowserSessionController {
       role: apiKey.role,
       engineType: this.engineFactory.getCurrentEngine(),
       scoped: (apiKey.allowedSessions?.length ?? 0) > 0,
+      deniedPermissions: apiKeyDeniedCapabilities(apiKey),
       apiKeyId: apiKey.id,
     };
   }
 
   @Get('session')
+  @CapabilityAgnostic()
   @ApiOperation({ summary: 'Validate the active browser session cookie or API key header' })
   @ApiResponse({ status: 200, description: 'Active session details', type: BrowserSessionResponseDto })
   @ApiResponse({ status: 401, description: 'Missing, expired, or revoked session' })
@@ -82,6 +86,7 @@ export class BrowserSessionController {
       role: apiKey.role,
       engineType: this.engineFactory.getCurrentEngine(),
       scoped: (apiKey.allowedSessions?.length ?? 0) > 0,
+      deniedPermissions: apiKeyDeniedCapabilities(apiKey),
       apiKeyId: apiKey.id,
     };
   }

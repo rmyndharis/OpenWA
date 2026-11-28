@@ -9,7 +9,8 @@ import {
   WebhookRedriveResultDto,
 } from './dto';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
-import { RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -23,6 +24,7 @@ export class WebhooksListController {
     private readonly audit: AuditService,
   ) {}
 
+  @Capability(ApiKeyCapability.WEBHOOKS_READ)
   @Get('delivery-failures')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'List failed or unsent webhook deliveries, most recent first' })
@@ -65,6 +67,7 @@ export class WebhooksListController {
   // Replaying lost deliveries sends real events to receivers, so it is ADMIN-gated like the listing
   // and the integration redrive. The body's sessionId bypasses the guard's route-param fence, so the
   // service scopes every row to the calling key's allowedSessions itself.
+  @Capability(ApiKeyCapability.WEBHOOKS_WRITE)
   @Post('delivery-failures/redrive')
   @RequireRole(ApiKeyRole.ADMIN)
   @HttpCode(HttpStatus.OK)
@@ -101,6 +104,7 @@ export class WebhooksListController {
     return result;
   }
 
+  @Capability(ApiKeyCapability.WEBHOOKS_READ)
   @Get()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'List webhooks visible to the calling key (scoped to its allowed sessions)' })

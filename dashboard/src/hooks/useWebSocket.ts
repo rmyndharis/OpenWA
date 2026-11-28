@@ -166,6 +166,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
   const roleContext = useContext(RoleContext);
   const hasContextApiKeyId = roleContext?.apiKeyId !== undefined;
   const contextApiKeyId = roleContext?.apiKeyId ?? null;
+  const eventsDenied = roleContext?.deniedPermissions?.includes('events:read') ?? false;
   const sessionEpoch = roleContext?.sessionEpoch ?? 0;
   const lastSessionEpochRef = useRef(sessionEpoch);
   const socketRef = useRef<Socket | null>(null);
@@ -335,6 +336,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
 
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return;
+    if (eventsDenied) return;
 
     const activeActorId = hasContextApiKeyId ? contextApiKeyId : getActiveApiKeyId();
 
@@ -383,7 +385,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       console.warn('[WebSocket] Reconnection failed after max attempts');
       setConnectionFailed(true);
     });
-  }, [hasContextApiKeyId, contextApiKeyId, clearSubscribeRetry, noteSubscribeAnswer]);
+  }, [hasContextApiKeyId, contextApiKeyId, eventsDenied, clearSubscribeRetry, noteSubscribeAnswer]);
 
   // Manual retry after the socket permanently gave up: tear down the dead socket and reconnect.
   const reconnect = useCallback(() => {

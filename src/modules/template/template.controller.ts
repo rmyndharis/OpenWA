@@ -3,7 +3,8 @@ import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { TemplateService } from './template.service';
 import { CreateTemplateDto, UpdateTemplateDto, TemplateResponseDto } from './dto';
 import { Template } from './entities/template.entity';
-import { RequireRole } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
 @ApiTags('templates')
@@ -11,6 +12,7 @@ import { ApiKeyRole } from '../auth/entities/api-key.entity';
 export class TemplateController {
   constructor(private readonly templateService: TemplateService) {}
 
+  @Capability(ApiKeyCapability.TEMPLATES_WRITE)
   @Post()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Create a message template for the session' })
@@ -23,6 +25,7 @@ export class TemplateController {
     return this.templateService.create(sessionId, dto);
   }
 
+  @Capability(ApiKeyCapability.TEMPLATES_READ)
   @Get()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'List all templates for a session' })
@@ -32,6 +35,7 @@ export class TemplateController {
     return this.templateService.findBySession(sessionId);
   }
 
+  @Capability(ApiKeyCapability.TEMPLATES_READ)
   @Get(':id')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Get a template by ID' })
@@ -43,6 +47,7 @@ export class TemplateController {
     return this.templateService.findOne(sessionId, id);
   }
 
+  @Capability(ApiKeyCapability.TEMPLATES_WRITE)
   @Put(':id')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Update a template' })
@@ -60,6 +65,7 @@ export class TemplateController {
     return this.templateService.update(sessionId, id, dto);
   }
 
+  @Capability(ApiKeyCapability.TEMPLATES_WRITE)
   @Delete(':id')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.NO_CONTENT)

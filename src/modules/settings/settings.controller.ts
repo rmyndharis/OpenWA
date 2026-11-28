@@ -2,7 +2,8 @@ import { Controller, Get } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SettingsResponseDto } from './dto/settings-response.dto';
 import { ConfigService } from '@nestjs/config';
-import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { Capability, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { ApiKeyCapability } from '../auth/api-key-permissions';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { isSwaggerEnabled } from '../../config/bootstrap-security';
 
@@ -61,6 +62,7 @@ export class SettingsController {
     };
   }
 
+  @Capability(ApiKeyCapability.SETTINGS_READ)
   @Get()
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
