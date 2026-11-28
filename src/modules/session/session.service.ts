@@ -1235,6 +1235,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         if (retryError instanceof ServerShuttingDownException) {
           const claimable = this.ownership?.claimableWhere() ?? [{}];
           const rows = this.engineLifecycle.rows;
+          const handBack: SessionRowWrite = {
+            field: 'status',
+            moves: [[SessionStatus.FAILED, SessionStatus.DISCONNECTED]],
+            owners: rows?.owners(),
+          };
           const live = rows?.begin(id, 'status');
           if (live?.wait) await live.wait;
           const superseded = rows?.kept(id, 'status');
@@ -1245,17 +1250,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             );
             live?.end();
             if (affected) rows?.landed(id, 'status', SessionStatus.DISCONNECTED, superseded);
+            // The first attempt's FAILED may be kept, refused, and would land after this, keeping the session down at
+            // the next boot: the hand-back goes with it.
+            else rows?.follow(id, handBack);
           } catch (error) {
             // Kept for the next boot, which lands it before its reset.
-            rows?.keep(
-              id,
-              {
-                field: 'status',
-                moves: [[SessionStatus.FAILED, SessionStatus.DISCONNECTED]],
-                owners: rows.owners(),
-              },
-              error,
-            );
+            rows?.keep(id, handBack, error);
           } finally {
             live?.end();
           }

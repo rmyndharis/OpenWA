@@ -579,6 +579,24 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       expect((await rowOf()).status).toBe(SessionStatus.DISCONNECTED);
     });
 
+    it('that fails a start, refused, is handed back with that start as shutdown begins, so the next boot restores it', async () => {
+      const node = boot();
+      node.engine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
+      // The database refuses the FAILED of the first attempt; shutdown begins while the start waits to retry.
+      refuse = patch => (patch.status === SessionStatus.FAILED ? unavailable() : undefined);
+      mockRetryPause = () => {
+        refuse = undefined;
+        node.shutdown.draining = true;
+      };
+
+      await expect(node.service.start(id, { explicit: true })).rejects.toThrow('Server is shutting down');
+      expect((await rowOf()).status).toBe(SessionStatus.INITIALIZING);
+      crash(node);
+      const next = await restart();
+
+      expect(next.factory.create).toHaveBeenCalledTimes(1);
+    });
+
     it('kept while a failed start waits to retry is settled by the hand-back of that start as shutdown begins', async () => {
       const node = boot();
       node.engine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));

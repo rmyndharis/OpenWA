@@ -203,6 +203,19 @@ export class SessionRows {
     if (superseded && this.kept(sessionId, field) === superseded) this.deps.queue?.settle('session', superseded.key);
   }
 
+  /**
+   * A conditional live write matched nothing, as the row still holds what a write kept of its column replaces: it goes
+   * with that kept write, composed over it, so the two land as they were issued.
+   */
+  follow(sessionId: string, write: SessionRowWrite): void {
+    const kept = this.kept(sessionId, write.field);
+    if (!kept) return;
+    this.deps.queue?.park(
+      kept.key,
+      new KeptRowWrite(kept.key, sessionId, compose(kept.write, write), kept.since, this, kept.claim),
+    );
+  }
+
   /** Before a read of the row: what it returns counts only if no write of this process lands meanwhile. */
   mark(sessionId: string): number {
     return this.known.get(sessionId)?.writes ?? 0;
