@@ -436,6 +436,32 @@ describe(`Session row writes the database refused, kept until it answers (${pg ?
       expect((await rowOf()).status).toBe(SessionStatus.FAILED);
     });
 
+    it('whose try is on its way when a live status write is sent lands before it', async () => {
+      const node = boot();
+      await node.lifecycle.updateStatus(id, SessionStatus.READY);
+      refuse = patch => ('status' in patch ? unavailable() : undefined);
+      await expect(node.lifecycle.updateStatus(id, SessionStatus.DISCONNECTED)).rejects.toThrow('disk I/O error');
+      refuse = undefined;
+      // A pass tries the kept DISCONNECTED, and the engine comes back while that write is on its way to the database.
+      let reach!: () => void;
+      const reached = new Promise<void>(resolve => (reach = resolve));
+      let trying = false;
+      beforeWrite = patch => {
+        if (patch.status !== SessionStatus.DISCONNECTED) return Promise.resolve();
+        trying = true;
+        return reached;
+      };
+      const pass = node.queue.flush();
+      await until(() => trying);
+      const ready = node.lifecycle.updateStatus(id, SessionStatus.READY);
+      await settle();
+      reach();
+      await pass;
+      await ready;
+
+      expect((await rowOf()).status).toBe(SessionStatus.READY);
+    });
+
     it('of a session deleted meanwhile is dropped with it, and nothing is lost', async () => {
       const node = await keptFailed();
 
