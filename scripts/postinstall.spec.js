@@ -39,6 +39,7 @@ const EXPECTED_PATCHER_ORDER = [
   'patch-baileys-status-ack.js',
   'patch-baileys-event-buffer.js',
   'patch-wwebjs-puppeteer.js',
+  'patch-wwebjs-login-route.js',
 ];
 
 /** Bare temp dir optionally holding a dashboard/ and/or the patch scripts. */
