@@ -99,6 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Messages: keep the replace of a forward placeholder by its send's echo, refused by the database, and run it once it answers; the row stayed a forward with no content.
 - Sessions: keep a status write the database refused and write it once it answers, at the next start before the boot reset; a lost FAILED stayed until the next status write, and the reset and auto-start acted on the stale one.
 - Sessions: keep the row a READY writes, its number included, when the database refused it, and write it once it answers, at the next start before auto-start reads it; a restart first left the session without its number, and auto-start skipped it.
+- Sessions: keep the clear of a session's number after WhatsApp unlinked it, or after a logout, when the database refused it, and write it once it answers; the old number stayed, auto-start brought the session back to a QR, and linking another number was refused.
 - Webhooks: keep an event whose webhooks could not be read or whose outbox rows could not be written, and dispatch it once the database answers under the same idempotency key; it was lost.
 - Webhooks: a revoke withdraws the queued, retrying and kept deliveries of the message and its `message.edited` deliveries, and clears the copy a failure row keeps for a redrive; they delivered the taken-back text.
 - Webhooks: a delete through the API, or an edit, reaches the queued, retrying and kept deliveries of the message; they delivered the original text.

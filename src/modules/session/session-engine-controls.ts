@@ -929,7 +929,19 @@ export class SessionEngineControls {
               { id, nodeId },
               { id, nodeId: IsNull() },
             ];
-      const clearPhone = (): Promise<unknown> => this.sessionRepository.update(phoneWhere, { phone: null });
+      // A clear the database refuses is kept and written once it answers, and the logout still fails.
+      const clearPhone = async (): Promise<unknown> => {
+        const superseded = this.host.rows?.kept(id, 'phone');
+        try {
+          const result = await this.sessionRepository.update(phoneWhere, { phone: null });
+          const landed = (result as { affected?: number } | undefined)?.affected !== 0;
+          if (landed) this.host.rows?.landed(id, 'phone', null, superseded);
+          return result;
+        } catch (error) {
+          this.host.rows?.keepSet(id, 'phone', null, error, { owners: this.host.rows?.owners(true) });
+          throw error;
+        }
+      };
       await (this.host.writePhone?.(id, clearPhone) ?? clearPhone());
       await this.host.updateStatus(id, SessionStatus.DISCONNECTED, { allowUnowned: true });
     } finally {

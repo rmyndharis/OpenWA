@@ -507,6 +507,7 @@ export class SessionEngineLifecycle {
       forgetBindingEpoch: id => {
         this.bindingEpochs.delete(id);
         this.phoneWrites.forget(id);
+        this.rows.forget(id);
       },
       forgetClaim: (id, ownsClaim) => this.ownership?.forget(id, ownsClaim),
       readAfterPhoneWrites: (id, read) => this.phoneWrites.readSettled(id, read),
@@ -1577,7 +1578,8 @@ export class SessionEngineLifecycle {
    * write is fenced. Fire-and-forget: no await may sit between the callers' identity fences.
    * Reported without the live engine (`ownRowsOnly`), the in-memory ownership can outlast the claim (a launch
    * retired for a lost claim), so the clear lands only on a row that is still this node's or unowned, the
-   * predicate retireLaunchedEngine writes under.
+   * predicate retireLaunchedEngine writes under. A clear the database refuses is kept and written once it
+   * answers: nothing else clears the number, and a different number linking next would be refused.
    */
   private recordTerminalUnlink(id: string, reason: string, ownRowsOnly = false): boolean {
     if (!this.ownsSession(id)) return false;
@@ -1589,7 +1591,20 @@ export class SessionEngineLifecycle {
     this.bindingEpochs.set(id, (this.bindingEpochs.get(id) ?? 0) + 1);
     const where = this.ownedRowWhere(id, ownRowsOnly);
     void this.phoneWrites
-      .run(id, () => this.sessionRepository.update(where, { phone: null }))
+      .run(id, () => {
+        const superseded = this.rows.kept(id, 'phone');
+        return this.sessionRepository.update(where, { phone: null }).then(
+          result => {
+            if ((result as { affected?: number } | undefined)?.affected !== 0) {
+              this.rows.landed(id, 'phone', null, superseded);
+            }
+          },
+          (error: unknown) => {
+            this.rows.keepSet(id, 'phone', null, error, { owners: this.rows.owners(ownRowsOnly) });
+            throw error;
+          },
+        );
+      })
       .catch((err: unknown) =>
         this.logger.warn('Failed to clear phone after a terminal unlink', {
           sessionId: id,

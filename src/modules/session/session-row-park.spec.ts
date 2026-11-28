@@ -44,7 +44,7 @@ describe('Session row writes the database refused, kept until it answers (SQLite
   let id: string;
   // Set while the database refuses the writes of the session rows it matches, with the error it answers.
   let refuse: ((patch: Record<string, unknown>) => Error | undefined) | undefined;
-  let nodes: Array<{ queue: RecoveryQueue }>;
+  let nodes: Array<{ queue: RecoveryQueue; lifecycle: SessionEngineLifecycle }>;
   const unavailable = (): Error => Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR' });
   const rejected = (): Error =>
     Object.assign(new Error('CHECK constraint failed'), { code: 'SQLITE_CONSTRAINT_CHECK' });
@@ -82,6 +82,8 @@ describe('Session row writes the database refused, kept until it answers (SQLite
     refuse = undefined;
     mockRetryPause = undefined;
     jest.useRealTimers();
+    // A reconnect an unlink armed must not fire after the test.
+    for (const node of nodes) await node.lifecycle.shutdown();
     for (const node of nodes) await node.queue.drain(0);
     jest.restoreAllMocks();
     await ds.destroy();
@@ -463,6 +465,78 @@ describe('Session row writes the database refused, kept until it answers (SQLite
         undefined,
         expect.objectContaining({ sessionId: id, reason: 'failures', action: 'session_phone_write_lost' }),
       );
+    });
+  });
+
+  describe('the phone clear after an unlink', () => {
+    /** The session runs bound to 628111; WhatsApp unlinks it, and the database refuses the clear of its number. */
+    async function keptClear() {
+      const node = boot();
+      await node.service.start(id, { explicit: true });
+      refuse = patch => ('phone' in patch ? unavailable() : undefined);
+      await node.lifecycle.handleEngineDisconnected(id, node.engine as never, 'LOGOUT');
+      await settle();
+      refuse = undefined;
+      return node;
+    }
+
+    it('is written once the database answers', async () => {
+      const node = await keptClear();
+      expect((await rowOf()).phone).toBe('628111');
+
+      await node.queue.flush();
+
+      expect((await rowOf()).phone).toBeNull();
+    });
+
+    it('survives a restart before the database answers, so auto-start leaves the unlinked session down', async () => {
+      crash(await keptClear());
+
+      const next = await restart();
+
+      expect((await rowOf()).phone).toBeNull();
+      expect(next.factory.create).not.toHaveBeenCalled();
+    });
+
+    it('gives way to the number a later READY linked', async () => {
+      const node = await keptClear();
+      node.callbacks().onReady!('628222', 'Bob');
+      await settle();
+
+      await node.queue.flush();
+
+      expect((await rowOf()).phone).toBe('628222');
+    });
+
+    it('gives way to a number another node linked since', async () => {
+      const node = await keptClear();
+      await sessions.update(id, { phone: '628333', nodeId: 'node-b' });
+
+      await node.queue.flush();
+
+      expect((await rowOf()).phone).toBe('628333');
+    });
+
+    it('gives way to the same number linked again since', async () => {
+      const node = await keptClear();
+      node.callbacks().onReady!('628111', 'Alice');
+      await settle();
+
+      await node.queue.flush();
+
+      expect((await rowOf()).phone).toBe('628111');
+    });
+
+    it('of a logout is written once the database answers', async () => {
+      const node = boot();
+      await node.service.start(id, { explicit: true });
+      refuse = patch => ('phone' in patch ? unavailable() : undefined);
+
+      await expect(node.service.logout(id)).rejects.toThrow('disk I/O error');
+      refuse = undefined;
+      await node.queue.flush();
+
+      expect((await rowOf()).phone).toBeNull();
     });
   });
 });
